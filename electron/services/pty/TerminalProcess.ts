@@ -15,8 +15,6 @@ import {
   type TerminalInfo,
   type TerminalSnapshot,
   OUTPUT_BUFFER_SIZE,
-  DEFAULT_MAX_QUEUE_SIZE,
-  DEFAULT_MAX_QUEUE_BYTES,
   SEMANTIC_BUFFER_MAX_LINES,
   SEMANTIC_BUFFER_MAX_LINE_LENGTH,
   SEMANTIC_FLUSH_INTERVAL_MS,
@@ -373,8 +371,6 @@ export class TerminalProcess {
 
     // Flush pending data
     this.flushPendingSemanticData();
-    this.throttler.flushBatch();
-    this.throttler.flush();
 
     // Clear pending input writes
     if (this.inputWriteTimeout) {
@@ -405,8 +401,8 @@ export class TerminalProcess {
   /**
    * Set buffering mode.
    */
-  setBuffering(enabled: boolean): void {
-    this.terminalInfo.bufferingMode = enabled;
+  setBuffering(_enabled: boolean): void {
+    // No-op: buffering logic removed.
   }
 
   /**

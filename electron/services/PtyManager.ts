@@ -351,7 +351,7 @@ export class PtyManager extends EventEmitter {
       lastInputTime: terminalInfo.lastInputTime,
       lastOutputTime: terminalInfo.lastOutputTime,
       lastStateChange: terminalInfo.lastStateChange,
-      activityTier: terminalInfo.activityTier,
+      activityTier: "focused",
       outputBufferSize: terminalInfo.outputBuffer.length,
       semanticBufferLines: terminalInfo.semanticBuffer.length,
       restartCount: terminalInfo.restartCount,
@@ -484,11 +484,6 @@ export class PtyManager extends EventEmitter {
    * Clean up all terminals.
    */
   dispose(): void {
-    if (this.floodCheckInterval) {
-      clearInterval(this.floodCheckInterval);
-      this.floodCheckInterval = null;
-    }
-
     for (const [_id, terminal] of this.terminals) {
       const terminalInfo = terminal.getInfo();
       if (terminalInfo.agentId) {

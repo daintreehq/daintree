@@ -2,7 +2,7 @@ import type * as pty from "node-pty";
 import type { Terminal as HeadlessTerminal } from "@xterm/headless";
 import type { SerializeAddon } from "@xterm/addon-serialize";
 import type { AgentState, TerminalType } from "../../../shared/types/domain.js";
-import type { ActivityTier, PtyHostSpawnOptions } from "../../../shared/types/pty-host.js";
+import type { PtyHostSpawnOptions } from "../../../shared/types/pty-host.js";
 import type { ProcessDetector } from "../ProcessDetector.js";
 
 // Re-export PtyHostSpawnOptions as PtySpawnOptions for backward compatibility/internal usage

@@ -47,10 +47,7 @@ export class ActivityMonitor {
       }
 
       // Check for Bracketed Paste Start: \x1b[200~
-      if (
-        fullData[i] === "\x1b" &&
-        fullData.substring(i, i + 6) === "\x1b[200~"
-      ) {
+      if (fullData[i] === "\x1b" && fullData.substring(i, i + 6) === "\x1b[200~") {
         this.inBracketedPaste = true;
         this.pasteStartTime = Date.now();
         i += 5; // Skip the sequence
@@ -58,10 +55,7 @@ export class ActivityMonitor {
       }
 
       // Check for Bracketed Paste End: \x1b[201~
-      if (
-        fullData[i] === "\x1b" &&
-        fullData.substring(i, i + 6) === "\x1b[201~"
-      ) {
+      if (fullData[i] === "\x1b" && fullData.substring(i, i + 6) === "\x1b[201~") {
         this.inBracketedPaste = false;
         this.pasteStartTime = 0;
         i += 5; // Skip the sequence
