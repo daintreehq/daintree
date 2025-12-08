@@ -155,11 +155,7 @@ Activity Metrics:
 
 Performance & Diagnostics:
   Output Buffer Size: ${info.outputBufferSize} lines
-  Queue State: ${info.queueState}
-  Flooding Status: ${info.isFlooded ? "Yes" : "No"}
-  Bytes This Second: ${formatBytes(info.bytesThisSecond)}
   Semantic Buffer: ${info.semanticBufferLines} lines
-  Queued Bytes: ${formatBytes(info.queuedBytes)}
 `;
 
     try {
@@ -233,11 +229,7 @@ Performance & Diagnostics:
 
             <InfoSection title="Performance & Diagnostics">
               <InfoRow label="Output Buffer Size" value={`${info.outputBufferSize} lines`} />
-              <InfoRow label="Queue State" value={info.queueState} />
-              <InfoRow label="Flooding Status" value={info.isFlooded ? "Yes" : "No"} />
-              <InfoRow label="Bytes This Second" value={formatBytes(info.bytesThisSecond)} />
               <InfoRow label="Semantic Buffer" value={`${info.semanticBufferLines} lines`} />
-              <InfoRow label="Queued Bytes" value={formatBytes(info.queuedBytes)} />
             </InfoSection>
           </div>
         )}

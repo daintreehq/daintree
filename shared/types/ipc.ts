@@ -133,11 +133,7 @@ export interface TerminalInfoPayload {
   lastStateChange?: number;
   activityTier: "focused" | "visible" | "background";
   outputBufferSize: number;
-  queueState: "normal" | "soft" | "hard";
-  isFlooded: boolean;
-  bytesThisSecond: number;
   semanticBufferLines: number;
-  queuedBytes: number;
   restartCount: number;
 }
 

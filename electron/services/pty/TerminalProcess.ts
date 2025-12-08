@@ -8,7 +8,6 @@ import type { TerminalType } from "../../../shared/types/domain.js";
 import type { ActivityTier } from "../../../shared/types/pty-host.js";
 import { ProcessDetector, type DetectionResult } from "../ProcessDetector.js";
 import { ActivityMonitor } from "../ActivityMonitor.js";
-import { OutputThrottler } from "./OutputThrottler.js";
 import { AgentStateService } from "./AgentStateService.js";
 import { ActivityHeadlineGenerator } from "../ActivityHeadlineGenerator.js";
 import { InputTracker } from "../../utils/inputTracker.js";
@@ -79,7 +78,6 @@ export interface TerminalProcessDependencies {
  * Handles PTY spawning, output throttling, agent detection, and activity monitoring.
  */
 export class TerminalProcess {
-  private throttler: OutputThrottler;
   private activityMonitor: ActivityMonitor | null = null;
   private processDetector: ProcessDetector | null = null;
   private headlineGenerator = new ActivityHeadlineGenerator();
@@ -214,34 +212,14 @@ export class TerminalProcess {
       lastOutputTime: spawnedAt,
       lastCheckTime: spawnedAt,
       semanticBuffer: [],
-      bufferingMode: false,
-      outputQueue: [],
-      queuedBytes: 0,
-      maxQueueSize: DEFAULT_MAX_QUEUE_SIZE,
-      maxQueueBytes: DEFAULT_MAX_QUEUE_BYTES,
       pendingSemanticData: "",
       semanticFlushTimer: null,
-      bytesThisSecond: 0,
-      isFlooded: false,
-      lastResumedAt: 0,
       inputWriteQueue: [],
       inputWriteTimeout: null,
-      queueState: "normal",
-      lastQueueStateChange: spawnedAt,
-      activityTier: "focused",
-      lastTierChangeAt: 0,
-      batchBuffer: [],
-      batchBytes: 0,
-      batchTimer: null,
       headlessTerminal,
       serializeAddon,
       restartCount: 0,
     };
-
-    // Create output throttler
-    this.throttler = new OutputThrottler(id, (data) => this.emitData(data), {
-      title: options.title,
-    });
 
     // Set up PTY event handlers
     this.setupPtyHandlers(ptyProcess);
@@ -326,18 +304,6 @@ export class TerminalProcess {
 
     if (traceId !== undefined) {
       terminal.traceId = traceId || undefined;
-    }
-
-    // Check for clear command and synchronize buffer state
-    if (this.inputTracker.process(data)) {
-      this.throttler.clear();
-      terminal.semanticBuffer = [];
-      terminal.outputBuffer = "";
-      this.pendingSemanticData = "";
-      if (this.semanticFlushTimer) {
-        clearTimeout(this.semanticFlushTimer);
-        this.semanticFlushTimer = null;
-      }
     }
 
     // Notify activity monitor of input
@@ -451,25 +417,15 @@ export class TerminalProcess {
   /**
    * Set activity tier for IPC batching.
    */
-  setActivityTier(tier: ActivityTier): void {
-    this.throttler.setActivityTier(tier);
-    this.terminalInfo.activityTier = tier;
-  }
-
-  /**
-   * Get activity tier.
-   */
+  // Activity tier is no longer used for throttling; kept for compatibility.
+  setActivityTier(_tier: ActivityTier): void {}
   getActivityTier(): ActivityTier {
-    return this.throttler.getActivityTier();
+    return "focused";
   }
 
-  /**
-   * Check and apply flood protection.
-   */
+  // Flood protection is handled via higher-level flow control; always no-op here.
   checkFlooding(): { flooded: boolean; resumed: boolean } {
-    const result = this.throttler.checkFlooding(this.terminalInfo.ptyProcess);
-    this.terminalInfo.isFlooded = this.throttler.isCurrentlyFlooded();
-    return result;
+    return { flooded: false, resumed: false };
   }
 
   /**
@@ -600,8 +556,6 @@ export class TerminalProcess {
       clearTimeout(this.inputWriteTimeout);
       this.inputWriteTimeout = null;
     }
-
-    this.throttler.dispose();
     this.terminalInfo.headlessTerminal.dispose();
 
     try {
@@ -641,13 +595,9 @@ export class TerminalProcess {
       // Write to headless terminal for authoritative state
       terminal.headlessTerminal.write(data);
 
-      // Track bytes and apply throttling
-      terminal.bytesThisSecond += data.length;
-      const shouldProcess = this.throttler.write(data);
-
-      if (!shouldProcess) {
-        return;
-      }
+      // Emit data to host/renderer immediately. Flow control is handled
+      // via char-count acknowledgements from the renderer.
+      this.emitData(data);
 
       // For agent terminals, handle additional processing
       if (this.isAgentTerminal) {
@@ -689,10 +639,8 @@ export class TerminalProcess {
       this.stopProcessDetector();
       this.stopActivityMonitor();
 
-      // Flush pending data
+      // Flush pending semantic data
       this.flushPendingSemanticData();
-      this.throttler.flushBatch();
-      this.throttler.flush();
 
       // Clear pending input writes
       if (this.inputWriteTimeout) {

@@ -365,11 +365,7 @@ export class PtyManager extends EventEmitter {
       lastStateChange: terminalInfo.lastStateChange,
       activityTier: terminalInfo.activityTier,
       outputBufferSize: terminalInfo.outputBuffer.length,
-      queueState: terminalInfo.queueState,
-      isFlooded: terminalInfo.isFlooded,
-      bytesThisSecond: terminalInfo.bytesThisSecond,
       semanticBufferLines: terminalInfo.semanticBuffer.length,
-      queuedBytes: terminalInfo.queuedBytes,
       restartCount: terminalInfo.restartCount,
     };
   }
