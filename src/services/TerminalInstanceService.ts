@@ -115,14 +115,10 @@ class TerminalInstanceService {
   private rafId: number | null = null;
   private pollTimeoutId: number | null = null;
   private sharedBufferEnabled = false;
-  private textEncoder = new TextEncoder(); // Reused encoder to avoid allocations
 
   private static readonly TERMINAL_COUNT_THRESHOLD = 20;
   private static readonly BUDGET_SCALE_FACTOR = 0.5;
   private static readonly MIN_WEBGL_BUDGET = 2;
-  // Max time per frame for polling (12ms to capture full TUI clear+repaint sequences)
-  // Leaves ~4ms for React updates per frame (60fps target = 16.67ms).
-  private static readonly POLL_TIME_BUDGET_MS = 12;
   private static readonly MAX_WEBGL_CONTEXTS = 12; // Conservative limit below browser max (16)
 
   constructor() {
@@ -181,81 +177,50 @@ class TerminalInstanceService {
   /**
    * Poll the ring buffer and dispatch data to terminals.
    *
-   * Greedy consumer strategy: Uses 12ms budget (of 16ms frame) to capture
-   * complete TUI update sequences (clear + repaint) in a single frame.
-   * Uses Uint8Array accumulation for efficiency, merging all packets per
-   * terminal into a single atomic write to prevent visual flicker.
+   * VS Code-style strategy: Read small chunks and write them through to
+   * xterm as they arrive, relying on xterm's own internal buffering.
+   * Avoids building large frame-sized writes that can cause visible flicker.
    */
   private poll = (): void => {
     if (!this.pollingActive || !this.ringBuffer) return;
 
-    const start = performance.now();
     let hasData = false;
 
-    // Accumulate raw bytes instead of strings for efficiency
-    const coalescedUpdates = new Map<string, Uint8Array[]>();
-    const coalescedLength = new Map<string, number>();
-
-    // PHASE 1: Greedy Read - drain buffer up to 12ms budget
-    while (performance.now() - start < TerminalInstanceService.POLL_TIME_BUDGET_MS) {
+    // Read until the ring buffer is empty, writing each packet through to
+    // the appropriate terminal as we go. This favours many smaller writes
+    // over a single large "atomic" write per frame.
+    // If we ever need to guard against pathological cases, we can add
+    // a simple max-reads-per-poll, but keep it simple for now.
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
       const data = this.ringBuffer.read();
-      if (!data) break; // Buffer exhausted
+      if (!data) {
+        break; // Buffer exhausted
+      }
 
       hasData = true;
       const packets = this.packetParser.parse(data);
 
       for (const packet of packets) {
-        // Accumulate raw bytes per terminal ID
-        let chunks = coalescedUpdates.get(packet.id);
-        if (!chunks) {
-          chunks = [];
-          coalescedUpdates.set(packet.id, chunks);
-          coalescedLength.set(packet.id, 0);
+        const managed = this.instances.get(packet.id);
+        if (!managed) {
+          continue;
         }
-
-        // Convert string packets to Uint8Array if needed (reuse encoder)
-        const bytes =
-          typeof packet.data === "string" ? this.textEncoder.encode(packet.data) : packet.data;
-
-        chunks.push(bytes);
-        coalescedLength.set(packet.id, coalescedLength.get(packet.id)! + bytes.length);
+        // Pass through the packet data (string or Uint8Array) directly.
+        managed.throttledWriter.write(packet.data);
       }
     }
 
-    // PHASE 2: Atomic Dispatch - single write per terminal
-    coalescedUpdates.forEach((chunks, id) => {
-      const managed = this.instances.get(id);
-      if (!managed) return;
-
-      // Fast path: single chunk needs no merge
-      if (chunks.length === 1) {
-        managed.throttledWriter.write(chunks[0]);
-        return;
-      }
-
-      // Merge multiple chunks into one contiguous buffer
-      const totalLen = coalescedLength.get(id)!;
-      const merged = new Uint8Array(totalLen);
-      let offset = 0;
-      for (const chunk of chunks) {
-        merged.set(chunk, offset);
-        offset += chunk.length;
-      }
-
-      // Single atomic write forces xterm to process clear+draw together
-      managed.throttledWriter.write(merged);
-    });
-
-    // PHASE 3: Tight Loop - continue while data available
+    // Schedule the next poll. When data was seen, use requestAnimationFrame
+    // to stay in sync with rendering; otherwise use a modest idle timeout.
     if (hasData) {
-      // Data found - poll again on next frame for continuous draining
       this.rafId = window.requestAnimationFrame(() => {
         this.rafId = null;
         this.poll();
       });
     } else {
-      // Reduced idle polling interval from 16ms to 6ms for faster burst detection
-      this.pollTimeoutId = window.setTimeout(this.poll, 6);
+      // Small idle timeout to detect new bursts without a tight loop.
+      this.pollTimeoutId = window.setTimeout(this.poll, 8);
     }
   };
 
