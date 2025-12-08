@@ -23,9 +23,9 @@
  * TODO: Remove this file once issue #800 is resolved.
  */
 
-import React, { useState, useEffect } from 'react';
-import { render, Box, Text, useInput, useApp, useStdout } from 'ink';
-import Spinner from 'ink-spinner';
+import React, { useState, useEffect } from "react";
+import { render, Box, Text, useInput, useApp, useStdout } from "ink";
+import Spinner from "ink-spinner";
 
 // Simulated conversation history (like Claude Code's scrollback)
 // This is a LOT of text to simulate real usage
@@ -80,7 +80,7 @@ const conversationHistory = `
 `.trim();
 
 // Help text - check first before printing history
-if (process.argv.includes('--help') || process.argv.includes('-h')) {
+if (process.argv.includes("--help") || process.argv.includes("-h")) {
   console.log(`
 \x1b[1mTUI Stress Test for Terminal Flicker Issue (#800)\x1b[0m
 
@@ -111,7 +111,7 @@ including the input prompt, which must be redrawn every frame.
 
 // Print static history immediately (not part of Ink)
 console.log(conversationHistory);
-console.log('');
+console.log("");
 
 // Progress bar component
 function ProgressBar({ percent, width = 20 }: { percent: number; width?: number }) {
@@ -119,14 +119,14 @@ function ProgressBar({ percent, width = 20 }: { percent: number; width?: number 
   const empty = width - filled;
   return (
     <Text>
-      <Text color="green">{'█'.repeat(filled)}</Text>
-      <Text color="gray">{'░'.repeat(empty)}</Text>
+      <Text color="green">{"█".repeat(filled)}</Text>
+      <Text color="gray">{"░".repeat(empty)}</Text>
     </Text>
   );
 }
 
 // Glowing dot that pulses from dark to light (like Codex MCP status)
-function GlowingDot({ frame, baseColor = 'cyan' }: { frame: number; baseColor?: string }) {
+function GlowingDot({ frame, baseColor = "cyan" }: { frame: number; baseColor?: string }) {
   // Cycle through brightness levels to create a glow/pulse effect
   const brightness = Math.sin(frame * 0.15) * 0.5 + 0.5; // 0 to 1
 
@@ -156,10 +156,10 @@ function CodexMcpBlock({
   frame: number;
   taskOffset: number;
 }) {
-  const elapsed = ((frame * 0.08) + taskOffset * 0.5).toFixed(0);
+  const elapsed = (frame * 0.08 + taskOffset * 0.5).toFixed(0);
   const tokens = 404 + frame * 3 + taskOffset * 200;
 
-  const messages = ['Herding…', 'Thinking…', 'Processing…', 'Analyzing…'];
+  const messages = ["Herding…", "Thinking…", "Processing…", "Analyzing…"];
   const msg = messages[Math.floor((frame + taskOffset) / 15) % messages.length];
 
   // Split prompt into multiple lines for realistic display
@@ -177,7 +177,9 @@ function CodexMcpBlock({
       <Box>
         <GlowingDot frame={frame + taskOffset} />
         <Text> </Text>
-        <Text bold color="white">{title}</Text>
+        <Text bold color="white">
+          {title}
+        </Text>
         <Text dimColor> - </Text>
         <Text>codex</Text>
         <Text dimColor> (MCP)</Text>
@@ -188,19 +190,24 @@ function CodexMcpBlock({
       {/* Multi-line prompt text */}
       {lines.map((line, i) => (
         <Box key={i}>
-          <Text dimColor>                     {line}</Text>
+          <Text dimColor> {line}</Text>
         </Box>
       ))}
 
       <Box>
-        <Text dimColor>                     ", model: "gpt-5.1-codex-max", cwd: "/Users/dev/project", sandbox: "read-only"</Text>
+        <Text dimColor>
+          {" "}
+          ", model: "gpt-5.1-codex-max", cwd: "/Users/dev/project", sandbox: "read-only"
+        </Text>
         <Text color="yellow">)</Text>
       </Box>
 
       {/* Animated status line with spinner */}
       <Box marginTop={1}>
-        <Text dimColor>  · </Text>
-        <Text color="cyan"><Spinner type="dots" /></Text>
+        <Text dimColor> · </Text>
+        <Text color="cyan">
+          <Spinner type="dots" />
+        </Text>
         <Text color="cyan"> {msg}</Text>
         <Text dimColor> (esc to interrupt · {elapsed}s · </Text>
         <Text color="gray">↓ </Text>
@@ -224,40 +231,45 @@ function McpTaskBox({
   taskOffset: number;
 }) {
   const files = [
-    'src/components/Terminal/XtermAdapter.tsx',
-    'electron/services/pty/TerminalProcess.ts',
-    'src/services/TerminalInstanceService.ts',
-    'electron/services/WorktreeService.ts',
-    'src/store/terminalStore.ts',
+    "src/components/Terminal/XtermAdapter.tsx",
+    "electron/services/pty/TerminalProcess.ts",
+    "src/services/TerminalInstanceService.ts",
+    "electron/services/WorktreeService.ts",
+    "src/store/terminalStore.ts",
   ];
 
-  const operations = ['Reading', 'Analyzing', 'Processing', 'Checking', 'Scanning'];
+  const operations = ["Reading", "Analyzing", "Processing", "Checking", "Scanning"];
   const currentFile = files[(frame + taskOffset) % files.length];
   const currentOp = operations[Math.floor((frame + taskOffset) / 3) % operations.length];
 
   const todos = [
-    { content: 'Analyze codebase structure', done: frame > 10 + taskOffset },
-    { content: 'Identify optimization targets', done: frame > 25 + taskOffset },
-    { content: 'Generate recommendations', done: false },
+    { content: "Analyze codebase structure", done: frame > 10 + taskOffset },
+    { content: "Identify optimization targets", done: frame > 25 + taskOffset },
+    { content: "Generate recommendations", done: false },
   ];
 
-  const elapsed = ((frame * 0.08) + taskOffset * 0.5).toFixed(1);
-  const tokens = ((1247 + frame * 23 + taskOffset * 500) % 50000);
+  const elapsed = (frame * 0.08 + taskOffset * 0.5).toFixed(1);
+  const tokens = (1247 + frame * 23 + taskOffset * 500) % 50000;
   const contextUsed = Math.min(95, 35 + frame * 0.15 + taskOffset * 10);
 
   const activityMsgs = [
-    `Parsed ${currentFile.split('/').pop()}`,
-    'Found optimization opportunity',
-    'Analyzing dependencies',
-    'Checking type safety',
+    `Parsed ${currentFile.split("/").pop()}`,
+    "Found optimization opportunity",
+    "Analyzing dependencies",
+    "Checking type safety",
   ];
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={color} paddingX={1}>
       {/* Header with spinner */}
       <Box>
-        <Text color={color}><Spinner type="dots" /></Text>
-        <Text bold color={color}> {title}</Text>
+        <Text color={color}>
+          <Spinner type="dots" />
+        </Text>
+        <Text bold color={color}>
+          {" "}
+          {title}
+        </Text>
         <Text dimColor> • {elapsed}s • </Text>
         <Text color="yellow">{tokens.toLocaleString()}</Text>
         <Text dimColor> tokens</Text>
@@ -265,7 +277,9 @@ function McpTaskBox({
 
       {/* Current file being processed */}
       <Box marginTop={1}>
-        <Text color="cyan"><Spinner type="dots12" /></Text>
+        <Text color="cyan">
+          <Spinner type="dots12" />
+        </Text>
         <Text> </Text>
         <Text color="yellow">{currentOp}</Text>
         <Text> </Text>
@@ -274,17 +288,21 @@ function McpTaskBox({
 
       {/* Todo list */}
       <Box flexDirection="column" marginTop={1}>
-        <Text bold dimColor>Tasks:</Text>
+        <Text bold dimColor>
+          Tasks:
+        </Text>
         {todos.map((todo, i) => (
           <Box key={i}>
-            <Text>  </Text>
+            <Text> </Text>
             {todo.done ? (
               <Text color="green">✓</Text>
             ) : (
-              <Text color="cyan"><Spinner type="dots" /></Text>
+              <Text color="cyan">
+                <Spinner type="dots" />
+              </Text>
             )}
             <Text> </Text>
-            <Text color={todo.done ? 'green' : 'white'} strikethrough={todo.done}>
+            <Text color={todo.done ? "green" : "white"} strikethrough={todo.done}>
               {todo.content}
             </Text>
           </Box>
@@ -297,20 +315,24 @@ function McpTaskBox({
         <Text>[</Text>
         <ProgressBar percent={contextUsed} width={20} />
         <Text>] </Text>
-        <Text color={contextUsed > 80 ? 'red' : contextUsed > 60 ? 'yellow' : 'green'}>
+        <Text color={contextUsed > 80 ? "red" : contextUsed > 60 ? "yellow" : "green"}>
           {contextUsed.toFixed(0)}%
         </Text>
       </Box>
 
       {/* Activity log - each line has its own spinner */}
       <Box flexDirection="column" marginTop={1}>
-        <Text bold dimColor>Activity:</Text>
-        {[0, 1, 2].map(i => {
+        <Text bold dimColor>
+          Activity:
+        </Text>
+        {[0, 1, 2].map((i) => {
           const ts = new Date(Date.now() - (2 - i) * 800).toISOString().slice(11, 19);
           return (
             <Box key={i}>
-              <Text dimColor>  {ts} </Text>
-              <Text color="cyan"><Spinner type="dots" /></Text>
+              <Text dimColor> {ts} </Text>
+              <Text color="cyan">
+                <Spinner type="dots" />
+              </Text>
               <Text> {activityMsgs[(frame + i + taskOffset) % activityMsgs.length]}</Text>
             </Box>
           );
@@ -325,7 +347,7 @@ function StressTest() {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [frame, setFrame] = useState(0);
-  const [inputText, setInputText] = useState('');
+  const [inputText, setInputText] = useState("");
   const [cursorVisible, setCursorVisible] = useState(true);
 
   // Get terminal width for full-width separators
@@ -335,7 +357,7 @@ function StressTest() {
   // Runs indefinitely until user presses Ctrl+C
   useEffect(() => {
     const timer = setInterval(() => {
-      setFrame(f => f + 1);
+      setFrame((f) => f + 1);
     }, 80);
 
     return () => {
@@ -346,48 +368,40 @@ function StressTest() {
   // Cursor blink (530ms is typical terminal cursor blink rate)
   useEffect(() => {
     const timer = setInterval(() => {
-      setCursorVisible(v => !v);
+      setCursorVisible((v) => !v);
     }, 530);
     return () => clearInterval(timer);
   }, []);
 
   // Handle input
   useInput((input, key) => {
-    if (key.ctrl && input === 'c') {
+    if (key.ctrl && input === "c") {
       exit();
     } else if (key.backspace || key.delete) {
-      setInputText(t => t.slice(0, -1));
+      setInputText((t) => t.slice(0, -1));
     } else if (key.return) {
-      setInputText('');
+      setInputText("");
     } else if (input && !key.ctrl && !key.meta) {
-      setInputText(t => t + input);
+      setInputText((t) => t + input);
     }
   });
 
   // Full-width separator line
-  const separatorLine = '─'.repeat(terminalWidth);
+  const separatorLine = "─".repeat(terminalWidth);
 
-  const codexPrompt1 = "Please do a comprehensive breakdown of this project - Canopy Command Center. Explore the codebase thoroughly and explain: 1. What is this project? - The core purpose and value proposition 2. Architecture overview - How the Electron main/renderer processes work together 3. Key features - What can users actually do with this tool? 4. Technical implementation - How are the major features built (terminals, worktrees, agent state tracking, etc.) 5. Target users - Who is this for and what problems does it solve? Look at the actual code structure, the services, the React components, and the IPC bridge to understand how everything fits together.";
+  const codexPrompt1 =
+    "Please do a comprehensive breakdown of this project - Canopy Command Center. Explore the codebase thoroughly and explain: 1. What is this project? - The core purpose and value proposition 2. Architecture overview - How the Electron main/renderer processes work together 3. Key features - What can users actually do with this tool? 4. Technical implementation - How are the major features built (terminals, worktrees, agent state tracking, etc.) 5. Target users - Who is this for and what problems does it solve? Look at the actual code structure, the services, the React components, and the IPC bridge to understand how everything fits together.";
 
-  const codexPrompt2 = "Analyze the terminal rendering pipeline in this Electron app. Focus on: 1. How PTY output flows from node-pty through IPC to xterm.js 2. The SharedRingBuffer implementation for zero-copy I/O 3. WebGL renderer management and context limits 4. Output throttling and batching strategies 5. The flickering issue when TUI frameworks like Ink render animations. Identify the root cause and propose solutions.";
+  const codexPrompt2 =
+    "Analyze the terminal rendering pipeline in this Electron app. Focus on: 1. How PTY output flows from node-pty through IPC to xterm.js 2. The SharedRingBuffer implementation for zero-copy I/O 3. WebGL renderer management and context limits 4. Output throttling and batching strategies 5. The flickering issue when TUI frameworks like Ink render animations. Identify the root cause and propose solutions.";
 
   return (
     <Box flexDirection="column">
       {/* Large Codex MCP blocks with glowing dots */}
-      <CodexMcpBlock
-        title="codex"
-        promptText={codexPrompt1}
-        frame={frame}
-        taskOffset={0}
-      />
+      <CodexMcpBlock title="codex" promptText={codexPrompt1} frame={frame} taskOffset={0} />
 
       <Box marginTop={1}>
-        <CodexMcpBlock
-          title="codex"
-          promptText={codexPrompt2}
-          frame={frame}
-          taskOffset={7}
-        />
+        <CodexMcpBlock title="codex" promptText={codexPrompt2} frame={frame} taskOffset={7} />
       </Box>
 
       {/* TWO parallel MCP task boxes with lots of animations */}
@@ -401,12 +415,14 @@ function StressTest() {
 
       {/* System status bar with multiple spinners */}
       <Box marginTop={1} paddingX={1}>
-        <Text color="green"><Spinner type="dots" /></Text>
+        <Text color="green">
+          <Spinner type="dots" />
+        </Text>
         <Text> System </Text>
         <Text dimColor>CPU:</Text>
-        <Text> {((45 + Math.sin(frame * 0.1) * 20) | 0)}% </Text>
+        <Text> {(45 + Math.sin(frame * 0.1) * 20) | 0}% </Text>
         <Text dimColor>MEM:</Text>
-        <Text> {((55 + Math.sin(frame * 0.07) * 15) | 0)}% </Text>
+        <Text> {(55 + Math.sin(frame * 0.07) * 15) | 0}% </Text>
         <Text dimColor>Frame:</Text>
         <Text> {frame} </Text>
         <Text dimColor>({(frame * 0.08).toFixed(1)}s)</Text>
@@ -420,9 +436,9 @@ function StressTest() {
       {/* Input prompt area - THIS SHOULD NOT FLICKER */}
       <Box>
         <Text dimColor>{">"}</Text>
-        <Text>  </Text>
+        <Text> </Text>
         <Text>{inputText}</Text>
-        <Text color="white">{cursorVisible ? '█' : ' '}</Text>
+        <Text color="white">{cursorVisible ? "█" : " "}</Text>
       </Box>
 
       {/* Another full-width separator */}
@@ -430,7 +446,7 @@ function StressTest() {
 
       {/* Status hint line - THIS SHOULD NOT FLICKER */}
       <Box>
-        <Text>  </Text>
+        <Text> </Text>
         <Text color="cyan">{"⏵⏵"}</Text>
         <Text> bypass permissions on </Text>
         <Text dimColor>(shift+tab to cycle)</Text>
