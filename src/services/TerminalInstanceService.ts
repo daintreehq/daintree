@@ -120,7 +120,10 @@ class TerminalInstanceService {
   private static readonly TERMINAL_COUNT_THRESHOLD = 20;
   private static readonly BUDGET_SCALE_FACTOR = 0.5;
   private static readonly MIN_WEBGL_BUDGET = 2;
-  private static readonly POLL_TIME_BUDGET_MS = 4; // Max time per frame for polling
+  // Increased time budget to prioritize terminal I/O over other UI updates.
+  // 12ms leaves ~4ms for React updates per frame (60fps target = 16.67ms).
+  // This ensures terminal output is drained aggressively during bursts.
+  private static readonly POLL_TIME_BUDGET_MS = 12;
   private static readonly MAX_WEBGL_CONTEXTS = 12; // Conservative limit below browser max (16)
 
   constructor() {
@@ -225,12 +228,16 @@ class TerminalInstanceService {
     }
 
     if (hasData) {
+      // Data found - poll again on next frame for continuous draining
       this.rafId = window.requestAnimationFrame(() => {
         this.rafId = null;
         this.poll();
       });
     } else {
-      this.pollTimeoutId = window.setTimeout(this.poll, 16);
+      // No data - check more frequently (6ms) to catch mid-frame arrivals.
+      // This ensures data arriving between frames is processed quickly
+      // without waiting for the next animation frame (16ms at 60fps).
+      this.pollTimeoutId = window.setTimeout(this.poll, 6);
     }
   };
 

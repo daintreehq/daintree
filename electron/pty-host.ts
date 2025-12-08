@@ -99,37 +99,20 @@ function toStringForIpc(data: string | Uint8Array): string {
 
 // Wire up PtyManager events
 ptyManager.on("data", (id: string, data: string | Uint8Array) => {
-  // Transcript buffering: sanitize and store output
-  const transcriptBuffer = transcriptBuffers.get(id);
-  if (transcriptBuffer?.enabled) {
-    const sanitized = stripAnsi(toStringForIpc(data));
-    if (sanitized.length > 0) {
-      const chunkSize = Buffer.byteLength(sanitized, "utf8");
+  // ---------------------------------------------------------------------------
+  // PRIORITY 1: VISUAL RENDERER (Zero-Latency Path)
+  // Write to SharedArrayBuffer immediately before doing ANY processing.
+  // This ensures terminal output reaches xterm.js with minimal latency.
+  // ---------------------------------------------------------------------------
+  let visualWritten = false;
 
-      // Evict old chunks if over size limit (FIFO)
-      while (
-        transcriptBuffer.totalSize + chunkSize > MAX_TRANSCRIPT_SIZE &&
-        transcriptBuffer.chunks.length > 0
-      ) {
-        const evicted = transcriptBuffer.chunks.shift()!;
-        transcriptBuffer.totalSize -= Buffer.byteLength(evicted.content, "utf8");
-      }
-
-      transcriptBuffer.chunks.push({
-        timestamp: Date.now(),
-        content: sanitized,
-      });
-      transcriptBuffer.totalSize += chunkSize;
-    }
-  }
-
-  // Use ring buffers if available (zero-copy path)
   if (visualBuffer) {
     const packet = packetFramer.frame(id, data);
     if (packet) {
-      // Write to visual buffer (critical path - must succeed)
-      const visualWritten = visualBuffer.write(packet);
-      if (visualWritten === 0) {
+      const bytesWritten = visualBuffer.write(packet);
+      visualWritten = bytesWritten > 0;
+
+      if (bytesWritten === 0) {
         // Ring buffer is full - apply backpressure by pausing the PTY
         if (!pausedTerminals.has(id)) {
           const utilization = visualBuffer.getUtilization();
@@ -218,25 +201,57 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
         // Data is dropped during backpressure - acceptable, PTY is paused
         return;
       }
+    } else {
+      // Packet framing failed (ID too long or data >64KB) - fall back to IPC
+      console.warn(`[PtyHost] Packet framing failed for terminal ${id}, using IPC fallback`);
+    }
+  }
 
-      // Write to analysis buffer (best-effort - drop frames if full)
-      if (analysisBuffer) {
-        const analysisWritten = analysisBuffer.write(packet);
-        if (analysisWritten === 0 && process.env.CANOPY_VERBOSE) {
-          // Analysis buffer full - acceptable, semantic analysis can lag
-          console.log(`[PtyHost] Analysis buffer full - dropping frame for terminal ${id}`);
-        }
-        // We don't fall back to IPC for analysis - it's best-effort
+  // Fallback: If ring buffer failed or isn't set up, use IPC
+  if (!visualWritten) {
+    sendEvent({ type: "data", id, data: toStringForIpc(data) });
+  }
+
+  // ---------------------------------------------------------------------------
+  // PRIORITY 2: BACKGROUND TASKS (Deferred Processing)
+  // Now that pixels are on their way to the screen, we can do heavy work.
+  // ---------------------------------------------------------------------------
+
+  // 1. Semantic Analysis (Worker) - best-effort, can drop frames
+  if (analysisBuffer) {
+    const analysisPacket = packetFramer.frame(id, data);
+    if (analysisPacket) {
+      const analysisWritten = analysisBuffer.write(analysisPacket);
+      if (analysisWritten === 0 && process.env.CANOPY_VERBOSE) {
+        console.log(`[PtyHost] Analysis buffer full - dropping frame for terminal ${id}`);
+      }
+    }
+  }
+
+  // 2. Transcript Buffering (Expensive: stripAnsi + String conversion)
+  // This is CPU-intensive due to regex processing - runs after visual update
+  const transcriptBuffer = transcriptBuffers.get(id);
+  if (transcriptBuffer?.enabled) {
+    const sanitized = stripAnsi(toStringForIpc(data));
+    if (sanitized.length > 0) {
+      const chunkSize = Buffer.byteLength(sanitized, "utf8");
+
+      // Evict old chunks if over size limit (FIFO)
+      while (
+        transcriptBuffer.totalSize + chunkSize > MAX_TRANSCRIPT_SIZE &&
+        transcriptBuffer.chunks.length > 0
+      ) {
+        const evicted = transcriptBuffer.chunks.shift()!;
+        transcriptBuffer.totalSize -= Buffer.byteLength(evicted.content, "utf8");
       }
 
-      // Successful visual write - no IPC needed, renderer will poll the buffer
-      return;
+      transcriptBuffer.chunks.push({
+        timestamp: Date.now(),
+        content: sanitized,
+      });
+      transcriptBuffer.totalSize += chunkSize;
     }
-    // Packet framing failed (ID too long or data >64KB) - fall back to IPC
-    console.warn(`[PtyHost] Packet framing failed for terminal ${id}, using IPC fallback`);
   }
-  // Fallback: use traditional IPC
-  sendEvent({ type: "data", id, data: toStringForIpc(data) });
 });
 
 ptyManager.on("exit", (id: string, exitCode: number) => {
