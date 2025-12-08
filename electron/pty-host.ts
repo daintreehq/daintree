@@ -11,7 +11,6 @@
 
 import { MessagePort } from "node:worker_threads";
 import os from "node:os";
-import stripAnsi from "strip-ansi";
 import { PtyManager } from "./services/PtyManager.js";
 import { PtyPool, getPtyPool } from "./services/PtyPool.js";
 import { events } from "./services/events.js";
@@ -21,7 +20,6 @@ import type {
   PtyHostEvent,
   PtyHostTerminalSnapshot,
   ActivityTier,
-  TranscriptChunk,
 } from "../shared/types/pty-host.js";
 
 // Validate we're running in UtilityProcess context
@@ -71,21 +69,6 @@ const BACKPRESSURE_MAX_PAUSE_MS = 5000; // Force resume after 5 seconds to preve
 // Note: Currently stored but not used elsewhere; could be extended for future features
 // @ts-expect-error - stored for future use
 let rendererPort: MessagePort | null = null;
-
-// Transcript buffer configuration
-const MAX_TRANSCRIPT_SIZE = 10 * 1024 * 1024; // 10MB per session
-
-// Per-terminal transcript buffers (sanitized ANSI output)
-interface TranscriptBuffer {
-  chunks: TranscriptChunk[];
-  totalSize: number;
-  enabled: boolean;
-}
-const transcriptBuffers = new Map<string, TranscriptBuffer>();
-
-function createTranscriptBuffer(): TranscriptBuffer {
-  return { chunks: [], totalSize: 0, enabled: true };
-}
 
 // Helper to send events to Main process
 function sendEvent(event: PtyHostEvent): void {
@@ -217,7 +200,7 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
   // Now that pixels are on their way to the screen, we can do heavy work.
   // ---------------------------------------------------------------------------
 
-  // 1. Semantic Analysis (Worker) - best-effort, can drop frames
+  // Semantic Analysis (Worker) - best-effort, can drop frames
   if (analysisBuffer) {
     const analysisPacket = packetFramer.frame(id, data);
     if (analysisPacket) {
@@ -225,31 +208,6 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
       if (analysisWritten === 0 && process.env.CANOPY_VERBOSE) {
         console.log(`[PtyHost] Analysis buffer full - dropping frame for terminal ${id}`);
       }
-    }
-  }
-
-  // 2. Transcript Buffering (Expensive: stripAnsi + String conversion)
-  // This is CPU-intensive due to regex processing - runs after visual update
-  const transcriptBuffer = transcriptBuffers.get(id);
-  if (transcriptBuffer?.enabled) {
-    const sanitized = stripAnsi(toStringForIpc(data));
-    if (sanitized.length > 0) {
-      const chunkSize = Buffer.byteLength(sanitized, "utf8");
-
-      // Evict old chunks if over size limit (FIFO)
-      while (
-        transcriptBuffer.totalSize + chunkSize > MAX_TRANSCRIPT_SIZE &&
-        transcriptBuffer.chunks.length > 0
-      ) {
-        const evicted = transcriptBuffer.chunks.shift()!;
-        transcriptBuffer.totalSize -= Buffer.byteLength(evicted.content, "utf8");
-      }
-
-      transcriptBuffer.chunks.push({
-        timestamp: Date.now(),
-        content: sanitized,
-      });
-      transcriptBuffer.totalSize += chunkSize;
     }
   }
 });
@@ -260,18 +218,6 @@ ptyManager.on("exit", (id: string, exitCode: number) => {
   if (checkInterval) {
     clearInterval(checkInterval);
     pausedTerminals.delete(id);
-  }
-
-  // Notify Main that transcript is ready for retrieval
-  const transcriptBuffer = transcriptBuffers.get(id);
-  if (transcriptBuffer && transcriptBuffer.chunks.length > 0) {
-    sendEvent({
-      type: "transcript-ready",
-      id,
-      chunkCount: transcriptBuffer.chunks.length,
-      totalSize: transcriptBuffer.totalSize,
-    });
-    // Keep buffer until Main fetches it (don't delete here)
   }
 
   sendEvent({ type: "exit", id, exitCode });
@@ -506,7 +452,6 @@ port.on("message", (rawMsg: any) => {
         break;
 
       case "spawn":
-        transcriptBuffers.set(msg.id, createTranscriptBuffer());
         ptyManager.spawn(msg.id, msg.options);
         break;
 
@@ -699,37 +644,6 @@ port.on("message", (rawMsg: any) => {
         break;
       }
 
-      case "get-transcript": {
-        const buffer = transcriptBuffers.get(msg.id);
-        sendEvent({
-          type: "transcript",
-          id: msg.id,
-          requestId: msg.requestId,
-          chunks: buffer?.chunks ?? [],
-        });
-        // Clean up buffer after it's been fetched
-        transcriptBuffers.delete(msg.id);
-        break;
-      }
-
-      case "start-transcript": {
-        let buffer = transcriptBuffers.get(msg.id);
-        if (!buffer) {
-          buffer = createTranscriptBuffer();
-          transcriptBuffers.set(msg.id, buffer);
-        }
-        buffer.enabled = true;
-        break;
-      }
-
-      case "stop-transcript": {
-        const buffer = transcriptBuffers.get(msg.id);
-        if (buffer) {
-          buffer.enabled = false;
-        }
-        break;
-      }
-
       case "get-terminal-info": {
         const info = ptyManager.getTerminalInfo(msg.id);
         sendEvent({
@@ -761,9 +675,6 @@ function cleanup(): void {
     console.log(`[PtyHost] Cleared backpressure monitor for terminal ${id}`);
   }
   pausedTerminals.clear();
-
-  // Clear all transcript buffers
-  transcriptBuffers.clear();
 
   if (ptyPool) {
     ptyPool.dispose();

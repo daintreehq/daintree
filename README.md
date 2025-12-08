@@ -22,7 +22,6 @@ Instead of juggling multiple terminal windows and manually copying context, Cano
 - **Smart Terminals**: Integrated terminal grid capable of running standard shells or AI agents
 - **Lifecycle Tracking**: Automatically detects if an agent is `working`, `waiting` for input, or `completed` based on output heuristics
 - **Waiting For You**: A dedicated notification strip that alerts you immediately when an agent needs human input
-- **Session History**: Full transcripts of agent sessions with artifact extraction (code blocks, patches)
 
 ### Context Injection
 

@@ -268,12 +268,6 @@ const CHANNELS = {
 
   // Window channels
   WINDOW_FULLSCREEN_CHANGE: "window:fullscreen-change",
-
-  // History channels
-  HISTORY_GET_ALL: "history:get-all",
-  HISTORY_GET_SESSION: "history:get-session",
-  HISTORY_DELETE: "history:delete",
-  HISTORY_EXPORT: "history:export",
 } as const;
 
 const api: ElectronAPI = {
@@ -748,17 +742,6 @@ const api: ElectronAPI = {
       ipcRenderer.on(CHANNELS.WINDOW_FULLSCREEN_CHANGE, handler);
       return () => ipcRenderer.removeListener(CHANNELS.WINDOW_FULLSCREEN_CHANGE, handler);
     },
-  },
-
-  // History API
-  history: {
-    getAll: () => ipcRenderer.invoke(CHANNELS.HISTORY_GET_ALL),
-
-    getSession: (id: string) => ipcRenderer.invoke(CHANNELS.HISTORY_GET_SESSION, id),
-
-    deleteSession: (id: string) => ipcRenderer.invoke(CHANNELS.HISTORY_DELETE, id),
-
-    exportSession: (id: string) => ipcRenderer.invoke(CHANNELS.HISTORY_EXPORT, id),
   },
 };
 

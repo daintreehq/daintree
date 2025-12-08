@@ -32,7 +32,6 @@ import {
   initializeSystemSleepService,
   getSystemSleepService,
 } from "./services/SystemSleepService.js";
-import { getTranscriptService, disposeTranscriptService } from "./services/TranscriptService.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -160,17 +159,12 @@ async function initializeDeferredServices(
       console.log("[MAIN] CLI availability checked:", availability);
       return availability;
     }),
-    getTranscriptService()
-      .initialize()
-      .then(() => {
-        console.log("[MAIN] TranscriptService initialized");
-      }),
   ]);
 
   // Log any failures
   results.forEach((result, index) => {
     if (result.status === "rejected") {
-      const serviceName = ["CliAvailabilityService", "TranscriptService"][index];
+      const serviceName = ["CliAvailabilityService"][index];
       console.error(`[MAIN] ${serviceName} initialization failed:`, result.reason);
     }
   });
@@ -477,7 +471,6 @@ async function createWindow(): Promise<void> {
     disposePtyClient();
 
     getSystemSleepService().dispose();
-    disposeTranscriptService();
 
     setLoggerWindow(null);
     mainWindow = null;

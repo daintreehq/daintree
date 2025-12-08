@@ -681,16 +681,6 @@ export interface AppError {
 
 // Agent Session IPC Types
 
-/** Transcript entry */
-export interface TranscriptEntry {
-  /** Timestamp in milliseconds */
-  timestamp: number;
-  /** Type of entry */
-  type: "user" | "agent" | "system";
-  /** Content of the entry */
-  content: string;
-}
-
 /** An artifact extracted from an agent session */
 export interface Artifact {
   /** Unique identifier */
@@ -705,32 +695,6 @@ export interface Artifact {
   content: string;
   /** Timestamp when extracted */
   extractedAt: number;
-}
-
-/** A complete agent session with transcript and artifacts */
-export interface AgentSession {
-  /** Unique identifier */
-  id: string;
-  /** Type of agent */
-  agentType: "claude" | "gemini" | "codex" | "custom";
-  /** Associated worktree ID */
-  worktreeId?: string;
-  /** Start timestamp */
-  startTime: number;
-  /** End timestamp (if completed) */
-  endTime?: number;
-  /** Session state */
-  state: "active" | "completed" | "failed";
-  /** Full transcript */
-  transcript: TranscriptEntry[];
-  /** Extracted artifacts */
-  artifacts: Artifact[];
-  /** Session metadata */
-  metadata: {
-    terminalId: string;
-    cwd: string;
-    exitCode?: number;
-  };
 }
 
 // Agent State Change Payload
@@ -1381,24 +1345,6 @@ export interface IpcInvokeMap {
     args: [payload: { pattern: string }];
     result: WorktreeConfig;
   };
-
-  // History channels
-  "history:get-all": {
-    args: [];
-    result: AgentSession[];
-  };
-  "history:get-session": {
-    args: [id: string];
-    result: AgentSession | null;
-  };
-  "history:delete": {
-    args: [id: string];
-    result: void;
-  };
-  "history:export": {
-    args: [id: string];
-    result: string | null;
-  };
 }
 
 /**
@@ -1719,15 +1665,5 @@ export interface ElectronAPI {
   window: {
     /** Subscribe to fullscreen state changes */
     onFullscreenChange(callback: (isFullscreen: boolean) => void): () => void;
-  };
-  history: {
-    /** Get all saved agent sessions */
-    getAll(): Promise<AgentSession[]>;
-    /** Get a specific session by ID */
-    getSession(id: string): Promise<AgentSession | null>;
-    /** Delete a session by ID */
-    deleteSession(id: string): Promise<void>;
-    /** Export a session to markdown file, returns the file path or null if cancelled */
-    exportSession(id: string): Promise<string | null>;
   };
 }

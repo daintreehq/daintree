@@ -2,7 +2,6 @@ import { useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { useLogsStore, useErrorStore } from "@/store";
 import { useEventStore } from "@/store/eventStore";
-import { useSessionHistoryStore } from "@/store/sessionHistoryStore";
 import { logsClient, eventInspectorClient, errorsClient } from "@/clients";
 
 export function ProblemsActions() {
@@ -81,26 +80,6 @@ export function EventsActions() {
     <div className="flex items-center gap-2">
       <Button variant="subtle" size="xs" onClick={handleClearEvents} title="Clear all events">
         Clear
-      </Button>
-    </div>
-  );
-}
-
-export function HistoryActions() {
-  const loadSessions = useSessionHistoryStore((state) => state.loadSessions);
-  const clearFilters = useSessionHistoryStore((state) => state.clearFilters);
-
-  const handleRefresh = useCallback(() => {
-    loadSessions();
-  }, [loadSessions]);
-
-  return (
-    <div className="flex items-center gap-2">
-      <Button variant="subtle" size="xs" onClick={handleRefresh} title="Refresh sessions">
-        Refresh
-      </Button>
-      <Button variant="subtle" size="xs" onClick={clearFilters} title="Clear filters">
-        Clear Filters
       </Button>
     </div>
   );

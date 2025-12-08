@@ -162,11 +162,6 @@ export const CHANNELS = {
   WORKTREE_CONFIG_SET_PATTERN: "worktree-config:set-pattern",
 
   WINDOW_FULLSCREEN_CHANGE: "window:fullscreen-change",
-
-  HISTORY_GET_ALL: "history:get-all",
-  HISTORY_GET_SESSION: "history:get-session",
-  HISTORY_DELETE: "history:delete",
-  HISTORY_EXPORT: "history:export",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

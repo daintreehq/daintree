@@ -1,6 +1,6 @@
 # Canopy Command Center
 
-**Overview:** Electron-based IDE for orchestrating AI coding agents (Claude, Gemini, Codex). Features integrated terminals, worktree dashboard, context injection, and session transcripts.
+**Overview:** Electron-based IDE for orchestrating AI coding agents (Claude, Gemini, Codex). Features integrated terminals, worktree dashboard, and context injection.
 **Stack:** Electron 33, React 19, Vite 6, TypeScript, Tailwind CSS v4, Zustand, node-pty, simple-git.
 
 ## Critical Rules
@@ -36,7 +36,6 @@ Access native features via namespaced API in Renderer. Returns Promises or Clean
 - `copyTree`: generate, injectToTerminal, isAvailable, cancel, onProgress
 - `system`: openExternal, openPath, getConfig, checkCommand
 - `project`: getAll, getCurrent, add, remove, update, switch, onSwitch
-- `history`: getSessions, getSession, exportSession, deleteSession
 - `ai`: getConfig, setKey, clearKey, setModel, validateKey, generateProjectIdentity
 - `logs`: getAll, getSources, clear, openFile, onEntry
 - `errors`: onError, retry, openLogs
@@ -49,7 +48,6 @@ Access native features via namespaced API in Renderer. Returns Promises or Clean
 - **Agent State:** `AgentStateMachine` tracks idle/working/waiting/completed via output heuristics.
 - **Context:** `CopyTreeService` generates context for agents, injects into terminals.
 - **Dev Server:** `DevServerManager` auto-detects `package.json` scripts, manages lifecycle.
-- **Transcripts:** `TranscriptManager` records agent sessions, `ArtifactExtractor` extracts code.
 
 ## Directory Map
 

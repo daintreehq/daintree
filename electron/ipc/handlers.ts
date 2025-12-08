@@ -17,7 +17,6 @@ import { registerHibernationHandlers } from "./handlers/hibernation.js";
 import { registerSystemSleepHandlers } from "./handlers/systemSleep.js";
 import { registerKeybindingHandlers } from "./handlers/keybinding.js";
 import { registerWorktreeConfigHandlers } from "./handlers/worktreeConfig.js";
-import { registerHistoryHandlers } from "./handlers/history.js";
 import { typedHandle, typedSend, sendToRenderer } from "./utils.js";
 
 export { typedHandle, typedSend, sendToRenderer };
@@ -55,7 +54,6 @@ export function registerIpcHandlers(
     registerSystemSleepHandlers(deps),
     registerKeybindingHandlers(deps),
     registerWorktreeConfigHandlers(deps),
-    registerHistoryHandlers(deps),
   ];
 
   return () => {

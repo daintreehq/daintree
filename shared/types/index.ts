@@ -130,9 +130,7 @@ export type {
   RetryAction,
   AppError,
   // Agent session types
-  TranscriptEntry,
   Artifact,
-  AgentSession,
   // Agent state change
   AgentStateChangePayload,
   // Artifact types
