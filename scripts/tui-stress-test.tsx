@@ -104,7 +104,7 @@ including the input prompt, which must be redrawn every frame.
   - Input prompt and separator lines don't flash
   - Only the glowing dots should visibly animate
 
-\x1b[2mPress Ctrl+C to stop. Runs for 60 seconds.\x1b[0m
+\x1b[2mPress Ctrl+C to stop. Runs indefinitely.\x1b[0m
 `);
   process.exit(0);
 }
@@ -332,22 +332,16 @@ function StressTest() {
   const terminalWidth = stdout?.columns || 120;
 
   // Animation loop - 80ms interval (12.5 fps) to match typical TUI refresh
+  // Runs indefinitely until user presses Ctrl+C
   useEffect(() => {
     const timer = setInterval(() => {
       setFrame(f => f + 1);
     }, 80);
 
-    // Run for 60 seconds
-    const stopTimer = setTimeout(() => {
-      clearInterval(timer);
-      exit();
-    }, 60000);
-
     return () => {
       clearInterval(timer);
-      clearTimeout(stopTimer);
     };
-  }, [exit]);
+  }, []);
 
   // Cursor blink (530ms is typical terminal cursor blink rate)
   useEffect(() => {
@@ -445,4 +439,5 @@ function StressTest() {
   );
 }
 
-render(<StressTest />);
+// Use patchConsole to prevent any stray console.log from breaking the TUI
+render(<StressTest />, { patchConsole: true });
