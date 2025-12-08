@@ -115,7 +115,14 @@ class TerminalInstanceService {
   private rafId: number | null = null;
   private pollTimeoutId: number | null = null;
   private sharedBufferEnabled = false;
+  // Per-terminal coalescing buffers for SAB data
+  private sabBuffers = new Map<
+    string,
+    { chunks: (string | Uint8Array)[]; timeoutId: number | null }
+  >();
 
+  // Small coalescing delay for SAB data, similar to VS Code's TerminalDataBufferer.
+  private static readonly BUFFER_FLUSH_DELAY_MS = 4;
   private static readonly TERMINAL_COUNT_THRESHOLD = 20;
   private static readonly BUDGET_SCALE_FACTOR = 0.5;
   private static readonly MIN_WEBGL_BUDGET = 2;
@@ -177,9 +184,9 @@ class TerminalInstanceService {
   /**
    * Poll the ring buffer and dispatch data to terminals.
    *
-   * VS Code-style strategy: Read small chunks and write them through to
-   * xterm as they arrive, relying on xterm's own internal buffering.
-   * Avoids building large frame-sized writes that can cause visible flicker.
+   * VS Code-style strategy: Read small chunks and buffer them briefly per
+   * terminal, then flush with a short timeout. This smooths out bursts and
+   * avoids building large frame-sized writes that can cause visible flicker.
    */
   private poll = (): void => {
     if (!this.pollingActive || !this.ringBuffer) return;
@@ -206,8 +213,9 @@ class TerminalInstanceService {
         if (!managed) {
           continue;
         }
-        // Pass through the packet data (string or Uint8Array) directly.
-        managed.throttledWriter.write(packet.data);
+        // Buffer the packet per terminal and flush shortly, similar to VS Code's
+        // TerminalDataBufferer behaviour.
+        this.bufferTerminalData(packet.id, packet.data);
       }
     }
 
@@ -223,6 +231,56 @@ class TerminalInstanceService {
       this.pollTimeoutId = window.setTimeout(this.poll, 8);
     }
   };
+
+  /**
+   * Buffer data for a terminal with a short timeout, then flush as a single
+   * write. This mirrors VS Code's TerminalDataBufferer behaviour on IPC.
+   */
+  private bufferTerminalData(id: string, data: string | Uint8Array): void {
+    let entry = this.sabBuffers.get(id);
+    if (!entry) {
+      entry = { chunks: [], timeoutId: null };
+      this.sabBuffers.set(id, entry);
+    }
+    entry.chunks.push(data);
+
+    if (entry.timeoutId !== null) {
+      return;
+    }
+
+    entry.timeoutId = window.setTimeout(() => {
+      const managed = this.instances.get(id);
+      const current = this.sabBuffers.get(id);
+      if (!managed || !current) {
+        if (current) {
+          this.sabBuffers.delete(id);
+        }
+        return;
+      }
+
+      const chunks = current.chunks;
+      this.sabBuffers.delete(id);
+
+      if (chunks.length === 0) {
+        return;
+      }
+
+      if (chunks.length === 1) {
+        managed.throttledWriter.write(chunks[0]);
+      } else {
+        // If all chunks are strings, join as a single string; otherwise fall
+        // back to writing each chunk in sequence.
+        const allStrings = chunks.every((c) => typeof c === "string");
+        if (allStrings) {
+          managed.throttledWriter.write((chunks as string[]).join(""));
+        } else {
+          for (const chunk of chunks) {
+            managed.throttledWriter.write(chunk);
+          }
+        }
+      }
+    }, TerminalInstanceService.BUFFER_FLUSH_DELAY_MS);
+  }
 
   /**
    * Check if SharedArrayBuffer-based I/O is enabled.
