@@ -103,7 +103,7 @@ export interface WorktreeCardProps {
   isActive: boolean;
   isFocused: boolean;
   onSelect: () => void;
-  onCopyTree: () => void;
+  onCopyTree: () => Promise<string | undefined> | void;
   onOpenEditor: () => void;
   onOpenIssue?: () => void;
   onOpenPR?: () => void;
@@ -148,6 +148,8 @@ export function WorktreeCard({
   const [runningRecipeId, setRunningRecipeId] = useState<string | null>(null);
 
   const [treeCopied, setTreeCopied] = useState(false);
+  const [isCopyingTree, setIsCopyingTree] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState<string>("");
   const treeCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMountedRef = useRef(true);
 
@@ -325,27 +327,47 @@ export function WorktreeCard({
     [setFocused]
   );
 
+  const handleCopyTree = useCallback(async () => {
+    if (isCopyingTree) return; // Prevent multiple clicks
+
+    setIsCopyingTree(true);
+
+    try {
+      // Await the result from App.tsx
+      const resultMessage = await onCopyTree();
+
+      if (!isMountedRef.current) return; // Prevent state update if unmounted
+
+      if (resultMessage) {
+        setTreeCopied(true);
+        setCopyFeedback(resultMessage);
+
+        if (treeCopyTimeoutRef.current) {
+          clearTimeout(treeCopyTimeoutRef.current);
+        }
+
+        treeCopyTimeoutRef.current = setTimeout(() => {
+          if (isMountedRef.current) {
+            setTreeCopied(false);
+            setCopyFeedback("");
+            treeCopyTimeoutRef.current = null;
+          }
+        }, 2000);
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setIsCopyingTree(false);
+      }
+    }
+  }, [onCopyTree, isCopyingTree]);
+
   const handleCopyTreeClick = useCallback(
-    (e: React.MouseEvent<HTMLButtonElement>) => {
+    async (e: React.MouseEvent<HTMLButtonElement>) => {
       e.stopPropagation();
       e.currentTarget.blur();
-
-      onCopyTree();
-
-      setTreeCopied(true);
-
-      if (treeCopyTimeoutRef.current) {
-        clearTimeout(treeCopyTimeoutRef.current);
-      }
-
-      treeCopyTimeoutRef.current = setTimeout(() => {
-        if (isMountedRef.current) {
-          setTreeCopied(false);
-          treeCopyTimeoutRef.current = null;
-        }
-      }, 2000);
+      await handleCopyTree();
     },
-    [onCopyTree]
+    [handleCopyTree]
   );
 
   const branchLabel = worktree.branch ?? worktree.name;
@@ -509,16 +531,28 @@ export function WorktreeCard({
               <div className="flex items-center gap-1 shrink-0">
                 <button
                   onClick={handleCopyTreeClick}
+                  disabled={isCopyingTree}
                   className={cn(
                     "p-1 rounded transition-colors",
-                    "text-canopy-text/40 hover:text-canopy-text hover:bg-white/10",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                    treeCopied
+                      ? "text-green-400 bg-green-400/10"
+                      : "text-canopy-text/40 hover:text-canopy-text hover:bg-white/10",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
+                    isCopyingTree && "cursor-wait opacity-70"
                   )}
-                  title={treeCopied ? "Context Copied!" : "Copy Context"}
+                  title={
+                    isCopyingTree
+                      ? "Generating context..."
+                      : treeCopied
+                        ? copyFeedback
+                        : "Copy Context"
+                  }
                   aria-label={treeCopied ? "Context Copied" : "Copy Context"}
                 >
-                  {treeCopied ? (
-                    <Check className="w-3.5 h-3.5 text-green-400" />
+                  {isCopyingTree ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-canopy-text" />
+                  ) : treeCopied ? (
+                    <Check className="w-3.5 h-3.5" />
                   ) : (
                     <Copy className="w-3.5 h-3.5" />
                   )}
@@ -538,7 +572,7 @@ export function WorktreeCard({
                     sideOffset={4}
                     onClick={(e) => e.stopPropagation()}
                   >
-                    <DropdownMenuItem onClick={() => onCopyTree()}>
+                    <DropdownMenuItem onClick={() => handleCopyTree()} disabled={isCopyingTree}>
                       <Copy className="w-3 h-3 mr-2" />
                       Copy Context
                     </DropdownMenuItem>

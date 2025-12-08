@@ -69,7 +69,6 @@ function SidebarContent() {
       }))
     );
   const addError = useErrorStore((state) => state.addError);
-  const addNotification = useNotificationStore((state) => state.addNotification);
 
   const [isRecipeEditorOpen, setIsRecipeEditorOpen] = useState(false);
   const [recipeEditorWorktreeId, setRecipeEditorWorktreeId] = useState<string | undefined>(
@@ -94,7 +93,7 @@ function SidebarContent() {
   }, [worktrees, activeWorktreeId, setActiveWorktree]);
 
   const handleCopyTree = useCallback(
-    async (worktree: WorktreeState) => {
+    async (worktree: WorktreeState): Promise<string | undefined> => {
       try {
         const isAvailable = await copyTreeClient.isAvailable();
         if (!isAvailable) {
@@ -113,12 +112,9 @@ function SidebarContent() {
 
         console.log(`Copied ${result.fileCount} files as file reference`);
         const sizeStr = result.stats?.totalSize ? formatBytes(result.stats.totalSize) : "";
-        addNotification({
-          type: "success",
-          title: "Context Copied",
-          message: `Copied ${result.fileCount} files${sizeStr ? ` (${sizeStr})` : ""} to clipboard`,
-          duration: 3000,
-        });
+
+        // Return success message instead of showing toast
+        return `Copied ${result.fileCount} files${sizeStr ? ` (${sizeStr})` : ""} to clipboard`;
       } catch (e) {
         const message = e instanceof Error ? e.message : "Failed to copy context to clipboard";
         const details = e instanceof Error ? e.stack : undefined;
@@ -150,9 +146,10 @@ function SidebarContent() {
         });
 
         console.error("Failed to copy context:", message);
+        return undefined;
       }
     },
-    [addError, addNotification]
+    [addError]
   );
 
   const handleOpenEditor = useCallback((worktree: WorktreeState) => {
