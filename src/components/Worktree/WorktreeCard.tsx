@@ -412,7 +412,7 @@ export function WorktreeCard({
     terminalCounts.total > 0 ||
     !!rawLastCommitMessage;
 
-  const showTimeInHeader = isMainWorktree || !hasExpandableContent;
+  const showTimeInHeader = !hasExpandableContent;
 
   const showMetaFooter = terminalCounts.total > 0;
 
