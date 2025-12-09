@@ -3,7 +3,6 @@ import { useShallow } from "zustand/react/shallow";
 import { SortableContext, rectSortingStrategy } from "@dnd-kit/sortable";
 import { useDroppable } from "@dnd-kit/core";
 import { cn } from "@/lib/utils";
-import { getTerminalAnimationDuration } from "@/lib/animationUtils";
 import {
   useTerminalStore,
   useLayoutConfigStore,
@@ -11,10 +10,9 @@ import {
   MAX_GRID_TERMINALS,
   type TerminalInstance,
 } from "@/store";
-import { TerminalPane } from "./TerminalPane";
+import { GridTerminalPane } from "./GridTerminalPane";
 import { TerminalCountWarning } from "./TerminalCountWarning";
 import { GridFullOverlay } from "./GridFullOverlay";
-import { ErrorBoundary } from "@/components/ErrorBoundary";
 import {
   SortableTerminal,
   useDndPlaceholder,
@@ -267,31 +265,7 @@ export function TerminalGrid({
   const hasActiveWorktree = activeWorktreeId !== null;
 
   const addTerminal = useTerminalStore((state) => state.addTerminal);
-  const trashTerminal = useTerminalStore((state) => state.trashTerminal);
-  const removeTerminal = useTerminalStore((state) => state.removeTerminal);
-  const updateTitle = useTerminalStore((state) => state.updateTitle);
-  const setFocused = useTerminalStore((state) => state.setFocused);
-  const toggleMaximize = useTerminalStore((state) => state.toggleMaximize);
-  const moveTerminalToDock = useTerminalStore((state) => state.moveTerminalToDock);
   const isInTrash = useTerminalStore((state) => state.isInTrash);
-
-  const [trashingIds, setTrashingIds] = useState<Set<string>>(new Set());
-
-  const handleTrashWithAnimation = useCallback(
-    (id: string) => {
-      const duration = getTerminalAnimationDuration();
-      setTrashingIds((prev) => new Set(prev).add(id));
-      setTimeout(() => {
-        trashTerminal(id);
-        setTrashingIds((prev) => {
-          const next = new Set(prev);
-          next.delete(id);
-          return next;
-        });
-      }, duration);
-    },
-    [trashTerminal]
-  );
 
   const gridTerminals = useMemo(
     () => terminals.filter((t) => t.location === "grid" || t.location === undefined),
@@ -427,43 +401,7 @@ export function TerminalGrid({
     if (terminal) {
       return (
         <div className={cn("h-full relative bg-canopy-bg", className)}>
-          <ErrorBoundary
-            variant="component"
-            componentName="TerminalPane"
-            resetKeys={[terminal.id, terminal.worktreeId, terminal.agentState].filter(
-              (key): key is string => key !== undefined
-            )}
-            context={{ terminalId: terminal.id, worktreeId: terminal.worktreeId }}
-          >
-            <TerminalPane
-              id={terminal.id}
-              title={terminal.title}
-              type={terminal.type}
-              worktreeId={terminal.worktreeId}
-              cwd={terminal.cwd}
-              isFocused={true}
-              isMaximized={true}
-              agentState={terminal.agentState}
-              activity={
-                terminal.activityHeadline
-                  ? {
-                      headline: terminal.activityHeadline,
-                      status: terminal.activityStatus ?? "working",
-                      type: terminal.activityType ?? "interactive",
-                    }
-                  : null
-              }
-              location="grid"
-              restartKey={terminal.restartKey}
-              onFocus={() => setFocused(terminal.id)}
-              onClose={(force) =>
-                force ? removeTerminal(terminal.id) : handleTrashWithAnimation(terminal.id)
-              }
-              onToggleMaximize={() => toggleMaximize(terminal.id)}
-              onTitleChange={(newTitle) => updateTitle(terminal.id, newTitle)}
-              isTrashing={trashingIds.has(terminal.id)}
-            />
-          </ErrorBoundary>
+          <GridTerminalPane terminal={terminal} isFocused={true} isMaximized={true} />
         </div>
       );
     }
@@ -524,46 +462,7 @@ export function TerminalGrid({
                       sourceIndex={index}
                       disabled={isTerminalInTrash}
                     >
-                      <ErrorBoundary
-                        variant="component"
-                        componentName="TerminalPane"
-                        resetKeys={[terminal.id, terminal.worktreeId, terminal.agentState].filter(
-                          (key): key is string => key !== undefined
-                        )}
-                        context={{ terminalId: terminal.id, worktreeId: terminal.worktreeId }}
-                      >
-                        <TerminalPane
-                          id={terminal.id}
-                          title={terminal.title}
-                          type={terminal.type}
-                          worktreeId={terminal.worktreeId}
-                          cwd={terminal.cwd}
-                          isFocused={terminal.id === focusedId}
-                          isMaximized={false}
-                          agentState={terminal.agentState}
-                          activity={
-                            terminal.activityHeadline
-                              ? {
-                                  headline: terminal.activityHeadline,
-                                  status: terminal.activityStatus ?? "working",
-                                  type: terminal.activityType ?? "interactive",
-                                }
-                              : null
-                          }
-                          location="grid"
-                          restartKey={terminal.restartKey}
-                          onFocus={() => setFocused(terminal.id)}
-                          onClose={(force) =>
-                            force
-                              ? removeTerminal(terminal.id)
-                              : handleTrashWithAnimation(terminal.id)
-                          }
-                          onToggleMaximize={() => toggleMaximize(terminal.id)}
-                          onTitleChange={(newTitle) => updateTitle(terminal.id, newTitle)}
-                          onMinimize={() => moveTerminalToDock(terminal.id)}
-                          isTrashing={trashingIds.has(terminal.id)}
-                        />
-                      </ErrorBoundary>
+                      <GridTerminalPane terminal={terminal} isFocused={terminal.id === focusedId} />
                     </SortableTerminal>
                   );
 
