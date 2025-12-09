@@ -312,9 +312,9 @@ export function SidecarDock() {
         aria-valuemax={SIDECAR_MAX_WIDTH}
         tabIndex={0}
         className={cn(
-          "group absolute left-0 top-0 bottom-0 w-1.5 cursor-ew-resize flex items-center justify-center",
-          "hover:bg-canopy-accent/30 transition-colors focus:outline-none focus:bg-canopy-accent/50",
-          isResizing && "bg-canopy-accent/50"
+          "group absolute -left-0.5 top-0 bottom-0 w-1.5 cursor-ew-resize flex items-center justify-center z-50",
+          "hover:bg-canopy-accent/25 transition-colors focus:outline-none focus:bg-canopy-accent/30",
+          isResizing && "bg-canopy-accent/30"
         )}
         onMouseDown={handleResizeStart}
         onKeyDown={handleKeyDown}

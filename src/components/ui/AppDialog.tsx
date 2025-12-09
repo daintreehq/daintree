@@ -81,7 +81,7 @@ export function AppDialog({
   return createPortal(
     <AppDialogContext.Provider value={{ onClose, titleId, descriptionId }}>
       <div
-        className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/50 backdrop-blur-sm"
+        className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/50 backdrop-blur-sm backdrop-saturate-50"
         onClick={handleBackdropClick}
         role="dialog"
         aria-modal="true"

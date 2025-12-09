@@ -125,7 +125,7 @@ function TerminalHeaderComponent({
         style={
           !isMaximized && getBrandColorHex(type)
             ? {
-                backgroundImage: `linear-gradient(to right, ${getBrandColorHex(type)}08 0%, transparent 50%)`,
+                backgroundImage: `linear-gradient(to right, ${getBrandColorHex(type)}0c 0%, transparent 60%)`,
               }
             : undefined
         }

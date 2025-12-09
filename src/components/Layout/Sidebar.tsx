@@ -113,9 +113,9 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
           aria-valuemax={600}
           tabIndex={0}
           className={cn(
-            "group absolute top-0 right-0 w-1.5 h-full cursor-col-resize flex items-center justify-center",
-            "hover:bg-canopy-accent/30 transition-colors focus-visible:outline-none focus-visible:bg-canopy-accent/50",
-            isResizing && "bg-canopy-accent/50"
+            "group absolute top-0 -right-0.5 w-1.5 h-full cursor-col-resize flex items-center justify-center z-50",
+            "hover:bg-canopy-accent/25 transition-colors focus-visible:outline-none focus-visible:bg-canopy-accent/30",
+            isResizing && "bg-canopy-accent/30"
           )}
           onMouseDown={startResizing}
           onKeyDown={handleKeyDown}

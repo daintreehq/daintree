@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { useGlobalSecondTicker } from "@/hooks/useGlobalSecondTicker";
+import { cn } from "@/lib/utils";
 
 interface LiveTimeAgoProps {
   timestamp?: number | null;
@@ -70,7 +71,7 @@ export function LiveTimeAgo({ timestamp, className }: LiveTimeAgoProps) {
 
   return (
     <span
-      className={className}
+      className={cn("tabular-nums", className)}
       title={`${timeData.fullLabel} (${timeData.formattedDate})`}
       aria-label={timeData.fullLabel}
     >
