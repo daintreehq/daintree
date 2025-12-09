@@ -127,7 +127,9 @@ export type WorkspaceHostRequest =
     }
   | { type: "copytree:cancel"; operationId: string }
   // DevServer parsing operations
-  | { type: "devserver:parse-output"; requestId: string; worktreeId: string; output: string };
+  | { type: "devserver:parse-output"; requestId: string; worktreeId: string; output: string }
+  // GitHub token propagation
+  | { type: "update-github-token"; token: string | null };
 
 /** Result of DevServer URL detection */
 export interface DevServerDetectedUrls {

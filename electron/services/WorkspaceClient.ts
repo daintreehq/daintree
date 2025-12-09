@@ -27,6 +27,7 @@ import type {
 } from "../../shared/types/workspace-host.js";
 import type { Worktree } from "../../shared/types/domain.js";
 import type { CopyTreeOptions, CopyTreeProgress, CopyTreeResult } from "../../shared/types/ipc.js";
+import { GitHubAuth } from "./github/GitHubAuth.js";
 
 export type CopyTreeProgressCallback = (progress: CopyTreeProgress) => void;
 
@@ -201,7 +202,7 @@ export class WorkspaceClient extends EventEmitter {
 
   private handleHostEvent(event: WorkspaceHostEvent): void {
     switch (event.type) {
-      case "ready":
+      case "ready": {
         this.isInitialized = true;
         this.restartAttempts = 0;
         if (this.readyResolve) {
@@ -209,7 +210,14 @@ export class WorkspaceClient extends EventEmitter {
           this.readyResolve = null;
         }
         console.log("[WorkspaceClient] Workspace Host is ready");
+
+        const token = GitHubAuth.getToken();
+        if (token) {
+          this.send({ type: "update-github-token", token });
+          console.log("[WorkspaceClient] Sent GitHub token to host");
+        }
         break;
+      }
 
       case "pong":
         // Health check response - host is alive
@@ -458,6 +466,10 @@ export class WorkspaceClient extends EventEmitter {
       type: "refresh-prs",
       requestId,
     });
+  }
+
+  updateGitHubToken(token: string | null): void {
+    this.send({ type: "update-github-token", token });
   }
 
   setPollingEnabled(enabled: boolean): void {

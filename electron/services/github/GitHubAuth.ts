@@ -15,8 +15,22 @@ export interface GitHubTokenValidation {
 }
 
 export class GitHubAuth {
+  private static memoryToken: string | null = null;
+  private static useMemoryOnly: boolean = false;
+
   static getToken(): string | undefined {
+    if (this.useMemoryOnly) {
+      return this.memoryToken ?? undefined;
+    }
+    if (this.memoryToken) {
+      return this.memoryToken;
+    }
     return secureStorage.get("userConfig.githubToken");
+  }
+
+  static setMemoryToken(token: string | null): void {
+    this.memoryToken = token;
+    this.useMemoryOnly = true;
   }
 
   static hasToken(): boolean {

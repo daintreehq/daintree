@@ -7,6 +7,7 @@ import type {
   GitHubTokenConfig,
   GitHubTokenValidation,
 } from "../../types/index.js";
+import { getWorkspaceClient } from "../../services/WorkspaceClient.js";
 
 export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
@@ -161,6 +162,13 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
 
     if (validation.valid) {
       setGitHubToken(token.trim());
+
+      try {
+        const workspaceClient = getWorkspaceClient();
+        workspaceClient.updateGitHubToken(token.trim());
+      } catch {
+        // WorkspaceClient may not be initialized yet
+      }
     }
 
     return validation;
@@ -171,6 +179,13 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   const handleGitHubClearToken = async (): Promise<void> => {
     const { clearGitHubToken } = await import("../../services/GitHubService.js");
     clearGitHubToken();
+
+    try {
+      const workspaceClient = getWorkspaceClient();
+      workspaceClient.updateGitHubToken(null);
+    } catch {
+      // WorkspaceClient may not be initialized yet
+    }
   };
   ipcMain.handle(CHANNELS.GITHUB_CLEAR_TOKEN, handleGitHubClearToken);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_CLEAR_TOKEN));

@@ -33,6 +33,7 @@ import { AdaptivePollingStrategy, NoteFileReader } from "./services/worktree/ind
 import { initializeLogger } from "./utils/logger.js";
 import { copyTreeService } from "./services/CopyTreeService.js";
 import { DevServerParser } from "./services/devserver/DevServerParser.js";
+import { GitHubAuth } from "./services/github/GitHubAuth.js";
 import type { CopyTreeProgress } from "../shared/types/ipc.js";
 
 // Validate we're running in UtilityProcess context
@@ -1102,6 +1103,17 @@ port.on("message", async (rawMsg: any) => {
             error: (error as Error).message,
             requestId,
           });
+        }
+        break;
+      }
+
+      case "update-github-token": {
+        GitHubAuth.setMemoryToken(request.token);
+        const { pullRequestService } = await import("./services/PullRequestService.js");
+        if (request.token) {
+          pullRequestService.refresh();
+        } else {
+          pullRequestService.reset();
         }
         break;
       }
