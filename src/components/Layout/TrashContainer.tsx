@@ -64,7 +64,7 @@ export function TrashContainer({ trashedTerminals }: TrashContainerProps) {
             <span className="text-[10px] text-canopy-text/40">Auto-clears</span>
           </div>
 
-          <div className="p-2 flex flex-col gap-1 max-h-[300px] overflow-y-auto">
+          <div className="p-1 flex flex-col gap-1 max-h-[300px] overflow-y-auto">
             {sortedItems.map(({ terminal, trashedInfo }) => {
               const worktreeName = terminal.worktreeId
                 ? worktreeMap.get(terminal.worktreeId)?.name

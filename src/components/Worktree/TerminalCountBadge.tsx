@@ -87,6 +87,7 @@ export function TerminalCountBadge({
   onSelectTerminal,
 }: TerminalCountBadgeProps) {
   const pingTerminal = useTerminalStore((s) => s.pingTerminal);
+  const focusedId = useTerminalStore((s) => s.focusedId);
 
   if (counts.total === 0) {
     return null;
@@ -134,72 +135,84 @@ export function TerminalCountBadge({
         className="w-64 p-0"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="px-3 py-2 border-b border-canopy-border bg-canopy-bg/50">
+        <div className="px-3 py-2 border-b border-canopy-border bg-canopy-bg/50 flex justify-between items-center">
           <span className="text-xs font-medium text-canopy-text/70">
             Active Sessions ({terminals.length})
           </span>
         </div>
         <div className="max-h-[300px] overflow-y-auto p-1">
-          {terminals.map((term) => (
-            <DropdownMenuItem
-              key={term.id}
-              onSelect={() => handleSelect(term)}
-              className="flex items-center justify-between gap-3 py-2 cursor-pointer group"
-            >
-              {/* LEFT SIDE: Icon + Title */}
-              <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                <div className="shrink-0 opacity-70 group-hover:opacity-100 transition-opacity">
-                  {getTerminalIcon(term.type)}
+          {terminals.map((term) => {
+            const isFocused = term.id === focusedId;
+
+            return (
+              <DropdownMenuItem
+                key={term.id}
+                onSelect={() => handleSelect(term)}
+                className={cn(
+                  "flex items-center justify-between gap-3 py-2 cursor-pointer group",
+                  isFocused && "bg-accent"
+                )}
+              >
+                {/* LEFT SIDE: Icon + Title */}
+                <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                  <div className="shrink-0 opacity-70 group-hover:opacity-100 transition-opacity">
+                    {getTerminalIcon(term.type)}
+                  </div>
+                  <span
+                    className={cn(
+                      "text-sm truncate text-canopy-text/90 group-hover:text-canopy-text",
+                      isFocused ? "font-bold" : "font-medium"
+                    )}
+                  >
+                    {term.title}
+                  </span>
                 </div>
-                <span className="text-sm font-medium truncate text-canopy-text/90 group-hover:text-canopy-text">
-                  {term.title}
-                </span>
-              </div>
 
-              {/* RIGHT SIDE: State Icons + Location */}
-              <div className="flex items-center gap-3 shrink-0">
-                {term.agentState === "working" && (
-                  <Loader2
-                    className="w-3.5 h-3.5 animate-spin text-[var(--color-state-working)]"
-                    aria-label="Working"
-                  />
-                )}
-
-                {term.agentState === "waiting" && (
-                  <AlertCircle
-                    className="w-3.5 h-3.5 text-amber-400"
-                    aria-label="Waiting for input"
-                  />
-                )}
-
-                {term.agentState === "failed" && (
-                  <XCircle
-                    className="w-3.5 h-3.5 text-[var(--color-status-error)]"
-                    aria-label="Failed"
-                  />
-                )}
-
-                {term.agentState === "completed" && (
-                  <CheckCircle2
-                    className="w-3.5 h-3.5 text-[var(--color-status-success)]"
-                    aria-label="Completed"
-                  />
-                )}
-
-                {/* Location Indicator (Grid vs Dock) */}
-                <div
-                  className="text-muted-foreground/40"
-                  title={term.location === "dock" ? "Docked" : "On Grid"}
-                >
-                  {term.location === "dock" ? (
-                    <PanelBottom className="w-3.5 h-3.5" />
-                  ) : (
-                    <LayoutGrid className="w-3.5 h-3.5" />
+                {/* RIGHT SIDE: State Icons + Location */}
+                <div className="flex items-center gap-3 shrink-0">
+                  {term.agentState === "working" && (
+                    <Loader2
+                      className="w-3.5 h-3.5 animate-spin text-[var(--color-state-working)]"
+                      aria-label="Working"
+                    />
                   )}
+
+                  {term.agentState === "waiting" && (
+                    <AlertCircle
+                      className="w-3.5 h-3.5 text-amber-400"
+                      aria-label="Waiting for input"
+                    />
+                  )}
+
+                  {term.agentState === "failed" && (
+                    <XCircle
+                      className="w-3.5 h-3.5 text-[var(--color-status-error)]"
+                      aria-label="Failed"
+                    />
+                  )}
+
+                  {term.agentState === "completed" && (
+                    <CheckCircle2
+                      className="w-3.5 h-3.5 text-[var(--color-status-success)]"
+                      aria-label="Completed"
+                    />
+                  )}
+
+                  {/* Location Indicator (Grid vs Dock) */}
+                  <div
+                    className="text-muted-foreground/40"
+                    title={term.location === "dock" ? "Docked" : "On Grid"}
+                  >
+                    {term.location === "dock" ? (
+                      <PanelBottom className="w-3.5 h-3.5" />
+                    ) : (
+                      <LayoutGrid className="w-3.5 h-3.5" />
+                    )}
+                  </div>
                 </div>
-              </div>
-            </DropdownMenuItem>
-          ))}
+              </DropdownMenuItem>
+            );
+          })}
         </div>
       </DropdownMenuContent>
     </DropdownMenu>

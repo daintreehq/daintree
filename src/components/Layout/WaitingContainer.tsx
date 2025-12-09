@@ -34,10 +34,11 @@ function getLocationIcon(location: TerminalLocation | undefined) {
 export function WaitingContainer() {
   const [isOpen, setIsOpen] = useState(false);
   const waitingIds = useWaitingTerminalIds();
-  const { activateTerminal, pingTerminal } = useTerminalStore(
+  const { activateTerminal, pingTerminal, focusedId } = useTerminalStore(
     useShallow((state) => ({
       activateTerminal: state.activateTerminal,
       pingTerminal: state.pingTerminal,
+      focusedId: state.focusedId,
     }))
   );
   const shortcut = useKeybindingDisplay("agent.focusNextWaiting");
@@ -92,6 +93,7 @@ export function WaitingContainer() {
           <div className="p-1 flex flex-col gap-1 max-h-[300px] overflow-y-auto">
             {waitingTerminals.map((terminal) => {
               if (!terminal) return null;
+              const isFocused = terminal.id === focusedId;
 
               return (
                 <button
@@ -101,13 +103,22 @@ export function WaitingContainer() {
                     pingTerminal(terminal.id);
                     setIsOpen(false);
                   }}
-                  className="flex items-center justify-between gap-3 w-full px-2 py-2 rounded-sm hover:bg-canopy-accent/10 hover:text-canopy-accent transition-colors group text-left outline-none focus:bg-canopy-accent/10"
+                  className={cn(
+                    "flex items-center justify-between gap-3 w-full px-2 py-2 rounded-sm transition-colors group text-left outline-none",
+                    "hover:bg-white/5 focus:bg-white/5",
+                    isFocused && "bg-white/5"
+                  )}
                 >
                   <div className="flex items-center gap-2.5 min-w-0 flex-1">
                     <div className="shrink-0 opacity-70 group-hover:opacity-100 transition-opacity">
                       {getTerminalIcon(terminal.type)}
                     </div>
-                    <span className="text-sm font-medium truncate text-canopy-text/90 group-hover:text-canopy-text">
+                    <span
+                      className={cn(
+                        "text-sm truncate text-canopy-text/90 group-hover:text-canopy-text",
+                        isFocused ? "font-bold text-canopy-text" : "font-medium"
+                      )}
+                    >
                       {terminal.title}
                     </span>
                   </div>
