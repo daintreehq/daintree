@@ -43,8 +43,7 @@ class SecureStorage {
         );
         store.set(key as DotNotatedUserConfigKey, value);
       }
-    }
-    else {
+    } else {
       store.set(key as DotNotatedUserConfigKey, value);
     }
   }

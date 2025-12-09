@@ -820,7 +820,7 @@ export function WorktreeCard({
                             : "No recent activity recorded"
                         }
                       >
-                          <ActivityLight
+                        <ActivityLight
                           lastActivityTimestamp={worktree.lastActivityTimestamp}
                           className="w-1.5 h-1.5"
                         />
