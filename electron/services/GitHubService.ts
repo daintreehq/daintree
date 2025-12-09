@@ -92,7 +92,7 @@ export async function getRepoContext(cwd: string): Promise<RepoContext | null> {
   }
 }
 
-export async function getRepoStats(cwd: string): Promise<RepoStatsResult> {
+export async function getRepoStats(cwd: string, bypassCache = false): Promise<RepoStatsResult> {
   const client = GitHubAuth.createClient();
   if (!client) {
     return { stats: null, error: "GitHub token not configured" };
@@ -104,9 +104,12 @@ export async function getRepoStats(cwd: string): Promise<RepoStatsResult> {
   }
 
   const cacheKey = `${context.owner}/${context.repo}`;
-  const cached = repoStatsCache.get(cacheKey);
-  if (cached) {
-    return { stats: cached };
+
+  if (!bypassCache) {
+    const cached = repoStatsCache.get(cacheKey);
+    if (cached) {
+      return { stats: cached };
+    }
   }
 
   try {

@@ -160,9 +160,12 @@ export function Toolbar({
                 variant="ghost"
                 size="sm"
                 onClick={() => {
-                  if (statsError) refreshStats();
                   setPrsOpen(false);
-                  setIssuesOpen((prev) => !prev);
+                  const willOpen = !issuesOpen;
+                  setIssuesOpen(willOpen);
+                  if (willOpen) {
+                    refreshStats({ force: true });
+                  }
                 }}
                 className={cn(
                   "text-canopy-text hover:bg-canopy-border hover:text-canopy-accent h-7 px-2 gap-1.5",
@@ -200,9 +203,12 @@ export function Toolbar({
                 variant="ghost"
                 size="sm"
                 onClick={() => {
-                  if (statsError) refreshStats();
                   setIssuesOpen(false);
-                  setPrsOpen((prev) => !prev);
+                  const willOpen = !prsOpen;
+                  setPrsOpen(willOpen);
+                  if (willOpen) {
+                    refreshStats({ force: true });
+                  }
                 }}
                 className={cn(
                   "text-canopy-text hover:bg-canopy-border hover:text-canopy-accent h-7 px-2 gap-1.5",

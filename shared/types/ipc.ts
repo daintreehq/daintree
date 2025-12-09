@@ -1175,7 +1175,7 @@ export interface IpcInvokeMap {
 
   // GitHub channels
   "github:get-repo-stats": {
-    args: [cwd: string];
+    args: [cwd: string, bypassCache?: boolean];
     result: RepositoryStats;
   };
   "github:open-issues": {
@@ -1597,7 +1597,7 @@ export interface ElectronAPI {
     reset(agentType?: "claude" | "gemini" | "codex"): Promise<AgentSettings>;
   };
   github: {
-    getRepoStats(cwd: string): Promise<RepositoryStats>;
+    getRepoStats(cwd: string, bypassCache?: boolean): Promise<RepositoryStats>;
     openIssues(cwd: string): Promise<void>;
     openPRs(cwd: string): Promise<void>;
     openIssue(cwd: string, issueNumber: number): Promise<void>;

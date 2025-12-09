@@ -604,7 +604,8 @@ const api: ElectronAPI = {
 
   // GitHub API
   github: {
-    getRepoStats: (cwd: string) => _typedInvoke(CHANNELS.GITHUB_GET_REPO_STATS, cwd),
+    getRepoStats: (cwd: string, bypassCache?: boolean) =>
+      _typedInvoke(CHANNELS.GITHUB_GET_REPO_STATS, cwd, bypassCache),
 
     openIssues: (cwd: string) => _typedInvoke(CHANNELS.GITHUB_OPEN_ISSUES, cwd),
 

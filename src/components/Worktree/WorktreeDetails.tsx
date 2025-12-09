@@ -187,9 +187,7 @@ export function WorktreeDetails({
       {/* Dev Server Controls */}
       {showDevServer && serverState && (
         <div className="space-y-2">
-          <div className="text-xs text-canopy-text/60 font-medium">
-            Dev Server
-          </div>
+          <div className="text-xs text-canopy-text/60 font-medium">Dev Server</div>
           <div className="flex items-center gap-3">
             <button
               onClick={(e) => {
@@ -330,9 +328,7 @@ export function WorktreeDetails({
       {/* Block 3: Artifacts (grouped file changes + system path) */}
       {hasChanges && worktree.worktreeChanges && (
         <div className="space-y-2">
-          <div className="text-xs text-canopy-text/60 font-medium">
-            Changed Files
-          </div>
+          <div className="text-xs text-canopy-text/60 font-medium">Changed Files</div>
           <FileChangeList
             changes={worktree.worktreeChanges.changes}
             rootPath={worktree.worktreeChanges.rootPath}

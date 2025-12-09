@@ -14,7 +14,8 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
 
   const handleGitHubGetRepoStats = async (
     _event: Electron.IpcMainInvokeEvent,
-    cwd: string
+    cwd: string,
+    bypassCache = false
   ): Promise<RepositoryStats> => {
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
@@ -38,7 +39,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
         };
       }
 
-      const statsResult = await getRepoStats(resolved);
+      const statsResult = await getRepoStats(resolved, bypassCache);
 
       const commitCount = await getCommitCount(resolved).catch(() => 0);
 

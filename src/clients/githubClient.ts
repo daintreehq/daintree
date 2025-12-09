@@ -14,8 +14,8 @@ import type {
 } from "@shared/types/github";
 
 export const githubClient = {
-  getRepoStats: (cwd: string): Promise<RepositoryStats> => {
-    return window.electron.github.getRepoStats(cwd);
+  getRepoStats: (cwd: string, bypassCache = false): Promise<RepositoryStats> => {
+    return window.electron.github.getRepoStats(cwd, bypassCache);
   },
 
   openIssues: (cwd: string): Promise<void> => {

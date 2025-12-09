@@ -10,7 +10,7 @@ export interface UseRepositoryStatsReturn {
   stats: RepositoryStats | null;
   loading: boolean;
   error: string | null;
-  refresh: () => Promise<void>;
+  refresh: (options?: { force?: boolean }) => Promise<void>;
 }
 
 /**
@@ -43,7 +43,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   const lastErrorRef = useRef<string | null>(null);
   const inFlightRef = useRef(false);
 
-  const fetchStats = useCallback(async () => {
+  const fetchStats = useCallback(async (force = false) => {
     if (inFlightRef.current) {
       return;
     }
@@ -64,7 +64,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       setLoading(true);
       setError(null);
 
-      const repoStats = await githubClient.getRepoStats(project.path);
+      const repoStats = await githubClient.getRepoStats(project.path, force);
 
       if (mountedRef.current) {
         setStats(repoStats);
@@ -90,14 +90,6 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     }
   }, []);
 
-  const refresh = useCallback(async () => {
-    if (pollTimerRef.current) {
-      clearTimeout(pollTimerRef.current);
-      pollTimerRef.current = null;
-    }
-    await fetchStats();
-  }, [fetchStats]);
-
   const scheduleNextPoll = useCallback(() => {
     if (pollTimerRef.current) {
       clearTimeout(pollTimerRef.current);
@@ -116,6 +108,20 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       });
     }, interval);
   }, [fetchStats]);
+
+  const refresh = useCallback(
+    async (options?: { force?: boolean }) => {
+      if (pollTimerRef.current) {
+        clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+      await fetchStats(options?.force ?? false);
+      if (mountedRef.current) {
+        scheduleNextPoll();
+      }
+    },
+    [fetchStats, scheduleNextPoll]
+  );
 
   useEffect(() => {
     const handleVisibilityChange = () => {

@@ -507,9 +507,7 @@ export function WorktreeCard({
                   isMainWorktree={isMainWorktree}
                 />
                 {!worktree.branch && (
-                  <span className="text-amber-500 text-xs font-medium shrink-0">
-                    (detached)
-                  </span>
+                  <span className="text-amber-500 text-xs font-medium shrink-0">(detached)</span>
                 )}
               </div>
 
