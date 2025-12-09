@@ -82,11 +82,12 @@ export function Toolbar({
           size="icon"
           onClick={onToggleFocusMode}
           className={cn(
-            "text-canopy-text hover:bg-canopy-border h-8 w-8 transition-colors mr-2",
-            isFocusMode && "text-canopy-text/50"
+            "text-canopy-text hover:bg-canopy-border hover:text-canopy-accent h-8 w-8 transition-colors mr-2",
+            !isFocusMode && "bg-canopy-accent/20 text-canopy-accent"
           )}
           title={isFocusMode ? "Show Sidebar (Cmd+B)" : "Hide Sidebar (Cmd+B)"}
           aria-label="Toggle Sidebar"
+          aria-pressed={!isFocusMode}
         >
           {isFocusMode ? <PanelLeft className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
         </Button>
@@ -297,7 +298,7 @@ export function Toolbar({
             size="icon"
             onClick={toggleSidecar}
             className={cn(
-              "text-canopy-text hover:bg-canopy-border hover:text-canopy-accent h-8 w-8",
+              "text-canopy-text hover:bg-canopy-border hover:text-canopy-accent h-8 w-8 transition-colors",
               sidecarOpen && "bg-canopy-accent/20 text-canopy-accent"
             )}
             title={sidecarOpen ? "Close Context Sidecar" : "Open Context Sidecar"}
