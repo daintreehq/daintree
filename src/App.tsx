@@ -379,7 +379,8 @@ function App() {
     }))
   );
   const terminals = useTerminalStore(useShallow((state) => state.terminals));
-  const { launchAgent, availability, agentSettings, refreshSettings } = useAgentLauncher();
+  const { launchAgent, availability, isCheckingAvailability, agentSettings, refreshSettings } =
+    useAgentLauncher();
   const loadRecipes = useRecipeStore((state) => state.loadRecipes);
   useTerminalConfig();
   useLinkDiscovery();
@@ -1001,7 +1002,13 @@ function App() {
           agentAvailability={availability}
           agentSettings={agentSettings}
         >
-          <TerminalGrid className="h-full w-full" onLaunchAgent={handleLaunchAgent} />
+          <TerminalGrid
+            className="h-full w-full"
+            onLaunchAgent={handleLaunchAgent}
+            agentAvailability={availability}
+            isCheckingAvailability={isCheckingAvailability}
+            onOpenSettings={handleOpenAgentSettings}
+          />
         </AppLayout>
       </DndProvider>
 

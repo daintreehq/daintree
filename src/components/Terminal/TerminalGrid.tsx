@@ -29,11 +29,15 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { terminalClient, systemClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
 import { getAutoGridCols } from "@/lib/terminalLayout";
+import type { CliAvailability } from "@shared/types";
 
 export interface TerminalGridProps {
   className?: string;
   defaultCwd?: string;
   onLaunchAgent?: (type: "claude" | "gemini" | "codex" | "shell") => Promise<void> | void;
+  agentAvailability?: CliAvailability;
+  isCheckingAvailability?: boolean;
+  onOpenSettings?: () => void;
 }
 
 interface LauncherCardProps {
@@ -43,20 +47,57 @@ interface LauncherCardProps {
   icon: React.ReactNode;
   onClick: () => void;
   primary?: boolean;
+  available?: boolean;
+  isLoading?: boolean;
+  onUnavailableClick?: () => void;
 }
 
-function LauncherCard({ title, description, shortcut, icon, onClick }: LauncherCardProps) {
+function LauncherCard({
+  title,
+  description,
+  shortcut,
+  icon,
+  onClick,
+  available = true,
+  isLoading = false,
+  onUnavailableClick,
+}: LauncherCardProps) {
+  const handleClick = () => {
+    if (isLoading) {
+      return;
+    }
+    if (!available) {
+      if (onUnavailableClick) {
+        onUnavailableClick();
+      }
+      return;
+    }
+    onClick();
+  };
+
+  const tooltipText = isLoading
+    ? `Checking ${title} CLI availability...`
+    : available
+      ? undefined
+      : `${title} CLI not found. Click to install.`;
+
   return (
     <button
-      onClick={onClick}
+      onClick={handleClick}
+      disabled={isLoading}
+      title={tooltipText}
       className={cn(
-        "group flex items-center text-left p-4 rounded-xl border transition-all duration-200 min-h-[100px]",
+        "group relative flex items-center text-left p-4 rounded-xl border transition-all duration-200 min-h-[100px]",
         "bg-canopy-bg hover:bg-surface",
         "border-canopy-border/20 hover:border-canopy-border/40",
         "shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03),inset_0_-1px_0_0_rgba(0,0,0,0.2)]",
-        "hover:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05),inset_0_-1px_0_0_rgba(0,0,0,0.3),0_4px_12px_-4px_rgba(0,0,0,0.4)]"
+        "hover:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05),inset_0_-1px_0_0_rgba(0,0,0,0.3),0_4px_12px_-4px_rgba(0,0,0,0.4)]",
+        !available && !isLoading && "opacity-60"
       )}
     >
+      {!available && !isLoading && (
+        <div className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-amber-500 rounded-full" />
+      )}
       <div className="flex items-center justify-center p-2 rounded-lg mr-3 transition-colors">
         {icon}
       </div>
@@ -73,7 +114,7 @@ function LauncherCard({ title, description, shortcut, icon, onClick }: LauncherC
           )}
         </div>
         <p className="text-xs text-canopy-text/60 group-hover:text-canopy-text/80 transition-colors leading-relaxed">
-          {description}
+          {isLoading ? "Checking availability..." : !available ? "Click to install" : description}
         </p>
       </div>
     </button>
@@ -83,9 +124,15 @@ function LauncherCard({ title, description, shortcut, icon, onClick }: LauncherC
 function EmptyState({
   onLaunchAgent,
   hasActiveWorktree,
+  agentAvailability,
+  isCheckingAvailability,
+  onOpenSettings,
 }: {
   onLaunchAgent: (type: "claude" | "gemini" | "codex" | "shell") => void;
   hasActiveWorktree: boolean;
+  agentAvailability?: CliAvailability;
+  isCheckingAvailability?: boolean;
+  onOpenSettings?: () => void;
 }) {
   const handleOpenHelp = () => {
     void systemClient
@@ -93,6 +140,20 @@ function EmptyState({
       .catch((err) => {
         console.error("Failed to open documentation:", err);
       });
+  };
+
+  const handleAgentClick = (type: "claude" | "gemini" | "codex" | "shell") => {
+    if (!hasActiveWorktree) {
+      console.warn("Cannot launch agent: no active worktree");
+      return;
+    }
+    onLaunchAgent(type);
+  };
+
+  const handleUnavailableClick = () => {
+    if (onOpenSettings) {
+      onOpenSettings();
+    }
   };
 
   return (
@@ -123,26 +184,20 @@ function EmptyState({
             description="Great for deep, steady refactors."
             shortcut="Cmd/Ctrl+Alt+C"
             icon={<ClaudeIcon className="h-5 w-5" brandColor={getBrandColorHex("claude")} />}
-            onClick={
-              hasActiveWorktree
-                ? () => onLaunchAgent("claude")
-                : () => {
-                    console.warn("Cannot launch agent: no active worktree");
-                  }
-            }
+            onClick={() => handleAgentClick("claude")}
+            available={agentAvailability?.claude ?? false}
+            isLoading={isCheckingAvailability}
+            onUnavailableClick={handleUnavailableClick}
             primary
           />
           <LauncherCard
             title="Codex CLI"
             description="Good for careful, step-by-step changes."
             icon={<CodexIcon className="h-5 w-5" brandColor={getBrandColorHex("codex")} />}
-            onClick={
-              hasActiveWorktree
-                ? () => onLaunchAgent("codex")
-                : () => {
-                    console.warn("Cannot launch agent: no active worktree");
-                  }
-            }
+            onClick={() => handleAgentClick("codex")}
+            available={agentAvailability?.codex ?? false}
+            isLoading={isCheckingAvailability}
+            onUnavailableClick={handleUnavailableClick}
             primary
           />
           <LauncherCard
@@ -150,26 +205,19 @@ function EmptyState({
             description="Ideal for quick explorations and visual tasks."
             shortcut="Cmd/Ctrl+Alt+G"
             icon={<GeminiIcon className="h-5 w-5" brandColor={getBrandColorHex("gemini")} />}
-            onClick={
-              hasActiveWorktree
-                ? () => onLaunchAgent("gemini")
-                : () => {
-                    console.warn("Cannot launch agent: no active worktree");
-                  }
-            }
+            onClick={() => handleAgentClick("gemini")}
+            available={agentAvailability?.gemini ?? false}
+            isLoading={isCheckingAvailability}
+            onUnavailableClick={handleUnavailableClick}
             primary
           />
           <LauncherCard
             title="Terminal"
             description="Direct terminal access."
             icon={<Terminal className="h-5 w-5" />}
-            onClick={
-              hasActiveWorktree
-                ? () => onLaunchAgent("shell")
-                : () => {
-                    console.warn("Cannot launch agent: no active worktree");
-                  }
-            }
+            onClick={() => handleAgentClick("shell")}
+            available={true}
+            isLoading={false}
           />
         </div>
 
@@ -199,7 +247,14 @@ function EmptyState({
   );
 }
 
-export function TerminalGrid({ className, defaultCwd, onLaunchAgent }: TerminalGridProps) {
+export function TerminalGrid({
+  className,
+  defaultCwd,
+  onLaunchAgent,
+  agentAvailability,
+  isCheckingAvailability,
+  onOpenSettings,
+}: TerminalGridProps) {
   const { terminals, focusedId, maximizedId } = useTerminalStore(
     useShallow((state) => ({
       terminals: state.terminals,
@@ -449,6 +504,9 @@ export function TerminalGrid({ className, defaultCwd, onLaunchAgent }: TerminalG
                 <EmptyState
                   onLaunchAgent={handleLaunchAgent}
                   hasActiveWorktree={hasActiveWorktree}
+                  agentAvailability={agentAvailability}
+                  isCheckingAvailability={isCheckingAvailability}
+                  onOpenSettings={onOpenSettings}
                 />
               </div>
             ) : (
