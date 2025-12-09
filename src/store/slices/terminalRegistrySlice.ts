@@ -671,8 +671,7 @@ export const createTerminalRegistrySlice =
       if (!validation.valid) {
         // Set error state instead of attempting doomed restart
         // Use the first non-recoverable error's code, or the first error's code
-        const primaryError =
-          validation.errors.find((e) => !e.recoverable) || validation.errors[0];
+        const primaryError = validation.errors.find((e) => !e.recoverable) || validation.errors[0];
 
         const restartError: TerminalRestartError = {
           message: validation.errors.map((e) => e.message).join("; "),
@@ -701,9 +700,7 @@ export const createTerminalRegistrySlice =
       if (!currentTerminal || currentTerminal.location === "trash") {
         // Terminal was removed or trashed while we were validating
         set((state) => ({
-          terminals: state.terminals.map((t) =>
-            t.id === id ? { ...t, isRestarting: false } : t
-          ),
+          terminals: state.terminals.map((t) => (t.id === id ? { ...t, isRestarting: false } : t)),
         }));
         console.warn(`[TerminalStore] Terminal ${id} no longer exists or was trashed`);
         return;
