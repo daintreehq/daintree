@@ -4,6 +4,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { ImageAddon } from "@xterm/addon-image";
+import { SearchAddon } from "@xterm/addon-search";
 import { terminalClient, systemClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
 import { detectHardware, HardwareProfile } from "@/utils/hardwareDetection";
@@ -20,6 +21,7 @@ interface ManagedTerminal {
   serializeAddon: SerializeAddon;
   webLinksAddon: WebLinksAddon;
   imageAddon: ImageAddon;
+  searchAddon: SearchAddon;
   hostElement: HTMLDivElement;
   isOpened: boolean;
   listeners: Array<() => void>;
@@ -495,6 +497,9 @@ class TerminalInstanceService {
     const imageAddon = new ImageAddon();
     terminal.loadAddon(imageAddon);
 
+    const searchAddon = new SearchAddon();
+    terminal.loadAddon(searchAddon);
+
     const hostElement = document.createElement("div");
     hostElement.style.width = "100%";
     hostElement.style.height = "100%";
@@ -532,6 +537,7 @@ class TerminalInstanceService {
       serializeAddon,
       webLinksAddon,
       imageAddon,
+      searchAddon,
       hostElement,
       isOpened: false,
       listeners,
@@ -1390,6 +1396,7 @@ class TerminalInstanceService {
     managed.webglAddon?.dispose();
     managed.webLinksAddon.dispose();
     managed.imageAddon.dispose();
+    managed.searchAddon.dispose();
     this.webglLru = this.webglLru.filter((existing) => existing !== id);
 
     managed.terminal.dispose();

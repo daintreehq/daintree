@@ -6,6 +6,7 @@ import { getTerminalAnimationDuration } from "@/lib/animationUtils";
 import { XtermAdapter } from "./XtermAdapter";
 import { ArtifactOverlay } from "./ArtifactOverlay";
 import { TerminalHeader } from "./TerminalHeader";
+import { TerminalSearchBar } from "./TerminalSearchBar";
 import { TerminalRestartBanner } from "./TerminalRestartBanner";
 import { ErrorBanner } from "../Errors/ErrorBanner";
 import { useErrorStore, useTerminalStore, getTerminalRefreshTier } from "@/store";
@@ -67,6 +68,7 @@ function TerminalPaneComponent({
   const containerRef = useRef<HTMLDivElement>(null);
   const [isRestoring, setIsRestoring] = useState(true);
   const [dismissedRestartPrompt, setDismissedRestartPrompt] = useState(false);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
 
   useEffect(() => {
     if (!isRestoring) return;
@@ -151,6 +153,17 @@ function TerminalPaneComponent({
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       const target = e.target as HTMLElement;
+
+      if ((e.metaKey || e.ctrlKey) && e.key === "f") {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsSearchOpen(true);
+        requestAnimationFrame(() => {
+          document.querySelector<HTMLInputElement>("[data-terminal-search-input]")?.focus();
+        });
+        return;
+      }
+
       if (target.tagName === "TEXTAREA" || target.tagName === "INPUT") {
         return;
       }
@@ -347,6 +360,15 @@ function TerminalPaneComponent({
           getRefreshTier={getRefreshTierCallback}
         />
         <ArtifactOverlay terminalId={id} worktreeId={worktreeId} cwd={cwd} />
+        {isSearchOpen && (
+          <TerminalSearchBar
+            terminalId={id}
+            onClose={() => {
+              setIsSearchOpen(false);
+              requestAnimationFrame(() => terminalInstanceService.focus(id));
+            }}
+          />
+        )}
       </div>
     </div>
   );
