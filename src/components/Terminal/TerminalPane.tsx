@@ -82,6 +82,8 @@ function TerminalPaneComponent({
   const updateVisibility = useTerminalStore((state) => state.updateVisibility);
   const getTerminal = useTerminalStore((state) => state.getTerminal);
   const restartTerminal = useTerminalStore((state) => state.restartTerminal);
+  const focusedId = useTerminalStore((state) => state.focusedId);
+  const setFocused = useTerminalStore((state) => state.setFocused);
 
   const queueCount = useTerminalStore(
     useShallow((state) => state.commandQueue.filter((c) => c.terminalId === id).length)
@@ -171,9 +173,13 @@ function TerminalPaneComponent({
   }, [id, isFocused, getTerminal]);
 
   const handleClick = useCallback(() => {
-    onFocus();
+    if (focusedId === id) {
+      setFocused(null);
+    } else {
+      onFocus();
+    }
     terminalInstanceService.boostRefreshRate(id);
-  }, [onFocus, id]);
+  }, [focusedId, id, onFocus, setFocused]);
 
   const handleRestart = useCallback(() => {
     restartTerminal(id);
