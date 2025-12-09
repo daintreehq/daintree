@@ -24,13 +24,13 @@ export function SidecarDock() {
     updateTabTitle,
     createdTabs,
   } = useSidecarStore();
-  const placeholderRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const [isResizing, setIsResizing] = useState(false);
   const [isSwitching, setIsSwitching] = useState(false);
 
   const getPlaceholderBounds = useCallback(() => {
-    if (!placeholderRef.current) return null;
-    const rect = placeholderRef.current.getBoundingClientRect();
+    if (!contentRef.current) return null;
+    const rect = contentRef.current.getBoundingClientRect();
     return {
       x: Math.round(rect.x),
       y: Math.round(rect.y),
@@ -51,8 +51,8 @@ export function SidecarDock() {
     activeTab?.url !== undefined && activeTab.url !== null && activeTab.url !== "";
 
   const syncBounds = useCallback(() => {
-    if (!placeholderRef.current || !activeTabId) return;
-    const rect = placeholderRef.current.getBoundingClientRect();
+    if (!contentRef.current || !activeTabId) return;
+    const rect = contentRef.current.getBoundingClientRect();
     window.electron.sidecar.resize({
       x: Math.round(rect.x),
       y: Math.round(rect.y),
@@ -62,11 +62,11 @@ export function SidecarDock() {
   }, [activeTabId]);
 
   useEffect(() => {
-    if (!placeholderRef.current || !activeTabId) return;
+    if (!contentRef.current || !activeTabId) return;
 
     const debouncedSync = debounce(syncBounds, 100);
     const observer = new ResizeObserver(debouncedSync);
-    observer.observe(placeholderRef.current);
+    observer.observe(contentRef.current);
 
     window.addEventListener("resize", debouncedSync);
 
@@ -366,11 +366,13 @@ export function SidecarDock() {
         onCopyUrl={handleCopyUrl}
         hasActiveUrl={hasActiveUrl}
       />
-      {showLaunchpad ? (
-        <SidecarLaunchpad links={enabledLinks} onOpenUrl={handleOpenUrl} />
-      ) : (
-        <div ref={placeholderRef} className="flex-1 bg-canopy-sidebar" id="sidecar-placeholder" />
-      )}
+      <div ref={contentRef} className="flex-1 flex flex-col min-h-0 relative">
+        {showLaunchpad ? (
+          <SidecarLaunchpad links={enabledLinks} onOpenUrl={handleOpenUrl} />
+        ) : (
+          <div className="flex-1 bg-canopy-sidebar" id="sidecar-placeholder" />
+        )}
+      </div>
     </div>
   );
 }

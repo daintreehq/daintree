@@ -117,6 +117,14 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
   },
 
   createBlankTab: () => {
+    const state = get();
+    const existingBlank = state.tabs.find((t) => !t.url);
+
+    if (existingBlank) {
+      set({ activeTabId: existingBlank.id });
+      return existingBlank.id;
+    }
+
     const newTabId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const newTab: SidecarTab = { id: newTabId, url: null, title: "New Tab" };
     set((s) => ({
@@ -137,21 +145,26 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
     window.electron.sidecar.closeTab({ tabId: id });
 
     if (newActiveId) {
-      setTimeout(() => {
-        const placeholder = document.getElementById("sidecar-placeholder");
-        if (placeholder) {
-          const rect = placeholder.getBoundingClientRect();
-          window.electron.sidecar.show({
-            tabId: newActiveId,
-            bounds: {
-              x: Math.round(rect.x),
-              y: Math.round(rect.y),
-              width: Math.round(rect.width),
-              height: Math.round(rect.height),
-            },
-          });
-        }
-      }, 0);
+      const newActiveTab = newTabs.find((t) => t.id === newActiveId);
+      if (newActiveTab && !newActiveTab.url) {
+        window.electron.sidecar.hide();
+      } else {
+        setTimeout(() => {
+          const placeholder = document.getElementById("sidecar-placeholder");
+          if (placeholder) {
+            const rect = placeholder.getBoundingClientRect();
+            window.electron.sidecar.show({
+              tabId: newActiveId,
+              bounds: {
+                x: Math.round(rect.x),
+                y: Math.round(rect.y),
+                width: Math.round(rect.width),
+                height: Math.round(rect.height),
+              },
+            });
+          }
+        }, 0);
+      }
     } else {
       window.electron.sidecar.hide();
     }
