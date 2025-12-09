@@ -43,7 +43,7 @@ export function TerminalListItem({
         "transition-colors duration-100",
         isSelected
           ? "bg-canopy-accent/20 border border-canopy-accent"
-          : "hover:bg-canopy-sidebar border border-transparent"
+          : "hover:bg-white/5 border border-transparent"
       )}
       onClick={onClick}
       aria-selected={isSelected}
