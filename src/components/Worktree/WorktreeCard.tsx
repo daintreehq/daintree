@@ -444,7 +444,7 @@ export function WorktreeCard({
     <div
       className={cn(
         "group relative border-b-2 border-white/5 transition-all duration-200",
-        isActive ? "bg-white/[0.03]" : "hover:bg-white/[0.02] bg-transparent",
+        isActive ? "bg-white/[0.06]" : "hover:bg-white/5 bg-transparent",
         isFocused && "bg-white/[0.04]",
         (isIdleCard || isStaleCard) && !isActive && !isFocused && "opacity-70 hover:opacity-100",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
@@ -757,7 +757,7 @@ export function WorktreeCard({
                   onClick={handleToggleExpand}
                   aria-expanded={false}
                   aria-controls={detailsId}
-                  className="w-full p-3 flex items-center justify-between min-w-0 text-left rounded-lg transition-colors hover:bg-white/[0.02] focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]"
+                  className="w-full p-3 flex items-center justify-between min-w-0 text-left rounded-lg transition-colors hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]"
                 >
                   {/* LEFT SLOT: Git Signal + Commit Message */}
                   <div className="flex items-center gap-2 min-w-0 flex-1 text-[11px] font-mono text-canopy-text/60">

@@ -270,29 +270,29 @@ export function WorktreeList({
 
   if (sortedWorktrees.length === 0) {
     return (
-      <div
-        className="flex flex-col items-center justify-center h-full p-4 text-canopy-text/60"
-        role="status"
-        aria-live="polite"
-      >
-        <svg
-          className="w-8 h-8 mb-2 text-canopy-text/40"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          aria-hidden="true"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
-          />
-        </svg>
-        <span className="text-sm font-medium">No worktrees yet</span>
-        <span className="text-xs text-canopy-text/60 mt-1 text-center max-w-[200px]">
-          Use <strong>File → Open Directory</strong> to open a git repository
-        </span>
+      <div className="flex flex-col items-center justify-center h-full p-4">
+        <div className="bg-canopy-bg border border-canopy-border/40 rounded-xl p-8 flex flex-col items-center max-w-sm text-center shadow-sm">
+          <div className="h-12 w-12 bg-canopy-accent/10 rounded-full flex items-center justify-center mb-4">
+            <svg
+              className="w-6 h-6 text-canopy-accent"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              aria-hidden="true"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
+              />
+            </svg>
+          </div>
+          <span className="text-sm font-medium text-canopy-text">No worktrees yet</span>
+          <span className="text-xs text-canopy-text/60 mt-2">
+            Use <strong>File → Open Directory</strong> to open a git repository
+          </span>
+        </div>
       </div>
     );
   }
