@@ -1,12 +1,12 @@
+import { useState, useRef, useEffect } from "react";
+import type { MouseEvent } from "react";
 import {
   CircleDot,
   CheckCircle2,
   GitPullRequest,
   GitMerge,
   GitPullRequestClosed,
-  ExternalLink,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
 
@@ -47,14 +47,58 @@ function isPR(item: GitHubIssue | GitHubPR): item is GitHubPR {
 }
 
 export function GitHubListItem({ item, type }: GitHubListItemProps) {
+  const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
+  const timeoutRef = useRef<number | undefined>(undefined);
   const StateIcon = getStateIcon(item.state, type);
   const stateColor = getStateColor(item.state);
   const isItemPR = isPR(item);
 
-  const handleOpenExternal = (e: React.MouseEvent) => {
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+  }, []);
+
+  const handleOpenExternal = (e: MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
     window.electron.system.openExternal(item.url);
   };
+
+  const handleCopyNumber = async (e: MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
+
+    if (!navigator.clipboard) {
+      setCopyError(true);
+      timeoutRef.current = window.setTimeout(() => setCopyError(false), 2000);
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(item.number.toString());
+      setCopied(true);
+      setCopyError(false);
+      timeoutRef.current = window.setTimeout(() => setCopied(false), 2000);
+    } catch (error) {
+      console.error("Failed to copy:", error);
+      setCopyError(true);
+      timeoutRef.current = window.setTimeout(() => setCopyError(false), 2000);
+    }
+  };
+
+  const getButtonStatus = () => {
+    if (copied) return { text: "✓", color: "text-green-500" };
+    if (copyError) return { text: `#${item.number}`, color: "text-red-500" };
+    return { text: `#${item.number}`, color: "" };
+  };
+
+  const status = getButtonStatus();
 
   return (
     <div className="p-3 hover:bg-muted/50 transition-colors group cursor-default">
@@ -65,15 +109,45 @@ export function GitHubListItem({ item, type }: GitHubListItemProps) {
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <h4 className="text-sm font-medium text-foreground truncate">{item.title}</h4>
+            <button
+              type="button"
+              onClick={handleOpenExternal}
+              className="text-sm font-medium text-foreground truncate hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 cursor-pointer text-left"
+              title="Open in GitHub"
+              aria-label={`Open ${type} "${item.title}" in GitHub`}
+            >
+              {item.title}
+            </button>
             {isItemPR && item.isDraft && (
               <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-medium">
                 Draft
               </span>
             )}
           </div>
-          <div className="text-xs text-muted-foreground mt-1 flex items-center gap-1.5">
-            <span>#{item.number}</span>
+          <div
+            className="text-xs text-muted-foreground mt-1 flex items-center gap-1.5"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            <button
+              type="button"
+              onClick={handleCopyNumber}
+              className={cn(
+                "hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                status.color
+              )}
+              title={copied ? "Copied!" : copyError ? "Failed to copy" : "Click to copy number"}
+              aria-label={
+                copied
+                  ? `Number ${item.number} copied to clipboard`
+                  : copyError
+                    ? `Failed to copy number ${item.number}`
+                    : `Copy ${type} number ${item.number}`
+              }
+            >
+              {status.text}
+            </button>
             <span>&middot;</span>
             <span>{item.author.login}</span>
             <span>&middot;</span>
@@ -100,17 +174,6 @@ export function GitHubListItem({ item, type }: GitHubListItemProps) {
               )}
             </div>
           )}
-
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
-            onClick={handleOpenExternal}
-            title="Open in GitHub"
-            aria-label="Open in GitHub"
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-          </Button>
         </div>
       </div>
     </div>
