@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { ArrowLeft, ArrowRight, RotateCw, X, Plus } from "lucide-react";
+import { ArrowLeft, ArrowRight, RotateCw, X, Plus, ExternalLink } from "lucide-react";
 import {
   DndContext,
   closestCorners,
@@ -102,6 +102,8 @@ interface SidecarToolbarProps {
   onGoBack?: () => void;
   onGoForward?: () => void;
   onReload?: () => void;
+  onOpenExternal?: () => void;
+  hasActiveUrl?: boolean;
 }
 
 export function SidecarToolbar({
@@ -114,6 +116,8 @@ export function SidecarToolbar({
   onGoBack,
   onGoForward,
   onReload,
+  onOpenExternal,
+  hasActiveUrl = false,
 }: SidecarToolbarProps) {
   const reorderTabs = useSidecarStore((s) => s.reorderTabs);
 
@@ -162,6 +166,15 @@ export function SidecarToolbar({
             title="Reload"
           >
             <RotateCw className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={onOpenExternal}
+            disabled={!activeTabId || !hasActiveUrl}
+            aria-label="Open in external browser"
+            className="p-1 rounded hover:bg-canopy-border text-muted-foreground hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Open in external browser"
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
           </button>
         </div>
 

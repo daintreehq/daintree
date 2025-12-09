@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { SidecarToolbar } from "./SidecarToolbar";
 import { SidecarLaunchpad } from "./SidecarLaunchpad";
 import { SIDECAR_MIN_WIDTH, SIDECAR_MAX_WIDTH } from "@shared/types";
+import { systemClient } from "@/clients/systemClient";
 
 export function SidecarDock() {
   const {
@@ -45,6 +46,7 @@ export function SidecarDock() {
   const activeTab = tabs.find((t) => t.id === activeTabId);
   const isBlankTab = activeTabId !== null && activeTab && !activeTab.url;
   const showLaunchpad = activeTabId === null || tabs.length === 0 || isBlankTab;
+  const hasActiveUrl = activeTab?.url !== undefined && activeTab.url !== null && activeTab.url !== "";
 
   const syncBounds = useCallback(() => {
     if (!placeholderRef.current || !activeTabId) return;
@@ -232,6 +234,16 @@ export function SidecarDock() {
     }
   }, [activeTabId]);
 
+  const handleOpenExternal = useCallback(async () => {
+    const activeTab = tabs.find((t) => t.id === activeTabId);
+    if (!activeTab?.url) return;
+    try {
+      await systemClient.openExternal(activeTab.url);
+    } catch (error) {
+      console.error("Failed to open URL externally:", error);
+    }
+  }, [activeTabId, tabs]);
+
   const RESIZE_STEP = 10;
 
   const handleResizeStart = useCallback(
@@ -325,6 +337,8 @@ export function SidecarDock() {
         onGoBack={handleGoBack}
         onGoForward={handleGoForward}
         onReload={handleReload}
+        onOpenExternal={handleOpenExternal}
+        hasActiveUrl={hasActiveUrl}
       />
       {showLaunchpad ? (
         <SidecarLaunchpad links={enabledLinks} onOpenUrl={handleOpenUrl} />
