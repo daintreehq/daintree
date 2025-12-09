@@ -14,9 +14,8 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
+import { useTerminalStore } from "@/store/terminalStore";
 import {
   ClaudeIcon,
   GeminiIcon,
@@ -87,6 +86,8 @@ export function TerminalCountBadge({
   terminals,
   onSelectTerminal,
 }: TerminalCountBadgeProps) {
+  const pingTerminal = useTerminalStore((s) => s.pingTerminal);
+
   if (counts.total === 0) {
     return null;
   }
@@ -97,6 +98,13 @@ export function TerminalCountBadge({
     counts.byState.failed > 0 ||
     counts.byState.waiting > 0;
 
+  const handleSelect = (term: TerminalInstance) => {
+    onSelectTerminal(term);
+    pingTerminal(term.id);
+  };
+
+  const contentId = "terminal-count-dropdown";
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -106,6 +114,9 @@ export function TerminalCountBadge({
             "hover:bg-black/40 hover:text-canopy-text transition-colors cursor-pointer border border-transparent hover:border-white/10"
           )}
           onClick={(e) => e.stopPropagation()}
+          aria-haspopup="menu"
+          aria-controls={contentId}
+          aria-label={`Active Sessions: ${counts.total} terminal${counts.total === 1 ? "" : "s"}`}
         >
           <TerminalSquare className="w-3 h-3 opacity-70" aria-hidden="true" />
           {hasNonIdleStates ? (
@@ -117,16 +128,17 @@ export function TerminalCountBadge({
           )}
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-64" onClick={(e) => e.stopPropagation()}>
-        <DropdownMenuLabel className="text-xs text-muted-foreground font-normal">
-          Active Sessions ({terminals.length})
-        </DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        <div className="max-h-[300px] overflow-y-auto">
+      <DropdownMenuContent id={contentId} align="start" className="w-64 p-0" onClick={(e) => e.stopPropagation()}>
+        <div className="px-3 py-2 border-b border-canopy-border bg-canopy-bg/50">
+          <span className="text-xs font-medium text-canopy-text/70">
+            Active Sessions ({terminals.length})
+          </span>
+        </div>
+        <div className="max-h-[300px] overflow-y-auto p-1">
           {terminals.map((term) => (
             <DropdownMenuItem
               key={term.id}
-              onSelect={() => onSelectTerminal(term)}
+              onSelect={() => handleSelect(term)}
               className="flex items-center justify-between gap-3 py-2 cursor-pointer group"
             >
               {/* LEFT SIDE: Icon + Title */}

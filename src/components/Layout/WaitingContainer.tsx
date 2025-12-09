@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertCircle, ChevronRight } from "lucide-react";
+import { AlertCircle, LayoutGrid, PanelBottom } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
@@ -7,10 +7,9 @@ import { cn } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { useTerminalStore } from "@/store/terminalStore";
 import { useWaitingTerminalIds } from "@/hooks/useTerminalSelectors";
-import { useWorktrees } from "@/hooks/useWorktrees";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { ClaudeIcon, GeminiIcon, CodexIcon } from "@/components/icons";
-import type { TerminalType } from "@shared/types";
+import type { TerminalType, TerminalLocation } from "@shared/types";
 
 function getTerminalIcon(type: TerminalType) {
   const iconProps = { className: "h-3.5 w-3.5 shrink-0" };
@@ -27,6 +26,11 @@ function getTerminalIcon(type: TerminalType) {
   }
 }
 
+function getLocationIcon(location: TerminalLocation | undefined) {
+  if (location === "dock") return <PanelBottom className="w-3.5 h-3.5" />;
+  return <LayoutGrid className="w-3.5 h-3.5" />;
+}
+
 export function WaitingContainer() {
   const [isOpen, setIsOpen] = useState(false);
   const waitingIds = useWaitingTerminalIds();
@@ -36,7 +40,6 @@ export function WaitingContainer() {
       pingTerminal: state.pingTerminal,
     }))
   );
-  const { worktreeMap } = useWorktrees();
   const shortcut = useKeybindingDisplay("agent.focusNextWaiting");
 
   const waitingTerminals = useTerminalStore(
@@ -86,10 +89,9 @@ export function WaitingContainer() {
             <span className="text-xs font-medium text-canopy-text/70">Waiting For Input</span>
           </div>
 
-          <div className="p-2 flex flex-col gap-1 max-h-[300px] overflow-y-auto">
+          <div className="p-1 flex flex-col gap-1 max-h-[300px] overflow-y-auto">
             {waitingTerminals.map((terminal) => {
               if (!terminal) return null;
-              const worktree = terminal.worktreeId ? worktreeMap.get(terminal.worktreeId) : null;
 
               return (
                 <button
@@ -99,25 +101,30 @@ export function WaitingContainer() {
                     pingTerminal(terminal.id);
                     setIsOpen(false);
                   }}
-                  className="flex items-center gap-2 p-2 rounded bg-canopy-bg/50 hover:bg-canopy-border transition-colors group text-left w-full"
+                  className="flex items-center justify-between gap-3 w-full px-2 py-2 rounded-sm hover:bg-canopy-accent/10 hover:text-canopy-accent transition-colors group text-left outline-none focus:bg-canopy-accent/10"
                 >
-                  <div className="shrink-0">{getTerminalIcon(terminal.type)}</div>
-
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-medium text-canopy-text/90 truncate">
-                      {terminal.title}
-                      {worktree && (
-                        <span className="text-canopy-text/50 ml-1">({worktree.name})</span>
-                      )}
+                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                    <div className="shrink-0 opacity-70 group-hover:opacity-100 transition-opacity">
+                      {getTerminalIcon(terminal.type)}
                     </div>
-                    {terminal.activityHeadline && (
-                      <div className="text-[10px] text-canopy-text/50 truncate italic">
-                        {terminal.activityHeadline}
-                      </div>
-                    )}
+                    <span className="text-sm font-medium truncate text-canopy-text/90 group-hover:text-canopy-text">
+                      {terminal.title}
+                    </span>
                   </div>
 
-                  <ChevronRight className="w-3 h-3 text-canopy-text/30 group-hover:text-canopy-text/60 shrink-0" />
+                  <div className="flex items-center gap-3 shrink-0">
+                    <AlertCircle
+                      className="w-3.5 h-3.5 text-amber-400"
+                      aria-label="Waiting for input"
+                    />
+
+                    <div
+                      className="text-muted-foreground/40 group-hover:text-muted-foreground/60"
+                      title={terminal.location === "dock" ? "Docked" : "On Grid"}
+                    >
+                      {getLocationIcon(terminal.location)}
+                    </div>
+                  </div>
                 </button>
               );
             })}
