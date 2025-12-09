@@ -3,6 +3,8 @@ import type { WorktreeState, DevServerState } from "../../types";
 import type { AppError, RetryAction } from "../../store/errorStore";
 import { ErrorBanner } from "../Errors/ErrorBanner";
 import { FileChangeList } from "./FileChangeList";
+import { ActivityLight } from "./ActivityLight";
+import { LiveTimeAgo } from "./LiveTimeAgo";
 import { cn } from "../../lib/utils";
 import { systemClient } from "@/clients";
 import { Globe, Play, GitCommit, Square, Copy, Check, ExternalLink } from "lucide-react";
@@ -20,6 +22,8 @@ export interface WorktreeDetailsProps {
   hasChanges: boolean;
   isFocused: boolean;
   showLastCommit?: boolean;
+  lastActivityTimestamp?: number | null;
+  showTime?: boolean;
 
   onPathClick: () => void;
   onToggleServer: () => void;
@@ -58,6 +62,8 @@ export function WorktreeDetails({
   onDismissError,
   onRetryError,
   showLastCommit,
+  lastActivityTimestamp,
+  showTime = false,
 }: WorktreeDetailsProps) {
   const displayPath = formatPath(worktree.path, homeDir);
   const rawLastCommitMsg = worktree.worktreeChanges?.lastCommitMessage;
@@ -120,7 +126,8 @@ export function WorktreeDetails({
     effectiveNote ||
     effectiveSummary ||
     (showLastCommit && rawLastCommitMsg) ||
-    (hasChanges && worktree.worktreeChanges);
+    (hasChanges && worktree.worktreeChanges) ||
+    (showTime && lastActivityTimestamp);
 
   if (!hasContent) {
     return (
@@ -166,6 +173,17 @@ export function WorktreeDetails({
 
   return (
     <div className="space-y-4">
+      {/* Time Display for Expanded View */}
+      {showTime && lastActivityTimestamp && (
+        <div className="flex items-center gap-2 pb-2 border-b border-white/5">
+          <div className="flex items-center gap-1.5 text-xs text-canopy-text/50">
+            <span className="text-[10px] uppercase tracking-wider font-semibold">Last Active</span>
+            <ActivityLight lastActivityTimestamp={lastActivityTimestamp} />
+            <LiveTimeAgo timestamp={lastActivityTimestamp} />
+          </div>
+        </div>
+      )}
+
       {/* Dev Server Controls */}
       {showDevServer && serverState && (
         <div className="space-y-2">

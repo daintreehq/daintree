@@ -215,20 +215,7 @@ function XtermAdapterComponent({
     if (!managed.keyHandlerInstalled) {
       managed.terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
         // TUI reliability: keep common readline-style Ctrl+key bindings in the terminal
-        const TUI_KEYBINDS = [
-          "p",
-          "n",
-          "r",
-          "f",
-          "b",
-          "a",
-          "e",
-          "k",
-          "u",
-          "w",
-          "h",
-          "d",
-        ];
+        const TUI_KEYBINDS = ["p", "n", "r", "f", "b", "a", "e", "k", "u", "w", "h", "d"];
 
         // Let the OS handle meta combinations (e.g., Cmd+C/V).
         // Keep Alt/Option available for word navigation/editing inside the TUI.
