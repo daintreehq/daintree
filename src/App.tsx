@@ -19,7 +19,7 @@ import {
   useLinkDiscovery,
   useGridNavigation,
   useWindowNotifications,
-  type AgentType,
+  useWorktreeActions,
 } from "./hooks";
 import { AppLayout } from "./components/Layout";
 import { TerminalGrid } from "./components/Terminal";
@@ -44,17 +44,8 @@ import {
 import { useShallow } from "zustand/react/shallow";
 import { useRecipeStore } from "./store/recipeStore";
 import { setupTerminalStoreListeners } from "./store/terminalStore";
-import type { WorktreeState, RecipeTerminal } from "./types";
-import {
-  systemClient,
-  copyTreeClient,
-  projectClient,
-  errorsClient,
-  devServerClient,
-  worktreeClient,
-  githubClient,
-} from "@/clients";
-import { formatBytes } from "@/lib/formatBytes";
+import type { RecipeTerminal } from "./types";
+import { systemClient, projectClient, errorsClient, worktreeClient } from "@/clients";
 
 function SidebarContent() {
   const { worktrees, isLoading, error, refresh } = useWorktrees();
@@ -69,8 +60,6 @@ function SidebarContent() {
         setActiveWorktree: state.setActiveWorktree,
       }))
     );
-  const addError = useErrorStore((state) => state.addError);
-
   const [isRecipeEditorOpen, setIsRecipeEditorOpen] = useState(false);
   const [recipeEditorWorktreeId, setRecipeEditorWorktreeId] = useState<string | undefined>(
     undefined
@@ -93,129 +82,26 @@ function SidebarContent() {
     }
   }, [worktrees, activeWorktreeId, setActiveWorktree]);
 
-  const handleCopyTree = useCallback(
-    async (worktree: WorktreeState): Promise<string | undefined> => {
-      try {
-        const isAvailable = await copyTreeClient.isAvailable();
-        if (!isAvailable) {
-          throw new Error(
-            "CopyTree SDK not available. Please restart the application or check installation."
-          );
-        }
-
-        const result = await copyTreeClient.generateAndCopyFile(worktree.id, {
-          format: "xml",
-        });
-
-        if (result.error) {
-          throw new Error(result.error);
-        }
-
-        console.log(`Copied ${result.fileCount} files as file reference`);
-        const sizeStr = result.stats?.totalSize ? formatBytes(result.stats.totalSize) : "";
-
-        // Return success message instead of showing toast
-        return `Copied ${result.fileCount} files${sizeStr ? ` (${sizeStr})` : ""} to clipboard`;
-      } catch (e) {
-        const message = e instanceof Error ? e.message : "Failed to copy context to clipboard";
-        const details = e instanceof Error ? e.stack : undefined;
-
-        let errorType: "config" | "process" | "filesystem" = "process";
-        if (message.includes("not available") || message.includes("not installed")) {
-          errorType = "config";
-        } else if (
-          message.includes("permission") ||
-          message.includes("EACCES") ||
-          message.includes("denied")
-        ) {
-          errorType = "filesystem";
-        }
-
-        addError({
-          type: errorType,
-          message: `Copy context failed: ${message}`,
-          details,
-          source: "WorktreeCard",
-          context: {
-            worktreeId: worktree.id,
-          },
-          isTransient: true,
-          retryAction: "copytree",
-          retryArgs: {
-            worktreeId: worktree.id,
-          },
-        });
-
-        console.error("Failed to copy context:", message);
-        return undefined;
-      }
-    },
-    [addError]
-  );
-
-  const handleOpenEditor = useCallback((worktree: WorktreeState) => {
-    systemClient.openPath(worktree.path);
-  }, []);
-
-  const handleToggleServer = useCallback(
-    (worktree: WorktreeState) => {
-      const command = projectSettings?.devServer?.command;
-      devServerClient.toggle(worktree.id, worktree.path, command);
-    },
-    [projectSettings]
-  );
-
-  const handleCreateRecipe = useCallback((worktreeId: string) => {
-    setRecipeEditorWorktreeId(worktreeId);
-    setRecipeEditorInitialTerminals(undefined);
-    setIsRecipeEditorOpen(true);
-  }, []);
-
-  const handleSaveLayout = useCallback(
-    (worktree: WorktreeState) => {
-      const terminals = useRecipeStore.getState().generateRecipeFromActiveTerminals(worktree.id);
-
-      if (terminals.length === 0) {
-        addError({
-          type: "config",
-          message: "No active terminals to save in this worktree.",
-          source: "Save Layout",
-          isTransient: true,
-        });
-        return;
-      }
-
-      setRecipeEditorWorktreeId(worktree.id);
-      setRecipeEditorInitialTerminals(terminals);
+  const handleOpenRecipeEditor = useCallback(
+    (worktreeId: string, initialTerminals?: RecipeTerminal[]) => {
+      setRecipeEditorWorktreeId(worktreeId);
+      setRecipeEditorInitialTerminals(initialTerminals);
       setIsRecipeEditorOpen(true);
     },
-    [addError]
+    []
   );
+
+  const worktreeActions = useWorktreeActions({
+    projectSettings: projectSettings ?? undefined,
+    onOpenRecipeEditor: handleOpenRecipeEditor,
+    launchAgent,
+  });
 
   const handleCloseRecipeEditor = useCallback(() => {
     setIsRecipeEditorOpen(false);
     setRecipeEditorWorktreeId(undefined);
     setRecipeEditorInitialTerminals(undefined);
   }, []);
-
-  const handleOpenIssue = useCallback((worktree: WorktreeState) => {
-    if (worktree.issueNumber) {
-      githubClient.openIssue(worktree.path, worktree.issueNumber);
-    }
-  }, []);
-
-  const handleOpenPR = useCallback((worktree: WorktreeState) => {
-    if (worktree.prUrl) {
-      githubClient.openPR(worktree.prUrl);
-    }
-  }, []);
-
-  const handleLaunchAgentForWorktree = useCallback(
-    (worktreeId: string, type: AgentType) => {
-      launchAgent(type, { worktreeId, location: "grid" });
-    },
-    [launchAgent]
-  );
 
   if (isLoading) {
     return (
@@ -298,14 +184,16 @@ function SidebarContent() {
               isActive={worktree.id === activeWorktreeId}
               isFocused={worktree.id === focusedWorktreeId}
               onSelect={() => selectWorktree(worktree.id)}
-              onCopyTree={() => handleCopyTree(worktree)}
-              onOpenEditor={() => handleOpenEditor(worktree)}
-              onToggleServer={() => handleToggleServer(worktree)}
-              onOpenIssue={worktree.issueNumber ? () => handleOpenIssue(worktree) : undefined}
-              onOpenPR={worktree.prUrl ? () => handleOpenPR(worktree) : undefined}
-              onCreateRecipe={() => handleCreateRecipe(worktree.id)}
-              onSaveLayout={() => handleSaveLayout(worktree)}
-              onLaunchAgent={(type) => handleLaunchAgentForWorktree(worktree.id, type)}
+              onCopyTree={() => worktreeActions.handleCopyTree(worktree)}
+              onOpenEditor={() => worktreeActions.handleOpenEditor(worktree)}
+              onToggleServer={() => worktreeActions.handleToggleServer(worktree)}
+              onOpenIssue={
+                worktree.issueNumber ? () => worktreeActions.handleOpenIssue(worktree) : undefined
+              }
+              onOpenPR={worktree.prUrl ? () => worktreeActions.handleOpenPR(worktree) : undefined}
+              onCreateRecipe={() => worktreeActions.handleCreateRecipe(worktree.id)}
+              onSaveLayout={() => worktreeActions.handleSaveLayout(worktree)}
+              onLaunchAgent={(type) => worktreeActions.handleLaunchAgent(worktree.id, type)}
               agentAvailability={availability}
               agentSettings={agentSettings}
               homeDir={homeDir}

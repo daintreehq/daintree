@@ -1,13 +1,12 @@
-import { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useDndMonitor } from "@dnd-kit/core";
 import { Loader2 } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
-import { getTerminalAnimationDuration } from "@/lib/animationUtils";
 import { useTerminalStore, useSidecarStore, type TerminalInstance } from "@/store";
-import { TerminalPane } from "@/components/Terminal/TerminalPane";
+import { DockedTerminalPane } from "@/components/Terminal/DockedTerminalPane";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import type { AgentState } from "@/types";
@@ -40,12 +39,6 @@ function getStateIndicator(state?: AgentState) {
 }
 
 export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
-  const [isRestoring, setIsRestoring] = useState(false);
-  const [isTrashing, setIsTrashing] = useState(false);
-  const updateTitle = useTerminalStore((s) => s.updateTitle);
-  const moveTerminalToGrid = useTerminalStore((s) => s.moveTerminalToGrid);
-  const trashTerminal = useTerminalStore((s) => s.trashTerminal);
-  const removeTerminal = useTerminalStore((s) => s.removeTerminal);
   const setFocused = useTerminalStore((s) => s.setFocused);
   const activeDockTerminalId = useTerminalStore((s) => s.activeDockTerminalId);
   const openDockTerminal = useTerminalStore((s) => s.openDockTerminal);
@@ -88,8 +81,6 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
 
   // Toggle buffering based on popover open state
   useEffect(() => {
-    if (isRestoring) return;
-
     let cancelled = false;
 
     const applyBufferingState = async () => {
@@ -119,7 +110,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     return () => {
       cancelled = true;
     };
-  }, [isOpen, terminal.id, isRestoring]);
+  }, [isOpen, terminal.id]);
 
   // Auto-close popover when drag starts for this terminal
   useDndMonitor({
@@ -130,32 +121,9 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     },
   });
 
-  const handleRestore = useCallback(() => {
-    setIsRestoring(true);
-    closeDockTerminal();
-    moveTerminalToGrid(terminal.id);
-  }, [moveTerminalToGrid, terminal.id, closeDockTerminal]);
-
-  const handleMinimize = useCallback(() => {
+  const handlePopoverClose = useCallback(() => {
     closeDockTerminal();
   }, [closeDockTerminal]);
-
-  const handleClose = useCallback(
-    (force?: boolean) => {
-      if (force) {
-        removeTerminal(terminal.id);
-        closeDockTerminal();
-      } else {
-        const duration = getTerminalAnimationDuration();
-        setIsTrashing(true);
-        setTimeout(() => {
-          trashTerminal(terminal.id);
-          closeDockTerminal();
-        }, duration);
-      }
-    },
-    [trashTerminal, removeTerminal, terminal.id, closeDockTerminal]
-  );
 
   const handleOpenChange = useCallback(
     (open: boolean) => {
@@ -217,32 +185,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
           setTimeout(() => terminalInstanceService.focus(terminal.id), 50);
         }}
       >
-        <TerminalPane
-          id={terminal.id}
-          title={terminal.title}
-          type={terminal.type}
-          worktreeId={terminal.worktreeId}
-          cwd={terminal.cwd}
-          isFocused={true}
-          agentState={terminal.agentState}
-          activity={
-            terminal.activityHeadline
-              ? {
-                  headline: terminal.activityHeadline,
-                  status: terminal.activityStatus ?? "working",
-                  type: terminal.activityType ?? "interactive",
-                }
-              : null
-          }
-          location="dock"
-          restartKey={terminal.restartKey}
-          onFocus={() => setFocused(terminal.id)}
-          onClose={handleClose}
-          onRestore={handleRestore}
-          onMinimize={handleMinimize}
-          onTitleChange={(newTitle) => updateTitle(terminal.id, newTitle)}
-          isTrashing={isTrashing}
-        />
+        <DockedTerminalPane terminal={terminal} onPopoverClose={handlePopoverClose} />
       </PopoverContent>
     </Popover>
   );

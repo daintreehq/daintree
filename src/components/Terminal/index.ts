@@ -18,3 +18,7 @@ export { TerminalIcon } from "./TerminalIcon";
 export type { TerminalIconProps } from "./TerminalIcon";
 export { TerminalRestartBanner } from "./TerminalRestartBanner";
 export type { TerminalRestartBannerProps } from "./TerminalRestartBanner";
+export { GridTerminalPane } from "./GridTerminalPane";
+export type { GridTerminalPaneProps } from "./GridTerminalPane";
+export { DockedTerminalPane } from "./DockedTerminalPane";
+export type { DockedTerminalPaneProps } from "./DockedTerminalPane";
