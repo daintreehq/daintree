@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { useEventStore } from "@/store/eventStore";
@@ -38,11 +38,6 @@ export function EventsContent({ className }: EventsContentProps) {
     }))
   );
 
-  const timelineRef = useRef<HTMLDivElement>(null);
-  const isUserScrolling = useRef(false);
-  const isProgrammaticScroll = useRef(false);
-  const scrollTimeout = useRef<NodeJS.Timeout | null>(null);
-
   useEffect(() => {
     eventInspectorClient.subscribe();
 
@@ -65,40 +60,7 @@ export function EventsContent({ className }: EventsContentProps) {
     };
   }, [addEvent, setEvents]);
 
-  useEffect(() => {
-    if (autoScroll && timelineRef.current && !isUserScrolling.current) {
-      isProgrammaticScroll.current = true;
-      timelineRef.current.scrollTop = timelineRef.current.scrollHeight;
-      setTimeout(() => {
-        isProgrammaticScroll.current = false;
-      }, 50);
-    }
-  }, [events, autoScroll]);
-
-  const handleScroll = useCallback(() => {
-    if (!timelineRef.current) return;
-
-    if (isProgrammaticScroll.current) return;
-
-    const { scrollTop, scrollHeight, clientHeight } = timelineRef.current;
-    const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
-
-    isUserScrolling.current = true;
-    if (scrollTimeout.current) {
-      clearTimeout(scrollTimeout.current);
-    }
-    scrollTimeout.current = setTimeout(() => {
-      isUserScrolling.current = false;
-    }, 100);
-
-    if (!isAtBottom && autoScroll) {
-      setAutoScroll(false);
-    } else if (isAtBottom && !autoScroll) {
-      setAutoScroll(true);
-    }
-  }, [autoScroll, setAutoScroll]);
-
-  const filteredEvents = useMemo(() => getFilteredEvents(), [getFilteredEvents]);
+  const filteredEvents = useMemo(() => getFilteredEvents(), [events, filters, getFilteredEvents]);
   const selectedEvent = selectedEventId
     ? events.find((e) => e.id === selectedEventId) || null
     : null;
@@ -112,11 +74,13 @@ export function EventsContent({ className }: EventsContentProps) {
       />
 
       <div className="flex-1 flex min-h-0">
-        <div ref={timelineRef} onScroll={handleScroll} className="w-1/2 border-r overflow-y-auto">
+        <div className="w-1/2 border-r overflow-hidden">
           <EventTimeline
             events={filteredEvents}
             selectedId={selectedEventId}
             onSelectEvent={setSelectedEvent}
+            autoScroll={autoScroll}
+            onAutoScrollChange={setAutoScroll}
           />
         </div>
 

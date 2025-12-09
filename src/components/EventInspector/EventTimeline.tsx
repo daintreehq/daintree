@@ -1,6 +1,9 @@
+import { useRef, useCallback, useState } from "react";
+import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
 import { cn } from "@/lib/utils";
 import type { EventRecord, EventCategory } from "@/store/eventStore";
 import { Circle } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 const CATEGORY_STYLES: Record<EventCategory, { label: string; color: string }> = {
   system: { label: "SYS", color: "bg-blue-500/20 text-blue-400 border-blue-500/30" },
@@ -17,6 +20,8 @@ interface EventTimelineProps {
   events: EventRecord[];
   selectedId: string | null;
   onSelectEvent: (id: string) => void;
+  autoScroll?: boolean;
+  onAutoScrollChange?: (autoScroll: boolean) => void;
   className?: string;
 }
 
@@ -24,8 +29,31 @@ export function EventTimeline({
   events,
   selectedId,
   onSelectEvent,
+  autoScroll = true,
+  onAutoScrollChange,
   className,
 }: EventTimelineProps) {
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const [atBottom, setAtBottom] = useState(true);
+
+  const handleAtBottomChange = useCallback(
+    (bottom: boolean) => {
+      setAtBottom(bottom);
+      if (!bottom && autoScroll) {
+        onAutoScrollChange?.(false);
+      }
+    },
+    [autoScroll, onAutoScrollChange]
+  );
+
+  const scrollToBottom = useCallback(() => {
+    onAutoScrollChange?.(true);
+    virtuosoRef.current?.scrollToIndex({
+      index: "LAST",
+      behavior: "smooth",
+    });
+  }, [onAutoScrollChange]);
+
   const formatTimestamp = (timestamp: number) => {
     const date = new Date(timestamp);
     const hours = date.getHours().toString().padStart(2, "0");
@@ -76,50 +104,68 @@ export function EventTimeline({
     );
   }
 
-  return (
-    <div className={cn("flex-1 overflow-y-auto", className)}>
-      <div className="space-y-px">
-        {events.map((event) => {
-          const categoryStyle = getCategoryStyle(event.category);
-          const isSelected = event.id === selectedId;
-          const summary = getPayloadSummary(event);
+  const renderEvent = (_index: number, event: EventRecord) => {
+    const categoryStyle = getCategoryStyle(event.category);
+    const isSelected = event.id === selectedId;
+    const summary = getPayloadSummary(event);
 
-          return (
-            <button
-              key={event.id}
-              onClick={() => onSelectEvent(event.id)}
-              className={cn(
-                "w-full text-left px-3 py-2 hover:bg-muted/50 transition-colors",
-                "border-l-2 border-transparent",
-                isSelected && "bg-muted border-l-primary"
-              )}
-            >
-              <div className="flex items-start gap-2">
-                <span
-                  className={cn(
-                    "flex-shrink-0 inline-flex items-center justify-center w-8 px-1 py-0.5 rounded text-[10px] font-medium border",
-                    categoryStyle.color
-                  )}
-                  title={event.category}
-                >
-                  {categoryStyle.label}
-                </span>
-                <div className="flex-1 min-w-0 space-y-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-xs text-muted-foreground">
-                      {formatTimestamp(event.timestamp)}
-                    </span>
-                    <span className="text-xs font-mono text-foreground truncate">{event.type}</span>
-                  </div>
-                  {summary && (
-                    <p className="text-xs text-muted-foreground font-mono truncate">{summary}</p>
-                  )}
-                </div>
-              </div>
-            </button>
-          );
-        })}
-      </div>
+    return (
+      <button
+        key={event.id}
+        onClick={() => onSelectEvent(event.id)}
+        className={cn(
+          "w-full text-left px-3 py-2 hover:bg-muted/50 transition-colors",
+          "border-l-2 border-transparent",
+          isSelected && "bg-muted border-l-primary"
+        )}
+      >
+        <div className="flex items-start gap-2">
+          <span
+            className={cn(
+              "flex-shrink-0 inline-flex items-center justify-center w-8 px-1 py-0.5 rounded text-[10px] font-medium border",
+              categoryStyle.color
+            )}
+            title={event.category}
+          >
+            {categoryStyle.label}
+          </span>
+          <div className="flex-1 min-w-0 space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-xs text-muted-foreground">
+                {formatTimestamp(event.timestamp)}
+              </span>
+              <span className="text-xs font-mono text-foreground truncate">{event.type}</span>
+            </div>
+            {summary && (
+              <p className="text-xs text-muted-foreground font-mono truncate">{summary}</p>
+            )}
+          </div>
+        </div>
+      </button>
+    );
+  };
+
+  return (
+    <div className={cn("flex-1 relative", className)}>
+      <Virtuoso
+        ref={virtuosoRef}
+        data={events}
+        followOutput={autoScroll ? "smooth" : false}
+        atBottomStateChange={handleAtBottomChange}
+        itemContent={renderEvent}
+        className="h-full"
+      />
+
+      {!atBottom && events.length > 0 && (
+        <Button
+          variant="info"
+          size="sm"
+          className="absolute bottom-4 right-4 rounded-full shadow-lg"
+          onClick={scrollToBottom}
+        >
+          Scroll to bottom
+        </Button>
+      )}
     </div>
   );
 }

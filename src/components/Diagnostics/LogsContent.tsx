@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { useLogsStore, filterLogs } from "@/store";
@@ -41,11 +42,9 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
     }))
   );
 
-  const containerRef = useRef<HTMLDivElement>(null);
-  const isUserScrolling = useRef(false);
-  const isProgrammaticScroll = useRef(false);
-  const scrollTimeout = useRef<NodeJS.Timeout | null>(null);
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
   const sourcesRef = useRef<string[]>([]);
+  const [atBottom, setAtBottom] = useState(true);
 
   useEffect(() => {
     logsClient
@@ -80,38 +79,23 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
     };
   }, [addLog, setLogs, onSourcesChange]);
 
-  useEffect(() => {
-    if (autoScroll && containerRef.current && !isUserScrolling.current) {
-      isProgrammaticScroll.current = true;
-      containerRef.current.scrollTop = containerRef.current.scrollHeight;
-      setTimeout(() => {
-        isProgrammaticScroll.current = false;
-      }, 50);
-    }
-  }, [logs, autoScroll]);
+  const handleAtBottomChange = useCallback(
+    (bottom: boolean) => {
+      setAtBottom(bottom);
+      if (!bottom && autoScroll) {
+        setAutoScroll(false);
+      }
+    },
+    [autoScroll, setAutoScroll]
+  );
 
-  const handleScroll = useCallback(() => {
-    if (!containerRef.current) return;
-
-    if (isProgrammaticScroll.current) return;
-
-    const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
-    const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
-
-    isUserScrolling.current = true;
-    if (scrollTimeout.current) {
-      clearTimeout(scrollTimeout.current);
-    }
-    scrollTimeout.current = setTimeout(() => {
-      isUserScrolling.current = false;
-    }, 100);
-
-    if (isAtBottom && !autoScroll) {
-      setAutoScroll(true);
-    } else if (!isAtBottom && autoScroll) {
-      setAutoScroll(false);
-    }
-  }, [autoScroll, setAutoScroll]);
+  const scrollToBottom = useCallback(() => {
+    setAutoScroll(true);
+    virtuosoRef.current?.scrollToIndex({
+      index: "LAST",
+      behavior: "smooth",
+    });
+  }, [setAutoScroll]);
 
   const filteredLogs = useMemo(() => filterLogs(logs, filters), [logs, filters]);
 
@@ -125,42 +109,34 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
       />
 
       <div className="flex-1 relative">
-        <div
-          ref={containerRef}
-          onScroll={handleScroll}
-          className="absolute inset-0 overflow-y-auto overflow-x-hidden font-mono"
-        >
-          {filteredLogs.length === 0 ? (
-            <div className="flex items-center justify-center h-full text-canopy-text/60 text-sm">
-              {logs.length === 0 ? "No logs yet" : "No logs match filters"}
-            </div>
-          ) : (
-            filteredLogs.map((entry) => (
+        {filteredLogs.length === 0 ? (
+          <div className="flex items-center justify-center h-full text-canopy-text/60 text-sm">
+            {logs.length === 0 ? "No logs yet" : "No logs match filters"}
+          </div>
+        ) : (
+          <Virtuoso
+            ref={virtuosoRef}
+            data={filteredLogs}
+            followOutput={autoScroll ? "smooth" : false}
+            atBottomStateChange={handleAtBottomChange}
+            itemContent={(_index, entry) => (
               <LogEntry
                 key={entry.id}
                 entry={entry}
                 isExpanded={expandedIds.has(entry.id)}
                 onToggle={() => toggleExpanded(entry.id)}
               />
-            ))
-          )}
-        </div>
+            )}
+            className="absolute inset-0 overflow-y-auto overflow-x-hidden font-mono"
+          />
+        )}
 
-        {!autoScroll && filteredLogs.length > 0 && (
+        {!atBottom && filteredLogs.length > 0 && (
           <Button
             variant="info"
             size="sm"
             className="absolute bottom-4 right-4 rounded-full shadow-lg"
-            onClick={() => {
-              setAutoScroll(true);
-              if (containerRef.current) {
-                isProgrammaticScroll.current = true;
-                containerRef.current.scrollTop = containerRef.current.scrollHeight;
-                setTimeout(() => {
-                  isProgrammaticScroll.current = false;
-                }, 50);
-              }
-            }}
+            onClick={scrollToBottom}
           >
             Scroll to bottom
           </Button>
