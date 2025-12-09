@@ -268,6 +268,9 @@ const CHANNELS = {
 
   // Window channels
   WINDOW_FULLSCREEN_CHANGE: "window:fullscreen-change",
+
+  // Notification channels
+  NOTIFICATION_UPDATE: "notification:update",
 } as const;
 
 const api: ElectronAPI = {
@@ -742,6 +745,12 @@ const api: ElectronAPI = {
       ipcRenderer.on(CHANNELS.WINDOW_FULLSCREEN_CHANGE, handler);
       return () => ipcRenderer.removeListener(CHANNELS.WINDOW_FULLSCREEN_CHANGE, handler);
     },
+  },
+
+  // Notification API
+  notification: {
+    updateBadge: (state: { waitingCount: number; failedCount: number }) =>
+      ipcRenderer.send(CHANNELS.NOTIFICATION_UPDATE, state),
   },
 };
 

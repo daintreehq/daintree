@@ -18,6 +18,7 @@ import {
   useProjectSettings,
   useLinkDiscovery,
   useGridNavigation,
+  useWindowNotifications,
   type AgentType,
 } from "./hooks";
 import { AppLayout } from "./components/Layout";
@@ -382,6 +383,7 @@ function App() {
   const loadRecipes = useRecipeStore((state) => state.loadRecipes);
   useTerminalConfig();
   useLinkDiscovery();
+  useWindowNotifications();
 
   // Grid navigation hook for directional terminal switching
   const { findNearest, findByIndex, findDockByIndex, getCurrentLocation } = useGridNavigation();

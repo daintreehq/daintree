@@ -47,3 +47,5 @@ export type { NavigationDirection } from "./useGridNavigation";
 
 export { useLayoutState } from "./useLayoutState";
 export type { LayoutState } from "./useLayoutState";
+
+export { useWindowNotifications } from "./useWindowNotifications";

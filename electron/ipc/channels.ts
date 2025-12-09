@@ -162,6 +162,8 @@ export const CHANNELS = {
   WORKTREE_CONFIG_SET_PATTERN: "worktree-config:set-pattern",
 
   WINDOW_FULLSCREEN_CHANGE: "window:fullscreen-change",
+
+  NOTIFICATION_UPDATE: "notification:update",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

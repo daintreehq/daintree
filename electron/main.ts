@@ -32,6 +32,7 @@ import {
   initializeSystemSleepService,
   getSystemSleepService,
 } from "./services/SystemSleepService.js";
+import { notificationService } from "./services/NotificationService.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -273,6 +274,10 @@ async function createWindow(): Promise<void> {
   console.log("[MAIN] Creating application menu...");
   createApplicationMenu(mainWindow);
 
+  // Initialize Notification Service
+  notificationService.initialize(mainWindow);
+  console.log("[MAIN] NotificationService initialized");
+
   // Initialize Service Instances (Start processes in background)
   console.log("[MAIN] Starting critical services...");
 
@@ -471,6 +476,7 @@ async function createWindow(): Promise<void> {
     disposePtyClient();
 
     getSystemSleepService().dispose();
+    notificationService.dispose();
 
     setLoggerWindow(null);
     mainWindow = null;
