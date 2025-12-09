@@ -8,8 +8,8 @@ export interface TabOption {
 }
 
 export interface TabsProps {
-  value: string;
-  onChange: (value: string) => void;
+  value: string | null;
+  onChange: (value: string | null) => void;
   options: TabOption[];
   className?: string;
   fullWidth?: boolean;
@@ -77,9 +77,6 @@ export function Tabs({
     return null;
   }
 
-  // Find the active tab index, fallback to first tab if value not found
-  const activeIndex = options.findIndex((opt) => opt.value === value);
-
   return (
     <div
       role="tablist"
@@ -88,7 +85,7 @@ export function Tabs({
       className={cn("flex border-b border-canopy-border", className)}
     >
       {options.map((option, index) => {
-        const isActive = value === option.value || (activeIndex === -1 && index === 0);
+        const isActive = value !== null && value === option.value;
         const tabId = idPrefix ? `${idPrefix}-tab-${option.value}` : undefined;
         const panelId = idPrefix ? `${idPrefix}-panel-${option.value}` : undefined;
 
@@ -103,8 +100,14 @@ export function Tabs({
             id={tabId}
             aria-selected={isActive}
             aria-controls={panelId}
-            tabIndex={isActive ? 0 : -1}
-            onClick={() => onChange(option.value)}
+            tabIndex={isActive ? 0 : value === null && index === 0 ? 0 : -1}
+            onClick={() => {
+              if (value === option.value) {
+                onChange(null);
+              } else {
+                onChange(option.value);
+              }
+            }}
             onKeyDown={(e) => handleKeyDown(e, index)}
             className={cn(
               "px-4 py-2 text-sm font-medium transition-colors",
