@@ -48,6 +48,7 @@ export interface SidecarTab {
   url: string | null;
   title: string;
   favicon?: string;
+  icon?: string;
 }
 
 export interface SidecarBounds {

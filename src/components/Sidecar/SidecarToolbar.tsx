@@ -19,6 +19,7 @@ import { CSS } from "@dnd-kit/utilities";
 import type { SidecarTab } from "@shared/types";
 import { cn } from "@/lib/utils";
 import { useSidecarStore } from "@/store/sidecarStore";
+import { SidecarIcon } from "./SidecarIcon";
 
 const SortableTab = memo(function SortableTab({
   tab,
@@ -56,12 +57,6 @@ const SortableTab = memo(function SortableTab({
       aria-label={tab.title}
       tabIndex={isActive ? 0 : -1}
       onClick={() => onClick(tab.id)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onClick(tab.id);
-        }
-      }}
       className={cn(
         "group relative flex items-center gap-2 px-3 py-1.5 text-xs font-medium cursor-pointer select-none transition-all",
         "rounded-full border shadow-sm",
@@ -72,6 +67,11 @@ const SortableTab = memo(function SortableTab({
         isDragging && "opacity-80 scale-105 shadow-xl cursor-grabbing"
       )}
     >
+      {tab.icon && (
+        <div className="flex-shrink-0">
+          <SidecarIcon icon={tab.icon} size="tab" url={tab.url ?? undefined} />
+        </div>
+      )}
       <span className="truncate max-w-[120px]">{tab.title}</span>
       <button
         onClick={(e) => {
@@ -192,6 +192,7 @@ export function SidecarToolbar({
         <div className="flex items-center gap-1">
           <button
             onClick={onClose}
+            aria-label="Close sidecar"
             className="p-1 rounded hover:bg-canopy-border text-muted-foreground hover:text-canopy-text transition-colors ml-1"
             title="Close sidecar"
           >
@@ -207,6 +208,7 @@ export function SidecarToolbar({
             <div
               className="flex flex-wrap gap-2 items-center"
               role="tablist"
+              aria-orientation="horizontal"
               onKeyDown={(e) => {
                 if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
                   e.preventDefault();
