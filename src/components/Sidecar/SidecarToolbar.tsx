@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { ArrowLeft, ArrowRight, RotateCw, X, Plus, ExternalLink } from "lucide-react";
+import { ArrowLeft, ArrowRight, RotateCw, X, Plus, ExternalLink, Link2 } from "lucide-react";
 import {
   DndContext,
   closestCorners,
@@ -103,6 +103,7 @@ interface SidecarToolbarProps {
   onGoForward?: () => void;
   onReload?: () => void;
   onOpenExternal?: () => void;
+  onCopyUrl?: () => void;
   hasActiveUrl?: boolean;
 }
 
@@ -117,6 +118,7 @@ export function SidecarToolbar({
   onGoForward,
   onReload,
   onOpenExternal,
+  onCopyUrl,
   hasActiveUrl = false,
 }: SidecarToolbarProps) {
   const reorderTabs = useSidecarStore((s) => s.reorderTabs);
@@ -166,6 +168,15 @@ export function SidecarToolbar({
             title="Reload"
           >
             <RotateCw className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={onCopyUrl}
+            disabled={!activeTabId || !hasActiveUrl}
+            aria-label="Copy URL"
+            className="p-1 rounded hover:bg-canopy-border text-muted-foreground hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Copy URL"
+          >
+            <Link2 className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={onOpenExternal}

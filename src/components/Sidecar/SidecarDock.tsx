@@ -245,6 +245,16 @@ export function SidecarDock() {
     }
   }, [activeTabId, tabs]);
 
+  const handleCopyUrl = useCallback(async () => {
+    const activeTab = tabs.find((t) => t.id === activeTabId);
+    if (!activeTab?.url) return;
+    try {
+      await navigator.clipboard.writeText(activeTab.url);
+    } catch (error) {
+      console.error("Failed to copy URL:", error);
+    }
+  }, [activeTabId, tabs]);
+
   const RESIZE_STEP = 10;
 
   const handleResizeStart = useCallback(
@@ -339,6 +349,7 @@ export function SidecarDock() {
         onGoForward={handleGoForward}
         onReload={handleReload}
         onOpenExternal={handleOpenExternal}
+        onCopyUrl={handleCopyUrl}
         hasActiveUrl={hasActiveUrl}
       />
       {showLaunchpad ? (
