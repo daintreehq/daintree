@@ -200,6 +200,11 @@ function TerminalPaneComponent({
     }
   }, [isFocused, id]);
 
+  // Sync agent state to terminal service for scroll management
+  useEffect(() => {
+    terminalInstanceService.setAgentState(id, agentState ?? "idle");
+  }, [id, agentState]);
+
   const isWorking = agentState === "working";
 
   return (
