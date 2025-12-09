@@ -11,7 +11,7 @@ const START_DEBOUNCING_THRESHOLD = 200;
 const HORIZONTAL_DEBOUNCE_MS = 100;
 // Vertical resize throttle delay - TUI apps redraw entire screen on height changes.
 // Use leading-edge + trailing throttle to balance responsiveness with TUI redraw storms.
-const VERTICAL_THROTTLE_MS = 50;
+const VERTICAL_THROTTLE_MS = 150;
 // Max wait time for idle callbacks (both X and Y)
 const IDLE_CALLBACK_TIMEOUT_MS = 1000;
 

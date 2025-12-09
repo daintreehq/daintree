@@ -85,7 +85,7 @@ function XtermAdapterComponent({
       cursorStyle: "block" as const,
       cursorInactiveStyle: "block" as const,
       fontSize,
-      lineHeight: 1.2,
+      lineHeight: 1.1,
       letterSpacing: 0,
       fontFamily: fontFamily || DEFAULT_TERMINAL_FONT_FAMILY,
       fontLigatures: false,
@@ -97,6 +97,8 @@ function XtermAdapterComponent({
       scrollback: effectiveScrollback,
       macOptionIsMeta: true,
       fastScrollModifier: "alt" as const,
+      fastScrollSensitivity: 5,
+      scrollSensitivity: 1.5,
     }),
     [effectiveScrollback, performanceMode, fontSize, fontFamily]
   );
@@ -212,6 +214,33 @@ function XtermAdapterComponent({
 
     if (!managed.keyHandlerInstalled) {
       managed.terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+        // TUI reliability: keep common readline-style Ctrl+key bindings in the terminal
+        const TUI_KEYBINDS = [
+          "p",
+          "n",
+          "r",
+          "f",
+          "b",
+          "a",
+          "e",
+          "k",
+          "u",
+          "w",
+          "h",
+          "d",
+        ];
+
+        // Let the OS handle meta combinations (e.g., Cmd+C/V).
+        // Keep Alt/Option available for word navigation/editing inside the TUI.
+        if (event.metaKey) {
+          return false;
+        }
+
+        // Allow critical Ctrl+<key> bindings to reach the TUI
+        if (event.ctrlKey && !event.shiftKey && TUI_KEYBINDS.includes(event.key)) {
+          return true;
+        }
+
         if (
           event.key === "Enter" &&
           event.shiftKey &&

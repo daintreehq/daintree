@@ -253,9 +253,21 @@ export class PtyPool {
 
   private getFilteredEnv(): Record<string, string> {
     const env = process.env as Record<string, string | undefined>;
-    return Object.fromEntries(
-      Object.entries(env).filter(([_, value]) => value !== undefined)
+
+    const filtered = Object.fromEntries(
+      Object.entries(env).filter(([, value]) => value !== undefined)
     ) as Record<string, string>;
+
+    // TUI reliability: ensure rich terminal capabilities for Claude/Gemini CLIs
+    filtered.TERM = "xterm-256color";
+    filtered.COLORTERM = "truecolor";
+    filtered.LANG = "en_US.UTF-8";
+    filtered.LC_ALL = "en_US.UTF-8";
+
+    // Avoid tools treating the environment as CI/non-interactive
+    delete filtered.CI;
+
+    return filtered;
   }
 }
 
