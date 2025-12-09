@@ -32,6 +32,7 @@ interface SidecarActions {
   closeAllTabs: () => void;
   updateTabTitle: (id: string, title: string) => void;
   updateTabUrl: (id: string, url: string) => void;
+  updateTabIcon: (id: string, icon: string | undefined) => void;
   updateLayoutMode: (windowWidth: number, sidebarWidth: number) => void;
   markTabCreated: (id: string) => void;
   isTabCreated: (id: string) => boolean;
@@ -172,6 +173,11 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
   updateTabUrl: (id, url) =>
     set((s) => ({
       tabs: s.tabs.map((t) => (t.id === id ? { ...t, url } : t)),
+    })),
+
+  updateTabIcon: (id, icon) =>
+    set((s) => ({
+      tabs: s.tabs.map((t) => (t.id === id ? { ...t, icon } : t)),
     })),
 
   updateLayoutMode: (windowWidth, sidebarWidth) => {
@@ -348,6 +354,7 @@ const sidecarStoreCreator: StateCreator<
   partialize: (state) => ({
     links: state.links,
     width: state.width,
+    tabs: state.tabs,
   }),
 });
 

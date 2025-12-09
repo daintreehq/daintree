@@ -5,6 +5,7 @@ import { SidecarToolbar } from "./SidecarToolbar";
 import { SidecarLaunchpad } from "./SidecarLaunchpad";
 import { SIDECAR_MIN_WIDTH, SIDECAR_MAX_WIDTH } from "@shared/types";
 import { systemClient } from "@/clients/systemClient";
+import { getAIAgentInfo } from "@/lib/aiAgentDetection";
 
 export function SidecarDock() {
   const {
@@ -77,8 +78,13 @@ export function SidecarDock() {
 
   useEffect(() => {
     const cleanup = window.electron.sidecar.onNavEvent((data) => {
-      useSidecarStore.getState().updateTabTitle(data.tabId, data.title);
+      const agentInfo = getAIAgentInfo(data.url);
+      const finalTitle = agentInfo?.title ?? data.title;
+      useSidecarStore.getState().updateTabTitle(data.tabId, finalTitle);
       useSidecarStore.getState().updateTabUrl(data.tabId, data.url);
+      if (agentInfo?.icon) {
+        useSidecarStore.getState().updateTabIcon(data.tabId, agentInfo.icon);
+      }
     });
     return cleanup;
   }, []);
@@ -150,6 +156,11 @@ export function SidecarDock() {
       setIsSwitching(true);
 
       try {
+        // Detect if this is a known AI agent
+        const agentInfo = getAIAgentInfo(url);
+        const finalTitle = agentInfo?.title ?? title;
+        const icon = agentInfo?.icon;
+
         // Reuse blank tab if active, otherwise create new tab
         const currentTab = activeTabId ? tabs.find((t) => t.id === activeTabId) : null;
         const isCurrentBlank = currentTab && !currentTab.url;
@@ -159,11 +170,14 @@ export function SidecarDock() {
           // Reuse the blank tab
           tabId = activeTabId;
           updateTabUrl(tabId, url);
-          updateTabTitle(tabId, title);
+          updateTabTitle(tabId, finalTitle);
+          if (icon) {
+            useSidecarStore.getState().updateTabIcon(tabId, icon);
+          }
         } else {
           // Create new tab
           const newTabId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-          const newTab = { id: newTabId, url, title };
+          const newTab = { id: newTabId, url, title: finalTitle, icon };
           useSidecarStore.setState((s) => ({
             tabs: [...s.tabs, newTab],
           }));
