@@ -22,9 +22,9 @@ interface AppLayoutProps {
   agentSettings?: AgentSettings | null;
 }
 
-const MIN_SIDEBAR_WIDTH = 200;
-const MAX_SIDEBAR_WIDTH = 600;
-const DEFAULT_SIDEBAR_WIDTH = 350;
+export const MIN_SIDEBAR_WIDTH = 200;
+export const MAX_SIDEBAR_WIDTH = 600;
+export const DEFAULT_SIDEBAR_WIDTH = 350;
 
 export function AppLayout({
   children,

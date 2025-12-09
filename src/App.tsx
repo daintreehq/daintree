@@ -163,11 +163,11 @@ function SidebarContent() {
   return (
     <div className="flex flex-col h-full">
       {/* Header Section */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-white/5 bg-[#18181b] shrink-0">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-canopy-border bg-canopy-sidebar shrink-0">
         <h2 className="text-canopy-text font-semibold text-sm tracking-wide">Worktrees</h2>
         <button
           onClick={() => setIsNewWorktreeDialogOpen(true)}
-          className="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 text-canopy-text/60 hover:text-canopy-text hover:bg-white/5 rounded transition-colors"
+          className="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-border/50 rounded transition-colors"
           title="Create new worktree"
         >
           <span className="text-[10px]">+</span> New

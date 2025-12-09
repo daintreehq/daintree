@@ -8,6 +8,7 @@ import {
   QuickRun,
 } from "@/components/Project";
 import { useProjectStore } from "@/store/projectStore";
+import { DEFAULT_SIDEBAR_WIDTH } from "./AppLayout";
 
 interface SidebarProps {
   width: number;
@@ -45,6 +46,10 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
     },
     [width, onResize]
   );
+
+  const handleResetWidth = useCallback(() => {
+    onResize(DEFAULT_SIDEBAR_WIDTH);
+  }, [onResize]);
 
   const resize = useCallback(
     (e: MouseEvent) => {
@@ -119,6 +124,7 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
           )}
           onMouseDown={startResizing}
           onKeyDown={handleKeyDown}
+          onDoubleClick={handleResetWidth}
         >
           <div
             className={cn(
