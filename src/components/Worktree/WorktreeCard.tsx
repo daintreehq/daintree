@@ -412,6 +412,8 @@ export function WorktreeCard({
     terminalCounts.total > 0 ||
     !!rawLastCommitMessage;
 
+  const showTimeInHeader = isMainWorktree || !hasExpandableContent;
+
   const showMetaFooter = terminalCounts.total > 0;
 
   const detailsId = useMemo(() => `worktree-${worktree.id}-details`, [worktree.id]);
@@ -511,25 +513,27 @@ export function WorktreeCard({
                 )}
               </div>
 
-              {/* Center: Activity chip */}
-              <div
-                className={cn(
-                  "flex items-center gap-1.5 shrink-0 text-[10px] px-2 py-0.5 rounded-full",
-                  worktree.lastActivityTimestamp
-                    ? "bg-white/[0.03] text-canopy-text/60"
-                    : "bg-transparent text-canopy-text/40"
-                )}
-                title={
-                  worktree.lastActivityTimestamp
-                    ? `Last activity: ${new Date(worktree.lastActivityTimestamp).toLocaleString()}`
-                    : "No recent activity recorded"
-                }
-              >
-                {worktree.lastActivityTimestamp && (
-                  <ActivityLight lastActivityTimestamp={worktree.lastActivityTimestamp} />
-                )}
-                <LiveTimeAgo timestamp={worktree.lastActivityTimestamp} className="font-medium" />
-              </div>
+              {/* Center: Activity chip (only shown in header for main worktree or when no expandable content) */}
+              {showTimeInHeader && (
+                <div
+                  className={cn(
+                    "flex items-center gap-1.5 shrink-0 text-[10px] px-2 py-0.5 rounded-full",
+                    worktree.lastActivityTimestamp
+                      ? "bg-white/[0.03] text-canopy-text/60"
+                      : "bg-transparent text-canopy-text/40"
+                  )}
+                  title={
+                    worktree.lastActivityTimestamp
+                      ? `Last activity: ${new Date(worktree.lastActivityTimestamp).toLocaleString()}`
+                      : "No recent activity recorded"
+                  }
+                >
+                  {worktree.lastActivityTimestamp && (
+                    <ActivityLight lastActivityTimestamp={worktree.lastActivityTimestamp} />
+                  )}
+                  <LiveTimeAgo timestamp={worktree.lastActivityTimestamp} className="font-medium" />
+                </div>
+              )}
 
               {/* Right: Actions */}
               <div className="flex items-center gap-1 shrink-0">
@@ -745,6 +749,8 @@ export function WorktreeCard({
                 onDismissError={dismissError}
                 onRetryError={handleErrorRetry}
                 showLastCommit={true}
+                lastActivityTimestamp={worktree.lastActivityTimestamp}
+                showTime={!showTimeInHeader}
               />
             ) : (
               /* Collapsed: Pulse line summary */
@@ -804,9 +810,34 @@ export function WorktreeCard({
                     )}
                   </div>
 
-                  {/* RIGHT SLOT: Runtime Signal (server only) */}
-                  {serverState?.status === "running" && serverState.port && (
-                    <div className="flex items-center shrink-0 ml-2">
+                  {/* RIGHT SLOT: Time & Runtime Signal */}
+                  <div className="flex items-center gap-3 shrink-0 ml-2">
+                    {/* Time display (only when moved from header) */}
+                    {!showTimeInHeader && (
+                      <div
+                        className="flex items-center gap-1.5 text-[10px] text-canopy-text/40"
+                        title={
+                          worktree.lastActivityTimestamp
+                            ? `Last activity: ${new Date(worktree.lastActivityTimestamp).toLocaleString()}`
+                            : "No recent activity recorded"
+                        }
+                      >
+                        {worktree.lastActivityTimestamp && (
+                          <ActivityLight
+                            lastActivityTimestamp={worktree.lastActivityTimestamp}
+                            className="w-1.5 h-1.5"
+                          />
+                        )}
+                        {worktree.lastActivityTimestamp ? (
+                          <LiveTimeAgo timestamp={worktree.lastActivityTimestamp} />
+                        ) : (
+                          <span>No activity</span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Dev Server Indicator */}
+                    {serverState?.status === "running" && serverState.port && (
                       <span
                         className="flex items-center gap-1 text-[10px] text-[var(--color-server-running)]"
                         title="Dev server running"
@@ -814,8 +845,8 @@ export function WorktreeCard({
                         <div className="w-2 h-2 bg-[var(--color-server-running)] rounded-full animate-pulse" />
                         <span className="font-mono">:{serverState.port}</span>
                       </span>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </button>
               </div>
             )}
