@@ -184,6 +184,19 @@ function TerminalPaneComponent({
       requestAnimationFrame(() => {
         terminalInstanceService.focus(id);
       });
+    } else {
+      // Background snap: only snap to bottom if user was already at bottom
+      // This preserves manual scroll position when viewing history
+      requestAnimationFrame(() => {
+        const managed = terminalInstanceService.get(id);
+        if (managed) {
+          const buffer = managed.terminal.buffer.active;
+          const isAtBottom = buffer.baseY - buffer.viewportY < 1;
+          if (isAtBottom) {
+            terminalInstanceService.scrollToBottom(id);
+          }
+        }
+      });
     }
   }, [isFocused, id]);
 

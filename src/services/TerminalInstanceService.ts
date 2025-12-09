@@ -49,6 +49,7 @@ interface ManagedTerminal {
   lastYResizeTime: number;
   latestCols: number;
   latestRows: number;
+  latestWasAtBottom: boolean;
 }
 
 const MAX_WEBGL_RECOVERY_ATTEMPTS = 4; // Supports full 1s → 2s → 4s → 8s backoff sequence
@@ -523,6 +524,7 @@ class TerminalInstanceService {
       lastYResizeTime: 0,
       latestCols: 0,
       latestRows: 0,
+      latestWasAtBottom: true,
     };
 
     const inputDisposable = terminal.onData((data) => {
@@ -606,13 +608,14 @@ class TerminalInstanceService {
 
     if (managed.resizeXJob || managed.resizeYJob) {
       this.clearResizeJobs(managed);
-      this.applyResize(id, managed.latestCols, managed.latestRows);
+      this.applyResize(id, managed.latestCols, managed.latestRows, managed.latestWasAtBottom);
     }
   }
 
   /**
    * Smart resize: accepts explicit dimensions from ResizeObserver.
    * Handles geometry caching, debouncing, xterm resize, and backend IPC.
+   * Preserves scroll position if user was scrolled up viewing history.
    * Returns {cols, rows} if resized, null if skipped (cached) or error.
    */
   resize(
@@ -629,6 +632,11 @@ class TerminalInstanceService {
       return null;
     }
 
+    // Capture scroll state before resize to preserve position when viewing history
+    // If viewportY < baseY, user is scrolled up (not at bottom)
+    const buffer = managed.terminal.buffer.active;
+    const wasAtBottom = buffer.baseY - buffer.viewportY < 1;
+
     // Calculate cols/rows using proposeDimensions if available (avoids DOM read)
     try {
       // FitAddon.proposeDimensions accepts optional dimensions override
@@ -643,6 +651,10 @@ class TerminalInstanceService {
         managed.lastHeight = height;
         managed.latestCols = cols;
         managed.latestRows = rows;
+        // Restore scroll position: only scroll to bottom if user was already there
+        if (wasAtBottom) {
+          managed.terminal.scrollToBottom();
+        }
         terminalClient.resize(id, cols, rows);
         return { cols, rows };
       }
@@ -659,13 +671,14 @@ class TerminalInstanceService {
       managed.lastHeight = height;
       managed.latestCols = cols;
       managed.latestRows = rows;
+      managed.latestWasAtBottom = wasAtBottom;
 
       const bufferLineCount = this.getBufferLineCount(id);
 
       // Immediate resize for small buffers or explicit immediate flag
       if (options.immediate || bufferLineCount < START_DEBOUNCING_THRESHOLD) {
         this.clearResizeJobs(managed);
-        this.applyResize(id, cols, rows);
+        this.applyResize(id, cols, rows, wasAtBottom);
         return { cols, rows };
       }
 
@@ -686,11 +699,26 @@ class TerminalInstanceService {
     }
   }
 
-  private applyResize(id: string, cols: number, rows: number): void {
+  /**
+   * Force the terminal to scroll to the bottom.
+   * Used when a terminal goes to background or user clicks "Scroll to Bottom".
+   */
+  scrollToBottom(id: string): void {
+    const managed = this.instances.get(id);
+    if (managed) {
+      managed.terminal.scrollToBottom();
+    }
+  }
+
+  private applyResize(id: string, cols: number, rows: number, wasAtBottom = true): void {
     const managed = this.instances.get(id);
     if (!managed) return;
 
     managed.terminal.resize(cols, rows);
+    // Only scroll to bottom if user was already at bottom before resize
+    if (wasAtBottom) {
+      managed.terminal.scrollToBottom();
+    }
     terminalClient.resize(id, cols, rows);
   }
 
@@ -730,6 +758,7 @@ class TerminalInstanceService {
             const current = this.instances.get(id);
             if (current) {
               current.terminal.resize(current.latestCols, current.terminal.rows);
+              if (current.latestWasAtBottom) current.terminal.scrollToBottom();
               terminalClient.resize(id, current.latestCols, current.terminal.rows);
               current.resizeXJob = undefined;
             }
@@ -742,6 +771,7 @@ class TerminalInstanceService {
           const current = this.instances.get(id);
           if (current) {
             current.terminal.resize(current.latestCols, current.terminal.rows);
+            if (current.latestWasAtBottom) current.terminal.scrollToBottom();
             terminalClient.resize(id, current.latestCols, current.terminal.rows);
             current.resizeXJob = undefined;
           }
@@ -757,6 +787,7 @@ class TerminalInstanceService {
             const current = this.instances.get(id);
             if (current) {
               current.terminal.resize(current.latestCols, current.latestRows);
+              if (current.latestWasAtBottom) current.terminal.scrollToBottom();
               terminalClient.resize(id, current.latestCols, current.latestRows);
               current.resizeYJob = undefined;
             }
@@ -769,6 +800,7 @@ class TerminalInstanceService {
           const current = this.instances.get(id);
           if (current) {
             current.terminal.resize(current.latestCols, current.latestRows);
+            if (current.latestWasAtBottom) current.terminal.scrollToBottom();
             terminalClient.resize(id, current.latestCols, current.latestRows);
             current.resizeYJob = undefined;
           }
@@ -788,6 +820,7 @@ class TerminalInstanceService {
       const current = this.instances.get(id);
       if (current) {
         current.terminal.resize(cols, current.terminal.rows);
+        if (current.latestWasAtBottom) current.terminal.scrollToBottom();
         terminalClient.resize(id, cols, current.terminal.rows);
         current.resizeXJob = undefined;
       }
@@ -806,6 +839,7 @@ class TerminalInstanceService {
         managed.resizeYJob = undefined;
       }
       managed.terminal.resize(managed.latestCols, rows);
+      if (managed.latestWasAtBottom) managed.terminal.scrollToBottom();
       terminalClient.resize(id, managed.latestCols, rows);
       return;
     }
@@ -817,6 +851,7 @@ class TerminalInstanceService {
         if (current) {
           current.lastYResizeTime = Date.now();
           current.terminal.resize(current.latestCols, current.latestRows);
+          if (current.latestWasAtBottom) current.terminal.scrollToBottom();
           terminalClient.resize(id, current.latestCols, current.latestRows);
           current.resizeYJob = undefined;
         }

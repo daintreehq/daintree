@@ -93,6 +93,7 @@ function XtermAdapterComponent({
       smoothScrollDuration: performanceMode ? 0 : 0, // Already 0, but keep explicit
       scrollback: effectiveScrollback,
       macOptionIsMeta: true,
+      scrollOnUserInput: false,
       fastScrollModifier: "alt" as const,
       fastScrollSensitivity: 5,
       scrollSensitivity: 1.5,
