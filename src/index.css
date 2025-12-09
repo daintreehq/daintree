@@ -271,6 +271,26 @@
     background: #71717a; /* Zinc-500: Lighter on hover */
   }
 
+  /* Terminal link styling - clickable URLs */
+  .xterm a {
+    color: #38bdf8; /* Sky-400: matches --color-status-info */
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-underline-offset: 2px;
+    cursor: pointer;
+  }
+
+  .xterm a:hover {
+    color: #7dd3fc; /* Sky-300: brighter on hover */
+    text-decoration-style: solid;
+  }
+
+  .xterm a:focus-visible {
+    outline: 2px solid var(--color-canopy-accent);
+    outline-offset: 2px;
+    border-radius: var(--radius-xs);
+  }
+
   /* Consistent monospace font stack - VS Code defaults */
   code,
   kbd,
