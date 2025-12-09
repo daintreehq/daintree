@@ -41,6 +41,9 @@ interface ManagedTerminal {
   lastAppliedTier?: TerminalRefreshTier; // The tier currently in effect
   pendingTier?: TerminalRefreshTier; // Target tier for scheduled downgrade
   tierChangeTimer?: number;
+  // Auto-rename prompt capture buffer
+  inputBuffer: string;
+  onFirstPromptCallback?: (prompt: string) => void;
 }
 
 const MAX_WEBGL_RECOVERY_ATTEMPTS = 4; // Supports full 1s → 2s → 4s → 8s backoff sequence
@@ -485,12 +488,6 @@ class TerminalInstanceService {
     });
     listeners.push(unsubExit);
 
-    const inputDisposable = terminal.onData((data) => {
-      throttledWriter.notifyInput();
-      terminalClient.write(id, data);
-    });
-    listeners.push(() => inputDisposable.dispose());
-
     const managed: ManagedTerminal = {
       terminal,
       fitAddon,
@@ -513,7 +510,53 @@ class TerminalInstanceService {
       hasWebglError: false,
       lastWidth: 0,
       lastHeight: 0,
+      inputBuffer: "",
+      onFirstPromptCallback: undefined,
     };
+
+    const inputDisposable = terminal.onData((data) => {
+      throttledWriter.notifyInput();
+      terminalClient.write(id, data);
+
+      // Track input for auto-rename on first prompt
+      if (managed.onFirstPromptCallback) {
+        // Check for newline in single-char or multi-char input (handles paste with \n)
+        const hasNewline = data.includes("\r") || data.includes("\n");
+
+        if (hasNewline) {
+          // Extract text before the newline for pasted content
+          const beforeNewline = data.split(/[\r\n]/)[0];
+          if (beforeNewline) {
+            managed.inputBuffer += beforeNewline;
+          }
+
+          // Enter pressed - check if we have accumulated text
+          const prompt = managed.inputBuffer.trim();
+          if (prompt) {
+            managed.onFirstPromptCallback(prompt);
+            managed.onFirstPromptCallback = undefined;
+          }
+          managed.inputBuffer = "";
+        } else if (data === "\x03" || data === "\x1b") {
+          // Ctrl+C or ESC - clear buffer (user cancelled input)
+          managed.inputBuffer = "";
+        } else if (data === "\x7f" || data === "\b") {
+          // Backspace - remove last grapheme cluster (handles emoji)
+          if (managed.inputBuffer.length > 0) {
+            // Simple approach: use Array.from to handle grapheme clusters
+            const graphemes = Array.from(managed.inputBuffer);
+            managed.inputBuffer = graphemes.slice(0, -1).join("");
+          }
+        } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
+          // Printable character
+          managed.inputBuffer += data;
+        } else if (data.length > 1 && !data.startsWith("\x1b")) {
+          // Pasted text (multiple chars, not escape sequence)
+          managed.inputBuffer += data;
+        }
+      }
+    });
+    listeners.push(() => inputDisposable.dispose());
 
     this.instances.set(id, managed);
 
@@ -1014,6 +1057,29 @@ class TerminalInstanceService {
     if (!managed) return () => {};
     managed.exitSubscribers.add(cb);
     return () => managed.exitSubscribers.delete(cb);
+  }
+
+  /**
+   * Register a callback to be invoked with the first user-submitted prompt.
+   * Used for auto-renaming terminals based on user's first input.
+   * The callback is invoked once when the user presses Enter after typing.
+   */
+  onFirstPrompt(id: string, callback: (prompt: string) => void): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+    managed.inputBuffer = "";
+    managed.onFirstPromptCallback = callback;
+  }
+
+  /**
+   * Clear any pending first prompt callback and input buffer.
+   * Called when terminal is already auto-renamed or user manually renamed.
+   */
+  clearFirstPromptListener(id: string): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+    managed.inputBuffer = "";
+    managed.onFirstPromptCallback = undefined;
   }
 
   destroy(id: string): void {

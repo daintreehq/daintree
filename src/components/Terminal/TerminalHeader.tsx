@@ -122,6 +122,13 @@ function TerminalHeaderComponent({
             (isFocused ? "bg-[var(--color-surface-highlight)]" : "bg-[var(--color-surface)]"),
           isPinged && !isMaximized && "animate-ping-header bg-[var(--color-surface-highlight)]"
         )}
+        style={
+          !isMaximized && getBrandColorHex(type)
+            ? {
+                backgroundImage: `linear-gradient(to right, ${getBrandColorHex(type)}08 0%, transparent 50%)`,
+              }
+            : undefined
+        }
         onDoubleClick={handleHeaderDoubleClick}
       >
         <div className="flex items-center gap-2 min-w-0">

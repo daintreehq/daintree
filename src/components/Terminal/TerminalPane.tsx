@@ -12,6 +12,8 @@ import { useTerminalLogic } from "@/hooks/useTerminalLogic";
 import type { AgentState } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 
+const AGENT_TYPES: TerminalType[] = ["claude", "gemini", "codex"];
+
 export type { TerminalType };
 
 export interface ActivityState {
@@ -41,6 +43,8 @@ export interface TerminalPaneProps {
   restartKey?: number;
   /** Terminal is animating out before being trashed */
   isTrashing?: boolean;
+  /** Whether the terminal has been auto-renamed from first prompt */
+  hasBeenAutoRenamed?: boolean;
 }
 
 function TerminalPaneComponent({
@@ -62,6 +66,7 @@ function TerminalPaneComponent({
   location = "grid",
   restartKey = 0,
   isTrashing = false,
+  hasBeenAutoRenamed = false,
 }: TerminalPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isRestoring, setIsRestoring] = useState(true);
@@ -76,6 +81,24 @@ function TerminalPaneComponent({
   const updateVisibility = useTerminalStore((state) => state.updateVisibility);
   const getTerminal = useTerminalStore((state) => state.getTerminal);
   const restartTerminal = useTerminalStore((state) => state.restartTerminal);
+  const autoRenameTerminal = useTerminalStore((state) => state.autoRenameTerminal);
+
+  // Register first-prompt listener for auto-rename on agent terminals
+  useEffect(() => {
+    // Only for agent terminals that haven't been renamed yet
+    if (!AGENT_TYPES.includes(type) || hasBeenAutoRenamed) {
+      terminalInstanceService.clearFirstPromptListener(id);
+      return;
+    }
+
+    terminalInstanceService.onFirstPrompt(id, (prompt) => {
+      autoRenameTerminal(id, prompt);
+    });
+
+    return () => {
+      terminalInstanceService.clearFirstPromptListener(id);
+    };
+  }, [id, type, hasBeenAutoRenamed, autoRenameTerminal]);
 
   const queueCount = useTerminalStore(
     useShallow((state) => state.commandQueue.filter((c) => c.terminalId === id).length)

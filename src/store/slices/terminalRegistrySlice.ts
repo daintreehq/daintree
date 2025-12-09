@@ -66,6 +66,7 @@ export interface TerminalRegistrySlice {
   addTerminal: (options: AddTerminalOptions) => Promise<string>;
   removeTerminal: (id: string) => void;
   updateTitle: (id: string, newTitle: string) => void;
+  autoRenameTerminal: (id: string, prompt: string) => void;
   updateAgentState: (
     id: string,
     agentState: AgentState,
@@ -240,7 +241,35 @@ export const createTerminalRegistrySlice =
 
         const effectiveTitle = newTitle.trim() || TYPE_TITLES[terminal.type];
         const newTerminals = state.terminals.map((t) =>
-          t.id === id ? { ...t, title: effectiveTitle } : t
+          t.id === id ? { ...t, title: effectiveTitle, hasBeenAutoRenamed: true } : t
+        );
+
+        terminalPersistence.save(newTerminals);
+        return { terminals: newTerminals };
+      });
+    },
+
+    autoRenameTerminal: (id, prompt) => {
+      set((state) => {
+        const terminal = state.terminals.find((t) => t.id === id);
+        if (!terminal) return state;
+        if (terminal.hasBeenAutoRenamed) return state;
+
+        const trimmedPrompt = prompt.trim();
+        if (!trimmedPrompt) return state;
+
+        const firstLine = trimmedPrompt.split("\n")[0];
+
+        // Use grapheme-aware truncation to handle emoji/combining chars
+        const graphemes = Array.from(firstLine);
+        const truncated =
+          graphemes.length > 40
+            ? graphemes.slice(0, 40).join("").trimEnd() + "…"
+            : firstLine;
+        const newTitle = `${TYPE_TITLES[terminal.type]}: ${truncated}`;
+
+        const newTerminals = state.terminals.map((t) =>
+          t.id === id ? { ...t, title: newTitle, hasBeenAutoRenamed: true } : t
         );
 
         terminalPersistence.save(newTerminals);
