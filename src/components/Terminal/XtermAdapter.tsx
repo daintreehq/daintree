@@ -1,4 +1,4 @@
-import React, { useCallback, useLayoutEffect, useMemo, useRef, useState, useEffect } from "react";
+import React, { useCallback, useLayoutEffect, useMemo, useRef, useEffect } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { cn } from "@/lib/utils";
 import { terminalClient } from "@/clients";
@@ -6,7 +6,6 @@ import { TerminalRefreshTier } from "@/types";
 import type { TerminalType } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useScrollbackStore, usePerformanceModeStore, useTerminalFontStore } from "@/store";
-import { TerminalResizeDebouncer } from "@/services/TerminalResizeDebouncer";
 import { getScrollbackForType } from "@/utils/scrollbackConfig";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
 
@@ -58,11 +57,9 @@ function XtermAdapterComponent({
   const containerRef = useRef<HTMLDivElement>(null);
   const prevDimensionsRef = useRef<{ cols: number; rows: number } | null>(null);
   const exitUnsubRef = useRef<(() => void) | null>(null);
-  const debouncerRef = useRef<TerminalResizeDebouncer | null>(null);
   const rafIdRef = useRef<number | null>(null);
 
   // Track visibility for resize optimization (start pessimistic for offscreen mounts)
-  const [isVisible, setIsVisible] = useState(false);
   const isVisibleRef = useRef(false);
 
   const scrollbackLines = useScrollbackStore((state) => state.scrollbackLines);
@@ -103,41 +100,6 @@ function XtermAdapterComponent({
     [effectiveScrollback, performanceMode, fontSize, fontFamily]
   );
 
-  // Initialize debouncer with callbacks for separate X/Y resize handling
-  useLayoutEffect(() => {
-    debouncerRef.current = new TerminalResizeDebouncer(
-      // Resize X only (horizontal reflow - expensive)
-      (cols) => {
-        const managed = terminalInstanceService.get(terminalId);
-        if (managed) {
-          managed.terminal.resize(cols, managed.terminal.rows);
-          terminalClient.resize(terminalId, cols, managed.terminal.rows);
-        }
-      },
-      // Resize Y only (vertical - cheap)
-      (rows) => {
-        const managed = terminalInstanceService.get(terminalId);
-        if (managed) {
-          managed.terminal.resize(managed.terminal.cols, rows);
-          terminalClient.resize(terminalId, managed.terminal.cols, rows);
-        }
-      },
-      // Resize both (for small buffers or immediate mode)
-      (cols, rows) => {
-        const managed = terminalInstanceService.get(terminalId);
-        if (managed) {
-          managed.terminal.resize(cols, rows);
-        }
-        terminalClient.resize(terminalId, cols, rows);
-      }
-    );
-
-    return () => {
-      debouncerRef.current?.dispose();
-      debouncerRef.current = null;
-    };
-  }, [terminalId]);
-
   // Push-based resize handler using ResizeObserver dimensions directly
   const handleResizeEntry = useCallback(
     (entry: ResizeObserverEntry) => {
@@ -154,15 +116,7 @@ function XtermAdapterComponent({
       const dims = terminalInstanceService.resize(terminalId, width, height);
 
       if (dims) {
-        const { cols, rows } = dims;
-        prevDimensionsRef.current = { cols, rows };
-
-        const bufferLines = terminalInstanceService.getBufferLineCount(terminalId);
-        debouncerRef.current?.resize(cols, rows, {
-          immediate: false,
-          bufferLineCount: bufferLines,
-          isVisible: true,
-        });
+        prevDimensionsRef.current = dims;
       }
     },
     [terminalId]
@@ -187,19 +141,11 @@ function XtermAdapterComponent({
 
     if (width < MIN_CONTAINER_SIZE || height < MIN_CONTAINER_SIZE) return;
 
-    const dims = terminalInstanceService.resize(terminalId, width, height);
+    const dims = terminalInstanceService.resize(terminalId, width, height, { immediate: true });
     if (dims) {
-      const { cols, rows } = dims;
-      prevDimensionsRef.current = { cols, rows };
-
-      const bufferLines = terminalInstanceService.getBufferLineCount(terminalId);
-      debouncerRef.current?.resize(cols, rows, {
-        immediate: false,
-        bufferLineCount: bufferLines,
-        isVisible,
-      });
+      prevDimensionsRef.current = dims;
     }
-  }, [terminalId, isVisible]);
+  }, [terminalId]);
 
   useLayoutEffect(() => {
     const container = containerRef.current;
@@ -255,8 +201,11 @@ function XtermAdapterComponent({
     onReady?.();
 
     return () => {
+      // Mark terminal as invisible before unmount
+      terminalInstanceService.setVisible(terminalId, false);
+
       // Flush pending resizes before unmount
-      debouncerRef.current?.flush();
+      terminalInstanceService.flushResize(terminalId);
 
       terminalInstanceService.detach(terminalId, containerRef.current);
 
@@ -297,15 +246,12 @@ function XtermAdapterComponent({
     const visibilityObserver = new IntersectionObserver(
       ([entry]) => {
         const nowVisible = entry.isIntersecting;
-        setIsVisible(nowVisible);
         isVisibleRef.current = nowVisible;
 
         // Notify the service about visibility change (handles WebGL and forced resize)
         terminalInstanceService.setVisible(terminalId, nowVisible);
 
         if (nowVisible) {
-          // Clear pending debounced resizes
-          debouncerRef.current?.clear();
           // Force immediate fit with fresh dimensions
           performFit();
         }

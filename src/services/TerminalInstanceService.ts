@@ -11,6 +11,8 @@ import { SharedRingBuffer, PacketParser } from "@shared/utils/SharedRingBuffer";
 
 type RefreshTierProvider = () => TerminalRefreshTier;
 
+type ResizeJobId = { type: "timeout"; id: number } | { type: "idle"; id: number };
+
 interface ManagedTerminal {
   terminal: Terminal;
   fitAddon: FitAddon;
@@ -41,11 +43,22 @@ interface ManagedTerminal {
   lastAppliedTier?: TerminalRefreshTier; // The tier currently in effect
   pendingTier?: TerminalRefreshTier; // Target tier for scheduled downgrade
   tierChangeTimer?: number;
+  // Resize debouncing state
+  resizeXJob?: ResizeJobId;
+  resizeYJob?: ResizeJobId;
+  lastYResizeTime: number;
+  latestCols: number;
+  latestRows: number;
 }
 
 const MAX_WEBGL_RECOVERY_ATTEMPTS = 4; // Supports full 1s → 2s → 4s → 8s backoff sequence
 const WEBGL_DISPOSE_GRACE_MS = 10000; // 10s grace period before releasing WebGL on hide
 const TIER_DOWNGRADE_HYSTERESIS_MS = 500; // Delay before applying tier downgrades to prevent flapping
+
+const START_DEBOUNCING_THRESHOLD = 200;
+const HORIZONTAL_DEBOUNCE_MS = 100;
+const VERTICAL_THROTTLE_MS = 150;
+const IDLE_CALLBACK_TIMEOUT_MS = 1000;
 
 /**
  * Creates a simple writer that passes data directly to xterm.
@@ -507,6 +520,9 @@ class TerminalInstanceService {
       hasWebglError: false,
       lastWidth: 0,
       lastHeight: 0,
+      lastYResizeTime: 0,
+      latestCols: 0,
+      latestRows: 0,
     };
 
     const inputDisposable = terminal.onData((data) => {
@@ -563,7 +579,8 @@ class TerminalInstanceService {
   }
 
   /**
-   * Trigger a fit and return the resulting cols/rows.
+   * Trigger a fit and send resize to backend.
+   * Consolidates xterm fit and IPC in single call.
    */
   fit(id: string): { cols: number; rows: number } | null {
     const managed = this.instances.get(id);
@@ -572,6 +589,7 @@ class TerminalInstanceService {
     try {
       managed.fitAddon.fit();
       const { cols, rows } = managed.terminal;
+      terminalClient.resize(id, cols, rows);
       return { cols, rows };
     } catch (error) {
       console.warn("Terminal fit failed:", error);
@@ -580,11 +598,29 @@ class TerminalInstanceService {
   }
 
   /**
+   * Force flush any pending resize operations for a terminal.
+   */
+  flushResize(id: string): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+
+    if (managed.resizeXJob || managed.resizeYJob) {
+      this.clearResizeJobs(managed);
+      this.applyResize(id, managed.latestCols, managed.latestRows);
+    }
+  }
+
+  /**
    * Smart resize: accepts explicit dimensions from ResizeObserver.
-   * Prevents the addon from forcing a synchronous layout read to measure the container.
+   * Handles geometry caching, debouncing, xterm resize, and backend IPC.
    * Returns {cols, rows} if resized, null if skipped (cached) or error.
    */
-  resize(id: string, width: number, height: number): { cols: number; rows: number } | null {
+  resize(
+    id: string,
+    width: number,
+    height: number,
+    options: { immediate?: boolean } = {}
+  ): { cols: number; rows: number } | null {
     const managed = this.instances.get(id);
     if (!managed) return null;
 
@@ -602,11 +638,13 @@ class TerminalInstanceService {
       if (!proposed) {
         // Fallback to fit() if proposeDimensions not available
         managed.fitAddon.fit();
-        const result = { cols: managed.terminal.cols, rows: managed.terminal.rows };
-        // Update cache after successful fallback fit
+        const { cols, rows } = managed.terminal;
         managed.lastWidth = width;
         managed.lastHeight = height;
-        return result;
+        managed.latestCols = cols;
+        managed.latestRows = rows;
+        terminalClient.resize(id, cols, rows);
+        return { cols, rows };
       }
 
       const { cols, rows } = proposed;
@@ -616,18 +654,174 @@ class TerminalInstanceService {
         return null;
       }
 
-      // Apply resize
-      managed.terminal.resize(cols, rows);
-
-      // Update cache only after successful resize
+      // Update cache
       managed.lastWidth = width;
       managed.lastHeight = height;
+      managed.latestCols = cols;
+      managed.latestRows = rows;
+
+      const bufferLineCount = this.getBufferLineCount(id);
+
+      // Immediate resize for small buffers or explicit immediate flag
+      if (options.immediate || bufferLineCount < START_DEBOUNCING_THRESHOLD) {
+        this.clearResizeJobs(managed);
+        this.applyResize(id, cols, rows);
+        return { cols, rows };
+      }
+
+      // Invisible terminals: defer to idle callback
+      if (!managed.isVisible) {
+        this.scheduleIdleResize(id, managed);
+        return { cols, rows };
+      }
+
+      // Visible terminals: throttle Y, debounce X
+      this.throttleResizeY(id, managed, rows);
+      this.debounceResizeX(id, managed, cols);
 
       return { cols, rows };
     } catch (error) {
       console.warn(`[TerminalInstanceService] Resize failed for ${id}:`, error);
-      // Don't update cache on error - allow retry with same dimensions
       return null;
+    }
+  }
+
+  private applyResize(id: string, cols: number, rows: number): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+
+    managed.terminal.resize(cols, rows);
+    terminalClient.resize(id, cols, rows);
+  }
+
+  private clearResizeJobs(managed: ManagedTerminal): void {
+    if (managed.resizeXJob) {
+      this.clearJob(managed.resizeXJob);
+      managed.resizeXJob = undefined;
+    }
+    if (managed.resizeYJob) {
+      this.clearJob(managed.resizeYJob);
+      managed.resizeYJob = undefined;
+    }
+  }
+
+  private clearJob(job: ResizeJobId): void {
+    if (job.type === "idle") {
+      const win = window as typeof window & {
+        cancelIdleCallback?: (handle: number) => void;
+      };
+      win.cancelIdleCallback?.(job.id);
+    } else {
+      clearTimeout(job.id);
+    }
+  }
+
+  private scheduleIdleResize(id: string, managed: ManagedTerminal): void {
+    const win = window as typeof window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+    const hasIdleCallback = typeof win.requestIdleCallback === "function";
+
+    if (!managed.resizeXJob) {
+      if (hasIdleCallback && win.requestIdleCallback) {
+        const idleId = win.requestIdleCallback(
+          () => {
+            const current = this.instances.get(id);
+            if (current) {
+              current.terminal.resize(current.latestCols, current.terminal.rows);
+              terminalClient.resize(id, current.latestCols, current.terminal.rows);
+              current.resizeXJob = undefined;
+            }
+          },
+          { timeout: IDLE_CALLBACK_TIMEOUT_MS }
+        );
+        managed.resizeXJob = { type: "idle", id: idleId };
+      } else {
+        const timeoutId = window.setTimeout(() => {
+          const current = this.instances.get(id);
+          if (current) {
+            current.terminal.resize(current.latestCols, current.terminal.rows);
+            terminalClient.resize(id, current.latestCols, current.terminal.rows);
+            current.resizeXJob = undefined;
+          }
+        }, IDLE_CALLBACK_TIMEOUT_MS);
+        managed.resizeXJob = { type: "timeout", id: timeoutId };
+      }
+    }
+
+    if (!managed.resizeYJob) {
+      if (hasIdleCallback && win.requestIdleCallback) {
+        const idleId = win.requestIdleCallback(
+          () => {
+            const current = this.instances.get(id);
+            if (current) {
+              current.terminal.resize(current.latestCols, current.latestRows);
+              terminalClient.resize(id, current.latestCols, current.latestRows);
+              current.resizeYJob = undefined;
+            }
+          },
+          { timeout: IDLE_CALLBACK_TIMEOUT_MS }
+        );
+        managed.resizeYJob = { type: "idle", id: idleId };
+      } else {
+        const timeoutId = window.setTimeout(() => {
+          const current = this.instances.get(id);
+          if (current) {
+            current.terminal.resize(current.latestCols, current.latestRows);
+            terminalClient.resize(id, current.latestCols, current.latestRows);
+            current.resizeYJob = undefined;
+          }
+        }, IDLE_CALLBACK_TIMEOUT_MS);
+        managed.resizeYJob = { type: "timeout", id: timeoutId };
+      }
+    }
+  }
+
+  private debounceResizeX(id: string, managed: ManagedTerminal, cols: number): void {
+    if (managed.resizeXJob) {
+      this.clearJob(managed.resizeXJob);
+      managed.resizeXJob = undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      const current = this.instances.get(id);
+      if (current) {
+        current.terminal.resize(cols, current.terminal.rows);
+        terminalClient.resize(id, cols, current.terminal.rows);
+        current.resizeXJob = undefined;
+      }
+    }, HORIZONTAL_DEBOUNCE_MS);
+    managed.resizeXJob = { type: "timeout", id: timeoutId };
+  }
+
+  private throttleResizeY(id: string, managed: ManagedTerminal, rows: number): void {
+    const now = Date.now();
+    const timeSinceLastY = now - managed.lastYResizeTime;
+
+    if (timeSinceLastY >= VERTICAL_THROTTLE_MS) {
+      managed.lastYResizeTime = now;
+      if (managed.resizeYJob) {
+        this.clearJob(managed.resizeYJob);
+        managed.resizeYJob = undefined;
+      }
+      managed.terminal.resize(managed.latestCols, rows);
+      terminalClient.resize(id, managed.latestCols, rows);
+      return;
+    }
+
+    if (!managed.resizeYJob) {
+      const remainingTime = VERTICAL_THROTTLE_MS - timeSinceLastY;
+      const timeoutId = window.setTimeout(() => {
+        const current = this.instances.get(id);
+        if (current) {
+          current.lastYResizeTime = Date.now();
+          current.terminal.resize(current.latestCols, current.latestRows);
+          terminalClient.resize(id, current.latestCols, current.latestRows);
+          current.resizeYJob = undefined;
+        }
+      }, remainingTime);
+      managed.resizeYJob = { type: "timeout", id: timeoutId };
     }
   }
 
@@ -1019,6 +1213,9 @@ class TerminalInstanceService {
   destroy(id: string): void {
     const managed = this.instances.get(id);
     if (!managed) return;
+
+    // Clear pending resize jobs
+    this.clearResizeJobs(managed);
 
     // Clear pending WebGL dispose timer
     if (managed.webglDisposeTimer !== undefined) {

@@ -26,7 +26,7 @@ import { CanopyIcon, CodexIcon, ClaudeIcon, GeminiIcon } from "@/components/icon
 import { Kbd } from "@/components/ui/Kbd";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { terminalClient, systemClient } from "@/clients";
+import { systemClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
 import { getAutoGridCols } from "@/lib/terminalLayout";
 import type { CliAvailability } from "@shared/types";
@@ -404,11 +404,8 @@ export function TerminalGrid({
         const managed = terminalInstanceService.get(id);
 
         if (managed?.hostElement.isConnected) {
-          const dims = terminalInstanceService.fit(id);
-          if (dims) {
-            terminalClient.resize(id, dims.cols, dims.rows);
-            terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
-          }
+          terminalInstanceService.fit(id);
+          terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
         }
         requestAnimationFrame(processNext);
       };
