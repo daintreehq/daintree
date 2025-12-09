@@ -263,9 +263,7 @@ export const createTerminalRegistrySlice =
         // Use grapheme-aware truncation to handle emoji/combining chars
         const graphemes = Array.from(firstLine);
         const truncated =
-          graphemes.length > 40
-            ? graphemes.slice(0, 40).join("").trimEnd() + "…"
-            : firstLine;
+          graphemes.length > 40 ? graphemes.slice(0, 40).join("").trimEnd() + "…" : firstLine;
         const newTitle = `${TYPE_TITLES[terminal.type]}: ${truncated}`;
 
         const newTerminals = state.terminals.map((t) =>
