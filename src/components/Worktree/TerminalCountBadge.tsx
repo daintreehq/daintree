@@ -128,7 +128,12 @@ export function TerminalCountBadge({
           )}
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent id={contentId} align="start" className="w-64 p-0" onClick={(e) => e.stopPropagation()}>
+      <DropdownMenuContent
+        id={contentId}
+        align="start"
+        className="w-64 p-0"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="px-3 py-2 border-b border-canopy-border bg-canopy-bg/50">
           <span className="text-xs font-medium text-canopy-text/70">
             Active Sessions ({terminals.length})

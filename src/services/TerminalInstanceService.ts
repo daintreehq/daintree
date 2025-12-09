@@ -198,7 +198,7 @@ class TerminalInstanceService {
     // over a single large "atomic" write per frame.
     // If we ever need to guard against pathological cases, we can add
     // a simple max-reads-per-poll, but keep it simple for now.
-    // eslint-disable-next-line no-constant-condition
+
     while (true) {
       const data = this.ringBuffer.read();
       if (!data) {
