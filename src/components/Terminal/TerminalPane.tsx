@@ -6,6 +6,7 @@ import { getTerminalAnimationDuration } from "@/lib/animationUtils";
 import { XtermAdapter } from "./XtermAdapter";
 import { ArtifactOverlay } from "./ArtifactOverlay";
 import { TerminalHeader } from "./TerminalHeader";
+import { TerminalRestartBanner } from "./TerminalRestartBanner";
 import { ErrorBanner } from "../Errors/ErrorBanner";
 import { useErrorStore, useTerminalStore, getTerminalRefreshTier } from "@/store";
 import { useTerminalLogic } from "@/hooks/useTerminalLogic";
@@ -70,6 +71,7 @@ function TerminalPaneComponent({
 }: TerminalPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isRestoring, setIsRestoring] = useState(true);
+  const [dismissedRestartPrompt, setDismissedRestartPrompt] = useState(false);
 
   useEffect(() => {
     if (!isRestoring) return;
@@ -77,6 +79,10 @@ function TerminalPaneComponent({
     const timer = setTimeout(() => setIsRestoring(false), duration);
     return () => clearTimeout(timer);
   }, [isRestoring]);
+
+  useEffect(() => {
+    setDismissedRestartPrompt(false);
+  }, [restartKey]);
 
   const updateVisibility = useTerminalStore((state) => state.updateVisibility);
   const getTerminal = useTerminalStore((state) => state.getTerminal);
@@ -134,6 +140,7 @@ function TerminalPaneComponent({
     title,
     onTitleChange,
     removeError,
+    restartKey,
   });
 
   // Visibility observation
@@ -311,6 +318,18 @@ function TerminalPaneComponent({
           )}
         </div>
       )}
+
+      {isExited &&
+        exitCode !== null &&
+        exitCode !== 0 &&
+        exitCode !== 130 &&
+        !dismissedRestartPrompt && (
+          <TerminalRestartBanner
+            exitCode={exitCode}
+            onRestart={handleRestart}
+            onDismiss={() => setDismissedRestartPrompt(true)}
+          />
+        )}
 
       <div className="flex-1 relative min-h-0 bg-canopy-bg">
         <XtermAdapter

@@ -16,3 +16,5 @@ export { GridFullOverlay } from "./GridFullOverlay";
 export type { GridFullOverlayProps } from "./GridFullOverlay";
 export { TerminalIcon } from "./TerminalIcon";
 export type { TerminalIconProps } from "./TerminalIcon";
+export { TerminalRestartBanner } from "./TerminalRestartBanner";
+export type { TerminalRestartBannerProps } from "./TerminalRestartBanner";

@@ -7,6 +7,7 @@ interface UseTerminalLogicOptions {
   title: string;
   onTitleChange?: (newTitle: string) => void;
   removeError: (errorId: string) => void;
+  restartKey?: number;
 }
 
 export interface UseTerminalLogicReturn {
@@ -39,6 +40,7 @@ export function useTerminalLogic({
   title,
   onTitleChange,
   removeError,
+  restartKey,
 }: UseTerminalLogicOptions): UseTerminalLogicReturn {
   const [isExited, setIsExited] = useState(false);
   const [exitCode, setExitCode] = useState<number | null>(null);
@@ -47,11 +49,11 @@ export function useTerminalLogic({
   const titleInputRef = useRef<HTMLInputElement | null>(null);
   const cancelledRef = useRef(false);
 
-  // Reset exit state when terminal ID changes
+  // Reset exit state when terminal ID or restartKey changes
   useEffect(() => {
     setIsExited(false);
     setExitCode(null);
-  }, [id]);
+  }, [id, restartKey]);
 
   // Sync editing value when title changes externally (and not editing)
   useEffect(() => {
