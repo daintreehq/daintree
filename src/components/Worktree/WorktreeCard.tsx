@@ -425,15 +425,17 @@ export function WorktreeCard({
     return "clean-feature";
   }, [hasChanges, isMainWorktree]);
 
-  type SpineState = "error" | "dirty" | "current" | "idle";
+  type SpineState = "error" | "dirty" | "current" | "stale" | "idle";
   const spineState: SpineState = useMemo(() => {
-    if (worktreeErrors.length > 0) return "error";
+    if (worktreeErrors.length > 0 || worktree.mood === "error") return "error";
     if (hasChanges) return "dirty";
     if (worktree.isCurrent) return "current";
+    if (worktree.mood === "stale") return "stale";
     return "idle";
-  }, [worktreeErrors.length, hasChanges, worktree.isCurrent]);
+  }, [worktreeErrors.length, worktree.mood, hasChanges, worktree.isCurrent]);
 
   const isIdleCard = spineState === "idle";
+  const isStaleCard = spineState === "stale";
 
   const cardContent = (
     <div
@@ -441,7 +443,7 @@ export function WorktreeCard({
         "group relative border-b-2 border-white/5 transition-all duration-200",
         isActive ? "bg-white/[0.03]" : "hover:bg-white/[0.02] bg-transparent",
         isFocused && "bg-white/[0.04]",
-        isIdleCard && !isActive && !isFocused && "opacity-70 hover:opacity-100",
+        (isIdleCard || isStaleCard) && !isActive && !isFocused && "opacity-70 hover:opacity-100",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
       )}
       onClick={onSelect}
@@ -461,6 +463,7 @@ export function WorktreeCard({
           "absolute left-0 top-0 bottom-0 w-[3px] transition-all duration-300",
           spineState === "error" && "bg-red-500",
           spineState === "dirty" && "bg-amber-500 shadow-[0_0_8px_rgba(251,191,36,0.4)]",
+          spineState === "stale" && "bg-zinc-500",
           spineState === "current" && "bg-teal-500",
           spineState === "idle" && "bg-transparent"
         )}
