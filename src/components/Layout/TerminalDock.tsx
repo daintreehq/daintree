@@ -108,7 +108,7 @@ export function TerminalDock() {
         <div
           className={cn(
             "bg-canopy-bg/95 backdrop-blur-sm border-t-2 border-canopy-border/60 shadow-[0_-4px_12px_rgba(0,0,0,0.3)]",
-            "flex items-center px-2 py-2 gap-2",
+            "flex items-center px-1.5 py-1.5 gap-1.5",
             "z-40 shrink-0"
           )}
           role="list"
@@ -129,8 +129,8 @@ export function TerminalDock() {
             <div
               ref={combinedRef}
               className={cn(
-                "flex items-center gap-2 overflow-x-auto flex-1 min-h-[36px] no-scrollbar scroll-smooth px-1",
-                isOver && "bg-white/[0.03] ring-2 ring-canopy-accent/30 ring-inset rounded"
+                "flex items-center gap-1.5 overflow-x-auto flex-1 min-h-[36px] no-scrollbar scroll-smooth px-1",
+                isOver && "bg-white/[0.03] ring-2 ring-canopy-accent/30 ring-inset rounded-full"
               )}
             >
               <SortableContext
@@ -140,7 +140,7 @@ export function TerminalDock() {
               >
                 {/* min-w/min-h prevent dnd-kit measureRects loop when empty
                     (dnd-kit measures first child, which collapses to 0×0 without this) */}
-                <div className="flex items-center gap-2 min-w-[100px] min-h-[32px]">
+                <div className="flex items-center gap-1.5 min-w-[100px] min-h-[32px]">
                   {activeDockTerminals.length === 0 ? (
                     <SortableDockPlaceholder />
                   ) : (
@@ -172,7 +172,7 @@ export function TerminalDock() {
           )}
 
           {/* Action containers: Waiting + Trash */}
-          <div className="shrink-0 pl-1 flex items-center gap-2">
+          <div className="shrink-0 pl-1 flex items-center gap-1.5">
             <WaitingContainer />
             <TrashContainer trashedTerminals={trashedItems} />
           </div>
