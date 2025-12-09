@@ -81,6 +81,23 @@ interface PendingSyncRequest {
   monitorConfig?: MonitorConfig;
 }
 
+/**
+ * WorktreeService - Manages Git worktree monitoring and state synchronization.
+ *
+ * @pattern Exported Singleton Instance (Pattern A)
+ *
+ * Why this pattern:
+ * - No external dependencies required at construction time
+ * - Stateful singleton with lightweight constructor (no external deps, no child processes)
+ * - Safe for eager instantiation: no heavy initialization at import time
+ * - Simple access: `import { worktreeService } from './WorktreeService'`
+ *
+ * When to use Pattern A:
+ * - Service has no constructor dependencies
+ * - Service doesn't manage child processes or system resources requiring explicit lifecycle
+ * - Service is used widely across the codebase (simple import pattern)
+ * - Initialization is lightweight (no async setup or resource allocation)
+ */
 export class WorktreeService {
   private monitors = new Map<string, WorktreeMonitor>();
   private pollQueue = new PQueue({ concurrency: 3 });

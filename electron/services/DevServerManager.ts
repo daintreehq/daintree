@@ -13,8 +13,23 @@ const MAX_LOG_LINES = 100;
 const RESTART_COOLDOWN_MS = 60000; // Prevent restart loops
 
 /**
- * DevServerManager manages dev server processes for worktrees.
+ * DevServerManager - Manages dev server processes for worktrees.
+ *
+ * @pattern Dependency Injection via main.ts (Pattern B)
+ *
  * State changes emitted via event bus (server:update, server:error).
+ *
+ * Why this pattern:
+ * - Manages multiple child processes (dev server per worktree) via execa
+ * - Needs WorkspaceClient reference for URL parsing (cross-service dependency)
+ * - Lifecycle tied to app: servers must be stopped on app quit
+ * - Created in main.ts composition root, injected into IPC handlers
+ *
+ * When to use Pattern B:
+ * - Service spawns/manages external processes
+ * - Service has runtime dependencies on other services (setWorkspaceClient)
+ * - Explicit cleanup required on application shutdown
+ * - Service state must be coordinated with window lifecycle
  */
 export class DevServerManager {
   private servers = new Map<string, ResultPromise>();

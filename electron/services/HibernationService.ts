@@ -11,6 +11,23 @@ const DEFAULT_CONFIG: HibernationConfig = {
   inactiveThresholdHours: 24,
 };
 
+/**
+ * HibernationService - Auto-hibernates inactive projects to free resources.
+ *
+ * @pattern Factory/Accessor Methods (Pattern C)
+ *
+ * Why this pattern:
+ * - Requires lazy initialization: depends on PtyManager which uses dynamic import
+ * - Has explicit lifecycle (start/stop) that callers control
+ * - Singleton with deferred construction: getHibernationService() + initializeHibernationService()
+ * - Factory separates creation from start(), allowing config check at runtime
+ *
+ * When to use Pattern C:
+ * - Service has circular or dynamic dependencies (import() at runtime)
+ * - Lazy initialization saves startup time if service isn't always needed
+ * - Explicit dispose() method pairs with factory for resource management
+ * - Initialization timing matters (must wait for other services to be ready)
+ */
 export class HibernationService {
   private checkInterval: NodeJS.Timeout | null = null;
   private readonly CHECK_INTERVAL_MS = 60 * 60 * 1000; // Every hour

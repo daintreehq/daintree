@@ -15,6 +15,23 @@ export interface SystemSleepMetrics {
 
 type WakeCallback = (sleepDurationMs: number) => void;
 
+/**
+ * SystemSleepService - Tracks system sleep/wake cycles for accurate timing.
+ *
+ * @pattern Factory/Accessor Methods (Pattern C)
+ *
+ * Why this pattern:
+ * - Requires explicit initialization (powerMonitor listeners registered via initialize())
+ * - Has dispose() method that must be called to remove event listeners
+ * - Factory accessor pattern pairs initialize()/dispose() for resource management
+ * - Stateful resource: tracks sleep periods, must be reset/disposed properly
+ *
+ * When to use Pattern C:
+ * - Service registers system-level event handlers that need cleanup
+ * - Service has initialize()/dispose() lifecycle methods
+ * - Creation and initialization are separate concerns
+ * - Memory/resource cleanup is critical (removing listeners, clearing state)
+ */
 class SystemSleepService {
   private sleepStart: number | null = null;
   private sleepPeriods: SleepPeriod[] = [];

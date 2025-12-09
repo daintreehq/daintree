@@ -8,6 +8,22 @@ export type { CopyTreeOptions, CopyTreeResult, CopyTreeProgress };
 
 export type ProgressCallback = (progress: CopyTreeProgress) => void;
 
+/**
+ * CopyTreeService - Generates context trees for AI agents.
+ *
+ * @pattern Exported Singleton Instance (Pattern A)
+ *
+ * Why this pattern:
+ * - Stateless request-response operations (generate context on demand)
+ * - No external dependencies at construction time
+ * - Cancellation handled per-operation via AbortController (no global state)
+ * - Lightweight instantiation: just initializes an empty Map
+ *
+ * When to use Pattern A:
+ * - Service performs stateless operations without persistent resources
+ * - No need for explicit lifecycle management (start/stop/dispose)
+ * - Wide usage across handlers benefits from simple import syntax
+ */
 class CopyTreeService {
   private activeOperations = new Map<string, AbortController>();
 

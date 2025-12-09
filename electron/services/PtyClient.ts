@@ -1,11 +1,23 @@
 /**
  * PtyClient - Main process stub for terminal management.
  *
+ * @pattern Dependency Injection via main.ts (Pattern B)
+ *
  * This class provides a drop-in replacement for PtyManager in the Main process.
  * It forwards all operations to the Pty Host (UtilityProcess) via IPC,
  * keeping the Main thread responsive.
  *
- * Interface matches PtyManager for seamless integration with existing code.
+ * Why this pattern:
+ * - Manages critical child process (UtilityProcess) requiring explicit lifecycle control
+ * - Constructor accepts configuration: must be instantiated with specific options
+ * - Needs coordination with other services (MessagePort distribution, error handlers)
+ * - Lifecycle tied to app lifecycle: created in main.ts, passed to IPC handlers
+ *
+ * When to use Pattern B:
+ * - Service manages child processes, sockets, or system resources
+ * - Service requires configuration at construction time
+ * - Service needs explicit startup/shutdown coordination
+ * - Multiple services need to interact (composition root in main.ts)
  */
 
 import { utilityProcess, UtilityProcess, dialog, app, MessagePortMain } from "electron";

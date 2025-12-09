@@ -19,10 +19,24 @@ import {
 /**
  * PtyManager - Facade for terminal process management.
  *
+ * @pattern Factory/Accessor Methods (Pattern C)
+ *
  * Orchestrates the pty subsystem by delegating to specialized services:
  * - TerminalRegistry: Terminal instance management and project filtering
  * - AgentStateService: Agent state transitions and event emission
  * - TerminalProcess: Individual terminal session handling
+ *
+ * Why this pattern:
+ * - Has explicit dispose() method to clean up terminals and listeners
+ * - Shared singleton accessed dynamically via getPtyManager() from IPC handlers and services
+ * - Lifecycle paired with disposePtyManager() for clean shutdown
+ * - Factory function provides control over instantiation timing
+ *
+ * When to use Pattern C:
+ * - Service manages resources that need explicit cleanup (terminals, listeners)
+ * - Service is accessed from multiple places but disposal must be coordinated
+ * - Factory function provides control over instantiation timing
+ * - Dispose function enables clean shutdown without import-time side effects
  */
 export class PtyManager extends EventEmitter {
   private registry: TerminalRegistry;
