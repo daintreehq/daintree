@@ -67,7 +67,7 @@ export const createTerminalFocusSlice =
             set({ pingedId: null });
           }
           pingTimeout = null;
-        }, 600);
+        }, 4000);
       },
 
       toggleMaximize: (id) =>

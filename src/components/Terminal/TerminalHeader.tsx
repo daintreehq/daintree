@@ -119,7 +119,7 @@ function TerminalHeaderComponent({
             : location === "dock"
               ? "bg-[var(--color-surface)]"
               : "bg-transparent",
-          isPinged && !isMaximized && "animate-ping-header"
+          isPinged && !isMaximized && "animate-bg-flash"
         )}
         onDoubleClick={handleHeaderDoubleClick}
       >
@@ -158,7 +158,8 @@ function TerminalHeaderComponent({
                 className={cn(
                   "text-xs font-medium select-none transition-colors",
                   isFocused ? "text-canopy-text" : "text-canopy-text/70",
-                  onTitleChange && "cursor-text hover:text-canopy-text"
+                  onTitleChange && "cursor-text hover:text-canopy-text",
+                  isPinged && !isMaximized && "animate-text-shimmer"
                 )}
                 onDoubleClick={onTitleDoubleClick}
                 onKeyDown={onTitleKeyDown}
