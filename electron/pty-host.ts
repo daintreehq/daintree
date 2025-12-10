@@ -426,16 +426,6 @@ port.on("message", (rawMsg: any) => {
         }
         break;
 
-      case "init-buffer":
-        // Legacy: single buffer init (backwards compatibility)
-        if (msg.buffer instanceof SharedArrayBuffer) {
-          visualBuffer = new SharedRingBuffer(msg.buffer);
-          console.log("[PtyHost] Single SharedArrayBuffer ring buffer initialized (legacy)");
-        } else {
-          console.warn("[PtyHost] init-buffer received but buffer is not SharedArrayBuffer");
-        }
-        break;
-
       case "init-buffers":
         // Dual buffer init: visual + analysis
         if (msg.visualBuffer instanceof SharedArrayBuffer) {
