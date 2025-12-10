@@ -617,33 +617,19 @@ class TerminalInstanceService {
   }
 
   /**
-   * Centralized method to write data to a terminal and apply smart scrolling policies.
+   * Centralized method to write data to a terminal.
    * Used by both the SharedArrayBuffer poller and the IPC fallback listener.
    */
   private writeToTerminal(id: string, data: string | Uint8Array): void {
     const managed = this.instances.get(id);
     if (!managed) return;
 
-    // Check scroll decision BEFORE writing to capture state before new data shifts the buffer
-    const shouldScroll = this.shouldSnapToBottom(managed);
-
-    // Write data and apply scroll after xterm processes the buffer update
+    // Write data and apply flow control acknowledgement after xterm processes the buffer update
     const terminal = managed.terminal;
     terminal.write(data, () => {
       // Flow control acknowledgement
       const len = typeof data === "string" ? data.length : data.byteLength;
       terminalClient.acknowledgeData(id, len);
-
-      // Apply smart sticky scrolling after the buffer has been updated
-      // If the agent is working and the user hasn't explicitly scrolled up,
-      // force the viewport to follow the new data.
-      if (shouldScroll) {
-        const buffer = terminal.buffer.active;
-        const isAtBottom = buffer.baseY - buffer.viewportY < 1;
-        if (!isAtBottom) {
-          this.scrollToBottom(id);
-        }
-      }
     });
   }
 
@@ -762,15 +748,6 @@ class TerminalInstanceService {
         }
         // If becoming visible, try to upgrade to WebGL
         this.applyRendererPolicy(id, managed.getRefreshTier());
-
-        // Force snap to bottom on tab switch if working or TUI
-        // This fixes the "jump to top" bug by resetting viewport after DOM layout
-        requestAnimationFrame(() => {
-          const current = this.instances.get(id);
-          if (current && current.isVisible && this.shouldSnapToBottom(current)) {
-            this.scrollToBottom(id);
-          }
-        });
       } else {
         // If hiding, wait grace period before releasing WebGL (prevents flicker on quick tab switches)
         if (managed.webglAddon && managed.webglDisposeTimer === undefined) {
@@ -1094,19 +1071,12 @@ class TerminalInstanceService {
 
   /**
    * Force the terminal to scroll to the bottom.
-   * Used when a terminal goes to background or user clicks "Scroll to Bottom".
+   * Intended for explicit user actions (e.g., "Scroll to Bottom" button).
    */
   scrollToBottom(id: string): void {
     const managed = this.instances.get(id);
     if (managed) {
-      managed.suppressScrollEvents = true;
       managed.terminal.scrollToBottom();
-      // Clear the userScrolledUp flag when we programmatically snap to bottom
-      // This ensures future auto-scroll will work for working agents
-      managed.userScrolledUp = false;
-      requestAnimationFrame(() => {
-        managed.suppressScrollEvents = false;
-      });
     }
   }
 
@@ -1142,66 +1112,11 @@ class TerminalInstanceService {
   }
 
   /**
-   * Determines whether terminal should auto-scroll to bottom based on:
-   * - Buffer type (TUI alternate buffer always snaps)
-   * - Agent state (working terminals snap unless user scrolled up)
-   * - Current scroll position (standard terminals only snap if already at bottom)
-   */
-  private shouldSnapToBottom(managed: ManagedTerminal): boolean {
-    const buffer = managed.terminal.buffer.active;
-    const isAlternateBuffer = buffer.type === "alternate";
-
-    // CASE 1: TUI Mode (Claude Code, Vim, etc.)
-    // TUIs manage their own viewport. Always ensure alignment with cursor/bottom,
-    // but if the user has explicitly scrolled while focused, don't fight them.
-    if (isAlternateBuffer) {
-      if (managed.isFocused && managed.userScrolledUp) {
-        return false;
-      }
-      return true;
-    }
-
-    // CASE 2: Agent Working
-    // If the agent is actively outputting, force scroll to bottom
-    // UNLESS the user explicitly scrolled up and hasn't returned to bottom.
-    if (managed.agentState === "working") {
-      // If user is scrolled up, respect their position until they return to bottom
-      if (managed.userScrolledUp) {
-        return false;
-      }
-      return true;
-    }
-
-    // CASE 3: Standard Terminal Behavior
-    // Only snap if we were already at the bottom (preserve xterm default behavior)
-    return buffer.baseY - buffer.viewportY < 1;
-  }
-
-  /**
    * Update agent state for a terminal.
    * Called by React components to sync agent state to the service layer.
-   * Triggers scroll behavior based on state transitions.
    */
-  setAgentState(id: string, state: ManagedTerminal["agentState"]): void {
-    const managed = this.instances.get(id);
-    if (!managed) return;
-
-    const previousState = managed.agentState;
-    managed.agentState = state;
-
-    // When entering a working state, assume the user is at the bottom and
-    // wants to follow output until they explicitly scroll up.
-    if (state === "working" && previousState !== "working") {
-      managed.userScrolledUp = false;
-    }
-
-    // When agent completes work, snap to bottom to show final output
-    // Don't snap on transition to working - respect user scroll position
-    if (state === "completed") {
-      if (this.shouldSnapToBottom(managed)) {
-        this.scrollToBottom(id);
-      }
-    }
+  setAgentState(_id: string, _state: ManagedTerminal["agentState"]): void {
+    // Agent state no longer affects scrolling; kept for API compatibility.
   }
 
   private applyResize(id: string, cols: number, rows: number): void {
@@ -1211,23 +1126,7 @@ class TerminalInstanceService {
     this.resetFrameBuffersForTerminal(id);
     managed.terminal.resize(cols, rows);
 
-    // Recalculate scroll decision at execution time
-    const buffer = managed.terminal.buffer.active;
-    const isCurrentlyAtBottom = buffer.baseY - buffer.viewportY < 1;
-    const shouldPreservePosition = !isCurrentlyAtBottom && managed.userScrolledUp;
-
-    if (!shouldPreservePosition) {
-      this.scrollToBottom(id);
-    }
     terminalClient.resize(id, cols, rows);
-  }
-
-  private shouldScrollAfterResize(managed: ManagedTerminal): boolean {
-    // Recalculate at execution time to avoid stale state
-    const buffer = managed.terminal.buffer.active;
-    const isAtBottom = buffer.baseY - buffer.viewportY < 1;
-    // Only preserve position if user is actively scrolled up
-    return !(managed.userScrolledUp && !isAtBottom);
   }
 
   setFocused(id: string, isFocused: boolean): void {
@@ -1236,12 +1135,6 @@ class TerminalInstanceService {
 
     managed.isFocused = isFocused;
     managed.lastActiveTime = Date.now();
-
-    // When a terminal loses focus, re-enable sticky scrolling by snapping to bottom.
-    // This ensures background terminals keep the viewport at the latest output.
-    if (!isFocused) {
-      this.scrollToBottom(id);
-    }
   }
 
   private clearResizeJobs(managed: ManagedTerminal): void {
@@ -1281,7 +1174,6 @@ class TerminalInstanceService {
             if (current) {
               this.resetFrameBuffersForTerminal(id);
               current.terminal.resize(current.latestCols, current.terminal.rows);
-              if (this.shouldScrollAfterResize(current)) this.scrollToBottom(id);
               terminalClient.resize(id, current.latestCols, current.terminal.rows);
               current.resizeXJob = undefined;
             }
@@ -1295,7 +1187,6 @@ class TerminalInstanceService {
           if (current) {
             this.resetFrameBuffersForTerminal(id);
             current.terminal.resize(current.latestCols, current.terminal.rows);
-            if (this.shouldScrollAfterResize(current)) this.scrollToBottom(id);
             terminalClient.resize(id, current.latestCols, current.terminal.rows);
             current.resizeXJob = undefined;
           }
@@ -1312,7 +1203,6 @@ class TerminalInstanceService {
             if (current) {
               this.resetFrameBuffersForTerminal(id);
               current.terminal.resize(current.latestCols, current.latestRows);
-              if (this.shouldScrollAfterResize(current)) this.scrollToBottom(id);
               terminalClient.resize(id, current.latestCols, current.latestRows);
               current.resizeYJob = undefined;
             }
@@ -1326,7 +1216,6 @@ class TerminalInstanceService {
           if (current) {
             this.resetFrameBuffersForTerminal(id);
             current.terminal.resize(current.latestCols, current.latestRows);
-            if (this.shouldScrollAfterResize(current)) this.scrollToBottom(id);
             terminalClient.resize(id, current.latestCols, current.latestRows);
             current.resizeYJob = undefined;
           }
@@ -1347,7 +1236,6 @@ class TerminalInstanceService {
       if (current) {
         this.resetFrameBuffersForTerminal(id);
         current.terminal.resize(cols, current.terminal.rows);
-        if (this.shouldScrollAfterResize(current)) this.scrollToBottom(id);
         terminalClient.resize(id, cols, current.terminal.rows);
         current.resizeXJob = undefined;
       }
@@ -1367,7 +1255,6 @@ class TerminalInstanceService {
       }
       this.resetFrameBuffersForTerminal(id);
       managed.terminal.resize(managed.latestCols, rows);
-      if (this.shouldScrollAfterResize(managed)) this.scrollToBottom(id);
       terminalClient.resize(id, managed.latestCols, rows);
       return;
     }
@@ -1380,7 +1267,6 @@ class TerminalInstanceService {
           current.lastYResizeTime = Date.now();
           this.resetFrameBuffersForTerminal(id);
           current.terminal.resize(current.latestCols, current.latestRows);
-          if (this.shouldScrollAfterResize(current)) this.scrollToBottom(id);
           terminalClient.resize(id, current.latestCols, current.latestRows);
           current.resizeYJob = undefined;
         }
