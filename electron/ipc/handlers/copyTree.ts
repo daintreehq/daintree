@@ -19,16 +19,14 @@ import {
   CopyTreeInjectPayloadSchema,
   CopyTreeGetFileTreePayloadSchema,
 } from "../../schemas/ipc.js";
-import type { WorkspaceClient } from "../../services/WorkspaceClient.js";
-import type { PtyClient } from "../../services/PtyClient.js";
 
 export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void {
-  const { mainWindow, worktreeService, ptyManager } = deps;
+  const {
+    mainWindow,
+    worktreeService: workspaceClient,
+    ptyManager: ptyClient,
+  } = deps;
   const handlers: Array<() => void> = [];
-
-  // Enforce Multi-Process Architecture: strictly use Client implementations
-  const workspaceClient = worktreeService as WorkspaceClient | undefined;
-  const ptyClient = ptyManager as PtyClient;
 
   const injectionsInProgress = new Set<string>();
 
@@ -55,7 +53,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       return {
         content: "",
         fileCount: 0,
-        error: "WorktreeService not initialized",
+        error: "Workspace client not initialized",
       };
     }
 
@@ -107,7 +105,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       return {
         content: "",
         fileCount: 0,
-        error: "WorktreeService not initialized",
+        error: "Workspace client not initialized",
       };
     }
 
@@ -219,7 +217,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       return {
         content: "",
         fileCount: 0,
-        error: "WorktreeService not initialized",
+        error: "Workspace client not initialized",
       };
     }
 
@@ -288,7 +286,6 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
   handlers.push(() => ipcMain.removeHandler(CHANNELS.COPYTREE_INJECT));
 
   const handleCopyTreeAvailable = async (): Promise<boolean> => {
-    // With Multi-Process architecture, it's always available via workspace-host
     return !!workspaceClient && workspaceClient.isReady();
   };
   ipcMain.handle(CHANNELS.COPYTREE_AVAILABLE, handleCopyTreeAvailable);
