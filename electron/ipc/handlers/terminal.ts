@@ -12,6 +12,9 @@ import type { ActivityTier } from "../../../shared/types/pty-host.js";
 import { TerminalSpawnOptionsSchema, TerminalResizePayloadSchema } from "../../schemas/ipc.js";
 import type { PtyClient } from "../../services/PtyClient.js";
 import type { WorkspaceClient } from "../../services/WorkspaceClient.js";
+import type { TerminalType } from "../../../shared/types/domain.js";
+
+const AGENT_TYPES: TerminalType[] = ["claude", "gemini", "codex"];
 
 export function registerTerminalHandlers(deps: HandlerDependencies): () => void {
   const { mainWindow, ptyManager, worktreeService } = deps;
@@ -150,9 +153,27 @@ export function registerTerminalHandlers(deps: HandlerDependencies): () => void 
           // (e.g., `claude 'How do I use && in bash?'`). These are safe because the shell
           // treats them as literal characters within quotes, not command separators.
           // The buildAgentCommand function in useAgentLauncher properly escapes all arguments.
+
+          // Wrap agent commands to ensure PTY exits when agent exits
+          let finalCommand = trimmedCommand;
+          const isAgent = AGENT_TYPES.includes(type as TerminalType);
+          if (isAgent) {
+            if (process.platform === "win32") {
+              const shell = (validatedOptions.shell || process.env.COMSPEC || "powershell.exe")
+                .toLowerCase();
+              if (shell.includes("cmd")) {
+                finalCommand = `${trimmedCommand} & exit`;
+              } else {
+                finalCommand = `${trimmedCommand}; exit`;
+              }
+            } else {
+              finalCommand = `exec ${trimmedCommand}`;
+            }
+          }
+
           setTimeout(() => {
             if (ptyClient.hasTerminal(id)) {
-              ptyClient.write(id, `${trimmedCommand}\r`);
+              ptyClient.write(id, `${finalCommand}\r`);
             }
           }, 100);
         }
