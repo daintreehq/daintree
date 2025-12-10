@@ -68,6 +68,11 @@ const HORIZONTAL_DEBOUNCE_MS = 100;
 const VERTICAL_THROTTLE_MS = 150;
 const IDLE_CALLBACK_TIMEOUT_MS = 1000;
 
+// Adaptive flush timing for "Atomic Painting" to eliminate TUI flicker
+const STANDARD_FLUSH_DELAY_MS = 4; // Preserves typing latency (standard mode)
+const REDRAW_FLUSH_DELAY_MS = 16; // ~1 frame @ 60fps to capture full repaint
+const MAX_FLUSH_DELAY_MS = 32; // Cap to prevent timer starvation on continuous redraws
+
 /**
  * Creates a simple writer that passes data directly to xterm.
  *
@@ -139,11 +144,9 @@ class TerminalInstanceService {
   // Per-terminal coalescing buffers for SAB data
   private sabBuffers = new Map<
     string,
-    { chunks: (string | Uint8Array)[]; timeoutId: number | null }
+    { chunks: (string | Uint8Array)[]; timeoutId: number | null; firstScheduledAt: number | null }
   >();
 
-  // Small coalescing delay for SAB data, similar to VS Code's TerminalDataBufferer.
-  private static readonly BUFFER_FLUSH_DELAY_MS = 4;
   private static readonly TERMINAL_COUNT_THRESHOLD = 20;
   private static readonly BUDGET_SCALE_FACTOR = 0.5;
   private static readonly MIN_WEBGL_BUDGET = 2;
@@ -254,53 +257,84 @@ class TerminalInstanceService {
   };
 
   /**
-   * Buffer data for a terminal with a short timeout, then flush as a single
-   * write. This mirrors VS Code's TerminalDataBufferer behaviour on IPC.
+   * Buffer data for a terminal with adaptive flush timing.
+   * - Standard: 4ms (keeps typing responsive)
+   * - Redraw Detected: 16ms (waits for full frame to arrive to prevent flicker)
+   *
+   * Detects Clear Screen (\x1b[2J) or Cursor Home (\x1b[H) sequences which
+   * typically precede full screen repaints. By waiting ~1 frame (16ms),
+   * we allow content packets to arrive and flush atomically with the clear
+   * command, eliminating the visible "blank flash" between clear and repaint.
    */
   private bufferTerminalData(id: string, data: string | Uint8Array): void {
     let entry = this.sabBuffers.get(id);
     if (!entry) {
-      entry = { chunks: [], timeoutId: null };
+      entry = { chunks: [], timeoutId: null, firstScheduledAt: null };
       this.sabBuffers.set(id, entry);
     }
     entry.chunks.push(data);
 
+    // Detect redraw patterns in string data (most common case)
+    let isRedraw = false;
+    if (typeof data === "string") {
+      isRedraw = data.includes("\x1b[2J") || data.includes("\x1b[H");
+    }
+
+    const now = Date.now();
+
+    // If a flush is already pending
     if (entry.timeoutId !== null) {
+      // If we just detected a redraw signal, extend timer to capture full repaint
+      // But cap the total delay to prevent timer starvation on continuous redraws
+      if (isRedraw && entry.firstScheduledAt) {
+        const elapsed = now - entry.firstScheduledAt;
+        if (elapsed < MAX_FLUSH_DELAY_MS) {
+          window.clearTimeout(entry.timeoutId);
+          entry.timeoutId = window.setTimeout(() => this.flushBuffer(id), REDRAW_FLUSH_DELAY_MS);
+        }
+      }
       return;
     }
 
-    entry.timeoutId = window.setTimeout(() => {
-      const managed = this.instances.get(id);
-      const current = this.sabBuffers.get(id);
-      if (!managed || !current) {
-        if (current) {
-          this.sabBuffers.delete(id);
-        }
-        return;
-      }
+    // Schedule new flush with appropriate delay
+    const delay = isRedraw ? REDRAW_FLUSH_DELAY_MS : STANDARD_FLUSH_DELAY_MS;
+    entry.firstScheduledAt = now;
+    entry.timeoutId = window.setTimeout(() => this.flushBuffer(id), delay);
+  }
 
-      const chunks = current.chunks;
+  /**
+   * Execute the buffered write to the terminal.
+   * Joins string chunks for efficient single xterm.write() call.
+   */
+  private flushBuffer(id: string): void {
+    const managed = this.instances.get(id);
+    const entry = this.sabBuffers.get(id);
+
+    // Cleanup buffer entry immediately (including timing state)
+    if (entry) {
       this.sabBuffers.delete(id);
+    }
 
-      if (chunks.length === 0) {
-        return;
-      }
+    if (!managed || !entry || entry.chunks.length === 0) {
+      return;
+    }
 
-      if (chunks.length === 1) {
-        this.writeToTerminal(id, chunks[0]);
+    const { chunks } = entry;
+
+    // Optimization: Join string chunks to reduce xterm write overhead
+    if (chunks.length === 1) {
+      this.writeToTerminal(id, chunks[0]);
+    } else {
+      const allStrings = chunks.every((c) => typeof c === "string");
+      if (allStrings) {
+        this.writeToTerminal(id, (chunks as string[]).join(""));
       } else {
-        // If all chunks are strings, join as a single string; otherwise fall
-        // back to writing each chunk in sequence.
-        const allStrings = chunks.every((c) => typeof c === "string");
-        if (allStrings) {
-          this.writeToTerminal(id, (chunks as string[]).join(""));
-        } else {
-          for (const chunk of chunks) {
-            this.writeToTerminal(id, chunk);
-          }
+        // Mixed binary/string - write sequentially (rare path)
+        for (const chunk of chunks) {
+          this.writeToTerminal(id, chunk);
         }
       }
-    }, TerminalInstanceService.BUFFER_FLUSH_DELAY_MS);
+    }
   }
 
   /**
