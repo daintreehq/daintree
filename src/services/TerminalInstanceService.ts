@@ -53,7 +53,7 @@ interface ManagedTerminal {
   latestRows: number;
   latestWasAtBottom: boolean;
   // Smart Sticky Scrolling state
-  agentState: "working" | "idle" | "waiting" | "completed" | "failed";
+  agentState: "working" | "running" | "idle" | "waiting" | "completed" | "failed";
   isFocused: boolean;
   userScrolledUp: boolean;
   suppressScrollEvents: boolean;

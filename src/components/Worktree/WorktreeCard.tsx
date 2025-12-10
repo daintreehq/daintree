@@ -867,6 +867,12 @@ export function WorktreeCard({
                       {terminalCounts.byState.working} working
                     </span>
                   )}
+                  {terminalCounts.byState.running > 0 && (
+                    <span className="flex items-center gap-1 text-[var(--color-status-info)]">
+                      <span className="w-1.5 h-1.5 rounded-full bg-current" />
+                      {terminalCounts.byState.running} running
+                    </span>
+                  )}
                   {terminalCounts.byState.waiting > 0 && (
                     <span className="flex items-center gap-1 text-amber-400">
                       <span className="w-1.5 h-1.5 rounded-full bg-current" />
@@ -927,6 +933,13 @@ export function WorktreeCard({
                         <Loader2
                           className="w-3 h-3 animate-spin text-[var(--color-state-working)]"
                           aria-label="Working"
+                        />
+                      )}
+
+                      {term.agentState === "running" && (
+                        <Play
+                          className="w-3 h-3 text-[var(--color-status-info)]"
+                          aria-label="Running"
                         />
                       )}
 

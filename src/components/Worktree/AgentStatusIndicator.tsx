@@ -26,6 +26,14 @@ const STATE_CONFIG: Record<
     label: "working",
     tooltip: "Agent is working on your request",
   },
+  running: {
+    icon: "▶",
+    color: "text-[var(--color-status-info)]",
+    borderColor: "border-[var(--color-status-info)]",
+    pulse: false,
+    label: "running",
+    tooltip: "Process is running",
+  },
   waiting: {
     icon: "?",
     color: "text-canopy-bg",
@@ -84,8 +92,9 @@ export function AgentStatusIndicator({ state, className }: AgentStatusIndicatorP
 }
 
 const STATE_PRIORITY: Record<AgentState, number> = {
-  failed: 5,
-  working: 4,
+  failed: 6,
+  working: 5,
+  running: 4,
   completed: 3,
   waiting: 2,
   idle: 1,

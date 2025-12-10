@@ -288,7 +288,14 @@ export function setupTerminalStoreListeners() {
   agentStateUnsubscribe = terminalClient.onAgentStateChanged((data) => {
     const { agentId, state, timestamp, trigger, confidence } = data;
 
-    const validStates: AgentState[] = ["idle", "working", "waiting", "completed", "failed"];
+    const validStates: AgentState[] = [
+      "idle",
+      "working",
+      "running",
+      "waiting",
+      "completed",
+      "failed",
+    ];
     if (!validStates.includes(state as AgentState)) {
       console.warn(`Invalid agent state received: ${state} for terminal ${agentId}`);
       return;

@@ -24,7 +24,7 @@ import {
   WRITE_INTERVAL_MS,
 } from "./types.js";
 import { events } from "../events.js";
-import { AgentSpawnedSchema } from "../../schemas/agent.js";
+import { AgentSpawnedSchema, AgentStateChangedSchema } from "../../schemas/agent.js";
 import type { PtyPool } from "../PtyPool.js";
 
 // Flow Control Constants (VS Code values)
@@ -739,6 +739,31 @@ export class TerminalProcess {
         timestamp: Date.now(),
         worktreeId: this.options.worktreeId,
       });
+
+      // Update pseudo-agent state for shells to reflect "running" status
+      // This allows shells to show up as active in the UI without being "working" (AI)
+      const newState = result.isBusy ? "running" : "idle";
+      if (terminal.agentState !== newState) {
+        const previousState = terminal.agentState || "idle";
+        terminal.agentState = newState;
+        terminal.lastStateChange = Date.now();
+
+        const stateChangePayload = {
+          agentId: this.id, // Use terminal ID as agentId for shells
+          terminalId: this.id,
+          state: newState,
+          previousState,
+          timestamp: terminal.lastStateChange,
+          trigger: "activity" as const,
+          confidence: 1.0,
+          worktreeId: this.options.worktreeId,
+        };
+
+        const validated = AgentStateChangedSchema.safeParse(stateChangePayload);
+        if (validated.success) {
+          events.emit("agent:state-changed", validated.data);
+        }
+      }
     }
   }
 

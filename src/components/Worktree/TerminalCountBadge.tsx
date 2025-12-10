@@ -6,6 +6,7 @@ import {
   AlertCircle,
   CheckCircle2,
   XCircle,
+  Play,
 } from "lucide-react";
 import type { WorktreeTerminalCounts } from "@/hooks/useWorktreeTerminals";
 import type { AgentState, TerminalInstance, TerminalType } from "@/types";
@@ -35,7 +36,8 @@ interface TerminalCountBadgeProps {
 }
 
 const STATE_LABELS: Record<AgentState, string> = {
-  working: "running",
+  working: "working",
+  running: "running",
   idle: "idle",
   waiting: "waiting",
   completed: "done",
@@ -45,7 +47,14 @@ const STATE_LABELS: Record<AgentState, string> = {
 function formatStateCounts(byState: Record<AgentState, number>): string {
   const parts: string[] = [];
 
-  const priorityOrder: AgentState[] = ["working", "waiting", "failed", "idle", "completed"];
+  const priorityOrder: AgentState[] = [
+    "working",
+    "running",
+    "waiting",
+    "failed",
+    "idle",
+    "completed",
+  ];
 
   for (const state of priorityOrder) {
     const count = byState[state];
@@ -95,6 +104,7 @@ export function TerminalCountBadge({
 
   const hasNonIdleStates =
     counts.byState.working > 0 ||
+    counts.byState.running > 0 ||
     counts.byState.completed > 0 ||
     counts.byState.failed > 0 ||
     counts.byState.waiting > 0;
@@ -174,6 +184,13 @@ export function TerminalCountBadge({
                     <Loader2
                       className="w-3.5 h-3.5 animate-spin text-[var(--color-state-working)]"
                       aria-label="Working"
+                    />
+                  )}
+
+                  {term.agentState === "running" && (
+                    <Play
+                      className="w-3.5 h-3.5 text-[var(--color-status-info)]"
+                      aria-label="Running"
                     />
                   )}
 

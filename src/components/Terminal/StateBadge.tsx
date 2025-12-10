@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { AgentState } from "@/types";
 
@@ -23,6 +23,13 @@ const STATE_CONFIG: Record<
     className:
       "bg-[color-mix(in_oklab,var(--color-state-working)_15%,transparent)] text-[var(--color-state-working)] border-[var(--color-state-working)]/40",
     tooltip: "Agent is working on your request",
+  },
+  running: {
+    icon: <Play className="h-3 w-3 text-[var(--color-status-info)]" aria-hidden="true" />,
+    label: "Running",
+    className:
+      "bg-[color-mix(in_oklab,var(--color-status-info)_15%,transparent)] text-[var(--color-status-info)] border-[var(--color-status-info)]/40",
+    tooltip: "Process is running",
   },
   completed: {
     icon: (

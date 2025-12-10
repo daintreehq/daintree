@@ -12,7 +12,14 @@ export const TerminalTypeSchema = z.enum([
   "custom",
 ]);
 
-export const AgentStateSchema = z.enum(["idle", "working", "waiting", "completed", "failed"]);
+export const AgentStateSchema = z.enum([
+  "idle",
+  "working",
+  "running",
+  "waiting",
+  "completed",
+  "failed",
+]);
 
 // @see shared/types/events.ts for the TypeScript interface definition.
 export const EventContextSchema = z.object({

@@ -17,6 +17,7 @@ function calculateWorktreeCounts(terminals: TerminalInstance[], worktreeId: stri
   const byState: Record<AgentState, number> = {
     idle: 0,
     working: 0,
+    running: 0,
     waiting: 0,
     completed: 0,
     failed: 0,
@@ -45,6 +46,7 @@ describe("useWorktreeTerminals logic", () => {
     expect(result.counts.byState).toEqual({
       idle: 0,
       working: 0,
+      running: 0,
       waiting: 0,
       completed: 0,
       failed: 0,
@@ -258,5 +260,38 @@ describe("useWorktreeTerminals logic", () => {
     expect(result.counts.byState.waiting).toBe(1);
     expect(result.counts.byState.idle).toBe(1);
     expect(result.counts.byState.completed).toBe(1);
+  });
+
+  it("counts shell terminals in running state", () => {
+    const terminals: TerminalInstance[] = [
+      {
+        id: "term-1",
+        worktreeId: "worktree-1",
+        type: "shell",
+        title: "Shell",
+        cwd: "/path/1",
+        cols: 80,
+        rows: 24,
+        location: "grid",
+        agentState: "running",
+      },
+      {
+        id: "term-2",
+        worktreeId: "worktree-1",
+        type: "shell",
+        title: "Shell 2",
+        cwd: "/path/1",
+        cols: 80,
+        rows: 24,
+        location: "grid",
+        agentState: "idle",
+      },
+    ];
+
+    const result = calculateWorktreeCounts(terminals, "worktree-1");
+
+    expect(result.counts.total).toBe(2);
+    expect(result.counts.byState.running).toBe(1);
+    expect(result.counts.byState.idle).toBe(1);
   });
 });

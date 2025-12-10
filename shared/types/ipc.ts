@@ -706,7 +706,8 @@ export type AgentStateChangeTrigger =
   | "heuristic"
   | "ai-classification"
   | "timeout"
-  | "exit";
+  | "exit"
+  | "activity";
 
 /** Payload for agent state change events */
 export interface AgentStateChangePayload {

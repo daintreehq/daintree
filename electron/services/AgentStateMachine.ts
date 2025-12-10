@@ -10,8 +10,9 @@ export type AgentEvent =
   | { type: "error"; error: string };
 
 const VALID_TRANSITIONS: Record<AgentState, AgentState[]> = {
-  idle: ["working", "failed"],
+  idle: ["working", "running", "failed"],
   working: ["waiting", "completed", "failed"],
+  running: ["idle"], // Shell process state - managed by TerminalProcess, not this state machine
   waiting: ["working", "failed"],
   completed: ["failed"], // Allow error events to override completed state
   failed: ["failed"],
