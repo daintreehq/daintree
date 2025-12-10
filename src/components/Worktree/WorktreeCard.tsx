@@ -64,6 +64,36 @@ import {
 import { ClaudeIcon, GeminiIcon, CodexIcon } from "@/components/icons";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import type { AgentType, UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
+import { STATE_ICONS, STATE_COLORS, STATE_LABELS, STATE_PRIORITY } from "./terminalStateConfig";
+
+interface StateIconProps {
+  state: AgentState;
+  count: number;
+}
+
+function StateIcon({ state, count }: StateIconProps) {
+  const Icon = STATE_ICONS[state];
+  const colorClass = STATE_COLORS[state];
+  const label = STATE_LABELS[state];
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className={cn("flex items-center gap-1", colorClass)}
+          role="img"
+          aria-label={`${count} ${label}`}
+        >
+          <Icon className={cn("w-3 h-3", state === "working" && "animate-spin")} aria-hidden />
+          <span className="font-mono">{count}</span>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="text-xs">
+        {count} {label}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
 
 export interface WorktreeCardProps {
   worktree: WorktreeState;
@@ -871,45 +901,16 @@ export function WorktreeCard({
                   <span className="font-mono">{terminalCounts.total} active</span>
                 </div>
 
-                {/* Right: State breakdown */}
-                <div className="flex items-center gap-3">
-                  {terminalCounts.byState.working > 0 && (
-                    <span className="flex items-center gap-1 text-[var(--color-state-working)]">
-                      <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
-                      {terminalCounts.byState.working} working
-                    </span>
-                  )}
-                  {terminalCounts.byState.waiting > 0 && (
-                    <span className="flex items-center gap-1 text-amber-400">
-                      <span className="w-1.5 h-1.5 rounded-full bg-current" />
-                      {terminalCounts.byState.waiting} waiting
-                    </span>
-                  )}
-                  {terminalCounts.byState.running > 0 && (
-                    <span className="flex items-center gap-1 text-[var(--color-status-info)]">
-                      <span className="w-1.5 h-1.5 rounded-full bg-current" />
-                      {terminalCounts.byState.running} running
-                    </span>
-                  )}
-                  {terminalCounts.byState.idle > 0 && (
-                    <span className="flex items-center gap-1 text-canopy-text/40">
-                      <span className="w-1.5 h-1.5 rounded-full bg-current" />
-                      {terminalCounts.byState.idle} idle
-                    </span>
-                  )}
-                  {terminalCounts.byState.completed > 0 && (
-                    <span className="flex items-center gap-1 text-canopy-text/40">
-                      <span className="w-1.5 h-1.5 rounded-full bg-current" />
-                      {terminalCounts.byState.completed} completed
-                    </span>
-                  )}
-                  {terminalCounts.byState.failed > 0 && (
-                    <span className="flex items-center gap-1 text-red-400">
-                      <span className="w-1.5 h-1.5 rounded-full bg-current" />
-                      {terminalCounts.byState.failed} failed
-                    </span>
-                  )}
-                </div>
+                {/* Right: State breakdown (icons + counts) */}
+                <TooltipProvider>
+                  <div className="flex items-center gap-3">
+                    {STATE_PRIORITY.map((state) => {
+                      const count = terminalCounts.byState[state];
+                      if (count === 0) return null;
+                      return <StateIcon key={state} state={state} count={count} />;
+                    })}
+                  </div>
+                </TooltipProvider>
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
