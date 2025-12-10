@@ -52,11 +52,8 @@ interface ManagedTerminal {
   latestCols: number;
   latestRows: number;
   latestWasAtBottom: boolean;
-  // Smart Sticky Scrolling state
-  agentState: "working" | "running" | "idle" | "waiting" | "completed" | "failed";
+  // Focus-aware scrolling state
   isFocused: boolean;
-  userScrolledUp: boolean;
-  suppressScrollEvents: boolean;
 }
 
 type SabFlushMode = "normal" | "frame";
@@ -619,6 +616,10 @@ class TerminalInstanceService {
   /**
    * Centralized method to write data to a terminal.
    * Used by both the SharedArrayBuffer poller and the IPC fallback listener.
+   *
+   * Implements focus-aware scrolling:
+   * - Focused terminal: Never auto-scroll (user has complete control)
+   * - Deselected terminals: Auto-scroll to bottom to follow new output
    */
   private writeToTerminal(id: string, data: string | Uint8Array): void {
     const managed = this.instances.get(id);
@@ -630,6 +631,16 @@ class TerminalInstanceService {
       // Flow control acknowledgement
       const len = typeof data === "string" ? data.length : data.byteLength;
       terminalClient.acknowledgeData(id, len);
+
+      // Focus-aware scroll behavior: only snap deselected terminals to bottom
+      // This prevents viewport jumping when user switches back to a background terminal
+      if (!managed.isFocused) {
+        const buffer = terminal.buffer.active;
+        const isAtBottom = buffer.baseY - buffer.viewportY < 1;
+        if (!isAtBottom) {
+          terminal.scrollToBottom();
+        }
+      }
     });
   }
 
@@ -869,10 +880,7 @@ class TerminalInstanceService {
       latestCols: 0,
       latestRows: 0,
       latestWasAtBottom: true,
-      agentState: "idle",
       isFocused: false,
-      userScrolledUp: false,
-      suppressScrollEvents: false,
     };
 
     const inputDisposable = terminal.onData((data) => {
@@ -912,27 +920,6 @@ class TerminalInstanceService {
     if (!managed.isOpened) {
       managed.terminal.open(managed.hostElement);
       managed.isOpened = true;
-
-      // Add scroll event listener to detect user interaction
-      const scrollDisposable = managed.terminal.onScroll(() => {
-        // Ignore system-triggered scroll events
-        if (managed.suppressScrollEvents) {
-          return;
-        }
-
-        const buffer = managed.terminal.buffer.active;
-        const isAtBottom = buffer.baseY - buffer.viewportY < 1;
-
-        if (!isAtBottom) {
-          // User scrolled up - mark persistent flag
-          managed.userScrolledUp = true;
-        } else {
-          // User returned to bottom - clear flag
-          managed.userScrolledUp = false;
-        }
-      });
-
-      managed.listeners.push(() => scrollDisposable.dispose());
     }
     managed.lastAttachAt = Date.now();
 
@@ -1024,9 +1011,8 @@ class TerminalInstanceService {
         managed.latestCols = cols;
         managed.latestRows = rows;
         managed.latestWasAtBottom = wasAtBottom;
-        // Apply smart scroll behavior
-        const shouldPreservePosition = !wasAtBottom && managed.userScrolledUp;
-        if (!shouldPreservePosition) {
+        // Focus-aware scroll: only snap deselected terminals to bottom after resize
+        if (!managed.isFocused && !wasAtBottom) {
           this.scrollToBottom(id);
         }
         terminalClient.resize(id, cols, rows);
@@ -1118,9 +1104,13 @@ class TerminalInstanceService {
   /**
    * Update agent state for a terminal.
    * Called by React components to sync agent state to the service layer.
+   * Agent state no longer affects scrolling (focus-based behavior only).
    */
-  setAgentState(_id: string, _state: ManagedTerminal["agentState"]): void {
-    // Agent state no longer affects scrolling; kept for API compatibility.
+  setAgentState(
+    _id: string,
+    _state: "working" | "running" | "idle" | "waiting" | "completed" | "failed"
+  ): void {
+    // No-op: Agent state no longer affects scrolling; kept for API compatibility.
   }
 
   private applyResize(id: string, cols: number, rows: number): void {
