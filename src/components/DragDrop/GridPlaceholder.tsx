@@ -1,35 +1,11 @@
-import { Terminal } from "lucide-react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ClaudeIcon, GeminiIcon, CodexIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
-import { getBrandColorHex } from "@/lib/colorUtils";
 import { useDndPlaceholder, GRID_PLACEHOLDER_ID } from "./DndProvider";
-import type { TerminalType } from "@/types";
+import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 
 interface GridPlaceholderProps {
   className?: string;
-}
-
-function getPlaceholderIcon(type: TerminalType) {
-  const brandColor = getBrandColorHex(type);
-  const props = {
-    className: "w-3.5 h-3.5",
-    "aria-hidden": "true" as const,
-  };
-  const customProps = { ...props, brandColor };
-
-  switch (type) {
-    case "claude":
-      return <ClaudeIcon {...customProps} />;
-    case "gemini":
-      return <GeminiIcon {...customProps} />;
-    case "codex":
-      return <CodexIcon {...customProps} />;
-    case "terminal":
-    default:
-      return <Terminal {...props} />;
-  }
 }
 
 export function GridPlaceholder({ className }: GridPlaceholderProps) {
@@ -40,7 +16,7 @@ export function GridPlaceholder({ className }: GridPlaceholderProps) {
     return <div className={cn("h-full rounded-lg bg-canopy-bg/50", className)} />;
   }
 
-  const { title, type } = activeTerminal;
+  const { title, type, agentId } = activeTerminal;
 
   return (
     <div
@@ -60,7 +36,7 @@ export function GridPlaceholder({ className }: GridPlaceholderProps) {
         )}
       >
         <span className="shrink-0 flex items-center justify-center text-canopy-accent/80">
-          {getPlaceholderIcon(type)}
+          <TerminalIcon type={type} agentId={agentId} className="w-3.5 h-3.5" />
         </span>
         <span className="font-medium text-canopy-accent/80 truncate opacity-80">{title}</span>
       </div>

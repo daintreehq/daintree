@@ -3,27 +3,36 @@ import { RefreshCw, Plus, Trash2, Globe, Check, X, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSidecarStore } from "@/store/sidecarStore";
 import { useLinkDiscovery } from "@/hooks/useLinkDiscovery";
-import { ClaudeIcon, GeminiIcon, CodexIcon } from "@/components/icons";
+import { CodexIcon } from "@/components/icons";
 import { LINK_TEMPLATES } from "@shared/types";
 import { getBrandColorHex } from "@/lib/colorUtils";
+import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 
 function ServiceIcon({ name, size = 16 }: { name: string; size?: number }) {
   const className = size === 16 ? "w-4 h-4" : size === 32 ? "w-8 h-8" : "w-4 h-4";
 
-  switch (name) {
-    case "claude":
-      return <ClaudeIcon className={className} brandColor={getBrandColorHex("claude")} />;
-    case "gemini":
-      return <GeminiIcon className={className} brandColor={getBrandColorHex("gemini")} />;
-    case "openai":
-      return <CodexIcon className={className} brandColor={getBrandColorHex("codex")} />;
-    case "globe":
-      return <Globe className={className} />;
-    case "search":
-      return <Search className={className} />;
-    default:
-      return <Globe className={className} />;
+  // Handle special cases first
+  if (name === "globe") {
+    return <Globe className={className} />;
   }
+  if (name === "search") {
+    return <Search className={className} />;
+  }
+  // Handle "openai" as codex icon (special mapping for sidecar)
+  if (name === "openai") {
+    return <CodexIcon className={className} brandColor={getBrandColorHex("codex")} />;
+  }
+
+  // Try to get agent config from registry
+  if (isRegisteredAgent(name)) {
+    const config = getAgentConfig(name);
+    if (config) {
+      const Icon = config.icon;
+      return <Icon className={className} brandColor={config.color} />;
+    }
+  }
+
+  return <Globe className={className} />;
 }
 
 function FaviconIcon({ url }: { url: string }) {

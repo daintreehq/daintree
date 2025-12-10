@@ -15,6 +15,7 @@ import { useErrorStore, useTerminalStore, getTerminalRefreshTier } from "@/store
 import { useTerminalLogic } from "@/hooks/useTerminalLogic";
 import type { AgentState } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { getAgentConfig } from "@/config/agents";
 
 export type { TerminalType };
 
@@ -294,18 +295,14 @@ function TerminalPaneComponent({
       tabIndex={0}
       role="group"
       aria-label={(() => {
-        switch (type) {
-          case "terminal":
-            return `Terminal: ${title}`;
-          case "claude":
-            return `Claude agent: ${title}`;
-          case "gemini":
-            return `Gemini agent: ${title}`;
-          case "codex":
-            return `Codex agent: ${title}`;
-          default:
-            return `${type} session: ${title}`;
+        if (type === "terminal") {
+          return `Terminal: ${title}`;
         }
+        const agentConfig = getAgentConfig(type);
+        if (agentConfig) {
+          return `${agentConfig.name} agent: ${title}`;
+        }
+        return `${type} session: ${title}`;
       })()}
     >
       <TerminalHeader

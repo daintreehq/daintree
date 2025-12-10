@@ -9,10 +9,12 @@ import {
   type AgentSettings,
 } from "@shared/types";
 import { keybindingService } from "@/services/KeybindingService";
+import { isRegisteredAgent, getAgentConfig } from "@/config/agents";
 
 export interface HydrationOptions {
   addTerminal: (options: {
     type?: TerminalType;
+    agentId?: string;
     title?: string;
     cwd: string;
     worktreeId?: string;
@@ -122,8 +124,11 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
             if (reconnectResult.exists) {
               // Add to UI without spawning new process, preserving agent state and command
               const currentAgentState = reconnectResult.agentState as AgentState | undefined;
+              // Get effective agentId - handles migration from type-based to agentId-based system
+              const agentId = terminal.agentId ?? (isRegisteredAgent(terminal.type) ? terminal.type : undefined);
               await addTerminal({
                 type: terminal.type,
+                agentId,
                 title: terminal.title,
                 cwd,
                 worktreeId: terminal.worktreeId,
@@ -179,6 +184,22 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
 }
 
 /**
+ * Get the effective agent ID from a terminal state.
+ * Handles migration from old type-based system to new agentId-based system.
+ */
+function getEffectiveAgentId(terminal: TerminalState): string | undefined {
+  // New system: use agentId directly
+  if (terminal.agentId) {
+    return terminal.agentId;
+  }
+  // Migration: if type is an agent, use type as agentId
+  if (isRegisteredAgent(terminal.type)) {
+    return terminal.type;
+  }
+  return undefined;
+}
+
+/**
  * Generate the command to run for a terminal on restart.
  *
  * - For agents (claude, gemini, codex): Regenerate command from current settings
@@ -189,11 +210,12 @@ function getRestartCommand(
   terminal: TerminalState,
   agentSettings: AgentSettings | null
 ): string | undefined {
-  const isAgent = ["claude", "gemini", "codex"].includes(terminal.type);
+  const agentId = getEffectiveAgentId(terminal);
 
-  if (isAgent) {
+  if (agentId) {
     // Regenerate command from current agent settings
-    const baseCommand = terminal.type; // "claude", "gemini", or "codex"
+    const agentConfig = getAgentConfig(agentId);
+    const baseCommand = agentConfig?.command || agentId;
 
     if (!agentSettings) {
       // Fallback to saved command if settings unavailable
@@ -202,7 +224,7 @@ function getRestartCommand(
     }
 
     let flags: string[] = [];
-    switch (terminal.type) {
+    switch (agentId) {
       case "claude":
         flags = generateClaudeFlags(agentSettings.claude);
         break;
@@ -231,9 +253,11 @@ async function spawnNewTerminal(
   agentSettings: AgentSettings | null
 ): Promise<void> {
   const commandToRun = getRestartCommand(terminal, agentSettings);
+  const agentId = getEffectiveAgentId(terminal);
 
   await addTerminal({
     type: terminal.type,
+    agentId,
     title: terminal.title,
     cwd,
     worktreeId: terminal.worktreeId,

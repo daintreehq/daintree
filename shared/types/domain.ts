@@ -205,7 +205,13 @@ export interface RunRecord {
 
 // Terminal Types
 
-/** Terminal type: AI agents (claude/gemini/codex) or standard terminal */
+/** Terminal kind: distinguishes between agent and standard terminals */
+export type TerminalKind = "terminal" | "agent";
+
+/**
+ * Terminal type: AI agents (claude/gemini/codex) or standard terminal
+ * @deprecated Use TerminalKind + agentId instead. This is kept for backward compatibility.
+ */
 export type TerminalType = "terminal" | "claude" | "gemini" | "codex";
 
 /** Location of a terminal instance in the UI */
@@ -257,6 +263,8 @@ export interface TerminalInstance {
   worktreeId?: string;
   /** Type of terminal */
   type: TerminalType;
+  /** Agent ID when type is an agent (claude, gemini, codex, etc.) - enables extensibility */
+  agentId?: string;
   /** Display title for the terminal tab */
   title: string;
   /** Current working directory of the terminal */
@@ -349,6 +357,8 @@ export interface TerminalSnapshot {
   id: string;
   /** Terminal type */
   type: TerminalType;
+  /** Agent ID when type is an agent - enables extensibility */
+  agentId?: string;
   /** Display title */
   title: string;
   /** Working directory */

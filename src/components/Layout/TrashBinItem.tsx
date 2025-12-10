@@ -1,31 +1,14 @@
 import { useState, useEffect, useCallback } from "react";
-import { RotateCcw, X, Terminal } from "lucide-react";
-import { ClaudeIcon, GeminiIcon, CodexIcon } from "@/components/icons";
-import { cn } from "@/lib/utils";
+import { RotateCcw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTerminalStore, type TerminalInstance } from "@/store";
 import type { TrashedTerminal } from "@/store/slices";
-import type { TerminalType } from "@/types";
+import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 
 interface TrashBinItemProps {
   terminal: TerminalInstance;
   trashedInfo: TrashedTerminal;
   worktreeName?: string;
-}
-
-function getTerminalIcon(type: TerminalType, className?: string) {
-  const props = { className: cn("w-3 h-3", className), "aria-hidden": "true" as const };
-  switch (type) {
-    case "claude":
-      return <ClaudeIcon {...props} />;
-    case "gemini":
-      return <GeminiIcon {...props} />;
-    case "codex":
-      return <CodexIcon {...props} />;
-    case "terminal":
-    default:
-      return <Terminal {...props} />;
-  }
 }
 
 export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinItemProps) {
@@ -64,7 +47,7 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
   return (
     <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-sm bg-transparent hover:bg-white/5 transition-colors group">
       <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
-        {getTerminalIcon(terminal.type)}
+        <TerminalIcon type={terminal.type} agentId={terminal.agentId} className="w-3 h-3" />
       </div>
 
       <div className="flex-1 min-w-0">

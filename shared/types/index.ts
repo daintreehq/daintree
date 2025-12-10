@@ -33,6 +33,7 @@ export type {
   TaskState,
   RunRecord,
   // Terminal types
+  TerminalKind,
   TerminalType,
   TerminalLocation,
   AgentStateChangeTrigger,

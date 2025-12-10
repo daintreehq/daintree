@@ -16,6 +16,7 @@ const DEFAULT_OPTIONS: Required<TerminalPersistenceOptions> = {
   transform: (t) => ({
     id: t.id,
     type: t.type,
+    agentId: t.agentId,
     title: t.title,
     cwd: t.cwd,
     worktreeId: t.worktreeId,

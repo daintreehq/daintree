@@ -13,6 +13,7 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { terminalPersistence } from "../persistence/terminalPersistence";
 import { validateTerminalConfig } from "@/utils/terminalValidation";
+import { isRegisteredAgent, getAgentConfig } from "@/config/agents";
 
 export const MAX_GRID_TERMINALS = 16;
 
@@ -29,6 +30,8 @@ export type TerminalInstance = TerminalInstanceType;
 
 export interface AddTerminalOptions {
   type?: TerminalType;
+  /** Agent ID when type is an agent - enables extensibility for new agents */
+  agentId?: string;
   title?: string;
   worktreeId?: string;
   cwd: string;
@@ -49,6 +52,18 @@ const TYPE_TITLES: Record<TerminalType, string> = {
   gemini: "Gemini",
   codex: "Codex",
 };
+
+function getDefaultTitle(type: TerminalType, agentId?: string): string {
+  // If agentId is provided, try to get the title from the registry
+  if (agentId) {
+    const config = getAgentConfig(agentId);
+    if (config) {
+      return config.name;
+    }
+  }
+  // Fall back to type-based titles
+  return TYPE_TITLES[type] || "Terminal";
+}
 
 export interface TrashedTerminal {
   id: string;
@@ -137,7 +152,9 @@ export const createTerminalRegistrySlice =
 
     addTerminal: async (options) => {
       const type = options.type || "terminal";
-      const title = options.title || TYPE_TITLES[type];
+      // Derive agentId: explicit option, or from type if it's a registered agent
+      const agentId = options.agentId ?? (isRegisteredAgent(type) ? type : undefined);
+      const title = options.title || getDefaultTitle(type, agentId);
 
       // Auto-dock if grid is full and user requested grid location
       const currentGridCount = get().terminals.filter(
@@ -171,14 +188,16 @@ export const createTerminalRegistrySlice =
           });
         }
 
-        const isAgentTerminal = type === "claude" || type === "gemini" || type === "codex";
+        // Determine if this is an agent terminal (by agentId or legacy type)
+        const isAgent = !!agentId || isRegisteredAgent(type);
 
-        const agentState = options.agentState ?? (isAgentTerminal ? "idle" : undefined);
+        const agentState = options.agentState ?? (isAgent ? "idle" : undefined);
         const lastStateChange =
           options.lastStateChange ?? (agentState !== undefined ? Date.now() : undefined);
         const terminal: TerminalInstance = {
           id,
           type,
+          agentId,
           title,
           worktreeId: options.worktreeId,
           cwd: options.cwd,
@@ -239,7 +258,7 @@ export const createTerminalRegistrySlice =
         const terminal = state.terminals.find((t) => t.id === id);
         if (!terminal) return state;
 
-        const effectiveTitle = newTitle.trim() || TYPE_TITLES[terminal.type];
+        const effectiveTitle = newTitle.trim() || getDefaultTitle(terminal.type, terminal.agentId);
         const newTerminals = state.terminals.map((t) =>
           t.id === id ? { ...t, title: effectiveTitle } : t
         );
@@ -734,15 +753,19 @@ export const createTerminalRegistrySlice =
       // For agent terminals, regenerate command from current settings
       // For other terminals, use the saved command
       let commandToRun = currentTerminal.command;
-      const isAgent = ["claude", "gemini", "codex"].includes(currentTerminal.type);
+      // Get effective agentId - handles both new agentId and legacy type-based detection
+      const effectiveAgentId = currentTerminal.agentId ??
+        (isRegisteredAgent(currentTerminal.type) ? currentTerminal.type : undefined);
+      const isAgent = !!effectiveAgentId;
 
-      if (isAgent) {
+      if (isAgent && effectiveAgentId) {
         try {
           const agentSettings = await agentSettingsClient.get();
           if (agentSettings) {
-            const baseCommand = currentTerminal.type;
+            const agentConfig = getAgentConfig(effectiveAgentId);
+            const baseCommand = agentConfig?.command || effectiveAgentId;
             let flags: string[] = [];
-            switch (currentTerminal.type) {
+            switch (effectiveAgentId) {
               case "claude":
                 flags = generateClaudeFlags(agentSettings.claude);
                 break;

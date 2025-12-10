@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Globe, Search } from "lucide-react";
-import { ClaudeIcon, GeminiIcon, CodexIcon } from "@/components/icons";
+import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
+import { CodexIcon } from "@/components/icons";
 import { getBrandColorHex } from "@/lib/colorUtils";
 
 interface SidecarIconProps {
@@ -22,32 +23,42 @@ export function SidecarIcon({ icon, size = "launchpad", url, type }: SidecarIcon
     return <Globe className={iconClass} />;
   }
 
-  switch (icon) {
-    case "claude":
-      return <ClaudeIcon className={iconClass} brandColor={getBrandColorHex("claude")} />;
-    case "gemini":
-      return <GeminiIcon className={iconClass} brandColor={getBrandColorHex("gemini")} />;
-    case "openai":
-      return <CodexIcon className={iconClass} brandColor={getBrandColorHex("codex")} />;
-    case "search":
-      return <Search className={iconClass} />;
-    default:
-      if (type === "user" && url) {
-        try {
-          const domain = new URL(url).hostname;
-          const faviconUrl = `https://www.google.com/s2/favicons?domain=${domain}&sz=64`;
-          return (
-            <img
-              src={faviconUrl}
-              alt=""
-              className={iconClass}
-              onError={() => setShowFallback(true)}
-            />
-          );
-        } catch {
-          return <Globe className={iconClass} />;
-        }
-      }
-      return <Globe className={iconClass} />;
+  // Handle special cases
+  if (icon === "search") {
+    return <Search className={iconClass} />;
   }
+
+  // Handle "openai" as codex icon (special mapping for sidecar)
+  if (icon === "openai") {
+    return <CodexIcon className={iconClass} brandColor={getBrandColorHex("codex")} />;
+  }
+
+  // Try to get agent config from registry
+  if (isRegisteredAgent(icon)) {
+    const config = getAgentConfig(icon);
+    if (config) {
+      const Icon = config.icon;
+      return <Icon className={iconClass} brandColor={config.color} />;
+    }
+  }
+
+  // Fallback for user-defined links with URL
+  if (type === "user" && url) {
+    try {
+      const domain = new URL(url).hostname;
+      const faviconUrl = `https://www.google.com/s2/favicons?domain=${domain}&sz=64`;
+      return (
+        <img
+          src={faviconUrl}
+          alt=""
+          className={iconClass}
+          onError={() => setShowFallback(true)}
+        />
+      );
+    } catch {
+      return <Globe className={iconClass} />;
+    }
+  }
+
+  return <Globe className={iconClass} />;
 }
