@@ -59,6 +59,8 @@ interface ManagedTerminal {
   suppressScrollEvents: boolean;
 }
 
+type SabFlushMode = "normal" | "frame";
+
 const MAX_WEBGL_RECOVERY_ATTEMPTS = 4; // Supports full 1s → 2s → 4s → 8s backoff sequence
 const WEBGL_DISPOSE_GRACE_MS = 10000; // 10s grace period before releasing WebGL on hide
 const TIER_DOWNGRADE_HYSTERESIS_MS = 500; // Delay before applying tier downgrades to prevent flapping
@@ -72,7 +74,7 @@ const IDLE_CALLBACK_TIMEOUT_MS = 1000;
 const STANDARD_FLUSH_DELAY_MS = 4; // Preserves typing latency (standard mode)
 const REDRAW_FLUSH_DELAY_MS = 16; // ~1 frame @ 60fps to capture full repaint (frame settle delay)
 const MAX_FLUSH_DELAY_MS = 32; // Max time to hold a frame before forced flush
-const MIN_FRAME_INTERVAL_MS = 33; // Target ~30fps for intense TUI redraws
+const MIN_FRAME_INTERVAL_MS = 50; // Target ~20fps for intense TUI redraws
 const FRAME_SETTLE_DELAY_MS = REDRAW_FLUSH_DELAY_MS;
 const FRAME_DEADLINE_MS = MAX_FLUSH_DELAY_MS;
 const TUI_BURST_THRESHOLD_MS = 50; // Repeated clears within this window treated as TUI burst
@@ -152,7 +154,7 @@ class TerminalInstanceService {
     string,
     {
       chunks: (string | Uint8Array)[];
-      flushMode: "normal" | "frame";
+      flushMode: SabFlushMode;
       normalTimeoutId: number | null;
       frameSettleTimeoutId: number | null;
       frameDeadlineTimeoutId: number | null;
@@ -164,8 +166,16 @@ class TerminalInstanceService {
       flushOnRedrawOnly: boolean;
     }
   >();
-  // Per-terminal last frame flush time for FPS-style limiting in frame mode
-  private sabFrameLastFlushAt = new Map<string, number>();
+  // Per-terminal frame stats for FPS-style limiting
+  private sabFrameStats = new Map<
+    string,
+    { lastFlushAt: number; lastIntervalMs: number | null; avgIntervalMs: number | null }
+  >();
+  // Per-terminal queued frames for TUI redraw mode
+  private sabFrameQueues = new Map<
+    string,
+    { frames: (string | Uint8Array)[][]; presenterTimeoutId: number | null }
+  >();
 
   private static readonly TERMINAL_COUNT_THRESHOLD = 20;
   private static readonly BUDGET_SCALE_FACTOR = 0.5;
@@ -353,9 +363,9 @@ class TerminalInstanceService {
     // drop the in-flight frame when redraws arrive above our FPS cap
     // and start a fresh frame from this new redraw boundary.
     if (isRedraw && entry.chunks.length > 0) {
-      const lastFlushAt = this.sabFrameLastFlushAt.get(id);
-      if (lastFlushAt !== undefined) {
-        const delta = now - lastFlushAt;
+      const stats = this.sabFrameStats.get(id);
+      if (stats) {
+        const delta = now - stats.lastFlushAt;
         if (delta < MIN_FRAME_INTERVAL_MS) {
           if (entry.normalTimeoutId !== null) {
             window.clearTimeout(entry.normalTimeoutId);
@@ -453,6 +463,90 @@ class TerminalInstanceService {
     }
   }
 
+  private recordFrameFlush(id: string): void {
+    const now = Date.now();
+    const existing = this.sabFrameStats.get(id);
+    const lastIntervalMs = existing ? now - existing.lastFlushAt : null;
+
+    let avgIntervalMs: number | null = lastIntervalMs;
+    if (existing && existing.avgIntervalMs != null && lastIntervalMs != null) {
+      const alpha = 0.2;
+      avgIntervalMs = existing.avgIntervalMs * (1 - alpha) + lastIntervalMs * alpha;
+    }
+
+    this.sabFrameStats.set(id, {
+      lastFlushAt: now,
+      lastIntervalMs,
+      avgIntervalMs,
+    });
+  }
+
+  private writeFrameChunks(id: string, chunks: (string | Uint8Array)[]): void {
+    if (chunks.length === 0) return;
+    if (chunks.length === 1) {
+      this.writeToTerminal(id, chunks[0]);
+      return;
+    }
+    const allStrings = chunks.every((c) => typeof c === "string");
+    if (allStrings) {
+      this.writeToTerminal(id, (chunks as string[]).join(""));
+      return;
+    }
+    for (const chunk of chunks) {
+      this.writeToTerminal(id, chunk);
+    }
+  }
+
+  private scheduleFramePresenter(id: string, queue: { frames: (string | Uint8Array)[][]; presenterTimeoutId: number | null }): void {
+    const stats = this.sabFrameStats.get(id);
+    const now = Date.now();
+    let delay = 0;
+    if (stats && stats.lastFlushAt) {
+      const delta = now - stats.lastFlushAt;
+      if (delta < MIN_FRAME_INTERVAL_MS) {
+        delay = MIN_FRAME_INTERVAL_MS - delta;
+      }
+    }
+    queue.presenterTimeoutId = window.setTimeout(() => this.presentNextFrame(id), delay);
+  }
+
+  private enqueueFrame(id: string, chunks: (string | Uint8Array)[]): void {
+    let queue = this.sabFrameQueues.get(id);
+    if (!queue) {
+      queue = { frames: [], presenterTimeoutId: null };
+      this.sabFrameQueues.set(id, queue);
+    }
+    queue.frames.push(chunks);
+
+    const MAX_FRAMES = 3;
+    if (queue.frames.length > MAX_FRAMES) {
+      // Drop oldest frames, keep the most recent ones
+      queue.frames.splice(0, queue.frames.length - MAX_FRAMES);
+    }
+
+    if (queue.presenterTimeoutId === null) {
+      this.scheduleFramePresenter(id, queue);
+    }
+  }
+
+  private presentNextFrame(id: string): void {
+    const queue = this.sabFrameQueues.get(id);
+    if (!queue) return;
+
+    queue.presenterTimeoutId = null;
+    const frame = queue.frames.shift();
+    if (!frame) {
+      return;
+    }
+
+    this.writeFrameChunks(id, frame);
+    this.recordFrameFlush(id);
+
+    if (queue.frames.length > 0) {
+      this.scheduleFramePresenter(id, queue);
+    }
+  }
+
   /**
    * Stream-level redraw detection that is robust to chunk boundaries.
    * We look for well-known full-screen repaint patterns in the recent
@@ -498,10 +592,6 @@ class TerminalInstanceService {
       return;
     }
 
-    if (entry.flushMode === "frame") {
-      this.sabFrameLastFlushAt.set(id, Date.now());
-    }
-
     // Clear any outstanding timers and remove the buffer entry.
     if (entry.normalTimeoutId !== null) {
       window.clearTimeout(entry.normalTimeoutId);
@@ -516,21 +606,14 @@ class TerminalInstanceService {
 
     const { chunks } = entry;
 
-    if (chunks.length === 1) {
-      this.writeToTerminal(id, chunks[0]);
+    if (entry.flushMode === "normal") {
+      this.writeFrameChunks(id, chunks);
+      this.recordFrameFlush(id);
       return;
     }
 
-    const allStrings = chunks.every((c) => typeof c === "string");
-    if (allStrings) {
-      this.writeToTerminal(id, (chunks as string[]).join(""));
-      return;
-    }
-
-    // Mixed binary/string - write sequentially (rare path)
-    for (const chunk of chunks) {
-      this.writeToTerminal(id, chunk);
-    }
+    // Frame mode: enqueue completed frame for presentation at capped FPS.
+    this.enqueueFrame(id, chunks);
   }
 
   /**
@@ -767,9 +850,9 @@ class TerminalInstanceService {
     const unsubData = terminalClient.onData(id, (data: string | Uint8Array) => {
       // Skip IPC data when SharedArrayBuffer polling is active
       if (this.sharedBufferEnabled && this.pollingActive) return;
-      // Use the centralized write method to ensure smart scrolling applies
-      // even when using IPC fallback
-      this.writeToTerminal(id, data);
+      // Route IPC fallback data through the same buffering pipeline as SAB
+      // so TUI heuristics and frame limiting still apply.
+      this.bufferTerminalData(id, data);
     });
     listeners.push(unsubData);
 
@@ -1028,6 +1111,37 @@ class TerminalInstanceService {
   }
 
   /**
+   * Reset SAB-based frame buffering state for a terminal.
+   * Called when applying a real resize so any in-flight or queued
+   * frames tied to the old geometry are discarded.
+   */
+  private resetFrameBuffersForTerminal(id: string): void {
+    const entry = this.sabBuffers.get(id);
+    if (entry) {
+      if (entry.normalTimeoutId !== null) {
+        window.clearTimeout(entry.normalTimeoutId);
+      }
+      if (entry.frameSettleTimeoutId !== null) {
+        window.clearTimeout(entry.frameSettleTimeoutId);
+      }
+      if (entry.frameDeadlineTimeoutId !== null) {
+        window.clearTimeout(entry.frameDeadlineTimeoutId);
+      }
+      this.sabBuffers.delete(id);
+    }
+
+    const queue = this.sabFrameQueues.get(id);
+    if (queue) {
+      if (queue.presenterTimeoutId !== null) {
+        window.clearTimeout(queue.presenterTimeoutId);
+      }
+      this.sabFrameQueues.delete(id);
+    }
+
+    this.sabFrameStats.delete(id);
+  }
+
+  /**
    * Determines whether terminal should auto-scroll to bottom based on:
    * - Buffer type (TUI alternate buffer always snaps)
    * - Agent state (working terminals snap unless user scrolled up)
@@ -1094,6 +1208,7 @@ class TerminalInstanceService {
     const managed = this.instances.get(id);
     if (!managed) return;
 
+    this.resetFrameBuffersForTerminal(id);
     managed.terminal.resize(cols, rows);
 
     // Recalculate scroll decision at execution time
@@ -1164,6 +1279,7 @@ class TerminalInstanceService {
           () => {
             const current = this.instances.get(id);
             if (current) {
+              this.resetFrameBuffersForTerminal(id);
               current.terminal.resize(current.latestCols, current.terminal.rows);
               if (this.shouldScrollAfterResize(current)) this.scrollToBottom(id);
               terminalClient.resize(id, current.latestCols, current.terminal.rows);
@@ -1177,6 +1293,7 @@ class TerminalInstanceService {
         const timeoutId = window.setTimeout(() => {
           const current = this.instances.get(id);
           if (current) {
+            this.resetFrameBuffersForTerminal(id);
             current.terminal.resize(current.latestCols, current.terminal.rows);
             if (this.shouldScrollAfterResize(current)) this.scrollToBottom(id);
             terminalClient.resize(id, current.latestCols, current.terminal.rows);
@@ -1193,6 +1310,7 @@ class TerminalInstanceService {
           () => {
             const current = this.instances.get(id);
             if (current) {
+              this.resetFrameBuffersForTerminal(id);
               current.terminal.resize(current.latestCols, current.latestRows);
               if (this.shouldScrollAfterResize(current)) this.scrollToBottom(id);
               terminalClient.resize(id, current.latestCols, current.latestRows);
@@ -1206,6 +1324,7 @@ class TerminalInstanceService {
         const timeoutId = window.setTimeout(() => {
           const current = this.instances.get(id);
           if (current) {
+            this.resetFrameBuffersForTerminal(id);
             current.terminal.resize(current.latestCols, current.latestRows);
             if (this.shouldScrollAfterResize(current)) this.scrollToBottom(id);
             terminalClient.resize(id, current.latestCols, current.latestRows);
@@ -1226,6 +1345,7 @@ class TerminalInstanceService {
     const timeoutId = window.setTimeout(() => {
       const current = this.instances.get(id);
       if (current) {
+        this.resetFrameBuffersForTerminal(id);
         current.terminal.resize(cols, current.terminal.rows);
         if (this.shouldScrollAfterResize(current)) this.scrollToBottom(id);
         terminalClient.resize(id, cols, current.terminal.rows);
@@ -1245,6 +1365,7 @@ class TerminalInstanceService {
         this.clearJob(managed.resizeYJob);
         managed.resizeYJob = undefined;
       }
+      this.resetFrameBuffersForTerminal(id);
       managed.terminal.resize(managed.latestCols, rows);
       if (this.shouldScrollAfterResize(managed)) this.scrollToBottom(id);
       terminalClient.resize(id, managed.latestCols, rows);
@@ -1257,6 +1378,7 @@ class TerminalInstanceService {
         const current = this.instances.get(id);
         if (current) {
           current.lastYResizeTime = Date.now();
+          this.resetFrameBuffersForTerminal(id);
           current.terminal.resize(current.latestCols, current.latestRows);
           if (this.shouldScrollAfterResize(current)) this.scrollToBottom(id);
           terminalClient.resize(id, current.latestCols, current.latestRows);

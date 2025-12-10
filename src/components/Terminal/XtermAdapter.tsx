@@ -239,7 +239,6 @@ function XtermAdapterComponent({
     }
   }, [terminalId, getRefreshTier, currentTier]);
 
-  // Track visibility for advanced resize debouncing and WebGL management
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -264,7 +263,6 @@ function XtermAdapterComponent({
     return () => visibilityObserver.disconnect();
   }, [terminalId, performFit]);
 
-  // ResizeObserver wrapped in requestAnimationFrame to batch at frame boundaries
   useLayoutEffect(() => {
     const container = containerRef.current;
     if (!container) return;
