@@ -12,9 +12,6 @@ export function detectTerminalTypeFromCommand(_command: string): TerminalType {
   return "terminal";
 }
 
-export function detectTerminalTypeFromRunCommand(
-  _icon?: string,
-  _command?: string
-): TerminalType {
+export function detectTerminalTypeFromRunCommand(_icon?: string, _command?: string): TerminalType {
   return "terminal";
 }

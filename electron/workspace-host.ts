@@ -12,7 +12,6 @@
 
 import { MessagePort } from "node:worker_threads";
 import PQueue from "p-queue";
-import { execSync } from "child_process";
 import { mkdir, writeFile, stat } from "fs/promises";
 import { join as pathJoin, dirname } from "path";
 import { simpleGit, SimpleGit, BranchSummary } from "simple-git";
@@ -26,6 +25,7 @@ import type {
   BranchInfo,
 } from "../shared/types/workspace-host.js";
 import { invalidateGitStatusCache, getWorktreeChangesWithStats } from "./utils/git.js";
+import { getGitDir, clearGitDirCache } from "./utils/gitUtils.js";
 import { WorktreeRemovedError } from "./utils/errorTypes.js";
 import { categorizeWorktree } from "./services/worktree/mood.js";
 import { extractIssueNumberSync, extractIssueNumber } from "./services/issueExtractor.js";
@@ -70,31 +70,6 @@ function sendEvent(event: WorkspaceHostEvent): void {
 const DEFAULT_ACTIVE_WORKTREE_INTERVAL_MS = 2000;
 const DEFAULT_BACKGROUND_WORKTREE_INTERVAL_MS = 10000;
 const NOTE_PATH = "canopy/note";
-
-// Git directory cache
-const gitDirCache = new Map<string, string | null>();
-
-function getGitDir(worktreePath: string): string | null {
-  if (gitDirCache.has(worktreePath)) {
-    return gitDirCache.get(worktreePath)!;
-  }
-
-  try {
-    const result = execSync("git rev-parse --git-dir", {
-      cwd: worktreePath,
-      encoding: "utf-8",
-      timeout: 5000,
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
-
-    const resolved = result.startsWith("/") ? result : pathJoin(worktreePath, result);
-    gitDirCache.set(worktreePath, resolved);
-    return resolved;
-  } catch {
-    gitDirCache.set(worktreePath, null);
-    return null;
-  }
-}
 
 async function ensureNoteFile(worktreePath: string): Promise<void> {
   const gitDir = getGitDir(worktreePath);
@@ -770,6 +745,7 @@ class WorkspaceHost {
         }
         args.push(monitor.path);
         await this.git.raw(args);
+        clearGitDirCache(monitor.path);
       }
 
       sendEvent({ type: "worktree-removed", worktreeId });
@@ -942,7 +918,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this.git = null;
 
     // Clear caches
-    gitDirCache.clear();
+    clearGitDirCache();
 
     sendEvent({ type: "project-switch-result", requestId, success: true });
   }

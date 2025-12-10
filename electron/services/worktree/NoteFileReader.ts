@@ -1,8 +1,8 @@
 import { readFile, stat } from "fs/promises";
 import { join as pathJoin } from "path";
-import { execSync } from "child_process";
 import { DEFAULT_CONFIG } from "../../types/config.js";
 import { logWarn } from "../../utils/logger.js";
+import { getGitDir } from "../../utils/gitUtils.js";
 
 export interface NoteData {
   content: string;
@@ -13,7 +13,6 @@ export class NoteFileReader {
   private worktreePath: string;
   private enabled: boolean;
   private filename: string;
-  private cachedGitDir: string | null = null;
 
   constructor(
     worktreePath: string,
@@ -27,39 +26,8 @@ export class NoteFileReader {
 
   public setConfig(enabled: boolean, filename?: string): void {
     this.enabled = enabled;
-    if (filename !== undefined && filename !== this.filename) {
+    if (filename !== undefined) {
       this.filename = filename;
-      this.cachedGitDir = null;
-    }
-  }
-
-  private getGitDir(): string | null {
-    if (this.cachedGitDir !== null) {
-      return this.cachedGitDir || null;
-    }
-
-    try {
-      const result = execSync("git rev-parse --git-dir", {
-        cwd: this.worktreePath,
-        encoding: "utf-8",
-        timeout: 5000,
-        stdio: ["pipe", "pipe", "pipe"],
-      }).trim();
-
-      if (!result.startsWith("/")) {
-        this.cachedGitDir = pathJoin(this.worktreePath, result);
-      } else {
-        this.cachedGitDir = result;
-      }
-
-      return this.cachedGitDir;
-    } catch (error) {
-      logWarn("Failed to resolve git directory", {
-        path: this.worktreePath,
-        error: (error as Error).message,
-      });
-      this.cachedGitDir = "";
-      return null;
     }
   }
 
@@ -68,7 +36,7 @@ export class NoteFileReader {
       return undefined;
     }
 
-    const gitDir = this.getGitDir();
+    const gitDir = getGitDir(this.worktreePath, { logErrors: true });
     if (!gitDir) {
       return undefined;
     }

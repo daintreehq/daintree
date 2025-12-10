@@ -14,7 +14,7 @@ export interface XtermAdapterProps {
   terminalType?: TerminalType;
   onReady?: () => void;
   onExit?: (exitCode: number) => void;
-   onInput?: (data: string) => void;
+  onInput?: (data: string) => void;
   className?: string;
   getRefreshTier?: () => TerminalRefreshTier;
 }

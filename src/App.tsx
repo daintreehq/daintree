@@ -560,7 +560,9 @@ function App() {
   useKeybinding("agent.claude", () => handleLaunchAgent("claude"), { enabled: electronAvailable });
   useKeybinding("agent.gemini", () => handleLaunchAgent("gemini"), { enabled: electronAvailable });
   useKeybinding("agent.codex", () => handleLaunchAgent("codex"), { enabled: electronAvailable });
-  useKeybinding("agent.terminal", () => handleLaunchAgent("terminal"), { enabled: electronAvailable });
+  useKeybinding("agent.terminal", () => handleLaunchAgent("terminal"), {
+    enabled: electronAvailable,
+  });
   useKeybinding("agent.focusNextWaiting", () => focusNextWaiting(isInTrash), {
     enabled: electronAvailable,
   });

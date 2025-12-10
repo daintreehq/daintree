@@ -390,10 +390,7 @@ class TerminalInstanceService {
           const remaining = MIN_FRAME_INTERVAL_MS - delta;
           const settleDelay = Math.max(FRAME_SETTLE_DELAY_MS, remaining);
 
-          entry.frameSettleTimeoutId = window.setTimeout(
-            () => this.onFrameSettle(id),
-            settleDelay
-          );
+          entry.frameSettleTimeoutId = window.setTimeout(() => this.onFrameSettle(id), settleDelay);
           entry.frameDeadlineTimeoutId = window.setTimeout(
             () => this.flushBuffer(id),
             Math.max(FRAME_DEADLINE_MS, settleDelay)
@@ -497,7 +494,10 @@ class TerminalInstanceService {
     }
   }
 
-  private scheduleFramePresenter(id: string, queue: { frames: (string | Uint8Array)[][]; presenterTimeoutId: number | null }): void {
+  private scheduleFramePresenter(
+    id: string,
+    queue: { frames: (string | Uint8Array)[][]; presenterTimeoutId: number | null }
+  ): void {
     const stats = this.sabFrameStats.get(id);
     const now = Date.now();
     let delay = 0;

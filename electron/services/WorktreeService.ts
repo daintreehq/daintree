@@ -1,46 +1,23 @@
 import { BrowserWindow } from "electron";
 import PQueue from "p-queue";
+import { execSync } from "child_process";
+import { mkdir, writeFile, stat } from "fs/promises";
+import { join as pathJoin, dirname } from "path";
 import { WorktreeMonitor, type WorktreeState } from "./WorktreeMonitor.js";
 import type { Worktree, MonitorConfig } from "../types/index.js";
 import { DEFAULT_CONFIG } from "../types/config.js";
 import { logInfo, logWarn, logDebug, logError } from "../utils/logger.js";
 import { events } from "./events.js";
-import { execSync } from "child_process";
-import { mkdir, writeFile, stat } from "fs/promises";
-import { join as pathJoin, dirname } from "path";
 import { CHANNELS } from "../ipc/channels.js";
 import { GitService, type CreateWorktreeOptions, type BranchInfo } from "./GitService.js";
 import { pullRequestService } from "./PullRequestService.js";
+import { getGitDir, clearGitDirCache } from "../utils/gitUtils.js";
 
 const DEFAULT_ACTIVE_WORKTREE_INTERVAL_MS = DEFAULT_CONFIG.monitor?.pollIntervalActive ?? 2000;
 const DEFAULT_BACKGROUND_WORKTREE_INTERVAL_MS =
   DEFAULT_CONFIG.monitor?.pollIntervalBackground ?? 10000;
 
 const NOTE_PATH = DEFAULT_CONFIG.note?.filename ?? "canopy/note";
-
-const gitDirCache = new Map<string, string | null>();
-
-function getGitDir(worktreePath: string): string | null {
-  if (gitDirCache.has(worktreePath)) {
-    return gitDirCache.get(worktreePath)!;
-  }
-
-  try {
-    const result = execSync("git rev-parse --git-dir", {
-      cwd: worktreePath,
-      encoding: "utf-8",
-      timeout: 5000,
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
-
-    const resolved = result.startsWith("/") ? result : pathJoin(worktreePath, result);
-    gitDirCache.set(worktreePath, resolved);
-    return resolved;
-  } catch {
-    gitDirCache.set(worktreePath, null);
-    return null;
-  }
-}
 
 async function ensureNoteFile(worktreePath: string): Promise<void> {
   const gitDir = getGitDir(worktreePath);
@@ -525,7 +502,7 @@ export class WorktreeService {
     this.monitors.clear();
 
     // Clear git-dir cache to prevent stale paths when switching projects
-    gitDirCache.clear();
+    clearGitDirCache();
 
     logInfo("WorktreeService state reset for project switch");
   }
@@ -712,6 +689,7 @@ export class WorktreeService {
     if (this.gitService) {
       try {
         await this.gitService.removeWorktree(monitor.path, force);
+        clearGitDirCache(monitor.path);
       } catch (error) {
         this.monitors.set(worktreeId, monitor);
         if (unsubscribe) {

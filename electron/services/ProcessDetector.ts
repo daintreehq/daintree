@@ -299,15 +299,13 @@ export class ProcessDetector {
             // 2. Extract COMM (next non-whitespace token, might be path)
             // 3. Everything else is COMMAND
 
-                        // Match: Start, Optional Space, Digits (PID), Spaces, Non-Spaces (COMM), Spaces, Rest (COMMAND)
+            // Match: Start, Optional Space, Digits (PID), Spaces, Non-Spaces (COMM), Spaces, Rest (COMMAND)
 
-                        // Fix: Added \s* at start to handle padded PIDs from ps
+            // Fix: Added \s* at start to handle padded PIDs from ps
 
-                        const match = line.match(/^\s*(\d+)\s+(\S+)\s+(.*)$/);
+            const match = line.match(/^\s*(\d+)\s+(\S+)\s+(.*)$/);
 
-            
-
-                        const pid = match ? Number.parseInt(match[1], 10) : NaN;
+            const pid = match ? Number.parseInt(match[1], 10) : NaN;
             if (!Number.isInteger(pid) || pid <= 0) return;
 
             const name = match ? match[2] : "";

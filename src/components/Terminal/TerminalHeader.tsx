@@ -1,5 +1,14 @@
 import React from "react";
-import { X, Maximize2, Minimize2, ArrowDownToLine, Loader2, RotateCcw, Grid2X2, Activity } from "lucide-react";
+import {
+  X,
+  Maximize2,
+  Minimize2,
+  ArrowDownToLine,
+  Loader2,
+  RotateCcw,
+  Grid2X2,
+  Activity,
+} from "lucide-react";
 import type { TerminalType, AgentState } from "@/types";
 import { cn } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
@@ -79,8 +88,7 @@ function TerminalHeaderComponent({
   isPinged,
 }: TerminalHeaderProps) {
   console.log(`[TerminalHeader] lastCommand: ${lastCommand}`);
-  const showCommandPill =
-    type === "terminal" && agentState === "running" && !!lastCommand;
+  const showCommandPill = type === "terminal" && agentState === "running" && !!lastCommand;
   // Get background activity stats for Zen Mode header (optimized single-pass)
   // Only count grid terminals - docked terminals are visually separate
   // Treat undefined location as grid for compatibility with persisted data
@@ -202,9 +210,7 @@ function TerminalHeaderComponent({
             agentState !== "idle" &&
             agentState !== "waiting" &&
             agentState !== "working" &&
-            agentState !== "running" && (
-              <StateBadge state={agentState} className="ml-2" />
-            )}
+            agentState !== "running" && <StateBadge state={agentState} className="ml-2" />}
 
           {queueCount > 0 && (
             <div
