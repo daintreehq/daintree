@@ -169,6 +169,7 @@ export function WorktreeCard({
     worktree.id
   );
   const setFocused = useTerminalStore((state) => state.setFocused);
+  const pingTerminal = useTerminalStore((state) => state.pingTerminal);
 
   const bulkCloseByWorktree = useTerminalStore((state) => state.bulkCloseByWorktree);
   const completedCount = terminalCounts.byState.completed;
@@ -324,8 +325,9 @@ export function WorktreeCard({
   const handleTerminalSelect = useCallback(
     (terminal: TerminalInstance) => {
       setFocused(terminal.id);
+      pingTerminal(terminal.id);
     },
-    [setFocused]
+    [setFocused, pingTerminal]
   );
 
   const handleCopyTree = useCallback(async () => {
