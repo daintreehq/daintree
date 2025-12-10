@@ -166,6 +166,9 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   );
 
   const isWorking = terminal.agentState === "working";
+  const isRunning = terminal.agentState === "running";
+  const isActive = isWorking || isRunning;
+  const commandText = terminal.activityHeadline || terminal.lastCommand;
   const brandColor = getBrandColorHex(terminal.type);
 
   return (
@@ -174,7 +177,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
         <PopoverTrigger asChild>
           <button
             className={cn(
-              "flex items-center gap-2.5 px-3 py-1.5 h-8 rounded-md text-xs border transition-all",
+              "flex items-center gap-2.5 px-3 py-1.5 h-8 rounded-md text-xs border transition-all max-w-[280px]",
               "bg-[var(--color-surface)] border-canopy-border text-canopy-text/80",
               "hover:text-canopy-text hover:border-canopy-accent/30 hover:bg-[var(--color-surface-highlight)]",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent",
@@ -188,7 +191,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
             <div
               className={cn(
                 "flex items-center justify-center transition-opacity",
-                isOpen || isWorking ? "opacity-100" : "opacity-70"
+                isOpen || isActive ? "opacity-100" : "opacity-70"
               )}
             >
               {isWorking ? (
@@ -206,7 +209,21 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
               )}
             </div>
             {getStateIndicator(terminal.agentState)}
-            <span className="truncate max-w-[120px] font-mono font-medium">{terminal.title}</span>
+            <span className="truncate shrink-0 min-w-[60px] max-w-[120px] font-mono font-medium">
+              {terminal.title}
+            </span>
+
+            {isActive && commandText && (
+              <>
+                <div className="h-3 w-px bg-white/10 shrink-0" aria-hidden="true" />
+                <span
+                  className="truncate flex-1 min-w-0 text-[10px] text-canopy-text/50 font-mono"
+                  title={commandText}
+                >
+                  {commandText}
+                </span>
+              </>
+            )}
           </button>
         </PopoverTrigger>
       </TerminalContextMenu>
