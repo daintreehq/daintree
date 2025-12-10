@@ -8,12 +8,9 @@ import {
   DEFAULT_WORKTREE_PATH_PATTERN,
   validatePathPattern,
 } from "../../../shared/utils/pathPattern.js";
-import type { WorkspaceClient } from "../../services/WorkspaceClient.js";
 
 export function registerWorktreeHandlers(deps: HandlerDependencies): () => void {
-  const { worktreeService } = deps;
-  // Enforce Multi-Process Architecture: strictly use Client implementations
-  const workspaceClient = worktreeService as WorkspaceClient | undefined;
+  const { worktreeService: workspaceClient } = deps;
 
   const handlers: Array<() => void> = [];
 
@@ -64,7 +61,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     }
   ) => {
     if (!workspaceClient) {
-      throw new Error("WorktreeService not initialized");
+      throw new Error("Workspace client not initialized");
     }
     await workspaceClient.createWorktree(payload.rootPath, payload.options);
   };
@@ -76,7 +73,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     payload: { rootPath: string }
   ) => {
     if (!workspaceClient) {
-      throw new Error("WorktreeService not initialized");
+      throw new Error("Workspace client not initialized");
     }
     return await workspaceClient.listBranches(payload.rootPath);
   };
@@ -122,7 +119,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     payload: WorktreeDeletePayload
   ) => {
     if (!workspaceClient) {
-      throw new Error("WorktreeService not initialized");
+      throw new Error("Workspace client not initialized");
     }
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");

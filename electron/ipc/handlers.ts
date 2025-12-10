@@ -3,7 +3,9 @@ import type { DevServerManager } from "../services/DevServerManager.js";
 import type { CliAvailabilityService } from "../services/CliAvailabilityService.js";
 import type { EventBuffer } from "../services/EventBuffer.js";
 import type { SidecarManager } from "../services/SidecarManager.js";
-import { HandlerDependencies, TerminalManager, WorkspaceManager } from "./types.js";
+import type { PtyClient } from "../services/PtyClient.js";
+import type { WorkspaceClient } from "../services/WorkspaceClient.js";
+import type { HandlerDependencies } from "./types.js";
 import { registerWorktreeHandlers } from "./handlers/worktree.js";
 import { registerTerminalHandlers } from "./handlers/terminal.js";
 import { registerDevServerHandlers } from "./handlers/devServer.js";
@@ -24,9 +26,9 @@ export { typedHandle, typedSend, sendToRenderer };
 
 export function registerIpcHandlers(
   mainWindow: BrowserWindow,
-  ptyManager: TerminalManager,
+  ptyManager: PtyClient,
   devServerManager?: DevServerManager,
-  worktreeService?: WorkspaceManager,
+  worktreeService?: WorkspaceClient,
   eventBuffer?: EventBuffer,
   cliAvailabilityService?: CliAvailabilityService,
   sidecarManager?: SidecarManager

@@ -10,38 +10,32 @@ import type { HandlerDependencies } from "../types.js";
 import type { TerminalSpawnOptions, TerminalResizePayload } from "../../types/index.js";
 import type { ActivityTier } from "../../../shared/types/pty-host.js";
 import { TerminalSpawnOptionsSchema, TerminalResizePayloadSchema } from "../../schemas/ipc.js";
-import type { PtyClient } from "../../services/PtyClient.js";
-import type { WorkspaceClient } from "../../services/WorkspaceClient.js";
 import type { TerminalType } from "../../../shared/types/domain.js";
 
 const AGENT_TYPES: TerminalType[] = ["claude", "gemini", "codex"];
 
 export function registerTerminalHandlers(deps: HandlerDependencies): () => void {
-  const { mainWindow, ptyManager, worktreeService } = deps;
-
-  // Enforce Multi-Process Architecture: strictly use Client implementations
-  const ptyClient = ptyManager as PtyClient;
-  const workspaceClient = worktreeService as WorkspaceClient | undefined;
+  const { mainWindow, ptyManager: ptyClient, worktreeService: workspaceClient } = deps;
 
   const handlers: Array<() => void> = [];
 
   const handlePtyData = (id: string, data: string | Uint8Array) => {
     sendToRenderer(mainWindow, CHANNELS.TERMINAL_DATA, id, data);
   };
-  ptyManager.on("data", handlePtyData);
-  handlers.push(() => ptyManager.off("data", handlePtyData));
+  ptyClient.on("data", handlePtyData);
+  handlers.push(() => ptyClient.off("data", handlePtyData));
 
   const handlePtyExit = (id: string, exitCode: number) => {
     sendToRenderer(mainWindow, CHANNELS.TERMINAL_EXIT, id, exitCode);
   };
-  ptyManager.on("exit", handlePtyExit);
-  handlers.push(() => ptyManager.off("exit", handlePtyExit));
+  ptyClient.on("exit", handlePtyExit);
+  handlers.push(() => ptyClient.off("exit", handlePtyExit));
 
   const handlePtyError = (id: string, error: string) => {
     sendToRenderer(mainWindow, CHANNELS.TERMINAL_ERROR, id, error);
   };
-  ptyManager.on("error", handlePtyError);
-  handlers.push(() => ptyManager.off("error", handlePtyError));
+  ptyClient.on("error", handlePtyError);
+  handlers.push(() => ptyClient.off("error", handlePtyError));
 
   const unsubAgentState = events.on("agent:state-changed", (payload: unknown) => {
     sendToRenderer(mainWindow, CHANNELS.AGENT_STATE_CHANGED, payload);
