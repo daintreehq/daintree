@@ -91,7 +91,6 @@ function TerminalPaneComponent({
   const getTerminal = useTerminalStore((state) => state.getTerminal);
   const restartTerminal = useTerminalStore((state) => state.restartTerminal);
   const trashTerminal = useTerminalStore((state) => state.trashTerminal);
-  const focusedId = useTerminalStore((state) => state.focusedId);
   const setFocused = useTerminalStore((state) => state.setFocused);
 
   const queueCount = useTerminalStore(
@@ -181,14 +180,10 @@ function TerminalPaneComponent({
 
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
-        if (focusedId === id) {
-          setFocused(null);
-        } else {
-          setFocused(id);
-        }
+        setFocused(id);
       }
     },
-    [focusedId, id, setFocused]
+    [id, setFocused]
   );
 
   const getRefreshTierCallback = useCallback(() => {
@@ -197,13 +192,9 @@ function TerminalPaneComponent({
   }, [id, isFocused, getTerminal]);
 
   const handleClick = useCallback(() => {
-    if (focusedId === id) {
-      setFocused(null);
-    } else {
-      setFocused(id);
-    }
+    setFocused(id);
     terminalInstanceService.boostRefreshRate(id);
-  }, [focusedId, id, setFocused]);
+  }, [id, setFocused]);
 
   const handleRestart = useCallback(() => {
     restartTerminal(id);
