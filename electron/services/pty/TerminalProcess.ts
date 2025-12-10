@@ -788,14 +788,8 @@ export class TerminalProcess {
       line = line.replace(/^~?[^\s]*[$>%#]\s*/, "");
       line = line.replace(/^[$>%#]\s*/, "");
 
-      // After stripping prompts, check if it's a command
-      if (
-        line.length > 0 &&
-        line.match(
-          // Added 'sleep', 'echo', 'cat', 'ls', 'cd', 'pwd', 'grep' for better interactivity feedback
-          /^(npm|yarn|pnpm|bun|git|docker|node|python|python3|pip|cargo|go|make|curl|wget|tsc|eslint|prettier|jest|vitest|mocha|sleep|echo|cat|ls|cd|pwd|grep)/i
-        )
-      ) {
+      // After stripping prompts, accept whatever is left as the command
+      if (line.length > 0) {
         return line;
       }
     }

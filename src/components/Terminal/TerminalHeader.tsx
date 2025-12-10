@@ -56,7 +56,7 @@ function TerminalHeaderComponent({
   exitCode,
   isWorking,
   agentState,
-  activity: _activity,
+  activity,
   queueCount,
   lastCommand,
   isEditingTitle,
@@ -78,6 +78,9 @@ function TerminalHeaderComponent({
   location = "grid",
   isPinged,
 }: TerminalHeaderProps) {
+  console.log(`[TerminalHeader] lastCommand: ${lastCommand}`);
+  const showCommandPill =
+    type === "terminal" && agentState === "running" && !!lastCommand;
   // Get background activity stats for Zen Mode header (optimized single-pass)
   // Only count grid terminals - docked terminals are visually separate
   // Treat undefined location as grid for compatibility with persisted data
@@ -174,9 +177,9 @@ function TerminalHeaderComponent({
               </span>
 
               {/* Command Pill - shows currently running command */}
-              {lastCommand && (
+              {showCommandPill && (
                 <span
-                  className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-black/10 text-canopy-text/60 border border-white/10 truncate max-w-[20rem]"
+                  className="px-3 py-1 rounded-full text-[10px] font-mono bg-black/10 text-canopy-text/60 border border-white/10 truncate max-w-[20rem]"
                   title={lastCommand}
                 >
                   {lastCommand}

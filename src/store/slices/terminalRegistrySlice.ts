@@ -79,6 +79,7 @@ export interface TerminalRegistrySlice {
     timestamp: number,
     lastCommand?: string
   ) => void;
+  updateLastCommand: (id: string, lastCommand: string) => void;
   updateVisibility: (id: string, isVisible: boolean) => void;
   getTerminal: (id: string) => TerminalInstance | undefined;
 
@@ -274,6 +275,7 @@ export const createTerminalRegistrySlice =
     },
 
     updateActivity: (id, headline, status, type, timestamp, lastCommand) => {
+      console.log(`[TerminalRegistrySlice] updateActivity for ${id}: lastCommand=${lastCommand}`);
       set((state) => {
         const terminal = state.terminals.find((t) => t.id === id);
         if (!terminal) {
@@ -288,6 +290,26 @@ export const createTerminalRegistrySlice =
                 activityStatus: status,
                 activityType: type,
                 activityTimestamp: timestamp,
+                lastCommand,
+              }
+            : t
+        );
+
+        return { terminals: newTerminals };
+      });
+    },
+
+    updateLastCommand: (id, lastCommand) => {
+      set((state) => {
+        const terminal = state.terminals.find((t) => t.id === id);
+        if (!terminal) {
+          return state;
+        }
+
+        const newTerminals = state.terminals.map((t) =>
+          t.id === id
+            ? {
+                ...t,
                 lastCommand,
               }
             : t

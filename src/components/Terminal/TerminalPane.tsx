@@ -94,6 +94,7 @@ function TerminalPaneComponent({
   const restartTerminal = useTerminalStore((state) => state.restartTerminal);
   const trashTerminal = useTerminalStore((state) => state.trashTerminal);
   const setFocused = useTerminalStore((state) => state.setFocused);
+  const updateLastCommand = useTerminalStore((state) => state.updateLastCommand);
 
   const queueCount = useTerminalStore(
     useShallow((state) => state.commandQueue.filter((c) => c.terminalId === id).length)
@@ -157,6 +158,39 @@ function TerminalPaneComponent({
   }, [id, updateVisibility]);
 
   const handleReady = useCallback(() => {}, []);
+
+  const commandBufferRef = useRef<string>("");
+
+  const handleInput = useCallback(
+    (data: string) => {
+      let buffer = commandBufferRef.current;
+
+      for (let i = 0; i < data.length; i++) {
+        const ch = data[i];
+
+        if (ch === "\r" || ch === "\n") {
+          const trimmed = buffer.trim();
+          if (trimmed) {
+            updateLastCommand(id, trimmed);
+          }
+          buffer = "";
+          continue;
+        }
+
+        if (ch === "\x7f" || ch === "\b") {
+          buffer = buffer.slice(0, -1);
+          continue;
+        }
+
+        if (ch >= " " && ch !== "\x7f") {
+          buffer += ch;
+        }
+      }
+
+      commandBufferRef.current = buffer;
+    },
+    [id, updateLastCommand]
+  );
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -355,6 +389,7 @@ function TerminalPaneComponent({
           terminalType={type}
           onReady={handleReady}
           onExit={handleExit}
+          onInput={handleInput}
           className={cn("absolute", location === "dock" || isMaximized ? "inset-0" : "inset-2")}
           getRefreshTier={getRefreshTierCallback}
         />

@@ -14,6 +14,7 @@ export interface XtermAdapterProps {
   terminalType?: TerminalType;
   onReady?: () => void;
   onExit?: (exitCode: number) => void;
+   onInput?: (data: string) => void;
   className?: string;
   getRefreshTier?: () => TerminalRefreshTier;
 }
@@ -51,6 +52,7 @@ function XtermAdapterComponent({
   terminalType = "terminal",
   onReady,
   onExit,
+  onInput,
   className,
   getRefreshTier,
 }: XtermAdapterProps) {
@@ -155,7 +157,8 @@ function XtermAdapterComponent({
     const managed = terminalInstanceService.getOrCreate(
       terminalId,
       terminalOptions,
-      getRefreshTier || (() => TerminalRefreshTier.FOCUSED)
+      getRefreshTier || (() => TerminalRefreshTier.FOCUSED),
+      onInput
     );
     terminalInstanceService.attach(terminalId, container);
 

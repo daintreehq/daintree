@@ -770,7 +770,8 @@ class TerminalInstanceService {
   getOrCreate(
     id: string,
     options: ConstructorParameters<typeof Terminal>[0],
-    getRefreshTier: RefreshTierProvider = () => TerminalRefreshTier.FOCUSED
+    getRefreshTier: RefreshTierProvider = () => TerminalRefreshTier.FOCUSED,
+    onInput?: (data: string) => void
   ): ManagedTerminal {
     const existing = this.instances.get(id);
     if (existing) {
@@ -877,6 +878,9 @@ class TerminalInstanceService {
     const inputDisposable = terminal.onData((data) => {
       throttledWriter.notifyInput();
       terminalClient.write(id, data);
+      if (onInput) {
+        onInput(data);
+      }
     });
     listeners.push(() => inputDisposable.dispose());
 
