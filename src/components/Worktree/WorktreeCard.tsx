@@ -51,7 +51,6 @@ import {
   GitCommit,
   Shield,
   Terminal,
-  TerminalSquare,
   LayoutGrid,
   PanelBottom,
   ExternalLink,
@@ -63,26 +62,8 @@ import {
   XCircle,
 } from "lucide-react";
 import { ClaudeIcon, GeminiIcon, CodexIcon } from "@/components/icons";
-import { getBrandColorHex } from "@/lib/colorUtils";
-import type { TerminalType } from "@/types";
+import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import type { AgentType, UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
-
-function getTerminalIcon(type: TerminalType) {
-  const brandColor = getBrandColorHex(type);
-  const className = "w-3 h-3";
-
-  switch (type) {
-    case "claude":
-      return <ClaudeIcon className={className} brandColor={brandColor} />;
-    case "gemini":
-      return <GeminiIcon className={className} brandColor={brandColor} />;
-    case "codex":
-      return <CodexIcon className={className} brandColor={brandColor} />;
-    case "terminal":
-    default:
-      return <TerminalSquare className={className} />;
-  }
-}
 
 export interface WorktreeCardProps {
   worktree: WorktreeState;
@@ -951,7 +932,7 @@ export function WorktreeCard({
                     {/* LEFT SIDE: Icon + Title */}
                     <div className="flex items-center gap-2 min-w-0 flex-1">
                       <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
-                        {getTerminalIcon(term.type)}
+                        <TerminalIcon type={term.type} agentId={term.agentId} className="w-3 h-3" />
                       </div>
                       <div className="flex flex-col min-w-0">
                         <span className="text-xs font-medium truncate text-canopy-text/70 group-hover:text-canopy-text transition-colors">

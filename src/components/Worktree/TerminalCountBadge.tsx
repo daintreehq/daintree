@@ -9,7 +9,7 @@ import {
   Play,
 } from "lucide-react";
 import type { WorktreeTerminalCounts } from "@/hooks/useWorktreeTerminals";
-import type { AgentState, TerminalInstance, TerminalType } from "@/types";
+import type { AgentState, TerminalInstance } from "@/types";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,8 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useTerminalStore } from "@/store/terminalStore";
-import { ClaudeIcon, GeminiIcon, CodexIcon } from "@/components/icons";
-import { getBrandColorHex } from "@/lib/colorUtils";
+import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { cn } from "@/lib/utils";
 
 interface TerminalCountBadgeProps {
@@ -56,23 +55,6 @@ function formatStateCounts(byState: Record<AgentState, number>): string {
   }
 
   return parts.join(" · ");
-}
-
-function getTerminalIcon(type: TerminalType) {
-  const brandColor = getBrandColorHex(type);
-  const className = "w-3.5 h-3.5";
-
-  switch (type) {
-    case "claude":
-      return <ClaudeIcon className={className} brandColor={brandColor} />;
-    case "gemini":
-      return <GeminiIcon className={className} brandColor={brandColor} />;
-    case "codex":
-      return <CodexIcon className={className} brandColor={brandColor} />;
-    case "terminal":
-    default:
-      return <TerminalSquare className={className} />;
-  }
 }
 
 export function TerminalCountBadge({
@@ -151,7 +133,11 @@ export function TerminalCountBadge({
                 {/* LEFT SIDE: Icon + Title */}
                 <div className="flex items-center gap-2.5 min-w-0 flex-1">
                   <div className="shrink-0 opacity-70 group-hover:opacity-100 transition-opacity">
-                    {getTerminalIcon(term.type)}
+                    <TerminalIcon
+                      type={term.type}
+                      agentId={term.agentId}
+                      className="w-3.5 h-3.5"
+                    />
                   </div>
                   <span
                     className={cn(

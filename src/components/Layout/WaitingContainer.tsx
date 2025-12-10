@@ -4,27 +4,11 @@ import { useShallow } from "zustand/react/shallow";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { getBrandColorHex } from "@/lib/colorUtils";
 import { useTerminalStore } from "@/store/terminalStore";
 import { useWaitingTerminalIds } from "@/hooks/useTerminalSelectors";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
-import { ClaudeIcon, GeminiIcon, CodexIcon } from "@/components/icons";
-import type { TerminalType, TerminalLocation } from "@shared/types";
-
-function getTerminalIcon(type: TerminalType) {
-  const iconProps = { className: "h-3 w-3 shrink-0" };
-
-  switch (type) {
-    case "claude":
-      return <ClaudeIcon {...iconProps} brandColor={getBrandColorHex("claude")} />;
-    case "gemini":
-      return <GeminiIcon {...iconProps} brandColor={getBrandColorHex("gemini")} />;
-    case "codex":
-      return <CodexIcon {...iconProps} brandColor={getBrandColorHex("codex")} />;
-    default:
-      return <AlertCircle {...iconProps} />;
-  }
-}
+import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
+import type { TerminalLocation } from "@shared/types";
 
 function getLocationIcon(location: TerminalLocation | undefined) {
   if (location === "dock") return <PanelBottom className="w-3 h-3" />;
@@ -105,7 +89,11 @@ export function WaitingContainer() {
                 >
                   <div className="flex items-center gap-2 min-w-0 flex-1">
                     <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
-                      {getTerminalIcon(terminal.type)}
+                      <TerminalIcon
+                        type={terminal.type}
+                        agentId={terminal.agentId}
+                        className="h-3 w-3"
+                      />
                     </div>
                     <span className="text-xs truncate font-medium text-canopy-text/70 group-hover:text-canopy-text transition-colors">
                       {terminal.title}

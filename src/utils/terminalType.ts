@@ -1,7 +1,8 @@
+import { isRegisteredAgent } from "@/config/agents";
 import type { TerminalType } from "@/types";
 
 export function isAgentTerminal(type: TerminalType): boolean {
-  return type === "claude" || type === "gemini" || type === "codex";
+  return isRegisteredAgent(type);
 }
 
 export function hasAgentDefaults(type: TerminalType): boolean {

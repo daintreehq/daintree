@@ -50,6 +50,8 @@ export interface TerminalState {
   id: string;
   /** Terminal type */
   type: TerminalType;
+  /** Agent ID when type is an agent - enables extensibility */
+  agentId?: string;
   /** Display title */
   title: string;
   /** Current working directory */
