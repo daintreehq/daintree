@@ -112,13 +112,11 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
             if (cancelled) return;
 
             // NOW it's safe to flush - backend and frontend dimensions match
-            await terminalClient.setBuffering(terminal.id, false);
             await terminalClient.flush(terminal.id);
             terminalInstanceService.applyRendererPolicy(terminal.id, TerminalRefreshTier.VISIBLE);
           }
         } else {
           if (!cancelled) {
-            await terminalClient.setBuffering(terminal.id, true);
             terminalInstanceService.applyRendererPolicy(
               terminal.id,
               TerminalRefreshTier.BACKGROUND
@@ -126,7 +124,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
           }
         }
       } catch (error) {
-        console.warn(`Failed to apply buffering state for terminal ${terminal.id}:`, error);
+        console.warn(`Failed to apply dock state for terminal ${terminal.id}:`, error);
       }
     };
 

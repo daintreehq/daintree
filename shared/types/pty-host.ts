@@ -9,9 +9,6 @@
 
 import type { AgentState, TerminalType } from "./domain.js";
 
-/** Activity tier for IPC batching (determines flush timing) */
-export type ActivityTier = "focused" | "visible" | "background";
-
 /** Options for spawning a new PTY process (matches PtyManager interface) */
 export interface PtyHostSpawnOptions {
   cwd: string;
@@ -37,9 +34,7 @@ export type PtyHostRequest =
   | { type: "kill"; id: string; reason?: string }
   | { type: "trash"; id: string }
   | { type: "restore"; id: string }
-  | { type: "set-buffering"; id: string; enabled: boolean }
   | { type: "flush-buffer"; id: string }
-  | { type: "set-activity-tier"; id: string; tier: ActivityTier }
   | { type: "get-snapshot"; id: string }
   | { type: "get-all-snapshots" }
   | { type: "mark-checked"; id: string }

@@ -26,7 +26,7 @@ export { typedHandle, typedSend, sendToRenderer };
 
 export function registerIpcHandlers(
   mainWindow: BrowserWindow,
-  ptyManager: PtyClient,
+  ptyClient: PtyClient,
   devServerManager?: DevServerManager,
   worktreeService?: WorkspaceClient,
   eventBuffer?: EventBuffer,
@@ -35,7 +35,7 @@ export function registerIpcHandlers(
 ): () => void {
   const deps: HandlerDependencies = {
     mainWindow,
-    ptyManager,
+    ptyClient,
     devServerManager,
     worktreeService,
     eventBuffer,

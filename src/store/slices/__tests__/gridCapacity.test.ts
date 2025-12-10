@@ -15,7 +15,6 @@ vi.mock("@/clients", () => ({
     onData: vi.fn(),
     onExit: vi.fn(),
     onAgentStateChanged: vi.fn(),
-    setBuffering: vi.fn().mockResolvedValue(undefined),
     flush: vi.fn().mockResolvedValue(undefined),
   },
   agentSettingsClient: {

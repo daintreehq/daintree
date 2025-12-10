@@ -313,13 +313,17 @@ export class ProjectStore {
     }
 
     if (!existsSync(stateFilePath)) {
-      console.log(`[ProjectStore] No state file to clear for project ${projectId}`);
+      if (process.env.CANOPY_VERBOSE) {
+        console.log(`[ProjectStore] No state file to clear for project ${projectId}`);
+      }
       return;
     }
 
     try {
       await fs.unlink(stateFilePath);
-      console.log(`[ProjectStore] Cleared state for project ${projectId}`);
+      if (process.env.CANOPY_VERBOSE) {
+        console.log(`[ProjectStore] Cleared state for project ${projectId}`);
+      }
     } catch (error) {
       console.error(`[ProjectStore] Failed to clear state for ${projectId}:`, error);
       throw error;

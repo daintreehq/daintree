@@ -3,8 +3,6 @@ import { events } from "./events.js";
 import type { AgentEvent } from "./AgentStateMachine.js";
 import type { AgentStateChangeTrigger } from "../schemas/agent.js";
 import type { PtyPool } from "./PtyPool.js";
-import type { ActivityTier } from "../../shared/types/pty-host.js";
-export type { ActivityTier } from "../../shared/types/pty-host.js";
 
 import {
   TerminalRegistry,
@@ -209,52 +207,11 @@ export class PtyManager extends EventEmitter {
   /**
    * Set buffering mode for a terminal.
    */
-  setBuffering(id: string, enabled: boolean): void {
-    const terminal = this.terminals.get(id);
-    if (!terminal) {
-      console.warn(`[PtyManager] Cannot set buffering: terminal ${id} not found`);
-      return;
-    }
-    terminal.setBuffering(enabled);
-
-    if (process.env.CANOPY_VERBOSE) {
-      console.log(`[PtyManager] Buffering ${enabled ? "enabled" : "disabled"} for ${id}`);
-    }
-  }
-
-  /**
-   * Flush buffered output for a terminal.
-   */
   flushBuffer(id: string): void {
     const terminal = this.terminals.get(id);
     if (terminal) {
       terminal.flushBuffer();
     }
-  }
-
-  /**
-   * Set activity tier for IPC batching.
-   */
-  setActivityTier(id: string, tier: ActivityTier): void {
-    const terminal = this.terminals.get(id);
-    if (!terminal) {
-      if (process.env.CANOPY_VERBOSE) {
-        console.warn(`[PtyManager] Cannot set activity tier: terminal ${id} not found`);
-      }
-      return;
-    }
-    terminal.setActivityTier(tier);
-
-    if (process.env.CANOPY_VERBOSE) {
-      console.log(`[PtyManager] Activity tier for ${id}: ${tier}`);
-    }
-  }
-
-  /**
-   * Get activity tier for a terminal.
-   */
-  getActivityTier(id: string): ActivityTier | undefined {
-    return this.terminals.get(id)?.getActivityTier();
   }
 
   /**
@@ -469,7 +426,6 @@ export class PtyManager extends EventEmitter {
           timestamp: Date.now(),
         });
 
-        terminalProcess.setBuffering(true);
         terminalProcess.stopProcessDetector();
         terminalProcess.stopActivityMonitor();
       } else {
@@ -480,7 +436,6 @@ export class PtyManager extends EventEmitter {
           timestamp: Date.now(),
         });
 
-        terminalProcess.setBuffering(false);
         terminalProcess.flushBuffer();
         terminalProcess.startProcessDetector();
         terminalProcess.startActivityMonitor();

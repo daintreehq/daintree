@@ -130,10 +130,6 @@ export type TerminalRegistryMiddleware = {
 };
 
 const optimizeForDock = (id: string) => {
-  terminalClient.setBuffering(id, true).catch((error) => {
-    console.error("Failed to enable terminal buffering:", error);
-  });
-
   terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
 
   const dims = terminalInstanceService.resize(id, DOCK_TERM_WIDTH, DOCK_TERM_HEIGHT);
@@ -402,18 +398,11 @@ export const createTerminalRegistrySlice =
       // Only apply side effects if the move succeeded
       if (moveSucceeded) {
         // Delay flush to ensure the UI has subscribed to onData
-        terminalClient
-          .setBuffering(id, false)
-          .then(() => {
-            setTimeout(() => {
-              terminalClient.flush(id).catch((error) => {
-                console.error("Failed to flush terminal buffer:", error);
-              });
-            }, 100);
-          })
-          .catch((error) => {
-            console.error("Failed to disable terminal buffering:", error);
+        setTimeout(() => {
+          terminalClient.flush(id).catch((error) => {
+            console.error("Failed to flush terminal buffer:", error);
           });
+        }, 100);
 
         terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
       }
@@ -454,10 +443,6 @@ export const createTerminalRegistrySlice =
         return { terminals: newTerminals, trashedTerminals: newTrashed };
       });
 
-      terminalClient.setBuffering(id, true).catch((error) => {
-        console.error("Failed to enable terminal buffering:", error);
-      });
-
       terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
     },
 
@@ -482,18 +467,11 @@ export const createTerminalRegistrySlice =
       if (restoreLocation === "dock") {
         optimizeForDock(id);
       } else {
-        terminalClient
-          .setBuffering(id, false)
-          .then(() => {
-            setTimeout(() => {
-              terminalClient.flush(id).catch((error) => {
-                console.error("Failed to flush terminal buffer:", error);
-              });
-            }, 100);
-          })
-          .catch((error) => {
-            console.error("Failed to disable terminal buffering:", error);
+        setTimeout(() => {
+          terminalClient.flush(id).catch((error) => {
+            console.error("Failed to flush terminal buffer:", error);
           });
+        }, 100);
         terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
       }
     },
@@ -516,10 +494,6 @@ export const createTerminalRegistrySlice =
         );
         terminalPersistence.save(newTerminals);
         return { trashedTerminals: newTrashed, terminals: newTerminals };
-      });
-
-      terminalClient.setBuffering(id, true).catch((error) => {
-        console.error("Failed to enable terminal buffering:", error);
       });
       terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
     },
@@ -547,18 +521,11 @@ export const createTerminalRegistrySlice =
       if (restoreLocation === "dock") {
         optimizeForDock(id);
       } else {
-        terminalClient
-          .setBuffering(id, false)
-          .then(() => {
-            setTimeout(() => {
-              terminalClient.flush(id).catch((error) => {
-                console.error("Failed to flush terminal buffer:", error);
-              });
-            }, 100);
-          })
-          .catch((error) => {
-            console.error("Failed to disable terminal buffering:", error);
+        setTimeout(() => {
+          terminalClient.flush(id).catch((error) => {
+            console.error("Failed to flush terminal buffer:", error);
           });
+        }, 100);
         terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
       }
     },
@@ -648,18 +615,11 @@ export const createTerminalRegistrySlice =
       if (location === "dock") {
         optimizeForDock(id);
       } else {
-        terminalClient
-          .setBuffering(id, false)
-          .then(() => {
-            setTimeout(() => {
-              terminalClient.flush(id).catch((error) => {
-                console.error("Failed to flush terminal buffer:", error);
-              });
-            }, 100);
-          })
-          .catch((error) => {
-            console.error("Failed to disable terminal buffering:", error);
+        setTimeout(() => {
+          terminalClient.flush(id).catch((error) => {
+            console.error("Failed to flush terminal buffer:", error);
           });
+        }, 100);
 
         terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
       }
@@ -788,9 +748,6 @@ export const createTerminalRegistrySlice =
       }
 
       try {
-        // Enable buffering to capture output from new PTY before XtermAdapter remounts
-        await terminalClient.setBuffering(id, true);
-
         // Kill the old PTY backend (but don't remove from store)
         await terminalClient.kill(id);
 
@@ -846,7 +803,6 @@ export const createTerminalRegistrySlice =
         if (targetLocation === "dock") {
           optimizeForDock(id);
         } else {
-          await terminalClient.setBuffering(id, false);
           terminalClient.flush(id).catch((error) => {
             console.error("Failed to flush terminal buffer:", error);
           });
@@ -873,8 +829,6 @@ export const createTerminalRegistrySlice =
           ),
         }));
 
-        // Re-enable normal mode if restart failed
-        terminalClient.setBuffering(id, false).catch(() => {});
         console.error(`[TerminalStore] Failed to restart terminal ${id}:`, error);
       }
     },

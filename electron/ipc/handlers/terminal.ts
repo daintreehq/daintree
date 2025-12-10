@@ -8,14 +8,13 @@ import { projectStore } from "../../services/ProjectStore.js";
 import { events, type CanopyEventMap } from "../../services/events.js";
 import type { HandlerDependencies } from "../types.js";
 import type { TerminalSpawnOptions, TerminalResizePayload } from "../../types/index.js";
-import type { ActivityTier } from "../../../shared/types/pty-host.js";
 import { TerminalSpawnOptionsSchema, TerminalResizePayloadSchema } from "../../schemas/ipc.js";
 import type { TerminalType } from "../../../shared/types/domain.js";
 
 const AGENT_TYPES: TerminalType[] = ["claude", "gemini", "codex"];
 
 export function registerTerminalHandlers(deps: HandlerDependencies): () => void {
-  const { mainWindow, ptyManager: ptyClient, worktreeService: workspaceClient } = deps;
+  const { mainWindow, ptyClient, worktreeService: workspaceClient } = deps;
 
   const handlers: Array<() => void> = [];
 
@@ -277,29 +276,6 @@ export function registerTerminalHandlers(deps: HandlerDependencies): () => void 
   });
   handlers.push(unsubTerminalRestored);
 
-  const handleTerminalSetBuffering = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { id: string; enabled: boolean }
-  ): Promise<void> => {
-    try {
-      if (!payload || typeof payload !== "object") {
-        throw new Error("Invalid payload");
-      }
-      if (typeof payload.id !== "string" || !payload.id) {
-        throw new Error("Invalid terminal ID: must be a non-empty string");
-      }
-      if (typeof payload.enabled !== "boolean") {
-        throw new Error("Invalid enabled flag: must be a boolean");
-      }
-      ptyClient.setBuffering(payload.id, payload.enabled);
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to set terminal buffering: ${errorMessage}`);
-    }
-  };
-  ipcMain.handle(CHANNELS.TERMINAL_SET_BUFFERING, handleTerminalSetBuffering);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_SET_BUFFERING));
-
   const handleTerminalFlush = async (
     _event: Electron.IpcMainInvokeEvent,
     id: string
@@ -336,34 +312,6 @@ export function registerTerminalHandlers(deps: HandlerDependencies): () => void 
   ipcMain.on(CHANNELS.TERMINAL_ACKNOWLEDGE_DATA, handleTerminalAcknowledgeData);
   handlers.push(() =>
     ipcMain.removeListener(CHANNELS.TERMINAL_ACKNOWLEDGE_DATA, handleTerminalAcknowledgeData)
-  );
-
-  const handleTerminalSetActivityTier = (
-    _event: Electron.IpcMainEvent,
-    payload: { id: string; tier: ActivityTier }
-  ) => {
-    try {
-      if (!payload || typeof payload !== "object") {
-        console.error("Invalid setActivityTier payload");
-        return;
-      }
-      if (typeof payload.id !== "string" || !payload.id) {
-        console.error("Invalid terminal ID: must be a non-empty string");
-        return;
-      }
-      const validTiers: ActivityTier[] = ["focused", "visible", "background"];
-      if (!validTiers.includes(payload.tier)) {
-        console.error(`Invalid activity tier: ${payload.tier}`);
-        return;
-      }
-      ptyClient.setActivityTier(payload.id, payload.tier);
-    } catch (error) {
-      console.error("Error setting terminal activity tier:", error);
-    }
-  };
-  ipcMain.on(CHANNELS.TERMINAL_SET_ACTIVITY_TIER, handleTerminalSetActivityTier);
-  handlers.push(() =>
-    ipcMain.removeListener(CHANNELS.TERMINAL_SET_ACTIVITY_TIER, handleTerminalSetActivityTier)
   );
 
   // Query terminals for a specific project

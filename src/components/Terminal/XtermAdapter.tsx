@@ -6,7 +6,7 @@ import { TerminalRefreshTier } from "@/types";
 import type { TerminalType } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useScrollbackStore, usePerformanceModeStore, useTerminalFontStore } from "@/store";
-import { getScrollbackForType } from "@/utils/scrollbackConfig";
+import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
 
 export interface XtermAdapterProps {
@@ -44,7 +44,6 @@ export const CANOPY_TERMINAL_THEME = {
   brightWhite: "#fafafa",
 };
 
-const PERFORMANCE_MODE_SCROLLBACK = 100;
 const MIN_CONTAINER_SIZE = 50;
 
 function XtermAdapterComponent({

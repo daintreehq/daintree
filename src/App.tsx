@@ -39,6 +39,7 @@ import {
   useErrorStore,
   useNotificationStore,
   useDiagnosticsStore,
+  cleanupWorktreeDataStore,
   type RetryAction,
 } from "./store";
 import { useShallow } from "zustand/react/shallow";
@@ -266,6 +267,19 @@ function App() {
       isInTrash: state.isInTrash,
     }))
   );
+
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      cleanupWorktreeDataStore();
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      cleanupWorktreeDataStore();
+    };
+  }, []);
   const terminals = useTerminalStore(useShallow((state) => state.terminals));
   const { launchAgent, availability, isCheckingAvailability, agentSettings, refreshSettings } =
     useAgentLauncher();

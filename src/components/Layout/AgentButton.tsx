@@ -1,43 +1,9 @@
 import { Button } from "@/components/ui/button";
-import { ClaudeIcon, GeminiIcon, CodexIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
-import type { ComponentType } from "react";
+import { getAgentConfig } from "@/config/agents";
 
 type AgentType = "claude" | "gemini" | "codex";
-
-interface IconProps {
-  className?: string;
-  brandColor?: string;
-}
-
-interface AgentMeta {
-  name: string;
-  Icon: ComponentType<IconProps>;
-  shortcut: string | null;
-  tooltip: string;
-}
-
-const AGENT_META: Record<AgentType, AgentMeta> = {
-  claude: {
-    name: "Claude",
-    Icon: ClaudeIcon,
-    shortcut: "Cmd/Ctrl+Alt+C",
-    tooltip: "deep, focused work",
-  },
-  gemini: {
-    name: "Gemini",
-    Icon: GeminiIcon,
-    shortcut: "Cmd/Ctrl+Alt+G",
-    tooltip: "quick exploration",
-  },
-  codex: {
-    name: "Codex",
-    Icon: CodexIcon,
-    shortcut: "Cmd/Ctrl+Alt+X",
-    tooltip: "careful, methodical runs",
-  },
-};
 
 interface AgentButtonProps {
   type: AgentType;
@@ -56,21 +22,25 @@ export function AgentButton({
 }: AgentButtonProps) {
   if (!isEnabled) return null;
 
-  const meta = AGENT_META[type];
+  const config = getAgentConfig(type);
+  if (!config) return null;
+
+  const tooltipDetails = config.tooltip ? ` — ${config.tooltip}` : "";
+  const shortcut = config.shortcut ? ` (${config.shortcut})` : "";
   const isLoading = availability === undefined;
   const isAvailable = availability ?? false;
 
   const tooltip = isLoading
-    ? `Checking ${meta.name} CLI availability...`
+    ? `Checking ${config.name} CLI availability...`
     : isAvailable
-      ? `Start ${meta.name} — ${meta.tooltip}${meta.shortcut ? ` (${meta.shortcut})` : ""}`
-      : `${meta.name} CLI not found. Click to install.`;
+      ? `Start ${config.name}${tooltipDetails}${shortcut}`
+      : `${config.name} CLI not found. Click to install.`;
 
   const ariaLabel = isLoading
-    ? `Checking ${meta.name} availability`
+    ? `Checking ${config.name} availability`
     : isAvailable
-      ? `Start ${meta.name} Agent`
-      : `${meta.name} CLI not installed`;
+      ? `Start ${config.name} Agent`
+      : `${config.name} CLI not installed`;
 
   const handleClick = () => {
     if (isAvailable) {
@@ -95,7 +65,7 @@ export function AgentButton({
       aria-label={ariaLabel}
     >
       <div className="relative">
-        <meta.Icon className="h-4 w-4" brandColor={getBrandColorHex(type)} />
+        <config.icon className="h-4 w-4" brandColor={getBrandColorHex(type)} />
         {!isAvailable && !isLoading && (
           <div className="absolute -top-1 -right-1 w-2 h-2 bg-amber-500 rounded-full" />
         )}

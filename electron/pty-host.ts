@@ -16,11 +16,7 @@ import { PtyPool, getPtyPool } from "./services/PtyPool.js";
 import { events } from "./services/events.js";
 import { SharedRingBuffer, PacketFramer } from "../shared/utils/SharedRingBuffer.js";
 import type { AgentEvent } from "./services/AgentStateMachine.js";
-import type {
-  PtyHostEvent,
-  PtyHostTerminalSnapshot,
-  ActivityTier,
-} from "../shared/types/pty-host.js";
+import type { PtyHostEvent, PtyHostTerminalSnapshot } from "../shared/types/pty-host.js";
 
 // Validate we're running in UtilityProcess context
 if (!process.parentPort) {
@@ -66,8 +62,8 @@ const BACKPRESSURE_CHECK_INTERVAL_MS = 100; // Check every 100ms during backpres
 const BACKPRESSURE_MAX_PAUSE_MS = 5000; // Force resume after 5 seconds to prevent indefinite pause
 
 // MessagePort for direct Renderer ↔ Pty Host communication (bypasses Main)
-// Note: Currently stored but not used elsewhere; could be extended for future features
-// @ts-expect-error - stored for future use
+// Note: This variable holds the port reference so the message handler stays active
+// @ts-expect-error - stored to keep port reference alive
 let rendererPort: MessagePort | null = null;
 
 // Helper to send events to Main process
@@ -465,20 +461,12 @@ port.on("message", (rawMsg: any) => {
         ptyManager.restore(msg.id);
         break;
 
-      case "set-buffering":
-        ptyManager.setBuffering(msg.id, msg.enabled);
-        break;
-
       case "flush-buffer":
         ptyManager.flushBuffer(msg.id);
         break;
 
       case "acknowledge-data":
         ptyManager.acknowledgeData(msg.id, msg.charCount);
-        break;
-
-      case "set-activity-tier":
-        ptyManager.setActivityTier(msg.id, msg.tier as ActivityTier);
         break;
 
       case "get-snapshot":

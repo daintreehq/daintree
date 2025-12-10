@@ -75,10 +75,6 @@ export function useWorktreeActions({
             worktreeId: worktree.id,
           },
           isTransient: true,
-          retryAction: "copytree",
-          retryArgs: {
-            worktreeId: worktree.id,
-          },
         });
 
         console.error("Failed to copy context:", message);

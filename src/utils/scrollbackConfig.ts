@@ -6,6 +6,8 @@ interface ScrollbackPolicy {
   minLines: number;
 }
 
+export const PERFORMANCE_MODE_SCROLLBACK = 100;
+
 const SCROLLBACK_POLICIES: Record<TerminalType, ScrollbackPolicy> = {
   // Agent terminals: full base setting (need conversation history)
   claude: { multiplier: 1.0, maxLines: 10000, minLines: 1000 },

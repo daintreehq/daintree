@@ -14,6 +14,8 @@ export interface AgentConfig {
   icon: ComponentType<AgentIconProps>;
   color: string;
   supportsContextInjection: boolean;
+  shortcut?: string | null;
+  tooltip?: string;
 }
 
 export const AGENT_REGISTRY: Record<string, AgentConfig> = {
@@ -24,6 +26,8 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     icon: ClaudeIcon,
     color: "#CC785C",
     supportsContextInjection: true,
+    shortcut: "Cmd/Ctrl+Alt+C",
+    tooltip: "deep, focused work",
   },
   gemini: {
     id: "gemini",
@@ -32,6 +36,8 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     icon: GeminiIcon,
     color: "#4285F4",
     supportsContextInjection: true,
+    shortcut: "Cmd/Ctrl+Alt+G",
+    tooltip: "quick exploration",
   },
   codex: {
     id: "codex",
@@ -40,6 +46,8 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     icon: CodexIcon,
     color: "#10A37F",
     supportsContextInjection: true,
+    shortcut: "Cmd/Ctrl+Alt+X",
+    tooltip: "careful, methodical runs",
   },
 };
 

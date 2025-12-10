@@ -30,7 +30,6 @@ import type {
   PtyHostRequest,
   PtyHostEvent,
   PtyHostSpawnOptions,
-  ActivityTier,
 } from "../../shared/types/pty-host.js";
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
@@ -461,7 +460,9 @@ export class PtyClient extends EventEmitter {
 
     try {
       this.child.postMessage({ type: "connect-port" }, [port]);
-      console.log("[PtyClient] MessagePort forwarded to Pty Host");
+      if (process.env.CANOPY_VERBOSE) {
+        console.log("[PtyClient] MessagePort forwarded to Pty Host");
+      }
     } catch (error) {
       console.error("[PtyClient] Failed to forward MessagePort to Pty Host:", error);
     }
@@ -504,10 +505,6 @@ export class PtyClient extends EventEmitter {
     return wasTracked;
   }
 
-  setBuffering(id: string, enabled: boolean): void {
-    this.send({ type: "set-buffering", id, enabled });
-  }
-
   flushBuffer(id: string): void {
     this.send({ type: "flush-buffer", id });
   }
@@ -517,11 +514,6 @@ export class PtyClient extends EventEmitter {
    */
   acknowledgeData(id: string, charCount: number): void {
     this.send({ type: "acknowledge-data", id, charCount } as any);
-  }
-
-  /** Set the activity tier for IPC batching (affects flush timing) */
-  setActivityTier(id: string, tier: ActivityTier): void {
-    this.send({ type: "set-activity-tier", id, tier });
   }
 
   /** Get terminal IDs for a specific project */

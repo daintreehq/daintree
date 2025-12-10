@@ -81,14 +81,6 @@ export const terminalClient = {
     return window.electron.terminal.onRestored(callback);
   },
 
-  /**
-   * Buffers PTY output in memory instead of emitting IPC events.
-   * Reduces IPC overhead for hidden/docked terminals.
-   */
-  setBuffering: (id: string, enabled: boolean): Promise<void> => {
-    return window.electron.terminal.setBuffering(id, enabled);
-  },
-
   flush: (id: string): Promise<void> => {
     return window.electron.terminal.flush(id);
   },
@@ -98,13 +90,6 @@ export const terminalClient = {
    */
   acknowledgeData: (id: string, length: number): void => {
     window.electron.terminal.acknowledgeData(id, length);
-  },
-
-  /**
-   * Sets the activity tier for IPC batching.
-   */
-  setActivityTier: (id: string, tier: "focused" | "visible" | "background"): void => {
-    window.electron.terminal.setActivityTier(id, tier);
   },
 
   /**

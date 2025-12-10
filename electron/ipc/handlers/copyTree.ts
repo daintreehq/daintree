@@ -21,7 +21,7 @@ import {
 } from "../../schemas/ipc.js";
 
 export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void {
-  const { mainWindow, worktreeService: workspaceClient, ptyManager: ptyClient } = deps;
+  const { mainWindow, worktreeService: workspaceClient, ptyClient } = deps;
   const handlers: Array<() => void> = [];
 
   const injectionsInProgress = new Set<string>();

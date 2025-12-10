@@ -76,9 +76,7 @@ const MIN_FRAME_INTERVAL_MS = 50; // Target ~20fps for intense TUI redraws
 const FRAME_SETTLE_DELAY_MS = REDRAW_FLUSH_DELAY_MS;
 const FRAME_DEADLINE_MS = MAX_FLUSH_DELAY_MS;
 const TUI_BURST_THRESHOLD_MS = 50; // Repeated clears within this window treated as TUI burst
-const REDRAW_LOOKBACK_CHARS = 32; // Stream-level detection window for ANSI patterns
-const EARLY_HOME_BYTE_WINDOW = 256; // Only treat bare \x1b[H as redraw when it appears early
-
+const REDRAW_LOOKBACK_CHARS = 128; // Stream-level detection window for ANSI patterns. Increased to catch \x1b[H further into the stream.
 /**
  * Creates a simple writer that passes data directly to xterm.
  *
@@ -308,7 +306,7 @@ class TerminalInstanceService {
     const combinedRecent = (prevRecent + stringData).slice(-REDRAW_LOOKBACK_CHARS);
     const bytesSinceStart = prevBytes + dataLength;
 
-    const isRedraw = this.detectRedrawPatternInStream(combinedRecent, bytesSinceStart);
+    const isRedraw = this.detectRedrawPatternInStream(combinedRecent);
 
     if (!entry) {
       entry = {
@@ -552,45 +550,18 @@ class TerminalInstanceService {
    *   - ESC[2J  (clear screen)
    *   - ESC[H   (cursor home) when it appears early in the burst
    */
-  private detectRedrawPatternInStream(recent: string, bytesSinceStart: number): boolean {
+  private detectRedrawPatternInStream(recent: string): boolean {
     if (!recent) return false;
 
     if (recent.includes("\x1b[2J")) {
       return true;
     }
 
-    if (recent.includes("\x1b[H") && bytesSinceStart <= EARLY_HOME_BYTE_WINDOW) {
+    if (recent.includes("\x1b[H")) {
       return true;
     }
 
     return false;
-  }
-
-  /**
-   * Filter problematic ANSI sequences for Claude Code terminals.
-   * Strips mouse tracking, alternate screen buffers, and scrollback clearing.
-   */
-  private filterProblematicSequences(data: string, id: string): string {
-    const managed = this.instances.get(id);
-    if (!managed || managed.type !== "claude") {
-      return data;
-    }
-
-    let filtered = data;
-
-    /* eslint-disable no-control-regex */
-    // Strip Mouse Tracking (?1000h - ?1006h)
-    filtered = filtered.replace(/\u001b\[\?100[0-6][hl]/g, "");
-
-    // Strip Alternate Screen Buffer (?1049h/l, ?47h/l)
-    filtered = filtered.replace(/\u001b\[\?1049[hl]/g, "");
-    filtered = filtered.replace(/\u001b\[\?47[hl]/g, "");
-
-    // Strip Scrollback Clear (3J)
-    filtered = filtered.replace(/\u001b\[3J/g, "");
-    /* eslint-enable no-control-regex */
-
-    return filtered;
   }
 
   /**
@@ -631,19 +602,14 @@ class TerminalInstanceService {
 
     const { chunks } = entry;
 
-    // Filter sequences for Claude terminals
-    const processedChunks = chunks.map((c) =>
-      typeof c === "string" ? this.filterProblematicSequences(c, id) : c
-    );
-
     if (entry.flushMode === "normal") {
-      this.writeFrameChunks(id, processedChunks);
+      this.writeFrameChunks(id, chunks);
       this.recordFrameFlush(id);
       return;
     }
 
     // Frame mode: enqueue completed frame for presentation at capped FPS.
-    this.enqueueFrame(id, processedChunks);
+    this.enqueueFrame(id, chunks);
   }
 
   /**
@@ -926,9 +892,98 @@ class TerminalInstanceService {
 
     this.instances.set(id, managed);
 
+    // Apply specific parser hooks for agent terminals
+    this.setupParserHandlers(managed);
+
     const initialTier = getRefreshTier ? getRefreshTier() : TerminalRefreshTier.FOCUSED;
     this.applyRendererPolicy(id, initialTier);
     return managed;
+  }
+
+  /**
+   * Set up xterm.js parser hooks to intercept and block problematic sequences.
+   * This is more robust than regex filtering as it handles stream chunking correctly.
+   */
+  private setupParserHandlers(managed: ManagedTerminal): void {
+    if (managed.type !== "claude") return;
+
+    // Helper to check if we should block the sequence
+    const shouldBlock = () => {
+      // Block always for Claude terminals to prevent TUI mode hijacking and bouncing
+      return true;
+    };
+
+    // 1. Intercept DECSET (CSI ? ... h) - Enable Mode
+    managed.terminal.parser.registerCsiHandler({ prefix: "?", final: "h" }, (params) => {
+      if (!shouldBlock()) return false;
+
+      // Block Mouse Tracking (1000, 1002, 1003, 1006)
+      // Block Alt Screen (1049, 47)
+      const blockList = [1000, 1002, 1003, 1006, 1049, 47];
+      const hasBlockedParam = params.some((p) => {
+        // xterm.js params are (number | number[])[]
+        const val = typeof p === "number" ? p : p[0];
+        return blockList.includes(val);
+      });
+
+      return hasBlockedParam; // true = handled (swallowed), false = pass to default
+    });
+
+    // 2. Intercept DECRST (CSI ? ... l) - Disable Mode
+    managed.terminal.parser.registerCsiHandler({ prefix: "?", final: "l" }, (params) => {
+      if (!shouldBlock()) return false;
+
+      // Same block list for disabling
+      const blockList = [1000, 1002, 1003, 1006, 1049, 47];
+      const hasBlockedParam = params.some((p) => {
+        const val = typeof p === "number" ? p : p[0];
+        return blockList.includes(val);
+      });
+
+      return hasBlockedParam;
+    });
+
+    // 3. Intercept DECSTBM (CSI ... r) - Set Scroll Region
+    managed.terminal.parser.registerCsiHandler({ final: "r" }, () => {
+      if (!shouldBlock()) return false;
+      // Block ALL scroll region changes for Claude to keep the buffer linear
+      return true;
+    });
+
+    // 4. Intercept ED (CSI ... J) - Erase in Display
+    managed.terminal.parser.registerCsiHandler({ final: "J" }, (params) => {
+      if (!shouldBlock()) return false;
+
+      // Block '2' (Clear Screen) and '3' (Clear Scrollback)
+      // This prevents the "blank slate" effect that usually precedes a jump-to-top
+      const hasBlockedParam = params.some((p) => {
+        const val = typeof p === "number" ? p : p[0];
+        return val === 2 || val === 3;
+      });
+
+      return hasBlockedParam;
+    });
+
+    // 5. Intercept CUP (CSI ... H) and HVP (CSI ... f) - Cursor Position
+    // Block attempts to move cursor to the top row (Row 1), which causes viewport jumping
+    const handleCursorMove = (params: (number | number[])[]) => {
+      if (!shouldBlock()) return false;
+
+      // Default is 1;1 if no params
+      if (params.length === 0) return true;
+
+      // Check Row (1st param)
+      const row = typeof params[0] === "number" ? params[0] : params[0][0];
+
+      // Block if explicit Row 1 (or default/missing which implies 1)
+      if (row === 1 || row === undefined) {
+        return true;
+      }
+      return false;
+    };
+
+    managed.terminal.parser.registerCsiHandler({ final: "H" }, handleCursorMove);
+    managed.terminal.parser.registerCsiHandler({ final: "f" }, handleCursorMove);
   }
 
   /**
@@ -1528,26 +1583,6 @@ class TerminalInstanceService {
     } else if (tier === TerminalRefreshTier.BACKGROUND && managed.webglAddon) {
       // Release WebGL for BACKGROUND tier (hidden tabs)
       this.releaseWebgl(id, managed);
-    }
-
-    // Map refresh tier to IPC activity tier and propagate to main process
-    const activityTier = this.mapToActivityTier(tier);
-    terminalClient.setActivityTier(id, activityTier);
-  }
-
-  /**
-   * Map TerminalRefreshTier to IPC activity tier.
-   */
-  private mapToActivityTier(tier: TerminalRefreshTier): "focused" | "visible" | "background" {
-    switch (tier) {
-      case TerminalRefreshTier.BURST:
-      case TerminalRefreshTier.FOCUSED:
-        return "focused";
-      case TerminalRefreshTier.VISIBLE:
-        return "visible";
-      case TerminalRefreshTier.BACKGROUND:
-      default:
-        return "background";
     }
   }
 

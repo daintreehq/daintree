@@ -8,7 +8,7 @@ import type { SidecarManager } from "../services/SidecarManager.js";
 
 export interface HandlerDependencies {
   mainWindow: BrowserWindow;
-  ptyManager: PtyClient;
+  ptyClient: PtyClient;
   devServerManager?: DevServerManager;
   worktreeService?: WorkspaceClient;
   eventBuffer?: EventBuffer;

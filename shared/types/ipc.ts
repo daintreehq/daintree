@@ -642,13 +642,7 @@ export interface EventFilterOptions {
 export type ErrorType = "git" | "process" | "filesystem" | "network" | "config" | "unknown";
 
 /** Action that can be retried after an error */
-export type RetryAction =
-  | "copytree"
-  | "devserver"
-  | "terminal"
-  | "git"
-  | "worktree"
-  | "injectContext";
+export type RetryAction = "devserver" | "terminal" | "git" | "worktree";
 
 /** Application error for UI display */
 export interface AppError {
@@ -948,10 +942,6 @@ export interface IpcInvokeMap {
   "terminal:restore": {
     args: [id: string];
     result: boolean;
-  };
-  "terminal:set-buffering": {
-    args: [payload: { id: string; enabled: boolean }];
-    result: void;
   };
   "terminal:flush": {
     args: [id: string];
@@ -1504,10 +1494,8 @@ export interface ElectronAPI {
     kill(id: string): Promise<void>;
     trash(id: string): Promise<void>;
     restore(id: string): Promise<boolean>;
-    setBuffering(id: string, enabled: boolean): Promise<void>;
     flush(id: string): Promise<void>;
     acknowledgeData(id: string, length: number): void;
-    setActivityTier(id: string, tier: "focused" | "visible" | "background"): void;
     getForProject(projectId: string): Promise<BackendTerminalInfo[]>;
     reconnect(terminalId: string): Promise<TerminalReconnectResult>;
     replayHistory(terminalId: string, maxLines?: number): Promise<{ replayed: number }>;

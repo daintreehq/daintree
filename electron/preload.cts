@@ -114,9 +114,7 @@ const CHANNELS = {
   TERMINAL_RESTORE: "terminal:restore",
   TERMINAL_TRASHED: "terminal:trashed",
   TERMINAL_RESTORED: "terminal:restored",
-  TERMINAL_SET_BUFFERING: "terminal:set-buffering",
   TERMINAL_FLUSH: "terminal:flush",
-  TERMINAL_SET_ACTIVITY_TIER: "terminal:set-activity-tier",
   TERMINAL_GET_FOR_PROJECT: "terminal:get-for-project",
   TERMINAL_RECONNECT: "terminal:reconnect",
   TERMINAL_REPLAY_HISTORY: "terminal:replay-history",
@@ -191,8 +189,6 @@ const CHANNELS = {
   LOGS_OPEN_FILE: "logs:open-file",
   LOGS_SET_VERBOSE: "logs:set-verbose",
   LOGS_GET_VERBOSE: "logs:get-verbose",
-
-  // Directory channels (legacy - migrated to Projects system)
 
   // Error channels
   ERROR_NOTIFY: "error:notify",
@@ -402,16 +398,10 @@ const api: ElectronAPI = {
     onRestored: (callback: (data: { id: string }) => void) =>
       _typedOn(CHANNELS.TERMINAL_RESTORED, callback),
 
-    setBuffering: (id: string, enabled: boolean) =>
-      _typedInvoke(CHANNELS.TERMINAL_SET_BUFFERING, { id, enabled }),
-
     flush: (id: string) => _typedInvoke(CHANNELS.TERMINAL_FLUSH, id),
 
     acknowledgeData: (id: string, length: number) =>
       ipcRenderer.send(CHANNELS.TERMINAL_ACKNOWLEDGE_DATA, { id, length }),
-
-    setActivityTier: (id: string, tier: "focused" | "visible" | "background") =>
-      ipcRenderer.send(CHANNELS.TERMINAL_SET_ACTIVITY_TIER, { id, tier }),
 
     getForProject: (projectId: string) =>
       ipcRenderer.invoke(CHANNELS.TERMINAL_GET_FOR_PROJECT, projectId),

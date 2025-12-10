@@ -226,12 +226,6 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
             terminalId: activeTerminal,
           },
           isTransient: true,
-          retryAction: "injectContext",
-          retryArgs: {
-            worktreeId,
-            terminalId: activeTerminal,
-            selectedPaths,
-          },
         });
 
         currentErrorIdRef.current = errorId;

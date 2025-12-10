@@ -12,7 +12,12 @@ import { cn } from "@/lib/utils";
 import { useLayoutConfigStore, usePerformanceModeStore, useScrollbackStore } from "@/store";
 import { appClient, terminalConfigClient } from "@/clients";
 import type { TerminalLayoutStrategy, TerminalGridConfig, TerminalType } from "@/types";
-import { getScrollbackForType, estimateMemoryUsage, formatBytes } from "@/utils/scrollbackConfig";
+import {
+  getScrollbackForType,
+  estimateMemoryUsage,
+  formatBytes,
+  PERFORMANCE_MODE_SCROLLBACK,
+} from "@/utils/scrollbackConfig";
 
 const STRATEGIES: Array<{
   id: TerminalLayoutStrategy;
@@ -66,20 +71,23 @@ export function TerminalSettingsTab() {
   const [showMemoryDetails, setShowMemoryDetails] = useState(false);
 
   const memoryEstimate = useMemo(() => {
-    return estimateMemoryUsage(TYPICAL_TERMINAL_COUNTS, scrollbackLines);
-  }, [scrollbackLines]);
+    const base = performanceMode ? PERFORMANCE_MODE_SCROLLBACK : scrollbackLines;
+    return estimateMemoryUsage(TYPICAL_TERMINAL_COUNTS, base);
+  }, [performanceMode, scrollbackLines]);
 
   const scrollbackLimits = useMemo(() => {
-    const effectiveBase = performanceMode ? 100 : scrollbackLines;
+    const effectiveBase = performanceMode ? PERFORMANCE_MODE_SCROLLBACK : scrollbackLines;
     const types: Array<{ type: TerminalType; label: string }> = [
       { type: "claude", label: "Agent (Claude/Gemini/Codex)" },
       { type: "terminal", label: "Terminal" },
     ];
     return types.map(({ type, label }) => ({
       label,
-      limit: performanceMode ? 100 : getScrollbackForType(type, effectiveBase),
+      limit: performanceMode
+        ? PERFORMANCE_MODE_SCROLLBACK
+        : getScrollbackForType(type, effectiveBase),
     }));
-  }, [scrollbackLines, performanceMode]);
+  }, [performanceMode, scrollbackLines]);
 
   const handleScrollbackChange = async (value: number) => {
     const previousValue = scrollbackLines;
@@ -128,7 +136,7 @@ export function TerminalSettingsTab() {
           </h4>
           <p className="text-xs text-canopy-text/50 mb-4">
             Manual safe mode for low-end hardware or high-density workflows. Reduces scrollback to
-            100 lines and disables animations for maximum performance.
+            {` ${PERFORMANCE_MODE_SCROLLBACK} lines and disables animations for maximum performance.`}
           </p>
         </div>
 
@@ -154,7 +162,7 @@ export function TerminalSettingsTab() {
               </div>
               <div className="text-xs opacity-70">
                 {performanceMode
-                  ? "100 line scrollback, animations disabled"
+                  ? `${PERFORMANCE_MODE_SCROLLBACK} line scrollback, animations disabled`
                   : "Standard scrollback, animations enabled"}
               </div>
             </div>

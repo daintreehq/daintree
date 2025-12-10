@@ -5,7 +5,6 @@ const { Terminal: HeadlessTerminal } = headless;
 import serialize from "@xterm/addon-serialize";
 const { SerializeAddon } = serialize;
 import type { TerminalType } from "../../../shared/types/domain.js";
-import type { ActivityTier } from "../../../shared/types/pty-host.js";
 import { ProcessDetector, type DetectionResult } from "../ProcessDetector.js";
 import { ActivityMonitor } from "../ActivityMonitor.js";
 import { AgentStateService } from "./AgentStateService.js";
@@ -399,24 +398,8 @@ export class TerminalProcess {
   /**
    * Set buffering mode.
    */
-  setBuffering(_enabled: boolean): void {
-    // No-op: buffering logic removed.
-  }
-
-  /**
-   * Flush buffered output.
-   */
   flushBuffer(): void {
     // No-op in baseline: output is emitted immediately.
-  }
-
-  /**
-   * Set activity tier for IPC batching.
-   */
-  // Activity tier is no longer used for throttling; kept for compatibility.
-  setActivityTier(_tier: ActivityTier): void {}
-  getActivityTier(): ActivityTier {
-    return "focused";
   }
 
   // Flood protection is handled via higher-level flow control; always no-op here.
