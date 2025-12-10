@@ -26,7 +26,12 @@ import type {
   DevServerDetectedUrls,
 } from "../../shared/types/workspace-host.js";
 import type { Worktree } from "../../shared/types/domain.js";
-import type { CopyTreeOptions, CopyTreeProgress, CopyTreeResult } from "../../shared/types/ipc.js";
+import type {
+  CopyTreeOptions,
+  CopyTreeProgress,
+  CopyTreeResult,
+  FileTreeNode,
+} from "../../shared/types/ipc.js";
 import { GitHubAuth } from "./github/GitHubAuth.js";
 
 export type CopyTreeProgressCallback = (progress: CopyTreeProgress) => void;
@@ -322,6 +327,11 @@ export class WorkspaceClient extends EventEmitter {
       // DevServer events
       case "devserver:urls-detected":
         this.handleRequestResult({ ...event, success: true });
+        break;
+
+      // File tree events
+      case "file-tree-result":
+        this.handleRequestResult({ ...event, success: !event.error });
         break;
 
       default:
@@ -665,6 +675,28 @@ export class WorkspaceClient extends EventEmitter {
     );
 
     return result.detected;
+  }
+
+  // File tree methods
+
+  async getFileTree(worktreePath: string, dirPath?: string): Promise<FileTreeNode[]> {
+    const requestId = this.generateRequestId();
+
+    const result = await this.sendWithResponse<{ nodes: FileTreeNode[]; error?: string }>(
+      {
+        type: "get-file-tree",
+        requestId,
+        worktreePath,
+        dirPath,
+      },
+      30000
+    );
+
+    if (result.error) {
+      throw new Error(result.error);
+    }
+
+    return result.nodes;
   }
 
   /** Pause health check during system sleep */

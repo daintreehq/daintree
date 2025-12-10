@@ -326,10 +326,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       throw new Error(`Worktree not found: ${validated.worktreeId}`);
     }
 
-    // TODO: Ideally move file tree generation to utility process too,
-    // but for now we read it from main process using the path from monitor
-    const { getFileTree } = await import("../../utils/fileTree.js");
-    return getFileTree(monitor.path, validated.dirPath);
+    return workspaceClient.getFileTree(monitor.path, validated.dirPath);
   };
   ipcMain.handle(CHANNELS.COPYTREE_GET_FILE_TREE, handleCopyTreeGetFileTree);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.COPYTREE_GET_FILE_TREE));

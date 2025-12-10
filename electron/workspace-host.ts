@@ -36,6 +36,7 @@ import { DevServerParser } from "./services/devserver/DevServerParser.js";
 import { GitHubAuth } from "./services/github/GitHubAuth.js";
 import { pullRequestService } from "./services/PullRequestService.js";
 import { events } from "./services/events.js";
+import { fileTreeService } from "./services/FileTreeService.js";
 import type { CopyTreeProgress } from "../shared/types/ipc.js";
 import type { PRServiceStatus } from "../shared/types/workspace-host.js";
 
@@ -1208,6 +1209,26 @@ port.on("message", async (rawMsg: any) => {
       case "update-github-token":
         workspaceHost.updateGitHubToken(request.token);
         break;
+
+      case "get-file-tree": {
+        const { requestId, worktreePath, dirPath } = request;
+        try {
+          const nodes = await fileTreeService.getFileTree(worktreePath, dirPath);
+          sendEvent({
+            type: "file-tree-result",
+            requestId,
+            nodes,
+          });
+        } catch (error) {
+          sendEvent({
+            type: "file-tree-result",
+            requestId,
+            nodes: [],
+            error: (error as Error).message,
+          });
+        }
+        break;
+      }
 
       default:
         console.warn("[WorkspaceHost] Unknown message type:", (msg as { type: string }).type);
