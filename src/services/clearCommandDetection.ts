@@ -7,6 +7,11 @@ export const VT100_CURSOR_HOME = "\x1b[H"; // Move cursor to (1,1)
 export const VT100_CLEAR_SCREEN = "\x1b[2J"; // Clear entire screen
 export const VT100_FULL_CLEAR = `${VT100_CLEAR_SCROLLBACK}${VT100_CURSOR_HOME}${VT100_CLEAR_SCREEN}`;
 
+export interface InputResult {
+  isClear: boolean;
+  command: string | null;
+}
+
 /**
  * Tracks user input keystrokes to detect clear commands before Enter.
  * Handles multi-char chunks (paste), backspace, control characters, and escape sequences.
@@ -14,8 +19,11 @@ export const VT100_FULL_CLEAR = `${VT100_CLEAR_SCROLLBACK}${VT100_CURSOR_HOME}${
 export class InputTracker {
   private buffer = "";
   private inBracketedPaste = false;
+  private results: InputResult[] = [];
 
-  process(data: string): boolean {
+  process(data: string): InputResult[] {
+    this.results = [];
+
     for (let i = 0; i < data.length; i++) {
       const char = data[i];
       const code = char.charCodeAt(0);
@@ -34,26 +42,47 @@ export class InputTracker {
         continue;
       }
 
-      // Handle Enter (CR or LF) - check for clear command
+      // Ignore newlines inside bracketed paste (multi-line paste should not trigger commands)
+      if (this.inBracketedPaste && (char === "\r" || char === "\n")) {
+        this.buffer += char;
+        continue;
+      }
+
+      // Handle Enter (CR or LF) - processing point
       if (char === "\r" || char === "\n") {
         const cmd = this.buffer.trim();
         this.buffer = "";
-        this.inBracketedPaste = false;
-        if (CLEAR_COMMANDS.has(cmd)) {
-          return true;
+
+        if (cmd) {
+          this.results.push({
+            isClear: CLEAR_COMMANDS.has(cmd),
+            command: cmd,
+          });
         }
         continue;
       }
 
-      // Handle Backspace (DEL - 0x7f)
-      if (char === "\x7f") {
+      // Handle Backspace (DEL - 0x7f or BS - 0x08)
+      if (char === "\x7f" || char === "\b") {
         this.buffer = this.buffer.slice(0, -1);
         continue;
       }
 
-      // Handle escape sequences (arrows, home/end) -> Reset buffer
+      // Handle escape sequences (arrows, home/end) -> Reset buffer and skip sequence
       if (char === "\x1b" && !this.inBracketedPaste) {
         this.buffer = "";
+        // Skip the rest of the escape sequence (commonly ESC[A, ESC[B, etc.)
+        // Look ahead for common patterns and skip them
+        if (i + 1 < data.length && data[i + 1] === "[") {
+          i++; // Skip '['
+          // Skip until we find a letter (command terminator)
+          while (i + 1 < data.length && !/[A-Za-z]/.test(data[i + 1])) {
+            i++;
+          }
+          if (i + 1 < data.length) {
+            i++; // Skip the letter
+          }
+        }
         continue;
       }
 
@@ -67,6 +96,12 @@ export class InputTracker {
       this.buffer += char;
     }
 
-    return false;
+    return this.results;
+  }
+
+  reset(): void {
+    this.buffer = "";
+    this.inBracketedPaste = false;
+    this.results = [];
   }
 }

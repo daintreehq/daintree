@@ -15,6 +15,7 @@ import { useErrorStore, useTerminalStore, getTerminalRefreshTier } from "@/store
 import { useTerminalLogic } from "@/hooks/useTerminalLogic";
 import type { AgentState } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { InputTracker } from "@/services/clearCommandDetection";
 import { getAgentConfig } from "@/config/agents";
 
 export type { TerminalType };
@@ -88,6 +89,7 @@ function TerminalPaneComponent({
 
   useEffect(() => {
     setDismissedRestartPrompt(false);
+    inputTrackerRef.current?.reset();
   }, [restartKey]);
 
   const updateVisibility = useTerminalStore((state) => state.updateVisibility);
@@ -160,35 +162,31 @@ function TerminalPaneComponent({
 
   const handleReady = useCallback(() => {}, []);
 
-  const commandBufferRef = useRef<string>("");
+  const inputTrackerRef = useRef<InputTracker | null>(null);
+
+  if (!inputTrackerRef.current) {
+    inputTrackerRef.current = new InputTracker();
+  }
 
   const handleInput = useCallback(
     (data: string) => {
-      let buffer = commandBufferRef.current;
+      const tracker = inputTrackerRef.current;
+      if (!tracker) return;
 
-      for (let i = 0; i < data.length; i++) {
-        const ch = data[i];
+      const results = tracker.process(data);
 
-        if (ch === "\r" || ch === "\n") {
-          const trimmed = buffer.trim();
-          if (trimmed) {
-            updateLastCommand(id, trimmed);
+      for (const result of results) {
+        if (result.isClear) {
+          const managed = terminalInstanceService.get(id);
+          if (managed?.terminal) {
+            managed.terminal.clear();
           }
-          buffer = "";
-          continue;
         }
 
-        if (ch === "\x7f" || ch === "\b") {
-          buffer = buffer.slice(0, -1);
-          continue;
-        }
-
-        if (ch >= " " && ch !== "\x7f") {
-          buffer += ch;
+        if (result.command) {
+          updateLastCommand(id, result.command);
         }
       }
-
-      commandBufferRef.current = buffer;
     },
     [id, updateLastCommand]
   );
@@ -235,6 +233,7 @@ function TerminalPaneComponent({
 
   const handleRestart = useCallback(() => {
     restartTerminal(id);
+    inputTrackerRef.current?.reset();
   }, [restartTerminal, id]);
 
   const handleUpdateCwd = useCallback(() => {
