@@ -525,16 +525,6 @@ export class PtyClient extends EventEmitter {
   }
 
   /** Get terminal IDs for a specific project */
-  getTerminalsForProject(_projectId: string): string[] {
-    // Note: This is async in PtyClient but returns empty array synchronously
-    // Use getTerminalsForProjectAsync for proper async behavior
-    console.warn(
-      "[PtyClient] getTerminalsForProject called synchronously - use getTerminalsForProjectAsync instead"
-    );
-    return [];
-  }
-
-  /** Get terminal IDs for a specific project (async) */
   async getTerminalsForProjectAsync(projectId: string): Promise<string[]> {
     return new Promise((resolve) => {
       const requestId = `terminals-${projectId}-${Date.now()}`;
@@ -550,14 +540,7 @@ export class PtyClient extends EventEmitter {
     });
   }
 
-  /** Get terminal info by ID (returns undefined sync, use getTerminalAsync for async) */
-  getTerminal(_id: string): undefined {
-    // Note: This is async in PtyClient
-    console.warn("[PtyClient] getTerminal called synchronously - use getTerminalAsync instead");
-    return undefined;
-  }
-
-  /** Get terminal info by ID (async) */
+  /** Get terminal info by ID */
   async getTerminalAsync(id: string): Promise<TerminalInfoResponse | null> {
     return new Promise((resolve) => {
       const requestId = `terminal-${id}-${Date.now()}`;
@@ -573,13 +556,7 @@ export class PtyClient extends EventEmitter {
     });
   }
 
-  /** Replay terminal history (returns 0 sync, use replayHistoryAsync for async) */
-  replayHistory(_id: string, _maxLines?: number): number {
-    console.warn("[PtyClient] replayHistory called synchronously - use replayHistoryAsync instead");
-    return 0;
-  }
-
-  /** Replay terminal history (async) */
+  /** Replay terminal history */
   async replayHistoryAsync(id: string, maxLines: number = 100): Promise<number> {
     return new Promise((resolve) => {
       const requestId = `replay-${id}-${Date.now()}`;
