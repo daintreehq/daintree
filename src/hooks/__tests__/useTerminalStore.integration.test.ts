@@ -57,7 +57,7 @@ describe("Terminal Store Integration", () => {
 
       await mockAddTerminal({
         id: "test-id-1",
-        type: "shell",
+        type: "terminal",
         cwd: "/test",
         cols: 80,
         rows: 24,
@@ -101,7 +101,7 @@ describe("Terminal Store Integration", () => {
 
       await useTerminalStore.getState().addTerminal({
         id: "test-id-3",
-        type: "shell",
+        type: "terminal",
         cwd: "/test",
         cols: 80,
         rows: 24,
@@ -127,7 +127,7 @@ describe("Terminal Store Integration", () => {
 
       await useTerminalStore.getState().addTerminal({
         id: "test-id-4",
-        type: "shell",
+        type: "terminal",
         cwd: "/test",
         cols: 80,
         rows: 24,
@@ -145,7 +145,7 @@ describe("Terminal Store Integration", () => {
         terminals: [
           {
             id: "term-1",
-            type: "shell",
+            type: "terminal",
             title: "Shell 1",
             cwd: "/test",
             cols: 80,
@@ -154,7 +154,7 @@ describe("Terminal Store Integration", () => {
           },
           {
             id: "term-2",
-            type: "shell",
+            type: "terminal",
             title: "Shell 2",
             cwd: "/test",
             cols: 80,
@@ -196,7 +196,7 @@ describe("Terminal Store Integration", () => {
         terminals: [
           {
             id: "term-1",
-            type: "shell",
+            type: "terminal",
             title: "Shell 1",
             cwd: "/test",
             cols: 80,
@@ -230,7 +230,7 @@ describe("Terminal Store Integration", () => {
         terminals: [
           {
             id: "term-1",
-            type: "shell",
+            type: "terminal",
             title: "Shell 1",
             cwd: "/test",
             cols: 80,
@@ -239,7 +239,7 @@ describe("Terminal Store Integration", () => {
           },
           {
             id: "term-2",
-            type: "shell",
+            type: "terminal",
             title: "Shell 2",
             cwd: "/test",
             cols: 80,
@@ -281,7 +281,7 @@ describe("Terminal Store Integration", () => {
         terminals: [
           {
             id: "term-1",
-            type: "shell",
+            type: "terminal",
             title: "Shell 1",
             cwd: "/test",
             cols: 80,
@@ -311,7 +311,7 @@ describe("Terminal Store Integration", () => {
         terminals: [
           {
             id: "term-1",
-            type: "shell",
+            type: "terminal",
             title: "Shell 1",
             cwd: "/test",
             cols: 80,
@@ -422,7 +422,7 @@ describe("Terminal Store Integration", () => {
         terminals: [
           {
             id: "term-1",
-            type: "shell",
+            type: "terminal",
             title: "Shell 1",
             cwd: "/test",
             cols: 80,
@@ -431,7 +431,7 @@ describe("Terminal Store Integration", () => {
           },
           {
             id: "term-2",
-            type: "shell",
+            type: "terminal",
             title: "Shell 2",
             cwd: "/test",
             cols: 80,
@@ -497,7 +497,7 @@ describe("Terminal Store Integration", () => {
         terminals: [
           {
             id: "term-1",
-            type: "shell",
+            type: "terminal",
             title: "Shell",
             cwd: "/test",
             cols: 80,
@@ -511,7 +511,7 @@ describe("Terminal Store Integration", () => {
         terminals: [
           {
             id: "term-1",
-            type: "shell",
+            type: "terminal",
             title: "Updated Title",
             cwd: "/test",
             cols: 100,

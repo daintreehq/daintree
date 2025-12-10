@@ -1,6 +1,6 @@
 import { useCallback, useState, useEffect, useMemo, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
-import type { WorktreeState, ProjectDevServerSettings } from "../../types";
+import type { WorktreeState, ProjectDevServerSettings, AgentState } from "../../types";
 import { ActivityLight } from "./ActivityLight";
 import { BranchLabel } from "./BranchLabel";
 import { LiveTimeAgo } from "./LiveTimeAgo";
@@ -62,15 +62,7 @@ import {
   CheckCircle2,
   XCircle,
 } from "lucide-react";
-import {
-  ClaudeIcon,
-  GeminiIcon,
-  CodexIcon,
-  NpmIcon,
-  YarnIcon,
-  PnpmIcon,
-  BunIcon,
-} from "@/components/icons";
+import { ClaudeIcon, GeminiIcon, CodexIcon } from "@/components/icons";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import type { TerminalType } from "@/types";
 import type { AgentType, UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
@@ -86,14 +78,7 @@ function getTerminalIcon(type: TerminalType) {
       return <GeminiIcon className={className} brandColor={brandColor} />;
     case "codex":
       return <CodexIcon className={className} brandColor={brandColor} />;
-    case "npm":
-      return <NpmIcon className={className} />;
-    case "yarn":
-      return <YarnIcon className={className} />;
-    case "pnpm":
-      return <PnpmIcon className={className} />;
-    case "bun":
-      return <BunIcon className={className} />;
+    case "terminal":
     default:
       return <TerminalSquare className={className} />;
   }
@@ -1072,7 +1057,7 @@ export function WorktreeCard({
           Codex
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem onClick={() => handleLaunchAgent("shell")}>
+        <ContextMenuItem onClick={() => handleLaunchAgent("terminal")}>
           <Terminal className="w-3.5 h-3.5 mr-2" />
           Open Terminal
         </ContextMenuItem>

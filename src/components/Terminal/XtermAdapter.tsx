@@ -48,7 +48,7 @@ const MIN_CONTAINER_SIZE = 50;
 
 function XtermAdapterComponent({
   terminalId,
-  terminalType = "shell",
+  terminalType = "terminal",
   onReady,
   onExit,
   className,

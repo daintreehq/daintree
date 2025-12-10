@@ -1,16 +1,6 @@
 import { z } from "zod";
 
-export const TerminalTypeSchema = z.enum([
-  "shell",
-  "claude",
-  "gemini",
-  "codex",
-  "npm",
-  "yarn",
-  "pnpm",
-  "bun",
-  "custom",
-]);
+export const TerminalTypeSchema = z.enum(["terminal", "claude", "gemini", "codex"]);
 
 export const AgentStateSchema = z.enum([
   "idle",

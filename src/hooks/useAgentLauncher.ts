@@ -7,7 +7,7 @@ import { cliAvailabilityClient, agentSettingsClient } from "@/clients";
 import type { AgentSettings, CliAvailability } from "@shared/types";
 import { generateClaudeFlags, generateGeminiFlags, generateCodexFlags } from "@shared/types";
 
-export type AgentType = "claude" | "gemini" | "codex" | "shell";
+export type AgentType = "claude" | "gemini" | "codex" | "terminal";
 
 /**
  * Detect if running on Windows using browser APIs.
@@ -128,9 +128,9 @@ const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
     title: "Codex",
     command: "codex",
   },
-  shell: {
-    type: "shell",
-    title: "Shell",
+  terminal: {
+    type: "terminal",
+    title: "Terminal",
     command: undefined, // Plain shell, no command
   },
 };

@@ -163,11 +163,11 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Agents",
   },
   {
-    actionId: "agent.shell",
+    actionId: "agent.terminal",
     combo: "Cmd+Alt+N",
     scope: "global",
     priority: 0,
-    description: "Launch shell in current worktree",
+    description: "Launch terminal in current worktree",
     category: "Agents",
   },
   {

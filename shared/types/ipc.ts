@@ -445,7 +445,7 @@ export interface SystemSleepMetrics {
 /** Saved recipe terminal */
 export interface SavedRecipeTerminal {
   /** Terminal type */
-  type: "claude" | "gemini" | "codex" | "shell" | "custom";
+  type: "terminal" | "claude" | "gemini" | "codex";
   /** Optional title */
   title?: string;
   /** Optional command */

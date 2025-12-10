@@ -38,7 +38,7 @@ export interface StoreSchema {
     };
     terminals: Array<{
       id: string;
-      type: "shell" | "claude" | "gemini" | "codex" | "npm" | "yarn" | "pnpm" | "bun" | "custom";
+      type: "terminal" | "claude" | "gemini" | "codex";
       title: string;
       cwd: string;
       worktreeId?: string;
@@ -53,7 +53,7 @@ export interface StoreSchema {
       name: string;
       worktreeId?: string;
       terminals: Array<{
-        type: "claude" | "gemini" | "shell" | "custom";
+        type: "terminal" | "claude" | "gemini" | "codex";
         title?: string;
         command?: string;
         env?: Record<string, string>;

@@ -205,21 +205,8 @@ export interface RunRecord {
 
 // Terminal Types
 
-/** Terminal type: AI agents (claude/gemini/codex), package managers, or shell/custom */
-export type TerminalType =
-  | "shell"
-  | "claude"
-  | "gemini"
-  | "codex"
-  | "npm"
-  | "yarn"
-  | "pnpm"
-  | "bun"
-  | "custom";
-
-/** Package manager terminal types for type narrowing */
-export const PACKAGE_MANAGER_TYPES = ["npm", "yarn", "pnpm", "bun"] as const;
-export type PackageManagerType = (typeof PACKAGE_MANAGER_TYPES)[number];
+/** Terminal type: AI agents (claude/gemini/codex) or standard terminal */
+export type TerminalType = "terminal" | "claude" | "gemini" | "codex";
 
 /** Location of a terminal instance in the UI */
 export type TerminalLocation = "grid" | "dock" | "trash";
@@ -404,7 +391,7 @@ export interface ProjectState {
 // Terminal Recipe Types
 
 /** Recipe terminal type */
-export type RecipeTerminalType = "claude" | "gemini" | "codex" | "shell" | "custom";
+export type RecipeTerminalType = "claude" | "gemini" | "codex" | "terminal";
 
 /** A single terminal definition within a recipe */
 export interface RecipeTerminal {

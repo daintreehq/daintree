@@ -1,14 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
-import { RotateCcw, X, Terminal, Command } from "lucide-react";
-import {
-  ClaudeIcon,
-  GeminiIcon,
-  CodexIcon,
-  NpmIcon,
-  YarnIcon,
-  PnpmIcon,
-  BunIcon,
-} from "@/components/icons";
+import { RotateCcw, X, Terminal } from "lucide-react";
+import { ClaudeIcon, GeminiIcon, CodexIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { useTerminalStore, type TerminalInstance } from "@/store";
@@ -30,17 +22,7 @@ function getTerminalIcon(type: TerminalType, className?: string) {
       return <GeminiIcon {...props} />;
     case "codex":
       return <CodexIcon {...props} />;
-    case "npm":
-      return <NpmIcon {...props} />;
-    case "yarn":
-      return <YarnIcon {...props} />;
-    case "pnpm":
-      return <PnpmIcon {...props} />;
-    case "bun":
-      return <BunIcon {...props} />;
-    case "custom":
-      return <Command {...props} />;
-    case "shell":
+    case "terminal":
     default:
       return <Terminal {...props} />;
   }

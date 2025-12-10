@@ -83,7 +83,7 @@ export function registerTerminalHandlers(deps: HandlerDependencies): () => void 
     const cols = Math.max(1, Math.min(500, Math.floor(validatedOptions.cols) || 80));
     const rows = Math.max(1, Math.min(500, Math.floor(validatedOptions.rows) || 30));
 
-    const type = validatedOptions.type || "shell";
+    const type = validatedOptions.type || "terminal";
 
     const title = validatedOptions.title;
     const worktreeId = validatedOptions.worktreeId;

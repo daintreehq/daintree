@@ -56,7 +56,7 @@ function TerminalHeaderComponent({
   exitCode,
   isWorking,
   agentState,
-  activity,
+  activity: _activity,
   queueCount,
   lastCommand,
   isEditingTitle,
@@ -78,7 +78,6 @@ function TerminalHeaderComponent({
   location = "grid",
   isPinged,
 }: TerminalHeaderProps) {
-  const isAgentType = type === "claude" || type === "gemini" || type === "codex";
   // Get background activity stats for Zen Mode header (optimized single-pass)
   // Only count grid terminals - docked terminals are visually separate
   // Treat undefined location as grid for compatibility with persisted data
@@ -147,24 +146,25 @@ function TerminalHeaderComponent({
               onKeyDown={onTitleInputKeyDown}
               onBlur={onTitleSave}
               className="text-sm font-medium bg-canopy-bg/60 border border-canopy-accent/50 px-1 h-5 min-w-32 outline-none text-canopy-text select-text"
-              aria-label={type === "shell" ? "Edit terminal title" : "Edit agent title"}
+              aria-label={type === "terminal" ? "Edit terminal title" : "Edit agent title"}
             />
           ) : (
-            <div className="flex items-baseline gap-2 min-w-0">
+            <div className="flex items-center gap-2 min-w-0">
+              {/* Title */}
               <span
                 className={cn(
+                  "text-xs font-medium select-none transition-colors",
                   isFocused ? "text-canopy-text" : "text-canopy-text/70",
-                  "font-medium truncate select-none",
                   onTitleChange && "cursor-text hover:text-canopy-text"
                 )}
                 onDoubleClick={onTitleDoubleClick}
                 onKeyDown={onTitleKeyDown}
                 tabIndex={onTitleChange ? 0 : undefined}
                 role={onTitleChange ? "button" : undefined}
-                title={onTitleChange ? `${title} — Double-click or press Enter to edit` : title}
+                title={onTitleChange ? `${title} — Double-click to edit` : title}
                 aria-label={
                   onTitleChange
-                    ? type === "shell"
+                    ? type === "terminal"
                       ? `Terminal title: ${title}. Press Enter or F2 to edit`
                       : `Agent title: ${title}. Press Enter or F2 to edit`
                     : undefined
@@ -173,9 +173,10 @@ function TerminalHeaderComponent({
                 {title}
               </span>
 
-              {!isAgentType && lastCommand && (
+              {/* Command Pill - shows currently running command */}
+              {lastCommand && (
                 <span
-                  className="ml-2 px-1.5 py-0.5 rounded-sm text-[10px] font-mono bg-white/5 text-canopy-text/50 truncate max-w-[20rem]"
+                  className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-black/10 text-canopy-text/60 border border-white/10 truncate max-w-[20rem]"
                   title={lastCommand}
                 >
                   {lastCommand}

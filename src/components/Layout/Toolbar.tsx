@@ -26,7 +26,7 @@ import { useRepositoryStats } from "@/hooks/useRepositoryStats";
 import type { CliAvailability, AgentSettings } from "@shared/types";
 
 interface ToolbarProps {
-  onLaunchAgent: (type: "claude" | "gemini" | "codex" | "shell") => void;
+  onLaunchAgent: (type: "claude" | "gemini" | "codex" | "terminal") => void;
   onSettings: () => void;
   onOpenAgentSettings?: () => void;
   errorCount?: number;
@@ -114,7 +114,7 @@ export function Toolbar({
         <Button
           variant="ghost"
           size="icon"
-          onClick={() => onLaunchAgent("shell")}
+          onClick={() => onLaunchAgent("terminal")}
           className="text-canopy-text hover:bg-canopy-border h-8 w-8 transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
           title="Open Terminal (⌘T for palette)"
           aria-label="Open Terminal"

@@ -50,8 +50,7 @@ const TYPICAL_TERMINAL_COUNTS: Partial<Record<TerminalType, number>> = {
   claude: 2,
   gemini: 2,
   codex: 2,
-  shell: 6,
-  npm: 2,
+  terminal: 8,
 };
 
 export function TerminalSettingsTab() {
@@ -73,9 +72,8 @@ export function TerminalSettingsTab() {
   const scrollbackLimits = useMemo(() => {
     const effectiveBase = performanceMode ? 100 : scrollbackLines;
     const types: Array<{ type: TerminalType; label: string }> = [
-      { type: "claude", label: "Agent (Claude/Gemini/Codex/Custom)" },
-      { type: "shell", label: "Terminal" },
-      { type: "npm", label: "Dev Server (npm/yarn/pnpm/bun)" },
+      { type: "claude", label: "Agent (Claude/Gemini/Codex)" },
+      { type: "terminal", label: "Terminal" },
     ];
     return types.map(({ type, label }) => ({
       label,
@@ -264,15 +262,9 @@ export function TerminalSettingsTab() {
               </span>
             </div>
             <div className="flex justify-between">
-              <span>Terminals (6)</span>
+              <span>Terminals (8)</span>
               <span className="font-mono text-canopy-text/70">
-                {formatBytes(memoryEstimate.perType.shell ?? 0)}
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span>Dev servers (2)</span>
-              <span className="font-mono text-canopy-text/70">
-                {formatBytes(memoryEstimate.perType.npm ?? 0)}
+                {formatBytes(memoryEstimate.perType.terminal ?? 0)}
               </span>
             </div>
             <div className="flex justify-between pt-1.5 border-t border-canopy-border mt-1.5">

@@ -185,7 +185,7 @@ Performance & Diagnostics:
           <div className="space-y-6">
             <InfoSection title="Session Metadata">
               <InfoRow label="Terminal ID" value={info.id} mono />
-              <InfoRow label="Type" value={info.type || "shell"} />
+              <InfoRow label="Type" value={info.type || "terminal"} />
               <InfoRow label="Title" value={info.title} />
               <InfoRow label="Project ID" value={info.projectId} mono />
               <InfoRow label="Worktree ID" value={info.worktreeId} mono />

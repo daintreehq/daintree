@@ -97,7 +97,7 @@ export type KeyAction =
   | "agent.claude"
   | "agent.gemini"
   | "agent.codex"
-  | "agent.shell"
+  | "agent.terminal"
   | "agent.focusNextWaiting"
 
   // Panel management

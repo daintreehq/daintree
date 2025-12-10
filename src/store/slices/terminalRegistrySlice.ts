@@ -44,15 +44,10 @@ export interface AddTerminalOptions {
 }
 
 const TYPE_TITLES: Record<TerminalType, string> = {
-  shell: "Shell",
+  terminal: "Terminal",
   claude: "Claude",
   gemini: "Gemini",
   codex: "Codex",
-  npm: "NPM",
-  yarn: "Yarn",
-  pnpm: "PNPM",
-  bun: "Bun",
-  custom: "Terminal",
 };
 
 export interface TrashedTerminal {
@@ -140,7 +135,7 @@ export const createTerminalRegistrySlice =
     trashedTerminals: new Map(),
 
     addTerminal: async (options) => {
-      const type = options.type || "shell";
+      const type = options.type || "terminal";
       const title = options.title || TYPE_TITLES[type];
 
       // Auto-dock if grid is full and user requested grid location

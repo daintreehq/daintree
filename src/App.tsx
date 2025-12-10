@@ -481,7 +481,7 @@ function App() {
   }, [addTerminal, setActiveWorktree, loadRecipes, openDiagnosticsDock]);
 
   const handleLaunchAgent = useCallback(
-    async (type: "claude" | "gemini" | "codex" | "shell") => {
+    async (type: "claude" | "gemini" | "codex" | "terminal") => {
       await launchAgent(type);
     },
     [launchAgent]
@@ -518,7 +518,7 @@ function App() {
     "terminal.new",
     () => {
       const worktreeId = activeWorktree?.id;
-      addTerminal({ type: "shell", cwd: defaultTerminalCwd, worktreeId }).catch((error) => {
+      addTerminal({ type: "terminal", cwd: defaultTerminalCwd, worktreeId }).catch((error) => {
         console.error("Failed to create terminal:", error);
       });
     },
@@ -560,7 +560,7 @@ function App() {
   useKeybinding("agent.claude", () => handleLaunchAgent("claude"), { enabled: electronAvailable });
   useKeybinding("agent.gemini", () => handleLaunchAgent("gemini"), { enabled: electronAvailable });
   useKeybinding("agent.codex", () => handleLaunchAgent("codex"), { enabled: electronAvailable });
-  useKeybinding("agent.shell", () => handleLaunchAgent("shell"), { enabled: electronAvailable });
+  useKeybinding("agent.terminal", () => handleLaunchAgent("terminal"), { enabled: electronAvailable });
   useKeybinding("agent.focusNextWaiting", () => focusNextWaiting(isInTrash), {
     enabled: electronAvailable,
   });
@@ -916,7 +916,6 @@ function App() {
         query={newTerminalPalette.query}
         results={newTerminalPalette.results}
         selectedIndex={newTerminalPalette.selectedIndex}
-        hasCustomOption={newTerminalPalette.hasCustomOption}
         onQueryChange={newTerminalPalette.setQuery}
         onSelectPrevious={newTerminalPalette.selectPrevious}
         onSelectNext={newTerminalPalette.selectNext}

@@ -1,4 +1,4 @@
-import { Terminal, Command } from "lucide-react";
+import { Terminal } from "lucide-react";
 import { ClaudeIcon, GeminiIcon, CodexIcon } from "@/components/icons";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import type { TerminalType } from "@/types";
@@ -35,18 +35,11 @@ export function getLaunchOptions(): LaunchOption[] {
       icon: <CodexIcon className="w-4 h-4" brandColor={getBrandColorHex("codex")} />,
     },
     {
-      id: "shell",
-      type: "shell",
+      id: "terminal",
+      type: "terminal",
       label: "Terminal",
       description: "Standard system shell (zsh/bash/powershell).",
       icon: <Terminal className="w-4 h-4" />,
-    },
-    {
-      id: "custom",
-      type: "custom",
-      label: "Custom Command",
-      description: "Run a specific command or script.",
-      icon: <Command className="w-4 h-4" />,
     },
   ];
 }

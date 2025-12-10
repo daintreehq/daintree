@@ -1,13 +1,5 @@
-import { Terminal, Command } from "lucide-react";
-import {
-  ClaudeIcon,
-  GeminiIcon,
-  CodexIcon,
-  NpmIcon,
-  YarnIcon,
-  PnpmIcon,
-  BunIcon,
-} from "@/components/icons";
+import { Terminal } from "lucide-react";
+import { ClaudeIcon, GeminiIcon, CodexIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import type { TerminalType } from "@/types";
 
@@ -30,17 +22,7 @@ export function TerminalIcon({ type, className, brandColor }: TerminalIconProps)
       return <GeminiIcon {...finalProps} brandColor={brandColor} />;
     case "codex":
       return <CodexIcon {...finalProps} brandColor={brandColor} />;
-    case "npm":
-      return <NpmIcon {...finalProps} />;
-    case "yarn":
-      return <YarnIcon {...finalProps} />;
-    case "pnpm":
-      return <PnpmIcon {...finalProps} />;
-    case "bun":
-      return <BunIcon {...finalProps} />;
-    case "custom":
-      return <Command {...finalProps} />;
-    case "shell":
+    case "terminal":
     default:
       return <Terminal {...finalProps} />;
   }

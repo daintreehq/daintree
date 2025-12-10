@@ -11,25 +11,18 @@ const SCROLLBACK_POLICIES: Record<TerminalType, ScrollbackPolicy> = {
   claude: { multiplier: 1.0, maxLines: 10000, minLines: 1000 },
   gemini: { multiplier: 1.0, maxLines: 10000, minLines: 1000 },
   codex: { multiplier: 1.0, maxLines: 10000, minLines: 1000 },
-  custom: { multiplier: 1.0, maxLines: 10000, minLines: 1000 },
 
-  // Shell terminals: limited (ephemeral commands)
-  shell: { multiplier: 0.2, maxLines: 2000, minLines: 200 },
-
-  // Dev server terminals: minimal (repeating status logs)
-  npm: { multiplier: 0.05, maxLines: 500, minLines: 50 },
-  yarn: { multiplier: 0.05, maxLines: 500, minLines: 50 },
-  pnpm: { multiplier: 0.05, maxLines: 500, minLines: 50 },
-  bun: { multiplier: 0.05, maxLines: 500, minLines: 50 },
+  // Standard terminals: limited (ephemeral commands)
+  terminal: { multiplier: 0.2, maxLines: 2000, minLines: 200 },
 };
 
 /**
  * Get appropriate scrollback lines for a terminal type based on the user's
- * base scrollback setting. Agent terminals get full base, shells get 20%,
- * and dev servers get 5%, all clamped to type-specific min/max limits.
+ * base scrollback setting. Agent terminals get full base, standard terminals get 20%,
+ * all clamped to type-specific min/max limits.
  */
 export function getScrollbackForType(type: TerminalType, baseScrollback: number): number {
-  const policy = SCROLLBACK_POLICIES[type];
+  const policy = SCROLLBACK_POLICIES[type] || SCROLLBACK_POLICIES.terminal;
 
   // Handle unlimited (0) or default (1000) by using maxLines for the type
   if (baseScrollback === 0 || baseScrollback === 1000) {
@@ -58,17 +51,7 @@ export function estimateMemoryUsage(
   const perType = {} as Record<TerminalType, number>;
   let total = 0;
 
-  const allTypes: TerminalType[] = [
-    "claude",
-    "gemini",
-    "codex",
-    "custom",
-    "shell",
-    "npm",
-    "yarn",
-    "pnpm",
-    "bun",
-  ];
+  const allTypes: TerminalType[] = ["claude", "gemini", "codex", "terminal"];
 
   for (const type of allTypes) {
     const count = terminalCounts[type] ?? 0;
@@ -105,13 +88,8 @@ export function getScrollbackSummary(
     claude: "Claude",
     gemini: "Gemini",
     codex: "Codex",
-    custom: "Custom",
-    shell: "Shell",
-    npm: "NPM",
-    yarn: "Yarn",
-    pnpm: "PNPM",
-    bun: "Bun",
+    terminal: "Terminal",
   };
 
-  return { limit, label: labels[type] };
+  return { limit, label: labels[type] || "Terminal" };
 }

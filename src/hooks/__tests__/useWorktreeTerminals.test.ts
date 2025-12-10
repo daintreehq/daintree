@@ -58,7 +58,7 @@ describe("useWorktreeTerminals logic", () => {
       {
         id: "term-1",
         worktreeId: "worktree-1",
-        type: "shell",
+        type: "terminal",
         title: "Shell 1",
         cwd: "/path/1",
         cols: 80,
@@ -68,7 +68,7 @@ describe("useWorktreeTerminals logic", () => {
       {
         id: "term-2",
         worktreeId: "worktree-2",
-        type: "shell",
+        type: "terminal",
         title: "Shell 2",
         cwd: "/path/2",
         cols: 80,
@@ -99,7 +99,7 @@ describe("useWorktreeTerminals logic", () => {
       {
         id: "term-1",
         worktreeId: "worktree-1",
-        type: "shell",
+        type: "terminal",
         title: "Shell",
         cwd: "/path/1",
         cols: 80,
@@ -110,7 +110,7 @@ describe("useWorktreeTerminals logic", () => {
       {
         id: "term-2",
         worktreeId: "worktree-1",
-        type: "shell",
+        type: "terminal",
         title: "Shell 2",
         cwd: "/path/1",
         cols: 80,
@@ -190,7 +190,7 @@ describe("useWorktreeTerminals logic", () => {
     const terminals: TerminalInstance[] = [
       {
         id: "term-1",
-        type: "shell",
+        type: "terminal",
         title: "Shell",
         cwd: "/path/1",
         cols: 80,
@@ -201,7 +201,7 @@ describe("useWorktreeTerminals logic", () => {
       {
         id: "term-2",
         worktreeId: "worktree-1",
-        type: "shell",
+        type: "terminal",
         title: "Shell 2",
         cwd: "/path/1",
         cols: 80,
@@ -233,7 +233,7 @@ describe("useWorktreeTerminals logic", () => {
       {
         id: "term-2",
         worktreeId: "worktree-1",
-        type: "shell",
+        type: "terminal",
         title: "Shell",
         cwd: "/path/1",
         cols: 80,
@@ -267,7 +267,7 @@ describe("useWorktreeTerminals logic", () => {
       {
         id: "term-1",
         worktreeId: "worktree-1",
-        type: "shell",
+        type: "terminal",
         title: "Shell",
         cwd: "/path/1",
         cols: 80,
@@ -278,7 +278,7 @@ describe("useWorktreeTerminals logic", () => {
       {
         id: "term-2",
         worktreeId: "worktree-1",
-        type: "shell",
+        type: "terminal",
         title: "Shell 2",
         cwd: "/path/1",
         cols: 80,

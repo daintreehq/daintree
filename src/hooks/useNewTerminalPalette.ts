@@ -3,12 +3,11 @@ import { getLaunchOptions, type LaunchOption } from "@/components/TerminalPalett
 import type { LaunchAgentOptions } from "./useAgentLauncher";
 import { useWorktreeSelectionStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
-import { useTerminalStore } from "@/store/terminalStore";
 import type { WorktreeState } from "@/types";
 
 interface UseNewTerminalPaletteProps {
   launchAgent: (
-    type: "claude" | "gemini" | "codex" | "shell",
+    type: "claude" | "gemini" | "codex" | "terminal",
     options?: LaunchAgentOptions
   ) => Promise<string | null>;
   worktreeMap: Map<string, WorktreeState>;
@@ -21,7 +20,6 @@ export function useNewTerminalPalette({ launchAgent, worktreeMap }: UseNewTermin
 
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const currentProject = useProjectStore((state) => state.currentProject);
-  const addTerminal = useTerminalStore((state) => state.addTerminal);
 
   const options = useMemo(() => getLaunchOptions(), []);
 
@@ -64,45 +62,24 @@ export function useNewTerminalPalette({ launchAgent, worktreeMap }: UseNewTermin
       const cwd = targetWorktree?.path ?? currentProject?.path ?? "";
 
       try {
-        if (option.type === "custom") {
-          await addTerminal({
-            type: "custom",
-            cwd,
-            worktreeId: targetWorktreeId || undefined,
-            location: "grid",
-          });
-        } else if (
-          option.type === "claude" ||
-          option.type === "gemini" ||
-          option.type === "codex" ||
-          option.type === "shell"
-        ) {
-          await launchAgent(option.type, {
-            worktreeId: targetWorktreeId || undefined,
-            cwd,
-            location: "grid",
-          });
-        } else {
-          console.warn(`Unsupported terminal type: ${option.type}`);
-          return;
-        }
+        await launchAgent(option.type, {
+          worktreeId: targetWorktreeId || undefined,
+          cwd,
+          location: "grid",
+        });
         close();
       } catch (error) {
         console.error(`Failed to launch ${option.type} terminal:`, error);
       }
     },
-    [activeWorktreeId, worktreeMap, currentProject, launchAgent, addTerminal, close]
+    [activeWorktreeId, worktreeMap, currentProject, launchAgent, close]
   );
-
-  const customOption = useMemo(() => options.find((opt) => opt.type === "custom"), [options]);
 
   const confirmSelection = useCallback(() => {
     if (filteredOptions.length > 0 && selectedIndex < filteredOptions.length) {
       handleSelect(filteredOptions[selectedIndex]);
-    } else if (filteredOptions.length === 0 && query.trim() && customOption) {
-      handleSelect(customOption);
     }
-  }, [filteredOptions, selectedIndex, handleSelect, query, customOption]);
+  }, [filteredOptions, selectedIndex, handleSelect]);
 
   return {
     isOpen,
@@ -116,6 +93,5 @@ export function useNewTerminalPalette({ launchAgent, worktreeMap }: UseNewTermin
     selectPrevious,
     handleSelect,
     confirmSelection,
-    hasCustomOption: Boolean(customOption),
   };
 }

@@ -1,57 +1,20 @@
 import type { TerminalType } from "@/types";
 
 export function isAgentTerminal(type: TerminalType): boolean {
-  return type === "claude" || type === "gemini" || type === "codex" || type === "custom";
-}
-
-export function hasAgentDefaults(type: TerminalType): boolean {
   return type === "claude" || type === "gemini" || type === "codex";
 }
 
-export function detectTerminalTypeFromCommand(command: string): TerminalType {
-  if (!command) return "custom";
-
-  // Normalize: lowercase and trim
-  const normalizedCommand = command.toLowerCase().trim();
-
-  const match = /\b(npm|npx|yarn|pnpm|pnpx|bun|bunx)\b/.exec(normalizedCommand);
-
-  if (match) {
-    const pm = match[1];
-    if (pm === "npm" || pm === "npx") return "npm";
-    if (pm === "yarn") return "yarn";
-    if (pm === "pnpm" || pm === "pnpx") return "pnpm";
-    if (pm === "bun" || pm === "bunx") return "bun";
-  }
-
-  return "custom";
+export function hasAgentDefaults(type: TerminalType): boolean {
+  return isAgentTerminal(type);
 }
 
-export function detectTerminalTypeFromRunCommand(icon?: string, command?: string): TerminalType {
-  // If we have a command, use command-based detection for more accuracy
-  if (command) {
-    const detected = detectTerminalTypeFromCommand(command);
-    if (detected !== "custom") {
-      return detected;
-    }
-  }
+export function detectTerminalTypeFromCommand(_command: string): TerminalType {
+  return "terminal";
+}
 
-  switch (icon) {
-    case "npm":
-    case "npx":
-      return "npm";
-    case "yarn":
-      return "yarn";
-    case "pnpm":
-    case "pnpx":
-      return "pnpm";
-    case "bun":
-    case "bunx":
-      return "bun";
-    case "python":
-    case "php":
-    case "terminal":
-    default:
-      return "custom";
-  }
+export function detectTerminalTypeFromRunCommand(
+  _icon?: string,
+  _command?: string
+): TerminalType {
+  return "terminal";
 }

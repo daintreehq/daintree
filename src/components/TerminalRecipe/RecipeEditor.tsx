@@ -13,14 +13,13 @@ interface RecipeEditorProps {
   onSave?: (recipe: TerminalRecipe) => void;
 }
 
-const TERMINAL_TYPES: RecipeTerminalType[] = ["shell", "claude", "gemini", "codex", "custom"];
+const TERMINAL_TYPES: RecipeTerminalType[] = ["terminal", "claude", "gemini", "codex"];
 
 const TYPE_LABELS: Record<RecipeTerminalType, string> = {
-  shell: "Shell",
+  terminal: "Terminal",
   claude: "Claude",
   gemini: "Gemini",
   codex: "Codex",
-  custom: "Custom",
 };
 
 export function RecipeEditor({
@@ -36,7 +35,7 @@ export function RecipeEditor({
 
   const [recipeName, setRecipeName] = useState("");
   const [terminals, setTerminals] = useState<RecipeTerminal[]>([
-    { type: "shell", title: "", command: "", env: {} },
+    { type: "terminal", title: "", command: "", env: {} },
   ]);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -51,7 +50,7 @@ export function RecipeEditor({
       setTerminals(initialTerminals.map((t) => ({ ...t })));
     } else {
       setRecipeName("");
-      setTerminals([{ type: "shell", title: "", command: "", env: {} }]);
+      setTerminals([{ type: "terminal", title: "", command: "", env: {} }]);
     }
     setError(null);
   }, [recipe, initialTerminals, isOpen]);
@@ -67,7 +66,7 @@ export function RecipeEditor({
       setError("Maximum of 10 terminals per recipe");
       return;
     }
-    setTerminals([...terminals, { type: "shell", title: "", command: "", env: {} }]);
+    setTerminals([...terminals, { type: "terminal", title: "", command: "", env: {} }]);
   };
 
   const handleRemoveTerminal = (index: number) => {
@@ -215,7 +214,7 @@ export function RecipeEditor({
                   </div>
                 </div>
 
-                {terminal.type === "custom" && (
+                {terminal.type === "terminal" && (
                   <div className="mt-2">
                     <label className="block text-xs font-medium text-canopy-text mb-1">
                       Command (optional)

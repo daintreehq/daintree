@@ -13,12 +13,7 @@ const AGENT_FORMAT_MAP: Record<TerminalType, CopyTreeFormat> = {
   claude: "xml",
   gemini: "markdown",
   codex: "xml",
-  npm: "xml",
-  yarn: "xml",
-  pnpm: "xml",
-  bun: "xml",
-  shell: "xml",
-  custom: "xml",
+  terminal: "xml",
 };
 
 function getOptimalFormat(terminalType: TerminalType): CopyTreeFormat {

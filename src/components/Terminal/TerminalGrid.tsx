@@ -32,7 +32,7 @@ import type { CliAvailability } from "@shared/types";
 export interface TerminalGridProps {
   className?: string;
   defaultCwd?: string;
-  onLaunchAgent?: (type: "claude" | "gemini" | "codex" | "shell") => Promise<void> | void;
+  onLaunchAgent?: (type: "claude" | "gemini" | "codex" | "terminal") => Promise<void> | void;
   agentAvailability?: CliAvailability;
   isCheckingAvailability?: boolean;
   onOpenSettings?: () => void;
@@ -126,7 +126,7 @@ function EmptyState({
   isCheckingAvailability,
   onOpenSettings,
 }: {
-  onLaunchAgent: (type: "claude" | "gemini" | "codex" | "shell") => void;
+  onLaunchAgent: (type: "claude" | "gemini" | "codex" | "terminal") => void;
   hasActiveWorktree: boolean;
   agentAvailability?: CliAvailability;
   isCheckingAvailability?: boolean;
@@ -140,7 +140,7 @@ function EmptyState({
       });
   };
 
-  const handleAgentClick = (type: "claude" | "gemini" | "codex" | "shell") => {
+  const handleAgentClick = (type: "claude" | "gemini" | "codex" | "terminal") => {
     if (!hasActiveWorktree) {
       console.warn("Cannot launch agent: no active worktree");
       return;
@@ -213,7 +213,7 @@ function EmptyState({
             title="Terminal"
             description="Direct terminal access."
             icon={<Terminal className="h-5 w-5" />}
-            onClick={() => handleAgentClick("shell")}
+            onClick={() => handleAgentClick("terminal")}
             available={true}
             isLoading={false}
           />
@@ -331,7 +331,7 @@ export function TerminalGrid({
   }, [gridTerminals.length, layoutConfig, gridWidth, showPlaceholder]);
 
   const handleLaunchAgent = useCallback(
-    async (type: "claude" | "gemini" | "codex" | "shell") => {
+    async (type: "claude" | "gemini" | "codex" | "terminal") => {
       if (onLaunchAgent) {
         try {
           await onLaunchAgent(type);
@@ -343,7 +343,7 @@ export function TerminalGrid({
 
       try {
         const cwd = defaultCwd || "";
-        const command = type !== "shell" ? type : undefined;
+        const command = type !== "terminal" ? type : undefined;
         await addTerminal({ type, cwd, command });
       } catch (error) {
         console.error(`Failed to launch ${type}:`, error);

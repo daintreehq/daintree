@@ -83,12 +83,7 @@ export const SCROLLBACK_BY_TYPE: Record<TerminalType, number> = {
   claude: 10000,
   gemini: 10000,
   codex: 10000,
-  custom: 10000,
-  shell: 2000,
-  npm: 500,
-  yarn: 500,
-  pnpm: 500,
-  bun: 500,
+  terminal: 2000,
 };
 export const DEFAULT_SCROLLBACK = 1000;
 

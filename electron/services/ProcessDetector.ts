@@ -167,7 +167,7 @@ export class ProcessDetector {
     terminalId: string,
     ptyPid: number,
     callback: DetectionCallback,
-    pollInterval: number = 3000
+    pollInterval: number = 1000
   ) {
     this.terminalId = terminalId;
     this.ptyPid = ptyPid;
@@ -294,9 +294,20 @@ export class ProcessDetector {
           .map((line) => line.trim())
           .filter((line) => line.length > 0)
           .forEach((line) => {
-            // Format: "<pid> <comm> <command...>"
-            const match = line.match(/^(\d+)\s+(\S+)\s+(.+)$/);
-            const pid = match ? Number.parseInt(match[1], 10) : NaN;
+            // Robust parsing:
+            // 1. Extract PID (first digits)
+            // 2. Extract COMM (next non-whitespace token, might be path)
+            // 3. Everything else is COMMAND
+
+                        // Match: Start, Optional Space, Digits (PID), Spaces, Non-Spaces (COMM), Spaces, Rest (COMMAND)
+
+                        // Fix: Added \s* at start to handle padded PIDs from ps
+
+                        const match = line.match(/^\s*(\d+)\s+(\S+)\s+(.*)$/);
+
+            
+
+                        const pid = match ? Number.parseInt(match[1], 10) : NaN;
             if (!Number.isInteger(pid) || pid <= 0) return;
 
             const name = match ? match[2] : "";
@@ -305,7 +316,8 @@ export class ProcessDetector {
             byPid.set(pid, {
               pid,
               name: name || String(pid),
-              command: command || undefined,
+              // If command is empty, fallback to name
+              command: command || name || undefined,
             });
           });
 

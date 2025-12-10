@@ -591,6 +591,7 @@ export type CanopyEventMap = {
     confidence: number;
     timestamp: number;
     worktreeId?: string;
+    lastCommand?: string;
   };
 
   /**

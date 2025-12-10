@@ -261,7 +261,7 @@ function TerminalPaneComponent({
       role="group"
       aria-label={(() => {
         switch (type) {
-          case "shell":
+          case "terminal":
             return `Terminal: ${title}`;
           case "claude":
             return `Claude agent: ${title}`;
@@ -269,14 +269,6 @@ function TerminalPaneComponent({
             return `Gemini agent: ${title}`;
           case "codex":
             return `Codex agent: ${title}`;
-          case "npm":
-            return `NPM runner: ${title}`;
-          case "yarn":
-            return `Yarn runner: ${title}`;
-          case "pnpm":
-            return `PNPM runner: ${title}`;
-          case "bun":
-            return `Bun runner: ${title}`;
           default:
             return `${type} session: ${title}`;
         }

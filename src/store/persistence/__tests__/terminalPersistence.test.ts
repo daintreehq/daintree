@@ -4,7 +4,7 @@ import type { TerminalInstance, TerminalState } from "@/types";
 
 const createMockTerminal = (overrides: Partial<TerminalInstance> = {}): TerminalInstance => ({
   id: "test-1",
-  type: "shell",
+  type: "terminal",
   title: "Test Terminal",
   cwd: "/test/path",
   cols: 80,
@@ -129,7 +129,7 @@ describe("TerminalPersistence", () => {
         filter: (t) => t.type === "claude",
       });
 
-      const shellTerminal = createMockTerminal({ id: "shell-1", type: "shell" });
+      const shellTerminal = createMockTerminal({ id: "shell-1", type: "terminal" });
       const claudeTerminal = createMockTerminal({ id: "claude-1", type: "claude" });
 
       persistence.save([shellTerminal, claudeTerminal]);
@@ -158,7 +158,7 @@ describe("TerminalPersistence", () => {
       await vi.advanceTimersByTimeAsync(100);
 
       expect(client.setState).toHaveBeenCalledWith({
-        terminals: [{ id: "test-1", type: "shell", title: "Custom", cwd: "/custom/path" }],
+        terminals: [{ id: "test-1", type: "terminal", title: "Custom", cwd: "/custom/path" }],
       });
     });
 

@@ -1,30 +1,13 @@
 import { create, type StateCreator } from "zustand";
-import type { TerminalRecipe, RecipeTerminal, RecipeTerminalType } from "@/types";
+import type { TerminalRecipe, RecipeTerminal } from "@/types";
 import { useTerminalStore, type TerminalInstance } from "./terminalStore";
 import { appClient } from "@/clients";
 
-const PACKAGE_MANAGERS = ["npm", "yarn", "pnpm", "bun"] as const;
-
 function terminalToRecipeTerminal(terminal: TerminalInstance): RecipeTerminal {
-  const isPackageManager = PACKAGE_MANAGERS.includes(
-    terminal.type as (typeof PACKAGE_MANAGERS)[number]
-  );
-
-  let type: RecipeTerminalType;
-  if (isPackageManager) {
-    type = "custom";
-  } else if (["shell", "claude", "gemini", "codex", "custom"].includes(terminal.type)) {
-    type = terminal.type as RecipeTerminalType;
-  } else {
-    type = "custom";
-  }
-
-  const command = terminal.command;
-
   return {
-    type,
+    type: terminal.type,
     title: terminal.title || undefined,
-    command: command || undefined,
+    command: terminal.command || undefined,
     env: {},
   };
 }
@@ -225,7 +208,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       throw new Error(`Recipe cannot exceed ${MAX_TERMINALS_PER_RECIPE} terminals`);
     }
 
-    const ALLOWED_TYPES = ["shell", "claude", "gemini", "codex", "custom"];
+    const ALLOWED_TYPES = ["terminal", "claude", "gemini", "codex"];
     const sanitizedTerminals = recipe.terminals
       .filter((terminal) => {
         if (!ALLOWED_TYPES.includes(terminal.type)) return false;

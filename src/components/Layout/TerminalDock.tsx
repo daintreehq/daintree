@@ -29,7 +29,7 @@ const AGENT_OPTIONS = [
   { type: "claude" as const, label: "Claude", Icon: ClaudeIcon },
   { type: "gemini" as const, label: "Gemini", Icon: GeminiIcon },
   { type: "codex" as const, label: "Codex", Icon: CodexIcon },
-  { type: "shell" as const, label: "Terminal", Icon: Terminal },
+  { type: "terminal" as const, label: "Terminal", Icon: Terminal },
 ];
 
 export function TerminalDock() {
@@ -188,7 +188,7 @@ export function TerminalDock() {
             <Icon
               className="w-4 h-4"
               style={
-                type !== "shell" ? { color: getBrandColorHex(type as TerminalType) } : undefined
+                type !== "terminal" ? { color: getBrandColorHex(type as TerminalType) } : undefined
               }
             />
             <span>New {label}</span>

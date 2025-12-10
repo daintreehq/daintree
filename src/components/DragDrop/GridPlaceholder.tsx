@@ -1,15 +1,7 @@
-import { Terminal, Command } from "lucide-react";
+import { Terminal } from "lucide-react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import {
-  ClaudeIcon,
-  GeminiIcon,
-  CodexIcon,
-  NpmIcon,
-  YarnIcon,
-  PnpmIcon,
-  BunIcon,
-} from "@/components/icons";
+import { ClaudeIcon, GeminiIcon, CodexIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { useDndPlaceholder, GRID_PLACEHOLDER_ID } from "./DndProvider";
@@ -34,17 +26,7 @@ function getPlaceholderIcon(type: TerminalType) {
       return <GeminiIcon {...customProps} />;
     case "codex":
       return <CodexIcon {...customProps} />;
-    case "npm":
-      return <NpmIcon {...props} />;
-    case "yarn":
-      return <YarnIcon {...props} />;
-    case "pnpm":
-      return <PnpmIcon {...props} />;
-    case "bun":
-      return <BunIcon {...props} />;
-    case "custom":
-      return <Command {...props} />;
-    case "shell":
+    case "terminal":
     default:
       return <Terminal {...props} />;
   }

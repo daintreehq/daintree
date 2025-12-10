@@ -105,10 +105,7 @@ export class TerminalProcess {
     const spawnedAt = Date.now();
 
     this.isAgentTerminal =
-      options.type === "claude" ||
-      options.type === "gemini" ||
-      options.type === "codex" ||
-      options.type === "custom";
+      options.type === "claude" || options.type === "gemini" || options.type === "codex";
     const agentId = this.isAgentTerminal ? id : undefined;
 
     // Merge environment
@@ -686,17 +683,12 @@ export class TerminalProcess {
         terminal.detectedAgentType = result.agentType;
         terminal.type = result.agentType;
 
-        if (!terminal.title || terminal.title === previousType || terminal.title === "Shell") {
+        if (!terminal.title || terminal.title === previousType || terminal.title === "Terminal") {
           const agentNames: Record<TerminalType, string> = {
             claude: "Claude",
             gemini: "Gemini",
             codex: "Codex",
-            shell: "Shell",
-            custom: "Custom",
-            npm: "NPM",
-            yarn: "Yarn",
-            pnpm: "PNPM",
-            bun: "Bun",
+            terminal: "Terminal",
           };
           terminal.title = agentNames[result.agentType];
         }
@@ -711,8 +703,8 @@ export class TerminalProcess {
     } else if (!result.detected && terminal.detectedAgentType) {
       const previousType = terminal.detectedAgentType;
       terminal.detectedAgentType = undefined;
-      terminal.type = "shell";
-      terminal.title = "Shell";
+      terminal.type = "terminal";
+      terminal.title = "Terminal";
 
       events.emit("agent:exited", {
         terminalId: this.id,
@@ -721,17 +713,20 @@ export class TerminalProcess {
       });
     }
 
-    // Handle busy/idle for shell terminals - emit full activity payload
-    if (!terminal.agentId && result.isBusy !== undefined) {
-      // Prefer process-based current command, fall back to semantic buffer heuristic
+    // Handle busy/idle for shell terminals
+    if (!terminal.agentId) {
+      // 1. Trust the process detector's command first.
+      // 2. Fallback to semantic buffer heuristic if process detection found activity but no name.
       const lastCommand = result.currentCommand || this.getLastCommand();
+
       const { headline, status, type } = this.headlineGenerator.generate({
         terminalId: this.id,
         terminalType: terminal.type,
         activity: result.isBusy ? "busy" : "idle",
-        lastCommand,
+        lastCommand, // Pass the detected command to the generator
       });
 
+      // EMIT ACTIVITY EVENT
       events.emit("terminal:activity", {
         terminalId: this.id,
         headline,
@@ -740,19 +735,21 @@ export class TerminalProcess {
         confidence: 1.0,
         timestamp: Date.now(),
         worktreeId: this.options.worktreeId,
-        lastCommand,
+        lastCommand, // Important: This populates the pill in the UI
       });
 
-      // Update pseudo-agent state for shells to reflect "running" status
-      // This allows shells to show up as active in the UI without being "working" (AI)
+      // UPDATE STATE
+      // Map isBusy -> 'running' | 'idle'
       const newState = result.isBusy ? "running" : "idle";
+
       if (terminal.agentState !== newState) {
         const previousState = terminal.agentState || "idle";
         terminal.agentState = newState;
         terminal.lastStateChange = Date.now();
 
+        // Emit state change to update the icon spin state
         const stateChangePayload = {
-          agentId: this.id, // Use terminal ID as agentId for shells
+          agentId: this.id,
           terminalId: this.id,
           state: newState,
           previousState,
@@ -762,6 +759,7 @@ export class TerminalProcess {
           worktreeId: this.options.worktreeId,
         };
 
+        // Validated emit
         const validated = AgentStateChangedSchema.safeParse(stateChangePayload);
         if (validated.success) {
           events.emit("agent:state-changed", validated.data);
@@ -794,7 +792,8 @@ export class TerminalProcess {
       if (
         line.length > 0 &&
         line.match(
-          /^(npm|yarn|pnpm|bun|git|docker|node|python|python3|pip|cargo|go|make|curl|wget|tsc|eslint|prettier|jest|vitest|mocha)/i
+          // Added 'sleep', 'echo', 'cat', 'ls', 'cd', 'pwd', 'grep' for better interactivity feedback
+          /^(npm|yarn|pnpm|bun|git|docker|node|python|python3|pip|cargo|go|make|curl|wget|tsc|eslint|prettier|jest|vitest|mocha|sleep|echo|cat|ls|cd|pwd|grep)/i
         )
       ) {
         return line;

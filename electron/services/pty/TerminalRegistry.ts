@@ -164,7 +164,7 @@ export class TerminalRegistry {
 
     const terminalTypes = projectTerminals.reduce(
       (acc, t) => {
-        const type = t.type || "shell";
+        const type = t.type || "terminal";
         acc[type] = (acc[type] || 0) + 1;
         return acc;
       },

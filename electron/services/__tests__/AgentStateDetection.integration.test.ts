@@ -162,7 +162,7 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
     }, 10000);
 
     it("should handle state transitions for shell terminals", async () => {
-      const id = await spawnShellTerminal(manager, { type: "shell" });
+      const id = await spawnShellTerminal(manager, { type: "terminal" });
       await sleep(500);
 
       const statePromise = waitForAgentStateChange(manager, id, 2000);

@@ -17,15 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useTerminalStore } from "@/store/terminalStore";
-import {
-  ClaudeIcon,
-  GeminiIcon,
-  CodexIcon,
-  NpmIcon,
-  YarnIcon,
-  PnpmIcon,
-  BunIcon,
-} from "@/components/icons";
+import { ClaudeIcon, GeminiIcon, CodexIcon } from "@/components/icons";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { cn } from "@/lib/utils";
 
@@ -77,14 +69,7 @@ function getTerminalIcon(type: TerminalType) {
       return <GeminiIcon className={className} brandColor={brandColor} />;
     case "codex":
       return <CodexIcon className={className} brandColor={brandColor} />;
-    case "npm":
-      return <NpmIcon className={className} />;
-    case "yarn":
-      return <YarnIcon className={className} />;
-    case "pnpm":
-      return <PnpmIcon className={className} />;
-    case "bun":
-      return <BunIcon className={className} />;
+    case "terminal":
     default:
       return <TerminalSquare className={className} />;
   }

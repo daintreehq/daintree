@@ -42,7 +42,7 @@ const { useTerminalStore } = await import("../../terminalStore");
 function createMockTerminal(id: string, location: "grid" | "dock" | "trash" = "grid"): any {
   return {
     id,
-    type: "shell",
+    type: "terminal",
     title: `Terminal ${id}`,
     cwd: "/test",
     cols: 80,
