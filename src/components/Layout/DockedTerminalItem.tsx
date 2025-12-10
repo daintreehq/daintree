@@ -217,6 +217,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
         align="start"
         sideOffset={8}
         collisionPadding={collisionPadding}
+        onEscapeKeyDown={(e) => e.preventDefault()}
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           // Small delay to ensure xterm is fully mounted before focusing
