@@ -1,6 +1,6 @@
 import { BrowserWindow } from "electron";
 import PQueue from "p-queue";
-import { execSync } from "child_process";
+
 import { mkdir, writeFile, stat } from "fs/promises";
 import { join as pathJoin, dirname } from "path";
 import { WorktreeMonitor, type WorktreeState } from "./WorktreeMonitor.js";
@@ -410,7 +410,6 @@ export class WorktreeService {
       logInfo("WorktreeService polling enabled");
     }
   }
-
 
   /**
    * Stop all monitors and clean up resources.

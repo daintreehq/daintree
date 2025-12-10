@@ -247,7 +247,7 @@ class WorkspaceHost {
         this.stopMonitor(monitor);
         this.monitors.delete(id);
         sendEvent({ type: "worktree-removed", worktreeId: id });
-        events.emit("sys:worktree:remove", { worktreeId: id });
+        events.emit("sys:worktree:remove", { worktreeId: id, timestamp: Date.now() });
       }
     }
 
@@ -568,11 +568,7 @@ class WorkspaceHost {
 
     sendEvent({ type: "worktree-update", worktree: snapshot });
 
-    events.emit("sys:worktree:update", {
-      worktreeId: monitor.id,
-      branch: monitor.branch,
-      issueNumber: monitor.issueNumber,
-    });
+    events.emit("sys:worktree:update", snapshot as any);
   }
 
   getAllStates(requestId: string): void {
@@ -917,6 +913,40 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     }
   }
 
+  getPRStatus(requestId: string): void {
+    const status = pullRequestService.getStatus();
+    const prStatus: PRServiceStatus = {
+      isRunning: status.isPolling,
+      candidateCount: status.candidateCount,
+      resolvedPRCount: status.resolvedCount,
+      lastCheckTime: undefined,
+      circuitBreakerTripped: !status.isEnabled,
+    };
+    sendEvent({ type: "get-pr-status-result", requestId, status: prStatus });
+  }
+
+  resetPRState(requestId: string): void {
+    pullRequestService.reset();
+    if (this.projectRootPath) {
+      pullRequestService.initialize(this.projectRootPath);
+      pullRequestService.start();
+    }
+    sendEvent({ type: "reset-pr-state-result", requestId, success: true });
+  }
+
+  updateGitHubToken(token: string | null): void {
+    GitHubAuth.setMemoryToken(token);
+    if (token) {
+      pullRequestService.refresh();
+    } else {
+      pullRequestService.reset();
+      if (this.projectRootPath) {
+        pullRequestService.initialize(this.projectRootPath);
+        pullRequestService.start();
+      }
+    }
+  }
+
   private initializePRService(): void {
     if (!this.projectRootPath) {
       return;
@@ -1074,26 +1104,12 @@ port.on("message", async (rawMsg: any) => {
         }
         break;
 
-      case "get-pr-status": {
-        const status = pullRequestService.getStatus();
-        const prStatus: PRServiceStatus = {
-          isRunning: status.isPolling,
-          candidateCount: status.candidateCount,
-          resolvedPRCount: status.resolvedCount,
-          lastCheckTime: undefined,
-          circuitBreakerTripped: !status.isEnabled,
-        };
-        sendEvent({ type: "get-pr-status-result", requestId: request.requestId, status: prStatus });
+      case "get-pr-status":
+        workspaceHost.getPRStatus(request.requestId);
         break;
-      }
 
       case "reset-pr-state":
-        pullRequestService.reset();
-        if (this.projectRootPath) {
-          pullRequestService.initialize(this.projectRootPath);
-          pullRequestService.start();
-        }
-        sendEvent({ type: "reset-pr-state-result", requestId: request.requestId, success: true });
+        workspaceHost.resetPRState(request.requestId);
         break;
 
       case "create-worktree":
@@ -1189,19 +1205,9 @@ port.on("message", async (rawMsg: any) => {
         break;
       }
 
-      case "update-github-token": {
-        GitHubAuth.setMemoryToken(request.token);
-        if (request.token) {
-          pullRequestService.refresh();
-        } else {
-          pullRequestService.reset();
-          if (this.projectRootPath) {
-            pullRequestService.initialize(this.projectRootPath);
-            pullRequestService.start();
-          }
-        }
+      case "update-github-token":
+        workspaceHost.updateGitHubToken(request.token);
         break;
-      }
 
       default:
         console.warn("[WorkspaceHost] Unknown message type:", (msg as { type: string }).type);

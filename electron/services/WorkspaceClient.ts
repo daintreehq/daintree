@@ -478,7 +478,9 @@ export class WorkspaceClient extends EventEmitter {
     });
   }
 
-  async getPRStatus(): Promise<import("../../shared/types/workspace-host.js").PRServiceStatus | null> {
+  async getPRStatus(): Promise<
+    import("../../shared/types/workspace-host.js").PRServiceStatus | null
+  > {
     const requestId = this.generateRequestId();
 
     const result = await this.sendWithResponse<{
