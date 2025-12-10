@@ -48,12 +48,7 @@ export function SidecarIcon({ icon, size = "launchpad", url, type }: SidecarIcon
       const domain = new URL(url).hostname;
       const faviconUrl = `https://www.google.com/s2/favicons?domain=${domain}&sz=64`;
       return (
-        <img
-          src={faviconUrl}
-          alt=""
-          className={iconClass}
-          onError={() => setShowFallback(true)}
-        />
+        <img src={faviconUrl} alt="" className={iconClass} onError={() => setShowFallback(true)} />
       );
     } catch {
       return <Globe className={iconClass} />;

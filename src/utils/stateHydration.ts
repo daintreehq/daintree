@@ -125,7 +125,8 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
               // Add to UI without spawning new process, preserving agent state and command
               const currentAgentState = reconnectResult.agentState as AgentState | undefined;
               // Get effective agentId - handles migration from type-based to agentId-based system
-              const agentId = terminal.agentId ?? (isRegisteredAgent(terminal.type) ? terminal.type : undefined);
+              const agentId =
+                terminal.agentId ?? (isRegisteredAgent(terminal.type) ? terminal.type : undefined);
               await addTerminal({
                 type: terminal.type,
                 agentId,

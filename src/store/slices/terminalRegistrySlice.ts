@@ -754,7 +754,8 @@ export const createTerminalRegistrySlice =
       // For other terminals, use the saved command
       let commandToRun = currentTerminal.command;
       // Get effective agentId - handles both new agentId and legacy type-based detection
-      const effectiveAgentId = currentTerminal.agentId ??
+      const effectiveAgentId =
+        currentTerminal.agentId ??
         (isRegisteredAgent(currentTerminal.type) ? currentTerminal.type : undefined);
       const isAgent = !!effectiveAgentId;
 

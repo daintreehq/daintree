@@ -133,11 +133,7 @@ export function TerminalCountBadge({
                 {/* LEFT SIDE: Icon + Title */}
                 <div className="flex items-center gap-2.5 min-w-0 flex-1">
                   <div className="shrink-0 opacity-70 group-hover:opacity-100 transition-opacity">
-                    <TerminalIcon
-                      type={term.type}
-                      agentId={term.agentId}
-                      className="w-3.5 h-3.5"
-                    />
+                    <TerminalIcon type={term.type} agentId={term.agentId} className="w-3.5 h-3.5" />
                   </div>
                   <span
                     className={cn(
