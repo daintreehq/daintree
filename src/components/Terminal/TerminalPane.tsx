@@ -178,13 +178,7 @@ function TerminalPaneComponent({
       const results = tracker.process(data);
 
       for (const result of results) {
-        if (result.isClear) {
-          const managed = terminalInstanceService.get(id);
-          if (managed?.terminal) {
-            managed.terminal.clear();
-          }
-        }
-
+        // Let agents handle /clear and /new natively - don't intercept
         if (result.command) {
           updateLastCommand(id, result.command);
         }
