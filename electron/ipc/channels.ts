@@ -89,6 +89,7 @@ export const CHANNELS = {
   APP_SET_STATE: "app:set-state",
   APP_GET_VERSION: "app:get-version",
   APP_HYDRATE: "app:hydrate",
+  MENU_ACTION: "menu:action",
 
   LOGS_GET_ALL: "logs:get-all",
   LOGS_GET_SOURCES: "logs:get-sources",

@@ -175,6 +175,7 @@ const CHANNELS = {
   APP_SET_STATE: "app:set-state",
   APP_GET_VERSION: "app:get-version",
   APP_HYDRATE: "app:hydrate",
+  MENU_ACTION: "menu:action",
 
   // Logs channels
   LOGS_GET_ALL: "logs:get-all",
@@ -482,6 +483,8 @@ const api: ElectronAPI = {
     getVersion: () => _typedInvoke(CHANNELS.APP_GET_VERSION),
 
     hydrate: () => _typedInvoke(CHANNELS.APP_HYDRATE),
+
+    onMenuAction: (callback: (action: string) => void) => _typedOn(CHANNELS.MENU_ACTION, callback),
   },
 
   // Logs API

@@ -55,3 +55,6 @@ export type { UseTerminalActionsOptions, UseTerminalActionsReturn } from "./useT
 
 export { useWorktreeActions } from "./useWorktreeActions";
 export type { UseWorktreeActionsOptions, WorktreeActions } from "./useWorktreeActions";
+
+export { useMenuActions } from "./useMenuActions";
+export type { UseMenuActionsOptions } from "./useMenuActions";

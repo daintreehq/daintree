@@ -1419,6 +1419,9 @@ export interface IpcEventMap {
 
   // System Sleep events
   "system-sleep:on-wake": number;
+
+  // Menu events
+  "menu:action": string;
 }
 
 /**
@@ -1522,6 +1525,7 @@ export interface ElectronAPI {
     setState(partialState: Partial<AppState>): Promise<void>;
     getVersion(): Promise<string>;
     hydrate(): Promise<HydrateResult>;
+    onMenuAction(callback: (action: string) => void): () => void;
   };
   logs: {
     getAll(filters?: LogFilterOptions): Promise<LogEntry[]>;
