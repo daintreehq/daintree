@@ -178,7 +178,21 @@ function TerminalPaneComponent({
       const results = tracker.process(data);
 
       for (const result of results) {
-        // Let agents handle /clear and /new natively - don't intercept
+        // Intercept user-initiated clear commands to provide immediate visual feedback.
+        // This is separate from blocking agent-generated escape sequences (handled by
+        // setupParserHandlers in TerminalInstanceService) which prevent dangerous
+        // screen jumping that could trigger photosensitive epileptic seizures.
+        if (result.isClear) {
+          const managed = terminalInstanceService.get(id);
+          if (managed?.terminal) {
+            try {
+              managed.terminal.clear();
+            } catch (error) {
+              console.warn(`Failed to clear terminal ${id}:`, error);
+            }
+          }
+        }
+
         if (result.command) {
           updateLastCommand(id, result.command);
         }
