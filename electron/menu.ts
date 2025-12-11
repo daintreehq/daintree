@@ -1,9 +1,23 @@
-import { Menu, dialog, BrowserWindow, shell } from "electron";
+import { Menu, dialog, BrowserWindow, shell, app } from "electron";
 import { projectStore } from "./services/ProjectStore.js";
 import { getWorkspaceClient } from "./services/WorkspaceClient.js";
 import { CHANNELS } from "./ipc/channels.js";
 
+app.setAboutPanelOptions({
+  applicationName: "Canopy",
+  applicationVersion: app.getVersion(),
+  version: "Beta",
+  copyright: "© 2025 Canopy Team",
+  website: "https://github.com/gregpriday/canopy-electron",
+});
+
 export function createApplicationMenu(mainWindow: BrowserWindow): void {
+  const sendAction = (action: string) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(CHANNELS.MENU_ACTION, action);
+    }
+  };
+
   const template: Electron.MenuItemConstructorOptions[] = [
     {
       label: "File",
@@ -12,6 +26,7 @@ export function createApplicationMenu(mainWindow: BrowserWindow): void {
           label: "Open Directory...",
           accelerator: "CommandOrControl+O",
           click: async () => {
+            if (mainWindow.isDestroyed()) return;
             const result = await dialog.showOpenDialog(mainWindow, {
               properties: ["openDirectory"],
               title: "Open Git Repository",
@@ -24,8 +39,18 @@ export function createApplicationMenu(mainWindow: BrowserWindow): void {
           },
         },
         {
+          label: "New Worktree...",
+          accelerator: "CommandOrControl+N",
+          click: () => sendAction("new-worktree"),
+        },
+        {
           label: "Open Recent",
           submenu: buildRecentProjectsMenu(mainWindow),
+        },
+        { type: "separator" },
+        {
+          label: "Project Settings",
+          click: () => sendAction("open-settings"),
         },
         { type: "separator" },
         {
@@ -50,6 +75,12 @@ export function createApplicationMenu(mainWindow: BrowserWindow): void {
     {
       label: "View",
       submenu: [
+        {
+          label: "Toggle Sidebar",
+          accelerator: "CommandOrControl+B",
+          click: () => sendAction("toggle-sidebar"),
+        },
+        { type: "separator" },
         { role: "reload" },
         { role: "forceReload" },
         { role: "toggleDevTools" },
@@ -59,6 +90,27 @@ export function createApplicationMenu(mainWindow: BrowserWindow): void {
         { role: "zoomOut" },
         { type: "separator" },
         { role: "togglefullscreen" },
+      ],
+    },
+    {
+      label: "Terminal",
+      submenu: [
+        {
+          label: "New Terminal",
+          accelerator: "CommandOrControl+T",
+          click: () => sendAction("new-terminal"),
+        },
+        {
+          label: "Split Terminal",
+          accelerator: "CommandOrControl+\\",
+          click: () => sendAction("split-terminal"),
+        },
+        { type: "separator" },
+        {
+          label: "Run Agent...",
+          accelerator: "CommandOrControl+Shift+A",
+          click: () => sendAction("open-agent-palette"),
+        },
       ],
     },
     {
@@ -83,6 +135,12 @@ export function createApplicationMenu(mainWindow: BrowserWindow): void {
       label: "Canopy",
       submenu: [
         { role: "about" },
+        { type: "separator" },
+        {
+          label: "Settings...",
+          accelerator: "CommandOrControl+,",
+          click: () => sendAction("open-settings"),
+        },
         { type: "separator" },
         { role: "services" },
         { type: "separator" },
@@ -122,6 +180,8 @@ async function handleDirectoryOpen(
   directoryPath: string,
   mainWindow: BrowserWindow
 ): Promise<void> {
+  if (mainWindow.isDestroyed()) return;
+
   try {
     const project = await projectStore.addProject(directoryPath);
 
@@ -134,7 +194,9 @@ async function handleDirectoryOpen(
 
     await getWorkspaceClient().refresh();
 
-    mainWindow.webContents.send(CHANNELS.PROJECT_ON_SWITCH, updatedProject);
+    if (!mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(CHANNELS.PROJECT_ON_SWITCH, updatedProject);
+    }
 
     createApplicationMenu(mainWindow);
   } catch (error) {

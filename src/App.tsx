@@ -20,6 +20,7 @@ import {
   useGridNavigation,
   useWindowNotifications,
   useWorktreeActions,
+  useMenuActions,
 } from "./hooks";
 import { AppLayout } from "./components/Layout";
 import { TerminalGrid } from "./components/Terminal";
@@ -534,6 +535,18 @@ function App() {
 
   const electronAvailable = isElectronAvailable();
   const { inject } = useContextInjection();
+
+  const handleToggleSidebar = useCallback(() => {
+    window.dispatchEvent(new CustomEvent("canopy:toggle-focus-mode"));
+  }, []);
+
+  useMenuActions({
+    onOpenSettings: handleSettings,
+    onToggleSidebar: handleToggleSidebar,
+    onOpenAgentPalette: terminalPalette.open,
+    defaultCwd: defaultTerminalCwd,
+    activeWorktreeId: activeWorktree?.id,
+  });
 
   useKeybinding("terminal.palette", () => terminalPalette.toggle(), { enabled: electronAvailable });
   useKeybinding("agent.palette", () => terminalPalette.open(), { enabled: electronAvailable });
