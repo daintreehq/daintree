@@ -32,6 +32,19 @@ import { styleUrls } from "./UrlStyler.js";
 const HIGH_WATERMARK_CHARS = 100000;
 const LOW_WATERMARK_CHARS = 5000;
 
+// Bracketed paste mode sequences
+const BRACKETED_PASTE_START = "\x1b[200~";
+const BRACKETED_PASTE_END = "\x1b[201~";
+
+/**
+ * Check if data is a bracketed paste (starts with ESC[200~ and ends with ESC[201~).
+ * Bracketed paste should be sent atomically to preserve paste detection in programs
+ * like Claude Code that show "Pasted X characters" for bulk input.
+ */
+function isBracketedPaste(data: string): boolean {
+  return data.startsWith(BRACKETED_PASTE_START) && data.endsWith(BRACKETED_PASTE_END);
+}
+
 /**
  * Split input into chunks for safe PTY writing.
  * Chunks at max size OR before escape sequences to prevent mid-sequence splits.
@@ -302,6 +315,8 @@ export class TerminalProcess {
 
   /**
    * Write data to terminal stdin with chunking.
+   * Bracketed paste content is sent atomically to preserve paste detection
+   * in programs like Claude Code.
    */
   write(data: string, traceId?: string): void {
     const terminal = this.terminalInfo;
@@ -321,7 +336,20 @@ export class TerminalProcess {
       this.activityMonitor.onInput(data);
     }
 
-    // Chunk input and queue for writing
+    // Bracketed paste: send atomically to preserve paste detection in CLI tools.
+    // Programs like Claude Code use bracketed paste mode to detect bulk input
+    // and show "Pasted X characters" instead of processing each character.
+    // Chunking would break this by making the paste appear as slow typing.
+    if (isBracketedPaste(data)) {
+      try {
+        terminal.ptyProcess.write(data);
+      } catch {
+        // Process may already be dead; swallow write errors
+      }
+      return;
+    }
+
+    // Regular input: chunk to prevent data corruption (VS Code pattern)
     const chunks = chunkInput(data);
     this.inputWriteQueue.push(...chunks);
     this.startWrite();
