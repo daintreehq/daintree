@@ -114,6 +114,7 @@ export interface TerminalRegistrySlice {
   restartTerminal: (id: string) => Promise<void>;
   clearTerminalError: (id: string) => void;
   updateTerminalCwd: (id: string, cwd: string) => void;
+  moveTerminalToWorktree: (id: string, worktreeId: string) => void;
 }
 
 // Flush pending persistence - call on app quit to prevent data loss
@@ -854,6 +855,24 @@ export const createTerminalRegistrySlice =
         const newTerminals = state.terminals.map((t) =>
           t.id === id ? { ...t, cwd, restartError: undefined } : t
         );
+        terminalPersistence.save(newTerminals);
+        return { terminals: newTerminals };
+      });
+    },
+
+    moveTerminalToWorktree: (id, worktreeId) => {
+      set((state) => {
+        const terminal = state.terminals.find((t) => t.id === id);
+        if (!terminal) {
+          console.warn(`Cannot move terminal ${id}: terminal not found`);
+          return state;
+        }
+
+        if (terminal.worktreeId === worktreeId) {
+          return state;
+        }
+
+        const newTerminals = state.terminals.map((t) => (t.id === id ? { ...t, worktreeId } : t));
         terminalPersistence.save(newTerminals);
         return { terminals: newTerminals };
       });

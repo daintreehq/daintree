@@ -6,6 +6,9 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
   ContextMenuShortcut,
+  ContextMenuSub,
+  ContextMenuSubTrigger,
+  ContextMenuSubContent,
 } from "@/components/ui/context-menu";
 import {
   Maximize2,
@@ -18,11 +21,13 @@ import {
   Copy,
   Eraser,
   Info,
+  GitBranch,
 } from "lucide-react";
 import { useTerminalStore } from "@/store";
 import type { TerminalLocation } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalInfoDialog } from "./TerminalInfoDialog";
+import { useWorktrees } from "@/hooks/useWorktrees";
 
 interface TerminalContextMenuProps {
   terminalId: string;
@@ -49,7 +54,9 @@ export function TerminalContextMenu({
   const toggleMaximize = useTerminalStore((s) => s.toggleMaximize);
   const restartTerminal = useTerminalStore((s) => s.restartTerminal);
   const addTerminal = useTerminalStore((s) => s.addTerminal);
+  const moveTerminalToWorktree = useTerminalStore((s) => s.moveTerminalToWorktree);
   const isMaximized = useTerminalStore((s) => s.maximizedId === terminalId);
+  const { worktrees } = useWorktrees();
 
   const handleDuplicate = async () => {
     if (!terminal) return;
@@ -113,6 +120,30 @@ export function TerminalContextMenu({
               </>
             )}
           </ContextMenuItem>
+        )}
+
+        {worktrees.length > 1 && (
+          <ContextMenuSub>
+            <ContextMenuSubTrigger>
+              <GitBranch className="w-4 h-4 mr-2" aria-hidden="true" />
+              Move to Worktree
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent className="w-48">
+              {worktrees.map((wt) => {
+                const isCurrent = wt.id === terminal?.worktreeId;
+                const label = wt.branch || wt.name;
+                return (
+                  <ContextMenuItem
+                    key={wt.id}
+                    onClick={() => moveTerminalToWorktree(terminalId, wt.id)}
+                    disabled={isCurrent}
+                  >
+                    <span className={wt.isMainWorktree ? "font-semibold" : ""}>{label}</span>
+                  </ContextMenuItem>
+                );
+              })}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
         )}
 
         <ContextMenuSeparator />
