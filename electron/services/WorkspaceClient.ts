@@ -422,15 +422,6 @@ export class WorkspaceClient extends EventEmitter {
     });
   }
 
-  getAllStates(): Map<string, WorktreeSnapshot> {
-    // This is synchronous in the original interface but we need async
-    // Return empty map and let caller use getAllStatesAsync
-    console.warn(
-      "[WorkspaceClient] getAllStates called synchronously - use getAllStatesAsync instead"
-    );
-    return new Map();
-  }
-
   async getAllStatesAsync(): Promise<WorktreeSnapshot[]> {
     const requestId = this.generateRequestId();
 
@@ -440,11 +431,6 @@ export class WorkspaceClient extends EventEmitter {
     });
 
     return result.states;
-  }
-
-  getMonitor(_worktreeId: string): undefined {
-    console.warn("[WorkspaceClient] getMonitor called synchronously - use getMonitorAsync instead");
-    return undefined;
   }
 
   async getMonitorAsync(worktreeId: string): Promise<WorktreeSnapshot | null> {
@@ -520,10 +506,6 @@ export class WorkspaceClient extends EventEmitter {
     this.send({ type: "set-polling-enabled", enabled });
   }
 
-  async stopAll(): Promise<void> {
-    // Handled by dispose
-  }
-
   async onProjectSwitch(): Promise<void> {
     const requestId = this.generateRequestId();
 
@@ -533,11 +515,6 @@ export class WorkspaceClient extends EventEmitter {
     });
 
     this.currentRootPath = null;
-  }
-
-  getMonitorCount(): number {
-    // Can't get this synchronously - return 0
-    return 0;
   }
 
   async listBranches(rootPath: string): Promise<BranchInfo[]> {

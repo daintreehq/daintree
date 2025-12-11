@@ -1,9 +1,4 @@
-import type {
-  WorktreeState,
-  CreateWorktreeOptions,
-  BranchInfo,
-  AdaptiveBackoffMetrics,
-} from "@shared/types";
+import type { WorktreeState, CreateWorktreeOptions, BranchInfo } from "@shared/types";
 
 /**
  * @example
@@ -41,22 +36,6 @@ export const worktreeClient = {
 
   getDefaultPath: (rootPath: string, branchName: string): Promise<string> => {
     return window.electron.worktree.getDefaultPath(rootPath, branchName);
-  },
-
-  setAdaptiveBackoffConfig: (
-    enabled: boolean,
-    maxInterval?: number,
-    threshold?: number
-  ): Promise<void> => {
-    return window.electron.worktree.setAdaptiveBackoffConfig(enabled, maxInterval, threshold);
-  },
-
-  isCircuitBreakerTripped: (worktreeId: string): Promise<boolean> => {
-    return window.electron.worktree.isCircuitBreakerTripped(worktreeId);
-  },
-
-  getAdaptiveBackoffMetrics: (worktreeId: string): Promise<AdaptiveBackoffMetrics | null> => {
-    return window.electron.worktree.getAdaptiveBackoffMetrics(worktreeId);
   },
 
   delete: (worktreeId: string, force?: boolean): Promise<void> => {

@@ -10,7 +10,11 @@ import { registerIpcHandlers, sendToRenderer } from "./ipc/handlers.js";
 import { registerErrorHandlers } from "./ipc/errorHandlers.js";
 import { PtyClient, disposePtyClient } from "./services/PtyClient.js";
 import { DevServerManager } from "./services/DevServerManager.js";
-import { WorkspaceClient, disposeWorkspaceClient } from "./services/WorkspaceClient.js";
+import {
+  getWorkspaceClient,
+  disposeWorkspaceClient,
+  WorkspaceClient,
+} from "./services/WorkspaceClient.js";
 import { CliAvailabilityService } from "./services/CliAvailabilityService.js";
 import { SidecarManager } from "./services/SidecarManager.js";
 import { createWindowWithState } from "./windowState.js";
@@ -287,7 +291,7 @@ async function createWindow(): Promise<void> {
     showCrashDialog: true,
   });
 
-  workspaceClient = new WorkspaceClient({
+  workspaceClient = getWorkspaceClient({
     maxRestartAttempts: 3,
     healthCheckIntervalMs: 60000,
     showCrashDialog: true,
@@ -347,7 +351,7 @@ async function createWindow(): Promise<void> {
     console.log("[MAIN] Pty Host restarted, refreshing ports...");
     createAndDistributePorts();
   });
-  workspaceClient.on("host-crash", (code) => {
+  workspaceClient.on("host-crash", (code: number) => {
     console.error(`[MAIN] Workspace Host crashed with code ${code}`);
   });
 

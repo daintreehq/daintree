@@ -8,7 +8,7 @@ import type {
   EventCategory,
 } from "../types/index.js";
 import type { EventContext } from "../../shared/types/events.js";
-import type { WorktreeState } from "./WorktreeMonitor.js";
+import type { WorktreeSnapshot as WorktreeState } from "../../shared/types/workspace-host.js";
 
 export type { EventCategory };
 

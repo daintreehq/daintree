@@ -166,9 +166,6 @@ export interface CopyTreeOptions {
   /** Formatting */
   withLineNumbers?: boolean;
   charLimit?: number;
-
-  /** Profile (load from .copytree file) - legacy option */
-  profile?: string;
 }
 
 export interface CopyTreeGeneratePayload {
@@ -889,18 +886,6 @@ export interface IpcInvokeMap {
     args: [payload: { rootPath: string; branchName: string }];
     result: string;
   };
-  "worktree:set-adaptive-backoff-config": {
-    args: [payload: { enabled: boolean; maxInterval?: number; threshold?: number }];
-    result: void;
-  };
-  "worktree:is-circuit-breaker-tripped": {
-    args: [worktreeId: string];
-    result: boolean;
-  };
-  "worktree:get-adaptive-backoff-metrics": {
-    args: [worktreeId: string];
-    result: AdaptiveBackoffMetrics | null;
-  };
   "worktree:delete": {
     args: [payload: WorktreeDeletePayload];
     result: void;
@@ -1476,13 +1461,6 @@ export interface ElectronAPI {
     create(options: CreateWorktreeOptions, rootPath: string): Promise<void>;
     listBranches(rootPath: string): Promise<BranchInfo[]>;
     getDefaultPath(rootPath: string, branchName: string): Promise<string>;
-    setAdaptiveBackoffConfig(
-      enabled: boolean,
-      maxInterval?: number,
-      threshold?: number
-    ): Promise<void>;
-    isCircuitBreakerTripped(worktreeId: string): Promise<boolean>;
-    getAdaptiveBackoffMetrics(worktreeId: string): Promise<AdaptiveBackoffMetrics | null>;
     delete(worktreeId: string, force?: boolean): Promise<void>;
     onUpdate(callback: (state: WorktreeState) => void): () => void;
     onRemove(callback: (data: { worktreeId: string }) => void): () => void;

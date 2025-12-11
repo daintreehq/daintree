@@ -1,7 +1,7 @@
 import { events } from "./events.js";
 import { batchCheckLinkedPRs, type PRCheckCandidate, type LinkedPR } from "./GitHubService.js";
 import { logInfo, logWarn, logDebug } from "../utils/logger.js";
-import type { WorktreeState } from "./WorktreeMonitor.js";
+import type { WorktreeSnapshot as WorktreeState } from "../../shared/types/workspace-host.js";
 
 const DEFAULT_POLL_INTERVAL_MS = 60 * 1000;
 

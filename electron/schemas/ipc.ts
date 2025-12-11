@@ -58,7 +58,6 @@ export const CopyTreeOptionsSchema = z
     maxFileCount: z.number().int().positive().optional(),
     withLineNumbers: z.boolean().optional(),
     charLimit: z.number().int().positive().optional(),
-    profile: z.string().optional(),
   })
   .optional();
 

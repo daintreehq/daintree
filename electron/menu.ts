@@ -1,6 +1,6 @@
 import { Menu, dialog, BrowserWindow, shell } from "electron";
 import { projectStore } from "./services/ProjectStore.js";
-import { worktreeService } from "./services/WorktreeService.js";
+import { getWorkspaceClient } from "./services/WorkspaceClient.js";
 import { CHANNELS } from "./ipc/channels.js";
 
 export function createApplicationMenu(mainWindow: BrowserWindow): void {
@@ -132,7 +132,7 @@ async function handleDirectoryOpen(
       throw new Error(`Project not found after update: ${project.id}`);
     }
 
-    await worktreeService.refresh();
+    await getWorkspaceClient().refresh();
 
     mainWindow.webContents.send(CHANNELS.PROJECT_ON_SWITCH, updatedProject);
 
