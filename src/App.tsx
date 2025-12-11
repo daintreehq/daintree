@@ -52,15 +52,25 @@ function SidebarContent() {
   const { worktrees, isLoading, error, refresh } = useWorktrees();
   const { settings: projectSettings } = useProjectSettings();
   const { launchAgent, availability, agentSettings } = useAgentLauncher();
-  const { activeWorktreeId, focusedWorktreeId, selectWorktree, setActiveWorktree } =
-    useWorktreeSelectionStore(
-      useShallow((state) => ({
-        activeWorktreeId: state.activeWorktreeId,
-        focusedWorktreeId: state.focusedWorktreeId,
-        selectWorktree: state.selectWorktree,
-        setActiveWorktree: state.setActiveWorktree,
-      }))
-    );
+  const {
+    activeWorktreeId,
+    focusedWorktreeId,
+    selectWorktree,
+    setActiveWorktree,
+    createDialog,
+    openCreateDialog,
+    closeCreateDialog,
+  } = useWorktreeSelectionStore(
+    useShallow((state) => ({
+      activeWorktreeId: state.activeWorktreeId,
+      focusedWorktreeId: state.focusedWorktreeId,
+      selectWorktree: state.selectWorktree,
+      setActiveWorktree: state.setActiveWorktree,
+      createDialog: state.createDialog,
+      openCreateDialog: state.openCreateDialog,
+      closeCreateDialog: state.closeCreateDialog,
+    }))
+  );
   const [isRecipeEditorOpen, setIsRecipeEditorOpen] = useState(false);
   const [recipeEditorWorktreeId, setRecipeEditorWorktreeId] = useState<string | undefined>(
     undefined
@@ -68,8 +78,6 @@ function SidebarContent() {
   const [recipeEditorInitialTerminals, setRecipeEditorInitialTerminals] = useState<
     RecipeTerminal[] | undefined
   >(undefined);
-
-  const [isNewWorktreeDialogOpen, setIsNewWorktreeDialogOpen] = useState(false);
 
   const [homeDir, setHomeDir] = useState<string | undefined>(undefined);
 
@@ -167,7 +175,7 @@ function SidebarContent() {
       <div className="flex items-center justify-between px-4 py-3 border-b border-canopy-border bg-canopy-sidebar shrink-0">
         <h2 className="text-canopy-text font-semibold text-sm tracking-wide">Worktrees</h2>
         <button
-          onClick={() => setIsNewWorktreeDialogOpen(true)}
+          onClick={() => openCreateDialog()}
           className="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-border/50 rounded transition-colors"
           title="Create new worktree"
         >
@@ -213,10 +221,11 @@ function SidebarContent() {
 
       {rootPath && (
         <NewWorktreeDialog
-          isOpen={isNewWorktreeDialogOpen}
-          onClose={() => setIsNewWorktreeDialogOpen(false)}
+          isOpen={createDialog.isOpen}
+          onClose={closeCreateDialog}
           rootPath={rootPath}
           onWorktreeCreated={refresh}
+          initialIssue={createDialog.initialIssue}
         />
       )}
     </div>
