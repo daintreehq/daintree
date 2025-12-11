@@ -9,9 +9,6 @@ import { events, type CanopyEventMap } from "../../services/events.js";
 import type { HandlerDependencies } from "../types.js";
 import type { TerminalSpawnOptions, TerminalResizePayload } from "../../types/index.js";
 import { TerminalSpawnOptionsSchema, TerminalResizePayloadSchema } from "../../schemas/ipc.js";
-import type { TerminalType } from "../../../shared/types/domain.js";
-
-const AGENT_TYPES: TerminalType[] = ["claude", "gemini", "codex"];
 
 export function registerTerminalHandlers(deps: HandlerDependencies): () => void {
   const { mainWindow, ptyClient, worktreeService: workspaceClient } = deps;
@@ -80,7 +77,8 @@ export function registerTerminalHandlers(deps: HandlerDependencies): () => void 
     const rows = Math.max(1, Math.min(500, Math.floor(validatedOptions.rows) || 30));
 
     const type = validatedOptions.type || "terminal";
-
+    const kind = validatedOptions.kind || (validatedOptions.agentId ? "agent" : "terminal");
+    const agentId = validatedOptions.agentId;
     const title = validatedOptions.title;
     const worktreeId = validatedOptions.worktreeId;
 
@@ -128,7 +126,9 @@ export function registerTerminalHandlers(deps: HandlerDependencies): () => void 
         cols,
         rows,
         env: validatedOptions.env,
+        kind,
         type,
+        agentId,
         title,
         worktreeId,
         projectId, // Pass project ID for multi-tenancy
@@ -149,7 +149,7 @@ export function registerTerminalHandlers(deps: HandlerDependencies): () => void 
 
           // Wrap agent commands to ensure PTY exits when agent exits
           let finalCommand = trimmedCommand;
-          const isAgent = AGENT_TYPES.includes(type as TerminalType);
+          const isAgent = kind === "agent" || Boolean(agentId);
           if (isAgent) {
             if (process.platform === "win32") {
               const shell = (

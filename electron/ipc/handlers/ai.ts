@@ -16,7 +16,7 @@ export function registerAiHandlers(_deps: HandlerDependencies): () => void {
   const handleAgentSettingsSet = async (
     _event: Electron.IpcMainInvokeEvent,
     payload: {
-      agentType: "claude" | "gemini" | "codex";
+      agentType: string;
       settings: Record<string, unknown>;
     }
   ) => {
@@ -24,9 +24,6 @@ export function registerAiHandlers(_deps: HandlerDependencies): () => void {
       throw new Error("Invalid payload");
     }
     const { agentType, settings } = payload;
-    if (!agentType || !["claude", "gemini", "codex"].includes(agentType)) {
-      throw new Error("Invalid agent type");
-    }
     if (!settings || typeof settings !== "object") {
       throw new Error("Invalid settings object");
     }
@@ -34,9 +31,12 @@ export function registerAiHandlers(_deps: HandlerDependencies): () => void {
     const currentSettings = store.get("agentSettings");
     const updatedSettings = {
       ...currentSettings,
-      [agentType]: {
-        ...currentSettings[agentType],
-        ...settings,
+      agents: {
+        ...currentSettings.agents,
+        [agentType]: {
+          ...(currentSettings.agents?.[agentType] ?? {}),
+          ...settings,
+        },
       },
     };
     store.set("agentSettings", updatedSettings);
@@ -47,16 +47,16 @@ export function registerAiHandlers(_deps: HandlerDependencies): () => void {
 
   const handleAgentSettingsReset = async (
     _event: Electron.IpcMainInvokeEvent,
-    agentType?: "claude" | "gemini" | "codex"
+    agentType?: string
   ) => {
     if (agentType) {
-      if (!["claude", "gemini", "codex"].includes(agentType)) {
-        throw new Error("Invalid agent type");
-      }
       const currentSettings = store.get("agentSettings");
       const updatedSettings = {
         ...currentSettings,
-        [agentType]: DEFAULT_AGENT_SETTINGS[agentType],
+        agents: {
+          ...currentSettings.agents,
+          [agentType]: DEFAULT_AGENT_SETTINGS.agents[agentType] ?? { enabled: true },
+        },
       };
       store.set("agentSettings", updatedSettings);
       return updatedSettings;

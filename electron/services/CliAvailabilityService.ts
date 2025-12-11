@@ -1,5 +1,6 @@
 import { execFileSync } from "child_process";
 import type { CliAvailability } from "../../shared/types/ipc.js";
+import { AGENT_REGISTRY } from "../../shared/config/agentRegistry.js";
 
 export class CliAvailabilityService {
   private availability: CliAvailability | null = null;
@@ -12,17 +13,12 @@ export class CliAvailabilityService {
 
     this.inFlightCheck = (async () => {
       try {
-        const [claude, gemini, codex] = await Promise.all([
-          this.checkCommand("claude"),
-          this.checkCommand("gemini"),
-          this.checkCommand("codex"),
-        ]);
+        const entries = Object.entries(AGENT_REGISTRY);
+        const availabilityEntries = await Promise.all(
+          entries.map(async ([id, config]) => [id, await this.checkCommand(config.command)])
+        );
 
-        const result: CliAvailability = {
-          claude,
-          gemini,
-          codex,
-        };
+        const result: CliAvailability = Object.fromEntries(availabilityEntries);
 
         this.availability = result;
 

@@ -1,18 +1,14 @@
 import { appClient, terminalClient } from "@/clients";
 import { terminalConfigClient } from "@/clients/terminalConfigClient";
 import { useLayoutConfigStore, useScrollbackStore, usePerformanceModeStore } from "@/store";
-import type { TerminalType, TerminalState, AgentState } from "@/types";
-import {
-  generateClaudeFlags,
-  generateGeminiFlags,
-  generateCodexFlags,
-  type AgentSettings,
-} from "@shared/types";
+import type { TerminalType, TerminalState, AgentState, TerminalKind } from "@/types";
+import { generateAgentFlags, type AgentSettings } from "@shared/types";
 import { keybindingService } from "@/services/KeybindingService";
 import { isRegisteredAgent, getAgentConfig } from "@/config/agents";
 
 export interface HydrationOptions {
   addTerminal: (options: {
+    kind?: TerminalKind;
     type?: TerminalType;
     agentId?: string;
     title?: string;
@@ -128,6 +124,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
               const agentId =
                 terminal.agentId ?? (isRegisteredAgent(terminal.type) ? terminal.type : undefined);
               await addTerminal({
+                kind: terminal.kind ?? (agentId ? "agent" : "terminal"),
                 type: terminal.type,
                 agentId,
                 title: terminal.title,
@@ -224,18 +221,7 @@ function getRestartCommand(
       return terminal.command?.trim() || baseCommand;
     }
 
-    let flags: string[] = [];
-    switch (agentId) {
-      case "claude":
-        flags = generateClaudeFlags(agentSettings.claude);
-        break;
-      case "gemini":
-        flags = generateGeminiFlags(agentSettings.gemini);
-        break;
-      case "codex":
-        flags = generateCodexFlags(agentSettings.codex);
-        break;
-    }
+    const flags = generateAgentFlags(agentSettings.agents?.[agentId] ?? {});
 
     return flags.length > 0 ? `${baseCommand} ${flags.join(" ")}` : baseCommand;
   }
@@ -255,8 +241,10 @@ async function spawnNewTerminal(
 ): Promise<void> {
   const commandToRun = getRestartCommand(terminal, agentSettings);
   const agentId = getEffectiveAgentId(terminal);
+  const kind: TerminalKind = agentId ? "agent" : "terminal";
 
   await addTerminal({
+    kind,
     type: terminal.type,
     agentId,
     title: terminal.title,

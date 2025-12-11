@@ -1,6 +1,7 @@
 import { create } from "zustand";
-import type { AgentSettings, ClaudeSettings, GeminiSettings, CodexSettings } from "@shared/types";
+import type { AgentSettings, AgentSettingsEntry } from "@shared/types";
 import { agentSettingsClient } from "@/clients";
+import { DEFAULT_AGENT_SETTINGS } from "@shared/types";
 
 interface AgentSettingsState {
   settings: AgentSettings | null;
@@ -11,10 +12,8 @@ interface AgentSettingsState {
 
 interface AgentSettingsActions {
   initialize: () => Promise<void>;
-  setClaude: (updates: Partial<ClaudeSettings>) => Promise<void>;
-  setGemini: (updates: Partial<GeminiSettings>) => Promise<void>;
-  setCodex: (updates: Partial<CodexSettings>) => Promise<void>;
-  reset: (agentType?: "claude" | "gemini" | "codex") => Promise<void>;
+  updateAgent: (agentId: string, updates: Partial<AgentSettingsEntry>) => Promise<void>;
+  reset: (agentId?: string) => Promise<void>;
 }
 
 type AgentSettingsStore = AgentSettingsState & AgentSettingsActions;
@@ -35,7 +34,7 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
       try {
         set({ isLoading: true, error: null });
 
-        const settings = await agentSettingsClient.get();
+        const settings = (await agentSettingsClient.get()) ?? DEFAULT_AGENT_SETTINGS;
         set({ settings, isLoading: false, isInitialized: true });
       } catch (e) {
         set({
@@ -49,43 +48,21 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
     return initPromise;
   },
 
-  setClaude: async (updates: Partial<ClaudeSettings>) => {
+  updateAgent: async (agentId: string, updates: Partial<AgentSettingsEntry>) => {
     set({ error: null });
     try {
-      const settings = await agentSettingsClient.setClaude(updates);
+      const settings = await agentSettingsClient.set(agentId, updates);
       set({ settings });
     } catch (e) {
-      set({ error: e instanceof Error ? e.message : "Failed to update Claude settings" });
+      set({ error: e instanceof Error ? e.message : `Failed to update ${agentId} settings` });
       throw e;
     }
   },
 
-  setGemini: async (updates: Partial<GeminiSettings>) => {
+  reset: async (agentId?: string) => {
     set({ error: null });
     try {
-      const settings = await agentSettingsClient.setGemini(updates);
-      set({ settings });
-    } catch (e) {
-      set({ error: e instanceof Error ? e.message : "Failed to update Gemini settings" });
-      throw e;
-    }
-  },
-
-  setCodex: async (updates: Partial<CodexSettings>) => {
-    set({ error: null });
-    try {
-      const settings = await agentSettingsClient.setCodex(updates);
-      set({ settings });
-    } catch (e) {
-      set({ error: e instanceof Error ? e.message : "Failed to update Codex settings" });
-      throw e;
-    }
-  },
-
-  reset: async (agentType?: "claude" | "gemini" | "codex") => {
-    set({ error: null });
-    try {
-      const settings = await agentSettingsClient.reset(agentType);
+      const settings = await agentSettingsClient.reset(agentId);
       set({ settings });
     } catch (e) {
       set({ error: e instanceof Error ? e.message : "Failed to reset agent settings" });
@@ -97,7 +74,7 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
 export function cleanupAgentSettingsStore() {
   initPromise = null;
   useAgentSettingsStore.setState({
-    settings: null,
+    settings: DEFAULT_AGENT_SETTINGS,
     isLoading: true,
     error: null,
     isInitialized: false,
