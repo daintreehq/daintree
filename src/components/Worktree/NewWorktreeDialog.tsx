@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { FolderOpen, GitBranch, Check, AlertCircle, Loader2 } from "lucide-react";
+import { FolderOpen, GitBranch, Check, AlertCircle, Loader2, ChevronDown } from "lucide-react";
 import type { BranchInfo, CreateWorktreeOptions } from "@/types/electron";
 import type { GitHubIssue } from "@shared/types/github";
 import { worktreeClient } from "@/clients";
 import { IssueSelector } from "@/components/GitHub/IssueSelector";
 import { generateBranchSlug } from "@/utils/textParsing";
+import { BRANCH_TYPES } from "@shared/config/branchPrefixes";
 
 interface NewWorktreeDialogProps {
   isOpen: boolean;
@@ -33,6 +34,7 @@ export function NewWorktreeDialog({
   const [worktreePath, setWorktreePath] = useState("");
   const [fromRemote, setFromRemote] = useState(false);
   const [selectedIssue, setSelectedIssue] = useState<GitHubIssue | null>(null);
+  const [selectedPrefix, setSelectedPrefix] = useState(BRANCH_TYPES[0].prefix);
 
   const newBranchInputRef = useRef<HTMLInputElement>(null);
 
@@ -47,6 +49,7 @@ export function NewWorktreeDialog({
     setSelectedIssue(initialIssue ?? null);
     setNewBranch("");
     setWorktreePath("");
+    setSelectedPrefix(BRANCH_TYPES[0].prefix);
 
     let isCurrent = true;
 
@@ -97,17 +100,25 @@ export function NewWorktreeDialog({
         ? `issue-${selectedIssue.number}-${slug}`
         : `issue-${selectedIssue.number}`;
       setNewBranch(suggestedBranch);
+
+      const labels = selectedIssue.labels || [];
+      const isBug = labels.some((l) => {
+        const name = l.name.toLowerCase();
+        return /\b(bug|bugfix|hotfix)\b/.test(name);
+      });
+      setSelectedPrefix(isBug ? "bugfix" : "feature");
     }
   }, [selectedIssue]);
 
   useEffect(() => {
     if (!newBranch || !rootPath) return;
 
-    const trimmedBranch = newBranch.trim();
+    const trimmedName = newBranch.trim();
+    const fullBranchName = `${selectedPrefix}/${trimmedName}`;
     const abortController = new AbortController();
 
     worktreeClient
-      .getDefaultPath(rootPath, trimmedBranch)
+      .getDefaultPath(rootPath, fullBranchName)
       .then((suggestedPath) => {
         if (!abortController.signal.aborted) {
           setWorktreePath(suggestedPath);
@@ -116,7 +127,7 @@ export function NewWorktreeDialog({
       .catch((err) => {
         if (!abortController.signal.aborted) {
           console.error("Failed to get default path:", err);
-          const sanitizedBranch = trimmedBranch.replace(/[^a-zA-Z0-9-_]/g, "-");
+          const sanitizedBranch = fullBranchName.replace(/[^a-zA-Z0-9-_]/g, "-");
           const separator = rootPath.includes("\\") ? "\\" : "/";
           const repoName = rootPath.split(/[/\\]/).pop() || "repo";
           setWorktreePath(
@@ -126,7 +137,7 @@ export function NewWorktreeDialog({
       });
 
     return () => abortController.abort();
-  }, [newBranch, rootPath]);
+  }, [newBranch, selectedPrefix, rootPath]);
 
   const handleCreate = async () => {
     if (!baseBranch) {
@@ -134,18 +145,18 @@ export function NewWorktreeDialog({
       return;
     }
 
-    const trimmedBranch = newBranch.trim();
-    if (!trimmedBranch) {
-      setError("Please enter a new branch name");
+    const trimmedName = newBranch.trim();
+    if (!trimmedName) {
+      setError("Please enter a branch name");
       return;
     }
 
-    if (/[\s.]$/.test(trimmedBranch) || /^[.-]/.test(trimmedBranch)) {
+    if (/[\s.]$/.test(trimmedName) || /^[.-]/.test(trimmedName)) {
       setError("Branch name cannot start with '.', '-' or end with space or '.'");
       return;
     }
 
-    if (/[/\\:]/.test(trimmedBranch) || trimmedBranch.includes("..")) {
+    if (/[/\\:]/.test(trimmedName) || trimmedName.includes("..")) {
       setError("Branch name contains invalid characters");
       return;
     }
@@ -155,13 +166,15 @@ export function NewWorktreeDialog({
       return;
     }
 
+    const fullBranchName = `${selectedPrefix}/${trimmedName}`;
+
     setCreating(true);
     setError(null);
 
     try {
       const options: CreateWorktreeOptions = {
         baseBranch,
-        newBranch: trimmedBranch,
+        newBranch: fullBranchName,
         path: worktreePath.trim(),
         fromRemote,
       };
@@ -174,6 +187,7 @@ export function NewWorktreeDialog({
       setNewBranch("");
       setWorktreePath("");
       setFromRemote(false);
+      setSelectedPrefix(BRANCH_TYPES[0].prefix);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Failed to create worktree";
       setError(message);
@@ -248,17 +262,44 @@ export function NewWorktreeDialog({
               <label htmlFor="new-branch" className="block text-sm font-medium text-canopy-text">
                 New Branch Name
               </label>
-              <input
-                ref={newBranchInputRef}
-                id="new-branch"
-                type="text"
-                value={newBranch}
-                onChange={(e) => setNewBranch(e.target.value)}
-                placeholder="feature/my-feature"
-                className="w-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-md text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
-                disabled={creating}
-              />
-              <p className="text-xs text-canopy-text/60">Name for the new branch</p>
+              <div className="flex gap-2 items-center">
+                <div className="relative shrink-0">
+                  <select
+                    value={selectedPrefix}
+                    onChange={(e) => setSelectedPrefix(e.target.value)}
+                    className="appearance-none h-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-md text-canopy-text text-sm focus:outline-none focus:ring-2 focus:ring-canopy-accent pr-8"
+                    disabled={creating}
+                  >
+                    {BRANCH_TYPES.map((type) => (
+                      <option key={type.id} value={type.prefix}>
+                        {type.displayName}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-canopy-text/40">
+                    <ChevronDown className="w-4 h-4" />
+                  </div>
+                </div>
+
+                <span className="text-canopy-text/40 font-mono">/</span>
+
+                <input
+                  ref={newBranchInputRef}
+                  id="new-branch"
+                  type="text"
+                  value={newBranch}
+                  onChange={(e) => setNewBranch(e.target.value)}
+                  placeholder="my-awesome-feature"
+                  className="flex-1 px-3 py-2 bg-canopy-bg border border-canopy-border rounded-md text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
+                  disabled={creating}
+                />
+              </div>
+              <p className="text-xs text-canopy-text/60">
+                Full branch:{" "}
+                <span className="font-mono text-canopy-accent">
+                  {selectedPrefix}/{newBranch || "..."}
+                </span>
+              </p>
             </div>
 
             <div className="space-y-2">

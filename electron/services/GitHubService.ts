@@ -326,6 +326,7 @@ function parseIssueNode(node: Record<string, unknown>): GitHubIssue {
   const author = node.author as { login?: string; avatarUrl?: string } | null;
   const assigneesData = node.assignees as { nodes?: Array<{ login?: string; avatarUrl?: string }> };
   const commentsData = node.comments as { totalCount?: number };
+  const labelsData = node.labels as { nodes?: Array<{ name?: string; color?: string }> };
 
   return {
     number: node.number as number,
@@ -342,6 +343,10 @@ function parseIssueNode(node: Record<string, unknown>): GitHubIssue {
       avatarUrl: a.avatarUrl ?? "",
     })),
     commentCount: commentsData?.totalCount ?? 0,
+    labels: (labelsData?.nodes ?? []).map((l) => ({
+      name: l.name ?? "",
+      color: l.color ?? "",
+    })),
   };
 }
 

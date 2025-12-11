@@ -36,6 +36,12 @@ export const LIST_ISSUES_QUERY = `
           comments {
             totalCount
           }
+          labels(first: 10) {
+            nodes {
+              name
+              color
+            }
+          }
         }
       }
     }
@@ -98,6 +104,12 @@ export const SEARCH_QUERY = `
           }
           comments {
             totalCount
+          }
+          labels(first: 10) {
+            nodes {
+              name
+              color
+            }
           }
         }
         ... on PullRequest {

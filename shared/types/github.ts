@@ -8,6 +8,14 @@ export interface GitHubUser {
   avatarUrl: string;
 }
 
+/** GitHub label */
+export interface GitHubLabel {
+  /** Label name */
+  name: string;
+  /** Label color (hex without #) */
+  color: string;
+}
+
 /** GitHub issue representation */
 export interface GitHubIssue {
   /** Issue number */
@@ -26,6 +34,8 @@ export interface GitHubIssue {
   assignees: GitHubUser[];
   /** Number of comments */
   commentCount: number;
+  /** Issue labels */
+  labels?: GitHubLabel[];
 }
 
 /** GitHub pull request representation */
