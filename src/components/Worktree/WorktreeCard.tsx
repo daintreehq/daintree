@@ -493,8 +493,10 @@ export function WorktreeCard({
     <div
       className={cn(
         "group relative border-b-2 border-white/5 transition-all duration-200",
-        isActive ? "bg-white/[0.06]" : "hover:bg-white/5 bg-transparent",
-        isFocused && "bg-white/[0.04]",
+        isActive
+          ? "bg-white/[0.08] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]"
+          : "hover:bg-white/5 bg-transparent",
+        isFocused && !isActive && "bg-white/[0.04]",
         (isIdleCard || isStaleCard) && !isActive && !isFocused && "opacity-70 hover:opacity-100",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
       )}
@@ -507,7 +509,7 @@ export function WorktreeCard({
       }}
       tabIndex={0}
       role="button"
-      aria-label={`Worktree: ${branchLabel}${worktree.isCurrent ? " (current)" : ""}, Status: ${spineState}${worktreeErrors.length > 0 ? `, ${worktreeErrors.length} error${worktreeErrors.length !== 1 ? "s" : ""}` : ""}${hasChanges ? ", has uncommitted changes" : ""}`}
+      aria-label={`Worktree: ${branchLabel}${isActive ? " (selected)" : ""}${worktree.isCurrent ? " (current)" : ""}, Status: ${spineState}${worktreeErrors.length > 0 ? `, ${worktreeErrors.length} error${worktreeErrors.length !== 1 ? "s" : ""}` : ""}${hasChanges ? ", has uncommitted changes" : ""}`}
     >
       {/* Status Spine - multi-state health rail on left edge */}
       <div
@@ -548,7 +550,13 @@ export function WorktreeCard({
             {/* Row 1: Identity bar */}
             <div className="flex items-center gap-2 min-h-[22px]">
               {/* Left: Branch identity */}
-              <div className="flex items-center gap-1.5 min-w-0 flex-1">
+              <div className="flex items-center gap-2 min-w-0 flex-1">
+                {isActive && (
+                  <CheckCircle2
+                    className="w-3.5 h-3.5 text-canopy-accent shrink-0 motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in motion-safe:duration-200"
+                    aria-hidden="true"
+                  />
+                )}
                 {isMainWorktree && <Shield className="w-3.5 h-3.5 text-canopy-text/30 shrink-0" />}
                 <BranchLabel
                   label={branchLabel}
