@@ -6,6 +6,7 @@ import type { BranchInfo, CreateWorktreeOptions } from "@/types/electron";
 import type { GitHubIssue } from "@shared/types/github";
 import { worktreeClient } from "@/clients";
 import { IssueSelector } from "@/components/GitHub/IssueSelector";
+import { generateBranchSlug } from "@/utils/textParsing";
 
 interface NewWorktreeDialogProps {
   isOpen: boolean;
@@ -91,13 +92,9 @@ export function NewWorktreeDialog({
 
   useEffect(() => {
     if (selectedIssue) {
-      const safeTitle = selectedIssue.title
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "")
-        .slice(0, 40);
-      const suggestedBranch = safeTitle
-        ? `issue-${selectedIssue.number}-${safeTitle}`
+      const slug = generateBranchSlug(selectedIssue.title, 30);
+      const suggestedBranch = slug
+        ? `issue-${selectedIssue.number}-${slug}`
         : `issue-${selectedIssue.number}`;
       setNewBranch(suggestedBranch);
     }

@@ -161,21 +161,24 @@ export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemP
             <span>{item.author.login}</span>
             <span>&middot;</span>
             <span>{formatTimeAgo(item.updatedAt)}</span>
+            {type === "issue" && onCreateWorktree && item.state === "OPEN" && (
+              <>
+                <span>&middot;</span>
+                <button
+                  type="button"
+                  onClick={handleCreateWorktree}
+                  className="hover:text-canopy-accent transition-colors flex items-center gap-1"
+                  title="Create Worktree from Issue"
+                >
+                  <GitBranch className="w-3 h-3" />
+                  <span>Create Worktree</span>
+                </button>
+              </>
+            )}
           </div>
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          {type === "issue" && onCreateWorktree && item.state === "OPEN" && (
-            <button
-              type="button"
-              onClick={handleCreateWorktree}
-              className="opacity-0 group-hover:opacity-100 p-1.5 text-xs bg-canopy-border hover:bg-canopy-accent/20 hover:text-canopy-accent rounded transition-all flex items-center gap-1"
-              title="Create Worktree from Issue"
-            >
-              <GitBranch className="w-3 h-3" />
-              <span>Worktree</span>
-            </button>
-          )}
           {type === "issue" && "assignees" in item && item.assignees.length > 0 && (
             <div className="flex -space-x-1.5">
               {item.assignees.slice(0, 3).map((assignee) => (

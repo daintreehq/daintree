@@ -1,3 +1,5 @@
+import { removeStopwords, eng } from "stopword";
+
 export interface TextSegment {
   type: "text" | "link";
   content: string;
@@ -73,6 +75,42 @@ export function formatTimestamp(timestamp: number | null | undefined): string {
   } else {
     return `${days}d ago`;
   }
+}
+
+/**
+ * Generates a branch-safe slug from an issue title.
+ * Filters stop words and limits to a character count to keep branch names concise.
+ *
+ * @param title - The issue title to convert
+ * @param maxChars - Maximum characters for the title portion (default: 30)
+ * @returns A lowercase, hyphen-separated slug suitable for branch names
+ */
+export function generateBranchSlug(title: string, maxChars: number = 30): string {
+  // Extract words, filter non-alphanumeric, lowercase
+  const words = title
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word.length > 0);
+
+  // Remove English stopwords
+  const filtered = removeStopwords(words, eng);
+
+  if (filtered.length === 0) {
+    return "";
+  }
+
+  // Build slug by adding words until we hit the character limit
+  let slug = "";
+  for (const word of filtered) {
+    const nextSlug = slug ? `${slug}-${word}` : word;
+    if (nextSlug.length > maxChars) {
+      break;
+    }
+    slug = nextSlug;
+  }
+
+  // Ensure no trailing dash (shouldn't happen with this logic, but safety check)
+  return slug.replace(/-+$/, "");
 }
 
 export function formatTimestampExact(timestamp: number | null | undefined): string {
