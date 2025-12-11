@@ -321,14 +321,22 @@ export function WorktreeCard({
 
   const handleTerminalSelect = useCallback(
     (terminal: TerminalInstance) => {
+      // Switch to this worktree if it isn't already active
+      if (!isActive) {
+        onSelect();
+      }
+
+      // Focus the terminal (Dock or Grid)
       if (terminal.location === "dock") {
         openDockTerminal(terminal.id);
       } else {
         setFocused(terminal.id);
       }
+
+      // Trigger the ping animation
       pingTerminal(terminal.id);
     },
-    [setFocused, pingTerminal, openDockTerminal]
+    [isActive, onSelect, setFocused, pingTerminal, openDockTerminal]
   );
 
   const handleCopyTree = useCallback(async () => {
