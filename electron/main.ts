@@ -6,6 +6,10 @@ import fixPath from "fix-path";
 
 fixPath();
 
+// Increase V8 heap size for renderer processes to handle large clipboard data
+// Maximum is 4GB due to V8 pointer compression in Electron 9+
+app.commandLine.appendSwitch("js-flags", "--max-old-space-size=4096");
+
 import { registerIpcHandlers, sendToRenderer } from "./ipc/handlers.js";
 import { registerErrorHandlers } from "./ipc/errorHandlers.js";
 import { PtyClient, disposePtyClient } from "./services/PtyClient.js";

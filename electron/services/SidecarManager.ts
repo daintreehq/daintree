@@ -1,6 +1,7 @@
-import { BrowserWindow, WebContentsView } from "electron";
+import { BrowserWindow, WebContentsView, clipboard } from "electron";
 import type { SidecarBounds, SidecarNavEvent } from "../../shared/types/sidecar.js";
 import { CHANNELS } from "../ipc/channels.js";
+import { ClipboardFileInjector } from "./ClipboardFileInjector.js";
 
 export class SidecarManager {
   private window: BrowserWindow;
@@ -73,6 +74,49 @@ export class SidecarManager {
         if (this.activeTabId === tabId) {
           this.activeView = null;
           this.activeTabId = null;
+        }
+      });
+
+      view.webContents.on("before-input-event", (event, input) => {
+        const isMac = process.platform === "darwin";
+        const isPasteShortcut =
+          input.key.toLowerCase() === "v" &&
+          ((isMac && input.meta && !input.control) || (!isMac && input.control && !input.meta)) &&
+          !input.alt &&
+          !input.shift &&
+          input.type === "keyDown";
+
+        if (isPasteShortcut) {
+          event.preventDefault();
+
+          ClipboardFileInjector.getFilePathsFromClipboard()
+            .then(async (filePaths) => {
+              if (filePaths.length > 0) {
+                if (filePaths.length > 1) {
+                  console.warn(
+                    `[SidecarManager] Multiple files in clipboard (${filePaths.length}), pasting first only`
+                  );
+                }
+
+                try {
+                  await ClipboardFileInjector.injectFileIntoPaste(view.webContents, filePaths[0]);
+                } catch (error) {
+                  console.error("[SidecarManager] Failed to inject file paste:", error);
+                }
+              } else {
+                const textContent = clipboard.readText();
+                if (textContent) {
+                  view.webContents.paste();
+                }
+              }
+            })
+            .catch((error) => {
+              console.error("[SidecarManager] Error checking clipboard for files:", error);
+              const textContent = clipboard.readText();
+              if (textContent) {
+                view.webContents.paste();
+              }
+            });
         }
       });
 
