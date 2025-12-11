@@ -7,7 +7,7 @@
  * All types are serializable (no functions, no circular refs) for IPC transport.
  */
 
-import type { AgentState, TerminalType } from "./domain.js";
+import type { AgentState, AgentId, TerminalType, TerminalKind } from "./domain.js";
 
 /** Options for spawning a new PTY process (matches PtyManager interface) */
 export interface PtyHostSpawnOptions {
@@ -17,7 +17,9 @@ export interface PtyHostSpawnOptions {
   env?: Record<string, string>;
   cols: number;
   rows: number;
+  kind?: TerminalKind;
   type?: TerminalType;
+  agentId?: AgentId;
   title?: string;
   worktreeId?: string;
   projectId?: string;
@@ -68,9 +70,10 @@ export interface PtyHostTerminalSnapshot {
   lastInputTime: number;
   lastOutputTime: number;
   lastCheckTime: number;
+  kind?: TerminalKind;
   type?: TerminalType;
   worktreeId?: string;
-  agentId?: string;
+  agentId?: AgentId;
   agentState?: AgentState;
   lastStateChange?: number;
   error?: string;
@@ -131,6 +134,7 @@ export type PtyHostEvent =
 export interface PtyHostTerminalInfo {
   id: string;
   projectId?: string;
+  kind?: TerminalKind;
   type?: TerminalType;
   title?: string;
   cwd: string;

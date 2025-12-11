@@ -1,101 +1,82 @@
-import { useState, useEffect } from "react";
-import { Button } from "@/components/ui/button";
-import { SegmentedControl, type SegmentedControlTab } from "@/components/ui/SegmentedControl";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import { RotateCcw, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
-import { ClaudeIcon, GeminiIcon, CodexIcon } from "@/components/icons";
-import type {
-  ClaudeApprovalMode,
-  GeminiApprovalMode,
-  CodexSandboxPolicy,
-  CodexApprovalPolicy,
-} from "@shared/types";
+import { getAgentIds, getAgentConfig } from "@/config/agents";
 import { useAgentSettingsStore } from "@/store";
-
-type AgentTab = "main" | "claude" | "gemini" | "codex";
+import { Button } from "@/components/ui/button";
+import {
+  DEFAULT_AGENT_SETTINGS,
+  getAgentSettingsEntry,
+  DEFAULT_DANGEROUS_ARGS,
+} from "@shared/types";
+import { FixedDropdown } from "@/components/ui/fixed-dropdown";
+import { ChevronDown, RotateCcw } from "lucide-react";
 
 interface AgentSettingsProps {
   onSettingsChange?: () => void;
 }
 
 export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
-  const [activeTab, setActiveTab] = useState<AgentTab>("main");
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [togglingAgent, setTogglingAgent] = useState<string | null>(null);
-
-  const {
-    settings,
-    isLoading,
-    error: loadError,
-    initialize,
-    setClaude,
-    setGemini,
-    setCodex,
-    reset,
-  } = useAgentSettingsStore();
+  const { settings, isLoading, error: loadError, initialize, updateAgent, reset } =
+    useAgentSettingsStore();
+  const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
+  const [selectorOpen, setSelectorOpen] = useState(false);
+  const selectorRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     initialize();
   }, [initialize]);
 
-  const handleClaudeChange = async (updates: Partial<NonNullable<typeof settings>["claude"]>) => {
-    try {
-      await setClaude(updates);
-      onSettingsChange?.();
-    } catch (error) {
-      console.error("Failed to update Claude settings:", error);
+  const agentIds = getAgentIds();
+  const effectiveSettings = settings ?? DEFAULT_AGENT_SETTINGS;
+
+  useEffect(() => {
+    if (!activeAgentId && agentIds.length > 0) {
+      setActiveAgentId(agentIds[0]);
     }
-  };
+  }, [activeAgentId, agentIds]);
 
-  const handleGeminiChange = async (updates: Partial<NonNullable<typeof settings>["gemini"]>) => {
-    try {
-      await setGemini(updates);
-      onSettingsChange?.();
-    } catch (error) {
-      console.error("Failed to update Gemini settings:", error);
-    }
-  };
+  const agentOptions = useMemo(
+    () =>
+      agentIds
+        .map((id) => {
+          const config = getAgentConfig(id);
+          if (!config) return null;
+          const entry = getAgentSettingsEntry(effectiveSettings, id);
+          const Icon = config.icon ? config.icon : null;
+          return {
+            id,
+            name: config.name,
+            color: config.color,
+            Icon,
+            enabled: entry.enabled ?? true,
+            dangerousEnabled: entry.dangerousEnabled ?? false,
+            hasCustomFlags: Boolean(entry.customFlags?.trim()),
+          };
+        })
+        .filter(Boolean),
+    [agentIds, effectiveSettings]
+  );
 
-  const handleCodexChange = async (updates: Partial<NonNullable<typeof settings>["codex"]>) => {
-    try {
-      await setCodex(updates);
-      onSettingsChange?.();
-    } catch (error) {
-      console.error("Failed to update Codex settings:", error);
-    }
-  };
+  const activeAgent = activeAgentId
+    ? agentOptions.find((a) => a?.id === activeAgentId)
+    : agentOptions[0];
+  const activeEntry = activeAgent
+    ? getAgentSettingsEntry(effectiveSettings, activeAgent.id)
+    : { customFlags: "", dangerousArgs: "", dangerousEnabled: false };
 
-  const handleReset = async (agentType: Exclude<AgentTab, "main">) => {
-    try {
-      await reset(agentType);
-      onSettingsChange?.();
-    } catch (error) {
-      console.error(`Failed to reset ${agentType} settings:`, error);
-    }
-  };
+  const defaultDangerousArg = activeAgent
+    ? DEFAULT_DANGEROUS_ARGS[activeAgent.id] ?? ""
+    : "";
 
-  const handleToggleEnabled = async (agent: "claude" | "gemini" | "codex") => {
-    if (!settings || togglingAgent === agent) return;
-    const current = settings[agent].enabled ?? true;
+  if (agentOptions.length === 0) {
+    return (
+      <div className="text-sm text-canopy-text/60">
+        No agents registered. Add agents to the registry to configure them here.
+      </div>
+    );
+  }
 
-    setTogglingAgent(agent);
-    try {
-      if (agent === "claude") {
-        await setClaude({ enabled: !current });
-      } else if (agent === "gemini") {
-        await setGemini({ enabled: !current });
-      } else {
-        await setCodex({ enabled: !current });
-      }
-      onSettingsChange?.();
-    } catch (error) {
-      console.error(`Failed to toggle ${agent}:`, error);
-    } finally {
-      setTogglingAgent(null);
-    }
-  };
-
-  if (isLoading) {
+  if (isLoading && !settings) {
     return (
       <div className="flex items-center justify-center h-32">
         <div className="text-canopy-text/60 text-sm">Loading settings...</div>
@@ -119,629 +100,203 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
     );
   }
 
-  const agentTabs: SegmentedControlTab[] = [
-    { id: "main", label: "Enabled" },
-    { id: "claude", label: "Claude", icon: <ClaudeIcon size={14} /> },
-    { id: "gemini", label: "Gemini", icon: <GeminiIcon size={14} /> },
-    { id: "codex", label: "Codex", icon: <CodexIcon size={14} /> },
-  ];
-
   return (
-    <div className="space-y-4">
-      <SegmentedControl
-        tabs={agentTabs}
-        activeTab={activeTab}
-        onTabChange={(tabId) => {
-          setActiveTab(tabId as AgentTab);
-          setShowAdvanced(false);
-        }}
-      />
+    <div className="space-y-5">
+      {/* Agent Selector Dropdown */}
+      <div className="relative">
+        <button
+          ref={selectorRef as React.RefObject<HTMLButtonElement>}
+          type="button"
+          onClick={() => setSelectorOpen((o) => !o)}
+          className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg border border-canopy-border bg-canopy-bg-secondary hover:border-canopy-text/20 transition-colors"
+        >
+          {activeAgent ? (
+            <div className="flex items-center gap-3 min-w-0">
+              {activeAgent.Icon && (
+                <activeAgent.Icon size={22} brandColor={activeAgent.color} />
+              )}
+              <span className="text-sm font-medium text-canopy-text">
+                {activeAgent.name}
+              </span>
+              {!activeAgent.enabled && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-canopy-border text-canopy-text/60">
+                  Disabled
+                </span>
+              )}
+              {activeAgent.dangerousEnabled && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-status-error)]/20 text-[var(--color-status-error)]">
+                  Dangerous
+                </span>
+              )}
+            </div>
+          ) : (
+            <span className="text-sm text-canopy-text/60">Select an agent</span>
+          )}
+          <ChevronDown
+            size={16}
+            className={cn(
+              "text-canopy-text/50 transition-transform",
+              selectorOpen && "rotate-180"
+            )}
+          />
+        </button>
 
-      {activeTab === "main" && settings && (
+        <FixedDropdown
+          open={selectorOpen}
+          onOpenChange={setSelectorOpen}
+          anchorRef={selectorRef}
+          className="min-w-[280px]"
+        >
+          <div className="py-1">
+            {agentOptions.map((agent) => {
+              if (!agent) return null;
+              const Icon = agent.Icon;
+              return (
+                <button
+                  key={agent.id}
+                  onClick={() => {
+                    setActiveAgentId(agent.id);
+                    setSelectorOpen(false);
+                  }}
+                  className={cn(
+                    "w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-white/5 transition-colors",
+                    activeAgent?.id === agent.id && "bg-canopy-accent/10"
+                  )}
+                >
+                  {Icon && <Icon size={20} brandColor={agent.color} />}
+                  <span className="text-sm font-medium text-canopy-text flex-1">
+                    {agent.name}
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    {!agent.enabled && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-canopy-border text-canopy-text/60">
+                        Off
+                      </span>
+                    )}
+                    {agent.dangerousEnabled && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-status-error)]/20 text-[var(--color-status-error)]">
+                        ⚠
+                      </span>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </FixedDropdown>
+      </div>
+
+      {/* Agent Configuration Panel */}
+      {activeAgent && (
         <div className="space-y-4">
-          <div className="space-y-2">
-            <h3 className="text-sm font-medium text-canopy-text">Enabled Agents</h3>
-            <p className="text-xs text-canopy-text/60">
-              Choose which agents appear in your toolbar. Agents must also be installed on your
-              system to appear.
-            </p>
+          {/* Enabled Toggle */}
+          <div className="flex items-center justify-between py-2">
+            <div>
+              <div className="text-sm font-medium text-canopy-text">
+                Enable {activeAgent.name}
+              </div>
+              <div className="text-xs text-canopy-text/60">
+                Show this agent in the launcher
+              </div>
+            </div>
+            <button
+              onClick={async () => {
+                const current = activeEntry.enabled ?? true;
+                await updateAgent(activeAgent.id, { enabled: !current });
+                onSettingsChange?.();
+              }}
+              className={cn(
+                "relative w-11 h-6 rounded-full transition-colors",
+                (activeEntry.enabled ?? true) ? "bg-canopy-accent" : "bg-canopy-border"
+              )}
+            >
+              <span
+                className={cn(
+                  "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform",
+                  (activeEntry.enabled ?? true) && "translate-x-5"
+                )}
+              />
+            </button>
           </div>
 
-          <div className="space-y-3 bg-canopy-bg border border-canopy-border rounded-md p-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <ClaudeIcon size={18} className="text-canopy-text" />
-                <div>
-                  <div className="text-sm font-medium text-canopy-text">Claude</div>
-                  <div className="text-xs text-canopy-text/60">Anthropic's Claude CLI</div>
+          <div className="border-t border-canopy-border" />
+
+          {/* Dangerous Mode Toggle */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between py-1">
+              <div>
+                <div className="text-sm font-medium text-canopy-text">
+                  Skip Permissions
+                </div>
+                <div className="text-xs text-canopy-text/60">
+                  Run without confirmation prompts
                 </div>
               </div>
               <button
-                onClick={() => handleToggleEnabled("claude")}
+                onClick={async () => {
+                  const current = activeEntry.dangerousEnabled ?? false;
+                  await updateAgent(activeAgent.id, { dangerousEnabled: !current });
+                  onSettingsChange?.();
+                }}
                 className={cn(
                   "relative w-11 h-6 rounded-full transition-colors",
-                  (settings.claude.enabled ?? true) ? "bg-canopy-accent" : "bg-canopy-border"
+                  activeEntry.dangerousEnabled
+                    ? "bg-[var(--color-status-error)]"
+                    : "bg-canopy-border"
                 )}
               >
                 <span
                   className={cn(
                     "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform",
-                    (settings.claude.enabled ?? true) && "translate-x-5"
+                    activeEntry.dangerousEnabled && "translate-x-5"
                   )}
                 />
               </button>
             </div>
 
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <GeminiIcon size={18} className="text-canopy-text" />
-                <div>
-                  <div className="text-sm font-medium text-canopy-text">Gemini</div>
-                  <div className="text-xs text-canopy-text/60">Google's Gemini CLI</div>
-                </div>
-              </div>
-              <button
-                onClick={() => handleToggleEnabled("gemini")}
-                className={cn(
-                  "relative w-11 h-6 rounded-full transition-colors",
-                  (settings.gemini.enabled ?? true) ? "bg-canopy-accent" : "bg-canopy-border"
-                )}
-              >
-                <span
-                  className={cn(
-                    "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform",
-                    (settings.gemini.enabled ?? true) && "translate-x-5"
-                  )}
-                />
-              </button>
-            </div>
-
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <CodexIcon size={18} className="text-canopy-text" />
-                <div>
-                  <div className="text-sm font-medium text-canopy-text">Codex</div>
-                  <div className="text-xs text-canopy-text/60">OpenAI's Codex CLI</div>
-                </div>
-              </div>
-              <button
-                onClick={() => handleToggleEnabled("codex")}
-                className={cn(
-                  "relative w-11 h-6 rounded-full transition-colors",
-                  (settings.codex.enabled ?? true) ? "bg-canopy-accent" : "bg-canopy-border"
-                )}
-              >
-                <span
-                  className={cn(
-                    "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform",
-                    (settings.codex.enabled ?? true) && "translate-x-5"
-                  )}
-                />
-              </button>
-            </div>
-          </div>
-
-          <p className="text-xs text-canopy-text/60">
-            Note: The Terminal button is always available and cannot be disabled.
-          </p>
-        </div>
-      )}
-
-      {activeTab === "claude" && (
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-canopy-text">Model</label>
-            <input
-              type="text"
-              value={settings.claude.model || ""}
-              onChange={(e) => handleClaudeChange({ model: e.target.value })}
-              placeholder="e.g., opus-4.5, sonnet-4.5"
-              className="w-full bg-canopy-bg border border-canopy-border rounded-md px-3 py-2 text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:ring-1 focus:ring-canopy-accent"
-            />
-            <p className="text-xs text-canopy-text/60">
-              Opus 4.5 recommended for long-horizon autonomous tasks. Leave empty to use Claude CLI
-              default.
-            </p>
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-canopy-text">Approval Mode</label>
-            <div className="space-y-2">
-              {[
-                {
-                  value: "default" as const,
-                  label: "Default",
-                  desc: "Standard permission prompts",
-                  warning: false,
-                  danger: false,
-                },
-                {
-                  value: "bypass" as const,
-                  label: "Bypass Permissions",
-                  desc: "Skip standard permission checks",
-                  warning: false,
-                  danger: false,
-                },
-                {
-                  value: "yolo" as const,
-                  label: "Skip All Permissions",
-                  desc: "Bypass all permission checks (--dangerously-skip-permissions)",
-                  warning: false,
-                  danger: true,
-                },
-              ].map((option) => (
-                <label
-                  key={option.value}
-                  className={cn(
-                    "flex items-start gap-3 p-3 rounded-md border cursor-pointer transition-colors",
-                    settings.claude.approvalMode === option.value
-                      ? "border-canopy-accent bg-canopy-accent/10"
-                      : "border-canopy-border hover:border-canopy-border"
-                  )}
-                >
-                  <input
-                    type="radio"
-                    name="claude-approval"
-                    value={option.value}
-                    checked={settings.claude.approvalMode === option.value}
-                    onChange={() =>
-                      handleClaudeChange({ approvalMode: option.value as ClaudeApprovalMode })
-                    }
-                    className="sr-only"
-                  />
-                  <div
-                    className={cn(
-                      "w-4 h-4 rounded-full border-2 flex items-center justify-center mt-0.5",
-                      settings.claude.approvalMode === option.value
-                        ? "border-canopy-accent"
-                        : "border-canopy-border"
-                    )}
-                  >
-                    {settings.claude.approvalMode === option.value && (
-                      <div className="w-2 h-2 rounded-full bg-canopy-accent" />
-                    )}
-                  </div>
-                  <div className="flex-1">
-                    <div className="text-sm font-medium text-canopy-text flex items-center gap-2">
-                      {option.label}
-                      {option.danger && <AlertTriangle className="w-3.5 h-3.5 text-red-500" />}
-                      {option.warning && !option.danger && (
-                        <AlertTriangle className="w-3.5 h-3.5 text-yellow-500" />
-                      )}
-                    </div>
-                    <div className="text-xs text-canopy-text/60">{option.desc}</div>
-                  </div>
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div className="border-t border-canopy-border pt-4">
-            <button
-              onClick={() => setShowAdvanced(!showAdvanced)}
-              className="flex items-center gap-2 text-sm text-canopy-text/60 hover:text-canopy-text transition-colors"
-            >
-              {showAdvanced ? (
-                <ChevronUp className="w-4 h-4" />
-              ) : (
-                <ChevronDown className="w-4 h-4" />
-              )}
-              Advanced Options
-            </button>
-
-            {showAdvanced && (
-              <div className="mt-4 space-y-4">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-canopy-text">System Prompt</label>
-                  <textarea
-                    value={settings.claude.systemPrompt || ""}
-                    onChange={(e) => handleClaudeChange({ systemPrompt: e.target.value })}
-                    placeholder="Custom system instructions..."
-                    rows={3}
-                    className="w-full bg-canopy-bg border border-canopy-border rounded-md px-3 py-2 text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:ring-1 focus:ring-canopy-accent resize-none"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-canopy-text">Custom Flags</label>
-                  <input
-                    type="text"
-                    value={settings.claude.customFlags || ""}
-                    onChange={(e) => handleClaudeChange({ customFlags: e.target.value })}
-                    placeholder="e.g., --verbose --no-color"
-                    className="w-full bg-canopy-bg border border-canopy-border rounded-md px-3 py-2 text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:ring-1 focus:ring-canopy-accent"
-                  />
-                  <p className="text-xs text-canopy-text/60">
-                    Additional CLI flags to pass to Claude (space-separated)
-                  </p>
-                </div>
+            {activeEntry.dangerousEnabled && defaultDangerousArg && (
+              <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-[var(--color-status-error)]/10 border border-[var(--color-status-error)]/20">
+                <code className="text-xs text-[var(--color-status-error)] font-mono">
+                  {defaultDangerousArg}
+                </code>
+                <span className="text-xs text-canopy-text/50">
+                  will be added automatically
+                </span>
               </div>
             )}
           </div>
 
-          <div className="flex justify-end pt-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => handleReset("claude")}
-              className="text-canopy-text/60 border-canopy-border hover:bg-canopy-border hover:text-canopy-text"
-            >
-              <RotateCcw className="w-4 h-4 mr-2" />
-              Reset to Defaults
-            </Button>
-          </div>
-        </div>
-      )}
+          <div className="border-t border-canopy-border" />
 
-      {activeTab === "gemini" && (
-        <div className="space-y-4">
+          {/* Custom Arguments */}
           <div className="space-y-2">
-            <label className="text-sm font-medium text-canopy-text">Model</label>
+            <label className="text-sm font-medium text-canopy-text">
+              Custom Arguments
+            </label>
             <input
-              type="text"
-              value={settings.gemini.model || ""}
-              onChange={(e) => handleGeminiChange({ model: e.target.value })}
-              placeholder="e.g., gemini-3-pro"
-              className="w-full bg-canopy-bg border border-canopy-border rounded-md px-3 py-2 text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:ring-1 focus:ring-canopy-accent"
+              className="w-full rounded-md border border-canopy-border bg-canopy-bg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-canopy-accent/50 placeholder:text-canopy-text/40"
+              value={activeEntry.customFlags ?? ""}
+              onChange={(e) => updateAgent(activeAgent.id, { customFlags: e.target.value })}
+              placeholder="--verbose --max-tokens=4096"
             />
-            <p className="text-xs text-canopy-text/60">
-              Leave empty to use 'Auto' routing (switches between Pro/Flash based on complexity).
+            <p className="text-xs text-canopy-text/50">
+              Additional CLI flags passed to {activeAgent.name.toLowerCase()}
             </p>
           </div>
 
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-canopy-text">Approval Mode</label>
-            <div className="space-y-2">
-              {[
-                {
-                  value: "default" as const,
-                  label: "Default",
-                  desc: "Standard approval prompts",
-                  warning: false,
-                },
-                {
-                  value: "auto_edit" as const,
-                  label: "Auto Edit",
-                  desc: "Auto-approve file edits",
-                  warning: false,
-                },
-                {
-                  value: "yolo" as const,
-                  label: "YOLO Mode",
-                  desc: "Auto-accept all actions",
-                  warning: true,
-                },
-              ].map((option) => (
-                <label
-                  key={option.value}
-                  className={cn(
-                    "flex items-start gap-3 p-3 rounded-md border cursor-pointer transition-colors",
-                    settings.gemini.approvalMode === option.value
-                      ? "border-canopy-accent bg-canopy-accent/10"
-                      : "border-canopy-border hover:border-canopy-border"
-                  )}
-                >
-                  <input
-                    type="radio"
-                    name="gemini-approval"
-                    value={option.value}
-                    checked={settings.gemini.approvalMode === option.value}
-                    onChange={() =>
-                      handleGeminiChange({ approvalMode: option.value as GeminiApprovalMode })
-                    }
-                    className="sr-only"
-                  />
-                  <div
-                    className={cn(
-                      "w-4 h-4 rounded-full border-2 flex items-center justify-center mt-0.5",
-                      settings.gemini.approvalMode === option.value
-                        ? "border-canopy-accent"
-                        : "border-canopy-border"
-                    )}
-                  >
-                    {settings.gemini.approvalMode === option.value && (
-                      <div className="w-2 h-2 rounded-full bg-canopy-accent" />
-                    )}
-                  </div>
-                  <div className="flex-1">
-                    <div className="text-sm font-medium text-canopy-text flex items-center gap-2">
-                      {option.label}
-                      {option.warning && <AlertTriangle className="w-3.5 h-3.5 text-yellow-500" />}
-                    </div>
-                    <div className="text-xs text-canopy-text/60">{option.desc}</div>
-                  </div>
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div className="border-t border-canopy-border pt-4">
-            <button
-              onClick={() => setShowAdvanced(!showAdvanced)}
-              className="flex items-center gap-2 text-sm text-canopy-text/60 hover:text-canopy-text transition-colors"
-            >
-              {showAdvanced ? (
-                <ChevronUp className="w-4 h-4" />
-              ) : (
-                <ChevronDown className="w-4 h-4" />
-              )}
-              Advanced Options
-            </button>
-
-            {showAdvanced && (
-              <div className="mt-4 space-y-4">
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <button
-                    onClick={() => handleGeminiChange({ sandbox: !settings.gemini.sandbox })}
-                    className={cn(
-                      "relative w-11 h-6 rounded-full transition-colors",
-                      settings.gemini.sandbox ? "bg-canopy-accent" : "bg-canopy-border"
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform",
-                        settings.gemini.sandbox && "translate-x-5"
-                      )}
-                    />
-                  </button>
-                  <div>
-                    <span className="text-sm text-canopy-text">Enable Sandbox Mode</span>
-                    <p className="text-xs text-canopy-text/60">
-                      Run Gemini in a sandboxed environment
-                    </p>
-                  </div>
-                </label>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-canopy-text">Custom Flags</label>
-                  <input
-                    type="text"
-                    value={settings.gemini.customFlags || ""}
-                    onChange={(e) => handleGeminiChange({ customFlags: e.target.value })}
-                    placeholder="e.g., --verbose"
-                    className="w-full bg-canopy-bg border border-canopy-border rounded-md px-3 py-2 text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:ring-1 focus:ring-canopy-accent"
-                  />
-                  <p className="text-xs text-canopy-text/60">
-                    Additional CLI flags to pass to Gemini (space-separated)
-                  </p>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="flex justify-end pt-2">
+          {/* Reset Button */}
+          <div className="pt-2">
             <Button
-              variant="outline"
               size="sm"
-              onClick={() => handleReset("gemini")}
-              className="text-canopy-text/60 border-canopy-border hover:bg-canopy-border hover:text-canopy-text"
+              variant="ghost"
+              className="text-canopy-text/60 hover:text-canopy-text"
+              onClick={async () => {
+                await reset(activeAgent.id);
+                onSettingsChange?.();
+              }}
             >
-              <RotateCcw className="w-4 h-4 mr-2" />
-              Reset to Defaults
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {activeTab === "codex" && (
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-canopy-text">Model</label>
-            <input
-              type="text"
-              value={settings.codex.model || ""}
-              onChange={(e) => handleCodexChange({ model: e.target.value })}
-              placeholder="e.g., gpt-5.1-codex-max"
-              className="w-full bg-canopy-bg border border-canopy-border rounded-md px-3 py-2 text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:ring-1 focus:ring-canopy-accent"
-            />
-            <p className="text-xs text-canopy-text/60">
-              Tip: Set effort to 'xhigh' for complex architecture decisions. Leave empty to use
-              Codex CLI default.
-            </p>
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-canopy-text">Sandbox Policy</label>
-            <div className="space-y-2">
-              {[
-                {
-                  value: "read-only" as const,
-                  label: "Read Only",
-                  desc: "Can only read files",
-                  warning: false,
-                },
-                {
-                  value: "workspace-write" as const,
-                  label: "Workspace Write",
-                  desc: "Can write to workspace",
-                  warning: false,
-                },
-                {
-                  value: "danger-full-access" as const,
-                  label: "Full Access",
-                  desc: "Full filesystem access",
-                  warning: true,
-                },
-              ].map((option) => (
-                <label
-                  key={option.value}
-                  className={cn(
-                    "flex items-start gap-3 p-3 rounded-md border cursor-pointer transition-colors",
-                    settings.codex.sandbox === option.value
-                      ? "border-canopy-accent bg-canopy-accent/10"
-                      : "border-canopy-border hover:border-canopy-border"
-                  )}
-                >
-                  <input
-                    type="radio"
-                    name="codex-sandbox"
-                    value={option.value}
-                    checked={settings.codex.sandbox === option.value}
-                    onChange={() =>
-                      handleCodexChange({ sandbox: option.value as CodexSandboxPolicy })
-                    }
-                    className="sr-only"
-                  />
-                  <div
-                    className={cn(
-                      "w-4 h-4 rounded-full border-2 flex items-center justify-center mt-0.5",
-                      settings.codex.sandbox === option.value
-                        ? "border-canopy-accent"
-                        : "border-canopy-border"
-                    )}
-                  >
-                    {settings.codex.sandbox === option.value && (
-                      <div className="w-2 h-2 rounded-full bg-canopy-accent" />
-                    )}
-                  </div>
-                  <div className="flex-1">
-                    <div className="text-sm font-medium text-canopy-text flex items-center gap-2">
-                      {option.label}
-                      {option.warning && <AlertTriangle className="w-3.5 h-3.5 text-yellow-500" />}
-                    </div>
-                    <div className="text-xs text-canopy-text/60">{option.desc}</div>
-                  </div>
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-canopy-text">Approval Policy</label>
-            <select
-              value={settings.codex.approvalPolicy || "untrusted"}
-              onChange={(e) =>
-                handleCodexChange({ approvalPolicy: e.target.value as CodexApprovalPolicy })
-              }
-              className="w-full bg-canopy-bg border border-canopy-border rounded-md px-3 py-2 text-sm text-canopy-text focus:outline-none focus:ring-1 focus:ring-canopy-accent"
-            >
-              <option value="untrusted">Untrusted (require approval)</option>
-              <option value="on-failure">On Failure (approve on errors)</option>
-              <option value="on-request">On Request (approve when asked)</option>
-              <option value="never">Never Ask</option>
-            </select>
-            <p className="text-xs text-canopy-text/60">
-              When to ask for approval before executing shell commands
-            </p>
-          </div>
-
-          <div className="border-t border-canopy-border pt-4">
-            <button
-              onClick={() => setShowAdvanced(!showAdvanced)}
-              className="flex items-center gap-2 text-sm text-canopy-text/60 hover:text-canopy-text transition-colors"
-            >
-              {showAdvanced ? (
-                <ChevronUp className="w-4 h-4" />
-              ) : (
-                <ChevronDown className="w-4 h-4" />
-              )}
-              Advanced Options
-            </button>
-
-            {showAdvanced && (
-              <div className="mt-4 space-y-4">
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <button
-                    onClick={() => handleCodexChange({ fullAuto: !settings.codex.fullAuto })}
-                    className={cn(
-                      "relative w-11 h-6 rounded-full transition-colors",
-                      settings.codex.fullAuto ? "bg-canopy-accent" : "bg-canopy-border"
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform",
-                        settings.codex.fullAuto && "translate-x-5"
-                      )}
-                    />
-                  </button>
-                  <div>
-                    <span className="text-sm text-canopy-text">Full Auto Mode</span>
-                    <p className="text-xs text-canopy-text/60">Low-friction sandboxed execution</p>
-                  </div>
-                </label>
-
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <button
-                    onClick={() => handleCodexChange({ search: !settings.codex.search })}
-                    className={cn(
-                      "relative w-11 h-6 rounded-full transition-colors",
-                      settings.codex.search ? "bg-canopy-accent" : "bg-canopy-border"
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform",
-                        settings.codex.search && "translate-x-5"
-                      )}
-                    />
-                  </button>
-                  <div>
-                    <span className="text-sm text-canopy-text">Enable Web Search</span>
-                    <p className="text-xs text-canopy-text/60">Allow Codex to search the web</p>
-                  </div>
-                </label>
-
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <button
-                    onClick={() =>
-                      handleCodexChange({
-                        dangerouslyBypassApprovalsAndSandbox:
-                          !settings.codex.dangerouslyBypassApprovalsAndSandbox,
-                      })
-                    }
-                    className={cn(
-                      "relative w-11 h-6 rounded-full transition-colors",
-                      settings.codex.dangerouslyBypassApprovalsAndSandbox
-                        ? "bg-red-500"
-                        : "bg-gray-600"
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform",
-                        settings.codex.dangerouslyBypassApprovalsAndSandbox && "translate-x-5"
-                      )}
-                    />
-                  </button>
-                  <div>
-                    <span className="text-sm text-canopy-text flex items-center gap-2">
-                      Bypass All Checks
-                      <AlertTriangle className="w-3.5 h-3.5 text-red-500" />
-                    </span>
-                    <p className="text-xs text-canopy-text/60">
-                      Skip sandbox and approval checks (EXTREMELY DANGEROUS)
-                    </p>
-                  </div>
-                </label>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-canopy-text">Custom Flags</label>
-                  <input
-                    type="text"
-                    value={settings.codex.customFlags || ""}
-                    onChange={(e) => handleCodexChange({ customFlags: e.target.value })}
-                    placeholder="e.g., --verbose"
-                    className="w-full bg-canopy-bg border border-canopy-border rounded-md px-3 py-2 text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:ring-1 focus:ring-canopy-accent"
-                  />
-                  <p className="text-xs text-canopy-text/60">
-                    Additional CLI flags to pass to Codex (space-separated)
-                  </p>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="flex justify-end pt-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => handleReset("codex")}
-              className="text-canopy-text/60 border-canopy-border hover:bg-canopy-border hover:text-canopy-text"
-            >
-              <RotateCcw className="w-4 h-4 mr-2" />
-              Reset to Defaults
+              <RotateCcw size={14} className="mr-1.5" />
+              Reset to defaults
             </Button>
           </div>
         </div>

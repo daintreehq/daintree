@@ -190,27 +190,14 @@ export type {
 export type { KeyAction, KeymapPreset, KeyMapConfig } from "./keymap.js";
 
 // Agent settings types - AI agent CLI configuration
-export type {
-  // Claude settings
-  ClaudeApprovalMode,
-  ClaudeSettings,
-  // Gemini settings
-  GeminiApprovalMode,
-  GeminiSettings,
-  // Codex settings
-  CodexSandboxPolicy,
-  CodexApprovalPolicy,
-  CodexSettings,
-  // Unified settings
-  AgentSettings,
-} from "./agentSettings.js";
+export type { AgentSettingsEntry, AgentSettings } from "./agentSettings.js";
 
 // Agent settings helpers
 export {
   DEFAULT_AGENT_SETTINGS,
-  generateClaudeFlags,
-  generateGeminiFlags,
-  generateCodexFlags,
+  DEFAULT_DANGEROUS_ARGS,
+  getAgentSettingsEntry,
+  generateAgentFlags,
 } from "./agentSettings.js";
 
 // Event types - event context for correlation

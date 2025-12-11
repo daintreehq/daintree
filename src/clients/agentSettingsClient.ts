@@ -1,23 +1,15 @@
-import type { AgentSettings, ClaudeSettings, GeminiSettings, CodexSettings } from "@shared/types";
+import type { AgentSettings, AgentSettingsEntry } from "@shared/types";
 
 export const agentSettingsClient = {
   get: (): Promise<AgentSettings> => {
     return window.electron.agentSettings.get();
   },
 
-  setClaude: (settings: Partial<ClaudeSettings>): Promise<AgentSettings> => {
-    return window.electron.agentSettings.setClaude(settings);
+  set: (agentId: string, settings: Partial<AgentSettingsEntry>): Promise<AgentSettings> => {
+    return window.electron.agentSettings.set(agentId, settings);
   },
 
-  setGemini: (settings: Partial<GeminiSettings>): Promise<AgentSettings> => {
-    return window.electron.agentSettings.setGemini(settings);
-  },
-
-  setCodex: (settings: Partial<CodexSettings>): Promise<AgentSettings> => {
-    return window.electron.agentSettings.setCodex(settings);
-  },
-
-  reset: (agentType?: "claude" | "gemini" | "codex"): Promise<AgentSettings> => {
+  reset: (agentType?: string): Promise<AgentSettings> => {
     return window.electron.agentSettings.reset(agentType);
   },
 } as const;

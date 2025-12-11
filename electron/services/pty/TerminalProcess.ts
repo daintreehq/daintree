@@ -17,8 +17,8 @@ import {
   SEMANTIC_BUFFER_MAX_LINES,
   SEMANTIC_BUFFER_MAX_LINE_LENGTH,
   SEMANTIC_FLUSH_INTERVAL_MS,
-  SCROLLBACK_BY_TYPE,
   DEFAULT_SCROLLBACK,
+  AGENT_SCROLLBACK,
   WRITE_MAX_CHUNK_SIZE,
   WRITE_INTERVAL_MS,
 } from "./types.js";
@@ -104,9 +104,8 @@ export class TerminalProcess {
     const args = options.args || this.getDefaultShellArgs(shell);
     const spawnedAt = Date.now();
 
-    this.isAgentTerminal =
-      options.type === "claude" || options.type === "gemini" || options.type === "codex";
-    const agentId = this.isAgentTerminal ? id : undefined;
+    this.isAgentTerminal = options.kind === "agent" || !!options.agentId;
+    const agentId = this.isAgentTerminal ? options.agentId ?? id : undefined;
 
     // Merge environment
     const baseEnv = process.env as Record<string, string | undefined>;
@@ -174,9 +173,7 @@ export class TerminalProcess {
     }
 
     // Create headless terminal
-    const scrollback = options.type
-      ? (SCROLLBACK_BY_TYPE[options.type] ?? DEFAULT_SCROLLBACK)
-      : DEFAULT_SCROLLBACK;
+    const scrollback = this.isAgentTerminal ? AGENT_SCROLLBACK : DEFAULT_SCROLLBACK;
     const headlessTerminal = new HeadlessTerminal({
       cols: options.cols,
       rows: options.rows,
@@ -193,6 +190,7 @@ export class TerminalProcess {
       ptyProcess,
       cwd: options.cwd,
       shell,
+      kind: options.kind,
       type: options.type,
       title: options.title,
       worktreeId: options.worktreeId,
@@ -235,7 +233,7 @@ export class TerminalProcess {
     }
 
     // Emit agent:spawned event
-    if (this.isAgentTerminal && agentId && options.type) {
+    if (this.isAgentTerminal && agentId) {
       const spawnedPayload = {
         agentId,
         terminalId: id,

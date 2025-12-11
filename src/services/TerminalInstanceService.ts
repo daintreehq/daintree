@@ -6,9 +6,10 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { ImageAddon } from "@xterm/addon-image";
 import { SearchAddon } from "@xterm/addon-search";
 import { terminalClient, systemClient } from "@/clients";
-import { TerminalRefreshTier, TerminalType } from "@/types";
+import { TerminalRefreshTier, TerminalType, TerminalKind } from "@/types";
 import { detectHardware, HardwareProfile } from "@/utils/hardwareDetection";
 import { SharedRingBuffer, PacketParser } from "@shared/utils/SharedRingBuffer";
+import { getAgentConfig } from "@/config/agents";
 
 type RefreshTierProvider = () => TerminalRefreshTier;
 
@@ -17,6 +18,8 @@ type ResizeJobId = { type: "timeout"; id: number } | { type: "idle"; id: number 
 interface ManagedTerminal {
   terminal: Terminal;
   type: TerminalType;
+  kind?: TerminalKind;
+  agentId?: string;
   fitAddon: FitAddon;
   webglAddon?: WebglAddon;
   serializeAddon: SerializeAddon;
@@ -905,12 +908,18 @@ class TerminalInstanceService {
    * This is more robust than regex filtering as it handles stream chunking correctly.
    */
   private setupParserHandlers(managed: ManagedTerminal): void {
-    if (managed.type !== "claude") return;
+    const kind: TerminalKind | undefined = (managed as any).kind;
+    const agentId = (managed as any).agentId as string | undefined;
+    if (kind !== "agent" && managed.type !== "claude") return;
+
+    const agentConfig = agentId ? getAgentConfig(agentId) : null;
+    const shouldBlockSequences =
+      agentConfig?.capabilities?.blockAltScreen || agentConfig?.capabilities?.blockMouseReporting;
 
     // Helper to check if we should block the sequence
     const shouldBlock = () => {
-      // Block always for Claude terminals to prevent TUI mode hijacking and bouncing
-      return true;
+      // Block for configured agent terminals to prevent TUI mode hijacking and bouncing
+      return shouldBlockSequences ?? false;
     };
 
     // 1. Intercept DECSET (CSI ? ... h) - Enable Mode

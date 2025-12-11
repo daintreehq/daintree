@@ -8,7 +8,7 @@ import type {
   AgentStateChangeTrigger,
 } from "@/types";
 import { terminalClient, agentSettingsClient } from "@/clients";
-import { generateClaudeFlags, generateGeminiFlags, generateCodexFlags } from "@shared/types";
+import { generateAgentFlags } from "@shared/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { terminalPersistence } from "../persistence/terminalPersistence";
@@ -29,6 +29,7 @@ const DOCK_TERM_HEIGHT = DOCK_HEIGHT - HEADER_HEIGHT - PADDING_Y;
 export type TerminalInstance = TerminalInstanceType;
 
 export interface AddTerminalOptions {
+  kind?: "terminal" | "agent";
   type?: TerminalType;
   /** Agent ID when type is an agent - enables extensibility for new agents */
   agentId?: string;
@@ -147,10 +148,12 @@ export const createTerminalRegistrySlice =
     trashedTerminals: new Map(),
 
     addTerminal: async (options) => {
-      const type = options.type || "terminal";
-      // Derive agentId: explicit option, or from type if it's a registered agent
-      const agentId = options.agentId ?? (isRegisteredAgent(type) ? type : undefined);
-      const title = options.title || getDefaultTitle(type, agentId);
+      const requestedKind = options.kind ?? (options.agentId ? "agent" : "terminal");
+      const legacyType = options.type || "terminal";
+      // Derive agentId: explicit option, or from legacy type if it's a registered agent
+      const agentId = options.agentId ?? (isRegisteredAgent(legacyType) ? legacyType : undefined);
+      const kind: "terminal" | "agent" = agentId ? "agent" : requestedKind;
+      const title = options.title || getDefaultTitle(legacyType, agentId);
 
       // Auto-dock if grid is full and user requested grid location
       const currentGridCount = get().terminals.filter(
@@ -178,21 +181,24 @@ export const createTerminalRegistrySlice =
             cols: 80,
             rows: 24,
             command: commandToExecute,
-            type,
+            kind,
+            type: legacyType,
+            agentId,
             title,
             worktreeId: options.worktreeId,
           });
         }
 
         // Determine if this is an agent terminal (by agentId or legacy type)
-        const isAgent = !!agentId || isRegisteredAgent(type);
+        const isAgent = kind === "agent";
 
         const agentState = options.agentState ?? (isAgent ? "idle" : undefined);
         const lastStateChange =
           options.lastStateChange ?? (agentState !== undefined ? Date.now() : undefined);
         const terminal: TerminalInstance = {
           id,
-          type,
+          kind,
+          type: legacyType,
           agentId,
           title,
           worktreeId: options.worktreeId,
@@ -726,17 +732,7 @@ export const createTerminalRegistrySlice =
             const agentConfig = getAgentConfig(effectiveAgentId);
             const baseCommand = agentConfig?.command || effectiveAgentId;
             let flags: string[] = [];
-            switch (effectiveAgentId) {
-              case "claude":
-                flags = generateClaudeFlags(agentSettings.claude);
-                break;
-              case "gemini":
-                flags = generateGeminiFlags(agentSettings.gemini);
-                break;
-              case "codex":
-                flags = generateCodexFlags(agentSettings.codex);
-                break;
-            }
+            flags = generateAgentFlags(agentSettings.agents?.[effectiveAgentId] ?? {});
             commandToRun = flags.length > 0 ? `${baseCommand} ${flags.join(" ")}` : baseCommand;
           }
         } catch (error) {
@@ -767,7 +763,9 @@ export const createTerminalRegistrySlice =
           cwd: currentTerminal.cwd,
           cols: spawnCols,
           rows: spawnRows,
+          kind: currentTerminal.kind ?? (isAgent ? "agent" : "terminal"),
           type: currentTerminal.type,
+          agentId: currentTerminal.agentId,
           title: currentTerminal.title,
           worktreeId: currentTerminal.worktreeId,
           command: commandToRun,

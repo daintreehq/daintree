@@ -24,9 +24,7 @@ import type {
   CreateWorktreeOptions,
   IpcInvokeMap,
   IpcEventMap,
-  ClaudeSettings,
-  GeminiSettings,
-  CodexSettings,
+  AgentSettingsEntry,
   PRDetectedPayload,
   PRClearedPayload,
   GitStatus,
@@ -566,17 +564,10 @@ const api: ElectronAPI = {
   agentSettings: {
     get: () => _typedInvoke(CHANNELS.AGENT_SETTINGS_GET),
 
-    setClaude: (settings: Partial<ClaudeSettings>) =>
-      _typedInvoke(CHANNELS.AGENT_SETTINGS_SET, { agentType: "claude", settings }),
+    set: (agentId: string, settings: Partial<AgentSettingsEntry>) =>
+      _typedInvoke(CHANNELS.AGENT_SETTINGS_SET, { agentType: agentId, settings }),
 
-    setGemini: (settings: Partial<GeminiSettings>) =>
-      _typedInvoke(CHANNELS.AGENT_SETTINGS_SET, { agentType: "gemini", settings }),
-
-    setCodex: (settings: Partial<CodexSettings>) =>
-      _typedInvoke(CHANNELS.AGENT_SETTINGS_SET, { agentType: "codex", settings }),
-
-    reset: (agentType?: "claude" | "gemini" | "codex") =>
-      _typedInvoke(CHANNELS.AGENT_SETTINGS_RESET, agentType),
+    reset: (agentType?: string) => _typedInvoke(CHANNELS.AGENT_SETTINGS_RESET, agentType),
   },
 
   // GitHub API

@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import { ChevronDown, ChevronRight, TreePine, Moon, CheckCircle, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { hibernationClient, cliAvailabilityClient, agentSettingsClient } from "@/clients";
+import { getAgentIds, getAgentConfig } from "@/config/agents";
+import { DEFAULT_AGENT_SETTINGS, getAgentSettingsEntry } from "@shared/types";
 import type { HibernationConfig, CliAvailability, AgentSettings } from "@shared/types";
 
 interface GeneralTabProps {
@@ -92,7 +94,7 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
     Promise.all([cliAvailabilityClient.get(), agentSettingsClient.get()])
       .then(([availability, settings]) => {
         setCliAvailability(availability);
-        setAgentSettings(settings);
+        setAgentSettings(settings ?? DEFAULT_AGENT_SETTINGS);
       })
       .catch((error) => {
         console.error("Failed to load agent availability:", error);
@@ -170,19 +172,16 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
           {!cliAvailability || !agentSettings ? (
             <div className="text-sm text-canopy-text/40">Loading agent status...</div>
           ) : (
-            (
-              [
-                { name: "Claude", type: "claude" as const },
-                { name: "Gemini", type: "gemini" as const },
-                { name: "Codex", type: "codex" as const },
-              ] as const
-            ).map((agent) => {
-              const isEnabled = agentSettings[agent.type]?.enabled ?? true;
-              const isAvailable = cliAvailability[agent.type] ?? false;
+            getAgentIds().map((id) => {
+              const config = getAgentConfig(id);
+              const agentEntry = getAgentSettingsEntry(agentSettings, id);
+              const isEnabled = agentEntry.enabled ?? true;
+              const isAvailable = cliAvailability[id] ?? false;
+              const name = config?.name ?? id;
 
               return (
-                <div key={agent.type} className="flex items-center justify-between text-sm">
-                  <span className="text-canopy-text/70">{agent.name}</span>
+                <div key={id} className="flex items-center justify-between text-sm">
+                  <span className="text-canopy-text/70">{name}</span>
                   <div className="flex items-center gap-2">
                     {!isEnabled ? (
                       <span className="text-canopy-text/40 text-xs">Disabled</span>

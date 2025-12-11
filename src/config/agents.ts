@@ -1,5 +1,12 @@
 import type { ComponentType } from "react";
 import { ClaudeIcon, GeminiIcon, CodexIcon } from "@/components/icons";
+import {
+  AGENT_REGISTRY as BASE_AGENT_REGISTRY,
+  type AgentConfig as BaseAgentConfig,
+  getAgentConfig as getBaseAgentConfig,
+  getAgentIds as getBaseAgentIds,
+  isRegisteredAgent as isBaseRegisteredAgent,
+} from "../../shared/config/agentRegistry";
 
 export interface AgentIconProps {
   className?: string;
@@ -7,60 +14,35 @@ export interface AgentIconProps {
   brandColor?: string;
 }
 
-export interface AgentConfig {
-  id: string;
-  name: string;
-  command: string;
+export interface AgentConfig extends BaseAgentConfig {
   icon: ComponentType<AgentIconProps>;
-  color: string;
-  supportsContextInjection: boolean;
-  shortcut?: string | null;
-  tooltip?: string;
 }
 
-export const AGENT_REGISTRY: Record<string, AgentConfig> = {
-  claude: {
-    id: "claude",
-    name: "Claude",
-    command: "claude",
-    icon: ClaudeIcon,
-    color: "#CC785C",
-    supportsContextInjection: true,
-    shortcut: "Cmd/Ctrl+Alt+C",
-    tooltip: "deep, focused work",
-  },
-  gemini: {
-    id: "gemini",
-    name: "Gemini",
-    command: "gemini",
-    icon: GeminiIcon,
-    color: "#4285F4",
-    supportsContextInjection: true,
-    shortcut: "Cmd/Ctrl+Alt+G",
-    tooltip: "quick exploration",
-  },
-  codex: {
-    id: "codex",
-    name: "Codex",
-    command: "codex",
-    icon: CodexIcon,
-    color: "#10A37F",
-    supportsContextInjection: true,
-    shortcut: "Cmd/Ctrl+Alt+X",
-    tooltip: "careful, methodical runs",
-  },
+const ICON_MAP: Record<string, ComponentType<AgentIconProps>> = {
+  claude: ClaudeIcon,
+  gemini: GeminiIcon,
+  codex: CodexIcon,
 };
+
+export const AGENT_REGISTRY: Record<string, AgentConfig> = Object.fromEntries(
+  Object.entries(BASE_AGENT_REGISTRY).map(([id, config]) => {
+    return [id, { ...config, icon: ICON_MAP[id] ?? ClaudeIcon }];
+  })
+) as Record<string, AgentConfig>;
 
 export const AGENT_IDS = Object.keys(AGENT_REGISTRY) as string[];
 
 export function getAgentConfig(agentId: string): AgentConfig | undefined {
-  return AGENT_REGISTRY[agentId];
+  const config = getBaseAgentConfig(agentId);
+  if (!config) return undefined;
+  const icon = ICON_MAP[agentId] ?? ClaudeIcon;
+  return { ...config, icon };
 }
 
 export function isRegisteredAgent(agentId: string): boolean {
-  return agentId in AGENT_REGISTRY;
+  return isBaseRegisteredAgent(agentId);
 }
 
 export function getAgentIds(): string[] {
-  return AGENT_IDS;
+  return getBaseAgentIds();
 }

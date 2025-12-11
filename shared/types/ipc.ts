@@ -1,5 +1,7 @@
 import type {
   TerminalType,
+  TerminalKind,
+  AgentId,
   TerminalLocation,
   DevServerState,
   WorktreeState,
@@ -9,12 +11,7 @@ import type {
   GitStatus,
 } from "./domain.js";
 import type { TerminalActivityPayload } from "./terminal.js";
-import type {
-  AgentSettings,
-  ClaudeSettings,
-  GeminiSettings,
-  CodexSettings,
-} from "./agentSettings.js";
+import type { AgentSettings, AgentSettingsEntry } from "./agentSettings.js";
 import type { TerminalGridConfig } from "./config.js";
 import type { KeyAction } from "./keymap.js";
 
@@ -24,6 +21,10 @@ import type { KeyAction } from "./keymap.js";
 export interface TerminalSpawnOptions {
   /** Optional custom ID for the terminal */
   id?: string;
+  /** Terminal category */
+  kind?: TerminalKind;
+  /** Agent ID when kind is 'agent' */
+  agentId?: AgentId;
   /** Working directory for the terminal */
   cwd?: string;
   /** Shell executable to use (defaults to user's shell) */
@@ -34,7 +35,7 @@ export interface TerminalSpawnOptions {
   cols: number;
   /** Initial number of rows */
   rows: number;
-  /** Type of terminal */
+  /** Legacy type of terminal */
   type?: TerminalType;
   /** Display title for the terminal */
   title?: string;
@@ -48,10 +49,12 @@ export interface TerminalSpawnOptions {
 export interface TerminalState {
   /** Terminal ID */
   id: string;
-  /** Terminal type */
-  type: TerminalType;
-  /** Agent ID when type is an agent - enables extensibility */
-  agentId?: string;
+  /** Terminal category */
+  kind?: TerminalKind;
+  /** Legacy terminal type for persisted state */
+  type?: TerminalType;
+  /** Agent ID when kind is an agent - enables extensibility */
+  agentId?: AgentId;
   /** Display title */
   title: string;
   /** Current working directory */
@@ -102,6 +105,7 @@ export interface TerminalErrorPayload {
 export interface BackendTerminalInfo {
   id: string;
   projectId?: string;
+  kind?: TerminalKind;
   type?: TerminalType;
   title?: string;
   cwd: string;
@@ -114,6 +118,7 @@ export interface BackendTerminalInfo {
 export interface TerminalReconnectResult {
   exists: boolean;
   id?: string;
+  kind?: TerminalKind;
   type?: TerminalType;
   cwd?: string;
   agentState?: string;
@@ -124,6 +129,7 @@ export interface TerminalReconnectResult {
 export interface TerminalInfoPayload {
   id: string;
   projectId?: string;
+  kind?: TerminalKind;
   type?: TerminalType;
   title?: string;
   cwd: string;
@@ -305,14 +311,7 @@ export interface SystemWakePayload {
 }
 
 /** CLI availability status for AI agents */
-export interface CliAvailability {
-  /** Whether the Claude CLI is available */
-  claude: boolean;
-  /** Whether the Gemini CLI is available */
-  gemini: boolean;
-  /** Whether the Codex CLI is available */
-  codex: boolean;
-}
+export type CliAvailability = Record<AgentId, boolean>;
 
 // PR Detection IPC Payloads
 
@@ -444,7 +443,7 @@ export interface SystemSleepMetrics {
 /** Saved recipe terminal */
 export interface SavedRecipeTerminal {
   /** Terminal type */
-  type: "terminal" | "claude" | "gemini" | "codex";
+  type: AgentId | "terminal";
   /** Optional title */
   title?: string;
   /** Optional command */
@@ -727,7 +726,7 @@ export interface AgentDetectedPayload {
   /** Terminal ID where agent was detected */
   terminalId: string;
   /** Type of agent detected */
-  agentType: TerminalType;
+  agentType: AgentId;
   /** Process name that was detected */
   processName: string;
   /** Timestamp when detected */
@@ -739,7 +738,7 @@ export interface AgentExitedPayload {
   /** Terminal ID where agent exited */
   terminalId: string;
   /** Type of agent that exited */
-  agentType: TerminalType;
+  agentType: AgentId;
   /** Timestamp when exited */
   timestamp: number;
 }
@@ -1220,13 +1219,11 @@ export interface IpcInvokeMap {
     result: AgentSettings;
   };
   "agent-settings:set": {
-    args: [
-      payload: { agentType: "claude" | "gemini" | "codex"; settings: Record<string, unknown> },
-    ];
+    args: [payload: { agentType: AgentId; settings: Record<string, unknown> }];
     result: AgentSettings;
   };
   "agent-settings:reset": {
-    args: [agentType?: "claude" | "gemini" | "codex"];
+    args: [agentType?: AgentId];
     result: AgentSettings;
   };
 
@@ -1565,10 +1562,8 @@ export interface ElectronAPI {
   };
   agentSettings: {
     get(): Promise<AgentSettings>;
-    setClaude(settings: Partial<ClaudeSettings>): Promise<AgentSettings>;
-    setGemini(settings: Partial<GeminiSettings>): Promise<AgentSettings>;
-    setCodex(settings: Partial<CodexSettings>): Promise<AgentSettings>;
-    reset(agentType?: "claude" | "gemini" | "codex"): Promise<AgentSettings>;
+    set(agentId: AgentId, settings: Partial<AgentSettingsEntry>): Promise<AgentSettings>;
+    reset(agentId?: AgentId): Promise<AgentSettings>;
   };
   github: {
     getRepoStats(cwd: string, bypassCache?: boolean): Promise<RepositoryStats>;

@@ -204,15 +204,14 @@ export interface RunRecord {
 }
 
 // Terminal Types
-
-/** Terminal kind: distinguishes between agent and standard terminals */
+export type AgentId = string;
+export type LegacyAgentType = "claude" | "gemini" | "codex";
+/** Terminal kind: distinguishes between default terminals and agent-driven terminals */
 export type TerminalKind = "terminal" | "agent";
-
 /**
- * Terminal type: AI agents (claude/gemini/codex) or standard terminal
- * @deprecated Use TerminalKind + agentId instead. This is kept for backward compatibility.
+ * @deprecated Use TerminalKind + agentId instead. This is kept for backward compatibility/migrations.
  */
-export type TerminalType = "terminal" | "claude" | "gemini" | "codex";
+export type TerminalType = "terminal" | LegacyAgentType;
 
 /** Location of a terminal instance in the UI */
 export type TerminalLocation = "grid" | "dock" | "trash";
@@ -261,10 +260,16 @@ export interface TerminalInstance {
   id: string;
   /** ID of the worktree this terminal is associated with */
   worktreeId?: string;
-  /** Type of terminal */
-  type: TerminalType;
-  /** Agent ID when type is an agent (claude, gemini, codex, etc.) - enables extensibility */
-  agentId?: string;
+  /** Terminal category */
+  kind?: TerminalKind;
+  /**
+   * Legacy field retained for persistence; new code should prefer `kind`.
+   * - "terminal" for default terminals
+   * - legacy agent ids ("claude", "gemini", "codex") when migrated from old state
+   */
+  type?: TerminalType;
+  /** Agent ID when kind is 'agent' */
+  agentId?: AgentId;
   /** Display title for the terminal tab */
   title: string;
   /** Current working directory of the terminal */
@@ -355,10 +360,12 @@ export interface Project {
 export interface TerminalSnapshot {
   /** Terminal ID */
   id: string;
+  /** Terminal category */
+  kind?: TerminalKind;
   /** Terminal type */
-  type: TerminalType;
-  /** Agent ID when type is an agent - enables extensibility */
-  agentId?: string;
+  type?: TerminalType;
+  /** Agent ID when kind is an agent - enables extensibility */
+  agentId?: AgentId;
   /** Display title */
   title: string;
   /** Working directory */
@@ -401,7 +408,7 @@ export interface ProjectState {
 // Terminal Recipe Types
 
 /** Recipe terminal type */
-export type RecipeTerminalType = "claude" | "gemini" | "codex" | "terminal";
+export type RecipeTerminalType = AgentId | "terminal";
 
 /** A single terminal definition within a recipe */
 export interface RecipeTerminal {

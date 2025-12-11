@@ -297,47 +297,22 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
       const newLinks: SidecarLink[] = [];
       let order = 0;
 
-      if (availability.claude) {
-        const id = "discovered-claude";
+      Object.entries(availability).forEach(([agentId, isAvailable]) => {
+        if (!isAvailable) return;
+        const template = LINK_TEMPLATES[agentId];
+        if (!template) return;
+        const id = `discovered-${agentId}`;
         const existing = findExisting(id);
         newLinks.push({
           id,
-          ...LINK_TEMPLATES.claude,
-          title: existing?.title ?? LINK_TEMPLATES.claude.title,
-          url: existing?.url ?? LINK_TEMPLATES.claude.url,
+          ...template,
+          title: existing?.title ?? template.title,
+          url: existing?.url ?? template.url,
           type: "discovered",
           enabled: existing?.enabled ?? true,
           order: order++,
         });
-      }
-
-      if (availability.gemini) {
-        const id = "discovered-gemini";
-        const existing = findExisting(id);
-        newLinks.push({
-          id,
-          ...LINK_TEMPLATES.gemini,
-          title: existing?.title ?? LINK_TEMPLATES.gemini.title,
-          url: existing?.url ?? LINK_TEMPLATES.gemini.url,
-          type: "discovered",
-          enabled: existing?.enabled ?? true,
-          order: order++,
-        });
-      }
-
-      if (availability.codex) {
-        const id = "discovered-chatgpt";
-        const existing = findExisting(id);
-        newLinks.push({
-          id,
-          ...LINK_TEMPLATES.chatgpt,
-          title: existing?.title ?? LINK_TEMPLATES.chatgpt.title,
-          url: existing?.url ?? LINK_TEMPLATES.chatgpt.url,
-          type: "discovered",
-          enabled: existing?.enabled ?? true,
-          order: order++,
-        });
-      }
+      });
 
       const userLinks = existingUserLinks.map((l) => ({ ...l, order: order++ }));
 

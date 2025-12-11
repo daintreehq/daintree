@@ -5,10 +5,9 @@ import { useWorktrees } from "./useWorktrees";
 import { isElectronAvailable } from "./useElectron";
 import { cliAvailabilityClient, agentSettingsClient } from "@/clients";
 import type { AgentSettings, CliAvailability } from "@shared/types";
-import { generateClaudeFlags, generateGeminiFlags, generateCodexFlags } from "@shared/types";
+import { generateAgentFlags } from "@shared/types";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
-
-export type AgentType = "claude" | "gemini" | "codex" | "terminal";
+import { getAgentIds } from "@/config/agents";
 
 function isWindows(): boolean {
   return navigator.platform.toLowerCase().startsWith("win");
@@ -75,19 +74,6 @@ function buildAgentCommand(
   return parts.join(" ");
 }
 
-function generateAgentFlags(agentId: string, agentSettings: AgentSettings): string[] {
-  switch (agentId) {
-    case "claude":
-      return generateClaudeFlags(agentSettings.claude);
-    case "gemini":
-      return generateGeminiFlags(agentSettings.gemini);
-    case "codex":
-      return generateCodexFlags(agentSettings.codex);
-    default:
-      return [];
-  }
-}
-
 export interface LaunchAgentOptions {
   location?: AddTerminalOptions["location"];
   cwd?: string;
@@ -109,11 +95,9 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
   const { worktreeMap, activeId } = useWorktrees();
   const currentProject = useProjectStore((state) => state.currentProject);
 
-  const [availability, setAvailability] = useState<CliAvailability>({
-    claude: false,
-    gemini: false,
-    codex: false,
-  });
+  const [availability, setAvailability] = useState<CliAvailability>(
+    Object.fromEntries(getAgentIds().map((id) => [id, false]))
+  );
   const [isCheckingAvailability, setIsCheckingAvailability] = useState(true);
   const [agentSettings, setAgentSettings] = useState<AgentSettings | null>(null);
 
@@ -180,7 +164,8 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
 
       let command: string | undefined;
       if (agentConfig) {
-        const flags = agentSettings ? generateAgentFlags(agentId, agentSettings) : [];
+        const entry = agentSettings?.agents?.[agentId] ?? {};
+        const flags = generateAgentFlags(entry);
         command = buildAgentCommand(
           agentConfig.command,
           agentId,
@@ -190,11 +175,9 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         );
       }
 
-      // Determine type - for agents use the agentId as type for backward compatibility
-      const terminalType = isAgent ? (agentId as AgentType) : "terminal";
-
       const options: AddTerminalOptions = {
-        type: terminalType,
+        kind: isAgent ? "agent" : "terminal",
+        type: isAgent ? (agentId as any) : "terminal",
         agentId: isAgent ? agentId : undefined,
         title: agentConfig?.name ?? "Terminal",
         cwd,

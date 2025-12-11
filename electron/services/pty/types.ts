@@ -1,7 +1,12 @@
 import type * as pty from "node-pty";
 import type { Terminal as HeadlessTerminal } from "@xterm/headless";
 import type { SerializeAddon } from "@xterm/addon-serialize";
-import type { AgentState, TerminalType } from "../../../shared/types/domain.js";
+import type {
+  AgentState,
+  TerminalType,
+  TerminalKind,
+  AgentId,
+} from "../../../shared/types/domain.js";
 import type { PtyHostSpawnOptions } from "../../../shared/types/pty-host.js";
 import type { ProcessDetector } from "../ProcessDetector.js";
 
@@ -14,10 +19,11 @@ export interface TerminalInfo {
   ptyProcess: pty.IPty;
   cwd: string;
   shell: string;
+  kind?: TerminalKind;
   type?: TerminalType;
+  agentId?: AgentId;
   title?: string;
   worktreeId?: string;
-  agentId?: string;
   spawnedAt: number;
   wasKilled?: boolean;
   agentState?: AgentState;
@@ -59,9 +65,10 @@ export interface TerminalSnapshot {
   lastInputTime: number;
   lastOutputTime: number;
   lastCheckTime: number;
+  kind?: TerminalKind;
   type?: TerminalType;
   worktreeId?: string;
-  agentId?: string;
+  agentId?: AgentId;
   agentState?: AgentState;
   lastStateChange?: number;
   error?: string;
@@ -78,13 +85,8 @@ export const SEMANTIC_FLUSH_INTERVAL_MS = 100;
 export const WRITE_MAX_CHUNK_SIZE = 50;
 export const WRITE_INTERVAL_MS = 5;
 
-// Scrollback configuration per terminal type
-export const SCROLLBACK_BY_TYPE: Record<TerminalType, number> = {
-  claude: 10000,
-  gemini: 10000,
-  codex: 10000,
-  terminal: 2000,
-};
+// Scrollback configuration
 export const DEFAULT_SCROLLBACK = 1000;
+export const AGENT_SCROLLBACK = 10000;
 
 export const TRASH_TTL_MS = 120 * 1000;
