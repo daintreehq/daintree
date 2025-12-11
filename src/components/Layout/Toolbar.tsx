@@ -22,6 +22,8 @@ import { AgentButton } from "./AgentButton";
 import { useProjectStore } from "@/store/projectStore";
 import { useTerminalStore } from "@/store/terminalStore";
 import { useSidecarStore } from "@/store";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { useRepositoryStats } from "@/hooks/useRepositoryStats";
 import type { CliAvailability, AgentSettings } from "@shared/types";
 
@@ -51,6 +53,11 @@ export function Toolbar({
   const currentProject = useProjectStore((state) => state.currentProject);
   const terminals = useTerminalStore(useShallow((state) => state.terminals));
   const { stats, error: statsError, refresh: refreshStats } = useRepositoryStats();
+  const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
+  const activeWorktree = useWorktreeDataStore((state) =>
+    activeWorktreeId ? state.worktrees.get(activeWorktreeId) : null
+  );
+  const branchName = activeWorktree?.branch;
 
   const sidecarOpen = useSidecarStore((state) => state.isOpen);
   const toggleSidecar = useSidecarStore((state) => state.toggle);
@@ -138,6 +145,14 @@ export function Toolbar({
             <span className="text-xs font-medium text-white tracking-wide drop-shadow-md">
               {currentProject.name}
             </span>
+            {branchName && (
+              <span
+                className="text-xs font-medium text-white/60 tracking-wide drop-shadow-md"
+                aria-label={`Current branch ${branchName}`}
+              >
+                [{branchName}]
+              </span>
+            )}
           </div>
         ) : (
           <div className="flex items-center gap-2 select-none">
