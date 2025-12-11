@@ -22,6 +22,7 @@ import {
   WRITE_MAX_CHUNK_SIZE,
   WRITE_INTERVAL_MS,
 } from "./types.js";
+import { getTerminalSerializerService } from "./TerminalSerializerService.js";
 import { events } from "../events.js";
 import { AgentSpawnedSchema, AgentStateChangedSchema } from "../../schemas/agent.js";
 import type { PtyPool } from "../PtyPool.js";
@@ -105,7 +106,7 @@ export class TerminalProcess {
     const spawnedAt = Date.now();
 
     this.isAgentTerminal = options.kind === "agent" || !!options.agentId;
-    const agentId = this.isAgentTerminal ? options.agentId ?? id : undefined;
+    const agentId = this.isAgentTerminal ? (options.agentId ?? id) : undefined;
 
     // Merge environment
     const baseEnv = process.env as Record<string, string | undefined>;
@@ -427,11 +428,37 @@ export class TerminalProcess {
   }
 
   /**
-   * Get serialized terminal state for fast restoration.
+   * Get serialized terminal state for fast restoration (synchronous).
+   * Use getSerializedStateAsync() for large terminals to avoid blocking.
    */
   getSerializedState(): string | null {
     try {
       return this.terminalInfo.serializeAddon.serialize();
+    } catch (error) {
+      console.error(`[TerminalProcess] Failed to serialize terminal ${this.id}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Get serialized terminal state asynchronously.
+   * Yields to event loop for large terminals (>1000 lines) to prevent blocking.
+   * Implements single-flight per terminal to prevent request pileup.
+   */
+  async getSerializedStateAsync(): Promise<string | null> {
+    const terminal = this.terminalInfo;
+
+    try {
+      const lineCount = terminal.headlessTerminal.buffer.active.length;
+      const serializerService = getTerminalSerializerService();
+
+      if (serializerService.shouldUseAsync(lineCount)) {
+        return await serializerService.serializeAsync(this.id, () =>
+          terminal.serializeAddon.serialize()
+        );
+      }
+
+      return terminal.serializeAddon.serialize();
     } catch (error) {
       console.error(`[TerminalProcess] Failed to serialize terminal ${this.id}:`, error);
       return null;

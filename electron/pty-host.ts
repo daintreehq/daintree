@@ -612,13 +612,25 @@ port.on("message", (rawMsg: any) => {
       }
 
       case "get-serialized-state": {
-        const serializedState = ptyManager.getSerializedState(msg.id);
-        sendEvent({
-          type: "serialized-state",
-          requestId: msg.requestId,
-          id: msg.id,
-          state: serializedState,
-        });
+        (async () => {
+          try {
+            const serializedState = await ptyManager.getSerializedStateAsync(msg.id);
+            sendEvent({
+              type: "serialized-state",
+              requestId: msg.requestId,
+              id: msg.id,
+              state: serializedState,
+            });
+          } catch (error) {
+            console.error(`[PtyHost] Failed to serialize terminal ${msg.id}:`, error);
+            sendEvent({
+              type: "serialized-state",
+              requestId: msg.requestId,
+              id: msg.id,
+              state: null,
+            });
+          }
+        })();
         break;
       }
 

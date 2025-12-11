@@ -13,6 +13,7 @@ import {
   type TerminalSnapshot,
   type PtyManagerEvents,
 } from "./pty/index.js";
+import { disposeTerminalSerializerService } from "./pty/TerminalSerializerService.js";
 
 /**
  * PtyManager - Facade for terminal process management.
@@ -291,7 +292,7 @@ export class PtyManager extends EventEmitter {
   }
 
   /**
-   * Get serialized terminal state.
+   * Get serialized terminal state (synchronous).
    */
   getSerializedState(id: string): string | null {
     const terminal = this.terminals.get(id);
@@ -299,6 +300,17 @@ export class PtyManager extends EventEmitter {
       return null;
     }
     return terminal.getSerializedState();
+  }
+
+  /**
+   * Get serialized terminal state (async, uses worker for large terminals).
+   */
+  async getSerializedStateAsync(id: string): Promise<string | null> {
+    const terminal = this.terminals.get(id);
+    if (!terminal) {
+      return null;
+    }
+    return terminal.getSerializedStateAsync();
   }
 
   /**
@@ -464,6 +476,8 @@ export class PtyManager extends EventEmitter {
     this.terminals.clear();
     this.registry.dispose();
     this.removeAllListeners();
+
+    disposeTerminalSerializerService();
   }
 }
 
