@@ -140,7 +140,7 @@ export const createTerminalBulkActionsSlice = (
     restartFailedAgents: async () => {
       const terminals = getTerminals();
       const failedAgents = terminals.filter(
-        (t) => t.agentState === "failed" && isAgentTerminal(t.type)
+        (t) => t.agentState === "failed" && isAgentTerminal(t.kind ?? t.type, t.agentId)
       );
       await restartTerminals(failedAgents);
     },
@@ -148,7 +148,7 @@ export const createTerminalBulkActionsSlice = (
     restartIdleAgents: async () => {
       const terminals = getTerminals();
       const idleAgents = terminals.filter(
-        (t) => t.agentState === "idle" && isAgentTerminal(t.type)
+        (t) => t.agentState === "idle" && isAgentTerminal(t.kind ?? t.type, t.agentId)
       );
       await restartTerminals(idleAgents);
     },

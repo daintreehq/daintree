@@ -29,7 +29,8 @@ export interface ActivityState {
 export interface TerminalPaneProps {
   id: string;
   title: string;
-  type: TerminalType;
+  type?: TerminalType;
+  agentId?: string;
   worktreeId?: string;
   cwd: string;
   isFocused: boolean;
@@ -56,6 +57,7 @@ function TerminalPaneComponent({
   id,
   title,
   type,
+  agentId,
   worktreeId,
   cwd,
   isFocused,
@@ -294,14 +296,15 @@ function TerminalPaneComponent({
       tabIndex={0}
       role="group"
       aria-label={(() => {
-        if (type === "terminal") {
+        const effectiveAgentId = agentId ?? type;
+        if (!effectiveAgentId || effectiveAgentId === "terminal") {
           return `Terminal: ${title}`;
         }
-        const agentConfig = getAgentConfig(type);
+        const agentConfig = getAgentConfig(effectiveAgentId);
         if (agentConfig) {
           return `${agentConfig.name} agent: ${title}`;
         }
-        return `${type} session: ${title}`;
+        return `${effectiveAgentId} session: ${title}`;
       })()}
     >
       <TerminalHeader

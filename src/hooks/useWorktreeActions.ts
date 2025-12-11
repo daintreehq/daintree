@@ -1,6 +1,5 @@
 import { useCallback } from "react";
 import type { WorktreeState, ProjectDevServerSettings, RecipeTerminal } from "@/types";
-import type { AgentType } from "@/hooks/useAgentLauncher";
 import { copyTreeClient, devServerClient, githubClient, systemClient } from "@/clients";
 import { useErrorStore, type AppError } from "@/store";
 import { useRecipeStore } from "@/store/recipeStore";
@@ -9,7 +8,7 @@ import { formatBytes } from "@/lib/formatBytes";
 export interface UseWorktreeActionsOptions {
   projectSettings?: { devServer?: ProjectDevServerSettings };
   onOpenRecipeEditor?: (worktreeId: string, initialTerminals?: RecipeTerminal[]) => void;
-  launchAgent?: (type: AgentType, options: { worktreeId: string; location: "grid" }) => void;
+  launchAgent?: (agentId: string, options: { worktreeId: string; location: "grid" }) => void;
 }
 
 export interface WorktreeActions {
@@ -20,7 +19,7 @@ export interface WorktreeActions {
   handleOpenPR: (worktree: WorktreeState) => void;
   handleCreateRecipe: (worktreeId: string) => void;
   handleSaveLayout: (worktree: WorktreeState) => void;
-  handleLaunchAgent: (worktreeId: string, type: AgentType) => void;
+  handleLaunchAgent: (worktreeId: string, agentId: string) => void;
 }
 
 export function useWorktreeActions({
@@ -135,8 +134,8 @@ export function useWorktreeActions({
   );
 
   const handleLaunchAgent = useCallback(
-    (worktreeId: string, type: AgentType) => {
-      launchAgent?.(type, { worktreeId, location: "grid" });
+    (worktreeId: string, agentId: string) => {
+      launchAgent?.(agentId, { worktreeId, location: "grid" });
     },
     [launchAgent]
   );

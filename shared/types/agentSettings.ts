@@ -47,12 +47,17 @@ export function getAgentSettingsEntry(
   return settings.agents[agentId] ?? {};
 }
 
-export function generateAgentFlags(entry: AgentSettingsEntry): string[] {
+export function generateAgentFlags(
+  entry: AgentSettingsEntry,
+  agentId?: string
+): string[] {
   const flags: string[] = [];
-  if (entry.dangerousEnabled && entry.dangerousArgs) {
-    const trimmed = entry.dangerousArgs.trim();
-    if (trimmed) {
-      flags.push(...trimmed.split(/\s+/));
+  if (entry.dangerousEnabled) {
+    // Use entry.dangerousArgs if set, otherwise fall back to default for this agent
+    const dangerousArgs =
+      entry.dangerousArgs?.trim() || (agentId ? DEFAULT_DANGEROUS_ARGS[agentId] : "");
+    if (dangerousArgs) {
+      flags.push(...dangerousArgs.split(/\s+/));
     }
   }
   if (entry.customFlags) {

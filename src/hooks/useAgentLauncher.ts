@@ -165,7 +165,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
       let command: string | undefined;
       if (agentConfig) {
         const entry = agentSettings?.agents?.[agentId] ?? {};
-        const flags = generateAgentFlags(entry);
+        const flags = generateAgentFlags(entry, agentId);
         command = buildAgentCommand(
           agentConfig.command,
           agentId,

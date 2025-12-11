@@ -101,7 +101,7 @@ export function SettingsDialog({
       onClick={onClose}
     >
       <div
-        className="bg-canopy-sidebar border border-canopy-border rounded-[var(--radius-xl)] shadow-xl w-full max-w-2xl mx-4 max-h-[80vh] min-h-[400px] flex overflow-hidden"
+        className="bg-canopy-sidebar border border-canopy-border rounded-[var(--radius-xl)] shadow-xl w-full max-w-4xl mx-4 h-[75vh] min-h-xl max-h-4xl flex overflow-hidden"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"

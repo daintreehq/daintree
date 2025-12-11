@@ -1,20 +1,15 @@
-import type { TerminalType } from "@shared/types/domain";
+import { getAgentConfig } from "@/config/agents";
 
 function isValidHexColor(color: string): boolean {
   return /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{4}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/.test(color);
 }
 
-export const BRAND_COLORS = {
-  claude: "#CC785C",
-  gemini: "#4285F4",
-  codex: "#E5E5E5",
-} as const satisfies Record<Extract<TerminalType, "claude" | "gemini" | "codex">, string>;
-
-export function getBrandColorHex(type: TerminalType): string | undefined {
-  if (type === "claude" || type === "gemini" || type === "codex") {
-    return BRAND_COLORS[type];
+export function getBrandColorHex(agentIdOrType?: string): string | undefined {
+  if (!agentIdOrType || agentIdOrType === "terminal") {
+    return undefined;
   }
-  return undefined;
+  const config = getAgentConfig(agentIdOrType);
+  return config?.color;
 }
 
 /**

@@ -2,24 +2,24 @@ import { useCallback, useState, useEffect, useRef, useSyncExternalStore } from "
 import { useShallow } from "zustand/react/shallow";
 import { useTerminalStore, type TerminalInstance } from "@/store/terminalStore";
 import { useErrorStore } from "@/store/errorStore";
-import type { TerminalType } from "@/components/Terminal/TerminalPane";
 import type { AgentState } from "@/types";
 import { copyTreeClient } from "@/clients";
 
 type CopyTreeFormat = "xml" | "json" | "markdown" | "tree" | "ndjson";
 
 // Different AI agents have different preferences for context format
-const AGENT_FORMAT_MAP: Record<TerminalType, CopyTreeFormat> = {
+const AGENT_FORMAT_MAP: Record<string, CopyTreeFormat> = {
   claude: "xml",
   gemini: "markdown",
   codex: "xml",
   terminal: "xml",
 };
 
-function getOptimalFormat(terminalType: TerminalType): CopyTreeFormat {
-  const format = AGENT_FORMAT_MAP[terminalType];
+function getOptimalFormat(agentIdOrType?: string): CopyTreeFormat {
+  if (!agentIdOrType) return "xml";
+  const format = AGENT_FORMAT_MAP[agentIdOrType];
   if (!format) {
-    console.warn(`Unknown terminal type "${terminalType}", defaulting to XML format`);
+    console.warn(`Unknown agent/terminal type "${agentIdOrType}", defaulting to XML format`);
     return "xml";
   }
   return format;
@@ -178,7 +178,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
           );
         }
 
-        const format = getOptimalFormat(terminal.type);
+        const format = getOptimalFormat(terminal.agentId ?? terminal.type);
 
         const options = {
           format,

@@ -63,7 +63,7 @@ import {
 } from "lucide-react";
 import { ClaudeIcon, GeminiIcon, CodexIcon } from "@/components/icons";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
-import type { AgentType, UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
+import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { STATE_ICONS, STATE_COLORS, STATE_LABELS, STATE_PRIORITY } from "./terminalStateConfig";
 
 interface StateIconProps {
@@ -107,7 +107,7 @@ export interface WorktreeCardProps {
   onToggleServer: () => void;
   onCreateRecipe?: () => void;
   onSaveLayout?: () => void;
-  onLaunchAgent?: (type: AgentType) => void;
+  onLaunchAgent?: (agentId: string) => void;
   agentAvailability?: UseAgentLauncherReturn["availability"];
   agentSettings?: UseAgentLauncherReturn["agentSettings"];
   homeDir?: string;
@@ -310,11 +310,11 @@ export function WorktreeCard({
   }, [totalTerminalCount, bulkCloseByWorktree, worktree.id, closeConfirmDialog]);
 
   const handleLaunchAgent = useCallback(
-    (type: AgentType, e?: React.MouseEvent) => {
+    (agentId: string, e?: React.MouseEvent) => {
       if (e) {
         e.stopPropagation();
       }
-      onLaunchAgent?.(type);
+      onLaunchAgent?.(agentId);
     },
     [onLaunchAgent]
   );
@@ -1034,9 +1034,9 @@ export function WorktreeCard({
     return cardContent;
   }
 
-  const isClaudeEnabled = agentAvailability?.claude && (agentSettings?.claude?.enabled ?? true);
-  const isGeminiEnabled = agentAvailability?.gemini && (agentSettings?.gemini?.enabled ?? true);
-  const isCodexEnabled = agentAvailability?.codex && (agentSettings?.codex?.enabled ?? true);
+  const isClaudeEnabled = agentAvailability?.claude && (agentSettings?.agents?.claude?.enabled ?? true);
+  const isGeminiEnabled = agentAvailability?.gemini && (agentSettings?.agents?.gemini?.enabled ?? true);
+  const isCodexEnabled = agentAvailability?.codex && (agentSettings?.agents?.codex?.enabled ?? true);
 
   return (
     <ContextMenu>
