@@ -6,7 +6,7 @@ export { useDevServer, useDevServerStates } from "./useDevServer";
 export { useElectron, isElectronAvailable } from "./useElectron";
 
 export { useAgentLauncher } from "./useAgentLauncher";
-export type { AgentType, LaunchAgentOptions, UseAgentLauncherReturn } from "./useAgentLauncher";
+export type { LaunchAgentOptions, UseAgentLauncherReturn } from "./useAgentLauncher";
 
 export { useContextInjection } from "./useContextInjection";
 export type { UseContextInjectionReturn } from "./useContextInjection";

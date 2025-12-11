@@ -4,7 +4,7 @@ import type { TerminalType } from "@/types";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 
 export interface TerminalIconProps {
-  type: TerminalType;
+  type?: TerminalType;
   agentId?: string;
   className?: string;
   brandColor?: string;
@@ -17,7 +17,7 @@ export function TerminalIcon({ type, agentId, className, brandColor }: TerminalI
   };
 
   // Get effective agent ID - either from explicit agentId prop or from type (backward compat)
-  const effectiveAgentId = agentId ?? (isRegisteredAgent(type) ? type : undefined);
+  const effectiveAgentId = agentId ?? (type && isRegisteredAgent(type) ? type : undefined);
 
   if (effectiveAgentId) {
     const config = getAgentConfig(effectiveAgentId);

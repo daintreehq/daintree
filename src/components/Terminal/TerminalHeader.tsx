@@ -22,7 +22,8 @@ import { useShallow } from "zustand/react/shallow";
 export interface TerminalHeaderProps {
   id: string;
   title: string;
-  type: TerminalType;
+  type?: TerminalType;
+  agentId?: string;
   isFocused: boolean;
   isExited: boolean;
   exitCode: number | null;
@@ -60,6 +61,7 @@ function TerminalHeaderComponent({
   id,
   title,
   type,
+  agentId,
   isFocused,
   isExited,
   exitCode,
@@ -135,14 +137,15 @@ function TerminalHeaderComponent({
             {isWorking ? (
               <Loader2
                 className="w-3.5 h-3.5 animate-spin"
-                style={{ color: getBrandColorHex(type) }}
+                style={{ color: getBrandColorHex(agentId ?? type) }}
                 aria-hidden="true"
               />
             ) : (
               <TerminalIcon
                 type={type}
+                agentId={agentId}
                 className="w-3.5 h-3.5"
-                brandColor={getBrandColorHex(type)}
+                brandColor={getBrandColorHex(agentId ?? type)}
               />
             )}
           </span>
@@ -156,7 +159,7 @@ function TerminalHeaderComponent({
               onKeyDown={onTitleInputKeyDown}
               onBlur={onTitleSave}
               className="text-sm font-medium bg-canopy-bg/60 border border-canopy-accent/50 px-1 h-5 min-w-32 outline-none text-canopy-text select-text"
-              aria-label={type === "terminal" ? "Edit terminal title" : "Edit agent title"}
+              aria-label={!agentId && type === "terminal" ? "Edit terminal title" : "Edit agent title"}
             />
           ) : (
             <div className="flex items-center gap-2 min-w-0">
@@ -175,7 +178,7 @@ function TerminalHeaderComponent({
                 title={onTitleChange ? `${title} — Double-click to edit` : title}
                 aria-label={
                   onTitleChange
-                    ? type === "terminal"
+                    ? !agentId && type === "terminal"
                       ? `Terminal title: ${title}. Press Enter or F2 to edit`
                       : `Agent title: ${title}. Press Enter or F2 to edit`
                     : undefined

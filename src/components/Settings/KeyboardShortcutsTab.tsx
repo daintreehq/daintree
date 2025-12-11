@@ -314,7 +314,7 @@ export function KeyboardShortcutsTab() {
         )}
       </div>
 
-      <div className="space-y-4 max-h-[380px] overflow-y-auto pr-1">
+      <div className="space-y-4">
         {Array.from(groupedBindings.entries()).map(([category, categoryBindings]) => (
           <div key={category}>
             <h4 className="text-xs font-semibold text-canopy-text/60 uppercase tracking-wider mb-2">

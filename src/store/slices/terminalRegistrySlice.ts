@@ -47,14 +47,7 @@ export interface AddTerminalOptions {
   skipCommandExecution?: boolean;
 }
 
-const TYPE_TITLES: Record<TerminalType, string> = {
-  terminal: "Terminal",
-  claude: "Claude",
-  gemini: "Gemini",
-  codex: "Codex",
-};
-
-function getDefaultTitle(type: TerminalType, agentId?: string): string {
+function getDefaultTitle(type?: TerminalType, agentId?: string): string {
   // If agentId is provided, try to get the title from the registry
   if (agentId) {
     const config = getAgentConfig(agentId);
@@ -62,8 +55,14 @@ function getDefaultTitle(type: TerminalType, agentId?: string): string {
       return config.name;
     }
   }
-  // Fall back to type-based titles
-  return TYPE_TITLES[type] || "Terminal";
+  // Fall back to checking type as agent ID (backward compat)
+  if (type && type !== "terminal") {
+    const config = getAgentConfig(type);
+    if (config) {
+      return config.name;
+    }
+  }
+  return "Terminal";
 }
 
 export interface TrashedTerminal {
@@ -722,7 +721,7 @@ export const createTerminalRegistrySlice =
       // Get effective agentId - handles both new agentId and legacy type-based detection
       const effectiveAgentId =
         currentTerminal.agentId ??
-        (isRegisteredAgent(currentTerminal.type) ? currentTerminal.type : undefined);
+        (currentTerminal.type && isRegisteredAgent(currentTerminal.type) ? currentTerminal.type : undefined);
       const isAgent = !!effectiveAgentId;
 
       if (isAgent && effectiveAgentId) {
@@ -732,7 +731,7 @@ export const createTerminalRegistrySlice =
             const agentConfig = getAgentConfig(effectiveAgentId);
             const baseCommand = agentConfig?.command || effectiveAgentId;
             let flags: string[] = [];
-            flags = generateAgentFlags(agentSettings.agents?.[effectiveAgentId] ?? {});
+            flags = generateAgentFlags(agentSettings.agents?.[effectiveAgentId] ?? {}, effectiveAgentId);
             commandToRun = flags.length > 0 ? `${baseCommand} ${flags.join(" ")}` : baseCommand;
           }
         } catch (error) {

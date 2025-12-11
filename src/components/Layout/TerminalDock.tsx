@@ -21,9 +21,8 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { useAgentLauncher, type AgentType } from "@/hooks/useAgentLauncher";
+import { useAgentLauncher } from "@/hooks/useAgentLauncher";
 import { useWorktrees } from "@/hooks/useWorktrees";
-import type { TerminalType } from "@shared/types";
 
 const AGENT_OPTIONS = [
   { type: "claude" as const, label: "Claude", Icon: ClaudeIcon },
@@ -76,8 +75,8 @@ export function TerminalDock() {
   };
 
   const handleAddTerminal = useCallback(
-    (agentType: AgentType) => {
-      launchAgent(agentType, { location: "dock", cwd });
+    (agentId: string) => {
+      launchAgent(agentId, { location: "dock", cwd });
     },
     [launchAgent, cwd]
   );
@@ -188,7 +187,7 @@ export function TerminalDock() {
             <Icon
               className="w-4 h-4"
               style={
-                type !== "terminal" ? { color: getBrandColorHex(type as TerminalType) } : undefined
+                type !== "terminal" ? { color: getBrandColorHex(type) } : undefined
               }
             />
             <span>New {label}</span>

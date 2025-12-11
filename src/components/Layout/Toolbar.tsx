@@ -93,21 +93,21 @@ export function Toolbar({
         <AgentButton
           type="claude"
           availability={agentAvailability?.claude}
-          isEnabled={agentSettings?.claude?.enabled ?? true}
+          isEnabled={agentSettings?.agents?.claude?.enabled ?? true}
           onLaunch={() => onLaunchAgent("claude")}
           onOpenSettings={openAgentSettings}
         />
         <AgentButton
           type="gemini"
           availability={agentAvailability?.gemini}
-          isEnabled={agentSettings?.gemini?.enabled ?? true}
+          isEnabled={agentSettings?.agents?.gemini?.enabled ?? true}
           onLaunch={() => onLaunchAgent("gemini")}
           onOpenSettings={openAgentSettings}
         />
         <AgentButton
           type="codex"
           availability={agentAvailability?.codex}
-          isEnabled={agentSettings?.codex?.enabled ?? true}
+          isEnabled={agentSettings?.agents?.codex?.enabled ?? true}
           onLaunch={() => onLaunchAgent("codex")}
           onOpenSettings={openAgentSettings}
         />

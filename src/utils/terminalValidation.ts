@@ -28,12 +28,14 @@ export async function validateTerminalConfig(
     });
   }
 
-  if (["claude", "gemini", "codex"].includes(terminal.type)) {
-    const cliAvailable = await systemClient.checkCommand(terminal.type);
+  // Check agent CLI availability
+  const agentId = terminal.agentId ?? terminal.type;
+  if (agentId && agentId !== "terminal") {
+    const cliAvailable = await systemClient.checkCommand(agentId);
     if (!cliAvailable) {
       errors.push({
         type: "cli",
-        message: `${terminal.type} CLI not found in PATH`,
+        message: `${agentId} CLI not found in PATH`,
         recoverable: false,
       });
     }

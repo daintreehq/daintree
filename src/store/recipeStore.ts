@@ -5,7 +5,7 @@ import { appClient } from "@/clients";
 
 function terminalToRecipeTerminal(terminal: TerminalInstance): RecipeTerminal {
   return {
-    type: terminal.type,
+    type: terminal.agentId ?? terminal.type ?? "terminal",
     title: terminal.title || undefined,
     command: terminal.command || undefined,
     env: {},
@@ -168,8 +168,10 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     for (const terminal of recipe.terminals) {
       try {
+        const isAgent = terminal.type !== "terminal";
         await terminalStore.addTerminal({
-          type: terminal.type,
+          kind: isAgent ? "agent" : "terminal",
+          agentId: isAgent ? terminal.type : undefined,
           title: terminal.title,
           cwd: worktreePath,
           command: terminal.command,

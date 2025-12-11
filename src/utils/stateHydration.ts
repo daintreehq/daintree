@@ -122,7 +122,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
               const currentAgentState = reconnectResult.agentState as AgentState | undefined;
               // Get effective agentId - handles migration from type-based to agentId-based system
               const agentId =
-                terminal.agentId ?? (isRegisteredAgent(terminal.type) ? terminal.type : undefined);
+                terminal.agentId ?? (terminal.type && isRegisteredAgent(terminal.type) ? terminal.type : undefined);
               await addTerminal({
                 kind: terminal.kind ?? (agentId ? "agent" : "terminal"),
                 type: terminal.type,
@@ -191,7 +191,7 @@ function getEffectiveAgentId(terminal: TerminalState): string | undefined {
     return terminal.agentId;
   }
   // Migration: if type is an agent, use type as agentId
-  if (isRegisteredAgent(terminal.type)) {
+  if (terminal.type && isRegisteredAgent(terminal.type)) {
     return terminal.type;
   }
   return undefined;
@@ -221,7 +221,7 @@ function getRestartCommand(
       return terminal.command?.trim() || baseCommand;
     }
 
-    const flags = generateAgentFlags(agentSettings.agents?.[agentId] ?? {});
+    const flags = generateAgentFlags(agentSettings.agents?.[agentId] ?? {}, agentId);
 
     return flags.length > 0 ? `${baseCommand} ${flags.join(" ")}` : baseCommand;
   }
