@@ -186,9 +186,7 @@ export function TerminalDock() {
           >
             <Icon
               className="w-4 h-4"
-              style={
-                type !== "terminal" ? { color: getBrandColorHex(type) } : undefined
-              }
+              style={type !== "terminal" ? { color: getBrandColorHex(type) } : undefined}
             />
             <span>New {label}</span>
           </ContextMenuItem>

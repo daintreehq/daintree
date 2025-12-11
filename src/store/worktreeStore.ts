@@ -1,10 +1,17 @@
 import { create, type StateCreator } from "zustand";
 import { appClient } from "@/clients";
+import type { GitHubIssue } from "@shared/types/github";
+
+interface CreateDialogState {
+  isOpen: boolean;
+  initialIssue: GitHubIssue | null;
+}
 
 interface WorktreeSelectionState {
   activeWorktreeId: string | null;
   focusedWorktreeId: string | null;
   expandedWorktrees: Set<string>;
+  createDialog: CreateDialogState;
 
   setActiveWorktree: (id: string | null) => void;
   setFocusedWorktree: (id: string | null) => void;
@@ -12,6 +19,8 @@ interface WorktreeSelectionState {
   toggleWorktreeExpanded: (id: string) => void;
   setWorktreeExpanded: (id: string, expanded: boolean) => void;
   collapseAllWorktrees: () => void;
+  openCreateDialog: (initialIssue?: GitHubIssue | null) => void;
+  closeCreateDialog: () => void;
   reset: () => void;
 }
 
@@ -19,6 +28,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set)
   activeWorktreeId: null,
   focusedWorktreeId: null,
   expandedWorktrees: new Set<string>(),
+  createDialog: { isOpen: false, initialIssue: null },
 
   setActiveWorktree: (id) => {
     set({ activeWorktreeId: id });
@@ -67,11 +77,16 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set)
 
   collapseAllWorktrees: () => set({ expandedWorktrees: new Set<string>() }),
 
+  openCreateDialog: (initialIssue = null) => set({ createDialog: { isOpen: true, initialIssue } }),
+
+  closeCreateDialog: () => set({ createDialog: { isOpen: false, initialIssue: null } }),
+
   reset: () =>
     set({
       activeWorktreeId: null,
       focusedWorktreeId: null,
       expandedWorktrees: new Set<string>(),
+      createDialog: { isOpen: false, initialIssue: null },
     }),
 });
 

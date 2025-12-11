@@ -721,7 +721,9 @@ export const createTerminalRegistrySlice =
       // Get effective agentId - handles both new agentId and legacy type-based detection
       const effectiveAgentId =
         currentTerminal.agentId ??
-        (currentTerminal.type && isRegisteredAgent(currentTerminal.type) ? currentTerminal.type : undefined);
+        (currentTerminal.type && isRegisteredAgent(currentTerminal.type)
+          ? currentTerminal.type
+          : undefined);
       const isAgent = !!effectiveAgentId;
 
       if (isAgent && effectiveAgentId) {
@@ -731,7 +733,10 @@ export const createTerminalRegistrySlice =
             const agentConfig = getAgentConfig(effectiveAgentId);
             const baseCommand = agentConfig?.command || effectiveAgentId;
             let flags: string[] = [];
-            flags = generateAgentFlags(agentSettings.agents?.[effectiveAgentId] ?? {}, effectiveAgentId);
+            flags = generateAgentFlags(
+              agentSettings.agents?.[effectiveAgentId] ?? {},
+              effectiveAgentId
+            );
             commandToRun = flags.length > 0 ? `${baseCommand} ${flags.join(" ")}` : baseCommand;
           }
         } catch (error) {

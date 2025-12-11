@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { githubClient } from "@/clients/githubClient";
 import { GitHubListItem } from "./GitHubListItem";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
 
 interface GitHubResourceListProps {
@@ -158,6 +159,16 @@ export function GitHubResourceList({
     handleOpenInGitHub();
   };
 
+  const openCreateDialog = useWorktreeSelectionStore((s) => s.openCreateDialog);
+
+  const handleCreateWorktree = useCallback(
+    (issue: GitHubIssue) => {
+      openCreateDialog(issue);
+      onClose?.();
+    },
+    [openCreateDialog, onClose]
+  );
+
   const handleRetry = () => {
     setCursor(null);
     fetchData(null, false, undefined);
@@ -292,7 +303,12 @@ export function GitHubResourceList({
           <>
             <div className="divide-y divide-canopy-border">
               {data.map((item) => (
-                <GitHubListItem key={item.number} item={item} type={type} />
+                <GitHubListItem
+                  key={item.number}
+                  item={item}
+                  type={type}
+                  onCreateWorktree={type === "issue" ? handleCreateWorktree : undefined}
+                />
               ))}
             </div>
 

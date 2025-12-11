@@ -3,13 +3,16 @@ import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { FolderOpen, GitBranch, Check, AlertCircle, Loader2 } from "lucide-react";
 import type { BranchInfo, CreateWorktreeOptions } from "@/types/electron";
+import type { GitHubIssue } from "@shared/types/github";
 import { worktreeClient } from "@/clients";
+import { IssueSelector } from "@/components/GitHub/IssueSelector";
 
 interface NewWorktreeDialogProps {
   isOpen: boolean;
   onClose: () => void;
   rootPath: string;
   onWorktreeCreated?: () => void;
+  initialIssue?: GitHubIssue | null;
 }
 
 export function NewWorktreeDialog({
@@ -17,6 +20,7 @@ export function NewWorktreeDialog({
   onClose,
   rootPath,
   onWorktreeCreated,
+  initialIssue,
 }: NewWorktreeDialogProps) {
   const [branches, setBranches] = useState<BranchInfo[]>([]);
   const [loading, setLoading] = useState(false);
@@ -27,6 +31,7 @@ export function NewWorktreeDialog({
   const [newBranch, setNewBranch] = useState("");
   const [worktreePath, setWorktreePath] = useState("");
   const [fromRemote, setFromRemote] = useState(false);
+  const [selectedIssue, setSelectedIssue] = useState<GitHubIssue | null>(null);
 
   const newBranchInputRef = useRef<HTMLInputElement>(null);
 
@@ -38,6 +43,9 @@ export function NewWorktreeDialog({
     setBranches([]);
     setBaseBranch("");
     setFromRemote(false);
+    setSelectedIssue(initialIssue ?? null);
+    setNewBranch("");
+    setWorktreePath("");
 
     let isCurrent = true;
 
@@ -73,7 +81,7 @@ export function NewWorktreeDialog({
     return () => {
       isCurrent = false;
     };
-  }, [isOpen, rootPath]);
+  }, [isOpen, rootPath, initialIssue]);
 
   useEffect(() => {
     if (isOpen && !loading) {
@@ -82,14 +90,34 @@ export function NewWorktreeDialog({
   }, [isOpen, loading]);
 
   useEffect(() => {
-    if (newBranch && rootPath) {
-      const trimmedBranch = newBranch.trim();
-      worktreeClient
-        .getDefaultPath(rootPath, trimmedBranch)
-        .then((suggestedPath) => {
+    if (selectedIssue) {
+      const safeTitle = selectedIssue.title
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 40);
+      const suggestedBranch = safeTitle
+        ? `issue-${selectedIssue.number}-${safeTitle}`
+        : `issue-${selectedIssue.number}`;
+      setNewBranch(suggestedBranch);
+    }
+  }, [selectedIssue]);
+
+  useEffect(() => {
+    if (!newBranch || !rootPath) return;
+
+    const trimmedBranch = newBranch.trim();
+    const abortController = new AbortController();
+
+    worktreeClient
+      .getDefaultPath(rootPath, trimmedBranch)
+      .then((suggestedPath) => {
+        if (!abortController.signal.aborted) {
           setWorktreePath(suggestedPath);
-        })
-        .catch((err) => {
+        }
+      })
+      .catch((err) => {
+        if (!abortController.signal.aborted) {
           console.error("Failed to get default path:", err);
           const sanitizedBranch = trimmedBranch.replace(/[^a-zA-Z0-9-_]/g, "-");
           const separator = rootPath.includes("\\") ? "\\" : "/";
@@ -97,8 +125,10 @@ export function NewWorktreeDialog({
           setWorktreePath(
             `${rootPath}${separator}..${separator}${repoName}-worktrees${separator}${sanitizedBranch}`
           );
-        });
-    }
+        }
+      });
+
+    return () => abortController.abort();
   }, [newBranch, rootPath]);
 
   const handleCreate = async () => {
@@ -106,10 +136,23 @@ export function NewWorktreeDialog({
       setError("Please select a base branch");
       return;
     }
-    if (!newBranch.trim()) {
+
+    const trimmedBranch = newBranch.trim();
+    if (!trimmedBranch) {
       setError("Please enter a new branch name");
       return;
     }
+
+    if (/[\s.]$/.test(trimmedBranch) || /^[.-]/.test(trimmedBranch)) {
+      setError("Branch name cannot start with '.', '-' or end with space or '.'");
+      return;
+    }
+
+    if (/[\/\\:]/.test(trimmedBranch) || trimmedBranch.includes("..")) {
+      setError("Branch name contains invalid characters");
+      return;
+    }
+
     if (!worktreePath.trim()) {
       setError("Please enter a worktree path");
       return;
@@ -121,7 +164,7 @@ export function NewWorktreeDialog({
     try {
       const options: CreateWorktreeOptions = {
         baseBranch,
-        newBranch: newBranch.trim(),
+        newBranch: trimmedBranch,
         path: worktreePath.trim(),
         fromRemote,
       };
@@ -159,6 +202,21 @@ export function NewWorktreeDialog({
           </div>
         ) : (
           <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-canopy-text">
+                Link Issue (Optional)
+              </label>
+              <IssueSelector
+                projectPath={rootPath}
+                selectedIssue={selectedIssue}
+                onSelect={setSelectedIssue}
+                disabled={creating}
+              />
+              <p className="text-xs text-canopy-text/60">
+                Select an issue to auto-generate a branch name
+              </p>
+            </div>
+
             <div className="space-y-2">
               <label htmlFor="base-branch" className="block text-sm font-medium text-canopy-text">
                 Base Branch

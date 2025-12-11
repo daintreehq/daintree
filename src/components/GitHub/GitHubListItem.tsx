@@ -6,6 +6,7 @@ import {
   GitPullRequest,
   GitMerge,
   GitPullRequestClosed,
+  GitBranch,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
@@ -13,6 +14,7 @@ import type { GitHubIssue, GitHubPR } from "@shared/types/github";
 interface GitHubListItemProps {
   item: GitHubIssue | GitHubPR;
   type: "issue" | "pr";
+  onCreateWorktree?: (issue: GitHubIssue) => void;
 }
 
 function getStateIcon(state: string, type: "issue" | "pr") {
@@ -46,7 +48,7 @@ function isPR(item: GitHubIssue | GitHubPR): item is GitHubPR {
   return "isDraft" in item;
 }
 
-export function GitHubListItem({ item, type }: GitHubListItemProps) {
+export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemProps) {
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
   const timeoutRef = useRef<number | undefined>(undefined);
@@ -96,6 +98,13 @@ export function GitHubListItem({ item, type }: GitHubListItemProps) {
     if (copied) return { text: "✓", color: "text-green-500" };
     if (copyError) return { text: `#${item.number}`, color: "text-red-500" };
     return { text: `#${item.number}`, color: "" };
+  };
+
+  const handleCreateWorktree = (e: MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    if (type === "issue" && onCreateWorktree) {
+      onCreateWorktree(item as GitHubIssue);
+    }
   };
 
   const status = getButtonStatus();
@@ -156,6 +165,17 @@ export function GitHubListItem({ item, type }: GitHubListItemProps) {
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          {type === "issue" && onCreateWorktree && item.state === "OPEN" && (
+            <button
+              type="button"
+              onClick={handleCreateWorktree}
+              className="opacity-0 group-hover:opacity-100 p-1.5 text-xs bg-canopy-border hover:bg-canopy-accent/20 hover:text-canopy-accent rounded transition-all flex items-center gap-1"
+              title="Create Worktree from Issue"
+            >
+              <GitBranch className="w-3 h-3" />
+              <span>Worktree</span>
+            </button>
+          )}
           {type === "issue" && "assignees" in item && item.assignees.length > 0 && (
             <div className="flex -space-x-1.5">
               {item.assignees.slice(0, 3).map((assignee) => (

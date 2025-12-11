@@ -159,7 +159,9 @@ function TerminalHeaderComponent({
               onKeyDown={onTitleInputKeyDown}
               onBlur={onTitleSave}
               className="text-sm font-medium bg-canopy-bg/60 border border-canopy-accent/50 px-1 h-5 min-w-32 outline-none text-canopy-text select-text"
-              aria-label={!agentId && type === "terminal" ? "Edit terminal title" : "Edit agent title"}
+              aria-label={
+                !agentId && type === "terminal" ? "Edit terminal title" : "Edit agent title"
+              }
             />
           ) : (
             <div className="flex items-center gap-2 min-w-0">

@@ -53,7 +53,11 @@ export function TerminalListItem({
       role="option"
     >
       <span className="shrink-0 text-canopy-text/70" aria-hidden="true">
-        <TerminalIcon type={type} agentId={agentId} brandColor={getBrandColorHex(agentId ?? type)} />
+        <TerminalIcon
+          type={type}
+          agentId={agentId}
+          brandColor={getBrandColorHex(agentId ?? type)}
+        />
       </span>
 
       <div className="flex-1 min-w-0 overflow-hidden">

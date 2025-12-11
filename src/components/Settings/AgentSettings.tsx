@@ -15,8 +15,14 @@ interface AgentSettingsProps {
 }
 
 export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
-  const { settings, isLoading, error: loadError, initialize, updateAgent, reset } =
-    useAgentSettingsStore();
+  const {
+    settings,
+    isLoading,
+    error: loadError,
+    initialize,
+    updateAgent,
+    reset,
+  } = useAgentSettingsStore();
   const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -61,9 +67,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
     ? getAgentSettingsEntry(effectiveSettings, activeAgent.id)
     : { customFlags: "", dangerousArgs: "", dangerousEnabled: false };
 
-  const defaultDangerousArg = activeAgent
-    ? DEFAULT_DANGEROUS_ARGS[activeAgent.id] ?? ""
-    : "";
+  const defaultDangerousArg = activeAgent ? (DEFAULT_DANGEROUS_ARGS[activeAgent.id] ?? "") : "";
 
   if (agentOptions.length === 0) {
     return (
@@ -123,13 +127,9 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
                   className={cn(!isActive && "opacity-60")}
                 />
               )}
-              <span className={cn("truncate", !agent.enabled && "opacity-50")}>
-                {agent.name}
-              </span>
+              <span className={cn("truncate", !agent.enabled && "opacity-50")}>{agent.name}</span>
               <div className="flex items-center gap-1 shrink-0">
-                {!agent.enabled && (
-                  <span className="w-1.5 h-1.5 rounded-full bg-canopy-text/30" />
-                )}
+                {!agent.enabled && <span className="w-1.5 h-1.5 rounded-full bg-canopy-text/30" />}
                 {agent.dangerousEnabled && (
                   <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-status-error)]" />
                 )}
@@ -145,9 +145,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
           {/* Header with agent info */}
           <div className="flex items-center justify-between pb-3 border-b border-canopy-border">
             <div className="flex items-center gap-3">
-              {activeAgent.Icon && (
-                <activeAgent.Icon size={24} brandColor={activeAgent.color} />
-              )}
+              {activeAgent.Icon && <activeAgent.Icon size={24} brandColor={activeAgent.color} />}
               <div>
                 <h4 className="text-sm font-medium text-canopy-text">
                   {activeAgent.name} Settings
@@ -175,9 +173,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
           <div className="flex items-center justify-between">
             <div>
               <div className="text-sm font-medium text-canopy-text">Enabled</div>
-              <div className="text-xs text-canopy-text/50">
-                Show in agent launcher
-              </div>
+              <div className="text-xs text-canopy-text/50">Show in agent launcher</div>
             </div>
             <button
               onClick={async () => {
@@ -203,12 +199,8 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-sm font-medium text-canopy-text">
-                  Skip Permissions
-                </div>
-                <div className="text-xs text-canopy-text/50">
-                  Auto-approve all actions
-                </div>
+                <div className="text-sm font-medium text-canopy-text">Skip Permissions</div>
+                <div className="text-xs text-canopy-text/50">Auto-approve all actions</div>
               </div>
               <button
                 onClick={async () => {
@@ -244,18 +236,14 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
 
           {/* Custom Arguments */}
           <div className="space-y-2 pt-2 border-t border-canopy-border">
-            <label className="text-sm font-medium text-canopy-text">
-              Custom Arguments
-            </label>
+            <label className="text-sm font-medium text-canopy-text">Custom Arguments</label>
             <input
               className="w-full rounded-md border border-canopy-border bg-canopy-bg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-canopy-accent/50 placeholder:text-canopy-text/30"
               value={activeEntry.customFlags ?? ""}
               onChange={(e) => updateAgent(activeAgent.id, { customFlags: e.target.value })}
               placeholder="--verbose --max-tokens=4096"
             />
-            <p className="text-xs text-canopy-text/40">
-              Extra CLI flags appended when launching
-            </p>
+            <p className="text-xs text-canopy-text/40">Extra CLI flags appended when launching</p>
           </div>
         </div>
       )}
