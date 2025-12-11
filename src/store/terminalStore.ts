@@ -155,8 +155,8 @@ export const useTerminalStore = create<TerminalGridState>()((set, get, api) => {
       }
     },
 
-    restoreTerminal: (id: string) => {
-      registrySlice.restoreTerminal(id);
+    restoreTerminal: (id: string, targetWorktreeId?: string) => {
+      registrySlice.restoreTerminal(id, targetWorktreeId);
       set({ focusedId: id, activeDockTerminalId: null });
     },
 

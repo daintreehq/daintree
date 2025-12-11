@@ -3,6 +3,7 @@ import type { WorktreeState } from "@shared/types";
 import { worktreeClient } from "@/clients";
 import { useWorktreeSelectionStore } from "./worktreeStore";
 import { useTerminalStore } from "./terminalStore";
+import { useNotificationStore } from "./notificationStore";
 
 interface WorktreeDataState {
   worktrees: Map<string, WorktreeState>;
@@ -73,14 +74,25 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
                 selectionStore.setActiveWorktree(null);
               }
 
-              // Close terminals associated with the removed worktree
+              // Move orphaned terminals to trash (not hard-kill them)
               const terminalStore = useTerminalStore.getState();
-              const terminalsToRemove = terminalStore.terminals.filter(
-                (t) => (t.worktreeId ?? undefined) === worktreeId
+              const notificationStore = useNotificationStore.getState();
+              const terminalsToTrash = terminalStore.terminals.filter(
+                (t) => (t.worktreeId ?? undefined) === worktreeId && t.location !== "trash"
               );
-              terminalsToRemove.forEach((terminal) => {
-                terminalStore.removeTerminal(terminal.id);
-              });
+
+              if (terminalsToTrash.length > 0) {
+                terminalsToTrash.forEach((terminal) => {
+                  terminalStore.trashTerminal(terminal.id);
+                });
+
+                notificationStore.addNotification({
+                  type: "info",
+                  title: "Worktree Deleted Externally",
+                  message: `${terminalsToTrash.length} terminal(s) moved to trash. Check trash to view logs before cleanup.`,
+                  duration: 5000,
+                });
+              }
 
               return { worktrees: next };
             });

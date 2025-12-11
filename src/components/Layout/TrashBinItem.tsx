@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { RotateCcw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTerminalStore, type TerminalInstance } from "@/store";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { TrashedTerminal } from "@/store/slices";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 
@@ -14,6 +15,9 @@ interface TrashBinItemProps {
 export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinItemProps) {
   const restoreTerminal = useTerminalStore((s) => s.restoreTerminal);
   const removeTerminal = useTerminalStore((s) => s.removeTerminal);
+  const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
+
+  const isOrphan = !!terminal.worktreeId && !worktreeName;
 
   const [timeRemaining, setTimeRemaining] = useState(() => {
     return Math.max(0, trashedInfo.expiresAt - Date.now());
@@ -34,9 +38,15 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
 
   const seconds = Math.ceil(timeRemaining / 1000);
 
+  const canRestore = !isOrphan || !!activeWorktreeId;
+
   const handleRestore = useCallback(() => {
-    restoreTerminal(terminal.id);
-  }, [restoreTerminal, terminal.id]);
+    if (isOrphan && activeWorktreeId) {
+      restoreTerminal(terminal.id, activeWorktreeId);
+    } else {
+      restoreTerminal(terminal.id);
+    }
+  }, [restoreTerminal, terminal.id, isOrphan, activeWorktreeId]);
 
   const handleKill = useCallback(() => {
     removeTerminal(terminal.id);
@@ -53,9 +63,11 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
       <div className="flex-1 min-w-0">
         <div className="text-xs font-medium text-canopy-text/70 group-hover:text-canopy-text truncate transition-colors">
           {terminalName}
-          {worktreeName && (
+          {worktreeName ? (
             <span className="text-canopy-text/50 ml-1 font-normal">({worktreeName})</span>
-          )}
+          ) : isOrphan ? (
+            <span className="text-amber-500/70 ml-1 font-normal text-[10px]">(deleted tree)</span>
+          ) : null}
         </div>
         <div className="text-[10px] text-canopy-text/40" aria-live="polite">
           {seconds}s remaining
@@ -67,8 +79,21 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
           variant="ghost-success"
           size="icon-sm"
           onClick={handleRestore}
-          aria-label={`Restore ${terminalName}`}
-          title={`Restore ${terminalName}`}
+          disabled={!canRestore}
+          aria-label={
+            isOrphan
+              ? canRestore
+                ? `Adopt ${terminalName} to current worktree`
+                : "No active worktree to restore to"
+              : `Restore ${terminalName}`
+          }
+          title={
+            isOrphan
+              ? canRestore
+                ? "Adopt to current worktree"
+                : "No active worktree - select a worktree first"
+              : `Restore ${terminalName}`
+          }
         >
           <RotateCcw aria-hidden="true" />
         </Button>

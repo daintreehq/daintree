@@ -103,7 +103,7 @@ export interface TerminalRegistrySlice {
   toggleTerminalLocation: (id: string) => void;
 
   trashTerminal: (id: string) => void;
-  restoreTerminal: (id: string) => void;
+  restoreTerminal: (id: string, targetWorktreeId?: string) => void;
   markAsTrashed: (id: string, expiresAt: number, originalLocation: "dock" | "grid") => void;
   markAsRestored: (id: string) => void;
   isInTrash: (id: string) => boolean;
@@ -451,7 +451,7 @@ export const createTerminalRegistrySlice =
       terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
     },
 
-    restoreTerminal: (id) => {
+    restoreTerminal: (id, targetWorktreeId) => {
       const trashedInfo = get().trashedTerminals.get(id);
       const restoreLocation = trashedInfo?.originalLocation ?? "grid";
 
@@ -461,7 +461,13 @@ export const createTerminalRegistrySlice =
 
       set((state) => {
         const newTerminals = state.terminals.map((t) =>
-          t.id === id ? { ...t, location: restoreLocation } : t
+          t.id === id
+            ? {
+                ...t,
+                location: restoreLocation,
+                worktreeId: targetWorktreeId !== undefined ? targetWorktreeId : t.worktreeId,
+              }
+            : t
         );
         const newTrashed = new Map(state.trashedTerminals);
         newTrashed.delete(id);
