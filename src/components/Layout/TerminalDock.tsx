@@ -5,7 +5,7 @@ import { useDroppable } from "@dnd-kit/core";
 import { ChevronLeft, ChevronRight, Terminal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
-import { useTerminalStore, useProjectStore } from "@/store";
+import { useTerminalStore, useProjectStore, useWorktreeSelectionStore } from "@/store";
 import { DockedTerminalItem } from "./DockedTerminalItem";
 import { TrashContainer } from "./TrashContainer";
 import { WaitingContainer } from "./WaitingContainer";
@@ -32,18 +32,25 @@ const AGENT_OPTIONS = [
 ];
 
 export function TerminalDock() {
+  const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
+
   const dockTerminals = useTerminalStore(
-    useShallow((state) => state.terminals.filter((t) => t.location === "dock"))
+    useShallow((state) =>
+      state.terminals.filter(
+        (t) =>
+          t.location === "dock" && (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+      )
+    )
   );
 
   const trashedTerminals = useTerminalStore(useShallow((state) => state.trashedTerminals));
   const terminals = useTerminalStore((state) => state.terminals);
   const currentProject = useProjectStore((s) => s.currentProject);
 
-  const { worktrees, activeId } = useWorktrees();
+  const { worktrees } = useWorktrees();
   const { launchAgent } = useAgentLauncher();
 
-  const activeWorktree = worktrees.find((w) => w.id === activeId);
+  const activeWorktree = activeWorktreeId ? worktrees.find((w) => w.id === activeWorktreeId) : null;
   const cwd = activeWorktree?.path ?? currentProject?.path ?? "";
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);

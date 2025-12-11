@@ -27,6 +27,7 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { systemClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
 import { getAutoGridCols } from "@/lib/terminalLayout";
+import { useWorktrees } from "@/hooks/useWorktrees";
 import type { CliAvailability } from "@shared/types";
 
 export interface TerminalGridProps {
@@ -125,12 +126,14 @@ function EmptyState({
   agentAvailability,
   isCheckingAvailability,
   onOpenSettings,
+  activeWorktreeName,
 }: {
   onLaunchAgent: (type: "claude" | "gemini" | "codex" | "terminal") => void;
   hasActiveWorktree: boolean;
   agentAvailability?: CliAvailability;
   isCheckingAvailability?: boolean;
   onOpenSettings?: () => void;
+  activeWorktreeName?: string | null;
 }) {
   const handleOpenHelp = () => {
     void systemClient
@@ -159,9 +162,13 @@ function EmptyState({
       <div className="max-w-3xl w-full flex flex-col items-center">
         <div className="mb-12 flex flex-col items-center text-center">
           <CanopyIcon className="h-28 w-28 text-white/80 mb-8" />
-          <h3 className="text-2xl font-semibold text-canopy-text tracking-tight mb-3">Canopy</h3>
+          <h3 className="text-2xl font-semibold text-canopy-text tracking-tight mb-3">
+            {activeWorktreeName || "Canopy"}
+          </h3>
           <p className="text-sm text-canopy-text/60 max-w-md leading-relaxed font-medium">
-            A habitat for your AI agents.
+            {activeWorktreeName
+              ? "Workspace is empty. Launch an agent or terminal to begin."
+              : "A habitat for your AI agents."}
           </p>
         </div>
 
@@ -262,14 +269,25 @@ export function TerminalGrid({
   );
 
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
-  const hasActiveWorktree = activeWorktreeId !== null;
+  const { worktreeMap } = useWorktrees();
+  const activeWorktree = activeWorktreeId ? worktreeMap.get(activeWorktreeId) : null;
+  const hasActiveWorktree = activeWorktreeId !== null && activeWorktree !== undefined;
+  const activeWorktreeName =
+    activeWorktree?.branch ||
+    activeWorktree?.name ||
+    (activeWorktreeId ? "Unknown Worktree" : null);
 
   const addTerminal = useTerminalStore((state) => state.addTerminal);
   const isInTrash = useTerminalStore((state) => state.isInTrash);
 
   const gridTerminals = useMemo(
-    () => terminals.filter((t) => t.location === "grid" || t.location === undefined),
-    [terminals]
+    () =>
+      terminals.filter(
+        (t) =>
+          (t.location === "grid" || t.location === undefined) &&
+          (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+      ),
+    [terminals, activeWorktreeId]
   );
 
   const layoutConfig = useLayoutConfigStore((state) => state.layoutConfig);
@@ -442,6 +460,7 @@ export function TerminalGrid({
                   agentAvailability={agentAvailability}
                   isCheckingAvailability={isCheckingAvailability}
                   onOpenSettings={onOpenSettings}
+                  activeWorktreeName={activeWorktreeName}
                 />
               </div>
             ) : (

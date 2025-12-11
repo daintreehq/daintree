@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import type { WorktreeState } from "@shared/types";
 import { worktreeClient } from "@/clients";
+import { useWorktreeSelectionStore } from "./worktreeStore";
+import { useTerminalStore } from "./terminalStore";
 
 interface WorktreeDataState {
   worktrees: Map<string, WorktreeState>;
@@ -64,6 +66,22 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
 
               const next = new Map(prev.worktrees);
               next.delete(worktreeId);
+
+              // Clear active selection if this worktree was selected
+              const selectionStore = useWorktreeSelectionStore.getState();
+              if (selectionStore.activeWorktreeId === worktreeId) {
+                selectionStore.setActiveWorktree(null);
+              }
+
+              // Close terminals associated with the removed worktree
+              const terminalStore = useTerminalStore.getState();
+              const terminalsToRemove = terminalStore.terminals.filter(
+                (t) => (t.worktreeId ?? undefined) === worktreeId
+              );
+              terminalsToRemove.forEach((terminal) => {
+                terminalStore.removeTerminal(terminal.id);
+              });
+
               return { worktrees: next };
             });
           });
