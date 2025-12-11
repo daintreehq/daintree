@@ -29,11 +29,11 @@ export const LINK_TEMPLATES: Record<string, LinkTemplate> = {
     icon: "claude",
     cliDetector: "claude",
   },
-  chatgpt: {
+  codex: {
     title: "ChatGPT",
     url: "https://chatgpt.com/",
-    icon: "openai",
-    cliDetector: "openai",
+    icon: "codex",
+    cliDetector: "codex",
   },
   gemini: {
     title: "Gemini",

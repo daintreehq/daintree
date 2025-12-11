@@ -1,8 +1,6 @@
 import { useState, useEffect } from "react";
 import { Globe, Search } from "lucide-react";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
-import { CodexIcon } from "@/components/icons";
-import { getBrandColorHex } from "@/lib/colorUtils";
 
 interface SidecarIconProps {
   icon: string;
@@ -26,11 +24,6 @@ export function SidecarIcon({ icon, size = "launchpad", url, type }: SidecarIcon
   // Handle special cases
   if (icon === "search") {
     return <Search className={iconClass} />;
-  }
-
-  // Handle "openai" as codex icon (special mapping for sidecar)
-  if (icon === "openai") {
-    return <CodexIcon className={iconClass} brandColor={getBrandColorHex("codex")} />;
   }
 
   // Try to get agent config from registry

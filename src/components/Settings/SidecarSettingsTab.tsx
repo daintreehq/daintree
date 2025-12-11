@@ -3,9 +3,7 @@ import { RefreshCw, Plus, Trash2, Globe, Check, X, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSidecarStore } from "@/store/sidecarStore";
 import { useLinkDiscovery } from "@/hooks/useLinkDiscovery";
-import { CodexIcon } from "@/components/icons";
 import { LINK_TEMPLATES } from "@shared/types";
-import { getBrandColorHex } from "@/lib/colorUtils";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 
 function ServiceIcon({ name, size = 16 }: { name: string; size?: number }) {
@@ -17,10 +15,6 @@ function ServiceIcon({ name, size = 16 }: { name: string; size?: number }) {
   }
   if (name === "search") {
     return <Search className={className} />;
-  }
-  // Handle "openai" as codex icon (special mapping for sidecar)
-  if (name === "openai") {
-    return <CodexIcon className={className} brandColor={getBrandColorHex("codex")} />;
   }
 
   // Try to get agent config from registry
@@ -147,9 +141,7 @@ export function SidecarSettingsTab() {
         <h4 className="text-sm font-medium text-canopy-text mb-3">AI Services</h4>
         <div className="space-y-2">
           {knownServices.map(([key, template]) => {
-            const link = discoveredLinks.find(
-              (l) => l.id === `discovered-${key === "chatgpt" ? "chatgpt" : key}`
-            );
+            const link = discoveredLinks.find((l) => l.id === `discovered-${key}`);
             const isDetected = !!link;
 
             return (

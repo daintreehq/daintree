@@ -16,11 +16,11 @@ describe("getAIAgentInfo", () => {
   it("should detect ChatGPT URLs", () => {
     expect(getAIAgentInfo("https://chatgpt.com/")).toEqual({
       title: "ChatGPT",
-      icon: "openai",
+      icon: "codex",
     });
     expect(getAIAgentInfo("https://chatgpt.com/c/abc123")).toEqual({
       title: "ChatGPT",
-      icon: "openai",
+      icon: "codex",
     });
   });
 
@@ -62,7 +62,7 @@ describe("getAIAgentInfo", () => {
     });
     expect(getAIAgentInfo("https://www.chatgpt.com/")).toEqual({
       title: "ChatGPT",
-      icon: "openai",
+      icon: "codex",
     });
   });
 
@@ -84,7 +84,7 @@ describe("getAIAgentInfo", () => {
     });
     expect(getAIAgentInfo("https://ChatGPT.COM/")).toEqual({
       title: "ChatGPT",
-      icon: "openai",
+      icon: "codex",
     });
   });
 });

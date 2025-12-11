@@ -7,7 +7,7 @@ export function getAIAgentInfo(url: string): { title: string; icon: string } | n
       return { title: "Claude", icon: "claude" };
     }
     if (hostname === "chatgpt.com" || hostname === "www.chatgpt.com") {
-      return { title: "ChatGPT", icon: "openai" };
+      return { title: "ChatGPT", icon: "codex" };
     }
     if (hostname === "gemini.google.com") {
       return { title: "Gemini", icon: "gemini" };
