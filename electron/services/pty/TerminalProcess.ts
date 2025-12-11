@@ -105,7 +105,7 @@ export class TerminalProcess {
     const spawnedAt = Date.now();
 
     this.isAgentTerminal = options.kind === "agent" || !!options.agentId;
-    const agentId = this.isAgentTerminal ? options.agentId ?? id : undefined;
+    const agentId = this.isAgentTerminal ? (options.agentId ?? id) : undefined;
 
     // Merge environment
     const baseEnv = process.env as Record<string, string | undefined>;

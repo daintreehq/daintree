@@ -47,10 +47,7 @@ export function getAgentSettingsEntry(
   return settings.agents[agentId] ?? {};
 }
 
-export function generateAgentFlags(
-  entry: AgentSettingsEntry,
-  agentId?: string
-): string[] {
+export function generateAgentFlags(entry: AgentSettingsEntry, agentId?: string): string[] {
   const flags: string[] = [];
   if (entry.dangerousEnabled) {
     // Use entry.dangerousArgs if set, otherwise fall back to default for this agent

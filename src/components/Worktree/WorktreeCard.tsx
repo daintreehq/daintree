@@ -1034,9 +1034,12 @@ export function WorktreeCard({
     return cardContent;
   }
 
-  const isClaudeEnabled = agentAvailability?.claude && (agentSettings?.agents?.claude?.enabled ?? true);
-  const isGeminiEnabled = agentAvailability?.gemini && (agentSettings?.agents?.gemini?.enabled ?? true);
-  const isCodexEnabled = agentAvailability?.codex && (agentSettings?.agents?.codex?.enabled ?? true);
+  const isClaudeEnabled =
+    agentAvailability?.claude && (agentSettings?.agents?.claude?.enabled ?? true);
+  const isGeminiEnabled =
+    agentAvailability?.gemini && (agentSettings?.agents?.gemini?.enabled ?? true);
+  const isCodexEnabled =
+    agentAvailability?.codex && (agentSettings?.agents?.codex?.enabled ?? true);
 
   return (
     <ContextMenu>

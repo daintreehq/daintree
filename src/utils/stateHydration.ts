@@ -122,7 +122,8 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
               const currentAgentState = reconnectResult.agentState as AgentState | undefined;
               // Get effective agentId - handles migration from type-based to agentId-based system
               const agentId =
-                terminal.agentId ?? (terminal.type && isRegisteredAgent(terminal.type) ? terminal.type : undefined);
+                terminal.agentId ??
+                (terminal.type && isRegisteredAgent(terminal.type) ? terminal.type : undefined);
               await addTerminal({
                 kind: terminal.kind ?? (agentId ? "agent" : "terminal"),
                 type: terminal.type,

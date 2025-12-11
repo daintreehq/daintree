@@ -1,7 +1,10 @@
 import { isRegisteredAgent } from "@/config/agents";
 import type { TerminalKind, TerminalType } from "@/types";
 
-export function isAgentTerminal(kindOrType?: TerminalKind | TerminalType, agentId?: string): boolean {
+export function isAgentTerminal(
+  kindOrType?: TerminalKind | TerminalType,
+  agentId?: string
+): boolean {
   // Check kind first if available
   if (kindOrType === "agent" || agentId) return true;
   // Fall back to checking if type is a registered agent (backward compat)
@@ -11,7 +14,10 @@ export function isAgentTerminal(kindOrType?: TerminalKind | TerminalType, agentI
   return false;
 }
 
-export function hasAgentDefaults(kindOrType?: TerminalKind | TerminalType, agentId?: string): boolean {
+export function hasAgentDefaults(
+  kindOrType?: TerminalKind | TerminalType,
+  agentId?: string
+): boolean {
   return isAgentTerminal(kindOrType, agentId);
 }
 

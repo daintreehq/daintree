@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTerminalStore, type AddTerminalOptions } from "@/store/terminalStore";
 import { useProjectStore } from "@/store/projectStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktrees } from "./useWorktrees";
 import { isElectronAvailable } from "./useElectron";
 import { cliAvailabilityClient, agentSettingsClient } from "@/clients";
@@ -92,7 +93,8 @@ export interface UseAgentLauncherReturn {
 
 export function useAgentLauncher(): UseAgentLauncherReturn {
   const addTerminal = useTerminalStore((state) => state.addTerminal);
-  const { worktreeMap, activeId } = useWorktrees();
+  const { worktreeMap } = useWorktrees();
+  const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const currentProject = useProjectStore((state) => state.currentProject);
 
   const [availability, setAvailability] = useState<CliAvailability>(
@@ -152,11 +154,11 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
       const agentConfig = getAgentConfig(agentId);
       const isAgent = isRegisteredAgent(agentId);
 
-      const targetWorktreeId = launchOptions?.worktreeId ?? activeId;
+      const targetWorktreeId = launchOptions?.worktreeId ?? activeWorktreeId;
       const targetWorktree = targetWorktreeId ? worktreeMap.get(targetWorktreeId) : null;
 
-      if (launchOptions?.worktreeId && !targetWorktree) {
-        console.warn(`Worktree ${launchOptions.worktreeId} not found, cannot launch agent`);
+      if (targetWorktreeId && !targetWorktree) {
+        console.warn(`Worktree ${targetWorktreeId} not found, cannot launch agent`);
         return null;
       }
 
@@ -194,7 +196,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         return null;
       }
     },
-    [activeId, worktreeMap, addTerminal, currentProject, agentSettings]
+    [activeWorktreeId, worktreeMap, addTerminal, currentProject, agentSettings]
   );
 
   return {
