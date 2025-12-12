@@ -61,6 +61,10 @@ const PADDING_LEFT_PX = 12;
 const TALL_PADDING_TOP = 12;
 const TALL_PADDING_BOTTOM = 12;
 
+// Dead-band for cell height stabilization - ignore changes smaller than this
+// Prevents sub-pixel jitter from xterm's internal renderer dimension updates
+const CELL_HEIGHT_DEAD_BAND_PX = 0.25;
+
 function XtermAdapterComponent({
   terminalId,
   terminalType = "terminal",
@@ -86,6 +90,11 @@ function XtermAdapterComponent({
   const isSelectingRef = useRef(false);
   // RAF ref for coalescing output-driven updates
   const tallCanvasSyncRafRef = useRef<number | null>(null);
+  // Stable bottom row - monotonic while following to prevent jitter from cursor moves
+  // Claude Code moves cursor up/down while redrawing UI; this prevents scroll oscillation
+  const stableBottomRowRef = useRef(0);
+  // Stabilized cell height with dead-band to prevent sub-pixel jitter
+  const stableCellHeightRef = useRef(0);
 
   // Determine if this terminal should use tall canvas mode
   const isTallCanvas = useMemo(() => {
@@ -139,32 +148,55 @@ function XtermAdapterComponent({
   );
 
   // Get cell height using centralized measurement from TerminalConfig
+  // Applies dead-band stabilization to prevent sub-pixel jitter
   const getCellHeight = useCallback(() => {
     const managed = terminalInstanceService.get(terminalId);
-    if (!managed) return 21; // Fallback
-    return measureCellHeight(managed.terminal);
+    if (!managed) return stableCellHeightRef.current || 21; // Fallback
+
+    const rawHeight = measureCellHeight(managed.terminal);
+
+    // Apply dead-band: only update stable value if change exceeds threshold
+    if (
+      stableCellHeightRef.current === 0 ||
+      Math.abs(rawHeight - stableCellHeightRef.current) >= CELL_HEIGHT_DEAD_BAND_PX
+    ) {
+      stableCellHeightRef.current = rawHeight;
+    }
+
+    return stableCellHeightRef.current;
   }, [terminalId]);
 
-  // Calculate target scroll position to keep cursor visible (tall canvas mode)
-  // Returns the scroll position that places the cursor at the bottom of the viewport
-  // Uses same math as maxScroll in handleTallCanvasScroll to prevent slack/bounce
+  // Calculate target scroll position to keep content bottom visible (tall canvas mode)
+  // Uses stable bottom row anchor to prevent jitter from cursor moves during TUI redraws
+  // Returns integer pixel value for crisp scrolling
   const calculateScrollTarget = useCallback(() => {
     if (!isTallCanvas || !viewportRef.current) return 0;
 
-    const managed = terminalInstanceService.get(terminalId);
-    if (!managed) return 0;
-
     const cellHeight = getCellHeight();
-    const cursorRow = managed.terminal.buffer.active.cursorY;
     const viewportHeight = viewportRef.current.clientHeight;
+    const followLog = terminalInstanceService.getTallCanvasFollowLog(terminalId);
 
-    // Position cursor at bottom of viewport (terminal-like behavior)
+    // Get current content bottom (last non-blank row or cursor, whichever is greater)
+    const currentBottom = terminalInstanceService.getContentBottom(terminalId);
+
+    // Compute stable bottom: while following, never let anchor decrease
+    // This prevents jitter when Claude Code moves cursor up to redraw status lines
+    let stableBottom: number;
+    if (followLog) {
+      stableBottom = Math.max(stableBottomRowRef.current, currentBottom);
+      stableBottomRowRef.current = stableBottom;
+    } else {
+      // Not following - use actual content bottom (allow scrolling up freely)
+      stableBottom = currentBottom;
+    }
+
+    // Position stable bottom at bottom of viewport (terminal-like behavior)
     // Include TALL_PADDING_BOTTOM so follow target equals maxScroll when at content bottom
-    // This prevents the "slack then snap back" bounce described in the scroll analysis
-    const cursorPixelY = (cursorRow + 1) * cellHeight + TALL_PADDING_TOP + TALL_PADDING_BOTTOM;
-    const target = Math.max(0, cursorPixelY - viewportHeight);
+    const contentPixelY = (stableBottom + 1) * cellHeight + TALL_PADDING_TOP + TALL_PADDING_BOTTOM;
+    const target = Math.max(0, contentPixelY - viewportHeight);
 
-    return target;
+    // Round to integer to prevent sub-pixel jitter
+    return Math.round(target);
   }, [isTallCanvas, terminalId, getCellHeight]);
 
   // Sync scroll position for tall canvas mode (follow cursor)
@@ -186,12 +218,14 @@ function XtermAdapterComponent({
       const cellHeight = getCellHeight();
       const lastScrollTop = terminalInstanceService.getTallCanvasLastScrollTop(terminalId);
 
-      // Calculate maximum allowed scroll (content bottom + padding - viewport)
-      const contentBottom = terminalInstanceService.getContentBottom(terminalId);
+      // Calculate maximum allowed scroll using stable bottom
+      // (same logic as updateInnerHostHeight for consistency)
+      const currentBottom = terminalInstanceService.getContentBottom(terminalId);
+      const stableBottom = Math.max(stableBottomRowRef.current, currentBottom);
       const viewportHeight = target.clientHeight;
       const contentHeight =
-        (contentBottom + 1) * cellHeight + TALL_PADDING_TOP + TALL_PADDING_BOTTOM;
-      const maxScroll = Math.max(0, contentHeight - viewportHeight);
+        (stableBottom + 1) * cellHeight + TALL_PADDING_TOP + TALL_PADDING_BOTTOM;
+      const maxScroll = Math.round(Math.max(0, contentHeight - viewportHeight));
 
       // Clamp scroll position to prevent scrolling past content
       if (target.scrollTop > maxScroll) {
@@ -215,14 +249,20 @@ function XtermAdapterComponent({
         terminalInstanceService.setTallCanvasFollowLog(terminalId, true);
       }
 
-      terminalInstanceService.setTallCanvasLastScrollTop(terminalId, target.scrollTop);
+      terminalInstanceService.setTallCanvasLastScrollTop(terminalId, Math.round(target.scrollTop));
     },
     [isTallCanvas, terminalId, getCellHeight, calculateScrollTarget]
   );
 
   // Jump to bottom on input (tall canvas mode)
+  // Also resets stable bottom to current content (user interaction = catch up)
   const handleTallCanvasInput = useCallback(() => {
     if (!isTallCanvas || !viewportRef.current) return;
+
+    // Reset stable bottom to current content when user types
+    // This allows scroll to "catch up" after user interaction
+    const currentBottom = terminalInstanceService.getContentBottom(terminalId);
+    stableBottomRowRef.current = currentBottom;
 
     terminalInstanceService.setTallCanvasFollowLog(terminalId, true);
     const target = calculateScrollTarget();
@@ -230,23 +270,40 @@ function XtermAdapterComponent({
     terminalInstanceService.setTallCanvasLastScrollTop(terminalId, target);
   }, [isTallCanvas, terminalId, calculateScrollTarget]);
 
-  // Update inner host height based on actual content bottom (tall canvas mode)
-  // Uses getContentBottom() to find real content extent - handles shrinking (autocomplete, clear, etc.)
+  // Update inner host height based on stable content bottom (tall canvas mode)
+  // Uses stable bottom row while following to match scroll target calculation
   const updateInnerHostHeight = useCallback(() => {
     if (!isTallCanvas || !innerHostRef.current || !viewportRef.current) return;
 
     const cellHeight = getCellHeight();
     const viewportHeight = viewportRef.current.clientHeight;
+    const followLog = terminalInstanceService.getTallCanvasFollowLog(terminalId);
 
-    // Get the actual content bottom (last non-blank row or cursor, whichever is greater)
-    const contentBottom = terminalInstanceService.getContentBottom(terminalId);
+    // Get current content bottom
+    const currentBottom = terminalInstanceService.getContentBottom(terminalId);
+
+    // If content shrinks significantly (>10 rows), reset stable bottom
+    // This handles terminal.clear() and major TUI collapses
+    const SHRINK_RESET_THRESHOLD = 10;
+    if (stableBottomRowRef.current - currentBottom > SHRINK_RESET_THRESHOLD) {
+      stableBottomRowRef.current = currentBottom;
+    }
+
+    // Use same stable bottom logic as calculateScrollTarget for consistency
+    let stableBottom: number;
+    if (followLog) {
+      stableBottom = Math.max(stableBottomRowRef.current, currentBottom);
+      stableBottomRowRef.current = stableBottom;
+    } else {
+      stableBottom = currentBottom;
+    }
 
     // Height should be the greater of:
     // 1. Viewport height (so content fills the view when little output)
-    // 2. Content bottom in pixels (so we can scroll up to see history, but not past content)
+    // 2. Stable bottom in pixels (so we can scroll up to see history, but not past content)
     // Account for padding (top + bottom) to ensure container wraps full content
-    const contentHeight = (contentBottom + 1) * cellHeight + TALL_PADDING_TOP + TALL_PADDING_BOTTOM;
-    const totalHeight = Math.max(viewportHeight, contentHeight);
+    const contentHeight = (stableBottom + 1) * cellHeight + TALL_PADDING_TOP + TALL_PADDING_BOTTOM;
+    const totalHeight = Math.max(viewportHeight, Math.round(contentHeight));
 
     innerHostRef.current.style.height = `${totalHeight}px`;
   }, [isTallCanvas, terminalId, getCellHeight]);
@@ -442,6 +499,10 @@ function XtermAdapterComponent({
 
     // Initial setup for tall canvas mode
     if (isTallCanvas) {
+      // Initialize stable bottom ref to current content
+      const contentBottom = terminalInstanceService.getContentBottom(terminalId);
+      stableBottomRowRef.current = contentBottom;
+
       updateInnerHostHeight();
 
       // Restore scroll position from persisted state (survives remounts)
@@ -449,13 +510,12 @@ function XtermAdapterComponent({
       if (viewportRef.current) {
         const followLog = terminalInstanceService.getTallCanvasFollowLog(terminalId);
         if (followLog) {
-          // Calculate scroll position to show cursor at bottom
+          // Calculate scroll position to show content bottom at viewport bottom
           const cellHeight = getCellHeight();
-          const contentBottom = terminalInstanceService.getContentBottom(terminalId);
           const viewportHeight = viewportRef.current.clientHeight;
           const contentHeight =
             (contentBottom + 1) * cellHeight + TALL_PADDING_TOP + TALL_PADDING_BOTTOM;
-          const initialScroll = Math.max(0, contentHeight - viewportHeight);
+          const initialScroll = Math.round(Math.max(0, contentHeight - viewportHeight));
           viewportRef.current.scrollTop = initialScroll;
           terminalInstanceService.setTallCanvasLastScrollTop(terminalId, initialScroll);
         } else {
@@ -471,8 +531,10 @@ function XtermAdapterComponent({
         const cellHeight = getCellHeight();
         const viewportHeight = viewportRef.current.clientHeight;
         // Center the target row in the viewport
-        // Account for top padding
-        const targetScroll = Math.max(0, row * cellHeight + TALL_PADDING_TOP - viewportHeight / 2);
+        // Account for top padding, round to prevent sub-pixel jitter
+        const targetScroll = Math.round(
+          Math.max(0, row * cellHeight + TALL_PADDING_TOP - viewportHeight / 2)
+        );
         viewportRef.current.scrollTop = targetScroll;
         terminalInstanceService.setTallCanvasLastScrollTop(terminalId, targetScroll);
       });
