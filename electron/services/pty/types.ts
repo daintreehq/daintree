@@ -47,8 +47,9 @@ export interface TerminalInfo {
   inputWriteQueue: string[];
   inputWriteTimeout: NodeJS.Timeout | null;
 
-  headlessTerminal: HeadlessTerminal;
-  serializeAddon: SerializeAddon;
+  headlessTerminal?: HeadlessTerminal;
+  serializeAddon?: SerializeAddon;
+  rawOutputBuffer?: string;
 
   restartCount: number;
 }
@@ -88,5 +89,8 @@ export const WRITE_INTERVAL_MS = 5;
 // Scrollback configuration
 export const DEFAULT_SCROLLBACK = 1000;
 export const AGENT_SCROLLBACK = 10000;
+
+// Raw output buffer for non-headless terminals (100KB max)
+export const RAW_OUTPUT_BUFFER_MAX_SIZE = 100 * 1024;
 
 export const TRASH_TTL_MS = 120 * 1000;

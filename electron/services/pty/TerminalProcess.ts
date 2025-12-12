@@ -1,8 +1,8 @@
 import * as pty from "node-pty";
 import { existsSync } from "fs";
-import headless from "@xterm/headless";
+import headless, { type Terminal as HeadlessTerminalType } from "@xterm/headless";
 const { Terminal: HeadlessTerminal } = headless;
-import serialize from "@xterm/addon-serialize";
+import serialize, { type SerializeAddon as SerializeAddonType } from "@xterm/addon-serialize";
 const { SerializeAddon } = serialize;
 import type { TerminalType } from "../../../shared/types/domain.js";
 import { ProcessDetector, type DetectionResult } from "../ProcessDetector.js";
@@ -19,6 +19,7 @@ import {
   SEMANTIC_FLUSH_INTERVAL_MS,
   DEFAULT_SCROLLBACK,
   AGENT_SCROLLBACK,
+  RAW_OUTPUT_BUFFER_MAX_SIZE,
   WRITE_MAX_CHUNK_SIZE,
   WRITE_INTERVAL_MS,
 } from "./types.js";
@@ -105,6 +106,11 @@ export class TerminalProcess {
   private inputWriteQueue: string[] = [];
   private inputWriteTimeout: NodeJS.Timeout | null = null;
 
+  // Lazy headless terminal state
+  private _cols: number;
+  private _rows: number;
+  private _scrollback: number;
+
   private readonly terminalInfo: TerminalInfo;
   private readonly isAgentTerminal: boolean;
 
@@ -186,16 +192,25 @@ export class TerminalProcess {
       }
     }
 
-    // Create headless terminal
-    const scrollback = this.isAgentTerminal ? AGENT_SCROLLBACK : DEFAULT_SCROLLBACK;
-    const headlessTerminal = new HeadlessTerminal({
-      cols: options.cols,
-      rows: options.rows,
-      scrollback,
-      allowProposedApi: true,
-    });
-    const serializeAddon = new SerializeAddon();
-    headlessTerminal.loadAddon(serializeAddon);
+    // Store dimensions for lazy headless terminal creation
+    this._cols = options.cols;
+    this._rows = options.rows;
+    this._scrollback = this.isAgentTerminal ? AGENT_SCROLLBACK : DEFAULT_SCROLLBACK;
+
+    // Create headless terminal eagerly only for agent terminals
+    let headlessTerminal: HeadlessTerminalType | undefined;
+    let serializeAddon: SerializeAddonType | undefined;
+
+    if (this.isAgentTerminal) {
+      headlessTerminal = new HeadlessTerminal({
+        cols: options.cols,
+        rows: options.rows,
+        scrollback: this._scrollback,
+        allowProposedApi: true,
+      });
+      serializeAddon = new SerializeAddon();
+      headlessTerminal.loadAddon(serializeAddon);
+    }
 
     // Create terminal info
     this.terminalInfo = {
@@ -223,6 +238,7 @@ export class TerminalProcess {
       inputWriteTimeout: null,
       headlessTerminal,
       serializeAddon,
+      rawOutputBuffer: this.isAgentTerminal ? undefined : "",
       restartCount: 0,
     };
 
@@ -279,6 +295,65 @@ export class TerminalProcess {
         );
       }
     }
+  }
+
+  /**
+   * Lazily create headless terminal for serialization.
+   * Called on-demand when serialization is requested for non-agent terminals.
+   */
+  private ensureHeadlessTerminal(): void {
+    const terminal = this.terminalInfo;
+
+    if (terminal.wasKilled) {
+      throw new Error("Terminal was killed");
+    }
+
+    if (terminal.headlessTerminal && terminal.serializeAddon) {
+      return;
+    }
+
+    // If we have a stale headless terminal without an addon, dispose it first
+    if (terminal.headlessTerminal && !terminal.serializeAddon) {
+      try {
+        terminal.headlessTerminal.dispose();
+      } catch {
+        // Ignore disposal errors
+      }
+      terminal.headlessTerminal = undefined;
+    }
+
+    terminal.headlessTerminal = new HeadlessTerminal({
+      cols: this._cols,
+      rows: this._rows,
+      scrollback: this._scrollback,
+      allowProposedApi: true,
+    });
+
+    terminal.serializeAddon = new SerializeAddon();
+    terminal.headlessTerminal.loadAddon(terminal.serializeAddon);
+
+    // Replay buffered raw output to headless terminal
+    if (terminal.rawOutputBuffer !== undefined && terminal.rawOutputBuffer.length > 0) {
+      terminal.headlessTerminal.write(terminal.rawOutputBuffer);
+    }
+    terminal.rawOutputBuffer = undefined;
+  }
+
+  /**
+   * Dispose headless terminal and clear references.
+   */
+  private disposeHeadless(): void {
+    const terminal = this.terminalInfo;
+    if (!terminal.headlessTerminal) {
+      return;
+    }
+    try {
+      terminal.headlessTerminal.dispose();
+    } catch {
+      // Ignore disposal errors
+    }
+    terminal.headlessTerminal = undefined;
+    terminal.serializeAddon = undefined;
   }
 
   /**
@@ -380,8 +455,14 @@ export class TerminalProcess {
         return;
       }
 
+      // Store dimensions for lazy headless creation
+      this._cols = cols;
+      this._rows = rows;
+
       terminal.ptyProcess.resize(cols, rows);
-      terminal.headlessTerminal.resize(cols, rows);
+      if (terminal.headlessTerminal) {
+        terminal.headlessTerminal.resize(cols, rows);
+      }
     } catch (error) {
       console.error(`Failed to resize terminal ${this.id}:`, error);
     }
@@ -428,11 +509,15 @@ export class TerminalProcess {
       this.deps.agentStateService.emitAgentKilled(terminal, reason);
     }
 
-    // Dispose headless terminal
-    terminal.headlessTerminal.dispose();
+    // Dispose headless terminal (if created)
+    this.disposeHeadless();
 
     // Kill PTY process
-    terminal.ptyProcess.kill();
+    try {
+      terminal.ptyProcess.kill();
+    } catch {
+      // Ignore kill errors - process may already be dead
+    }
   }
 
   /**
@@ -471,10 +556,12 @@ export class TerminalProcess {
   /**
    * Get serialized terminal state for fast restoration (synchronous).
    * Use getSerializedStateAsync() for large terminals to avoid blocking.
+   * Creates headless terminal on-demand for non-agent terminals.
    */
   getSerializedState(): string | null {
     try {
-      return this.terminalInfo.serializeAddon.serialize();
+      this.ensureHeadlessTerminal();
+      return this.terminalInfo.serializeAddon!.serialize();
     } catch (error) {
       console.error(`[TerminalProcess] Failed to serialize terminal ${this.id}:`, error);
       return null;
@@ -485,21 +572,24 @@ export class TerminalProcess {
    * Get serialized terminal state asynchronously.
    * Yields to event loop for large terminals (>1000 lines) to prevent blocking.
    * Implements single-flight per terminal to prevent request pileup.
+   * Creates headless terminal on-demand for non-agent terminals.
    */
   async getSerializedStateAsync(): Promise<string | null> {
     const terminal = this.terminalInfo;
 
     try {
-      const lineCount = terminal.headlessTerminal.buffer.active.length;
+      this.ensureHeadlessTerminal();
+
+      const lineCount = terminal.headlessTerminal!.buffer.active.length;
       const serializerService = getTerminalSerializerService();
 
       if (serializerService.shouldUseAsync(lineCount)) {
         return await serializerService.serializeAsync(this.id, () =>
-          terminal.serializeAddon.serialize()
+          terminal.serializeAddon!.serialize()
         );
       }
 
-      return terminal.serializeAddon.serialize();
+      return terminal.serializeAddon!.serialize();
     } catch (error) {
       console.error(`[TerminalProcess] Failed to serialize terminal ${this.id}:`, error);
       return null;
@@ -618,7 +708,8 @@ export class TerminalProcess {
       clearTimeout(this.inputWriteTimeout);
       this.inputWriteTimeout = null;
     }
-    this.terminalInfo.headlessTerminal.dispose();
+
+    this.disposeHeadless();
 
     try {
       this.terminalInfo.ptyProcess.kill();
@@ -654,8 +745,16 @@ export class TerminalProcess {
 
       terminal.lastOutputTime = Date.now();
 
-      // Write to headless terminal for authoritative state
-      terminal.headlessTerminal.write(data);
+      // Write to headless terminal (if created) or buffer raw output
+      if (terminal.headlessTerminal) {
+        terminal.headlessTerminal.write(data);
+      } else if (terminal.rawOutputBuffer !== undefined) {
+        terminal.rawOutputBuffer += data;
+        // Trim less frequently to reduce allocation churn (only when >110% of max)
+        if (terminal.rawOutputBuffer.length > RAW_OUTPUT_BUFFER_MAX_SIZE * 1.1) {
+          terminal.rawOutputBuffer = terminal.rawOutputBuffer.slice(-RAW_OUTPUT_BUFFER_MAX_SIZE);
+        }
+      }
 
       // Emit data to host/renderer immediately. Flow control is handled
       // via char-count acknowledgements from the renderer.
@@ -731,8 +830,8 @@ export class TerminalProcess {
         this.deps.agentStateService.emitAgentCompleted(terminal, exitCode ?? 0);
       }
 
-      // Dispose headless terminal
-      terminal.headlessTerminal.dispose();
+      // Dispose headless terminal (if created)
+      this.disposeHeadless();
     });
   }
 
