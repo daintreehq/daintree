@@ -80,6 +80,8 @@ interface ManagedTerminal {
   isFocused: boolean;
   // Tall canvas mode (agent terminals)
   isTallCanvas: boolean;
+  // Effective row count for tall canvas (may be less than TALL_CANVAS_ROWS due to DPI limits)
+  effectiveTallRows: number;
 }
 
 type SabFlushMode = "normal" | "frame";
@@ -943,6 +945,7 @@ class TerminalInstanceService {
       latestWasAtBottom: true,
       isFocused: false,
       isTallCanvas,
+      effectiveTallRows: TALL_CANVAS_ROWS, // Refined in attach() after measuring cell height
     };
 
     const inputDisposable = terminal.onData((data) => {
@@ -1084,7 +1087,9 @@ class TerminalInstanceService {
       if (managed.isTallCanvas) {
         const cellHeight = this.measureCellHeight(managed.terminal);
         const safeRows = getSafeTallCanvasRows(cellHeight);
-        if (safeRows < TALL_CANVAS_ROWS && safeRows !== managed.terminal.rows) {
+        // Store effective rows for use in resize/fit
+        managed.effectiveTallRows = safeRows;
+        if (safeRows !== managed.terminal.rows) {
           managed.terminal.resize(managed.terminal.cols, safeRows);
           terminalClient.resize(id, managed.terminal.cols, safeRows);
         }
@@ -1140,7 +1145,7 @@ class TerminalInstanceService {
         // @ts-expect-error - internal API
         const proposed = managed.fitAddon.proposeDimensions?.({ width, height: 1 });
         const cols = proposed?.cols ?? managed.terminal.cols;
-        const rows = TALL_CANVAS_ROWS;
+        const rows = managed.effectiveTallRows;
         if (cols !== managed.terminal.cols) {
           managed.terminal.resize(cols, rows);
           terminalClient.resize(id, cols, rows);
@@ -1223,8 +1228,8 @@ class TerminalInstanceService {
           managed.fitAddon.fit();
         }
         const cols = managed.terminal.cols;
-        // For tall canvas, rows are fixed
-        const rows = isTallCanvas ? TALL_CANVAS_ROWS : managed.terminal.rows;
+        // For tall canvas, rows are fixed at effectiveTallRows (DPI-safe limit)
+        const rows = isTallCanvas ? managed.effectiveTallRows : managed.terminal.rows;
         managed.lastWidth = width;
         managed.lastHeight = height;
         managed.latestCols = cols;
@@ -1240,8 +1245,8 @@ class TerminalInstanceService {
       }
 
       const cols = proposed.cols;
-      // For tall canvas mode, rows are ALWAYS TALL_CANVAS_ROWS
-      const rows = isTallCanvas ? TALL_CANVAS_ROWS : proposed.rows;
+      // For tall canvas mode, rows are fixed at effectiveTallRows (DPI-safe limit)
+      const rows = isTallCanvas ? managed.effectiveTallRows : proposed.rows;
 
       // Skip if dimensions unchanged
       if (managed.terminal.cols === cols && managed.terminal.rows === rows) {
@@ -1342,6 +1347,45 @@ class TerminalInstanceService {
     if (managed && (managed as any).tallCanvasScrollToRow) {
       (managed as any).tallCanvasScrollToRow(row);
     }
+  }
+
+  /**
+   * Get the effective row count for tall canvas mode.
+   * Returns the DPI-safe row limit stored at attach time.
+   */
+  getEffectiveTallRows(id: string): number {
+    const managed = this.instances.get(id);
+    return managed?.effectiveTallRows ?? TALL_CANVAS_ROWS;
+  }
+
+  /**
+   * Find the last row with actual content in the terminal buffer.
+   * Scans from bottom up to find the last non-blank line.
+   * Returns the row index (0-based) of the last content line, or cursor row if higher.
+   */
+  getContentBottom(id: string): number {
+    const managed = this.instances.get(id);
+    if (!managed) return 0;
+
+    const buffer = managed.terminal.buffer.active;
+    const cursorY = buffer.cursorY;
+    const totalRows = managed.terminal.rows;
+
+    // Start from the maximum possible content position
+    // (the greater of cursor position or last row that could have content)
+    let lastContentRow = cursorY;
+
+    // Scan backwards from bottom of buffer to find actual content
+    // We check from totalRows - 1 down to cursorY (no point checking below cursor in most cases)
+    for (let row = totalRows - 1; row > cursorY; row--) {
+      const line = buffer.getLine(row);
+      if (line && line.translateToString(true).trim().length > 0) {
+        lastContentRow = Math.max(lastContentRow, row);
+        break; // Found content, no need to scan further
+      }
+    }
+
+    return lastContentRow;
   }
 
   /**

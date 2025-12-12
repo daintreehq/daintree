@@ -80,7 +80,6 @@ function XtermAdapterComponent({
   const lastScrollTopRef = useRef(0);
   const isSelectingRef = useRef(false);
   const cellHeightRef = useRef(0);
-  const maxCursorRowRef = useRef(0); // Monotonic - only grows, never shrinks (except on clear)
 
   // Determine if this terminal should use tall canvas mode
   const isTallCanvas = useMemo(() => {
@@ -217,28 +216,22 @@ function XtermAdapterComponent({
     lastScrollTopRef.current = target;
   }, [isTallCanvas, calculateScrollTarget]);
 
-  // Update inner host height based on cursor position (tall canvas mode)
-  // Uses monotonic growth: maxCursorRowRef only increases, preventing jitter from TUI redraws
-  // Height is based on max cursor row seen, not current cursor (which can move up during redraws)
+  // Update inner host height based on actual content bottom (tall canvas mode)
+  // Uses getContentBottom() to find real content extent - handles shrinking (autocomplete, clear, etc.)
   const updateInnerHostHeight = useCallback(() => {
     if (!isTallCanvas || !innerHostRef.current || !viewportRef.current) return;
 
-    const managed = terminalInstanceService.get(terminalId);
-    if (!managed) return;
-
     const cellHeight = measureCellHeight();
-    const cursorRow = managed.terminal.buffer.active.cursorY;
     const viewportHeight = viewportRef.current.clientHeight;
 
-    // Track maximum cursor row seen (monotonic growth prevents height shrinking)
-    // This avoids flicker when TUI-style agents move cursor up during redraws
-    maxCursorRowRef.current = Math.max(maxCursorRowRef.current, cursorRow);
+    // Get the actual content bottom (last non-blank row or cursor, whichever is greater)
+    const contentBottom = terminalInstanceService.getContentBottom(terminalId);
 
     // Height should be the greater of:
     // 1. Viewport height (so content fills the view when little output)
-    // 2. Max cursor position in pixels (so we can scroll up to see history)
+    // 2. Content bottom in pixels (so we can scroll up to see history, but not past content)
     // Account for padding (top + bottom) to ensure container wraps full content
-    const contentHeight = (maxCursorRowRef.current + 1) * cellHeight + TALL_PADDING_TOP + TALL_PADDING_BOTTOM;
+    const contentHeight = (contentBottom + 1) * cellHeight + TALL_PADDING_TOP + TALL_PADDING_BOTTOM;
     const totalHeight = Math.max(viewportHeight, contentHeight);
 
     innerHostRef.current.style.height = `${totalHeight}px`;
