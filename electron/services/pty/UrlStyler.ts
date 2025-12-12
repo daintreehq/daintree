@@ -23,6 +23,7 @@ const ANSI = {
 
 // Compiled URL regex for performance
 // Conservative pattern to minimize false positives
+// Excludes trailing punctuation and angle brackets at word boundaries
 // eslint-disable-next-line no-useless-escape
 const URL_REGEX = /https?:\/\/[^\s<>"{}|\\^`\[\]]+/g;
 
@@ -48,22 +49,37 @@ function wrapUrl(url: string): string {
  * Style URLs in terminal output with OSC 8 hyperlinks.
  *
  * Strategy:
+ * - Fast path: skip regex entirely if no URL protocol present
  * - Skip text that already contains escape sequences (let apps style themselves)
- * - Replace URLs with OSC 8 hyperlink sequences
+ * - Replace URLs with OSC 8 hyperlinks sequences
  * - Preserve all other text unchanged
  *
  * @param text - Raw terminal output
  * @returns Text with URLs as OSC 8 hyperlinks
  */
 export function styleUrls(text: string): string {
+  // Fast path: skip if no URL protocol present (reduces false positives)
+  if (!text.includes("://")) {
+    return text;
+  }
+
   // Skip if text already contains escape sequences
   // This preserves styling from applications like `ls --color`
   if (ESCAPE_REGEX.test(text)) {
     return text;
   }
 
-  // Replace URLs with OSC 8 hyperlinks
-  return text.replace(URL_REGEX, (url) => wrapUrl(url));
+  // Replace URLs with OSC 8 hyperlinks, trimming trailing punctuation
+  return text.replace(URL_REGEX, (match) => {
+    // Trim common trailing punctuation that shouldn't be part of the link
+    let url = match;
+    while (url.length > 0 && /[.,;:!?)>]$/.test(url)) {
+      url = url.slice(0, -1);
+    }
+    // Return the hyperlink for the trimmed URL plus any trailing punctuation
+    const trailing = match.slice(url.length);
+    return wrapUrl(url) + trailing;
+  });
 }
 
 /**

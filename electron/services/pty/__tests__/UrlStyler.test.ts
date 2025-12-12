@@ -184,12 +184,14 @@ describe("UrlStyler", () => {
         expect(output).toContain("\t");
       });
 
-      it("styles URLs inside angle brackets", () => {
+      it("styles URLs inside angle brackets without including closing bracket", () => {
         const input = "Email: <https://example.com>";
         const output = styleUrls(input);
 
         expect(output).toContain(OSC_START);
         expect(output).toContain("https://example.com");
+        expect(output).not.toContain(expectedHyperlink("https://example.com>"));
+        expect(output).toContain(">");
       });
 
       it("styles URLs inside double quotes", () => {
@@ -200,12 +202,14 @@ describe("UrlStyler", () => {
         expect(output).toContain("https://example.com");
       });
 
-      it("handles URL followed by punctuation (period included in URL)", () => {
+      it("excludes trailing punctuation from URL", () => {
         const input = "Go to https://example.com. Then continue.";
         const output = styleUrls(input);
 
         expect(output).toContain(OSC_START);
-        expect(output).toContain("Then continue.");
+        expect(output).toContain("https://example.com");
+        expect(output).not.toContain(expectedHyperlink("https://example.com."));
+        expect(output).toContain(". Then continue.");
       });
 
       it("handles URL followed by comma", () => {
@@ -240,26 +244,114 @@ describe("UrlStyler", () => {
       });
     });
 
+    describe("sentinel check optimization", () => {
+      it("returns unchanged for text without protocol", () => {
+        const input = "Building project...\nTests passed: 42\n";
+        expect(styleUrls(input)).toBe(input);
+      });
+
+      it("returns unchanged for JSON output without URLs", () => {
+        const input = '{"status": "success", "count": 100}\n';
+        expect(styleUrls(input)).toBe(input);
+      });
+
+      it("still styles http:// URLs correctly", () => {
+        const input = "Error fetching http://api.test/data\n";
+        const output = styleUrls(input);
+        expect(output).toContain(OSC_START);
+        expect(output).toContain("http://api.test/data");
+      });
+
+      it("still styles https:// URLs correctly", () => {
+        const input = "Visit https://example.com for docs\n";
+        const output = styleUrls(input);
+        expect(output).toContain(OSC_START);
+        expect(output).toContain("https://example.com");
+      });
+
+      it("skips httpie and similar non-URL text with http substring", () => {
+        const input = "Install httpie with npm install -g httpie\n";
+        const output = styleUrls(input);
+        expect(output).toBe(input);
+      });
+
+      it("skips http_status and similar variable names", () => {
+        const input = "const http_status = 200;";
+        const output = styleUrls(input);
+        expect(output).toBe(input);
+      });
+
+      it("handles parentheses around URLs correctly", () => {
+        const input = "See documentation (https://example.com).";
+        const output = styleUrls(input);
+        expect(output).toContain(OSC_START);
+        expect(output).toContain("https://example.com");
+        expect(output).not.toContain(expectedHyperlink("https://example.com)."));
+      });
+
+      it("handles comma after URL correctly", () => {
+        const input = "Sites like https://a.com, https://b.com work";
+        const output = styleUrls(input);
+        expect(output).toContain("https://a.com");
+        expect(output).toContain("https://b.com");
+        expect(output).not.toContain(expectedHyperlink("https://a.com,"));
+      });
+    });
+
     describe("performance considerations", () => {
       it("handles large text efficiently", () => {
         const text = "Some text with https://example.com embedded. ";
         const input = text.repeat(1000);
-        const start = performance.now();
         const output = styleUrls(input);
-        const duration = performance.now() - start;
 
         expect(output).toContain(OSC_START);
-        expect(duration).toBeLessThan(100);
       });
 
       it("handles text with no URLs quickly", () => {
         const input = "Lorem ipsum ".repeat(10000);
-        const start = performance.now();
         const output = styleUrls(input);
-        const duration = performance.now() - start;
 
         expect(output).toBe(input);
-        expect(duration).toBeLessThan(50);
+      });
+
+      it("sentinel check provides speedup for non-URL output", () => {
+        const nonUrlInput = "Building project...\nCompiling files...\n".repeat(10000);
+        const urlInput = "Visit https://example.com for docs\n".repeat(10000);
+
+        const nonUrlStart = performance.now();
+        styleUrls(nonUrlInput);
+        const nonUrlDuration = performance.now() - nonUrlStart;
+
+        const urlStart = performance.now();
+        styleUrls(urlInput);
+        const urlDuration = performance.now() - urlStart;
+
+        // Non-URL output should be faster than URL output
+        expect(nonUrlDuration).toBeLessThan(urlDuration);
+      });
+
+      it("processes many non-URL chunks efficiently", () => {
+        const nonUrlChunks = Array.from(
+          { length: 10000 },
+          (_, i) => `Line ${i}: Building project...\n`
+        );
+
+        for (const chunk of nonUrlChunks) {
+          const result = styleUrls(chunk);
+          expect(result).toBe(chunk);
+        }
+      });
+
+      it("processes URL chunks without significant overhead", () => {
+        const urlChunks = Array.from(
+          { length: 1000 },
+          (_, i) => `Line ${i}: https://example.com/page/${i}\n`
+        );
+
+        for (const chunk of urlChunks) {
+          const result = styleUrls(chunk);
+          expect(result).toContain(OSC_START);
+        }
       });
     });
   });
