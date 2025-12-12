@@ -11,6 +11,25 @@ import { detectHardware, HardwareProfile } from "@/utils/hardwareDetection";
 import { SharedRingBuffer, PacketParser } from "@shared/utils/SharedRingBuffer";
 import { getAgentConfig } from "@/config/agents";
 
+// Tall canvas configuration for agent terminals
+// This creates a fixed-height "screen" that the browser scrolls natively
+// Using 600 rows as default - safe for most DPI/font combinations
+// (600 rows * 25px font * 2x DPI = 30,000px, under the ~32k canvas limit)
+export const TALL_CANVAS_ROWS = 600;
+
+// Maximum canvas height in pixels (conservative limit - most browsers support ~32k)
+const MAX_CANVAS_HEIGHT_PX = 16384;
+
+/**
+ * Calculate safe row count for tall canvas mode based on device pixel ratio.
+ * Prevents canvas height from exceeding browser limits on high-DPI displays.
+ */
+export function getSafeTallCanvasRows(cellHeight: number): number {
+  const dpr = window.devicePixelRatio || 1;
+  const maxRows = Math.floor(MAX_CANVAS_HEIGHT_PX / (dpr * cellHeight));
+  return Math.min(TALL_CANVAS_ROWS, maxRows);
+}
+
 type RefreshTierProvider = () => TerminalRefreshTier;
 
 type ResizeJobId = { type: "timeout"; id: number } | { type: "idle"; id: number };
@@ -30,6 +49,7 @@ interface ManagedTerminal {
   isOpened: boolean;
   listeners: Array<() => void>;
   exitSubscribers: Set<(exitCode: number) => void>;
+  outputSubscribers: Set<() => void>; // For tall canvas scroll sync
   throttledWriter: ReturnType<typeof createThrottledWriter>;
   getRefreshTier: RefreshTierProvider;
   keyHandlerInstalled: boolean;
@@ -58,6 +78,8 @@ interface ManagedTerminal {
   latestWasAtBottom: boolean;
   // Focus-aware scrolling state
   isFocused: boolean;
+  // Tall canvas mode (agent terminals)
+  isTallCanvas: boolean;
 }
 
 type SabFlushMode = "normal" | "frame";
@@ -634,6 +656,17 @@ class TerminalInstanceService {
       const len = typeof data === "string" ? data.length : data.byteLength;
       terminalClient.acknowledgeData(id, len);
 
+      // Notify output subscribers (for tall canvas scroll sync)
+      if (managed.outputSubscribers.size > 0) {
+        managed.outputSubscribers.forEach((cb) => cb());
+      }
+
+      // For tall canvas mode, browser handles scrolling via XtermAdapter
+      // Skip internal scroll logic since it's not needed
+      if (managed.isTallCanvas) {
+        return;
+      }
+
       // Focus-aware scroll behavior: only snap deselected terminals to bottom
       // This prevents viewport jumping when user switches back to a background terminal
       if (!managed.isFocused) {
@@ -656,8 +689,15 @@ class TerminalInstanceService {
   private getWebGLBudget(): number {
     let budget = this.hardwareProfile.baseWebGLBudget;
 
-    // Reduce budget when many terminals are open
-    const terminalCount = this.instances.size;
+    // Reduce budget when many WebGL-eligible terminals are open
+    // Tall canvas terminals (agents) never use WebGL, so exclude them from the count
+    let terminalCount = 0;
+    this.instances.forEach((term) => {
+      if (!term.isTallCanvas) {
+        terminalCount++;
+      }
+    });
+
     if (terminalCount > TerminalInstanceService.TERMINAL_COUNT_THRESHOLD) {
       const scaleFactor = Math.max(
         TerminalInstanceService.BUDGET_SCALE_FACTOR,
@@ -785,13 +825,17 @@ class TerminalInstanceService {
     type: TerminalType,
     options: ConstructorParameters<typeof Terminal>[0],
     getRefreshTier: RefreshTierProvider = () => TerminalRefreshTier.FOCUSED,
-    onInput?: (data: string) => void
+    onInput?: (data: string) => void,
+    tallCanvasOptions?: { isTallCanvas?: boolean; agentId?: string }
   ): ManagedTerminal {
     const existing = this.instances.get(id);
     if (existing) {
       existing.getRefreshTier = getRefreshTier;
       return existing;
     }
+
+    const isTallCanvas = tallCanvasOptions?.isTallCanvas ?? false;
+    const agentId = tallCanvasOptions?.agentId;
 
     const openLink = (url: string) => {
       const normalizedUrl = /^https?:\/\//i.test(url) ? url : `https://${url}`;
@@ -801,12 +845,24 @@ class TerminalInstanceService {
       });
     };
 
-    const terminal = new Terminal({
-      ...options,
-      linkHandler: {
-        activate: (_event, text) => openLink(text),
-      },
-    });
+    // For tall canvas mode, override rows and scrollback
+    const terminalOptions = isTallCanvas
+      ? {
+          ...options,
+          rows: TALL_CANVAS_ROWS,
+          scrollback: 0, // No scrollback - the tall screen IS the buffer
+          linkHandler: {
+            activate: (_event: MouseEvent, text: string) => openLink(text),
+          },
+        }
+      : {
+          ...options,
+          linkHandler: {
+            activate: (_event: MouseEvent, text: string) => openLink(text),
+          },
+        };
+
+    const terminal = new Terminal(terminalOptions);
     const fitAddon = new FitAddon();
     const serializeAddon = new SerializeAddon();
     terminal.loadAddon(fitAddon);
@@ -831,6 +887,7 @@ class TerminalInstanceService {
 
     const listeners: Array<() => void> = [];
     const exitSubscribers = new Set<(exitCode: number) => void>();
+    const outputSubscribers = new Set<() => void>();
 
     // Subscribe to IPC data events only when SharedArrayBuffer is unavailable.
     // When SharedArrayBuffer is enabled, data comes exclusively through polling.
@@ -856,6 +913,8 @@ class TerminalInstanceService {
     const managed: ManagedTerminal = {
       terminal,
       type,
+      kind: isTallCanvas ? "agent" : undefined,
+      agentId,
       fitAddon,
       webglAddon: undefined,
       serializeAddon,
@@ -866,6 +925,7 @@ class TerminalInstanceService {
       isOpened: false,
       listeners,
       exitSubscribers,
+      outputSubscribers,
       throttledWriter,
       getRefreshTier,
       keyHandlerInstalled: false,
@@ -879,9 +939,10 @@ class TerminalInstanceService {
       lastHeight: 0,
       lastYResizeTime: 0,
       latestCols: 0,
-      latestRows: 0,
+      latestRows: isTallCanvas ? TALL_CANVAS_ROWS : 0,
       latestWasAtBottom: true,
       isFocused: false,
+      isTallCanvas,
     };
 
     const inputDisposable = terminal.onData((data) => {
@@ -1072,25 +1133,40 @@ class TerminalInstanceService {
    * Handles geometry caching, debouncing, xterm resize, and backend IPC.
    * Preserves scroll position if user was scrolled up viewing history.
    * Returns {cols, rows} if resized, null if skipped (cached) or error.
+   *
+   * For tall canvas mode (agent terminals):
+   * - Only columns change, rows are fixed at TALL_CANVAS_ROWS
+   * - Browser handles scrolling, so no scroll preservation needed
    */
   resize(
     id: string,
     width: number,
     height: number,
-    options: { immediate?: boolean } = {}
+    options: { immediate?: boolean; isTallCanvas?: boolean } = {}
   ): { cols: number; rows: number } | null {
     const managed = this.instances.get(id);
     if (!managed) return null;
 
+    // Use isTallCanvas from options or from managed instance
+    const isTallCanvas = options.isTallCanvas ?? managed.isTallCanvas;
+
     // Geometry caching check - ignore sub-pixel changes
-    if (Math.abs(managed.lastWidth - width) < 1 && Math.abs(managed.lastHeight - height) < 1) {
-      return null;
+    // For tall canvas, only width matters for cache
+    if (isTallCanvas) {
+      if (Math.abs(managed.lastWidth - width) < 1) {
+        return null;
+      }
+    } else {
+      if (Math.abs(managed.lastWidth - width) < 1 && Math.abs(managed.lastHeight - height) < 1) {
+        return null;
+      }
     }
 
     // Capture scroll state before resize to preserve position when viewing history
     // If viewportY < baseY, user is scrolled up (not at bottom)
+    // Not needed for tall canvas since browser handles scrolling
     const buffer = managed.terminal.buffer.active;
-    const wasAtBottom = buffer.baseY - buffer.viewportY < 1;
+    const wasAtBottom = isTallCanvas ? true : buffer.baseY - buffer.viewportY < 1;
 
     // Calculate cols/rows using proposeDimensions if available (avoids DOM read)
     try {
@@ -1100,22 +1176,29 @@ class TerminalInstanceService {
 
       if (!proposed) {
         // Fallback to fit() if proposeDimensions not available
-        managed.fitAddon.fit();
-        const { cols, rows } = managed.terminal;
+        if (!isTallCanvas) {
+          managed.fitAddon.fit();
+        }
+        const cols = managed.terminal.cols;
+        // For tall canvas, rows are fixed
+        const rows = isTallCanvas ? TALL_CANVAS_ROWS : managed.terminal.rows;
         managed.lastWidth = width;
         managed.lastHeight = height;
         managed.latestCols = cols;
         managed.latestRows = rows;
         managed.latestWasAtBottom = wasAtBottom;
         // Focus-aware scroll: only snap deselected terminals to bottom after resize
-        if (!managed.isFocused && !wasAtBottom) {
+        // Skip for tall canvas since browser handles scrolling
+        if (!isTallCanvas && !managed.isFocused && !wasAtBottom) {
           this.scrollToBottom(id);
         }
         terminalClient.resize(id, cols, rows);
         return { cols, rows };
       }
 
-      const { cols, rows } = proposed;
+      const cols = proposed.cols;
+      // For tall canvas mode, rows are ALWAYS TALL_CANVAS_ROWS
+      const rows = isTallCanvas ? TALL_CANVAS_ROWS : proposed.rows;
 
       // Skip if dimensions unchanged
       if (managed.terminal.cols === cols && managed.terminal.rows === rows) {
@@ -1130,6 +1213,14 @@ class TerminalInstanceService {
       managed.latestWasAtBottom = wasAtBottom;
 
       const bufferLineCount = this.getBufferLineCount(id);
+
+      // Tall canvas mode: simplified resize - only cols change, always immediate
+      // Y-axis throttling/debouncing doesn't apply since rows are fixed
+      if (isTallCanvas) {
+        this.clearResizeJobs(managed);
+        this.applyResize(id, cols, rows);
+        return { cols, rows };
+      }
 
       // Immediate resize for small buffers or explicit immediate flag
       if (options.immediate || bufferLineCount < START_DEBOUNCING_THRESHOLD) {
@@ -1163,6 +1254,50 @@ class TerminalInstanceService {
     const managed = this.instances.get(id);
     if (managed) {
       managed.terminal.scrollToBottom();
+    }
+  }
+
+  /**
+   * Get the current selection start row (for search scrolling in tall canvas mode).
+   * Returns null if no selection or terminal not found.
+   */
+  getSelectionRow(id: string): number | null {
+    const managed = this.instances.get(id);
+    if (!managed) return null;
+
+    const selection = managed.terminal.getSelectionPosition();
+    if (!selection) return null;
+
+    return selection.start.y;
+  }
+
+  /**
+   * Check if a terminal is in tall canvas mode.
+   */
+  isTallCanvasMode(id: string): boolean {
+    const managed = this.instances.get(id);
+    return managed?.isTallCanvas ?? false;
+  }
+
+  /**
+   * Register a callback to scroll tall canvas viewport to a specific row.
+   * Used by search to scroll to matches in tall canvas mode.
+   */
+  setTallCanvasScrollCallback(id: string, callback: ((row: number) => void) | null): void {
+    const managed = this.instances.get(id);
+    if (managed) {
+      (managed as any).tallCanvasScrollToRow = callback;
+    }
+  }
+
+  /**
+   * Scroll tall canvas to a specific row (calls registered callback).
+   * Used after search finds a match.
+   */
+  scrollTallCanvasToRow(id: string, row: number): void {
+    const managed = this.instances.get(id);
+    if (managed && (managed as any).tallCanvasScrollToRow) {
+      (managed as any).tallCanvasScrollToRow(row);
     }
   }
 
@@ -1385,10 +1520,15 @@ class TerminalInstanceService {
    * Reset the WebGL renderer by disposing and recreating the WebGL addon.
    * Forces a full WebGL context reset to resolve rendering artifacts.
    * Used after drag operations where the canvas may have incorrect dimensions.
+   *
+   * For tall canvas terminals (agents): no-op since they don't use WebGL.
    */
   resetRenderer(id: string): void {
     const managed = this.instances.get(id);
     if (!managed) return;
+
+    // Tall canvas terminals don't use WebGL - nothing to reset
+    if (managed.isTallCanvas) return;
 
     // Skip if terminal is detached or container has invalid dimensions
     if (!managed.hostElement.isConnected) return;
@@ -1571,6 +1711,17 @@ class TerminalInstanceService {
     // Track the last applied tier for hysteresis baseline
     managed.lastAppliedTier = tier;
 
+    // BLOCK WebGL for tall canvas mode (agent terminals)
+    // WebGL renderer can hit GPU texture limits with very tall canvases (1000 rows × devicePixelRatio)
+    // The default canvas renderer works better for tall screens with native browser scrolling
+    if (managed.isTallCanvas) {
+      if (managed.webglAddon) {
+        this.releaseWebgl(id, managed);
+        managed.terminal.refresh(0, managed.terminal.rows - 1);
+      }
+      return; // Stay with canvas renderer
+    }
+
     // Terminal must be visible AND have appropriate tier to want WebGL
     const wantsWebgl =
       managed.isVisible &&
@@ -1596,6 +1747,12 @@ class TerminalInstanceService {
   }
 
   private acquireWebgl(id: string, managed: ManagedTerminal): void {
+    // BLOCK: Never acquire WebGL for tall canvas mode (agent terminals)
+    // This guard catches direct calls (e.g., context loss recovery) that bypass applyRendererPolicyImmediate
+    if (managed.isTallCanvas) {
+      return;
+    }
+
     // Don't retry if we've hit an error state or exhausted recovery attempts
     if (managed.hasWebglError || managed.webglRecoveryAttempts >= MAX_WEBGL_RECOVERY_ATTEMPTS) {
       return;
@@ -1728,6 +1885,17 @@ class TerminalInstanceService {
     if (!managed) return () => {};
     managed.exitSubscribers.add(cb);
     return () => managed.exitSubscribers.delete(cb);
+  }
+
+  /**
+   * Register a callback to be invoked when output is written to the terminal.
+   * Used by tall canvas mode for scroll sync.
+   */
+  addOutputListener(id: string, cb: () => void): () => void {
+    const managed = this.instances.get(id);
+    if (!managed) return () => {};
+    managed.outputSubscribers.add(cb);
+    return () => managed.outputSubscribers.delete(cb);
   }
 
   destroy(id: string): void {

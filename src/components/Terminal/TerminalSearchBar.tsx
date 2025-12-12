@@ -41,6 +41,14 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
         managed.searchAddon.clearDecorations();
       }
       setHasMatches(found);
+
+      // For tall canvas mode: scroll outer viewport to the match
+      if (found && terminalInstanceService.isTallCanvasMode(terminalId)) {
+        const row = terminalInstanceService.getSelectionRow(terminalId);
+        if (row !== null) {
+          terminalInstanceService.scrollTallCanvasToRow(terminalId, row);
+        }
+      }
     },
     [terminalId, caseSensitive]
   );
@@ -107,6 +115,14 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
             managed.searchAddon.clearDecorations();
           }
           setHasMatches(found);
+
+          // For tall canvas mode: scroll outer viewport to the match
+          if (found && terminalInstanceService.isTallCanvasMode(terminalId)) {
+            const row = terminalInstanceService.getSelectionRow(terminalId);
+            if (row !== null) {
+              terminalInstanceService.scrollTallCanvasToRow(terminalId, row);
+            }
+          }
         }
       }
       return nextCaseSensitive;

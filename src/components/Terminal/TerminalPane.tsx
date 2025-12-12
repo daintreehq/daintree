@@ -394,6 +394,7 @@ function TerminalPaneComponent({
           key={`${id}-${restartKey}`}
           terminalId={id}
           terminalType={type}
+          agentId={agentId}
           onReady={handleReady}
           onExit={handleExit}
           onInput={handleInput}

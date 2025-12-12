@@ -1,4 +1,4 @@
-import React, { useCallback, useLayoutEffect, useMemo, useRef, useEffect } from "react";
+import React, { useCallback, useLayoutEffect, useMemo, useRef, useEffect, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { cn } from "@/lib/utils";
 import { terminalClient } from "@/clients";
@@ -8,10 +8,12 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useScrollbackStore, usePerformanceModeStore, useTerminalFontStore } from "@/store";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
+import { isRegisteredAgent } from "@/config/agents";
 
 export interface XtermAdapterProps {
   terminalId: string;
   terminalType?: TerminalType;
+  agentId?: string;
   onReady?: () => void;
   onExit?: (exitCode: number) => void;
   onInput?: (data: string) => void;
@@ -46,9 +48,13 @@ export const CANOPY_TERMINAL_THEME = {
 
 const MIN_CONTAINER_SIZE = 50;
 
+// Threshold in pixels for "at bottom" detection
+const FOLLOW_THRESHOLD_ROWS = 2;
+
 function XtermAdapterComponent({
   terminalId,
   terminalType = "terminal",
+  agentId,
   onReady,
   onExit,
   onInput,
@@ -63,19 +69,39 @@ function XtermAdapterComponent({
   // Track visibility for resize optimization (start pessimistic for offscreen mounts)
   const isVisibleRef = useRef(false);
 
+  // Tall canvas mode refs (agent terminals only)
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const innerHostRef = useRef<HTMLDivElement>(null);
+  const [followLog, setFollowLog] = useState(true);
+  const lastScrollTopRef = useRef(0);
+  const isSelectingRef = useRef(false);
+  const cellHeightRef = useRef(0);
+
+  // Determine if this terminal should use tall canvas mode
+  const isTallCanvas = useMemo(() => {
+    // Check if it's an agent terminal by agentId or legacy terminalType
+    if (agentId && isRegisteredAgent(agentId)) return true;
+    if (terminalType && terminalType !== "terminal" && isRegisteredAgent(terminalType)) return true;
+    return false;
+  }, [agentId, terminalType]);
+
   const scrollbackLines = useScrollbackStore((state) => state.scrollbackLines);
   const performanceMode = usePerformanceModeStore((state) => state.performanceMode);
   const fontSize = useTerminalFontStore((state) => state.fontSize);
   const fontFamily = useTerminalFontStore((state) => state.fontFamily);
 
   // Calculate effective scrollback: performance mode overrides, otherwise use type-based policy
+  // For tall canvas mode (agent terminals), scrollback is always 0 - the tall screen IS the buffer
   const effectiveScrollback = useMemo(() => {
+    if (isTallCanvas) {
+      return 0; // No scrollback in tall canvas mode - browser handles scrolling
+    }
     if (performanceMode) {
       return PERFORMANCE_MODE_SCROLLBACK;
     }
     // Use scrollbackLines directly (0 means unlimited, handled by getScrollbackForType)
     return getScrollbackForType(terminalType, scrollbackLines);
-  }, [performanceMode, scrollbackLines, terminalType]);
+  }, [performanceMode, scrollbackLines, terminalType, isTallCanvas]);
 
   const terminalOptions = useMemo(
     () => ({
@@ -102,6 +128,134 @@ function XtermAdapterComponent({
     [effectiveScrollback, performanceMode, fontSize, fontFamily]
   );
 
+  // Measure cell height from xterm's internal renderer
+  const measureCellHeight = useCallback(() => {
+    const managed = terminalInstanceService.get(terminalId);
+    if (!managed) return cellHeightRef.current || 21; // Fallback
+
+    // Access xterm internal dimensions
+    const terminal = managed.terminal;
+    // @ts-expect-error - accessing internal API
+    const renderDims = terminal._core?._renderService?.dimensions;
+    if (renderDims?.css?.cell?.height) {
+      cellHeightRef.current = renderDims.css.cell.height;
+      return renderDims.css.cell.height;
+    }
+    // Fallback based on font size
+    const fallback = fontSize * 1.1 + 2; // lineHeight + buffer
+    cellHeightRef.current = fallback;
+    return fallback;
+  }, [terminalId, fontSize]);
+
+  // Calculate target scroll position to keep cursor visible (tall canvas mode)
+  const calculateScrollTarget = useCallback(() => {
+    if (!isTallCanvas || !viewportRef.current) return 0;
+
+    const managed = terminalInstanceService.get(terminalId);
+    if (!managed) return 0;
+
+    const cellHeight = measureCellHeight();
+    const cursorRow = managed.terminal.buffer.active.cursorY;
+    const viewportHeight = viewportRef.current.clientHeight;
+
+    // Position cursor at bottom of viewport (terminal-like behavior)
+    const cursorPixelY = (cursorRow + 1) * cellHeight;
+    const target = Math.max(0, cursorPixelY - viewportHeight);
+
+    return target;
+  }, [isTallCanvas, terminalId, measureCellHeight]);
+
+  // Sync scroll position for tall canvas mode (follow cursor)
+  const syncTallCanvasScroll = useCallback(() => {
+    if (!isTallCanvas || !followLog || !viewportRef.current || isSelectingRef.current) return;
+
+    const target = calculateScrollTarget();
+    viewportRef.current.scrollTop = target;
+    lastScrollTopRef.current = target;
+  }, [isTallCanvas, followLog, calculateScrollTarget]);
+
+  // Handle user scroll events in tall canvas mode
+  const handleTallCanvasScroll = useCallback(
+    (e: React.UIEvent<HTMLDivElement>) => {
+      if (!isTallCanvas) return;
+
+      const target = e.currentTarget;
+      const diff = Math.abs(target.scrollTop - lastScrollTopRef.current);
+
+      // Ignore tiny/programmatic scroll changes
+      if (diff < 2) return;
+
+      const cellHeight = measureCellHeight();
+      const idealScrollTop = calculateScrollTarget();
+      const threshold = cellHeight * FOLLOW_THRESHOLD_ROWS;
+
+      // If user scrolls away from target, disable follow
+      if (Math.abs(target.scrollTop - idealScrollTop) > threshold) {
+        setFollowLog(false);
+      } else {
+        setFollowLog(true);
+      }
+
+      lastScrollTopRef.current = target.scrollTop;
+    },
+    [isTallCanvas, measureCellHeight, calculateScrollTarget]
+  );
+
+  // Jump to bottom on input (tall canvas mode)
+  const handleTallCanvasInput = useCallback(() => {
+    if (!isTallCanvas || !viewportRef.current) return;
+
+    setFollowLog(true);
+    const target = calculateScrollTarget();
+    viewportRef.current.scrollTop = target;
+    lastScrollTopRef.current = target;
+  }, [isTallCanvas, calculateScrollTarget]);
+
+  // Update inner host height based on cursor position (tall canvas mode)
+  // Height extends only to where content exists, preventing scroll into empty space
+  const updateInnerHostHeight = useCallback(() => {
+    if (!isTallCanvas || !innerHostRef.current || !viewportRef.current) return;
+
+    const managed = terminalInstanceService.get(terminalId);
+    if (!managed) return;
+
+    const cellHeight = measureCellHeight();
+    const cursorRow = managed.terminal.buffer.active.cursorY;
+    const viewportHeight = viewportRef.current.clientHeight;
+
+    // Height should be the greater of:
+    // 1. Viewport height (so content fills the view when little output)
+    // 2. Cursor position in pixels (so we can scroll up to see history)
+    const contentHeight = (cursorRow + 1) * cellHeight;
+    const totalHeight = Math.max(viewportHeight, contentHeight);
+
+    innerHostRef.current.style.height = `${totalHeight}px`;
+  }, [isTallCanvas, terminalId, measureCellHeight]);
+
+  // Track text selection to avoid fighting with scroll sync
+  // Only freeze if selection is inside THIS terminal (not global page selection)
+  useEffect(() => {
+    if (!isTallCanvas) return;
+
+    const handleSelectionChange = () => {
+      const selection = window.getSelection();
+      if (!selection || selection.toString().length === 0) {
+        isSelectingRef.current = false;
+        return;
+      }
+      // Check if selection is inside our container
+      const container = containerRef.current;
+      if (container && selection.anchorNode) {
+        isSelectingRef.current = container.contains(selection.anchorNode);
+      } else {
+        isSelectingRef.current = false;
+      }
+    };
+
+    document.addEventListener("selectionchange", handleSelectionChange);
+    return () => document.removeEventListener("selectionchange", handleSelectionChange);
+  }, [isTallCanvas]);
+
   // Push-based resize handler using ResizeObserver dimensions directly
   const handleResizeEntry = useCallback(
     (entry: ResizeObserverEntry) => {
@@ -115,13 +269,24 @@ function XtermAdapterComponent({
       if (width === 0 || height === 0) return;
       if (width < MIN_CONTAINER_SIZE || height < MIN_CONTAINER_SIZE) return;
 
-      const dims = terminalInstanceService.resize(terminalId, width, height);
+      const dims = terminalInstanceService.resize(terminalId, width, height, {
+        isTallCanvas,
+      });
 
       if (dims) {
         prevDimensionsRef.current = dims;
       }
+
+      // For tall canvas: always update height and re-snap on ANY resize (including height-only)
+      // This handles viewport height changes (maximize/restore) that don't change cols
+      if (isTallCanvas) {
+        updateInnerHostHeight();
+        if (followLog) {
+          requestAnimationFrame(syncTallCanvasScroll);
+        }
+      }
     },
-    [terminalId]
+    [terminalId, isTallCanvas, updateInnerHostHeight, followLog, syncTallCanvasScroll]
   );
 
   // Fallback fit for initial mount and visibility changes
@@ -143,24 +308,41 @@ function XtermAdapterComponent({
 
     if (width < MIN_CONTAINER_SIZE || height < MIN_CONTAINER_SIZE) return;
 
-    const dims = terminalInstanceService.resize(terminalId, width, height, { immediate: true });
+    const dims = terminalInstanceService.resize(terminalId, width, height, {
+      immediate: true,
+      isTallCanvas,
+    });
     if (dims) {
       prevDimensionsRef.current = dims;
+      // Update inner host height after fit in tall canvas mode
+      if (isTallCanvas) {
+        updateInnerHostHeight();
+      }
     }
-  }, [terminalId]);
+  }, [terminalId, isTallCanvas, updateInnerHostHeight]);
 
   useLayoutEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+
+    // For tall canvas mode, we need the inner host to be ready first
+    // In standard mode, we attach directly to container
+    const attachTarget = isTallCanvas ? innerHostRef.current : container;
+    if (isTallCanvas && !attachTarget) return;
 
     const managed = terminalInstanceService.getOrCreate(
       terminalId,
       terminalType,
       terminalOptions,
       getRefreshTier || (() => TerminalRefreshTier.FOCUSED),
-      onInput
+      onInput,
+      { isTallCanvas, agentId }
     );
-    terminalInstanceService.attach(terminalId, container);
+
+    // Attach to appropriate target
+    if (attachTarget) {
+      terminalInstanceService.attach(terminalId, attachTarget);
+    }
 
     if (!managed.keyHandlerInstalled) {
       managed.terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
@@ -197,9 +379,57 @@ function XtermAdapterComponent({
       managed.keyHandlerInstalled = true;
     }
 
+    // For tall canvas mode: set up key listener to snap to bottom on actual input
+    // Filter to keys that send data to PTY, not navigation/scroll keys
+    let tallCanvasKeyDisposable: { dispose: () => void } | null = null;
+    if (isTallCanvas) {
+      tallCanvasKeyDisposable = managed.terminal.onKey(({ domEvent }) => {
+        // Skip navigation keys that shouldn't snap to bottom
+        const navigationKeys = ["PageUp", "PageDown", "Home", "End"];
+        if (navigationKeys.includes(domEvent.key)) {
+          return;
+        }
+        // Skip if modifier keys are held (likely shortcuts, not input)
+        if (domEvent.ctrlKey || domEvent.metaKey || domEvent.altKey) {
+          return;
+        }
+        handleTallCanvasInput();
+      });
+    }
+
+    // For tall canvas mode: prevent xterm from handling wheel events
+    // We want native browser scrolling on the outer container, not xterm's internal scroll
+    // which can trigger history navigation in some terminal applications
+    let wheelHandler: ((e: WheelEvent) => void) | null = null;
+    if (isTallCanvas && managed.terminal.element) {
+      wheelHandler = (e: WheelEvent) => {
+        // Stop xterm from processing the wheel event
+        e.stopPropagation();
+        // Don't preventDefault - let it bubble to outer scroll container
+      };
+      // Use capture phase to intercept before xterm processes it
+      managed.terminal.element.addEventListener("wheel", wheelHandler, { capture: true });
+    }
+
     exitUnsubRef.current = terminalInstanceService.addExitListener(terminalId, (code) => {
       onExit?.(code);
     });
+
+    // Initial setup for tall canvas mode
+    if (isTallCanvas) {
+      updateInnerHostHeight();
+
+      // Register scroll callback for search to scroll to matches
+      terminalInstanceService.setTallCanvasScrollCallback(terminalId, (row: number) => {
+        if (!viewportRef.current) return;
+        const cellHeight = measureCellHeight();
+        const viewportHeight = viewportRef.current.clientHeight;
+        // Center the target row in the viewport
+        const targetScroll = Math.max(0, row * cellHeight - viewportHeight / 2);
+        viewportRef.current.scrollTop = targetScroll;
+        lastScrollTopRef.current = targetScroll;
+      });
+    }
 
     performFit();
     onReady?.();
@@ -211,7 +441,23 @@ function XtermAdapterComponent({
       // Flush pending resizes before unmount
       terminalInstanceService.flushResize(terminalId);
 
-      terminalInstanceService.detach(terminalId, containerRef.current);
+      // Clean up tall canvas key listener
+      if (tallCanvasKeyDisposable) {
+        tallCanvasKeyDisposable.dispose();
+      }
+
+      // Clean up tall canvas wheel handler
+      if (wheelHandler && managed.terminal.element) {
+        managed.terminal.element.removeEventListener("wheel", wheelHandler, { capture: true });
+      }
+
+      // Clean up tall canvas scroll callback
+      if (isTallCanvas) {
+        terminalInstanceService.setTallCanvasScrollCallback(terminalId, null);
+      }
+
+      const detachTarget = isTallCanvas ? innerHostRef.current : containerRef.current;
+      terminalInstanceService.detach(terminalId, detachTarget);
 
       if (exitUnsubRef.current) {
         exitUnsubRef.current();
@@ -220,7 +466,18 @@ function XtermAdapterComponent({
 
       prevDimensionsRef.current = null;
     };
-  }, [terminalId, terminalType, terminalOptions, onExit, onReady, performFit]);
+  }, [
+    terminalId,
+    terminalType,
+    agentId,
+    terminalOptions,
+    onExit,
+    onReady,
+    performFit,
+    isTallCanvas,
+    handleTallCanvasInput,
+    updateInnerHostHeight,
+  ]);
 
   // Resolve current tier for dependency tracking
   const currentTier = useMemo(
@@ -299,6 +556,65 @@ function XtermAdapterComponent({
     };
   }, [handleResizeEntry]);
 
+  // Subscribe to output for tall canvas height updates and scroll sync
+  useEffect(() => {
+    if (!isTallCanvas) return;
+
+    const managed = terminalInstanceService.get(terminalId);
+    if (!managed) return;
+
+    // Register callback for when output is written
+    const unsubscribe = terminalInstanceService.addOutputListener(terminalId, () => {
+      // Update height first (expands scroll area as content grows)
+      // Then sync scroll position
+      requestAnimationFrame(() => {
+        updateInnerHostHeight();
+        syncTallCanvasScroll();
+      });
+    });
+
+    return unsubscribe;
+  }, [terminalId, isTallCanvas, updateInnerHostHeight, syncTallCanvasScroll]);
+
+  // Render tall canvas mode
+  if (isTallCanvas) {
+    return (
+      <div
+        ref={containerRef}
+        className={cn(
+          "w-full h-full bg-canopy-bg text-white overflow-hidden rounded-b-[var(--radius-lg)]",
+          className
+        )}
+        style={{
+          willChange: "transform",
+          transform: "translateZ(0)",
+        }}
+      >
+        {/* Outer scroll viewport - browser owns scrolling */}
+        <div
+          ref={viewportRef}
+          className="absolute inset-0 overflow-y-auto overflow-x-hidden pl-2 pt-2 pb-4"
+          onScroll={handleTallCanvasScroll}
+          style={{
+            // Smooth scrolling for programmatic scroll changes
+            scrollBehavior: followLog ? "auto" : "auto",
+          }}
+        >
+          {/* Inner tall host - fixed height based on TALL_CANVAS_ROWS * cellHeight */}
+          <div
+            ref={innerHostRef}
+            className="w-full relative"
+            style={{
+              // Height will be set dynamically by updateInnerHostHeight
+              minHeight: "100%",
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // Standard terminal mode (original behavior)
   return (
     <div
       ref={containerRef}
