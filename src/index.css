@@ -102,6 +102,8 @@
   --animation-duration: 150ms;
   --transition-duration: 150ms;
   --terminal-animation-duration: 150ms;
+  --focus-transition-duration: 150ms;
+  --focus-transition-easing: cubic-bezier(0.4, 0, 0.2, 1);
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -211,6 +213,14 @@
   * {
     @apply border-border;
   }
+
+  *:focus-visible {
+    transition:
+      outline-color var(--focus-transition-duration) var(--focus-transition-easing),
+      outline-offset var(--focus-transition-duration) var(--focus-transition-easing),
+      box-shadow var(--focus-transition-duration) var(--focus-transition-easing);
+  }
+
   body {
     @apply bg-background text-foreground;
     font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
@@ -364,6 +374,11 @@ body,
     opacity: 1;
     transform: none;
     will-change: auto;
+  }
+
+  /* Disable focus ring transitions for reduced motion */
+  *:focus-visible {
+    transition: none !important;
   }
 
   /* Disable button scale transforms for reduced motion */
