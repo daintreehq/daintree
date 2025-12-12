@@ -475,7 +475,7 @@ port.on("message", (rawMsg: any) => {
         }
         break;
 
-      case "init-buffers":
+      case "init-buffers": {
         const visualOk = msg.visualBuffer instanceof SharedArrayBuffer;
         const analysisOk = msg.analysisBuffer instanceof SharedArrayBuffer;
 
@@ -498,6 +498,7 @@ port.on("message", (rawMsg: any) => {
           } sabMode=${ptyManager.isSabMode()}`
         );
         break;
+      }
 
       case "spawn":
         ptyManager.spawn(msg.id, msg.options);
