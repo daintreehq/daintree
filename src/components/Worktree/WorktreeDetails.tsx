@@ -338,7 +338,7 @@ export function WorktreeDetails({
           <FileChangeList
             changes={worktree.worktreeChanges.changes}
             rootPath={worktree.worktreeChanges.rootPath}
-            maxVisible={15}
+            maxVisible={worktree.worktreeChanges.changes.length}
             groupByFolder={worktree.worktreeChanges.changedFileCount > 5}
           />
         </div>
