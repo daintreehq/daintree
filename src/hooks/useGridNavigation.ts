@@ -1,6 +1,7 @@
-import { useMemo, useCallback, useRef, useEffect } from "react";
-import { useTerminalStore } from "@/store";
+import { useMemo, useCallback, useRef, useEffect, useState } from "react";
+import { useTerminalStore, useLayoutConfigStore, useWorktreeSelectionStore } from "@/store";
 import { useShallow } from "zustand/react/shallow";
+import { getAutoGridCols } from "@/lib/terminalLayout";
 
 export type NavigationDirection = "up" | "down" | "left" | "right";
 
@@ -8,7 +9,6 @@ interface GridPosition {
   terminalId: string;
   row: number;
   col: number;
-  center: { x: number; y: number };
 }
 
 interface UseGridNavigationOptions {
@@ -16,7 +16,7 @@ interface UseGridNavigationOptions {
 }
 
 export function useGridNavigation(options: UseGridNavigationOptions = {}) {
-  const { containerSelector = "[role='grid']" } = options;
+  const { containerSelector = "#terminal-grid" } = options;
 
   const { terminals, focusedId } = useTerminalStore(
     useShallow((state) => ({
@@ -25,77 +25,90 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
     }))
   );
 
+  const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
+  const layoutConfig = useLayoutConfigStore((state) => state.layoutConfig);
+
   const gridTerminals = useMemo(
-    () => terminals.filter((t) => t.location === "grid" || t.location === undefined),
-    [terminals]
+    () =>
+      terminals.filter(
+        (t) =>
+          (t.location === "grid" || t.location === undefined) &&
+          (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+      ),
+    [terminals, activeWorktreeId]
   );
 
-  const dockTerminals = useMemo(() => terminals.filter((t) => t.location === "dock"), [terminals]);
+  const dockTerminals = useMemo(
+    () =>
+      terminals.filter(
+        (t) =>
+          t.location === "dock" && (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+      ),
+    [terminals, activeWorktreeId]
+  );
 
   const directionCache = useRef(new Map<string, string | null>());
 
+  // Track container width for responsive layout (mirrors TerminalGrid)
+  const [gridWidth, setGridWidth] = useState<number | null>(null);
+
+  useEffect(() => {
+    const findAndObserve = () => {
+      const container = document.querySelector(containerSelector);
+      if (!container) return null;
+
+      const observer = new ResizeObserver((entries) => {
+        const entry = entries[0];
+        if (entry) {
+          const newWidth = entry.contentRect.width;
+          setGridWidth((prev) => (prev === newWidth ? prev : newWidth));
+        }
+      });
+
+      observer.observe(container);
+      setGridWidth(container.clientWidth);
+
+      return observer;
+    };
+
+    const observer = findAndObserve();
+    if (!observer) {
+      const retryTimer = setTimeout(findAndObserve, 100);
+      return () => clearTimeout(retryTimer);
+    }
+
+    return () => observer.disconnect();
+  }, [containerSelector]);
+
+  // Compute gridCols using the same logic as TerminalGrid
+  const gridCols = useMemo(() => {
+    const count = gridTerminals.length;
+    if (count === 0) return 1;
+
+    const { strategy, value } = layoutConfig;
+
+    if (strategy === "fixed-columns") {
+      return Math.max(1, Math.min(value, 10));
+    }
+
+    if (strategy === "fixed-rows") {
+      const rows = Math.max(1, Math.min(value, 10));
+      return Math.ceil(count / rows);
+    }
+
+    return getAutoGridCols(count, gridWidth);
+  }, [gridTerminals.length, layoutConfig, gridWidth]);
+
+  // Compute grid layout from indices (no DOM measurement)
   const gridLayout = useMemo(() => {
     if (gridTerminals.length === 0) return [];
 
-    const container = document.querySelector(containerSelector);
-    if (!container) return [];
-
-    const positions: GridPosition[] = [];
-
-    for (const terminal of gridTerminals) {
-      // Find element by data-terminal-id attribute on sortable wrapper
-      const element = container.querySelector(`[data-terminal-id="${terminal.id}"]`);
-
-      if (!element) continue;
-
-      const bounds = element.getBoundingClientRect();
-      positions.push({
-        terminalId: terminal.id,
-        row: -1,
-        col: -1,
-        center: {
-          x: bounds.left + bounds.width / 2,
-          y: bounds.top + bounds.height / 2,
-        },
-      });
-    }
-
-    if (positions.length === 0) return [];
-
-    // Sort by Y position (top to bottom)
-    positions.sort((a, b) => a.center.y - b.center.y);
-
-    // Group into rows (terminals with similar Y positions)
-    const rows: GridPosition[][] = [];
-    const Y_THRESHOLD = 50; // Pixels of Y overlap to consider same row
-
-    for (const pos of positions) {
-      let addedToRow = false;
-      for (const row of rows) {
-        const rowY = row[0].center.y;
-        if (Math.abs(pos.center.y - rowY) < Y_THRESHOLD) {
-          row.push(pos);
-          addedToRow = true;
-          break;
-        }
-      }
-      if (!addedToRow) {
-        rows.push([pos]);
-      }
-    }
-
-    // Within each row, sort by X position (left to right) and assign indices
-    for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
-      const row = rows[rowIndex];
-      row.sort((a, b) => a.center.x - b.center.x);
-      for (let colIndex = 0; colIndex < row.length; colIndex++) {
-        row[colIndex].row = rowIndex;
-        row[colIndex].col = colIndex;
-      }
-    }
-
-    return positions;
-  }, [gridTerminals, containerSelector]);
+    return gridTerminals.map((terminal, index) => ({
+      terminalId: terminal.id,
+      row: Math.floor(index / gridCols),
+      col: index % gridCols,
+    }));
+  }, [gridTerminals, gridCols]);
 
   // Clear cache when grid layout changes
   useEffect(() => {
@@ -120,13 +133,12 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
           candidates = gridLayout.filter((p) => p.col === current.col && p.row < current.row);
           // Get closest (max row index)
           candidates.sort((a, b) => b.row - a.row);
-          // Fallback: if no exact column match, find nearest by X distance
+          // Fallback: if no exact column match, find nearest by column distance
           if (candidates.length === 0) {
             candidates = gridLayout.filter((p) => p.row < current.row);
             candidates.sort(
               (a, b) =>
-                b.row - a.row ||
-                Math.abs(a.center.x - current.center.x) - Math.abs(b.center.x - current.center.x)
+                b.row - a.row || Math.abs(a.col - current.col) - Math.abs(b.col - current.col)
             );
           }
           break;
@@ -136,13 +148,12 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
           candidates = gridLayout.filter((p) => p.col === current.col && p.row > current.row);
           // Get closest (min row index)
           candidates.sort((a, b) => a.row - b.row);
-          // Fallback: if no exact column match, find nearest by X distance
+          // Fallback: if no exact column match, find nearest by column distance
           if (candidates.length === 0) {
             candidates = gridLayout.filter((p) => p.row > current.row);
             candidates.sort(
               (a, b) =>
-                a.row - b.row ||
-                Math.abs(a.center.x - current.center.x) - Math.abs(b.center.x - current.center.x)
+                a.row - b.row || Math.abs(a.col - current.col) - Math.abs(b.col - current.col)
             );
           }
           break;
