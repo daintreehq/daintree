@@ -102,7 +102,12 @@ export class TerminalAddonManager {
 
           requestAnimationFrame(() => {
             const retryManaged = this.getTerminal(id);
-            if (!retryManaged || retryManaged.webglRecoveryToken !== token || !retryManaged.terminal.element) return;
+            if (
+              !retryManaged ||
+              retryManaged.webglRecoveryToken !== token ||
+              !retryManaged.terminal.element
+            )
+              return;
 
             try {
               if (retryManaged.webglRecoveryAttempts < MAX_WEBGL_RECOVERY_ATTEMPTS) {

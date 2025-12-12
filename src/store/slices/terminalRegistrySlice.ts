@@ -830,9 +830,7 @@ export const createTerminalRegistrySlice =
 
         // Restart complete - clear isRestarting flag
         set((state) => ({
-          terminals: state.terminals.map((t) =>
-            t.id === id ? { ...t, isRestarting: false } : t
-          ),
+          terminals: state.terminals.map((t) => (t.id === id ? { ...t, isRestarting: false } : t)),
         }));
       } catch (error) {
         // Set error state instead of trashing the terminal
