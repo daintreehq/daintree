@@ -84,4 +84,7 @@ src/
 
 ## Documentation
 
-See `docs/` for detailed guides: `architecture.md`, `development.md`, `services.md`, `contributing.md`.
+See `docs/` for detailed guides:
+
+- `development.md` — Setup, commands, workflow
+- `motion-system.md` — Animation patterns, timing tokens, accessibility
