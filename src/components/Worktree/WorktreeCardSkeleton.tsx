@@ -6,7 +6,7 @@ export function WorktreeCardSkeleton() {
       className={cn(
         "border rounded-lg p-3 mb-2",
         "border-transparent bg-canopy-bg/50",
-        "motion-safe:animate-pulse motion-reduce:animate-none"
+        "animate-pulse-delayed"
       )}
       role="status"
       aria-live="polite"

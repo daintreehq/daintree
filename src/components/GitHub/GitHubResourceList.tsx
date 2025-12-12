@@ -179,35 +179,38 @@ export function GitHubResourceList({
     const renderCount = Math.min(Math.max(1, safeCount), MAX_SKELETON_ITEMS);
 
     return (
-      <div className="divide-y divide-canopy-border">
-        {Array.from({ length: renderCount }).map((_, i) => (
-          <div
-            key={i}
-            className="p-3 animate-pulse box-border"
-            style={{ height: `${ITEM_HEIGHT_PX}px` }}
-          >
-            <div className="flex items-start gap-3 h-full">
-              <div className="w-4 h-4 rounded-full bg-muted mt-0.5 shrink-0" />
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <div className="h-5 bg-muted rounded w-3/4" />
-                  <div className="h-4 bg-muted rounded w-10 shrink-0" />
+      <div role="status" aria-live="polite" aria-busy="true" aria-label="Loading GitHub results">
+        <span className="sr-only">Loading GitHub results</span>
+        <div aria-hidden="true" className="divide-y divide-canopy-border">
+          {Array.from({ length: renderCount }).map((_, i) => (
+            <div
+              key={i}
+              className="p-3 animate-pulse-delayed box-border"
+              style={{ height: `${ITEM_HEIGHT_PX}px` }}
+            >
+              <div className="flex items-start gap-3 h-full">
+                <div className="w-4 h-4 rounded-full bg-muted mt-0.5 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <div className="h-5 bg-muted rounded w-3/4" />
+                    <div className="h-4 bg-muted rounded w-10 shrink-0" />
+                  </div>
+                  <div className="mt-1 flex items-center gap-1.5">
+                    <div className="h-4 bg-muted rounded w-10" />
+                    <div className="h-4 bg-muted rounded w-12" />
+                    <div className="h-4 bg-muted rounded w-14" />
+                  </div>
                 </div>
-                <div className="mt-1 flex items-center gap-1.5">
-                  <div className="h-4 bg-muted rounded w-10" />
-                  <div className="h-4 bg-muted rounded w-12" />
-                  <div className="h-4 bg-muted rounded w-14" />
-                </div>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <div className="flex -space-x-1.5">
-                  <div className="w-5 h-5 rounded-full bg-muted border-2 border-canopy-sidebar" />
-                  <div className="w-5 h-5 rounded-full bg-muted border-2 border-canopy-sidebar" />
+                <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex -space-x-1.5">
+                    <div className="w-5 h-5 rounded-full bg-muted border-2 border-canopy-sidebar" />
+                    <div className="w-5 h-5 rounded-full bg-muted border-2 border-canopy-sidebar" />
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
     );
   };
