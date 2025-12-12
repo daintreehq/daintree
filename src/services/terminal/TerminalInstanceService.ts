@@ -11,7 +11,6 @@ import {
 import { TALL_CANVAS_ROWS, getSafeTallCanvasRows, measureCellHeight } from "./TerminalConfig";
 import { TerminalAddonManager } from "./TerminalAddonManager";
 import { TerminalDataBuffer } from "./TerminalDataBuffer";
-import { setupParserHandlers } from "./TerminalParserHandler";
 import { createThrottledWriter } from "./ThrottledWriter";
 
 const START_DEBOUNCING_THRESHOLD = 200;
@@ -229,8 +228,6 @@ class TerminalInstanceService {
     listeners.push(() => inputDisposable.dispose());
 
     this.instances.set(id, managed);
-
-    setupParserHandlers(managed);
 
     const initialTier = getRefreshTier ? getRefreshTier() : TerminalRefreshTier.FOCUSED;
     this.applyRendererPolicy(id, initialTier);

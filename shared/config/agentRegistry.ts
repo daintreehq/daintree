@@ -8,8 +8,6 @@ export interface AgentConfig {
   shortcut?: string | null;
   tooltip?: string;
   capabilities?: {
-    blockAltScreen?: boolean;
-    blockMouseReporting?: boolean;
     scrollback?: number;
   };
 }
@@ -25,8 +23,6 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     shortcut: "Cmd/Ctrl+Alt+C",
     tooltip: "deep, focused work",
     capabilities: {
-      blockAltScreen: true,
-      blockMouseReporting: true,
       scrollback: 10000,
     },
   },
