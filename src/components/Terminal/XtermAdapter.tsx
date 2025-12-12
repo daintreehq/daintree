@@ -185,12 +185,26 @@ function XtermAdapterComponent({
       if (!isTallCanvas) return;
 
       const target = e.currentTarget;
+      const cellHeight = measureCellHeight();
+
+      // Calculate maximum allowed scroll (content bottom + padding - viewport)
+      const contentBottom = terminalInstanceService.getContentBottom(terminalId);
+      const viewportHeight = target.clientHeight;
+      const contentHeight = (contentBottom + 1) * cellHeight + TALL_PADDING_TOP + TALL_PADDING_BOTTOM;
+      const maxScroll = Math.max(0, contentHeight - viewportHeight);
+
+      // Clamp scroll position to prevent scrolling past content
+      if (target.scrollTop > maxScroll) {
+        target.scrollTop = maxScroll;
+        lastScrollTopRef.current = maxScroll;
+        return; // Skip further processing for clamped scroll
+      }
+
       const diff = Math.abs(target.scrollTop - lastScrollTopRef.current);
 
       // Ignore tiny/programmatic scroll changes
       if (diff < 2) return;
 
-      const cellHeight = measureCellHeight();
       const idealScrollTop = calculateScrollTarget();
       const threshold = cellHeight * FOLLOW_THRESHOLD_ROWS;
 
@@ -203,7 +217,7 @@ function XtermAdapterComponent({
 
       lastScrollTopRef.current = target.scrollTop;
     },
-    [isTallCanvas, measureCellHeight, calculateScrollTarget]
+    [isTallCanvas, terminalId, measureCellHeight, calculateScrollTarget]
   );
 
   // Jump to bottom on input (tall canvas mode)
@@ -436,6 +450,18 @@ function XtermAdapterComponent({
     if (isTallCanvas) {
       updateInnerHostHeight();
 
+      // Ensure initial scroll position is at the bottom (follow mode)
+      if (viewportRef.current) {
+        const cellHeight = measureCellHeight();
+        const contentBottom = terminalInstanceService.getContentBottom(terminalId);
+        const viewportHeight = viewportRef.current.clientHeight;
+        const contentHeight = (contentBottom + 1) * cellHeight + TALL_PADDING_TOP + TALL_PADDING_BOTTOM;
+        // Start at bottom of content, or 0 if content fits in viewport
+        const initialScroll = Math.max(0, contentHeight - viewportHeight);
+        viewportRef.current.scrollTop = initialScroll;
+        lastScrollTopRef.current = initialScroll;
+      }
+
       // Register scroll callback for search to scroll to matches
       terminalInstanceService.setTallCanvasScrollCallback(terminalId, (row: number) => {
         if (!viewportRef.current) return;
@@ -613,6 +639,7 @@ function XtermAdapterComponent({
         <div
           ref={viewportRef}
           className="absolute inset-0 overflow-y-auto overflow-x-hidden"
+          style={{ overscrollBehavior: "contain" }}
           onScroll={handleTallCanvasScroll}
         >
           {/* Inner tall host - padding here so browser includes it in scrollable area */}
