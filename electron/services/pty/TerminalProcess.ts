@@ -82,6 +82,8 @@ export interface TerminalProcessCallbacks {
 export interface TerminalProcessDependencies {
   agentStateService: AgentStateService;
   ptyPool: PtyPool | null;
+  /** When true, per-terminal flow control is bypassed in favor of global SAB backpressure */
+  sabModeEnabled?: boolean;
 }
 
 /**
@@ -96,6 +98,7 @@ export class TerminalProcess {
   // Flow control state
   private _unacknowledgedCharCount = 0;
   private _isPtyPaused = false;
+  private sabModeEnabled: boolean;
 
   // Semantic buffer state
   private pendingSemanticData = "";
@@ -118,6 +121,7 @@ export class TerminalProcess {
     const args = options.args || this.getDefaultShellArgs(shell);
     const spawnedAt = Date.now();
 
+    this.sabModeEnabled = deps.sabModeEnabled ?? false;
     this.isAgentTerminal = options.kind === "agent" || !!options.agentId;
     const agentId = this.isAgentTerminal ? (options.agentId ?? id) : undefined;
 
@@ -290,9 +294,15 @@ export class TerminalProcess {
 
   /**
    * Acknowledge data processing from frontend (Flow Control).
+   * Only has effect in IPC fallback mode; in SAB mode, flow control is handled globally.
    */
   acknowledgeData(charCount: number): void {
     if (this.terminalInfo.wasKilled) {
+      return;
+    }
+
+    // In SAB mode, per-terminal acks are ignored - global backpressure handles flow control
+    if (this.sabModeEnabled) {
       return;
     }
 
@@ -603,6 +613,27 @@ export class TerminalProcess {
   }
 
   /**
+   * Update SAB mode setting dynamically.
+   * If enabling SAB mode while terminal is paused waiting for renderer acks,
+   * immediately resume the PTY to unblock.
+   */
+  setSabModeEnabled(enabled: boolean): void {
+    this.sabModeEnabled = enabled;
+    if (enabled) {
+      // Transitioning to SAB mode - clear ack-based flow control state
+      this._unacknowledgedCharCount = 0;
+      if (this._isPtyPaused) {
+        try {
+          this.terminalInfo.ptyProcess.resume();
+        } catch {
+          // Ignore resume errors - process may be dead
+        }
+        this._isPtyPaused = false;
+      }
+    }
+  }
+
+  /**
    * Clean up resources.
    */
   dispose(): void {
@@ -636,20 +667,24 @@ export class TerminalProcess {
         return;
       }
 
-      // Flow Control: Pause if backlog is too high
-      this._unacknowledgedCharCount += data.length;
-      if (!this._isPtyPaused && this._unacknowledgedCharCount > HIGH_WATERMARK_CHARS) {
-        if (process.env.CANOPY_VERBOSE) {
-          console.log(
-            `[TerminalProcess] Flow control: Pausing ${this.id} (${this._unacknowledgedCharCount} > ${HIGH_WATERMARK_CHARS})`
-          );
+      // Flow Control: Only apply per-terminal flow control in IPC fallback mode.
+      // In SAB mode, global SAB backpressure in pty-host handles throttling,
+      // and renderer acks may never arrive for background (non-rendered) terminals.
+      if (!this.sabModeEnabled) {
+        this._unacknowledgedCharCount += data.length;
+        if (!this._isPtyPaused && this._unacknowledgedCharCount > HIGH_WATERMARK_CHARS) {
+          if (process.env.CANOPY_VERBOSE) {
+            console.log(
+              `[TerminalProcess] Flow control: Pausing ${this.id} (${this._unacknowledgedCharCount} > ${HIGH_WATERMARK_CHARS})`
+            );
+          }
+          try {
+            ptyProcess.pause();
+          } catch {
+            // Process might be dead
+          }
+          this._isPtyPaused = true;
         }
-        try {
-          ptyProcess.pause();
-        } catch {
-          // Process might be dead
-        }
-        this._isPtyPaused = true;
       }
 
       terminal.lastOutputTime = Date.now();

@@ -43,11 +43,36 @@ export class PtyManager extends EventEmitter {
   private terminals: Map<string, TerminalProcess> = new Map();
   private ptyPool: PtyPool | null = null;
   private activeProjectId: string | null = null;
+  private sabModeEnabled = false;
 
   constructor() {
     super();
     this.registry = new TerminalRegistry();
     this.agentStateService = new AgentStateService();
+  }
+
+  /**
+   * Enable SharedArrayBuffer mode for flow control.
+   * When SAB mode is enabled, per-terminal flow control is bypassed
+   * because global SAB backpressure handles throttling instead.
+   * Propagates to all existing terminals to unblock any that are paused.
+   */
+  setSabMode(enabled: boolean): void {
+    this.sabModeEnabled = enabled;
+    // Propagate to all existing terminals
+    for (const terminal of this.terminals.values()) {
+      terminal.setSabModeEnabled(enabled);
+    }
+    if (process.env.CANOPY_VERBOSE) {
+      console.log(`[PtyManager] SAB mode ${enabled ? "enabled" : "disabled"}`);
+    }
+  }
+
+  /**
+   * Check if SAB mode is enabled.
+   */
+  isSabMode(): boolean {
+    return this.sabModeEnabled;
   }
 
   /**
@@ -164,6 +189,7 @@ export class PtyManager extends EventEmitter {
       {
         agentStateService: this.agentStateService,
         ptyPool: this.ptyPool,
+        sabModeEnabled: this.sabModeEnabled,
       }
     );
 

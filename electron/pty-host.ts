@@ -476,18 +476,27 @@ port.on("message", (rawMsg: any) => {
         break;
 
       case "init-buffers":
-        // Dual buffer init: visual + analysis
-        if (msg.visualBuffer instanceof SharedArrayBuffer) {
+        const visualOk = msg.visualBuffer instanceof SharedArrayBuffer;
+        const analysisOk = msg.analysisBuffer instanceof SharedArrayBuffer;
+
+        if (visualOk) {
           visualBuffer = new SharedRingBuffer(msg.visualBuffer);
+          ptyManager.setSabMode(true);
         } else {
-          console.warn("[PtyHost] init-buffers: visualBuffer is not SharedArrayBuffer");
+          console.warn("[PtyHost] init-buffers: visualBuffer is not SharedArrayBuffer (IPC mode)");
         }
-        if (msg.analysisBuffer instanceof SharedArrayBuffer) {
+
+        if (analysisOk) {
           analysisBuffer = new SharedRingBuffer(msg.analysisBuffer);
         } else {
           console.warn("[PtyHost] init-buffers: analysisBuffer is not SharedArrayBuffer");
         }
-        console.log("[PtyHost] Dual SharedArrayBuffer ring buffers initialized");
+
+        console.log(
+          `[PtyHost] Buffers initialized: visual=${visualOk ? "SAB" : "IPC"} analysis=${
+            analysisOk ? "SAB" : "disabled"
+          } sabMode=${ptyManager.isSabMode()}`
+        );
         break;
 
       case "spawn":
