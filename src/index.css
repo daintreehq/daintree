@@ -349,6 +349,32 @@ body,
   will-change: opacity;
 }
 
+/* Delayed pulse animation for skeleton loading states
+ * Prevents "flash of loading state" (FOLS) for fast operations (<400ms).
+ * Skeleton starts invisible and fades in only when animation begins after delay.
+ */
+@keyframes pulse-delayed {
+  0% {
+    opacity: 0;
+  }
+  0.1% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.animate-pulse-delayed {
+  opacity: 0;
+  animation: pulse-delayed 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  animation-delay: 400ms;
+  will-change: opacity;
+}
+
 /* Agent status working state - pulsing gradient animation */
 @keyframes status-pulse {
   0%,
@@ -369,6 +395,7 @@ body,
 @media (prefers-reduced-motion: reduce) {
   .animate-activity-pulse,
   .animate-agent-pulse,
+  .animate-pulse-delayed,
   .status-working {
     animation: none;
     opacity: 1;
@@ -853,4 +880,9 @@ body[data-performance-mode="true"] *::after {
   animation: none !important;
   animation-play-state: paused !important;
   transition: none !important;
+}
+
+/* Ensure delayed skeletons don't stay invisible when animations are disabled */
+body[data-performance-mode="true"] .animate-pulse-delayed {
+  opacity: 1 !important;
 }
