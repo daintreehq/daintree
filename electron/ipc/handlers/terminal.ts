@@ -73,8 +73,11 @@ export function registerTerminalHandlers(deps: HandlerDependencies): () => void 
 
     const validatedOptions = parseResult.data;
 
+    // Row limits: 500 standard, up to 1000 for agent tall canvas mode
+    // Runtime clamping in getSafeTallCanvasRows() ensures we stay under canvas limits
+    const MAX_ROWS_TALL_CANVAS = 1000;
     const cols = Math.max(1, Math.min(500, Math.floor(validatedOptions.cols) || 80));
-    const rows = Math.max(1, Math.min(500, Math.floor(validatedOptions.rows) || 30));
+    const rows = Math.max(1, Math.min(MAX_ROWS_TALL_CANVAS, Math.floor(validatedOptions.rows) || 30));
 
     const type = validatedOptions.type || "terminal";
     const kind = validatedOptions.kind || (validatedOptions.agentId ? "agent" : "terminal");
@@ -208,7 +211,8 @@ export function registerTerminalHandlers(deps: HandlerDependencies): () => void 
 
       const { id, cols, rows } = parseResult.data;
       const clampedCols = Math.max(1, Math.min(500, Math.floor(cols)));
-      const clampedRows = Math.max(1, Math.min(500, Math.floor(rows)));
+      // Allow up to 1000 rows for agent tall canvas mode (runtime clamping handles safety)
+      const clampedRows = Math.max(1, Math.min(1000, Math.floor(rows)));
 
       ptyClient.resize(id, clampedCols, clampedRows);
     } catch (error) {

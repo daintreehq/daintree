@@ -95,6 +95,8 @@ function XtermAdapterComponent({
   const stableBottomRowRef = useRef(0);
   // Stabilized cell height with dead-band to prevent sub-pixel jitter
   const stableCellHeightRef = useRef(0);
+  // Cache last inner host height to avoid redundant style writes
+  const lastHeightPxRef = useRef(0);
 
   // Determine if this terminal should use tall canvas mode
   const isTallCanvas = useMemo(() => {
@@ -305,7 +307,11 @@ function XtermAdapterComponent({
     const contentHeight = (stableBottom + 1) * cellHeight + TALL_PADDING_TOP + TALL_PADDING_BOTTOM;
     const totalHeight = Math.max(viewportHeight, Math.round(contentHeight));
 
-    innerHostRef.current.style.height = `${totalHeight}px`;
+    // Only update style if height changed by at least 1px to reduce layout churn
+    if (Math.abs(totalHeight - lastHeightPxRef.current) >= 1) {
+      lastHeightPxRef.current = totalHeight;
+      innerHostRef.current.style.height = `${totalHeight}px`;
+    }
   }, [isTallCanvas, terminalId, getCellHeight]);
 
   // Track text selection to avoid fighting with scroll sync
@@ -445,6 +451,49 @@ function XtermAdapterComponent({
           return false;
         }
 
+        // Tall canvas mode: handle PageUp/PageDown/Home/End for browser scrolling
+        // Since xterm's scrollback is disabled, these keys won't scroll without intervention
+        if (isTallCanvas && viewportRef.current && event.type === "keydown") {
+          const viewport = viewportRef.current;
+          const pageSize = viewport.clientHeight * 0.9; // 90% of viewport for page scroll
+
+          if (event.key === "PageUp" || (event.shiftKey && event.key === "PageUp")) {
+            event.preventDefault();
+            viewport.scrollTop = Math.max(0, viewport.scrollTop - pageSize);
+            terminalInstanceService.setTallCanvasFollowLog(terminalId, false);
+            terminalInstanceService.setTallCanvasLastScrollTop(terminalId, viewport.scrollTop);
+            return false;
+          }
+          if (event.key === "PageDown" || (event.shiftKey && event.key === "PageDown")) {
+            event.preventDefault();
+            viewport.scrollTop += pageSize;
+            // Check if near bottom to re-enable follow
+            const cellHeight = getCellHeight();
+            const threshold = cellHeight * FOLLOW_THRESHOLD_ROWS;
+            const idealScrollTop = calculateScrollTarget();
+            if (Math.abs(viewport.scrollTop - idealScrollTop) <= threshold) {
+              terminalInstanceService.setTallCanvasFollowLog(terminalId, true);
+            }
+            terminalInstanceService.setTallCanvasLastScrollTop(terminalId, viewport.scrollTop);
+            return false;
+          }
+          if (event.key === "Home" && event.ctrlKey) {
+            event.preventDefault();
+            viewport.scrollTop = 0;
+            terminalInstanceService.setTallCanvasFollowLog(terminalId, false);
+            terminalInstanceService.setTallCanvasLastScrollTop(terminalId, 0);
+            return false;
+          }
+          if (event.key === "End" && event.ctrlKey) {
+            event.preventDefault();
+            const target = calculateScrollTarget();
+            viewport.scrollTop = target;
+            terminalInstanceService.setTallCanvasFollowLog(terminalId, true);
+            terminalInstanceService.setTallCanvasLastScrollTop(terminalId, target);
+            return false;
+          }
+        }
+
         // Allow critical Ctrl+<key> bindings to reach the TUI
         if (event.ctrlKey && !event.shiftKey && TUI_KEYBINDS.includes(event.key)) {
           return true;
@@ -487,10 +536,14 @@ function XtermAdapterComponent({
       wheelHandler = (e: WheelEvent) => {
         // Stop xterm from processing the wheel event
         e.stopPropagation();
-        // Don't preventDefault - let it bubble to outer scroll container
+        // Don't preventDefault - let browser handle scroll natively on outer container
       };
       // Use capture phase to intercept before xterm processes it
-      managed.terminal.element.addEventListener("wheel", wheelHandler, { capture: true });
+      // passive: true since we don't call preventDefault, reduces scroll jank
+      managed.terminal.element.addEventListener("wheel", wheelHandler, {
+        capture: true,
+        passive: true,
+      });
     }
 
     exitUnsubRef.current = terminalInstanceService.addExitListener(terminalId, (code) => {
@@ -555,9 +608,11 @@ function XtermAdapterComponent({
         tallCanvasDataDisposable.dispose();
       }
 
-      // Clean up tall canvas wheel handler
+      // Clean up tall canvas wheel handler (must match addEventListener options)
       if (wheelHandler && managed.terminal.element) {
-        managed.terminal.element.removeEventListener("wheel", wheelHandler, { capture: true });
+        managed.terminal.element.removeEventListener("wheel", wheelHandler, {
+          capture: true,
+        });
       }
 
       // Clean up tall canvas scroll callback
@@ -710,10 +765,11 @@ function XtermAdapterComponent({
       >
         {/* Outer scroll viewport - browser owns scrolling */}
         {/* No padding here - padding goes on inner host so scroll math is clean */}
+        {/* scrollbar-gutter: stable prevents column reflow when scrollbar appears/disappears */}
         <div
           ref={viewportRef}
           className="absolute inset-0 overflow-y-auto overflow-x-hidden"
-          style={{ overscrollBehavior: "contain" }}
+          style={{ overscrollBehavior: "contain", scrollbarGutter: "stable" }}
           onScroll={handleTallCanvasScroll}
         >
           {/* Inner tall host - padding here so browser includes it in scrollable area */}

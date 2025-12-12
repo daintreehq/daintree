@@ -2,9 +2,10 @@ import { Terminal } from "@xterm/xterm";
 
 // Tall canvas configuration for agent terminals
 // This creates a fixed-height "screen" that the browser scrolls natively
-// Using 600 rows as default - safe for most DPI/font combinations
-// (600 rows * 25px font * 2x DPI = 30,000px, under the ~32k canvas limit)
-export const TALL_CANVAS_ROWS = 600;
+// Target 1000 rows - getSafeTallCanvasRows() clamps based on actual DPI/font at runtime
+// Example: 14px font, 1.1 line height (~17px cell), 2x DPI → ~480 safe rows
+// Example: 14px font, 1.1 line height (~17px cell), 1x DPI → ~960 safe rows
+export const TALL_CANVAS_ROWS = 1000;
 
 // Maximum canvas height in pixels (conservative limit - most browsers support ~32k)
 const MAX_CANVAS_HEIGHT_PX = 16384;
