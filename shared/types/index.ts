@@ -231,6 +231,8 @@ export type {
   AgentCompletedPayload,
   AgentFailedPayload,
   AgentKilledPayload,
+  TerminalFlowStatus,
+  TerminalStatusPayload,
 } from "./pty-host.js";
 
 // Sidecar types - browser dock

@@ -30,6 +30,9 @@ import type {
   PtyHostRequest,
   PtyHostEvent,
   PtyHostSpawnOptions,
+  TerminalStatusPayload,
+  CrashType,
+  HostCrashPayload,
 } from "../../shared/types/pty-host.js";
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
@@ -67,6 +70,60 @@ const DEFAULT_CONFIG: Required<PtyClientConfig> = {
 
 /** Default ring buffer size: 10MB for high-throughput terminal output */
 const DEFAULT_RING_BUFFER_SIZE = 10 * 1024 * 1024;
+
+/**
+ * Classify crash type based on exit code and signal.
+ * Exit codes 137 (128+9=SIGKILL) and 134 (128+6=SIGABRT) often indicate OOM.
+ */
+function classifyCrash(code: number | null, signal: string | null): CrashType {
+  if (code === null) {
+    return "SIGNAL_TERMINATED";
+  }
+  if (code === 0) {
+    return "CLEAN_EXIT";
+  }
+  // OOM detection - SIGKILL (exit 137) or SIGABRT (exit 134)
+  if (code === 137 || signal === "SIGKILL") {
+    return "OUT_OF_MEMORY";
+  }
+  if (code === 134 || signal === "SIGABRT") {
+    return "ASSERTION_FAILURE";
+  }
+  // Signal-terminated (exit code > 128 typically means 128 + signal number)
+  if (code > 128) {
+    return "SIGNAL_TERMINATED";
+  }
+  if (code !== 0) {
+    return "UNKNOWN_CRASH";
+  }
+  return "CLEAN_EXIT";
+}
+
+/**
+ * Generate user-friendly crash message based on crash type.
+ */
+function getCrashMessage(crashType: CrashType, code: number | null): string {
+  switch (crashType) {
+    case "OUT_OF_MEMORY":
+      return (
+        `The terminal backend crashed due to memory exhaustion (code ${code}). ` +
+        `This can happen with high-throughput terminal output. ` +
+        `Consider reducing output volume or splitting tasks.`
+      );
+    case "ASSERTION_FAILURE":
+      return (
+        `The terminal backend crashed due to an internal assertion failure (code ${code}). ` +
+        `This may indicate a bug. Please report this issue.`
+      );
+    case "SIGNAL_TERMINATED":
+      return (
+        `The terminal backend was terminated by a signal (code ${code}). ` +
+        `Terminals may need to be restarted.`
+      );
+    default:
+      return `The terminal backend crashed (code ${code}). Terminals may need to be restarted.`;
+  }
+}
 
 export class PtyClient extends EventEmitter {
   private child: UtilityProcess | null = null;
@@ -192,7 +249,14 @@ export class PtyClient extends EventEmitter {
     }
 
     this.child.on("exit", (code) => {
-      console.error(`[PtyClient] Pty Host exited with code ${code}`);
+      // Note: UtilityProcess exit event doesn't provide signal, but we can infer from code
+      const signal = code !== null && code > 128 ? `SIG${code - 128}` : null;
+      const crashType = classifyCrash(code, signal);
+
+      console.error(
+        `[PtyClient] Pty Host exited with code ${code}` +
+          (crashType !== "CLEAN_EXIT" ? ` (${crashType})` : "")
+      );
 
       // Clear health check
       if (this.healthCheckInterval) {
@@ -206,6 +270,17 @@ export class PtyClient extends EventEmitter {
       if (this.isDisposed) {
         // Expected shutdown
         return;
+      }
+
+      // Emit crash payload with classification for downstream consumers
+      if (crashType !== "CLEAN_EXIT") {
+        const crashPayload: HostCrashPayload = {
+          code,
+          signal,
+          crashType,
+          timestamp: Date.now(),
+        };
+        this.emit("host-crash-details", crashPayload);
       }
 
       // Try to restart
@@ -226,11 +301,12 @@ export class PtyClient extends EventEmitter {
         this.emit("host-crash", code);
 
         if (this.config.showCrashDialog) {
+          const crashMessage = getCrashMessage(crashType, code);
           dialog
             .showMessageBox({
               type: "error",
               title: "Terminal Service Crashed",
-              message: `The terminal backend crashed (code ${code}). Terminals may need to be restarted.`,
+              message: crashMessage,
               buttons: ["OK"],
             })
             .catch(console.error);
@@ -420,6 +496,21 @@ export class PtyClient extends EventEmitter {
         break;
       }
 
+      case "terminal-status": {
+        // Forward terminal status events for flow control visibility
+        const statusPayload: TerminalStatusPayload = {
+          id: event.id,
+          status: event.status,
+          bufferUtilization: event.bufferUtilization,
+          pauseDuration: event.pauseDuration,
+          timestamp: event.timestamp,
+        };
+        this.emit("terminal-status", statusPayload);
+        // Also emit to internal event bus for other services
+        events.emit("terminal:status", statusPayload);
+        break;
+      }
+
       default:
         console.warn("[PtyClient] Unknown event type:", (event as { type: string }).type);
     }
@@ -514,6 +605,15 @@ export class PtyClient extends EventEmitter {
    */
   acknowledgeData(id: string, charCount: number): void {
     this.send({ type: "acknowledge-data", id, charCount } as any);
+  }
+
+  /**
+   * Force resume a terminal that may be paused due to backpressure.
+   * This is a user-initiated action to unblock a terminal when the
+   * automatic flow control gets stuck.
+   */
+  forceResume(id: string): void {
+    this.send({ type: "force-resume", id });
   }
 
   /** Get terminal IDs for a specific project */

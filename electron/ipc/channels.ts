@@ -39,6 +39,8 @@ export const CHANNELS = {
   TERMINAL_GET_ANALYSIS_BUFFER: "terminal:get-analysis-buffer",
   TERMINAL_GET_INFO: "terminal:get-info",
   TERMINAL_ACKNOWLEDGE_DATA: "terminal:acknowledge-data",
+  TERMINAL_FORCE_RESUME: "terminal:force-resume",
+  TERMINAL_STATUS: "terminal:status",
 
   AGENT_STATE_CHANGED: "agent:state-changed",
   AGENT_GET_STATE: "agent:get-state",

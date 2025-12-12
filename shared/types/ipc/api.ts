@@ -51,6 +51,7 @@ import type { TerminalConfig } from "./config.js";
 import type { HibernationConfig } from "./hibernation.js";
 import type { SystemSleepMetrics } from "./systemSleep.js";
 import type { KeyAction } from "../keymap.js";
+import type { TerminalStatusPayload } from "../pty-host.js";
 
 // ElectronAPI Type (exposed via preload)
 
@@ -104,6 +105,8 @@ export interface ElectronAPI {
     onActivity(callback: (data: TerminalActivityPayload) => void): () => void;
     onTrashed(callback: (data: { id: string; expiresAt: number }) => void): () => void;
     onRestored(callback: (data: { id: string }) => void): () => void;
+    forceResume(id: string): Promise<{ success: boolean; error?: string }>;
+    onStatus(callback: (data: TerminalStatusPayload) => void): () => void;
   };
   artifact: {
     onDetected(callback: (data: ArtifactDetectedPayload) => void): () => void;

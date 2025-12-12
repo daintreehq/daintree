@@ -253,6 +253,12 @@ export const EVENT_META: Record<keyof CanopyEventMap, EventMetadata> = {
     requiresTimestamp: true,
     description: "Terminal activity state changed with human-readable headlines",
   },
+  "terminal:status": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "Terminal flow control status changed (running, paused)",
+  },
   "terminal:backgrounded": {
     category: "agent",
     requiresContext: false,
@@ -595,6 +601,18 @@ export type CanopyEventMap = {
   };
 
   /**
+   * Emitted when a terminal's flow control status changes.
+   * Indicates whether the terminal is paused due to backpressure.
+   */
+  "terminal:status": {
+    id: string;
+    status: "running" | "paused-backpressure" | "paused-user";
+    bufferUtilization?: number;
+    pauseDuration?: number;
+    timestamp: number;
+  };
+
+  /**
    * Emitted when a terminal is backgrounded during project switch.
    * The process stays alive but is hidden from the UI.
    */
@@ -725,6 +743,7 @@ export const ALL_EVENT_TYPES: Array<keyof CanopyEventMap> = [
   "terminal:trashed",
   "terminal:restored",
   "terminal:activity",
+  "terminal:status",
   "terminal:backgrounded",
   "terminal:foregrounded",
   "server:backgrounded",

@@ -105,6 +105,7 @@ export function GridTerminalPane({
             : null
         }
         lastCommand={terminal.lastCommand}
+        flowStatus={terminal.flowStatus}
         location="grid"
         restartKey={terminal.restartKey}
         restartError={terminal.restartError}

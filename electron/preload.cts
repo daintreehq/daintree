@@ -39,6 +39,7 @@ import type {
   ApplyPatchOptions,
 } from "../shared/types/ipc.js";
 import type { TerminalActivityPayload } from "../shared/types/terminal.js";
+import type { TerminalStatusPayload } from "../shared/types/pty-host.js";
 
 export type { ElectronAPI };
 
@@ -118,6 +119,8 @@ const CHANNELS = {
   TERMINAL_GET_ANALYSIS_BUFFER: "terminal:get-analysis-buffer",
   TERMINAL_GET_INFO: "terminal:get-info",
   TERMINAL_ACKNOWLEDGE_DATA: "terminal:acknowledge-data",
+  TERMINAL_FORCE_RESUME: "terminal:force-resume",
+  TERMINAL_STATUS: "terminal:status",
 
   // Agent state channels
   AGENT_STATE_CHANGED: "agent:state-changed",
@@ -411,6 +414,12 @@ const api: ElectronAPI = {
     },
 
     isMessagePortAvailable: (): boolean => false,
+
+    forceResume: (id: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(CHANNELS.TERMINAL_FORCE_RESUME, id),
+
+    onStatus: (callback: (data: TerminalStatusPayload) => void) =>
+      _typedOn(CHANNELS.TERMINAL_STATUS, callback),
   },
 
   // Artifact API

@@ -6,6 +6,7 @@ import type {
   TerminalType,
   TerminalLocation,
   AgentStateChangeTrigger,
+  TerminalFlowStatus,
 } from "@/types";
 import { terminalClient, agentSettingsClient } from "@/clients";
 import { generateAgentFlags } from "@shared/types";
@@ -115,6 +116,7 @@ export interface TerminalRegistrySlice {
   clearTerminalError: (id: string) => void;
   updateTerminalCwd: (id: string, cwd: string) => void;
   moveTerminalToWorktree: (id: string, worktreeId: string) => void;
+  updateFlowStatus: (id: string, status: TerminalFlowStatus, timestamp: number) => void;
 }
 
 // Flush pending persistence - call on app quit to prevent data loss
@@ -875,6 +877,26 @@ export const createTerminalRegistrySlice =
         const newTerminals = state.terminals.map((t) => (t.id === id ? { ...t, worktreeId } : t));
         terminalPersistence.save(newTerminals);
         return { terminals: newTerminals };
+      });
+    },
+
+    updateFlowStatus: (id, status, timestamp) => {
+      set((state) => {
+        const terminal = state.terminals.find((t) => t.id === id);
+        if (!terminal) return state;
+
+        const prevTs = terminal.flowStatusTimestamp;
+        if (prevTs !== undefined && timestamp < prevTs) return state;
+
+        if (terminal.flowStatus === status && terminal.flowStatusTimestamp === timestamp) {
+          return state;
+        }
+
+        return {
+          terminals: state.terminals.map((t) =>
+            t.id === id ? { ...t, flowStatus: status, flowStatusTimestamp: timestamp } : t
+          ),
+        };
       });
     },
   });

@@ -64,6 +64,7 @@ import type {
 import type { GitGetFileDiffPayload } from "./git.js";
 import type { TerminalConfig } from "./config.js";
 import type { SystemSleepMetrics } from "./systemSleep.js";
+import type { TerminalFlowStatus } from "../pty-host.js";
 
 // IPC Contract Maps
 
@@ -177,6 +178,10 @@ export interface IpcInvokeMap {
   "terminal:get-info": {
     args: [id: string];
     result: TerminalInfoPayload;
+  };
+  "terminal:force-resume": {
+    args: [id: string];
+    result: { success: boolean; error?: string };
   };
 
   // Agent channels
@@ -569,6 +574,13 @@ export interface IpcEventMap {
   "terminal:error": [id: string, error: string];
   "terminal:trashed": { id: string; expiresAt: number };
   "terminal:restored": { id: string };
+  "terminal:status": {
+    id: string;
+    status: TerminalFlowStatus;
+    bufferUtilization?: number;
+    pauseDuration?: number;
+    timestamp: number;
+  };
 
   // Agent events
   "agent:state-changed": AgentStateChangePayload;

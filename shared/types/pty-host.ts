@@ -59,7 +59,8 @@ export type PtyHostRequest =
   | { type: "get-serialized-state"; id: string; requestId: string }
   | { type: "init-buffers"; visualBuffer: SharedArrayBuffer; analysisBuffer: SharedArrayBuffer }
   | { type: "connect-port" }
-  | { type: "get-terminal-info"; id: string; requestId: string };
+  | { type: "get-terminal-info"; id: string; requestId: string }
+  | { type: "force-resume"; id: string };
 
 /**
  * Terminal snapshot data sent from Host → Main for state queries.
@@ -128,7 +129,15 @@ export type PtyHostEvent =
   | { type: "terminal-info"; requestId: string; terminal: PtyHostTerminalInfo | null }
   | { type: "replay-history-result"; requestId: string; replayed: number }
   | { type: "serialized-state"; requestId: string; id: string; state: string | null }
-  | { type: "terminal-diagnostic-info"; requestId: string; info: any };
+  | { type: "terminal-diagnostic-info"; requestId: string; info: any }
+  | {
+      type: "terminal-status";
+      id: string;
+      status: TerminalFlowStatus;
+      bufferUtilization?: number;
+      pauseDuration?: number;
+      timestamp: number;
+    };
 
 /** Terminal info sent from Host → Main for getTerminal queries */
 export interface PtyHostTerminalInfo {
@@ -191,6 +200,34 @@ export interface AgentKilledPayload {
   traceId?: string;
   terminalId?: string;
   worktreeId?: string;
+}
+
+/** Terminal flow control status */
+export type TerminalFlowStatus = "running" | "paused-backpressure" | "paused-user";
+
+/** Crash type classification based on exit codes */
+export type CrashType =
+  | "OUT_OF_MEMORY"
+  | "ASSERTION_FAILURE"
+  | "SIGNAL_TERMINATED"
+  | "UNKNOWN_CRASH"
+  | "CLEAN_EXIT";
+
+/** Payload for terminal status events (flow control) */
+export interface TerminalStatusPayload {
+  id: string;
+  status: TerminalFlowStatus;
+  bufferUtilization?: number;
+  pauseDuration?: number;
+  timestamp: number;
+}
+
+/** Payload for host crash events */
+export interface HostCrashPayload {
+  code: number | null;
+  signal: string | null;
+  crashType: CrashType;
+  timestamp: number;
 }
 
 /**

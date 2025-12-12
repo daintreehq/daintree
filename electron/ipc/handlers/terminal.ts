@@ -321,6 +321,39 @@ export function registerTerminalHandlers(deps: HandlerDependencies): () => void 
     ipcMain.removeListener(CHANNELS.TERMINAL_ACKNOWLEDGE_DATA, handleTerminalAcknowledgeData)
   );
 
+  // Force resume a paused terminal
+  const handleTerminalForceResume = async (
+    _event: Electron.IpcMainInvokeEvent,
+    id: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    try {
+      if (typeof id !== "string" || !id) {
+        throw new Error("Invalid terminal ID: must be a non-empty string");
+      }
+      ptyClient.forceResume(id);
+      return { success: true };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`[IPC] Failed to force resume terminal ${id}:`, errorMessage);
+      return { success: false, error: errorMessage };
+    }
+  };
+  ipcMain.handle(CHANNELS.TERMINAL_FORCE_RESUME, handleTerminalForceResume);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_FORCE_RESUME));
+
+  // Forward terminal status events to renderer
+  const handleTerminalStatus = (payload: {
+    id: string;
+    status: string;
+    bufferUtilization?: number;
+    pauseDuration?: number;
+    timestamp: number;
+  }) => {
+    sendToRenderer(mainWindow, CHANNELS.TERMINAL_STATUS, payload);
+  };
+  ptyClient.on("terminal-status", handleTerminalStatus);
+  handlers.push(() => ptyClient.off("terminal-status", handleTerminalStatus));
+
   // Query terminals for a specific project
   const handleTerminalGetForProject = async (
     _event: Electron.IpcMainInvokeEvent,

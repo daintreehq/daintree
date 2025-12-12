@@ -22,10 +22,12 @@ import {
   Eraser,
   Info,
   GitBranch,
+  Play,
 } from "lucide-react";
 import { useTerminalStore } from "@/store";
 import type { TerminalLocation } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { terminalClient } from "@/clients";
 import { TerminalInfoDialog } from "./TerminalInfoDialog";
 import { useWorktrees } from "@/hooks/useWorktrees";
 
@@ -85,7 +87,15 @@ export function TerminalContextMenu({
     }
   };
 
+  const handleForceResume = () => {
+    terminalClient.forceResume(terminalId).catch((error) => {
+      console.error("Failed to force resume terminal:", error);
+    });
+  };
+
   if (!terminal) return <>{children}</>;
+
+  const isPaused = terminal.flowStatus === "paused-backpressure";
 
   const currentLocation: TerminalLocation = forceLocation ?? terminal.location ?? "grid";
 
@@ -154,6 +164,13 @@ export function TerminalContextMenu({
           <RotateCcw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
           Restart Terminal
         </ContextMenuItem>
+
+        {isPaused && (
+          <ContextMenuItem onClick={handleForceResume}>
+            <Play className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+            Force Resume (Paused)
+          </ContextMenuItem>
+        )}
 
         <ContextMenuItem onClick={handleDuplicate}>
           <Copy className="w-3.5 h-3.5 mr-2" aria-hidden="true" />

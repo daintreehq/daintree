@@ -248,6 +248,7 @@ let activityUnsubscribe: (() => void) | null = null;
 let trashedUnsubscribe: (() => void) | null = null;
 let restoredUnsubscribe: (() => void) | null = null;
 let exitUnsubscribe: (() => void) | null = null;
+let flowStatusUnsubscribe: (() => void) | null = null;
 let beforeUnloadHandler: (() => void) | null = null;
 
 export function cleanupTerminalStoreListeners() {
@@ -270,6 +271,10 @@ export function cleanupTerminalStoreListeners() {
   if (exitUnsubscribe) {
     exitUnsubscribe();
     exitUnsubscribe = null;
+  }
+  if (flowStatusUnsubscribe) {
+    flowStatusUnsubscribe();
+    flowStatusUnsubscribe = null;
   }
   if (beforeUnloadHandler) {
     window.removeEventListener("beforeunload", beforeUnloadHandler);
@@ -362,6 +367,11 @@ export function setupTerminalStoreListeners() {
 
     // Auto-trash on exit preserves history for review (consistent with manual close)
     state.trashTerminal(id);
+  });
+
+  flowStatusUnsubscribe = terminalClient.onStatus((data) => {
+    const { id, status, timestamp } = data;
+    useTerminalStore.getState().updateFlowStatus(id, status, timestamp);
   });
 
   // Flush pending terminal persistence on window close to prevent data loss

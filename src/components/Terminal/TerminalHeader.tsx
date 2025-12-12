@@ -8,6 +8,7 @@ import {
   RotateCcw,
   Grid2X2,
   Activity,
+  Pause,
 } from "lucide-react";
 import type { TerminalType, AgentState } from "@/types";
 import { cn } from "@/lib/utils";
@@ -32,6 +33,7 @@ export interface TerminalHeaderProps {
   activity?: ActivityState | null;
   lastCommand?: string;
   queueCount: number;
+  flowStatus?: "running" | "paused-backpressure" | "paused-user";
 
   // Title editing
   isEditingTitle: boolean;
@@ -71,6 +73,7 @@ function TerminalHeaderComponent({
   activity: _activity,
   queueCount,
   lastCommand,
+  flowStatus,
   isEditingTitle,
   editingValue,
   titleInputRef,
@@ -230,6 +233,18 @@ function TerminalHeaderComponent({
               title={`${queueCount} command${queueCount > 1 ? "s" : ""} queued`}
             >
               {queueCount} queued
+            </div>
+          )}
+
+          {flowStatus === "paused-backpressure" && (
+            <div
+              className="flex items-center gap-1 text-xs font-mono bg-[var(--color-status-warning)]/15 text-[var(--color-status-warning)] px-1.5 py-0.5 rounded ml-1"
+              role="status"
+              aria-live="polite"
+              title="Terminal paused due to buffer overflow (right-click for Force Resume)"
+            >
+              <Pause className="w-3 h-3" aria-hidden="true" />
+              Paused
             </div>
           )}
         </div>

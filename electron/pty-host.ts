@@ -16,7 +16,11 @@ import { PtyPool, getPtyPool } from "./services/PtyPool.js";
 import { events } from "./services/events.js";
 import { SharedRingBuffer, PacketFramer } from "../shared/utils/SharedRingBuffer.js";
 import type { AgentEvent } from "./services/AgentStateMachine.js";
-import type { PtyHostEvent, PtyHostTerminalSnapshot } from "../shared/types/pty-host.js";
+import type {
+  PtyHostEvent,
+  PtyHostTerminalSnapshot,
+  TerminalFlowStatus,
+} from "../shared/types/pty-host.js";
 
 // Validate we're running in UtilityProcess context
 if (!process.parentPort) {
@@ -56,10 +60,38 @@ const textDecoder = new TextDecoder();
 // Maps terminal ID to the interval timer used for resume checking
 const pausedTerminals = new Map<string, ReturnType<typeof setInterval>>();
 
+// Track terminal pause start times for duration calculation
+const pauseStartTimes = new Map<string, number>();
+
+// Track current terminal flow status to avoid duplicate events
+const terminalStatuses = new Map<string, TerminalFlowStatus>();
+
 // Resume threshold - use hysteresis to prevent rapid pause/resume oscillation
 const BACKPRESSURE_RESUME_THRESHOLD = 80; // Resume when buffer drops below 80%
 const BACKPRESSURE_CHECK_INTERVAL_MS = 100; // Check every 100ms during backpressure
 const BACKPRESSURE_MAX_PAUSE_MS = 5000; // Force resume after 5 seconds to prevent indefinite pause
+
+// Helper to emit terminal status change (only on actual transitions)
+function emitTerminalStatus(
+  id: string,
+  status: TerminalFlowStatus,
+  bufferUtilization?: number,
+  pauseDuration?: number
+): void {
+  const previousStatus = terminalStatuses.get(id);
+  if (previousStatus === status) {
+    return; // No change, don't emit
+  }
+  terminalStatuses.set(id, status);
+  sendEvent({
+    type: "terminal-status",
+    id,
+    status,
+    bufferUtilization,
+    pauseDuration,
+    timestamp: Date.now(),
+  });
+}
 
 // MessagePort for direct Renderer ↔ Pty Host communication (bypasses Main)
 // Note: This variable holds the port reference so the message handler stays active
@@ -100,19 +132,28 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
           );
 
           const terminal = ptyManager.getTerminal(id);
-          if (terminal?.ptyProcess) {
-            try {
-              terminal.ptyProcess.pause();
-            } catch (error) {
-              console.error(`[PtyHost] Failed to pause PTY ${id}:`, error);
-              // If pause fails, fall back to IPC to avoid data loss
-              sendEvent({ type: "data", id, data: toStringForIpc(data) });
-              return;
-            }
+          if (!terminal?.ptyProcess) {
+            console.warn(
+              `[PtyHost] Cannot apply backpressure: missing PTY process for ${id}. Falling back to IPC.`
+            );
+            sendEvent({ type: "data", id, data: toStringForIpc(data) });
+            return;
+          }
+          try {
+            terminal.ptyProcess.pause();
+          } catch (error) {
+            console.error(`[PtyHost] Failed to pause PTY ${id}:`, error);
+            // If pause fails, fall back to IPC to avoid data loss
+            sendEvent({ type: "data", id, data: toStringForIpc(data) });
+            return;
           }
 
           // Track when we started pausing for timeout safety
           const pauseStartTime = Date.now();
+          pauseStartTimes.set(id, pauseStartTime);
+
+          // Emit status event for UI
+          emitTerminalStatus(id, "paused-backpressure", utilization);
 
           // Start monitoring for buffer clearance
           const checkInterval = setInterval(() => {
@@ -123,6 +164,9 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
                 try {
                   terminal.ptyProcess.resume();
                   console.log(`[PtyHost] Visual buffer removed. Resumed PTY ${id}`);
+                  // Emit resume status
+                  const pauseDuration = Date.now() - (pauseStartTimes.get(id) ?? pauseStartTime);
+                  emitTerminalStatus(id, "running", undefined, pauseDuration);
                 } catch (error) {
                   console.error(
                     `[PtyHost] Failed to resume PTY ${id} after buffer removal:`,
@@ -132,6 +176,7 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
               }
               clearInterval(checkInterval);
               pausedTerminals.delete(id);
+              pauseStartTimes.delete(id);
               return;
             }
 
@@ -148,12 +193,15 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
                     `[PtyHost] Force resumed PTY ${id} after ${pauseDuration}ms (buffer at ${currentUtilization.toFixed(1)}%). ` +
                       `Consumer may be stalled.`
                   );
+                  // Emit resume status with duration
+                  emitTerminalStatus(id, "running", currentUtilization, pauseDuration);
                 } catch (error) {
                   console.error(`[PtyHost] Failed to force resume PTY ${id}:`, error);
                 }
               }
               clearInterval(checkInterval);
               pausedTerminals.delete(id);
+              pauseStartTimes.delete(id);
               return;
             }
 
@@ -166,12 +214,15 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
                   console.log(
                     `[PtyHost] Buffer cleared to ${currentUtilization.toFixed(1)}%. Resumed PTY ${id}`
                   );
+                  // Emit resume status with duration
+                  emitTerminalStatus(id, "running", currentUtilization, pauseDuration);
                 } catch (error) {
                   console.error(`[PtyHost] Failed to resume PTY ${id}:`, error);
                 }
               }
               clearInterval(checkInterval);
               pausedTerminals.delete(id);
+              pauseStartTimes.delete(id);
             }
           }, BACKPRESSURE_CHECK_INTERVAL_MS);
 
@@ -215,6 +266,8 @@ ptyManager.on("exit", (id: string, exitCode: number) => {
     clearInterval(checkInterval);
     pausedTerminals.delete(id);
   }
+  pauseStartTimes.delete(id);
+  terminalStatuses.delete(id);
 
   sendEvent({ type: "exit", id, exitCode });
 });
@@ -644,6 +697,36 @@ port.on("message", (rawMsg: any) => {
         break;
       }
 
+      case "force-resume": {
+        const terminal = ptyManager.getTerminal(msg.id);
+        if (terminal?.ptyProcess) {
+          try {
+            terminal.ptyProcess.resume();
+            console.log(`[PtyHost] Force resumed PTY ${msg.id} via user request`);
+
+            // Clean up any pending backpressure monitoring
+            const checkInterval = pausedTerminals.get(msg.id);
+            if (checkInterval) {
+              clearInterval(checkInterval);
+              pausedTerminals.delete(msg.id);
+            }
+
+            // Calculate pause duration if we have a start time
+            const pauseStart = pauseStartTimes.get(msg.id);
+            const pauseDuration = pauseStart ? Date.now() - pauseStart : undefined;
+            pauseStartTimes.delete(msg.id);
+
+            // Emit resume status
+            emitTerminalStatus(msg.id, "running", visualBuffer?.getUtilization(), pauseDuration);
+          } catch (error) {
+            console.error(`[PtyHost] Failed to force resume PTY ${msg.id}:`, error);
+          }
+        } else {
+          console.warn(`[PtyHost] Cannot force resume - terminal ${msg.id} not found`);
+        }
+        break;
+      }
+
       case "dispose":
         cleanup();
         break;
@@ -665,6 +748,8 @@ function cleanup(): void {
     console.log(`[PtyHost] Cleared backpressure monitor for terminal ${id}`);
   }
   pausedTerminals.clear();
+  pauseStartTimes.clear();
+  terminalStatuses.clear();
 
   if (ptyPool) {
     ptyPool.dispose();

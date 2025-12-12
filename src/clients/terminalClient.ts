@@ -4,6 +4,7 @@ import type {
   TerminalActivityPayload,
   BackendTerminalInfo,
   TerminalReconnectResult,
+  TerminalStatusPayload,
 } from "@shared/types";
 
 let messagePort: MessagePort | null = null;
@@ -131,5 +132,20 @@ export const terminalClient = {
    */
   getSharedBuffer: (): Promise<SharedArrayBuffer | null> => {
     return window.electron.terminal.getSharedBuffer();
+  },
+
+  /**
+   * Force resume a terminal that may be paused due to backpressure.
+   * User-initiated action to unblock a terminal.
+   */
+  forceResume: (id: string): Promise<{ success: boolean; error?: string }> => {
+    return window.electron.terminal.forceResume(id);
+  },
+
+  /**
+   * Listen for terminal status changes (flow control state).
+   */
+  onStatus: (callback: (data: TerminalStatusPayload) => void): (() => void) => {
+    return window.electron.terminal.onStatus(callback);
   },
 } as const;

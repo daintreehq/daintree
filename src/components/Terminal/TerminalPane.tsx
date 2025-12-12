@@ -38,6 +38,7 @@ export interface TerminalPaneProps {
   agentState?: AgentState;
   activity?: ActivityState | null;
   lastCommand?: string;
+  flowStatus?: "running" | "paused-backpressure" | "paused-user";
   onFocus: () => void;
   onClose: (force?: boolean) => void;
   onToggleMaximize?: () => void;
@@ -65,6 +66,7 @@ function TerminalPaneComponent({
   agentState,
   activity,
   lastCommand,
+  flowStatus,
   onFocus,
   onClose,
   onToggleMaximize,
@@ -345,6 +347,7 @@ function TerminalPaneComponent({
         activity={activity}
         lastCommand={lastCommand}
         queueCount={queueCount}
+        flowStatus={flowStatus}
         isEditingTitle={isEditingTitle}
         editingValue={editingValue}
         titleInputRef={titleInputRef}
