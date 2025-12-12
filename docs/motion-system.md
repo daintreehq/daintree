@@ -23,13 +23,13 @@ Every animation in Canopy serves one of three purposes:
 
 CSS custom properties control all animation and transition durations, ensuring consistent timing across the application.
 
-| Token | Default | Scope | Purpose |
-|-------|---------|-------|---------|
-| `--animation-duration` | `150ms` | `:root` | Default animation length for UI elements |
-| `--transition-duration` | `150ms` | `:root` | Default transition length for property changes |
-| `--terminal-animation-duration` | `150ms` | `:root` | Terminal-specific animations (restore, trash) |
-| `--terminal-ping-duration` | `1600ms` | `.terminal-pane` | Attention-grabbing ping animation (scoped to terminal panes) |
-| `--terminal-select-duration` | `200ms` | `.terminal-pane` | Selection state transitions (scoped to terminal panes) |
+| Token                           | Default  | Scope            | Purpose                                                      |
+| ------------------------------- | -------- | ---------------- | ------------------------------------------------------------ |
+| `--animation-duration`          | `150ms`  | `:root`          | Default animation length for UI elements                     |
+| `--transition-duration`         | `150ms`  | `:root`          | Default transition length for property changes               |
+| `--terminal-animation-duration` | `150ms`  | `:root`          | Terminal-specific animations (restore, trash)                |
+| `--terminal-ping-duration`      | `1600ms` | `.terminal-pane` | Attention-grabbing ping animation (scoped to terminal panes) |
+| `--terminal-select-duration`    | `200ms`  | `.terminal-pane` | Selection state transitions (scoped to terminal panes)       |
 
 **Note:** Terminal-specific timing tokens (`--terminal-ping-duration`, `--terminal-select-duration`) are scoped to `.terminal-pane` rather than `:root`. Animations using these tokens must be applied within a `.terminal-pane` context.
 
@@ -134,12 +134,10 @@ Overlay-based ping animation for already-selected terminals. Creates a brightnes
 
 ```css
 .animate-terminal-ping::before {
-  animation: terminal-ping-overlay var(--terminal-ping-duration)
-    cubic-bezier(0.4, 0, 0.2, 1) both;
+  animation: terminal-ping-overlay var(--terminal-ping-duration) cubic-bezier(0.4, 0, 0.2, 1) both;
 }
 .animate-terminal-ping::after {
-  animation: terminal-ping-border var(--terminal-ping-duration)
-    cubic-bezier(0.4, 0, 0.2, 1) both;
+  animation: terminal-ping-border var(--terminal-ping-duration) cubic-bezier(0.4, 0, 0.2, 1) both;
 }
 ```
 
@@ -153,8 +151,8 @@ Element-level animation for terminals being selected. Animates directly on the e
 
 ```css
 .animate-terminal-ping-select {
-  animation: terminal-ping-select-element var(--terminal-ping-duration)
-    cubic-bezier(0.4, 0, 0.2, 1) both !important;
+  animation: terminal-ping-select-element var(--terminal-ping-duration) cubic-bezier(0.4, 0, 0.2, 1)
+    both !important;
 }
 ```
 
@@ -182,8 +180,7 @@ Text shadow glow effect for terminal titles during ping. Both classes share the 
 ```css
 .animate-eco-title,
 .animate-eco-title-select {
-  animation: title-glow var(--terminal-ping-duration, 1600ms)
-    cubic-bezier(0.4, 0, 0.2, 1) both;
+  animation: title-glow var(--terminal-ping-duration, 1600ms) cubic-bezier(0.4, 0, 0.2, 1) both;
 }
 ```
 
@@ -215,14 +212,14 @@ The `.terminal-selected` class applies the selected appearance. There's also a b
 
 ### When to Use Animation
 
-| Scenario | Animation | Why |
-|----------|-----------|-----|
-| Terminal selected | `.terminal-selected` (transition) | Confirms user action |
-| "Locate" command | `animate-terminal-ping` | Draws attention to target |
-| Terminal restored | `terminal-restoring` | Shows element entering |
-| Terminal trashed | `terminal-trashing` | Shows element leaving |
-| Agent working | `status-working` | Ambient activity indicator |
-| Recent activity | `animate-activity-pulse` | Transient attention signal |
+| Scenario          | Animation                         | Why                        |
+| ----------------- | --------------------------------- | -------------------------- |
+| Terminal selected | `.terminal-selected` (transition) | Confirms user action       |
+| "Locate" command  | `animate-terminal-ping`           | Draws attention to target  |
+| Terminal restored | `terminal-restoring`              | Shows element entering     |
+| Terminal trashed  | `terminal-trashing`               | Shows element leaving      |
+| Agent working     | `status-working`                  | Ambient activity indicator |
+| Recent activity   | `animate-activity-pulse`          | Transient attention signal |
 
 ### When NOT to Use Animation
 
@@ -242,8 +239,12 @@ The `.terminal-selected` class applies the selected appearance. There's also a b
 
 ```css
 @keyframes my-animation {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .animate-my-animation {
@@ -396,8 +397,12 @@ For infinite animations, keep the effect subtle:
 
 ```css
 @keyframes fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .animate-fade-in {
@@ -418,8 +423,13 @@ For infinite animations, keep the effect subtle:
 
 ```css
 @keyframes custom-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.6; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
 }
 
 .animate-custom-pulse {
@@ -456,17 +466,17 @@ For infinite animations, keep the effect subtle:
 
 ## Quick Reference
 
-| Class | Duration | Loop | Purpose |
-|-------|----------|------|---------|
-| `animate-activity-pulse` | 1s | Yes | Activity indicator |
-| `animate-agent-pulse` | 1.5s | Yes | Agent status |
-| `status-working` | 2s | Yes | Working state color |
-| `terminal-restoring` | 150ms | No | Restore entrance |
-| `terminal-trashing` | 150ms | No | Trash exit |
-| `animate-terminal-ping` | 1600ms | No | Attention (selected) |
-| `animate-terminal-ping-select` | 1600ms | No | Attention (becoming selected) |
-| `animate-terminal-header-ping` | 1600ms | No | Header highlight |
-| `animate-eco-title` | 1600ms | No | Title glow |
-| `animate-eco-title-select` | 1600ms | No | Title glow (selection variant) |
+| Class                          | Duration | Loop | Purpose                        |
+| ------------------------------ | -------- | ---- | ------------------------------ |
+| `animate-activity-pulse`       | 1s       | Yes  | Activity indicator             |
+| `animate-agent-pulse`          | 1.5s     | Yes  | Agent status                   |
+| `status-working`               | 2s       | Yes  | Working state color            |
+| `terminal-restoring`           | 150ms    | No   | Restore entrance               |
+| `terminal-trashing`            | 150ms    | No   | Trash exit                     |
+| `animate-terminal-ping`        | 1600ms   | No   | Attention (selected)           |
+| `animate-terminal-ping-select` | 1600ms   | No   | Attention (becoming selected)  |
+| `animate-terminal-header-ping` | 1600ms   | No   | Header highlight               |
+| `animate-eco-title`            | 1600ms   | No   | Title glow                     |
+| `animate-eco-title-select`     | 1600ms   | No   | Title glow (selection variant) |
 
 **Note:** `.terminal-focused` exists as a backwards-compatible alias for `.terminal-selected`.
