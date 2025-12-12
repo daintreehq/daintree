@@ -51,6 +51,10 @@ const MIN_CONTAINER_SIZE = 50;
 // Threshold in pixels for "at bottom" detection
 const FOLLOW_THRESHOLD_ROWS = 2;
 
+// Padding constants matching Tailwind classes: pt-2 (8px), pb-4 (16px)
+const TALL_PADDING_TOP = 8;
+const TALL_PADDING_BOTTOM = 16;
+
 function XtermAdapterComponent({
   terminalId,
   terminalType = "terminal",
@@ -159,7 +163,8 @@ function XtermAdapterComponent({
     const viewportHeight = viewportRef.current.clientHeight;
 
     // Position cursor at bottom of viewport (terminal-like behavior)
-    const cursorPixelY = (cursorRow + 1) * cellHeight;
+    // Account for top padding which pushes content down
+    const cursorPixelY = (cursorRow + 1) * cellHeight + TALL_PADDING_TOP;
     const target = Math.max(0, cursorPixelY - viewportHeight);
 
     return target;
@@ -226,7 +231,8 @@ function XtermAdapterComponent({
     // Height should be the greater of:
     // 1. Viewport height (so content fills the view when little output)
     // 2. Cursor position in pixels (so we can scroll up to see history)
-    const contentHeight = (cursorRow + 1) * cellHeight;
+    // Account for padding (top + bottom) to ensure container wraps full content
+    const contentHeight = (cursorRow + 1) * cellHeight + TALL_PADDING_TOP + TALL_PADDING_BOTTOM;
     const totalHeight = Math.max(viewportHeight, contentHeight);
 
     innerHostRef.current.style.height = `${totalHeight}px`;
@@ -425,7 +431,8 @@ function XtermAdapterComponent({
         const cellHeight = measureCellHeight();
         const viewportHeight = viewportRef.current.clientHeight;
         // Center the target row in the viewport
-        const targetScroll = Math.max(0, row * cellHeight - viewportHeight / 2);
+        // Account for top padding
+        const targetScroll = Math.max(0, row * cellHeight + TALL_PADDING_TOP - viewportHeight / 2);
         viewportRef.current.scrollTop = targetScroll;
         lastScrollTopRef.current = targetScroll;
       });
@@ -591,19 +598,16 @@ function XtermAdapterComponent({
         }}
       >
         {/* Outer scroll viewport - browser owns scrolling */}
+        {/* No padding here - padding goes on inner host so scroll math is clean */}
         <div
           ref={viewportRef}
-          className="absolute inset-0 overflow-y-auto overflow-x-hidden pl-2 pt-2 pb-4"
+          className="absolute inset-0 overflow-y-auto overflow-x-hidden"
           onScroll={handleTallCanvasScroll}
-          style={{
-            // Smooth scrolling for programmatic scroll changes
-            scrollBehavior: followLog ? "auto" : "auto",
-          }}
         >
-          {/* Inner tall host - fixed height based on TALL_CANVAS_ROWS * cellHeight */}
+          {/* Inner tall host - padding here so browser includes it in scrollable area */}
           <div
             ref={innerHostRef}
-            className="w-full relative"
+            className="w-full relative pl-2 pt-2 pb-4"
             style={{
               // Height will be set dynamically by updateInnerHostHeight
               minHeight: "100%",
