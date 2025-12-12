@@ -10,6 +10,7 @@ const MIN_FRAME_INTERVAL_MS = 50;
 const FRAME_SETTLE_DELAY_MS = REDRAW_FLUSH_DELAY_MS;
 const FRAME_DEADLINE_MS = MAX_FLUSH_DELAY_MS;
 const TUI_BURST_THRESHOLD_MS = 50;
+const IDLE_POLL_INTERVALS = [8, 16, 33, 100] as const;
 
 type SabBufferEntry = {
   chunks: (string | Uint8Array)[];
@@ -39,6 +40,7 @@ export class TerminalDataBuffer {
   private rafId: number | null = null;
   private pollTimeoutId: number | null = null;
   private sharedBufferEnabled = false;
+  private idlePollCount = 0;
 
   private sabBuffers = new Map<string, SabBufferEntry>();
   private sabFrameStats = new Map<string, FrameStats>();
@@ -73,6 +75,7 @@ export class TerminalDataBuffer {
   private startPolling(): void {
     if (this.pollingActive || !this.ringBuffer) return;
     this.pollingActive = true;
+    this.idlePollCount = 0;
     this.poll();
   }
 
@@ -230,6 +233,7 @@ export class TerminalDataBuffer {
 
   private poll = (): void => {
     if (!this.pollingActive || !this.ringBuffer) return;
+    this.pollTimeoutId = null;
 
     let hasData = false;
 
@@ -248,12 +252,16 @@ export class TerminalDataBuffer {
     }
 
     if (hasData) {
+      this.idlePollCount = 0;
       this.rafId = window.requestAnimationFrame(() => {
         this.rafId = null;
         this.poll();
       });
     } else {
-      this.pollTimeoutId = window.setTimeout(this.poll, 8);
+      const intervalIndex = Math.min(this.idlePollCount, IDLE_POLL_INTERVALS.length - 1);
+      const interval = IDLE_POLL_INTERVALS[intervalIndex];
+      this.idlePollCount = Math.min(this.idlePollCount + 1, IDLE_POLL_INTERVALS.length - 1);
+      this.pollTimeoutId = window.setTimeout(this.poll, interval);
     }
   };
 
