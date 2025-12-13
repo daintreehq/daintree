@@ -780,16 +780,20 @@ class TerminalInstanceService {
     const managed = this.instances.get(id);
     if (!managed) return;
 
-    this.addonManager.resetRenderer(id);
+    try {
+      this.addonManager.resetRenderer(id);
 
-    // Re-apply policy to potentially restore WebGL if managed.webglAddon is now undefined
-    if (managed.hostElement.isConnected) {
-      const dims = this.fit(id);
-      if (dims) {
-        terminalClient.resize(id, dims.cols, dims.rows);
+      // Re-apply policy to potentially restore WebGL if managed.webglAddon is now undefined
+      if (managed.hostElement.isConnected) {
+        const dims = this.fit(id);
+        if (dims) {
+          terminalClient.resize(id, dims.cols, dims.rows);
+        }
+        const tier = managed.getRefreshTier();
+        this.applyRendererPolicy(id, tier);
       }
-      const tier = managed.getRefreshTier();
-      this.applyRendererPolicy(id, tier);
+    } catch (error) {
+      console.error(`[TerminalInstanceService] resetRenderer failed for ${id}:`, error);
     }
   }
 
@@ -797,6 +801,36 @@ class TerminalInstanceService {
     this.instances.forEach((managed, id) => {
       if (managed.webglAddon) {
         this.resetRenderer(id);
+      }
+    });
+  }
+
+  /**
+   * Called when the PTY backend restarts after a crash.
+   * Resets all xterm renderers to fix the "white text" glitch
+   * caused by incomplete ANSI sequences or WebGL context loss.
+   */
+  handleBackendRecovery(): void {
+    this.instances.forEach((managed, id) => {
+      try {
+        // 1. Send soft terminal reset to clear stuck ANSI state
+        // \x1b[!p = DECSTR (Soft Terminal Reset)
+        // Resets colors, cursor, scrolling regions but keeps text
+        managed.terminal.write("\x1b[!p");
+
+        // 2. Reset the renderer (WebGL context)
+        this.resetRenderer(id);
+
+        // 3. Force fit to recalculate dimensions
+        managed.fitAddon?.fit();
+
+        // 4. Inject recovery message for visibility
+        const timestamp = new Date().toLocaleTimeString();
+        managed.terminal.write(
+          `\r\n\x1b[33m[${timestamp}] Terminal backend reconnected\x1b[0m\r\n`
+        );
+      } catch (error) {
+        console.error(`[TerminalInstanceService] Failed to recover terminal ${id}:`, error);
       }
     });
   }

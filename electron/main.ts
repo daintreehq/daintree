@@ -298,6 +298,33 @@ async function createWindow(): Promise<void> {
     showCrashDialog: true,
   });
 
+  // Attach crash listeners immediately to avoid race conditions
+  ptyClient.on("host-crash-details", (details) => {
+    console.error(`[MAIN] Pty Host crashed:`, details);
+
+    // Forward to renderer with crash metadata
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(CHANNELS.TERMINAL_BACKEND_CRASHED, {
+        crashType: details.crashType,
+        code: details.code,
+        signal: details.signal,
+        timestamp: details.timestamp,
+      });
+    }
+  });
+  ptyClient.on("host-crash", (code) => {
+    console.error(`[MAIN] Pty Host crashed with code ${code} (max restarts exceeded)`);
+  });
+  ptyClient.setPortRefreshCallback(() => {
+    console.log("[MAIN] Pty Host restarted, refreshing ports...");
+    createAndDistributePorts();
+
+    // Notify renderer that backend is back
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(CHANNELS.TERMINAL_BACKEND_READY);
+    }
+  });
+
   workspaceClient = getWorkspaceClient({
     maxRestartAttempts: 3,
     healthCheckIntervalMs: 60000,
@@ -349,14 +376,6 @@ async function createWindow(): Promise<void> {
     createAndDistributePorts();
   });
 
-  // Handle Host Crashes
-  ptyClient.on("host-crash", (code) => {
-    console.error(`[MAIN] Pty Host crashed with code ${code}`);
-  });
-  ptyClient.setPortRefreshCallback(() => {
-    console.log("[MAIN] Pty Host restarted, refreshing ports...");
-    createAndDistributePorts();
-  });
   workspaceClient.on("host-crash", (code: number) => {
     console.error(`[MAIN] Workspace Host crashed with code ${code}`);
   });

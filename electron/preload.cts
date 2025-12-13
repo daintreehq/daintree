@@ -121,6 +121,8 @@ const CHANNELS = {
   TERMINAL_ACKNOWLEDGE_DATA: "terminal:acknowledge-data",
   TERMINAL_FORCE_RESUME: "terminal:force-resume",
   TERMINAL_STATUS: "terminal:status",
+  TERMINAL_BACKEND_CRASHED: "terminal:backend-crashed",
+  TERMINAL_BACKEND_READY: "terminal:backend-ready",
 
   // Agent state channels
   AGENT_STATE_CHANGED: "agent:state-changed",
@@ -422,6 +424,28 @@ const api: ElectronAPI = {
 
     onStatus: (callback: (data: TerminalStatusPayload) => void) =>
       _typedOn(CHANNELS.TERMINAL_STATUS, callback),
+
+    onBackendCrashed: (
+      callback: (data: {
+        crashType: string;
+        code: number | null;
+        signal: string | null;
+        timestamp: number;
+      }) => void
+    ): (() => void) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        data: { crashType: string; code: number | null; signal: string | null; timestamp: number }
+      ) => callback(data);
+      ipcRenderer.on(CHANNELS.TERMINAL_BACKEND_CRASHED, handler);
+      return () => ipcRenderer.removeListener(CHANNELS.TERMINAL_BACKEND_CRASHED, handler);
+    },
+
+    onBackendReady: (callback: () => void): (() => void) => {
+      const handler = () => callback();
+      ipcRenderer.on(CHANNELS.TERMINAL_BACKEND_READY, handler);
+      return () => ipcRenderer.removeListener(CHANNELS.TERMINAL_BACKEND_READY, handler);
+    },
   },
 
   // Artifact API

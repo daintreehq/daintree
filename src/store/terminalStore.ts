@@ -55,12 +55,16 @@ export function getTerminalRefreshTier(
   return TerminalRefreshTier.BACKGROUND;
 }
 
+export type BackendStatus = "connected" | "disconnected" | "recovering";
+
 export interface TerminalGridState
   extends
     TerminalRegistrySlice,
     TerminalFocusSlice,
     TerminalCommandQueueSlice,
     TerminalBulkActionsSlice {
+  backendStatus: BackendStatus;
+  setBackendStatus: (status: BackendStatus) => void;
   reset: () => Promise<void>;
   resetWithoutKilling: () => Promise<void>;
   restoreLastTrashed: () => void;
@@ -95,6 +99,9 @@ export const useTerminalStore = create<TerminalGridState>()((set, get, api) => {
     ...focusSlice,
     ...commandQueueSlice,
     ...bulkActionsSlice,
+
+    backendStatus: "connected" as BackendStatus,
+    setBackendStatus: (status: BackendStatus) => set({ backendStatus: status }),
 
     addTerminal: async (options: AddTerminalOptions) => {
       const id = await registrySlice.addTerminal(options);
@@ -250,6 +257,9 @@ let trashedUnsubscribe: (() => void) | null = null;
 let restoredUnsubscribe: (() => void) | null = null;
 let exitUnsubscribe: (() => void) | null = null;
 let flowStatusUnsubscribe: (() => void) | null = null;
+let backendCrashedUnsubscribe: (() => void) | null = null;
+let backendReadyUnsubscribe: (() => void) | null = null;
+let recoveryTimer: NodeJS.Timeout | null = null;
 let beforeUnloadHandler: (() => void) | null = null;
 
 export function cleanupTerminalStoreListeners() {
@@ -276,6 +286,18 @@ export function cleanupTerminalStoreListeners() {
   if (flowStatusUnsubscribe) {
     flowStatusUnsubscribe();
     flowStatusUnsubscribe = null;
+  }
+  if (backendCrashedUnsubscribe) {
+    backendCrashedUnsubscribe();
+    backendCrashedUnsubscribe = null;
+  }
+  if (backendReadyUnsubscribe) {
+    backendReadyUnsubscribe();
+    backendReadyUnsubscribe = null;
+  }
+  if (recoveryTimer) {
+    clearTimeout(recoveryTimer);
+    recoveryTimer = null;
   }
   if (beforeUnloadHandler) {
     window.removeEventListener("beforeunload", beforeUnloadHandler);
@@ -376,6 +398,39 @@ export function setupTerminalStoreListeners() {
   flowStatusUnsubscribe = terminalClient.onStatus((data) => {
     const { id, status, timestamp } = data;
     useTerminalStore.getState().updateFlowStatus(id, status, timestamp);
+  });
+
+  backendCrashedUnsubscribe = terminalClient.onBackendCrashed((details) => {
+    console.error("[TerminalStore] Backend crashed:", details);
+
+    // Cancel any pending recovery timer
+    if (recoveryTimer) {
+      clearTimeout(recoveryTimer);
+      recoveryTimer = null;
+    }
+
+    useTerminalStore.setState({ backendStatus: "disconnected" });
+  });
+
+  backendReadyUnsubscribe = terminalClient.onBackendReady(() => {
+    console.log("[TerminalStore] Backend recovered, resetting renderers...");
+
+    // Cancel any pending recovery timer from previous crash
+    if (recoveryTimer) {
+      clearTimeout(recoveryTimer);
+      recoveryTimer = null;
+    }
+
+    useTerminalStore.setState({ backendStatus: "recovering" });
+
+    // Reset all xterm instances to fix white text
+    terminalInstanceService.handleBackendRecovery();
+
+    // Mark as connected after a short delay to show recovery state
+    recoveryTimer = setTimeout(() => {
+      recoveryTimer = null;
+      useTerminalStore.setState({ backendStatus: "connected" });
+    }, 500);
   });
 
   // Flush pending terminal persistence on window close to prevent data loss

@@ -41,6 +41,8 @@ export const CHANNELS = {
   TERMINAL_ACKNOWLEDGE_DATA: "terminal:acknowledge-data",
   TERMINAL_FORCE_RESUME: "terminal:force-resume",
   TERMINAL_STATUS: "terminal:status",
+  TERMINAL_BACKEND_CRASHED: "terminal:backend-crashed",
+  TERMINAL_BACKEND_READY: "terminal:backend-ready",
 
   AGENT_STATE_CHANGED: "agent:state-changed",
   AGENT_GET_STATE: "agent:get-state",
