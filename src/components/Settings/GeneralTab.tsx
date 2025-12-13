@@ -1,5 +1,13 @@
 import { useState, useEffect } from "react";
-import { ChevronDown, ChevronRight, TreePine, Moon, CheckCircle, AlertCircle, Activity } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  TreePine,
+  Moon,
+  CheckCircle,
+  AlertCircle,
+  Activity,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { hibernationClient, cliAvailabilityClient, agentSettingsClient } from "@/clients";
 import { getAgentIds, getAgentConfig } from "@/config/agents";

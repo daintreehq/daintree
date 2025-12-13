@@ -153,7 +153,9 @@ export class ProjectPulseService {
       await Promise.allSettled([
         this.computeHeatmap(git, rangeDays),
         includeRecentCommits ? this.getRecentCommits(git, 8) : Promise.resolve([]),
-        includeDelta && branch ? this.getBranchDelta(git, mainBranch, branch) : Promise.resolve(null),
+        includeDelta && branch
+          ? this.getBranchDelta(git, mainBranch, branch)
+          : Promise.resolve(null),
         this.getFirstCommitDate(git),
       ]);
 
@@ -174,10 +176,11 @@ export class ProjectPulseService {
       const todayMidnight = getLocalMidnight(new Date());
 
       // Calculate days since first commit (inclusive of first commit day)
-      const daysSinceFirst = Math.floor(
-        (todayMidnight.getTime() - getLocalMidnight(firstCommitDate).getTime()) /
-          (1000 * 60 * 60 * 24)
-      ) + 1;
+      const daysSinceFirst =
+        Math.floor(
+          (todayMidnight.getTime() - getLocalMidnight(firstCommitDate).getTime()) /
+            (1000 * 60 * 60 * 24)
+        ) + 1;
       projectAgeDays = Math.min(daysSinceFirst, rangeDays);
 
       // Mark cells before project started

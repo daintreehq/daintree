@@ -229,7 +229,7 @@ export class TerminalAddonManager {
 
     const effectiveBudget = Math.min(this.getWebGLBudget(), MAX_WEBGL_CONTEXTS);
 
-    if (activeContexts.length < effectiveBudget) {
+    if (activeContexts.length <= effectiveBudget) {
       return;
     }
 
@@ -243,7 +243,7 @@ export class TerminalAddonManager {
       return a.lastActiveTime - b.lastActiveTime;
     });
 
-    while (activeContexts.length >= effectiveBudget) {
+    while (activeContexts.length > effectiveBudget) {
       const victimId = activeContexts.shift();
       if (!victimId) break;
       const victim = this.getTerminal(victimId);

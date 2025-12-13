@@ -61,11 +61,7 @@ export function PulseHeatmap({ cells, rangeDays, compact = false }: PulseHeatmap
         aria-label={`Activity over the last ${rangeDays} days`}
       >
         {rows.map((row, rowIndex) => (
-          <div
-            key={rowIndex}
-            className="flex"
-            style={{ gap: `${gap}px` }}
-          >
+          <div key={rowIndex} className="flex" style={{ gap: `${gap}px` }}>
             {row.map((cell) => {
               // Determine the appropriate color class
               let colorClass: string;
