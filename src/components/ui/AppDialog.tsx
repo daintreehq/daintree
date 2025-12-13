@@ -1,7 +1,8 @@
-import { useEffect, useRef, useCallback, useId, createContext, useContext } from "react";
+import { useEffect, useRef, useCallback, useId, createContext, useContext, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import { useOverlayState } from "@/hooks";
+import { getUiAnimationDuration } from "@/lib/animationUtils";
 import { X } from "lucide-react";
 
 type DialogSize = "sm" | "md" | "lg" | "xl";
@@ -38,27 +39,82 @@ export function AppDialog({
   children,
   className,
 }: AppDialogProps) {
-  useOverlayState(isOpen);
   const previousActiveElement = useRef<HTMLElement | null>(null);
   const titleId = useId();
   const descriptionId = useId();
+  const [isVisible, setIsVisible] = useState(false);
+  const [shouldRender, setShouldRender] = useState(false);
+  const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rafRef = useRef<number | null>(null);
+
+  useOverlayState(isOpen || shouldRender);
 
   useEffect(() => {
     if (isOpen) {
+      if (closeTimeoutRef.current) {
+        clearTimeout(closeTimeoutRef.current);
+        closeTimeoutRef.current = null;
+      }
       previousActiveElement.current = document.activeElement as HTMLElement;
-    } else if (previousActiveElement.current) {
-      previousActiveElement.current.focus();
-      previousActiveElement.current = null;
+      setShouldRender(true);
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = null;
+        setIsVisible(true);
+      });
+    } else {
+      setIsVisible(false);
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      const duration = getUiAnimationDuration();
+      if (duration === 0) {
+        setShouldRender(false);
+        if (previousActiveElement.current) {
+          previousActiveElement.current.focus();
+          previousActiveElement.current = null;
+        }
+      } else {
+        closeTimeoutRef.current = setTimeout(() => {
+          closeTimeoutRef.current = null;
+          setShouldRender(false);
+          if (previousActiveElement.current) {
+            previousActiveElement.current.focus();
+            previousActiveElement.current = null;
+          }
+        }, duration);
+      }
     }
+
+    return () => {
+      if (closeTimeoutRef.current) {
+        clearTimeout(closeTimeoutRef.current);
+        closeTimeoutRef.current = null;
+      }
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      if (previousActiveElement.current) {
+        previousActiveElement.current.focus();
+        previousActiveElement.current = null;
+      }
+    };
   }, [isOpen]);
+
+  const handleClose = useCallback(() => {
+    if (dismissible) {
+      onClose();
+    }
+  }, [dismissible, onClose]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
-      if (e.key === "Escape" && dismissible) {
-        onClose();
+      if (e.key === "Escape") {
+        handleClose();
       }
     },
-    [dismissible, onClose]
+    [handleClose]
   );
 
   useEffect(() => {
@@ -69,19 +125,24 @@ export function AppDialog({
 
   const handleBackdropClick = useCallback(
     (e: React.MouseEvent) => {
-      if (e.target === e.currentTarget && dismissible) {
-        onClose();
+      if (e.target === e.currentTarget) {
+        handleClose();
       }
     },
-    [dismissible, onClose]
+    [handleClose]
   );
 
-  if (!isOpen) return null;
+  if (!shouldRender) return null;
 
   return createPortal(
-    <AppDialogContext.Provider value={{ onClose, titleId, descriptionId }}>
+    <AppDialogContext.Provider value={{ onClose: handleClose, titleId, descriptionId }}>
       <div
-        className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/50 backdrop-blur-sm backdrop-saturate-50"
+        className={cn(
+          "fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/50 backdrop-blur-sm backdrop-saturate-50",
+          "transition-opacity duration-150",
+          "motion-reduce:transition-none motion-reduce:duration-0",
+          isVisible ? "opacity-100" : "opacity-0"
+        )}
         onClick={handleBackdropClick}
         role="dialog"
         aria-modal="true"
@@ -93,6 +154,11 @@ export function AppDialog({
             "bg-canopy-sidebar border border-canopy-border rounded-[var(--radius-xl)] shadow-xl mx-4 flex flex-col max-h-[80vh]",
             sizeClasses[size],
             "w-full",
+            "transition-all duration-150",
+            "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:transform-none",
+            isVisible
+              ? "opacity-100 translate-y-0 scale-100"
+              : "opacity-0 translate-y-1 scale-[0.98]",
             className
           )}
           onClick={(e) => e.stopPropagation()}

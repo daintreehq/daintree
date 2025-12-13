@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { AlertTriangle, RotateCcw, FolderEdit, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { TerminalRestartError } from "@/types";
@@ -21,6 +21,22 @@ function TerminalErrorBannerComponent({
   className,
 }: TerminalErrorBannerProps) {
   const isCwdError = error.code === "ENOENT" && error.context?.failedCwd;
+  const [isVisible, setIsVisible] = useState(false);
+  const rafRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      setIsVisible(true);
+    });
+
+    return () => {
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    };
+  }, []);
 
   return (
     <div
@@ -28,6 +44,9 @@ function TerminalErrorBannerComponent({
         "flex flex-col gap-2 px-3 py-2 shrink-0",
         "bg-[color-mix(in_oklab,var(--color-status-error)_10%,transparent)]",
         "border-b border-[var(--color-status-error)]/20",
+        "transition-all duration-150",
+        "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:transform-none",
+        isVisible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-2",
         className
       )}
       role="alert"
