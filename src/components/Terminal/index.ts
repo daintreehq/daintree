@@ -9,8 +9,6 @@ export type { BulkActionsMenuProps } from "./BulkActionsMenu";
 export { ConfirmDialog } from "./ConfirmDialog";
 export type { ConfirmDialogProps } from "./ConfirmDialog";
 export { StateBadge } from "./StateBadge";
-export { ActivityBadge } from "./ActivityBadge";
-export type { ActivityStatus, ActivityType } from "./ActivityBadge";
 export { TerminalCountWarning, SOFT_TERMINAL_LIMIT } from "./TerminalCountWarning";
 export { GridFullOverlay } from "./GridFullOverlay";
 export type { GridFullOverlayProps } from "./GridFullOverlay";

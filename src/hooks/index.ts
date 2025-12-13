@@ -42,9 +42,6 @@ export type { LayoutState } from "./useLayoutState";
 
 export { useWindowNotifications } from "./useWindowNotifications";
 
-export { useTerminalActions } from "./useTerminalActions";
-export type { UseTerminalActionsOptions, UseTerminalActionsReturn } from "./useTerminalActions";
-
 export { useWorktreeActions } from "./useWorktreeActions";
 export type { UseWorktreeActionsOptions, WorktreeActions } from "./useWorktreeActions";
 
