@@ -40,37 +40,46 @@ export interface TerminalGridProps {
   onOpenSettings?: () => void;
 }
 
-interface LauncherButtonProps {
+interface LauncherCardProps {
   title: string;
+  description: string;
+  shortcut?: string;
   icon: React.ReactNode;
   onClick: () => void;
+  primary?: boolean;
   available?: boolean;
   isLoading?: boolean;
   onUnavailableClick?: () => void;
 }
 
-function LauncherButton({
+function LauncherCard({
   title,
+  description,
+  shortcut,
   icon,
   onClick,
   available = true,
   isLoading = false,
   onUnavailableClick,
-}: LauncherButtonProps) {
+}: LauncherCardProps) {
   const handleClick = () => {
-    if (isLoading) return;
+    if (isLoading) {
+      return;
+    }
     if (!available) {
-      onUnavailableClick?.();
+      if (onUnavailableClick) {
+        onUnavailableClick();
+      }
       return;
     }
     onClick();
   };
 
   const tooltipText = isLoading
-    ? `Checking ${title} availability...`
+    ? `Checking ${title} CLI availability...`
     : available
       ? undefined
-      : `${title} not found. Click to install.`;
+      : `${title} CLI not found. Click to install.`;
 
   return (
     <button
@@ -78,8 +87,7 @@ function LauncherButton({
       disabled={isLoading}
       title={tooltipText}
       className={cn(
-        "group relative flex flex-col items-center justify-center gap-2.5 p-4 rounded-xl border transition-all duration-200",
-        "w-28 h-28",
+        "group relative flex items-center text-left p-4 rounded-[var(--radius-xl)] border transition-all duration-200 min-h-[100px]",
         "bg-canopy-bg hover:bg-surface",
         "border-canopy-border/20 hover:border-canopy-border/40",
         "shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03),inset_0_-1px_0_0_rgba(0,0,0,0.2)]",
@@ -90,10 +98,25 @@ function LauncherButton({
       {!available && !isLoading && (
         <div className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-amber-500 rounded-full" />
       )}
-      <div className="flex items-center justify-center">{icon}</div>
-      <span className="text-sm font-medium text-canopy-text/70 group-hover:text-canopy-text transition-colors">
-        {title}
-      </span>
+      <div className="flex items-center justify-center p-2 rounded-[var(--radius-lg)] mr-3 transition-colors">
+        {icon}
+      </div>
+
+      <div className="flex-1">
+        <div className="flex w-full items-center justify-between mb-1">
+          <h4 className="font-medium text-base text-canopy-text/80 group-hover:text-canopy-text">
+            {title}
+          </h4>
+          {shortcut && (
+            <span className="text-[10px] font-mono text-white/30 border border-white/10 rounded px-1.5 py-0.5 group-hover:text-white/50 group-hover:border-white/20 transition-colors">
+              {shortcut}
+            </span>
+          )}
+        </div>
+        <p className="text-xs text-canopy-text/60 group-hover:text-canopy-text/80 transition-colors leading-relaxed">
+          {isLoading ? "Checking availability..." : !available ? "Click to install" : description}
+        </p>
+      </div>
     </button>
   );
 }
@@ -163,34 +186,43 @@ function EmptyState({
           </div>
         )}
 
-        <div className="flex justify-center gap-3 mb-8">
-          <LauncherButton
-            title="Claude"
-            icon={<ClaudeIcon className="h-10 w-10" brandColor={getBrandColorHex("claude")} />}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full max-w-3xl mb-8">
+          <LauncherCard
+            title="Claude Code"
+            description="Great for deep, steady refactors."
+            shortcut="Cmd/Ctrl+Alt+C"
+            icon={<ClaudeIcon className="h-5 w-5" brandColor={getBrandColorHex("claude")} />}
             onClick={() => handleAgentClick("claude")}
             available={agentAvailability?.claude ?? false}
             isLoading={isCheckingAvailability}
             onUnavailableClick={handleUnavailableClick}
+            primary
           />
-          <LauncherButton
-            title="Codex"
-            icon={<CodexIcon className="h-10 w-10" brandColor={getBrandColorHex("codex")} />}
+          <LauncherCard
+            title="Codex CLI"
+            description="Good for careful, step-by-step changes."
+            icon={<CodexIcon className="h-5 w-5" brandColor={getBrandColorHex("codex")} />}
             onClick={() => handleAgentClick("codex")}
             available={agentAvailability?.codex ?? false}
             isLoading={isCheckingAvailability}
             onUnavailableClick={handleUnavailableClick}
+            primary
           />
-          <LauncherButton
-            title="Gemini"
-            icon={<GeminiIcon className="h-10 w-10" brandColor={getBrandColorHex("gemini")} />}
+          <LauncherCard
+            title="Gemini CLI"
+            description="Ideal for quick explorations and visual tasks."
+            shortcut="Cmd/Ctrl+Alt+G"
+            icon={<GeminiIcon className="h-5 w-5" brandColor={getBrandColorHex("gemini")} />}
             onClick={() => handleAgentClick("gemini")}
             available={agentAvailability?.gemini ?? false}
             isLoading={isCheckingAvailability}
             onUnavailableClick={handleUnavailableClick}
+            primary
           />
-          <LauncherButton
+          <LauncherCard
             title="Terminal"
-            icon={<Terminal className="h-10 w-10 text-canopy-text/70" />}
+            description="Direct terminal access."
+            icon={<Terminal className="h-5 w-5" />}
             onClick={() => handleAgentClick("terminal")}
             available={true}
             isLoading={false}
