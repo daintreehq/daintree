@@ -5,6 +5,7 @@ import type { TerminalType, TerminalState, AgentState, TerminalKind } from "@/ty
 import { generateAgentFlags, type AgentSettings } from "@shared/types";
 import { keybindingService } from "@/services/KeybindingService";
 import { isRegisteredAgent, getAgentConfig } from "@/config/agents";
+import { normalizeScrollbackLines } from "@shared/config/scrollback";
 
 export interface HydrationOptions {
   addTerminal: (options: {
@@ -43,31 +44,19 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     // Hydrate terminal config (scrollback, performance mode) BEFORE restoring terminals
     try {
       if (terminalConfig?.scrollbackLines !== undefined) {
-        let { scrollbackLines } = terminalConfig;
-        // Migrate legacy values to new defaults (Issue #504 optimization)
-        // - Unlimited (-1) → 1,000 (no longer supported)
-        // - Values > 1,000 → 1,000 (clamp to new default for memory savings)
-        if (scrollbackLines === -1 || scrollbackLines > 1000) {
+        const { scrollbackLines } = terminalConfig;
+        const normalizedScrollback = normalizeScrollbackLines(scrollbackLines);
+
+        if (normalizedScrollback !== scrollbackLines) {
           console.log(
-            `Migrating scrollback from ${scrollbackLines} to 1000 (Issue #504 optimization)`
+            `[Hydration] Normalizing scrollback from ${scrollbackLines} to ${normalizedScrollback}`
           );
-          scrollbackLines = 1000;
-          // Persist the migration
-          terminalConfigClient.setScrollback(1000).catch((err) => {
-            console.warn("Failed to persist scrollback migration:", err);
+          terminalConfigClient.setScrollback(normalizedScrollback).catch((err) => {
+            console.warn("[Hydration] Failed to persist scrollback normalization:", err);
           });
         }
-        // Validate persisted value
-        if (
-          Number.isFinite(scrollbackLines) &&
-          Number.isInteger(scrollbackLines) &&
-          scrollbackLines >= 100 &&
-          scrollbackLines <= 1000
-        ) {
-          useScrollbackStore.getState().setScrollbackLines(scrollbackLines);
-        } else {
-          console.warn("Invalid persisted scrollback value, using default:", scrollbackLines);
-        }
+
+        useScrollbackStore.getState().setScrollbackLines(normalizedScrollback);
       }
       if (terminalConfig?.performanceMode !== undefined) {
         usePerformanceModeStore.getState().setPerformanceMode(terminalConfig.performanceMode);
