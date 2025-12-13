@@ -1,4 +1,4 @@
-import React, { useCallback, useLayoutEffect, useMemo, useRef, useEffect, useState } from "react";
+import React, { useCallback, useLayoutEffect, useMemo, useRef, useEffect } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { cn } from "@/lib/utils";
 import { terminalClient } from "@/clients";
@@ -129,7 +129,8 @@ function XtermAdapterComponent({
   const isVisibleRef = useRef(false);
 
   // Agent state for state-aware rendering decisions (height ratchet, resize guard, scroll latch)
-  const [agentState, setAgentState] = useState<AgentState | undefined>(undefined);
+  // Used via ref to avoid triggering re-renders that would cause XtermAdapter to detach/reattach
+  const agentStateRef = useRef<AgentState | undefined>(undefined);
 
   // Tall canvas mode refs (agent terminals only)
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -342,9 +343,11 @@ function XtermAdapterComponent({
     const currentBottom = terminalInstanceService.getContentBottom(terminalId);
 
     // Height ratchet: determine if agent is actively working
-    // When working/running, viewport height can only grow (never shrink)
+    // When working/running/waiting, viewport height can only grow (never shrink)
     // This prevents jitter during TUI redraws where ESC[2J briefly empties the buffer
-    const isWorking = agentState === "working" || agentState === "running";
+    const currentState = agentStateRef.current;
+    const isWorking =
+      currentState === "working" || currentState === "running" || currentState === "waiting";
 
     // If content shrinks significantly (>10 rows), reset stable bottom
     // This handles terminal.clear() and major TUI collapses
@@ -375,7 +378,7 @@ function XtermAdapterComponent({
       lastHeightPxRef.current = totalHeight;
       innerHostRef.current.style.height = `${totalHeight}px`;
     }
-  }, [isTallCanvas, terminalId, getCellHeight, agentState]);
+  }, [isTallCanvas, terminalId, getCellHeight]);
 
   // Track text selection to avoid fighting with scroll sync
   // Only freeze if selection is inside THIS terminal (not global page selection)
@@ -786,7 +789,7 @@ function XtermAdapterComponent({
   // This enables future defensive layers (height ratchet, resize guard, scroll latch)
   useEffect(() => {
     const unsubscribe = terminalInstanceService.addAgentStateListener(terminalId, (state) => {
-      setAgentState(state);
+      agentStateRef.current = state;
     });
     return unsubscribe;
   }, [terminalId]);
