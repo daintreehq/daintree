@@ -20,10 +20,12 @@ import type {
   WorkerTerminalState,
 } from "../../shared/types/worker-messages.js";
 
-const POLLING_INTERVAL_MS = 20; // 50Hz analysis rate
+const ACTIVE_POLL_MS = 20; // 50Hz when receiving data
+const IDLE_INTERVALS = [50, 100, 250] as const; // Progressive backoff when idle
 const MAX_ANALYSIS_BUFFER_SIZE = 5000; // 5KB sliding window per terminal
 
 let ringBuffer: SharedRingBuffer | null = null;
+let idleLevel = 0;
 const packetParser = new PacketParser();
 const terminalStates = new Map<string, WorkerTerminalState>();
 let isPolling = false;
@@ -102,16 +104,29 @@ async function processPacket(terminalId: string, data: string): Promise<void> {
 }
 
 /**
+ * Schedule the next poll with adaptive timing.
+ * Backs off progressively when no data is being received.
+ */
+function scheduleNext(hadData: boolean): void {
+  if (!isPolling) return;
+  idleLevel = hadData ? 0 : Math.min(idleLevel + 1, IDLE_INTERVALS.length - 1);
+  const ms = hadData ? ACTIVE_POLL_MS : IDLE_INTERVALS[idleLevel];
+  setTimeout(pollBuffer, ms);
+}
+
+/**
  * Poll the ring buffer for new data.
  */
 async function pollBuffer(): Promise<void> {
   if (!ringBuffer || !isPolling) return;
 
+  let hadData = false;
   try {
     // Read all available data from the ring buffer
     const rawData = ringBuffer.read();
 
     if (rawData) {
+      hadData = true;
       // Parse framed packets (handles partial packets across reads)
       const packets = packetParser.parse(rawData);
 
@@ -144,10 +159,7 @@ async function pollBuffer(): Promise<void> {
       context: "polling loop",
     });
   } finally {
-    // Always schedule next poll to keep loop alive
-    if (isPolling) {
-      setTimeout(pollBuffer, POLLING_INTERVAL_MS);
-    }
+    scheduleNext(hadData);
   }
 }
 
@@ -179,6 +191,8 @@ self.onmessage = (event: MessageEvent<WorkerInboundMessage>) => {
     case "INIT_BUFFER":
       try {
         ringBuffer = new SharedRingBuffer(message.buffer);
+        packetParser.reset();
+        idleLevel = 0;
         startPolling();
         postTypedMessage({ type: "READY" });
       } catch (error) {
@@ -229,6 +243,7 @@ self.onmessage = (event: MessageEvent<WorkerInboundMessage>) => {
       // Clear all state (e.g., on project switch)
       terminalStates.clear();
       packetParser.reset();
+      idleLevel = 0;
       break;
   }
 };

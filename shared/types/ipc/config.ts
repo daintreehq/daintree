@@ -8,7 +8,7 @@ export interface AdaptiveBackoffMetrics {
 
 /** Terminal configuration for scrollback, etc. */
 export interface TerminalConfig {
-  scrollbackLines: number; // -1 for unlimited, otherwise 100-100000
+  scrollbackLines: number; // 100-10000 (user-configurable)
   performanceMode: boolean;
   fontSize?: number;
   fontFamily?: string;
