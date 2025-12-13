@@ -1,10 +1,11 @@
 import { useState, useEffect } from "react";
-import { ChevronDown, ChevronRight, TreePine, Moon, CheckCircle, AlertCircle } from "lucide-react";
+import { ChevronDown, ChevronRight, TreePine, Moon, CheckCircle, AlertCircle, Activity } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { hibernationClient, cliAvailabilityClient, agentSettingsClient } from "@/clients";
 import { getAgentIds, getAgentConfig } from "@/config/agents";
 import { DEFAULT_AGENT_SETTINGS, getAgentSettingsEntry } from "@shared/types";
 import type { HibernationConfig, CliAvailability, AgentSettings } from "@shared/types";
+import { usePreferencesStore } from "@/store";
 
 interface GeneralTabProps {
   appVersion: string;
@@ -76,6 +77,9 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
   const [configError, setConfigError] = useState<string | null>(null);
   const [cliAvailability, setCliAvailability] = useState<CliAvailability | null>(null);
   const [agentSettings, setAgentSettings] = useState<AgentSettings | null>(null);
+
+  const showProjectPulse = usePreferencesStore((s) => s.showProjectPulse);
+  const setShowProjectPulse = usePreferencesStore((s) => s.setShowProjectPulse);
 
   useEffect(() => {
     hibernationClient
@@ -304,6 +308,50 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
           )}
         </div>
       ) : null}
+
+      <div className="space-y-2">
+        <h4 className="text-sm font-medium text-canopy-text flex items-center gap-2">
+          <Activity className="w-4 h-4 text-canopy-accent" />
+          Display
+        </h4>
+        <button
+          onClick={() => setShowProjectPulse(!showProjectPulse)}
+          className={cn(
+            "w-full flex items-center justify-between p-4 rounded-[var(--radius-lg)] border transition-all",
+            showProjectPulse
+              ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
+              : "border-canopy-border hover:bg-white/5 text-canopy-text/70"
+          )}
+        >
+          <div className="flex items-center gap-3">
+            <Activity
+              className={cn(
+                "w-5 h-5",
+                showProjectPulse ? "text-canopy-accent" : "text-canopy-text/50"
+              )}
+            />
+            <div className="text-left">
+              <div className="text-sm font-medium">Project Pulse</div>
+              <div className="text-xs opacity-70">
+                Show activity heatmap on the empty terminal grid
+              </div>
+            </div>
+          </div>
+          <div
+            className={cn(
+              "w-11 h-6 rounded-full relative transition-colors",
+              showProjectPulse ? "bg-canopy-accent" : "bg-canopy-border"
+            )}
+          >
+            <div
+              className={cn(
+                "absolute top-1 w-4 h-4 rounded-full bg-white transition-transform",
+                showProjectPulse ? "translate-x-6" : "translate-x-1"
+              )}
+            />
+          </div>
+        </button>
+      </div>
 
       <div className="border border-canopy-border rounded-[var(--radius-md)]">
         <button

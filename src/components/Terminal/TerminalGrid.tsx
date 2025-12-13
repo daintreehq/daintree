@@ -7,6 +7,7 @@ import {
   useTerminalStore,
   useLayoutConfigStore,
   useWorktreeSelectionStore,
+  usePreferencesStore,
   MAX_GRID_TERMINALS,
   type TerminalInstance,
 } from "@/store";
@@ -106,6 +107,7 @@ function EmptyState({
   onOpenSettings,
   activeWorktreeName,
   activeWorktreeId,
+  showProjectPulse,
 }: {
   onLaunchAgent: (type: "claude" | "gemini" | "codex" | "terminal") => void;
   hasActiveWorktree: boolean;
@@ -114,6 +116,7 @@ function EmptyState({
   onOpenSettings?: () => void;
   activeWorktreeName?: string | null;
   activeWorktreeId?: string | null;
+  showProjectPulse: boolean;
 }) {
   const handleOpenHelp = () => {
     void systemClient
@@ -197,7 +200,7 @@ function EmptyState({
           />
         </div>
 
-        {hasActiveWorktree && activeWorktreeId && (
+        {showProjectPulse && hasActiveWorktree && activeWorktreeId && (
           <div className="flex justify-center mb-8">
             <ProjectPulseCard worktreeId={activeWorktreeId} />
           </div>
@@ -246,6 +249,7 @@ export function TerminalGrid({
   );
 
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
+  const showProjectPulse = usePreferencesStore((state) => state.showProjectPulse);
   const { worktreeMap } = useWorktrees();
   const activeWorktree = activeWorktreeId ? worktreeMap.get(activeWorktreeId) : null;
   const hasActiveWorktree = activeWorktreeId !== null && activeWorktree !== undefined;
@@ -439,6 +443,7 @@ export function TerminalGrid({
                   onOpenSettings={onOpenSettings}
                   activeWorktreeName={activeWorktreeName}
                   activeWorktreeId={activeWorktreeId}
+                  showProjectPulse={showProjectPulse}
                 />
               </div>
             ) : (

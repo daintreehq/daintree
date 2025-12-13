@@ -46,3 +46,5 @@ export { useGitHubConfigStore, cleanupGitHubConfigStore } from "./githubConfigSt
 export { useAgentSettingsStore, cleanupAgentSettingsStore } from "./agentSettingsStore";
 
 export { usePulseStore } from "./pulseStore";
+
+export { usePreferencesStore } from "./preferencesStore";
