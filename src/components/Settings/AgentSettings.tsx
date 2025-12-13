@@ -141,7 +141,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
 
       {/* Agent Configuration Card */}
       {activeAgent && (
-        <div className="rounded-[var(--radius-lg)] border border-canopy-border bg-canopy-bg-secondary p-4 space-y-4">
+        <div className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-4">
           {/* Header with agent info */}
           <div className="flex items-center justify-between pb-3 border-b border-canopy-border">
             <div className="flex items-center gap-3">
