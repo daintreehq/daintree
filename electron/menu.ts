@@ -252,10 +252,3 @@ async function handleDirectoryOpen(
     dialog.showErrorBox("Failed to Open Project", errorMessage);
   }
 }
-
-export function updateApplicationMenu(
-  mainWindow: BrowserWindow,
-  cliAvailabilityService?: CliAvailabilityService
-): void {
-  createApplicationMenu(mainWindow, cliAvailabilityService);
-}

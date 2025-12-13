@@ -28,15 +28,7 @@ export type { KeyScope, KeybindingConfig } from "../services/KeybindingService";
 
 export { useProjectSettings } from "./useProjectSettings";
 
-export {
-  useTerminalById,
-  useTerminalIds,
-  useGridTerminalIds,
-  useDockedTerminalIds,
-  useTerminalCounts,
-  useFocusedTerminal,
-  useWaitingTerminalIds,
-} from "./useTerminalSelectors";
+export { useWaitingTerminalIds } from "./useTerminalSelectors";
 
 export { useLinkDiscovery } from "./useLinkDiscovery";
 
