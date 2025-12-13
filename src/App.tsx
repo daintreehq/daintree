@@ -179,7 +179,7 @@ function SidebarContent() {
           className="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-border/50 rounded transition-colors"
           title="Create new worktree"
         >
-          <span className="text-[10px]">+</span> New
+          <span className="text-[11px]">+</span> New
         </button>
       </div>
 

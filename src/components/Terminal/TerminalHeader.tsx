@@ -125,7 +125,7 @@ function TerminalHeaderComponent({
     <TerminalContextMenu terminalId={id} forceLocation={location}>
       <div
         className={cn(
-          "flex items-center justify-between px-3 shrink-0 font-mono text-xs transition-colors relative overflow-hidden",
+          "flex items-center justify-between px-3 shrink-0 text-xs transition-colors relative overflow-hidden",
           // Base height and separator border
           "h-8 border-b border-black/20",
           // Maximized overrides: taller height, sidebar background, standard border color
@@ -174,7 +174,7 @@ function TerminalHeaderComponent({
               {/* Title */}
               <span
                 className={cn(
-                  "text-xs font-medium select-none transition-colors",
+                  "text-xs font-medium font-sans select-none transition-colors",
                   isFocused ? "text-canopy-text" : "text-canopy-text/70",
                   onTitleChange && "cursor-text hover:text-canopy-text",
                   isPinged &&
@@ -200,7 +200,7 @@ function TerminalHeaderComponent({
               {/* Command Pill - shows currently running command */}
               {showCommandPill && (
                 <span
-                  className="px-3 py-1 rounded-full text-[10px] font-mono bg-black/10 text-canopy-text/60 border border-white/10 truncate max-w-[20rem]"
+                  className="px-3 py-1 rounded-full text-[11px] font-mono bg-black/10 text-canopy-text/60 border border-white/10 truncate max-w-[20rem]"
                   title={lastCommand}
                 >
                   {lastCommand}
@@ -227,18 +227,19 @@ function TerminalHeaderComponent({
 
           {queueCount > 0 && (
             <div
-              className="text-xs font-mono bg-canopy-accent/15 text-canopy-text px-1.5 py-0.5 rounded ml-1"
+              className="inline-flex items-center gap-1 text-xs font-sans bg-canopy-accent/15 text-canopy-text px-1.5 py-0.5 rounded ml-1"
               role="status"
               aria-live="polite"
               title={`${queueCount} command${queueCount > 1 ? "s" : ""} queued`}
             >
-              {queueCount} queued
+              <span className="font-mono tabular-nums">{queueCount}</span>
+              <span>queued</span>
             </div>
           )}
 
           {flowStatus === "paused-backpressure" && (
             <div
-              className="flex items-center gap-1 text-xs font-mono bg-[var(--color-status-warning)]/15 text-[var(--color-status-warning)] px-1.5 py-0.5 rounded ml-1"
+              className="flex items-center gap-1 text-xs font-sans bg-[var(--color-status-warning)]/15 text-[var(--color-status-warning)] px-1.5 py-0.5 rounded ml-1"
               role="status"
               aria-live="polite"
               title="Terminal paused due to buffer overflow (right-click for Force Resume)"
@@ -256,9 +257,9 @@ function TerminalHeaderComponent({
             role="status"
             aria-live="polite"
           >
-            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider font-semibold">
-              <Grid2X2 className="w-3 h-3" aria-hidden="true" />
-              <span>{activeCount} Background</span>
+            <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider font-semibold max-w-[300px]">
+              <Grid2X2 className="w-3 h-3 shrink-0" aria-hidden="true" />
+              <span className="truncate">{activeCount} Background</span>
               {workingCount > 0 && (
                 <span className="flex items-center gap-1 text-[var(--color-state-working)] ml-1">
                   <Activity className="w-3 h-3 animate-pulse" aria-hidden="true" />

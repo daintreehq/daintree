@@ -804,7 +804,7 @@ export function WorktreeCard({
                   className="w-full p-3 flex items-center justify-between min-w-0 text-left rounded-[var(--radius-lg)] transition-colors hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]"
                 >
                   {/* LEFT SLOT: Git Signal + Commit Message */}
-                  <div className="flex items-center gap-2 min-w-0 flex-1 text-xs font-mono text-canopy-text/60">
+                  <div className="flex items-center gap-2 min-w-0 flex-1 text-xs font-sans text-canopy-text/60">
                     {workspaceScenario === "dirty" && worktree.worktreeChanges && (
                       <>
                         <span className="shrink-0">
@@ -889,7 +889,10 @@ export function WorktreeCard({
                 {/* Left: Terminal icon + total count */}
                 <div className="flex items-center gap-1.5">
                   <Terminal className="w-3 h-3" />
-                  <span className="font-mono">{terminalCounts.total} active</span>
+                  <span className="inline-flex items-center gap-1">
+                    <span className="font-mono tabular-nums">{terminalCounts.total}</span>
+                    <span className="font-sans">active</span>
+                  </span>
                 </div>
 
                 {/* Right: State breakdown (icons + counts) */}
@@ -934,7 +937,7 @@ export function WorktreeCard({
                           term.agentState === "running" &&
                           term.lastCommand && (
                             <span
-                              className="text-[10px] font-mono text-canopy-text/50 truncate"
+                              className="text-[11px] font-mono text-canopy-text/50 truncate"
                               title={term.lastCommand}
                             >
                               {term.lastCommand}

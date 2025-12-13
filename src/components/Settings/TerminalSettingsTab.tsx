@@ -222,7 +222,7 @@ export function TerminalSettingsTab() {
               )}
             >
               <span className="text-xs font-medium">{label}</span>
-              <span className="text-[10px] mt-0.5 opacity-60">{description}</span>
+              <span className="text-[11px] mt-0.5 opacity-60">{description}</span>
             </button>
           ))}
         </div>
@@ -306,7 +306,7 @@ export function TerminalSettingsTab() {
           >
             <Icon className="w-6 h-6 mb-2" />
             <span className="text-xs font-medium">{label}</span>
-            <span className="text-[10px] text-center mt-1 opacity-60">{description}</span>
+            <span className="text-[11px] text-center mt-1 opacity-60">{description}</span>
           </button>
         ))}
       </div>

@@ -243,7 +243,10 @@ export function SidecarSettingsTab() {
                         <span className="text-sm text-canopy-text">
                           {link?.title || template.title}
                         </span>
-                        <span className="text-[10px] text-zinc-500">
+                        <span
+                          className="text-[11px] font-mono text-zinc-500 truncate min-w-0"
+                          title={link?.url || template.url}
+                        >
                           {link?.url || template.url}
                         </span>
                       </div>
@@ -452,7 +455,7 @@ export function SidecarSettingsTab() {
             >
               <Icon className="w-5 h-5 mb-1.5" />
               <span className="text-xs font-medium">{label}</span>
-              <span className="text-[10px] mt-0.5 opacity-60">{description}</span>
+              <span className="text-[11px] mt-0.5 opacity-60">{description}</span>
             </button>
           ))}
         </div>
@@ -525,7 +528,7 @@ export function SidecarSettingsTab() {
             />
           </div>
 
-          <div className="flex justify-between text-[10px] text-canopy-text/40">
+          <div className="flex justify-between text-[11px] text-canopy-text/40">
             <span>{SIDECAR_MIN_WIDTH}px (min)</span>
             <button
               onClick={() => {

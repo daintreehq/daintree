@@ -66,10 +66,10 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
           {worktreeName ? (
             <span className="text-canopy-text/50 ml-1 font-normal">({worktreeName})</span>
           ) : isOrphan ? (
-            <span className="text-amber-500/70 ml-1 font-normal text-[10px]">(deleted tree)</span>
+            <span className="text-amber-500/70 ml-1 font-normal text-[11px]">(deleted tree)</span>
           ) : null}
         </div>
-        <div className="text-[10px] text-canopy-text/40" aria-live="polite">
+        <div className="text-[11px] text-canopy-text/40" aria-live="polite">
           {seconds}s remaining
         </div>
       </div>

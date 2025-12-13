@@ -128,7 +128,7 @@ export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemP
               {item.title}
             </button>
             {isItemPR && item.isDraft && (
-              <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-medium">
+              <span className="shrink-0 text-[11px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-medium">
                 Draft
               </span>
             )}

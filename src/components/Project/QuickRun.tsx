@@ -293,7 +293,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
         onClick={() => setIsExpanded(!isExpanded)}
         className={cn(
           "w-full flex items-center justify-between px-3 py-1.5",
-          "text-canopy-text/40 hover:text-canopy-text hover:bg-white/5 transition-colors focus:outline-none font-mono"
+          "text-canopy-text/40 hover:text-canopy-text hover:bg-white/5 transition-colors focus:outline-none font-sans"
         )}
         aria-expanded={isExpanded}
         aria-controls="quick-run-panel"
@@ -405,7 +405,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                   onMouseDown={(e) => e.preventDefault()}
                   className="absolute bottom-full left-0 right-0 mb-1 bg-surface border border-canopy-border rounded-[var(--radius-md)] shadow-2xl overflow-hidden z-50 max-h-64 flex flex-col"
                 >
-                  <div className="text-[10px] text-white/30 px-3 py-1 bg-black/20 border-b border-white/5 shrink-0">
+                  <div className="text-[11px] font-sans tracking-wider text-white/30 px-3 py-1 bg-black/20 border-b border-white/5 shrink-0">
                     COMMANDS
                   </div>
                   <div className="overflow-y-auto flex-1">
@@ -444,12 +444,12 @@ export function QuickRun({ projectId }: QuickRunProps) {
                               {item.type === "saved" ? item.label : item.value}
                             </span>
                             {item.type === "script" && item.label !== item.value && (
-                              <span className="ml-2 text-[10px] opacity-40 font-sans">
+                              <span className="ml-2 text-[11px] opacity-40 font-sans">
                                 ({item.label})
                               </span>
                             )}
                             {item.type === "saved" && item.label !== item.value && (
-                              <span className="ml-2 text-[10px] opacity-40 font-sans">
+                              <span className="ml-2 text-[11px] opacity-40 font-sans">
                                 {item.value}
                               </span>
                             )}

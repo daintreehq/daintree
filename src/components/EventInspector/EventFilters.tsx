@@ -254,7 +254,7 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
                 >
                   <span>{config.label}</span>
                   {count > 0 && (
-                    <span className={cn("text-[10px]", isActive ? "opacity-80" : "opacity-60")}>
+                    <span className={cn("text-[11px]", isActive ? "opacity-80" : "opacity-60")}>
                       {count}
                     </span>
                   )}
@@ -308,7 +308,7 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
                         onChange={() => toggleTypeFilter(type)}
                         className="w-3.5 h-3.5 rounded border-muted-foreground/50"
                       />
-                      <span className="text-sm font-mono truncate flex-1">{type}</span>
+                      <span className="text-sm font-mono truncate flex-1 min-w-0">{type}</span>
                       <span className="text-xs text-muted-foreground opacity-0 group-hover:opacity-100">
                         {typeCounts.get(type) || 0}
                       </span>

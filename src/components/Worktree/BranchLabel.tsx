@@ -43,7 +43,7 @@ export function BranchLabel({ label, isActive, isMainWorktree, className }: Bran
       {displayName && colors && (
         <span
           className={cn(
-            "text-[10px] font-medium px-1.5 py-0.5 rounded border shrink-0",
+            "text-[11px] tracking-wide font-medium px-1.5 py-0.5 rounded border shrink-0",
             colors.bg,
             colors.border,
             colors.text
@@ -54,7 +54,7 @@ export function BranchLabel({ label, isActive, isMainWorktree, className }: Bran
       )}
       <span
         className={cn(
-          "truncate font-semibold text-[13px]",
+          "truncate font-mono font-semibold text-[13px]",
           isActive ? "text-white" : "text-canopy-text",
           isMainWorktree && "font-bold tracking-wide"
         )}

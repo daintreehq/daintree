@@ -122,7 +122,7 @@ export function EventTimeline({
         <div className="flex items-start gap-2">
           <span
             className={cn(
-              "flex-shrink-0 inline-flex items-center justify-center w-8 px-1 py-0.5 rounded text-[10px] font-medium border",
+              "flex-shrink-0 inline-flex items-center justify-center w-8 px-1 py-0.5 rounded text-[11px] font-medium border",
               categoryStyle.color
             )}
             title={event.category}

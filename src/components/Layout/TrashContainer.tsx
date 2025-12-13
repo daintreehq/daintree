@@ -61,7 +61,7 @@ export function TrashContainer({ trashedTerminals }: TrashContainerProps) {
         <div className="flex flex-col">
           <div className="px-3 py-2 border-b border-canopy-border bg-canopy-bg/50 flex justify-between items-center">
             <span className="text-xs font-medium text-canopy-text/70">Recently Closed</span>
-            <span className="text-[10px] text-canopy-text/40">Auto-clears</span>
+            <span className="text-[11px] text-canopy-text/40">Auto-clears</span>
           </div>
 
           <div className="p-1 flex flex-col gap-1 max-h-[300px] overflow-y-auto">

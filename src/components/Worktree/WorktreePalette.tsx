@@ -31,7 +31,7 @@ function WorktreeListItem({ worktree, isActive, isSelected, onClick }: WorktreeL
             <span className="font-mono text-canopy-text/70">{worktree.branch}</span>
           )}
           {isActive && (
-            <span className="px-1.5 py-0.5 rounded-[var(--radius-md)] bg-canopy-accent/15 text-canopy-accent text-[10px] font-semibold">
+            <span className="px-1.5 py-0.5 rounded-[var(--radius-md)] bg-canopy-accent/15 text-canopy-accent text-[11px] font-semibold">
               Active
             </span>
           )}

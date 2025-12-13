@@ -207,7 +207,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
               )}
             </div>
             {getStateIndicator(terminal.agentState)}
-            <span className="truncate shrink-0 min-w-[60px] max-w-[120px] font-mono font-medium">
+            <span className="truncate shrink-0 min-w-[60px] max-w-[120px] font-sans font-medium">
               {terminal.title}
             </span>
 
@@ -215,7 +215,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
               <>
                 <div className="h-3 w-px bg-white/10 shrink-0" aria-hidden="true" />
                 <span
-                  className="truncate flex-1 min-w-0 text-[10px] text-canopy-text/50 font-mono"
+                  className="truncate flex-1 min-w-0 text-[11px] text-canopy-text/50 font-mono"
                   title={commandText}
                 >
                   {commandText}

@@ -189,16 +189,16 @@ export function FileChangeList({
 
         <div className="flex-1 min-w-0 flex items-center mr-2">
           {showDir && displayDir && (
-            <span className="truncate text-canopy-text/60 opacity-60 group-hover:opacity-80">
+            <span className="truncate min-w-0 text-canopy-text/60 opacity-60 group-hover:opacity-80">
               {displayDir}/
             </span>
           )}
-          <span className="text-canopy-text group-hover:text-white font-medium shrink-0">
+          <span className="text-canopy-text group-hover:text-white font-medium truncate min-w-0">
             {base}
           </span>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0 text-[10px]">
+        <div className="flex items-center gap-2 shrink-0 text-[11px]">
           {(change.insertions ?? 0) > 0 && (
             <span className="text-green-500/80">+{change.insertions}</span>
           )}
@@ -216,7 +216,7 @@ export function FileChangeList({
         <div className="space-y-3 w-full">
           {groupedChanges.map((group) => (
             <div key={group.dir}>
-              <div className="flex items-center gap-1.5 text-[10px] text-canopy-text/40 mb-1">
+              <div className="flex items-center gap-1.5 text-[11px] text-canopy-text/40 mb-1">
                 <Folder className="w-3 h-3" />
                 <span className="font-mono">{group.displayDir}</span>
                 <span className="text-canopy-text/30">({group.files.length})</span>
@@ -227,7 +227,7 @@ export function FileChangeList({
             </div>
           ))}
           {remainingCount > 0 && (
-            <div className="text-[10px] text-canopy-text/60 pl-4 pt-1">
+            <div className="text-[11px] text-canopy-text/60 pl-4 pt-1">
               ...and {remainingCount} more
               {remainingFiles.length > 0 && (
                 <span className="ml-1 opacity-75">
@@ -256,7 +256,7 @@ export function FileChangeList({
         {visibleChanges.map((change) => renderFileItem(change, true))}
 
         {remainingCount > 0 && (
-          <div className="text-[10px] text-canopy-text/60 pl-5 pt-1">
+          <div className="text-[11px] text-canopy-text/60 pl-5 pt-1">
             ...and {remainingCount} more
             {remainingFiles.length > 0 && (
               <span className="ml-1 opacity-75">
