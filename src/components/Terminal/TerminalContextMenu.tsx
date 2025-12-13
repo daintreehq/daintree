@@ -23,6 +23,7 @@ import {
   Info,
   GitBranch,
   Play,
+  PenLine,
 } from "lucide-react";
 import { useTerminalStore } from "@/store";
 import type { TerminalLocation } from "@/types";
@@ -175,6 +176,17 @@ export function TerminalContextMenu({
         <ContextMenuItem onClick={handleDuplicate}>
           <Copy className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
           Duplicate Terminal
+        </ContextMenuItem>
+
+        <ContextMenuItem
+          onClick={() =>
+            window.dispatchEvent(
+              new CustomEvent("canopy:rename-terminal", { detail: { id: terminalId } })
+            )
+          }
+        >
+          <PenLine className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+          Rename Terminal
         </ContextMenuItem>
 
         <ContextMenuItem onClick={handleClearBuffer}>

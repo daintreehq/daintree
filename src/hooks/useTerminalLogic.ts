@@ -70,6 +70,27 @@ export function useTerminalLogic({
     }
   }, [isEditingTitle]);
 
+  // Listen for rename events from context menu
+  const canRename = Boolean(onTitleChange);
+  useEffect(() => {
+    if (!canRename) return;
+
+    const handleRenameEvent = (e: Event) => {
+      if (!(e instanceof CustomEvent)) return;
+      const detail = e.detail as unknown;
+      if (!detail || typeof (detail as { id?: unknown }).id !== "string") return;
+      if ((detail as { id: string }).id === id) {
+        setIsEditingTitle(true);
+      }
+    };
+
+    const controller = new AbortController();
+    window.addEventListener("canopy:rename-terminal", handleRenameEvent, {
+      signal: controller.signal,
+    });
+    return () => controller.abort();
+  }, [id, canRename]);
+
   const handleTitleDoubleClick = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
