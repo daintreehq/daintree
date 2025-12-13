@@ -85,7 +85,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     return (
       <div
         className={cn(
-          "p-4 bg-white/[0.02] rounded-[var(--radius-lg)] border border-white/5",
+          "p-4 bg-[var(--color-surface)] rounded-[var(--radius-lg)] border border-canopy-border",
           className
         )}
       >
@@ -101,16 +101,16 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     return (
       <div
         className={cn(
-          "p-4 bg-white/[0.02] rounded-[var(--radius-lg)] border border-white/5",
+          "p-4 bg-[var(--color-surface)] rounded-[var(--radius-lg)] border border-canopy-border",
           className
         )}
       >
         <div className="flex items-center gap-2 text-canopy-text/50">
-          <AlertCircle className="w-4 h-4 text-red-400/70" />
+          <AlertCircle className="w-4 h-4 text-canopy-error/70" />
           <span className="text-xs">{error}</span>
           <button
             onClick={handleRefresh}
-            className="ml-auto p-1 hover:bg-white/10 rounded transition-colors"
+            className="ml-auto p-1 hover:bg-[var(--color-surface-highlight)] rounded transition-colors"
             aria-label="Retry"
           >
             <RefreshCw className="w-3 h-3" />
@@ -127,11 +127,11 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
   return (
     <div
       className={cn(
-        "w-fit bg-white/[0.02] rounded-[var(--radius-lg)] border border-white/5",
+        "w-fit bg-[var(--color-surface)] rounded-[var(--radius-lg)] border border-canopy-border",
         className
       )}
     >
-      <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between">
+      <div className="px-4 py-3 border-b border-canopy-border flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Activity className="w-4 h-4 text-emerald-400/70" />
           <span className="text-sm font-medium text-canopy-text/80">{title}</span>
@@ -142,7 +142,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
-                className="text-xs text-canopy-text/50 hover:text-canopy-text/70 transition-colors px-2 py-1 rounded hover:bg-white/5"
+                className="text-xs text-canopy-text/50 hover:text-canopy-text/70 transition-colors px-2 py-1 rounded hover:bg-[var(--color-surface-highlight)]"
                 aria-label="Change time range"
               >
                 {currentRangeLabel}
@@ -153,7 +153,9 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
                 <DropdownMenuItem
                   key={option.value}
                   onClick={() => handleRangeChange(option.value)}
-                  className={cn(option.value === rangeDays && "bg-white/5")}
+                  className={cn(
+                    option.value === rangeDays && "bg-[var(--color-surface-highlight)]"
+                  )}
                 >
                   {option.label}
                 </DropdownMenuItem>
@@ -164,7 +166,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
           <button
             onClick={handleRefresh}
             disabled={isLoading}
-            className="p-1 text-canopy-text/40 hover:text-canopy-text/70 hover:bg-white/5 rounded transition-colors disabled:opacity-50"
+            className="p-1 text-canopy-text/40 hover:text-canopy-text/70 hover:bg-[var(--color-surface-highlight)] rounded transition-colors disabled:opacity-50"
             aria-label="Refresh"
           >
             <RefreshCw className={cn("w-3 h-3", isLoading && "animate-spin")} />
@@ -177,7 +179,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
 
         <p className="text-xs text-canopy-text/60 italic">{getCoachLine(pulse)}</p>
 
-        <div className="border-t border-white/5 pt-3">
+        <div className="border-t border-canopy-border pt-3">
           <PulseSummary pulse={pulse} />
         </div>
       </div>
