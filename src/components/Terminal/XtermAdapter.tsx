@@ -89,6 +89,7 @@ function getTerminalThemeFromCSS(): typeof CANOPY_TERMINAL_THEME_FALLBACK {
   return cachedTerminalTheme;
 }
 
+export { getTerminalThemeFromCSS };
 export const CANOPY_TERMINAL_THEME = CANOPY_TERMINAL_THEME_FALLBACK;
 
 const MIN_CONTAINER_SIZE = 50;
