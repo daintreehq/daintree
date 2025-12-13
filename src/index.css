@@ -99,6 +99,11 @@
   --z-popover: 70;
   --z-toast: 80;
 
+  /* Overlay elevation system */
+  --shadow-overlay: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 16px 48px rgba(0, 0, 0, 0.55);
+  --shadow-modal: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 28px 90px rgba(0, 0, 0, 0.65);
+  --border-overlay: rgba(255, 255, 255, 0.08);
+
   --animation-duration: 150ms;
   --transition-duration: 150ms;
   --terminal-animation-duration: 150ms;
@@ -885,4 +890,29 @@ body[data-performance-mode="true"] *::after {
 /* Ensure delayed skeletons don't stay invisible when animations are disabled */
 body[data-performance-mode="true"] .animate-pulse-delayed {
   opacity: 1 !important;
+}
+
+/* Disable backdrop effects in performance mode */
+body[data-performance-mode="true"] .surface-overlay {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  background-color: var(--color-canopy-sidebar) !important;
+}
+
+@layer utilities {
+  .surface-overlay {
+    background-color: var(--color-canopy-sidebar);
+    background-color: color-mix(in oklab, var(--color-canopy-sidebar) 92%, transparent);
+    border: 1px solid var(--border-overlay);
+    -webkit-backdrop-filter: blur(10px) saturate(120%);
+    backdrop-filter: blur(10px) saturate(120%);
+  }
+
+  .shadow-overlay {
+    box-shadow: var(--shadow-overlay);
+  }
+
+  .shadow-modal {
+    box-shadow: var(--shadow-modal);
+  }
 }
