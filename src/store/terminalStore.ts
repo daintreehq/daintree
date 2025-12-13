@@ -23,9 +23,21 @@ import {
 } from "./slices";
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import type { CrashType } from "@shared/types/pty-host";
 
-export type { TerminalInstance, AddTerminalOptions, QueuedCommand };
+export type { TerminalInstance, AddTerminalOptions, QueuedCommand, CrashType };
 export { isAgentReady };
+
+function normalizeCrashType(value: unknown): CrashType | null {
+  const validTypes: CrashType[] = [
+    "OUT_OF_MEMORY",
+    "ASSERTION_FAILURE",
+    "SIGNAL_TERMINATED",
+    "UNKNOWN_CRASH",
+    "CLEAN_EXIT",
+  ];
+  return validTypes.includes(value as CrashType) ? (value as CrashType) : null;
+}
 
 export function getTerminalRefreshTier(
   terminal: TerminalInstance | undefined,
@@ -64,7 +76,9 @@ export interface TerminalGridState
     TerminalCommandQueueSlice,
     TerminalBulkActionsSlice {
   backendStatus: BackendStatus;
+  lastCrashType: CrashType | null;
   setBackendStatus: (status: BackendStatus) => void;
+  setLastCrashType: (crashType: CrashType | null) => void;
   reset: () => Promise<void>;
   resetWithoutKilling: () => Promise<void>;
   restoreLastTrashed: () => void;
@@ -101,7 +115,9 @@ export const useTerminalStore = create<TerminalGridState>()((set, get, api) => {
     ...bulkActionsSlice,
 
     backendStatus: "connected" as BackendStatus,
+    lastCrashType: null as CrashType | null,
     setBackendStatus: (status: BackendStatus) => set({ backendStatus: status }),
+    setLastCrashType: (crashType: CrashType | null) => set({ lastCrashType: crashType }),
 
     addTerminal: async (options: AddTerminalOptions) => {
       const id = await registrySlice.addTerminal(options);
@@ -216,6 +232,8 @@ export const useTerminalStore = create<TerminalGridState>()((set, get, api) => {
         maximizedId: null,
         activeDockTerminalId: null,
         commandQueue: [],
+        backendStatus: "connected",
+        lastCrashType: null,
       });
     },
 
@@ -246,6 +264,8 @@ export const useTerminalStore = create<TerminalGridState>()((set, get, api) => {
         maximizedId: null,
         activeDockTerminalId: null,
         commandQueue: [],
+        backendStatus: "connected",
+        lastCrashType: null,
       });
     },
   };
@@ -409,7 +429,10 @@ export function setupTerminalStoreListeners() {
       recoveryTimer = null;
     }
 
-    useTerminalStore.setState({ backendStatus: "disconnected" });
+    useTerminalStore.setState({
+      backendStatus: "disconnected",
+      lastCrashType: normalizeCrashType(details?.crashType),
+    });
   });
 
   backendReadyUnsubscribe = terminalClient.onBackendReady(() => {
@@ -429,7 +452,7 @@ export function setupTerminalStoreListeners() {
     // Mark as connected after a short delay to show recovery state
     recoveryTimer = setTimeout(() => {
       recoveryTimer = null;
-      useTerminalStore.setState({ backendStatus: "connected" });
+      useTerminalStore.setState({ backendStatus: "connected", lastCrashType: null });
     }, 500);
   });
 

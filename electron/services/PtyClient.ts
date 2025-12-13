@@ -60,12 +60,15 @@ export interface PtyClientConfig {
   healthCheckIntervalMs?: number;
   /** Whether to show dialog on crash */
   showCrashDialog?: boolean;
+  /** Memory limit in MB for PTY Host process (default: 4096 = 4GB) */
+  memoryLimitMb?: number;
 }
 
 const DEFAULT_CONFIG: Required<PtyClientConfig> = {
   maxRestartAttempts: 3,
   healthCheckIntervalMs: 30000,
   showCrashDialog: true,
+  memoryLimitMb: 4096,
 };
 
 /** Default ring buffer size: 10MB for high-throughput terminal output */
@@ -136,6 +139,10 @@ export class PtyClient extends EventEmitter {
   private isWaitingForHandshake = false;
   private handshakeTimeout: NodeJS.Timeout | null = null;
   private pendingSpawns: Map<string, PtyHostSpawnOptions> = new Map();
+
+  /** Watchdog: Track missed heartbeat responses to detect deadlocks */
+  private missedHeartbeats = 0;
+  private readonly MAX_MISSED_HEARTBEATS = 3;
   private snapshotCallbacks: Map<string, (snapshot: TerminalSnapshot | null) => void> = new Map();
   private allSnapshotsCallback: ((snapshots: TerminalSnapshot[]) => void) | null = null;
   private transitionCallbacks: Map<string, (success: boolean) => void> = new Map();
@@ -212,11 +219,13 @@ export class PtyClient extends EventEmitter {
       this.child = utilityProcess.fork(hostPath, [], {
         serviceName: "canopy-pty-host",
         stdio: "inherit", // Show logs in dev
+        execArgv: [`--max-old-space-size=${this.config.memoryLimitMb}`],
         env: {
           ...(process.env as Record<string, string>),
           CANOPY_USER_DATA: app.getPath("userData"),
         },
       });
+      console.log(`[PtyClient] Pty Host started with ${this.config.memoryLimitMb}MB memory limit`);
     } catch (error) {
       console.error("[PtyClient] Failed to fork Pty Host:", error);
       this.emit("host-crash", -1);
@@ -314,13 +323,9 @@ export class PtyClient extends EventEmitter {
       }
     });
 
-    // Start health check (only if not paused by system sleep)
+    // Start health check with watchdog (only if not paused by system sleep)
     if (!this.isHealthCheckPaused) {
-      this.healthCheckInterval = setInterval(() => {
-        if (this.isInitialized && this.child && !this.isHealthCheckPaused) {
-          this.send({ type: "health-check" });
-        }
-      }, this.config.healthCheckIntervalMs);
+      this.startHealthCheckInterval();
     }
 
     console.log("[PtyClient] Pty Host started");
@@ -439,6 +444,9 @@ export class PtyClient extends EventEmitter {
       }
 
       case "pong":
+        // Reset watchdog counter on every pong - host is responsive
+        this.missedHeartbeats = 0;
+
         // If waiting for handshake, this pong confirms host is responsive
         if (this.isWaitingForHandshake) {
           this.isWaitingForHandshake = false;
@@ -511,6 +519,16 @@ export class PtyClient extends EventEmitter {
         break;
       }
 
+      case "host-throttled":
+        // Forward host throttle events for memory pressure visibility
+        this.emit("host-throttled", {
+          isThrottled: event.isThrottled,
+          reason: event.reason,
+          duration: event.duration,
+          timestamp: event.timestamp,
+        });
+        break;
+
       default:
         console.warn("[PtyClient] Unknown event type:", (event as { type: string }).type);
     }
@@ -521,7 +539,15 @@ export class PtyClient extends EventEmitter {
       console.warn("[PtyClient] Cannot send - host not running");
       return;
     }
-    this.child.postMessage(request);
+    try {
+      this.child.postMessage(request);
+    } catch (error) {
+      console.error("[PtyClient] postMessage failed:", error);
+      // Treat as host crash - triggers restart path
+      if (this.child) {
+        this.child.kill();
+      }
+    }
   }
 
   private respawnPending(): void {
@@ -837,7 +863,7 @@ export class PtyClient extends EventEmitter {
     }, 5000);
   }
 
-  /** Start the health check interval (called after handshake or timeout) */
+  /** Start the health check interval with watchdog (called after handshake or timeout) */
   private startHealthCheckInterval(): void {
     // Clear any existing interval
     if (this.healthCheckInterval) {
@@ -845,13 +871,42 @@ export class PtyClient extends EventEmitter {
       this.healthCheckInterval = null;
     }
 
+    // Reset watchdog counter when starting
+    this.missedHeartbeats = 0;
+
     this.healthCheckInterval = setInterval(() => {
-      if (this.isInitialized && this.child && !this.isHealthCheckPaused) {
-        this.send({ type: "health-check" });
+      if (!this.isInitialized || !this.child || this.isHealthCheckPaused) return;
+
+      // WATCHDOG CHECK: Force-kill if host is unresponsive
+      if (this.missedHeartbeats >= this.MAX_MISSED_HEARTBEATS) {
+        const missedMs = this.missedHeartbeats * this.config.healthCheckIntervalMs;
+        console.error(
+          `[PtyClient] Watchdog: Host unresponsive for ${this.missedHeartbeats} checks (${missedMs}ms). Force killing.`
+        );
+
+        // Emit crash details before force-killing
+        const crashPayload: HostCrashPayload = {
+          code: null,
+          signal: "SIGKILL",
+          crashType: "SIGNAL_TERMINATED",
+          timestamp: Date.now(),
+        };
+        this.emit("host-crash-details", crashPayload);
+
+        // Force kill with SIGKILL (UtilityProcess.kill() only sends SIGTERM)
+        if (this.child.pid) {
+          process.kill(this.child.pid, "SIGKILL");
+        }
+        this.missedHeartbeats = 0;
+        return;
       }
+
+      // Increment counter - will be reset by 'pong' response
+      this.missedHeartbeats++;
+      this.send({ type: "health-check" });
     }, this.config.healthCheckIntervalMs);
 
-    console.log("[PtyClient] Health check interval started");
+    console.log("[PtyClient] Health check interval started (watchdog enabled)");
   }
 
   /** Handle project switch - forward to host */

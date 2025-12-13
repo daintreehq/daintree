@@ -1,5 +1,6 @@
 export { useTerminalStore, isAgentReady, getTerminalRefreshTier } from "./terminalStore";
 export type { TerminalInstance, AddTerminalOptions, QueuedCommand } from "./terminalStore";
+export type { CrashType } from "@shared/types/pty-host";
 export { MAX_GRID_TERMINALS } from "./slices/terminalRegistrySlice";
 
 export { useWorktreeSelectionStore } from "./worktreeStore";

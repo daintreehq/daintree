@@ -137,6 +137,13 @@ export type PtyHostEvent =
       bufferUtilization?: number;
       pauseDuration?: number;
       timestamp: number;
+    }
+  | {
+      type: "host-throttled";
+      isThrottled: boolean;
+      reason?: string;
+      duration?: number;
+      timestamp: number;
     };
 
 /** Terminal info sent from Host → Main for getTerminal queries */
@@ -227,6 +234,14 @@ export interface HostCrashPayload {
   code: number | null;
   signal: string | null;
   crashType: CrashType;
+  timestamp: number;
+}
+
+/** Payload for host throttle events (memory pressure) */
+export interface HostThrottlePayload {
+  isThrottled: boolean;
+  reason?: string;
+  duration?: number;
   timestamp: number;
 }
 

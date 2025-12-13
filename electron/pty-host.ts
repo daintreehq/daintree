@@ -45,10 +45,120 @@ process.on("unhandledRejection", (reason) => {
   });
 });
 
+// Resource Governor - monitors heap usage and applies backpressure proactively
+class ResourceGovernor {
+  private readonly MEMORY_LIMIT_PERCENT = 80; // Pause at 80% of max heap
+  private readonly RESUME_THRESHOLD_PERCENT = 60; // Resume at 60% (hysteresis)
+  private readonly FORCE_RESUME_MS = 10000; // Force resume after 10s to prevent indefinite pause
+  private readonly CHECK_INTERVAL_MS = 2000; // Check every 2 seconds
+  private isThrottling = false;
+  private checkInterval: NodeJS.Timeout | null = null;
+  private throttleStartTime = 0;
+
+  start(): void {
+    this.checkInterval = setInterval(() => this.checkResources(), this.CHECK_INTERVAL_MS);
+    console.log("[ResourceGovernor] Started monitoring memory usage");
+  }
+
+  private checkResources(): void {
+    const memory = process.memoryUsage();
+    const heapUsedMb = memory.heapUsed / 1024 / 1024;
+    // Use heap limit from V8, not heapTotal (which is current allocation, not max)
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const v8 = require("v8");
+    const heapStats = v8.getHeapStatistics();
+    const heapLimitMb = heapStats.heap_size_limit / 1024 / 1024;
+    const utilizationPercent = (heapUsedMb / heapLimitMb) * 100;
+
+    if (!this.isThrottling && utilizationPercent > this.MEMORY_LIMIT_PERCENT) {
+      this.engageThrottle(heapUsedMb, utilizationPercent);
+    } else if (this.isThrottling) {
+      const throttleDuration = Date.now() - this.throttleStartTime;
+      const shouldForceResume = throttleDuration > this.FORCE_RESUME_MS;
+      const belowThreshold = utilizationPercent < this.RESUME_THRESHOLD_PERCENT;
+
+      if (shouldForceResume || belowThreshold) {
+        this.disengageThrottle(heapUsedMb, utilizationPercent, shouldForceResume);
+      }
+    }
+  }
+
+  private engageThrottle(currentUsageMb: number, percent: number): void {
+    console.warn(
+      `[ResourceGovernor] High memory usage (${Math.round(currentUsageMb)}MB, ${percent.toFixed(1)}%). Pausing all terminals.`
+    );
+    this.isThrottling = true;
+    this.throttleStartTime = Date.now();
+
+    // Pause all PTYs to stop new data from entering the heap
+    const terminals = ptyManager.getAll();
+    let pausedCount = 0;
+    for (const term of terminals) {
+      try {
+        term.ptyProcess.pause();
+        pausedCount++;
+      } catch {
+        // Ignore dead processes
+      }
+    }
+    console.log(`[ResourceGovernor] Paused ${pausedCount}/${terminals.length} terminals`);
+
+    // Request aggressive GC if exposed
+    if (global.gc) {
+      global.gc();
+    }
+
+    sendEvent({
+      type: "host-throttled",
+      isThrottled: true,
+      reason: `High memory usage: ${Math.round(currentUsageMb)}MB (${percent.toFixed(1)}%)`,
+      timestamp: Date.now(),
+    });
+  }
+
+  private disengageThrottle(currentUsageMb: number, percent: number, forced: boolean): void {
+    const duration = Date.now() - this.throttleStartTime;
+    console.log(
+      `[ResourceGovernor] ${forced ? "Force resuming" : "Memory stabilized"} ` +
+        `(${Math.round(currentUsageMb)}MB, ${percent.toFixed(1)}%). ` +
+        `Resuming terminals after ${duration}ms.`
+    );
+    this.isThrottling = false;
+
+    const terminals = ptyManager.getAll();
+    let resumedCount = 0;
+    for (const term of terminals) {
+      try {
+        term.ptyProcess.resume();
+        resumedCount++;
+      } catch {
+        // Ignore dead processes
+      }
+    }
+    console.log(`[ResourceGovernor] Resumed ${resumedCount}/${terminals.length} terminals`);
+
+    sendEvent({
+      type: "host-throttled",
+      isThrottled: false,
+      duration,
+      timestamp: Date.now(),
+    });
+  }
+
+  dispose(): void {
+    if (this.checkInterval) {
+      clearInterval(this.checkInterval);
+      this.checkInterval = null;
+    }
+    console.log("[ResourceGovernor] Disposed");
+  }
+}
+
 // Initialize services
 const ptyManager = new PtyManager();
 const processTreeCache = new ProcessTreeCache(1000);
 let ptyPool: PtyPool | null = null;
+const resourceGovernor = new ResourceGovernor();
 
 // Zero-copy ring buffers for terminal I/O (set via init-buffers message)
 // Visual buffer: consumed by renderer (xterm.js) - critical path
@@ -764,6 +874,9 @@ port.on("message", (rawMsg: any) => {
 function cleanup(): void {
   console.log("[PtyHost] Disposing resources...");
 
+  // Stop resource governor
+  resourceGovernor.dispose();
+
   // Clear all backpressure monitoring intervals
   for (const [id, checkInterval] of pausedTerminals) {
     clearInterval(checkInterval);
@@ -795,6 +908,9 @@ process.on("exit", () => {
 // Initialize pool asynchronously
 async function initialize(): Promise<void> {
   try {
+    // Start the resource governor for proactive memory monitoring
+    resourceGovernor.start();
+
     // Start the process tree cache (shared across all terminals)
     processTreeCache.start();
     ptyManager.setProcessTreeCache(processTreeCache);
