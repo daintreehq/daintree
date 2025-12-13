@@ -12,6 +12,7 @@ import { TALL_CANVAS_ROWS, getSafeTallCanvasRows, measureCellHeight } from "./Te
 import { TerminalAddonManager } from "./TerminalAddonManager";
 import { TerminalDataBuffer } from "./TerminalDataBuffer";
 import { createThrottledWriter } from "./ThrottledWriter";
+import { setupParserHandlers } from "./TerminalParserHandler";
 
 const START_DEBOUNCING_THRESHOLD = 200;
 const HORIZONTAL_DEBOUNCE_MS = 100;
@@ -54,15 +55,21 @@ class TerminalInstanceService {
     const managed = this.instances.get(id);
     if (!managed) return;
 
+    // Capture SAB mode decision before write to avoid mode-flip ambiguity during callback
+    const shouldAck = !this.dataBuffer.isEnabled();
+
     // Write data and apply flow control acknowledgement after xterm processes the buffer update
     const terminal = managed.terminal;
     terminal.write(data, () => {
       // Guard against stale callback after destroy/restart
       if (this.instances.get(id) !== managed) return;
 
-      // Flow control acknowledgement
-      const len = typeof data === "string" ? data.length : data.byteLength;
-      terminalClient.acknowledgeData(id, len);
+      // Flow control: Only send acknowledgements in IPC fallback mode.
+      // In SAB mode, flow control is handled globally via SAB backpressure.
+      if (shouldAck) {
+        const len = typeof data === "string" ? data.length : data.byteLength;
+        terminalClient.acknowledgeData(id, len);
+      }
 
       // Notify output subscribers (for tall canvas scroll sync)
       if (managed.outputSubscribers.size > 0) {
@@ -167,7 +174,22 @@ class TerminalInstanceService {
     hostElement.style.display = "flex";
     hostElement.style.flexDirection = "column";
 
-    const throttledWriter = createThrottledWriter(id, terminal, getRefreshTier);
+    const throttledWriter = createThrottledWriter(id, terminal, getRefreshTier, () =>
+      this.dataBuffer.isEnabled()
+    );
+
+    // Create managed terminal placeholder for parser handler setup
+    const managedPlaceholder: Partial<ManagedTerminal> = {
+      terminal,
+      type,
+      kind: isTallCanvas ? "agent" : undefined,
+      agentId,
+    };
+
+    // Setup parser handlers BEFORE data subscriptions to prevent race conditions
+    if (isTallCanvas) {
+      setupParserHandlers(managedPlaceholder as ManagedTerminal);
+    }
 
     const listeners: Array<() => void> = [];
     const exitSubscribers = new Set<(exitCode: number) => void>();

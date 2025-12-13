@@ -3,6 +3,8 @@ import { terminalClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
 import { RefreshTierProvider, ThrottledWriter } from "./types";
 
+export type SabModeChecker = () => boolean;
+
 /**
  * Creates a simple writer that passes data directly to xterm.
  *
@@ -13,7 +15,8 @@ import { RefreshTierProvider, ThrottledWriter } from "./types";
 export function createThrottledWriter(
   id: string,
   terminal: Terminal,
-  _initialProvider: RefreshTierProvider = () => TerminalRefreshTier.FOCUSED
+  _initialProvider: RefreshTierProvider = () => TerminalRefreshTier.FOCUSED,
+  isSabModeEnabled: SabModeChecker = () => false
 ): ThrottledWriter {
   let pendingWrites = 0;
   return {
@@ -23,11 +26,16 @@ export function createThrottledWriter(
     write: (data: string | Uint8Array) => {
       // Direct write to xterm - all batching happens in the backend OutputThrottler
       pendingWrites++;
+      // Capture SAB mode decision before write to avoid mode-flip ambiguity during callback
+      const shouldAck = !isSabModeEnabled();
       terminal.write(data, () => {
         pendingWrites--;
-        // Flow Control: Acknowledge processed data to backend
-        // This allows the backend to resume the PTY if it was paused
-        terminalClient.acknowledgeData(id, data.length);
+        // Flow Control: Only send acknowledgements in IPC fallback mode.
+        // In SAB mode, flow control is handled globally via SAB backpressure,
+        // and the backend ignores per-terminal acks anyway.
+        if (shouldAck) {
+          terminalClient.acknowledgeData(id, data.length);
+        }
       });
     },
     dispose: () => {

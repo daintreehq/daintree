@@ -17,7 +17,6 @@ import {
   type Modifier,
 } from "@dnd-kit/core";
 import { useTerminalStore, type TerminalInstance, MAX_GRID_TERMINALS } from "@/store";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalDragPreview } from "./TerminalDragPreview";
 
 // Placeholder ID used when dragging from dock to grid
@@ -300,10 +299,7 @@ export function DndProvider({ children }: DndProviderProps) {
       );
       const isGridFull = gridTerminals.length >= MAX_GRID_TERMINALS;
       if (sourceLocation === "dock" && targetContainer === "grid" && isGridFull) {
-        // Grid is full, cancel the drop
-        setTimeout(() => {
-          terminalInstanceService.refreshAll();
-        }, 100);
+        // Grid is full, cancel the drop - TerminalGrid's batched fitter handles any needed resizing
         return;
       }
 
@@ -327,13 +323,7 @@ export function DndProvider({ children }: DndProviderProps) {
           setFocused(null);
         }
       }
-
-      // Refresh terminals after drag to ensure correct rendering
-      // Use setTimeout with longer delay to ensure CSS Grid layout has fully settled
-      // before measuring container dimensions for fit()
-      setTimeout(() => {
-        terminalInstanceService.refreshAll();
-      }, 100);
+      // TerminalGrid's batched fitter handles resizing automatically when gridTerminals changes
     },
     [activeData, overContainer, terminals, reorderTerminals, moveTerminalToPosition, setFocused]
   );
@@ -343,12 +333,7 @@ export function DndProvider({ children }: DndProviderProps) {
     setActiveData(null);
     setOverContainer(null);
     setPlaceholderIndex(null);
-
-    // Refresh terminals after drag cancel to ensure correct rendering
-    // Use setTimeout with longer delay to ensure CSS Grid layout has fully settled
-    setTimeout(() => {
-      terminalInstanceService.refreshAll();
-    }, 100);
+    // No explicit refresh needed - terminals return to original state (no layout change)
   }, []);
 
   // Use rectIntersection for grid (better for 2D layouts), closestCenter for dock (1D horizontal)
