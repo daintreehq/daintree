@@ -267,14 +267,15 @@ export function registerAppHandlers(deps: HandlerDependencies): () => void {
     _event: Electron.IpcMainInvokeEvent,
     scrollbackLines: number
   ) => {
-    // Validate: -1 (unlimited) or 100-100000, must be finite integer
     if (!Number.isFinite(scrollbackLines) || !Number.isInteger(scrollbackLines)) {
-      console.warn("Invalid scrollback value (not a finite integer):", scrollbackLines);
-      return;
+      const error = `Invalid scrollback value (not a finite integer): ${scrollbackLines}`;
+      console.warn(error);
+      throw new Error(error);
     }
-    if (scrollbackLines !== -1 && (scrollbackLines < 100 || scrollbackLines > 100000)) {
-      console.warn("Invalid scrollback value (out of range):", scrollbackLines);
-      return;
+    if (scrollbackLines < 100 || scrollbackLines > 10000) {
+      const error = `Invalid scrollback value (out of range 100-10000): ${scrollbackLines}`;
+      console.warn(error);
+      throw new Error(error);
     }
     const currentConfig = store.get("terminalConfig");
     store.set("terminalConfig", { ...currentConfig, scrollbackLines });

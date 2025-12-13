@@ -1,12 +1,6 @@
 // Commands that trigger visual terminal clear (AI agents + standard shell)
 export const CLEAR_COMMANDS = new Set(["/clear", "/new", "/reset", "clear", "cls"]);
 
-// VT100 escape sequences for terminal clearing (optimized order for compatibility)
-export const VT100_CLEAR_SCROLLBACK = "\x1b[3J"; // Clear scrollback buffer first
-export const VT100_CURSOR_HOME = "\x1b[H"; // Move cursor to (1,1)
-export const VT100_CLEAR_SCREEN = "\x1b[2J"; // Clear entire screen
-export const VT100_FULL_CLEAR = `${VT100_CLEAR_SCROLLBACK}${VT100_CURSOR_HOME}${VT100_CLEAR_SCREEN}`;
-
 export interface InputResult {
   isClear: boolean;
   command: string | null;

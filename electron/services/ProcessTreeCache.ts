@@ -47,13 +47,25 @@ export class ProcessTreeCache {
   }
 
   onRefresh(callback: RefreshCallback): () => void {
+    const wasEmpty = this.refreshCallbacks.size === 0;
     this.refreshCallbacks.add(callback);
+
+    // Trigger immediate refresh when first subscriber is added
+    if (wasEmpty && this.refreshCallbacks.size === 1) {
+      this.refresh();
+    }
+
     return () => {
       this.refreshCallbacks.delete(callback);
     };
   }
 
   async refresh(): Promise<void> {
+    // Skip refresh if nobody is listening - saves CPU especially on Windows
+    if (this.refreshCallbacks.size === 0) {
+      return;
+    }
+
     if (this.isRefreshing) {
       return;
     }

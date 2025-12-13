@@ -64,7 +64,7 @@ function generateErrorId(): string {
   return `error-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-export function createAppError(
+function createAppError(
   error: unknown,
   options: {
     source?: string;
@@ -90,7 +90,7 @@ export function createAppError(
   };
 }
 
-export class ErrorService {
+class ErrorService {
   private mainWindow: BrowserWindow | null = null;
   private devServerManager: DevServerManager | null = null;
   private worktreeService: WorkspaceClient | null = null;
@@ -169,7 +169,7 @@ export class ErrorService {
   }
 }
 
-export const errorService = new ErrorService();
+const errorService = new ErrorService();
 
 export function registerErrorHandlers(
   mainWindow: BrowserWindow,

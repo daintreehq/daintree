@@ -124,7 +124,7 @@
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.985 0 0);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
@@ -143,75 +143,77 @@
   --sidebar-ring: oklch(0.708 0 0);
 }
 
-/* Dark Mode Surface Layering System
+/* Dark Mode - Unified Token System
  *
- * Z-axis hierarchy (darkest to lightest):
- * 1. App Background (0.12) - Deepest layer, main container
- * 2. Sidebar (0.14) - Between background and cards
- * 3. Cards (0.16) - Elevated from background
- * 4. Popovers/Modals (0.18) - Highest elevation
+ * CANONICAL SOURCE: Canopy tokens (defined in @theme inline above)
+ * This .dark class projects Canopy values into Shadcn semantic tokens.
  *
- * This creates visual depth through progressively lighter surfaces,
- * improving component separation and hierarchy without relying on borders.
+ * Surface Layering (darkest to lightest):
+ * 1. App Background (canopy-bg) - Deepest layer
+ * 2. Sidebar (canopy-sidebar) - Between background and cards
+ * 3. Cards (surface) - Elevated from background
+ * 4. Popovers/Modals (surface-highlight) - Highest elevation
+ *
+ * Primary Action: Emerald (canopy-accent) - The Brand Color
  */
 .dark {
-  /* Base background - deepest layer */
-  --background: oklch(0.12 0 0);
-  --foreground: oklch(0.985 0 0);
+  /* Background surfaces - sourced from Canopy */
+  --background: var(--color-canopy-bg);
+  --foreground: var(--color-canopy-text);
 
   /* Card surface - elevated from background */
-  --card: oklch(0.16 0 0);
-  --card-foreground: oklch(0.985 0 0);
+  --card: var(--color-surface);
+  --card-foreground: var(--color-canopy-text);
 
   /* Popover/Modal - highest elevation */
-  --popover: oklch(0.18 0 0);
-  --popover-foreground: oklch(0.985 0 0);
+  --popover: var(--color-surface-highlight);
+  --popover-foreground: var(--color-canopy-text);
 
-  /* Primary actions */
-  --primary: oklch(0.985 0 0);
-  --primary-foreground: oklch(0.205 0 0);
+  /* Primary actions - aligned with brand accent (emerald) */
+  --primary: var(--color-canopy-accent);
+  --primary-foreground: var(--color-canopy-bg);
 
   /* Secondary surfaces */
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
+  --secondary: var(--color-surface-highlight);
+  --secondary-foreground: var(--color-canopy-text);
 
-  /* Muted surfaces - lighter for secondary content */
-  --muted: oklch(0.22 0 0);
-  --muted-foreground: oklch(0.708 0 0);
+  /* Muted surfaces - for secondary content */
+  --muted: var(--color-surface);
+  --muted-foreground: color-mix(in oklab, var(--color-canopy-text) 65%, var(--color-canopy-bg));
 
-  /* Accent surfaces - lighter still for highlights */
-  --accent: oklch(0.24 0 0);
-  --accent-foreground: oklch(0.985 0 0);
+  /* Accent surfaces - for highlights/hovers */
+  --accent: var(--color-surface-highlight);
+  --accent-foreground: var(--color-canopy-text);
 
-  /* Destructive actions */
-  --destructive: oklch(0.396 0.141 25.723);
-  --destructive-foreground: oklch(0.985 0 0);
+  /* Destructive actions - sourced from Canopy status */
+  --destructive: var(--color-status-error);
+  --destructive-foreground: var(--color-canopy-bg);
 
-  /* Borders - subtle but visible */
-  --border: oklch(0.28 0 0);
+  /* Borders - sourced from Canopy */
+  --border: var(--color-canopy-border);
 
   /* Input fields */
-  --input: oklch(0.269 0 0);
+  --input: var(--color-canopy-border);
 
-  /* Focus rings */
-  --ring: oklch(0.439 0 0);
+  /* Focus rings - using brand accent */
+  --ring: var(--color-canopy-accent);
 
-  /* Chart colors - unchanged */
+  /* Chart colors - unchanged (no Canopy equivalent) */
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
   --chart-4: oklch(0.627 0.265 303.9);
   --chart-5: oklch(0.645 0.246 16.439);
 
-  /* Sidebar - distinct from main background */
-  --sidebar: oklch(0.14 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.696 0.17 162.48); /* Emerald-500 - matches brand accent */
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(0.269 0 0);
-  --sidebar-ring: oklch(0.439 0 0);
+  /* Sidebar - sourced from Canopy */
+  --sidebar: var(--color-canopy-sidebar);
+  --sidebar-foreground: var(--color-canopy-text);
+  --sidebar-primary: var(--color-canopy-accent);
+  --sidebar-primary-foreground: var(--color-canopy-bg);
+  --sidebar-accent: var(--color-canopy-border);
+  --sidebar-accent-foreground: var(--color-canopy-text);
+  --sidebar-border: var(--color-canopy-border);
+  --sidebar-ring: var(--color-canopy-accent);
 }
 
 @layer base {

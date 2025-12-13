@@ -13,7 +13,7 @@ export interface StoreSchema {
     isMaximized: boolean;
   };
   terminalConfig: {
-    scrollbackLines: number; // 100-1000 (optimized for memory efficiency)
+    scrollbackLines: number; // 100-10000 (user-configurable)
     performanceMode: boolean;
   };
   hibernation: {
