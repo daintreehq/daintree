@@ -110,10 +110,45 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
     }));
   }, [gridTerminals, gridCols]);
 
-  // Clear cache when grid layout changes
+  const rowMajor = useMemo(() => {
+    return [...gridLayout].sort((a, b) => {
+      if (a.row !== b.row) return a.row - b.row;
+      return a.col - b.col;
+    });
+  }, [gridLayout]);
+
+  const positionById = useMemo(() => {
+    const map = new Map<string, GridPosition>();
+    for (const pos of gridLayout) map.set(pos.terminalId, pos);
+    return map;
+  }, [gridLayout]);
+
+  const indexById = useMemo(() => {
+    const map = new Map<string, number>();
+    rowMajor.forEach((pos, index) => {
+      map.set(pos.terminalId, index);
+    });
+    return map;
+  }, [rowMajor]);
+
+  const columnBuckets = useMemo(() => {
+    const buckets = new Map<number, GridPosition[]>();
+    for (const pos of gridLayout) {
+      const col = pos.col;
+      if (!buckets.has(col)) {
+        buckets.set(col, []);
+      }
+      buckets.get(col)!.push(pos);
+    }
+    for (const bucket of buckets.values()) {
+      bucket.sort((a, b) => a.row - b.row);
+    }
+    return buckets;
+  }, [gridLayout]);
+
   useEffect(() => {
     directionCache.current.clear();
-  }, [gridLayout]);
+  }, [gridLayout, rowMajor, columnBuckets]);
 
   const findNearest = useCallback(
     (currentId: string, direction: NavigationDirection): string | null => {
@@ -122,97 +157,60 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
         return directionCache.current.get(cacheKey) ?? null;
       }
 
-      const current = gridLayout.find((p) => p.terminalId === currentId);
+      if (rowMajor.length === 0) return null;
+
+      const current = positionById.get(currentId);
       if (!current) return null;
 
-      let candidates: GridPosition[];
+      let result: string | null = null;
 
       switch (direction) {
-        case "up":
-          // Same column, lower row index
-          candidates = gridLayout.filter((p) => p.col === current.col && p.row < current.row);
-          // Get closest (max row index)
-          candidates.sort((a, b) => b.row - a.row);
-          // Fallback: if no exact column match, find nearest by column distance
-          if (candidates.length === 0) {
-            candidates = gridLayout.filter((p) => p.row < current.row);
-            candidates.sort(
-              (a, b) =>
-                b.row - a.row || Math.abs(a.col - current.col) - Math.abs(b.col - current.col)
-            );
-          }
-          break;
-
-        case "down":
-          // Same column, higher row index
-          candidates = gridLayout.filter((p) => p.col === current.col && p.row > current.row);
-          // Get closest (min row index)
-          candidates.sort((a, b) => a.row - b.row);
-          // Fallback: if no exact column match, find nearest by column distance
-          if (candidates.length === 0) {
-            candidates = gridLayout.filter((p) => p.row > current.row);
-            candidates.sort(
-              (a, b) =>
-                a.row - b.row || Math.abs(a.col - current.col) - Math.abs(b.col - current.col)
-            );
-          }
-          break;
-
         case "left":
-          // Same row, lower col index
-          candidates = gridLayout.filter((p) => p.row === current.row && p.col < current.col);
-          // Get closest (max col index)
-          candidates.sort((a, b) => b.col - a.col);
-          break;
+        case "right": {
+          const currentIndex = indexById.get(currentId);
+          if (currentIndex === undefined) break;
 
-        case "right":
-          // Same row, higher col index
-          candidates = gridLayout.filter((p) => p.row === current.row && p.col > current.col);
-          // Get closest (min col index)
-          candidates.sort((a, b) => a.col - b.col);
-          break;
-      }
-
-      let result = candidates[0]?.terminalId ?? null;
-
-      // If we hit an edge, fall back to linear reading order (row-major)
-      if (!result) {
-        const sortedPositions = [...gridLayout].sort((a, b) => {
-          if (a.row !== b.row) return a.row - b.row;
-          return a.col - b.col;
-        });
-
-        const currentIndex = sortedPositions.findIndex((p) => p.terminalId === currentId);
-        if (currentIndex !== -1) {
-          if (direction === "right" || direction === "down") {
-            const nextIndex = (currentIndex + 1) % sortedPositions.length;
-            result = sortedPositions[nextIndex].terminalId;
+          if (direction === "right") {
+            const nextIndex = (currentIndex + 1) % rowMajor.length;
+            result = rowMajor[nextIndex].terminalId;
           } else {
-            const prevIndex = (currentIndex - 1 + sortedPositions.length) % sortedPositions.length;
-            result = sortedPositions[prevIndex].terminalId;
+            const prevIndex = (currentIndex - 1 + rowMajor.length) % rowMajor.length;
+            result = rowMajor[prevIndex].terminalId;
           }
+          break;
+        }
+
+        case "up":
+        case "down": {
+          const colBucket = columnBuckets.get(current.col);
+          if (!colBucket || colBucket.length === 0) break;
+
+          const currentColIndex = colBucket.findIndex((p) => p.terminalId === currentId);
+          if (currentColIndex === -1) break;
+
+          if (direction === "down") {
+            const nextIndex = (currentColIndex + 1) % colBucket.length;
+            result = colBucket[nextIndex].terminalId;
+          } else {
+            const prevIndex = (currentColIndex - 1 + colBucket.length) % colBucket.length;
+            result = colBucket[prevIndex].terminalId;
+          }
+          break;
         }
       }
 
       directionCache.current.set(cacheKey, result);
       return result;
     },
-    [gridLayout]
+    [rowMajor, indexById, columnBuckets, positionById]
   );
 
   const findByIndex = useCallback(
     (index: number): string | null => {
-      // Use visual order (sorted by row, then col)
-      const sortedPositions = [...gridLayout].sort((a, b) => {
-        if (a.row !== b.row) return a.row - b.row;
-        return a.col - b.col;
-      });
-
-      // Index is 1-based for user convenience (Cmd+1 = first terminal)
-      const position = sortedPositions[index - 1];
+      const position = rowMajor[index - 1];
       return position?.terminalId ?? null;
     },
-    [gridLayout]
+    [rowMajor]
   );
 
   const findDockByIndex = useCallback(
