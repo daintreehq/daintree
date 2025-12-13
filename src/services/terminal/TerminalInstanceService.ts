@@ -54,15 +54,21 @@ class TerminalInstanceService {
     const managed = this.instances.get(id);
     if (!managed) return;
 
+    // Capture SAB mode decision before write to avoid mode-flip ambiguity during callback
+    const shouldAck = !this.dataBuffer.isEnabled();
+
     // Write data and apply flow control acknowledgement after xterm processes the buffer update
     const terminal = managed.terminal;
     terminal.write(data, () => {
       // Guard against stale callback after destroy/restart
       if (this.instances.get(id) !== managed) return;
 
-      // Flow control acknowledgement
-      const len = typeof data === "string" ? data.length : data.byteLength;
-      terminalClient.acknowledgeData(id, len);
+      // Flow control: Only send acknowledgements in IPC fallback mode.
+      // In SAB mode, flow control is handled globally via SAB backpressure.
+      if (shouldAck) {
+        const len = typeof data === "string" ? data.length : data.byteLength;
+        terminalClient.acknowledgeData(id, len);
+      }
 
       // Notify output subscribers (for tall canvas scroll sync)
       if (managed.outputSubscribers.size > 0) {
@@ -167,7 +173,9 @@ class TerminalInstanceService {
     hostElement.style.display = "flex";
     hostElement.style.flexDirection = "column";
 
-    const throttledWriter = createThrottledWriter(id, terminal, getRefreshTier);
+    const throttledWriter = createThrottledWriter(id, terminal, getRefreshTier, () =>
+      this.dataBuffer.isEnabled()
+    );
 
     const listeners: Array<() => void> = [];
     const exitSubscribers = new Set<(exitCode: number) => void>();
