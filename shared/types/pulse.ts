@@ -7,6 +7,7 @@ export interface HeatCell {
   level: HeatLevel;
   isToday?: boolean;
   isMostRecentActive?: boolean;
+  isBeforeProject?: boolean;
 }
 
 export interface CommitItem {
@@ -36,6 +37,7 @@ export interface ProjectPulse {
   heatmap: HeatCell[];
   commitsInRange: number;
   activeDays: number;
+  projectAgeDays: number;
   currentStreakDays?: number;
   recentCommits: CommitItem[];
   uncommitted?: {

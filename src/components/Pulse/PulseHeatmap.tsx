@@ -17,7 +17,12 @@ const HEAT_COLORS = [
   "bg-emerald-400/80",
 ] as const;
 
+const BEFORE_PROJECT_COLOR = "bg-white/[0.02]";
+const MISSED_DAY_COLOR = "bg-rose-900/20";
+
 const COLUMNS_PER_ROW = 60;
+const CELL_SIZE_PX = 10;
+const GAP_PX = 3;
 
 export function PulseHeatmap({ cells, rangeDays, compact = false }: PulseHeatmapProps) {
   const rows = useMemo(() => {
@@ -41,47 +46,66 @@ export function PulseHeatmap({ cells, rangeDays, compact = false }: PulseHeatmap
     return result;
   }, [cells]);
 
-  const cellSize = compact ? "w-2 h-2" : "w-2.5 h-2.5";
-  const gap = compact ? "gap-[2px]" : "gap-[3px]";
+  const cellSize = compact ? 6 : CELL_SIZE_PX;
+  const gap = compact ? 2 : GAP_PX;
+
+  // Calculate exact width: (cellSize * columns) + (gap * (columns - 1))
+  const rowWidth = cellSize * COLUMNS_PER_ROW + gap * (COLUMNS_PER_ROW - 1);
 
   return (
-    <TooltipProvider>
+    <TooltipProvider delayDuration={0} skipDelayDuration={0}>
       <div
-        className={cn("flex flex-col", gap)}
+        className="flex flex-col"
+        style={{ gap: `${gap}px`, width: `${rowWidth}px` }}
         role="img"
         aria-label={`Activity over the last ${rangeDays} days`}
       >
         {rows.map((row, rowIndex) => (
-          <div key={rowIndex} className={cn("flex", gap)}>
+          <div
+            key={rowIndex}
+            className="flex"
+            style={{ gap: `${gap}px` }}
+          >
             {row.map((cell) => {
-              const colorClass = HEAT_COLORS[cell.level];
+              // Determine the appropriate color class
+              let colorClass: string;
+              if (cell.isBeforeProject) {
+                colorClass = BEFORE_PROJECT_COLOR;
+              } else if (cell.count === 0) {
+                colorClass = MISSED_DAY_COLOR;
+              } else {
+                colorClass = HEAT_COLORS[cell.level];
+              }
+
               const date = new Date(cell.date);
               const formatted = date.toLocaleDateString("en-US", {
                 month: "short",
                 day: "numeric",
               });
 
+              const tooltipText = cell.isBeforeProject
+                ? "Before project started"
+                : `${cell.count} commit${cell.count !== 1 ? "s" : ""}`;
+
               return (
-                <Tooltip key={cell.date} delayDuration={150}>
+                <Tooltip key={cell.date} delayDuration={0}>
                   <TooltipTrigger asChild>
                     <button
                       type="button"
+                      style={{ width: `${cellSize}px`, height: `${cellSize}px` }}
                       className={cn(
-                        cellSize,
                         colorClass,
-                        "rounded-[var(--radius-xs)] transition-[transform,background-color] duration-150 border-0 p-0 cursor-default",
+                        "rounded-full shrink-0 transition-[transform,background-color] duration-150 border-0 p-0 cursor-default",
                         cell.isToday && "ring-1 ring-white/30",
                         cell.isMostRecentActive && !cell.isToday && "ring-1 ring-emerald-400/40"
                       )}
-                      aria-label={`${formatted}: ${cell.count} commit${cell.count !== 1 ? "s" : ""}`}
+                      aria-label={`${formatted}: ${tooltipText}`}
                       tabIndex={0}
                     />
                   </TooltipTrigger>
                   <TooltipContent side="top" className="text-xs">
                     <span className="font-medium">{formatted}</span>
-                    <span className="text-canopy-text/60 ml-1">
-                      {cell.count} commit{cell.count !== 1 ? "s" : ""}
-                    </span>
+                    <span className="text-canopy-text/60 ml-1">{tooltipText}</span>
                   </TooltipContent>
                 </Tooltip>
               );

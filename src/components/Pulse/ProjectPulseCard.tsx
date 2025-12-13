@@ -126,7 +126,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
 
   return (
     <div
-      className={cn("bg-white/[0.02] rounded-[var(--radius-lg)] border border-white/5", className)}
+      className={cn("w-fit bg-white/[0.02] rounded-[var(--radius-lg)] border border-white/5", className)}
     >
       <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between">
         <div className="flex items-center gap-2">

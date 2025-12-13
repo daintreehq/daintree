@@ -149,11 +149,13 @@ export class ProjectPulseService {
     }
 
     // Run operations in parallel for performance
-    const [heatmapResult, recentCommitsResult, deltaResult] = await Promise.allSettled([
-      this.computeHeatmap(git, rangeDays),
-      includeRecentCommits ? this.getRecentCommits(git, 8) : Promise.resolve([]),
-      includeDelta && branch ? this.getBranchDelta(git, mainBranch, branch) : Promise.resolve(null),
-    ]);
+    const [heatmapResult, recentCommitsResult, deltaResult, firstCommitResult] =
+      await Promise.allSettled([
+        this.computeHeatmap(git, rangeDays),
+        includeRecentCommits ? this.getRecentCommits(git, 8) : Promise.resolve([]),
+        includeDelta && branch ? this.getBranchDelta(git, mainBranch, branch) : Promise.resolve(null),
+        this.getFirstCommitDate(git),
+      ]);
 
     const heatmap =
       heatmapResult.status === "fulfilled"
@@ -162,6 +164,29 @@ export class ProjectPulseService {
     const recentCommits =
       recentCommitsResult.status === "fulfilled" ? recentCommitsResult.value : [];
     const deltaToMain = deltaResult.status === "fulfilled" ? deltaResult.value : undefined;
+    const firstCommitDate =
+      firstCommitResult.status === "fulfilled" ? firstCommitResult.value : null;
+
+    // Mark cells before project start and calculate project age
+    let projectAgeDays: number = rangeDays;
+    if (firstCommitDate) {
+      const firstCommitDay = formatLocalDay(firstCommitDate);
+      const todayMidnight = getLocalMidnight(new Date());
+
+      // Calculate days since first commit (inclusive of first commit day)
+      const daysSinceFirst = Math.floor(
+        (todayMidnight.getTime() - getLocalMidnight(firstCommitDate).getTime()) /
+          (1000 * 60 * 60 * 24)
+      ) + 1;
+      projectAgeDays = Math.min(daysSinceFirst, rangeDays);
+
+      // Mark cells before project started
+      for (const cell of heatmap) {
+        if (cell.date < firstCommitDay) {
+          cell.isBeforeProject = true;
+        }
+      }
+    }
 
     // Calculate summary stats
     const commitsInRange = heatmap.reduce((sum, cell) => sum + cell.count, 0);
@@ -178,6 +203,7 @@ export class ProjectPulseService {
       heatmap,
       commitsInRange,
       activeDays,
+      projectAgeDays,
       currentStreakDays,
       recentCommits,
       deltaToMain: deltaToMain ?? undefined,
@@ -417,6 +443,31 @@ export class ProjectPulseService {
       }
     }
     return streak;
+  }
+
+  private async getFirstCommitDate(git: SimpleGit): Promise<Date | null> {
+    try {
+      // Get the root commit(s) - commits with no parents
+      const rootSha = await git.raw(["rev-list", "--max-parents=0", "HEAD"]);
+      const firstRootSha = rootSha.trim().split("\n")[0];
+
+      if (!firstRootSha) {
+        return null;
+      }
+
+      // Get the timestamp of the first root commit
+      const output = await git.raw(["log", "-1", "--format=%ct", firstRootSha]);
+      const timestamp = parseInt(output.trim(), 10);
+
+      if (isNaN(timestamp)) {
+        return null;
+      }
+
+      return new Date(timestamp * 1000);
+    } catch (error) {
+      logError("Failed to get first commit date", { error: (error as Error).message });
+      return null;
+    }
   }
 }
 

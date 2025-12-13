@@ -55,7 +55,11 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
           value={pulse.commitsInRange}
           label="commits"
         />
-        <Stat icon={<Calendar className="w-3 h-3" />} value={pulse.activeDays} label="days" />
+        <Stat
+          icon={<Calendar className="w-3 h-3" />}
+          value={`${pulse.activeDays}/${pulse.projectAgeDays}`}
+          label="days"
+        />
         {hasStreak && (
           <Stat
             icon={<Flame className="w-3 h-3 text-orange-400" />}
@@ -86,7 +90,7 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
         />
         <Stat
           icon={<Calendar className="w-3.5 h-3.5" />}
-          value={`${pulse.activeDays}/${pulse.rangeDays}`}
+          value={`${pulse.activeDays}/${pulse.projectAgeDays}`}
           label="active days"
         />
         {hasStreak && (

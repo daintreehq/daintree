@@ -198,7 +198,7 @@ function EmptyState({
         </div>
 
         {hasActiveWorktree && activeWorktreeId && (
-          <div className="w-full max-w-3xl mb-8">
+          <div className="flex justify-center mb-8">
             <ProjectPulseCard worktreeId={activeWorktreeId} />
           </div>
         )}
