@@ -1,3 +1,4 @@
+import PQueue from "p-queue";
 import type { StateCreator } from "zustand";
 import type { TerminalInstance } from "./terminalRegistrySlice";
 import { MAX_GRID_TERMINALS } from "./terminalRegistrySlice";
@@ -38,13 +39,16 @@ export const createTerminalBulkActionsSlice = (
   setFocusedId: (id: string | null) => void
 ): StateCreator<TerminalBulkActionsSlice, [], [], TerminalBulkActionsSlice> => {
   const restartTerminals = async (terminalsToRestart: TerminalInstance[]) => {
-    for (const terminal of terminalsToRestart) {
-      try {
-        await restartTerminal(terminal.id);
-      } catch (error) {
-        console.error(`Failed to restart terminal ${terminal.id}:`, error);
-      }
-    }
+    const queue = new PQueue({ concurrency: 4 });
+    await queue.addAll(
+      terminalsToRestart.map((terminal) => async () => {
+        try {
+          await restartTerminal(terminal.id);
+        } catch (error) {
+          console.error(`Failed to restart terminal ${terminal.id}:`, error);
+        }
+      })
+    );
   };
 
   return () => ({
