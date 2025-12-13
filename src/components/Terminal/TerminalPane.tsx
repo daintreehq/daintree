@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { AlertTriangle, Loader2 } from "lucide-react";
 import type { TerminalType, TerminalRestartError } from "@/types";
 import { cn } from "@/lib/utils";
 import { getTerminalAnimationDuration } from "@/lib/animationUtils";
@@ -112,6 +113,10 @@ function TerminalPaneComponent({
   const trashTerminal = useTerminalStore((state) => state.trashTerminal);
   const setFocused = useTerminalStore((state) => state.setFocused);
   const updateLastCommand = useTerminalStore((state) => state.updateLastCommand);
+  const backendStatus = useTerminalStore((state) => state.backendStatus);
+
+  const isBackendDisconnected = backendStatus === "disconnected";
+  const isBackendRecovering = backendStatus === "recovering";
 
   const queueCount = useTerminalStore(
     useShallow((state) => state.commandQueue.filter((c) => c.terminalId === id).length)
@@ -411,7 +416,12 @@ function TerminalPaneComponent({
           />
         )}
 
-      <div className="flex-1 relative min-h-0 bg-canopy-bg">
+      <div
+        className={cn(
+          "flex-1 relative min-h-0 bg-canopy-bg",
+          (isBackendDisconnected || isBackendRecovering) && "pointer-events-none opacity-50"
+        )}
+      >
         <XtermAdapter
           key={`${id}-${restartKey}`}
           terminalId={id}
@@ -432,6 +442,35 @@ function TerminalPaneComponent({
               requestAnimationFrame(() => terminalInstanceService.focus(id));
             }}
           />
+        )}
+
+        {/* Backend Disconnect Overlay */}
+        {(isBackendDisconnected || isBackendRecovering) && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm pointer-events-auto">
+            {isBackendRecovering ? (
+              <div className="flex flex-col items-center gap-3">
+                <Loader2 className="w-8 h-8 animate-spin text-amber-400" />
+                <span className="text-white font-medium">Reconnecting...</span>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-4 p-6 bg-canopy-sidebar border border-canopy-border rounded-xl shadow-2xl max-w-md">
+                <div className="flex items-center gap-3 text-red-400">
+                  <AlertTriangle className="w-6 h-6" />
+                  <h3 className="font-semibold text-lg">Connection Lost</h3>
+                </div>
+                <p className="text-sm text-canopy-text/80 text-center">
+                  The terminal backend process terminated unexpectedly. Automatic recovery is in
+                  progress.
+                </p>
+                <button
+                  onClick={() => window.location.reload()}
+                  className="px-4 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-lg border border-red-500/30 transition-colors"
+                >
+                  Restart Application
+                </button>
+              </div>
+            )}
+          </div>
         )}
       </div>
 

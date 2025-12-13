@@ -107,6 +107,15 @@ export interface ElectronAPI {
     onRestored(callback: (data: { id: string }) => void): () => void;
     forceResume(id: string): Promise<{ success: boolean; error?: string }>;
     onStatus(callback: (data: TerminalStatusPayload) => void): () => void;
+    onBackendCrashed(
+      callback: (data: {
+        crashType: string;
+        code: number | null;
+        signal: string | null;
+        timestamp: number;
+      }) => void
+    ): () => void;
+    onBackendReady(callback: () => void): () => void;
   };
   artifact: {
     onDetected(callback: (data: ArtifactDetectedPayload) => void): () => void;

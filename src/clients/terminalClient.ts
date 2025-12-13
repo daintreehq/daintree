@@ -13,6 +13,10 @@ let messagePort: MessagePort | null = null;
 if (typeof window !== "undefined") {
   window.addEventListener("message", (event) => {
     if (event.data?.type === "terminal-port" && event.ports?.[0]) {
+      // Close old port to prevent memory leak on backend restart
+      if (messagePort) {
+        messagePort.close();
+      }
       messagePort = event.ports[0];
       messagePort.start();
       console.log("[TerminalClient] MessagePort acquired via postMessage");
@@ -32,7 +36,13 @@ export const terminalClient = {
 
   write: (id: string, data: string): void => {
     if (messagePort) {
-      messagePort.postMessage({ type: "write", id, data });
+      try {
+        messagePort.postMessage({ type: "write", id, data });
+      } catch (error) {
+        console.warn("[TerminalClient] MessagePort write failed, clearing port:", error);
+        messagePort = null;
+        window.electron.terminal.write(id, data);
+      }
     } else {
       window.electron.terminal.write(id, data);
     }
@@ -40,7 +50,13 @@ export const terminalClient = {
 
   resize: (id: string, cols: number, rows: number): void => {
     if (messagePort) {
-      messagePort.postMessage({ type: "resize", id, cols, rows });
+      try {
+        messagePort.postMessage({ type: "resize", id, cols, rows });
+      } catch (error) {
+        console.warn("[TerminalClient] MessagePort resize failed, clearing port:", error);
+        messagePort = null;
+        window.electron.terminal.resize(id, cols, rows);
+      }
     } else {
       window.electron.terminal.resize(id, cols, rows);
     }
@@ -147,5 +163,26 @@ export const terminalClient = {
    */
   onStatus: (callback: (data: TerminalStatusPayload) => void): (() => void) => {
     return window.electron.terminal.onStatus(callback);
+  },
+
+  /**
+   * Listen for backend crash events.
+   */
+  onBackendCrashed: (
+    callback: (data: {
+      crashType: string;
+      code: number | null;
+      signal: string | null;
+      timestamp: number;
+    }) => void
+  ): (() => void) => {
+    return window.electron.terminal.onBackendCrashed(callback);
+  },
+
+  /**
+   * Listen for backend ready events (after crash recovery).
+   */
+  onBackendReady: (callback: () => void): (() => void) => {
+    return window.electron.terminal.onBackendReady(callback);
   },
 } as const;
