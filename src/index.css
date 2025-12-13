@@ -391,12 +391,53 @@ body,
   animation: status-pulse 2s ease-in-out infinite;
 }
 
+/* Badge bump animation - for count/state changes */
+@keyframes badge-bump {
+  0% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.06);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.animate-badge-bump {
+  animation: badge-bump var(--terminal-select-duration, 200ms) cubic-bezier(0.4, 0, 0.2, 1) both;
+  will-change: transform;
+}
+
+/* Activity blip animation - for new activity signals */
+@keyframes activity-blip {
+  0% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  35% {
+    transform: scale(1.25);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+}
+
+.animate-activity-blip {
+  animation: activity-blip 260ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  will-change: transform, opacity;
+}
+
 /* Respect user's motion preferences */
 @media (prefers-reduced-motion: reduce) {
   .animate-activity-pulse,
   .animate-agent-pulse,
   .animate-pulse-delayed,
-  .status-working {
+  .status-working,
+  .animate-badge-bump,
+  .animate-activity-blip {
     animation: none;
     opacity: 1;
     transform: none;

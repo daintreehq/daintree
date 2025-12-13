@@ -100,6 +100,76 @@ Color-shifting animation for "working" agent state.
 
 **Keyframes:** Alternates between Emerald-500 (`#10b981`) and Emerald-400 (`#34d399`).
 
+### State-Change Feedback
+
+#### `animate-badge-bump`
+
+Subtle scale bump for confirming discrete state changes (count updates, badge changes).
+
+```css
+.animate-badge-bump {
+  animation: badge-bump var(--terminal-select-duration, 200ms) cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+```
+
+**Use case:** Queue count pills, notification badges, state indicators when value changes.
+
+**Keyframes:** Scale 1 → 1.06 at 35% → 1. Early peak timing provides immediate visual confirmation.
+
+**Timing:** Uses `--terminal-select-duration` (200ms) to match selection feedback pacing.
+
+**When to use:**
+- ✅ Discrete count changes (queue count, notification count)
+- ✅ State badge appearance/change
+- ✅ Low-frequency updates (< 1 per second)
+- ❌ Continuous values or high-frequency updates
+
+**How to trigger (key prop pattern):**
+```tsx
+<span key={queueCount} className="animate-badge-bump">
+  {queueCount} queued
+</span>
+```
+
+**Caution:** This animation uses `transform: scale()`. Don't apply to elements with existing transform styles (rotation, translation), as it will override them during animation. Apply to a wrapper element instead. The `key` prop pattern remounts the element, which can cause focus loss on interactive elements—use only on non-interactive badges.
+
+#### `animate-activity-blip`
+
+Attention-grabbing blip for new activity signals. Slightly larger scale than badge-bump.
+
+```css
+.animate-activity-blip {
+  animation: activity-blip 260ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+```
+
+**Use case:** Activity light when `lastActivityTimestamp` changes, one-shot feedback for user actions.
+
+**Keyframes:** Scale 1 → 1.25 and opacity 0.9 → 1 at 35% → back to origin.
+
+**Timing:** 260ms, slightly longer than badge-bump for more noticeable "new signal" acknowledgment. This is an intentional hardcoded duration (exception to the timing token guideline) to create distinct pacing from badge-bump.
+
+**When to use:**
+- ✅ New activity signal (lastActivityTimestamp changes)
+- ✅ "Attention required" state transitions
+- ✅ One-shot feedback for user actions
+- ❌ Continuous activity (use existing pulse animations instead)
+
+**How to trigger (state-based pattern):**
+```tsx
+useEffect(() => {
+  if (lastActivityTimestamp) {
+    setTriggerBlip(true);
+    const timer = setTimeout(() => setTriggerBlip(false), 260);
+    return () => clearTimeout(timer);
+  }
+}, [lastActivityTimestamp]);
+
+<div className={triggerBlip ? "animate-activity-blip" : ""} />
+```
+
+**Caution:** This animation uses `transform: scale()` and `opacity`. Don't apply to elements with existing transform styles. The animation sets `opacity: 0.9` at rest (0% and 100% keyframes), so if the class is left on, the element will remain slightly dim—ensure the class is removed after animation completes. The boolean toggle pattern can miss rapid back-to-back updates; for retriggerable behavior, use a counter/token key instead of a boolean.
+
 ### Terminal Lifecycle
 
 #### `terminal-restoring`
@@ -212,14 +282,16 @@ The `.terminal-selected` class applies the selected appearance. There's also a b
 
 ### When to Use Animation
 
-| Scenario          | Animation                         | Why                        |
-| ----------------- | --------------------------------- | -------------------------- |
-| Terminal selected | `.terminal-selected` (transition) | Confirms user action       |
-| "Locate" command  | `animate-terminal-ping`           | Draws attention to target  |
-| Terminal restored | `terminal-restoring`              | Shows element entering     |
-| Terminal trashed  | `terminal-trashing`               | Shows element leaving      |
-| Agent working     | `status-working`                  | Ambient activity indicator |
-| Recent activity   | `animate-activity-pulse`          | Transient attention signal |
+| Scenario          | Animation                         | Why                           |
+| ----------------- | --------------------------------- | ----------------------------- |
+| Terminal selected | `.terminal-selected` (transition) | Confirms user action          |
+| "Locate" command  | `animate-terminal-ping`           | Draws attention to target     |
+| Terminal restored | `terminal-restoring`              | Shows element entering        |
+| Terminal trashed  | `terminal-trashing`               | Shows element leaving         |
+| Agent working     | `status-working`                  | Ambient activity indicator    |
+| Recent activity   | `animate-activity-pulse`          | Transient attention signal    |
+| Count changed     | `animate-badge-bump`              | Confirms value update         |
+| New activity      | `animate-activity-blip`           | Signals attention required    |
 
 ### When NOT to Use Animation
 
@@ -270,10 +342,13 @@ System-level setting from the operating system. Canopy disables all decorative a
 
 ```css
 @media (prefers-reduced-motion: reduce) {
-  /* Disable status pulse animations */
+  /* Disable status pulse and state-change animations */
   .animate-activity-pulse,
   .animate-agent-pulse,
-  .status-working {
+  .animate-pulse-delayed,
+  .status-working,
+  .animate-badge-bump,
+  .animate-activity-blip {
     animation: none;
     opacity: 1;
     transform: none;
@@ -471,6 +546,8 @@ For infinite animations, keep the effect subtle:
 | `animate-activity-pulse`       | 1s       | Yes  | Activity indicator             |
 | `animate-agent-pulse`          | 1.5s     | Yes  | Agent status                   |
 | `status-working`               | 2s       | Yes  | Working state color            |
+| `animate-badge-bump`           | 200ms    | No   | Count/state change feedback    |
+| `animate-activity-blip`        | 260ms    | No   | New activity signal            |
 | `terminal-restoring`           | 150ms    | No   | Restore entrance               |
 | `terminal-trashing`            | 150ms    | No   | Trash exit                     |
 | `animate-terminal-ping`        | 1600ms   | No   | Attention (selected)           |
