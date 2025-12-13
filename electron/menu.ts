@@ -21,6 +21,20 @@ export function createApplicationMenu(
   mainWindow: BrowserWindow,
   cliAvailabilityService?: CliAvailabilityService
 ): void {
+  const getTargetBrowserWindow = (
+    browserWindow: Electron.BaseWindow | undefined
+  ): BrowserWindow | null => {
+    if (browserWindow instanceof BrowserWindow && !browserWindow.isDestroyed()) {
+      return browserWindow;
+    }
+
+    if (!mainWindow.isDestroyed()) {
+      return mainWindow;
+    }
+
+    return null;
+  };
+
   const sendAction = (action: string) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(CHANNELS.MENU_ACTION, action);
@@ -110,8 +124,22 @@ export function createApplicationMenu(
           click: () => sendAction("toggle-sidebar"),
         },
         { type: "separator" },
-        { role: "reload" },
-        { role: "forceReload" },
+        {
+          label: "Reload",
+          click: (_item, browserWindow) => {
+            const win = getTargetBrowserWindow(browserWindow);
+            if (!win) return;
+            win.webContents.reload();
+          },
+        },
+        {
+          label: "Force Reload",
+          click: (_item, browserWindow) => {
+            const win = getTargetBrowserWindow(browserWindow);
+            if (!win) return;
+            win.webContents.reloadIgnoringCache();
+          },
+        },
         { role: "toggleDevTools" },
         { type: "separator" },
         { role: "resetZoom" },
