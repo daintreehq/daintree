@@ -14,62 +14,34 @@ import { getAgentIds, getAgentConfig } from "@/config/agents";
 import { DEFAULT_AGENT_SETTINGS, getAgentSettingsEntry } from "@shared/types";
 import type { HibernationConfig, CliAvailability, AgentSettings } from "@shared/types";
 import { usePreferencesStore } from "@/store";
+import { keybindingService } from "@/services/KeybindingService";
 
 interface GeneralTabProps {
   appVersion: string;
   onNavigateToAgents?: () => void;
 }
 
-const KEYBOARD_SHORTCUTS = [
+const CURATED_SHORTCUTS = [
   {
     category: "Agents",
-    shortcuts: [
-      { key: "Cmd+N", description: "New terminal (select type)" },
-      { key: "Cmd+Alt+C", description: "Start Claude agent" },
-      { key: "Cmd+Alt+G", description: "Start Gemini agent" },
-      { key: "Cmd+Alt+X", description: "Start Codex agent" },
-      { key: "Cmd+Alt+N", description: "Start shell agent" },
-      { key: "Cmd+Shift+I", description: "Inject context to agent" },
-      { key: "Cmd+P", description: "Open terminal palette" },
-      { key: "Cmd+T", description: "New terminal" },
+    actionIds: [
+      "terminal.spawnPalette",
+      "agent.claude",
+      "agent.gemini",
+      "agent.codex",
+      "agent.terminal",
+      "terminal.inject",
     ],
   },
   {
-    category: "Navigation",
-    shortcuts: [
-      { key: "Ctrl+Tab", description: "Focus next agent or terminal" },
-      { key: "Ctrl+Shift+Tab", description: "Focus previous agent or terminal" },
-      { key: "Ctrl+Shift+F", description: "Toggle maximize focused tile" },
-    ],
+    category: "Terminal",
+    actionIds: ["terminal.palette", "terminal.new", "terminal.focusNext", "terminal.focusPrevious"],
   },
   {
     category: "Panels",
-    shortcuts: [
-      { key: "Ctrl+Shift+L", description: "Toggle logs panel" },
-      { key: "Ctrl+Shift+E", description: "Toggle event inspector" },
-    ],
-  },
-  {
-    category: "Other",
-    shortcuts: [
-      { key: "Cmd+K Z", description: "Toggle focus mode (chord: press Cmd+K, release, then Z)" },
-    ],
+    actionIds: ["panel.diagnosticsLogs", "panel.diagnosticsEvents"],
   },
 ];
-
-const formatKey = (key: string): string => {
-  const isMac = window.navigator.platform.toUpperCase().indexOf("MAC") >= 0;
-
-  if (isMac) {
-    return key
-      .replace(/Cmd\+/g, "⌘")
-      .replace(/Ctrl\+/g, "⌃")
-      .replace(/Shift\+/g, "⇧")
-      .replace(/Alt\+/g, "⌥");
-  }
-
-  return key.replace(/Cmd\+/g, "Ctrl+");
-};
 
 const THRESHOLD_PRESETS = [
   { value: 12, label: "12h" },
@@ -78,6 +50,17 @@ const THRESHOLD_PRESETS = [
   { value: 72, label: "72h" },
 ] as const;
 
+interface ShortcutDisplay {
+  actionId: string;
+  key: string;
+  description: string;
+}
+
+interface ShortcutCategory {
+  category: string;
+  shortcuts: ShortcutDisplay[];
+}
+
 export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) {
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [hibernationConfig, setHibernationConfig] = useState<HibernationConfig | null>(null);
@@ -85,6 +68,7 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
   const [configError, setConfigError] = useState<string | null>(null);
   const [cliAvailability, setCliAvailability] = useState<CliAvailability | null>(null);
   const [agentSettings, setAgentSettings] = useState<AgentSettings | null>(null);
+  const [shortcuts, setShortcuts] = useState<ShortcutCategory[]>([]);
 
   const showProjectPulse = usePreferencesStore((s) => s.showProjectPulse);
   const setShowProjectPulse = usePreferencesStore((s) => s.setShowProjectPulse);
@@ -111,6 +95,53 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
       .catch((error) => {
         console.error("Failed to load agent availability:", error);
       });
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadShortcuts = () => {
+      const categories: ShortcutCategory[] = CURATED_SHORTCUTS.map((category) => {
+        const shortcuts: ShortcutDisplay[] = category.actionIds
+          .map((actionId) => {
+            const binding = keybindingService.getBinding(actionId);
+            const effectiveCombo = keybindingService.getEffectiveCombo(actionId);
+
+            if (!binding || !effectiveCombo) {
+              return null;
+            }
+
+            return {
+              actionId,
+              key: keybindingService.formatComboForDisplay(effectiveCombo),
+              description: binding.description || actionId,
+            };
+          })
+          .filter((s): s is ShortcutDisplay => s !== null);
+
+        return {
+          category: category.category,
+          shortcuts,
+        };
+      }).filter((c) => c.shortcuts.length > 0);
+
+      if (isMounted) {
+        setShortcuts(categories);
+      }
+    };
+
+    const unsubscribe = keybindingService.subscribe(loadShortcuts);
+
+    keybindingService.loadOverrides().then(() => {
+      if (isMounted) {
+        loadShortcuts();
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
   }, []);
   const handleHibernationToggle = async () => {
     if (!hibernationConfig || isSaving) return;
@@ -382,7 +413,7 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
             id="keyboard-shortcuts-content"
             className="px-3 pb-3 space-y-4 border-t border-canopy-border pt-3"
           >
-            {KEYBOARD_SHORTCUTS.map((category) => (
+            {shortcuts.map((category) => (
               <div key={category.category} className="space-y-2">
                 <h5 className="text-xs font-medium text-canopy-text/60 uppercase tracking-wide">
                   {category.category}
@@ -390,13 +421,13 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
                 <dl className="space-y-1">
                   {category.shortcuts.map((shortcut) => (
                     <div
-                      key={shortcut.key}
+                      key={shortcut.actionId}
                       className="flex items-center justify-between text-sm py-1"
                     >
                       <dt className="text-canopy-text">{shortcut.description}</dt>
                       <dd>
                         <kbd className="px-2 py-1 bg-canopy-bg border border-canopy-border rounded text-xs font-mono text-canopy-text">
-                          {formatKey(shortcut.key)}
+                          {shortcut.key}
                         </kbd>
                       </dd>
                     </div>

@@ -704,9 +704,12 @@ class KeybindingService {
   }
 
   getEffectiveCombo(actionId: string): string | undefined {
-    const override = this.overrides.get(actionId);
-    if (override && override.length > 0) {
-      return override[0];
+    if (this.overrides.has(actionId)) {
+      const override = this.overrides.get(actionId);
+      if (override && override.length > 0) {
+        return override[0];
+      }
+      return undefined;
     }
     return this.getDefaultCombo(actionId);
   }
@@ -952,10 +955,13 @@ class KeybindingService {
   }
 
   getAllBindingsWithEffectiveCombos(): Array<KeybindingConfig & { effectiveCombo: string }> {
-    return Array.from(this.bindings.values()).map((binding) => ({
-      ...binding,
-      effectiveCombo: this.getEffectiveCombo(binding.actionId) || binding.combo,
-    }));
+    return Array.from(this.bindings.values()).map((binding) => {
+      const effectiveCombo = this.getEffectiveCombo(binding.actionId);
+      return {
+        ...binding,
+        effectiveCombo: effectiveCombo !== undefined ? effectiveCombo : binding.combo,
+      };
+    });
   }
 
   getCategories(): string[] {
