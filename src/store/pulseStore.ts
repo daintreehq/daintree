@@ -10,7 +10,7 @@ interface PulseState {
 }
 
 interface PulseActions {
-  fetchPulse: (worktreeId: string) => Promise<ProjectPulse | null>;
+  fetchPulse: (worktreeId: string, forceRefresh?: boolean) => Promise<ProjectPulse | null>;
   setRangeDays: (days: PulseRangeDays) => void;
   invalidate: (worktreeId: string) => void;
   invalidateAll: () => void;
@@ -30,7 +30,7 @@ export const usePulseStore = create<PulseStore>()((set, get) => ({
   rangeDays: DEFAULT_RANGE_DAYS,
   requestIds: new Map(),
 
-  fetchPulse: async (worktreeId: string) => {
+  fetchPulse: async (worktreeId: string, forceRefresh = false) => {
     const state = get();
 
     if (state.loading.get(worktreeId)) {
@@ -51,7 +51,8 @@ export const usePulseStore = create<PulseStore>()((set, get) => ({
         worktreeId,
         rangeDays: requestedRangeDays,
         includeDelta: true,
-        includeRecentCommits: true,
+        includeRecentCommits: false,
+        forceRefresh,
       });
 
       const currentState = get();

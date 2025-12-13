@@ -178,13 +178,14 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
       rangeDays: PulseRangeDays;
       includeDelta?: boolean;
       includeRecentCommits?: boolean;
+      forceRefresh?: boolean;
     }
   ): Promise<ProjectPulse> => {
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
 
-    const { worktreeId, rangeDays, includeDelta, includeRecentCommits } = payload;
+    const { worktreeId, rangeDays, includeDelta, includeRecentCommits, forceRefresh } = payload;
 
     if (typeof worktreeId !== "string" || !worktreeId) {
       throw new Error("Invalid worktree ID");
@@ -200,6 +201,10 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
 
     if (includeRecentCommits !== undefined && typeof includeRecentCommits !== "boolean") {
       throw new Error("Invalid includeRecentCommits: must be a boolean");
+    }
+
+    if (forceRefresh !== undefined && typeof forceRefresh !== "boolean") {
+      throw new Error("Invalid forceRefresh: must be a boolean");
     }
 
     if (!workspaceClient) {
@@ -218,6 +223,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     return workspaceClient.getProjectPulse(monitor.path, worktreeId, mainBranch, rangeDays, {
       includeDelta,
       includeRecentCommits,
+      forceRefresh,
     });
   };
   ipcMain.handle(CHANNELS.GIT_GET_PROJECT_PULSE, handleGitGetProjectPulse);

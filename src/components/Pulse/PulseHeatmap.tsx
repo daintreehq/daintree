@@ -32,7 +32,7 @@ export function PulseHeatmap({ cells, rangeDays, compact = false }: PulseHeatmap
         level: Math.max(0, Math.min(4, cell.level)) as HeatCell["level"],
       }));
 
-    // Split cells into rows of 30
+    // Split cells into rows of 60
     const result: HeatCell[][] = [];
     for (let i = 0; i < sortedCells.length; i += COLUMNS_PER_ROW) {
       result.push(sortedCells.slice(i, i + COLUMNS_PER_ROW));

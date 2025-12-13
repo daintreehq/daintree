@@ -671,7 +671,7 @@ export class WorkspaceClient extends EventEmitter {
     worktreeId: string,
     mainBranch: string,
     rangeDays: PulseRangeDays,
-    options?: { includeDelta?: boolean; includeRecentCommits?: boolean }
+    options?: { includeDelta?: boolean; includeRecentCommits?: boolean; forceRefresh?: boolean }
   ): Promise<ProjectPulse> {
     const requestId = this.generateRequestId();
 
@@ -685,6 +685,7 @@ export class WorkspaceClient extends EventEmitter {
         rangeDays,
         includeDelta: options?.includeDelta,
         includeRecentCommits: options?.includeRecentCommits,
+        forceRefresh: options?.forceRefresh,
       },
       30000
     );

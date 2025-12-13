@@ -1,7 +1,7 @@
 import { useEffect, useCallback } from "react";
 import { useShallow } from "zustand/react/shallow";
-import type { PulseRangeDays } from "@shared/types";
-import { usePulseStore } from "@/store";
+import type { PulseRangeDays, ProjectPulse } from "@shared/types";
+import { usePulseStore, useProjectStore } from "@/store";
 import { cn } from "@/lib/utils";
 import { Loader2, AlertCircle, RefreshCw, Activity } from "lucide-react";
 import { PulseHeatmap } from "./PulseHeatmap";
@@ -24,7 +24,29 @@ const RANGE_OPTIONS: { value: PulseRangeDays; label: string }[] = [
   { value: 180, label: "180 days" },
 ];
 
+function getCoachLine(pulse: ProjectPulse): string {
+  const sortedCells = [...pulse.heatmap]
+    .filter((cell) => !isNaN(new Date(cell.date).getTime()))
+    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+  const today = sortedCells.find((c) => c.isToday) ?? sortedCells.at(-1);
+
+  const last7Days = sortedCells.slice(-7).filter((c) => c.count > 0).length;
+
+  if (today && today.count > 0) {
+    return "Nice — progress logged today.";
+  }
+  if (pulse.currentStreakDays && pulse.currentStreakDays > 0) {
+    return "One small commit today keeps your streak going.";
+  }
+  if (last7Days > 0) {
+    return `Momentum's building: ${last7Days} active day${last7Days !== 1 ? "s" : ""} this week.`;
+  }
+  return "Make a tiny win: ship one small change today.";
+}
+
 export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProps) {
+  const projectName = useProjectStore((s) => s.currentProject?.name);
   const { pulse, isLoading, error, rangeDays, fetchPulse, setRangeDays } = usePulseStore(
     useShallow((state) => ({
       pulse: state.getPulse(worktreeId),
@@ -36,6 +58,8 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     }))
   );
 
+  const title = projectName ? `${projectName} Project Pulse` : "Project Pulse";
+
   useEffect(() => {
     if (!pulse && !isLoading && !error) {
       fetchPulse(worktreeId);
@@ -43,8 +67,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
   }, [worktreeId, pulse, isLoading, error, fetchPulse]);
 
   const handleRefresh = useCallback(() => {
-    usePulseStore.getState().invalidate(worktreeId);
-    fetchPulse(worktreeId);
+    fetchPulse(worktreeId, true);
   }, [worktreeId, fetchPulse]);
 
   const handleRangeChange = useCallback(
@@ -55,7 +78,8 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     [setRangeDays, fetchPulse, worktreeId]
   );
 
-  const currentRangeLabel = RANGE_OPTIONS.find((o) => o.value === rangeDays)?.label ?? "30 days";
+  const currentRangeLabel =
+    RANGE_OPTIONS.find((o) => o.value === rangeDays)?.label ?? `${rangeDays} days`;
 
   if (isLoading && !pulse) {
     return (
@@ -95,7 +119,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
       <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Activity className="w-4 h-4 text-emerald-400/70" />
-          <span className="text-sm font-medium text-canopy-text/80">Project Pulse</span>
+          <span className="text-sm font-medium text-canopy-text/80">{title}</span>
           {isLoading && <Loader2 className="w-3 h-3 animate-spin text-canopy-text/40" />}
         </div>
 
@@ -135,6 +159,8 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
 
       <div className="p-4 space-y-4">
         <PulseHeatmap cells={pulse.heatmap} rangeDays={pulse.rangeDays} />
+
+        <p className="text-xs text-canopy-text/60 italic">{getCoachLine(pulse)}</p>
 
         <div className="border-t border-white/5 pt-3">
           <PulseSummary pulse={pulse} />

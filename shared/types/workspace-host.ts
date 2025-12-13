@@ -159,6 +159,7 @@ export type WorkspaceHostRequest =
       rangeDays: PulseRangeDays;
       includeDelta?: boolean;
       includeRecentCommits?: boolean;
+      forceRefresh?: boolean;
     };
 
 /** Result of DevServer URL detection */

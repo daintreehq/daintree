@@ -257,6 +257,7 @@ port.on("message", async (rawMsg: any) => {
           rangeDays,
           includeDelta,
           includeRecentCommits,
+          forceRefresh,
         } = request;
         try {
           if (typeof worktreePath !== "string" || !worktreePath.trim()) {
@@ -277,6 +278,9 @@ port.on("message", async (rawMsg: any) => {
           if (includeRecentCommits !== undefined && typeof includeRecentCommits !== "boolean") {
             throw new Error("Invalid includeRecentCommits");
           }
+          if (forceRefresh !== undefined && typeof forceRefresh !== "boolean") {
+            throw new Error("Invalid forceRefresh");
+          }
 
           const pulse = await projectPulseService.getPulse({
             worktreePath,
@@ -285,6 +289,7 @@ port.on("message", async (rawMsg: any) => {
             rangeDays,
             includeDelta,
             includeRecentCommits,
+            forceRefresh,
           });
           sendEvent({
             type: "git:project-pulse",
