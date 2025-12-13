@@ -258,7 +258,7 @@
   }
 
   *::-webkit-scrollbar-thumb:hover {
-    background: #71717a;
+    background: color-mix(in oklab, var(--color-state-idle) 85%, white);
   }
 
   *::-webkit-scrollbar-corner {
@@ -285,7 +285,7 @@
   }
 
   .xterm-viewport::-webkit-scrollbar-thumb:hover {
-    background: #71717a; /* Zinc-500: Lighter on hover */
+    background: color-mix(in oklab, var(--color-state-idle) 85%, white);
   }
 
   /* Consistent monospace font stack - VS Code defaults */
