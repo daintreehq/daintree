@@ -1,5 +1,7 @@
 export type SidecarLayoutMode = "push" | "overlay";
 
+export type SidecarLayoutModePreference = "auto" | "push" | "overlay";
+
 export type SidecarLinkType = "system" | "discovered" | "user";
 
 export interface SidecarLink {
