@@ -24,6 +24,7 @@ type SabBufferEntry = {
   lastDataAt: number;
   lastRedrawAt: number | null;
   flushOnRedrawOnly: boolean;
+  isCursorHidden: boolean;
 };
 
 type FrameQueue = { frames: (string | Uint8Array)[][]; presenterTimeoutId: number | null };
@@ -41,6 +42,7 @@ export class TerminalDataBuffer {
   private pollTimeoutId: number | null = null;
   private sharedBufferEnabled = false;
   private idlePollCount = 0;
+  private readonly decoder = new TextDecoder();
 
   private sabBuffers = new Map<string, SabBufferEntry>();
   private sabFrameStats = new Map<string, FrameStats>();
@@ -95,14 +97,16 @@ export class TerminalDataBuffer {
     const now = Date.now();
     let entry = this.sabBuffers.get(id);
 
-    const stringData = typeof data === "string" ? data : "";
+    const textThisChunk = typeof data === "string" ? data : this.decoder.decode(data);
     const dataLength = typeof data === "string" ? data.length : data.byteLength;
     const prevRecent = entry ? entry.recentChars : "";
     const prevBytes = entry ? entry.bytesSinceStart : 0;
-    const combinedRecent = (prevRecent + stringData).slice(-REDRAW_LOOKBACK_CHARS);
+    const combinedRecent = (prevRecent + textThisChunk).slice(-REDRAW_LOOKBACK_CHARS);
     const bytesSinceStart = prevBytes + dataLength;
 
-    const isRedraw = this.detectRedrawPatternInStream(combinedRecent);
+    const scanWindow = prevRecent.slice(-32) + textThisChunk;
+    const isRedraw = this.detectRedrawPatternInStream(scanWindow);
+    const newCursorState = this.updateCursorState(scanWindow, entry?.isCursorHidden ?? false);
 
     if (!entry) {
       entry = {
@@ -117,6 +121,7 @@ export class TerminalDataBuffer {
         lastDataAt: now,
         lastRedrawAt: isRedraw ? now : null,
         flushOnRedrawOnly: false,
+        isCursorHidden: newCursorState,
       };
       this.sabBuffers.set(id, entry);
       entry.chunks.push(data);
@@ -139,7 +144,6 @@ export class TerminalDataBuffer {
       return;
     }
 
-    // Existing entry: update TUI burst detection state.
     if (isRedraw) {
       if (entry.lastRedrawAt !== null) {
         const clearDelta = now - entry.lastRedrawAt;
@@ -157,12 +161,18 @@ export class TerminalDataBuffer {
         if (delta < MIN_FRAME_INTERVAL_MS) {
           this.cancelBufferTimers(entry);
 
+          this.enqueueFrame(id, entry.chunks);
+
           entry.chunks = [data];
           entry.flushMode = "frame";
           entry.bytesSinceStart = dataLength;
           entry.recentChars = combinedRecent;
           entry.firstDataAt = now;
           entry.lastDataAt = now;
+          entry.isCursorHidden = newCursorState;
+          if (isRedraw) {
+            entry.lastRedrawAt = now;
+          }
 
           const remaining = MIN_FRAME_INTERVAL_MS - delta;
           const settleDelay = Math.max(FRAME_SETTLE_DELAY_MS, remaining);
@@ -186,6 +196,13 @@ export class TerminalDataBuffer {
     entry.lastDataAt = now;
     entry.bytesSinceStart = bytesSinceStart;
     entry.recentChars = combinedRecent;
+
+    if (entry.isCursorHidden && !newCursorState) {
+      entry.isCursorHidden = newCursorState;
+      this.flushBuffer(id);
+      return;
+    }
+    entry.isCursorHidden = newCursorState;
 
     if (entry.flushMode === "normal") {
       if (entry.normalTimeoutId === null) {
@@ -286,6 +303,10 @@ export class TerminalDataBuffer {
 
     entry.frameSettleTimeoutId = null;
 
+    if (this.isFrameIncomplete(entry)) {
+      return;
+    }
+
     const now = Date.now();
     if (now - entry.lastDataAt >= FRAME_SETTLE_DELAY_MS - 1) {
       if (entry.flushMode === "frame" && entry.flushOnRedrawOnly) {
@@ -322,8 +343,35 @@ export class TerminalDataBuffer {
 
   private detectRedrawPatternInStream(recent: string): boolean {
     if (!recent) return false;
-    if (recent.includes("\x1b[2J")) return true;
-    if (recent.includes("\x1b[H")) return true;
+    // eslint-disable-next-line no-control-regex
+    if (/\x1b\[[0-9;]*H/.test(recent)) return true;
+    // eslint-disable-next-line no-control-regex
+    if (/\x1b\[[0-9;]*J/.test(recent)) return true;
+    return false;
+  }
+
+  private updateCursorState(text: string, currentState: boolean): boolean {
+    const lastHide = text.lastIndexOf("\x1b[?25l");
+    const lastShow = text.lastIndexOf("\x1b[?25h");
+
+    if (lastHide > lastShow) return true;
+    if (lastShow > lastHide) return false;
+    return currentState;
+  }
+
+  private isFrameIncomplete(entry: SabBufferEntry): boolean {
+    if (entry.isCursorHidden) return true;
+
+    const lastClear = Math.max(
+      entry.recentChars.lastIndexOf("\x1b[2J"),
+      entry.recentChars.lastIndexOf("\x1b[H"),
+      entry.recentChars.lastIndexOf("\x1b[J")
+    );
+
+    if (lastClear !== -1 && entry.recentChars.length - lastClear < 50) {
+      return true;
+    }
+
     return false;
   }
 
@@ -370,8 +418,9 @@ export class TerminalDataBuffer {
     queue.frames.push(chunks);
 
     const MAX_FRAMES = 3;
-    if (queue.frames.length > MAX_FRAMES) {
-      queue.frames.splice(0, queue.frames.length - MAX_FRAMES);
+    while (queue.frames.length > MAX_FRAMES) {
+      const oldest = queue.frames.shift()!;
+      queue.frames[0] = [...oldest, ...queue.frames[0]];
     }
 
     if (queue.presenterTimeoutId === null) {
