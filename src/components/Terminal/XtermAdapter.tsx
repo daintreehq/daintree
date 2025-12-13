@@ -342,10 +342,9 @@ function XtermAdapterComponent({
     const currentBottom = terminalInstanceService.getContentBottom(terminalId);
 
     // Height ratchet: determine if agent is actively working
-    // When working/running/waiting, viewport height can only grow (never shrink)
+    // When working/running, viewport height can only grow (never shrink)
     // This prevents jitter during TUI redraws where ESC[2J briefly empties the buffer
-    const isWorking =
-      agentState === "working" || agentState === "running" || agentState === "waiting";
+    const isWorking = agentState === "working" || agentState === "running";
 
     // If content shrinks significantly (>10 rows), reset stable bottom
     // This handles terminal.clear() and major TUI collapses
@@ -450,8 +449,7 @@ function XtermAdapterComponent({
       // Uses longer delay when agent is working (more output = longer reflow time)
       if (isTallCanvas) {
         const agentState = terminalInstanceService.getAgentState(terminalId);
-        const isWorking =
-          agentState === "working" || agentState === "waiting" || agentState === "running";
+        const isWorking = agentState === "working" || agentState === "running";
         const settleDelay = isWorking ? 150 : 100;
 
         resizeSettleTimerRef.current = setTimeout(() => {
