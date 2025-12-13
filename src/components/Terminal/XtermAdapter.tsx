@@ -100,6 +100,9 @@ function XtermAdapterComponent({
   const stableCellHeightRef = useRef(0);
   // Cache last inner host height to avoid redundant style writes
   const lastHeightPxRef = useRef(0);
+  // Resize stabilization: freeze height/scroll updates during resize to prevent jitter
+  const isResizingRef = useRef(false);
+  const resizeSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Determine if this terminal should use tall canvas mode
   const isTallCanvas = useMemo(() => {
@@ -206,6 +209,8 @@ function XtermAdapterComponent({
 
   // Sync scroll position for tall canvas mode (follow cursor)
   const syncTallCanvasScroll = useCallback(() => {
+    // Bail early if resize is in progress - layout is transiently invalid
+    if (isResizingRef.current) return;
     const followLog = terminalInstanceService.getTallCanvasFollowLog(terminalId);
     if (!isTallCanvas || !followLog || !viewportRef.current || isSelectingRef.current) return;
 
@@ -278,6 +283,8 @@ function XtermAdapterComponent({
   // Update inner host height based on stable content bottom (tall canvas mode)
   // Uses stable bottom row while following to match scroll target calculation
   const updateInnerHostHeight = useCallback(() => {
+    // Bail early if resize is in progress - layout is transiently invalid
+    if (isResizingRef.current) return;
     if (!isTallCanvas || !innerHostRef.current || !viewportRef.current) return;
 
     const cellHeight = getCellHeight();
@@ -363,11 +370,26 @@ function XtermAdapterComponent({
       if (width === 0 || height === 0) return;
       if (width < MIN_CONTAINER_SIZE || height < MIN_CONTAINER_SIZE) return;
 
+      // For tall canvas: set resize lock to freeze height/scroll updates during reflow
+      // This prevents jitter from getContentBottom() returning invalid values
+      if (isTallCanvas) {
+        isResizingRef.current = true;
+
+        // Clear any pending settle timer before scheduling new one
+        if (resizeSettleTimerRef.current !== null) {
+          clearTimeout(resizeSettleTimerRef.current);
+          resizeSettleTimerRef.current = null;
+        }
+      }
+
       // For tall canvas: innerHostRef has padding that terminal lives inside
       // Subtract this from width so cols calculation accounts for it
       if (isTallCanvas) {
         width -= PADDING_LEFT_PX;
       }
+
+      // Re-validate width after padding subtraction
+      if (width < MIN_CONTAINER_SIZE) return;
 
       const dims = terminalInstanceService.resize(terminalId, width, height, {
         isTallCanvas,
@@ -377,13 +399,23 @@ function XtermAdapterComponent({
         prevDimensionsRef.current = dims;
       }
 
-      // For tall canvas: always update height and re-snap on ANY resize (including height-only)
-      // This handles viewport height changes (maximize/restore) that don't change cols
+      // For tall canvas: schedule settle timer to clear lock and force sync after layout stabilizes
+      // Uses longer delay when agent is working (more output = longer reflow time)
       if (isTallCanvas) {
-        updateInnerHostHeight();
-        if (terminalInstanceService.getTallCanvasFollowLog(terminalId)) {
-          requestAnimationFrame(syncTallCanvasScroll);
-        }
+        const agentState = terminalInstanceService.getAgentState(terminalId);
+        const isWorking =
+          agentState === "working" || agentState === "waiting" || agentState === "running";
+        const settleDelay = isWorking ? 150 : 100;
+
+        resizeSettleTimerRef.current = setTimeout(() => {
+          isResizingRef.current = false;
+          resizeSettleTimerRef.current = null;
+          // Force sync after layout settles (guards now allow through)
+          updateInnerHostHeight();
+          if (terminalInstanceService.getTallCanvasFollowLog(terminalId)) {
+            syncTallCanvasScroll();
+          }
+        }, settleDelay);
       }
     },
     [terminalId, isTallCanvas, updateInnerHostHeight, syncTallCanvasScroll]
@@ -612,6 +644,14 @@ function XtermAdapterComponent({
 
       // Flush pending resizes before unmount
       terminalInstanceService.flushResize(terminalId);
+
+      // Clean up resize settle timer to prevent post-unmount execution
+      if (resizeSettleTimerRef.current !== null) {
+        clearTimeout(resizeSettleTimerRef.current);
+        resizeSettleTimerRef.current = null;
+      }
+      // Belt-and-suspenders: clear resize lock on unmount
+      isResizingRef.current = false;
 
       // Clean up tall canvas data listener
       if (tallCanvasDataDisposable) {
