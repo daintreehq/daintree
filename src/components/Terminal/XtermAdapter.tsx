@@ -83,9 +83,8 @@ function XtermAdapterComponent({
   // Track visibility for resize optimization (start pessimistic for offscreen mounts)
   const isVisibleRef = useRef(false);
 
-  // Agent state for state-aware rendering decisions (enables future defensive layers)
-  // Prefixed with _ to indicate intentionally unused for now - will be used by height ratchet, resize guard, scroll latch
-  const [_agentState, setAgentState] = useState<AgentState | undefined>(undefined);
+  // Agent state for state-aware rendering decisions (height ratchet, resize guard, scroll latch)
+  const [agentState, setAgentState] = useState<AgentState | undefined>(undefined);
 
   // Tall canvas mode refs (agent terminals only)
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -288,10 +287,17 @@ function XtermAdapterComponent({
     // Get current content bottom
     const currentBottom = terminalInstanceService.getContentBottom(terminalId);
 
+    // Height ratchet: determine if agent is actively working
+    // When working/running/waiting, viewport height can only grow (never shrink)
+    // This prevents jitter during TUI redraws where ESC[2J briefly empties the buffer
+    const isWorking =
+      agentState === "working" || agentState === "running" || agentState === "waiting";
+
     // If content shrinks significantly (>10 rows), reset stable bottom
     // This handles terminal.clear() and major TUI collapses
+    // BUT: only allow shrink reset when agent is NOT working (height ratchet)
     const SHRINK_RESET_THRESHOLD = 10;
-    if (stableBottomRowRef.current - currentBottom > SHRINK_RESET_THRESHOLD) {
+    if (!isWorking && stableBottomRowRef.current - currentBottom > SHRINK_RESET_THRESHOLD) {
       stableBottomRowRef.current = currentBottom;
     }
 
@@ -316,7 +322,7 @@ function XtermAdapterComponent({
       lastHeightPxRef.current = totalHeight;
       innerHostRef.current.style.height = `${totalHeight}px`;
     }
-  }, [isTallCanvas, terminalId, getCellHeight]);
+  }, [isTallCanvas, terminalId, getCellHeight, agentState]);
 
   // Track text selection to avoid fighting with scroll sync
   // Only freeze if selection is inside THIS terminal (not global page selection)
