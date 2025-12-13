@@ -500,7 +500,7 @@ export function WorktreeCard({
   const cardContent = (
     <div
       className={cn(
-        "group relative border-b-2 border-white/5 transition-all duration-200",
+        "group relative border-b border-canopy-border transition-all duration-200",
         isActive
           ? "bg-white/[0.03] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]"
           : "hover:bg-white/[0.02] bg-transparent",
@@ -524,7 +524,7 @@ export function WorktreeCard({
         className={cn(
           "absolute left-0 top-0 bottom-0 w-[3px] transition-all duration-300",
           spineState === "error" && "bg-red-500",
-          spineState === "dirty" && "bg-amber-500 shadow-[0_0_8px_rgba(251,191,36,0.4)]",
+          spineState === "dirty" && "bg-amber-500 shadow-[0_0_6px_rgba(251,191,36,0.3)]",
           spineState === "stale" && "bg-zinc-500",
           spineState === "current" && "bg-teal-500",
           spineState === "idle" && "bg-transparent"
@@ -539,7 +539,7 @@ export function WorktreeCard({
             {hasExpandableContent && (
               <button
                 onClick={handleToggleExpand}
-                className="p-0.5 text-canopy-text/60 hover:text-canopy-text transition-colors rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                className="p-0.5 text-canopy-text/60 hover:text-canopy-text transition-colors rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
                 aria-label={isExpanded ? "Collapse details" : "Expand details"}
                 aria-expanded={isExpanded}
                 aria-controls={detailsId}
@@ -608,7 +608,7 @@ export function WorktreeCard({
                           "p-1 rounded transition-colors",
                           treeCopied
                             ? "text-green-400 bg-green-400/10"
-                            : "text-canopy-text/40 hover:text-canopy-text hover:bg-white/10",
+                            : "text-canopy-text/40 hover:text-canopy-text hover:bg-white/5",
                           "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
                           isCopyingTree && "cursor-wait opacity-70"
                         )}
@@ -634,7 +634,7 @@ export function WorktreeCard({
                   <DropdownMenuTrigger asChild>
                     <button
                       onClick={(e) => e.stopPropagation()}
-                      className="p-1 text-canopy-text/60 hover:text-white hover:bg-white/10 rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                      className="p-1 text-canopy-text/60 hover:text-white hover:bg-white/5 rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
                       aria-label="More actions"
                     >
                       <MoreHorizontal className="w-3.5 h-3.5" />

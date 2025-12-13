@@ -164,7 +164,7 @@ function TerminalHeaderComponent({
               onChange={(e) => onEditingValueChange(e.target.value)}
               onKeyDown={onTitleInputKeyDown}
               onBlur={onTitleSave}
-              className="text-sm font-medium bg-canopy-bg/60 border border-canopy-accent/50 px-1 h-5 min-w-32 outline-none text-canopy-text select-text"
+              className="text-sm font-medium bg-canopy-bg/60 border border-canopy-accent/50 px-1 h-5 min-w-32 text-canopy-text select-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
               aria-label={
                 !agentId && type === "terminal" ? "Edit terminal title" : "Edit agent title"
               }
@@ -276,7 +276,7 @@ function TerminalHeaderComponent({
                 e.stopPropagation();
                 onRestart();
               }}
-              className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent text-canopy-text/60 hover:text-canopy-text transition-colors"
+              className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
               title="Restart Session"
               aria-label="Restart Session"
             >
@@ -289,7 +289,7 @@ function TerminalHeaderComponent({
                 e.stopPropagation();
                 onMinimize();
               }}
-              className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent text-canopy-text/60 hover:text-canopy-text transition-colors"
+              className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
               title={location === "dock" ? "Minimize" : "Minimize to dock"}
               aria-label={location === "dock" ? "Minimize" : "Minimize to dock"}
             >
@@ -302,7 +302,7 @@ function TerminalHeaderComponent({
                 e.stopPropagation();
                 onRestore();
               }}
-              className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent text-canopy-text/60 hover:text-canopy-text transition-colors"
+              className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
               title="Restore to grid"
               aria-label="Restore to grid"
             >
@@ -316,7 +316,7 @@ function TerminalHeaderComponent({
                 onFocus();
                 onToggleMaximize();
               }}
-              className="flex items-center gap-1.5 px-2 py-1 bg-canopy-accent/10 text-canopy-accent hover:bg-canopy-accent/20 rounded transition-colors mr-1"
+              className="flex items-center gap-1.5 px-2 py-1 bg-canopy-accent/10 text-canopy-accent hover:bg-canopy-accent/20 rounded transition-colors mr-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
               title="Restore Grid View (Ctrl+Shift+F)"
               aria-label="Exit Focus mode and restore grid view"
             >
@@ -331,7 +331,7 @@ function TerminalHeaderComponent({
                   onFocus();
                   onToggleMaximize();
                 }}
-                className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent text-canopy-text/60 hover:text-canopy-text transition-colors"
+                className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
                 title="Maximize (Ctrl+Shift+F)"
                 aria-label="Maximize"
               >
@@ -351,7 +351,7 @@ function TerminalHeaderComponent({
                 onClose(true);
               }
             }}
-            className="p-1.5 hover:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-status-error)] text-canopy-text/60 hover:text-[var(--color-status-error)] transition-colors"
+            className="p-1.5 hover:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-status-error)] focus-visible:outline-offset-2 text-canopy-text/60 hover:text-[var(--color-status-error)] transition-colors"
             title="Close Session (Alt+Click to force close)"
             aria-label="Close session. Hold Alt and click to force close without recovery."
           >
