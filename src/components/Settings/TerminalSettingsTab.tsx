@@ -146,7 +146,7 @@ export function TerminalSettingsTab() {
           aria-checked={performanceMode}
           aria-label="Performance Mode Toggle"
           className={cn(
-            "w-full flex items-center justify-between p-4 rounded-lg border transition-all",
+            "w-full flex items-center justify-between p-4 rounded-[var(--radius-lg)] border transition-all",
             performanceMode
               ? "bg-amber-500/10 border-amber-500 text-amber-500"
               : "border-canopy-border hover:bg-white/5 text-canopy-text/70"
@@ -214,7 +214,7 @@ export function TerminalSettingsTab() {
               aria-checked={scrollbackLines === value}
               aria-label={`${label} - ${description}`}
               className={cn(
-                "flex flex-col items-center justify-center p-3 rounded-md border transition-all",
+                "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-all",
                 performanceMode && "opacity-50 cursor-not-allowed",
                 scrollbackLines === value
                   ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
@@ -227,7 +227,7 @@ export function TerminalSettingsTab() {
           ))}
         </div>
 
-        <div className="text-xs text-canopy-text/50 space-y-1.5 bg-canopy-bg/50 rounded-md p-3">
+        <div className="text-xs text-canopy-text/50 space-y-1.5 bg-canopy-bg/50 rounded-[var(--radius-md)] p-3">
           <div className="font-medium text-canopy-text/70 mb-2">
             Effective limits per type{performanceMode ? " (performance mode)" : ""}:
           </div>
@@ -254,7 +254,7 @@ export function TerminalSettingsTab() {
         {showMemoryDetails && (
           <div
             id="memory-details"
-            className="text-xs text-canopy-text/50 space-y-1.5 bg-canopy-bg/50 rounded-md p-3"
+            className="text-xs text-canopy-text/50 space-y-1.5 bg-canopy-bg/50 rounded-[var(--radius-md)] p-3"
           >
             <div className="font-medium text-canopy-text/70 mb-2">
               Typical session (6 agents, 6 shells, 2 dev servers):
@@ -298,7 +298,7 @@ export function TerminalSettingsTab() {
             key={id}
             onClick={() => handleStrategyChange(id)}
             className={cn(
-              "flex flex-col items-center justify-center p-4 rounded-md border transition-all",
+              "flex flex-col items-center justify-center p-4 rounded-[var(--radius-md)] border transition-all",
               layoutConfig.strategy === id
                 ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
                 : "border-canopy-border hover:bg-white/5 text-canopy-text/70"

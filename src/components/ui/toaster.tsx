@@ -59,7 +59,7 @@ function Toast({ notification }: { notification: Notification }) {
     <div
       className={cn(
         "pointer-events-auto relative flex w-full max-w-[400px] items-start gap-3",
-        "rounded-lg border",
+        "rounded-[var(--radius-lg)] border",
         "p-4 pr-10",
         "text-sm text-canopy-text",
         "shadow-lg",
@@ -89,7 +89,7 @@ function Toast({ notification }: { notification: Notification }) {
       <button
         onClick={handleDismiss}
         className={cn(
-          "absolute right-2 top-2 rounded-md p-1",
+          "absolute right-2 top-2 rounded-[var(--radius-sm)] p-1",
           "text-canopy-text/40 transition-colors",
           "hover:text-canopy-text hover:bg-white/5",
           "focus:outline-none focus:ring-1 focus:ring-canopy-border"

@@ -173,7 +173,7 @@ Performance & Diagnostics:
 
         {error && (
           <div
-            className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 text-red-400 select-text"
+            className="bg-red-500/10 border border-red-500/30 rounded-[var(--radius-lg)] p-4 text-red-400 select-text"
             role="alert"
           >
             <p className="font-semibold mb-1">Failed to load terminal information</p>
@@ -232,14 +232,14 @@ Performance & Diagnostics:
           <button
             type="button"
             onClick={copyToClipboard}
-            className="px-4 py-2 bg-canopy-accent text-white rounded-lg hover:bg-canopy-accent/90 transition-colors font-medium"
+            className="px-4 py-2 bg-canopy-accent text-white rounded-[var(--radius-lg)] hover:bg-canopy-accent/90 transition-colors font-medium"
           >
             Copy to Clipboard
           </button>
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 bg-canopy-border/30 text-canopy-text rounded-lg hover:bg-canopy-border/50 transition-colors font-medium"
+            className="px-4 py-2 bg-canopy-border/30 text-canopy-text rounded-[var(--radius-lg)] hover:bg-canopy-border/50 transition-colors font-medium"
           >
             Close
           </button>

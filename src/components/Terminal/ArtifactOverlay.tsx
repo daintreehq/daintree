@@ -90,7 +90,9 @@ function ArtifactItem({
   const lineCount = artifact.content.split("\n").length;
 
   return (
-    <div className={cn("border rounded-md overflow-hidden", colorClass.split(" ")[0])}>
+    <div
+      className={cn("border rounded-[var(--radius-md)] overflow-hidden", colorClass.split(" ")[0])}
+    >
       <button
         onClick={() => setIsExpanded(!isExpanded)}
         className={cn(
@@ -216,7 +218,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
         <button
           onClick={() => setIsExpanded(true)}
           className={cn(
-            "px-3 py-2 rounded-md shadow-lg",
+            "px-3 py-2 rounded-[var(--radius-md)] shadow-lg",
             "bg-[var(--color-status-info)] hover:brightness-110 text-white",
             "text-sm font-medium transition-all",
             "flex items-center gap-2"
@@ -230,7 +232,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
       ) : (
         <div
           className={cn(
-            "bg-canopy-sidebar border border-canopy-border rounded-lg shadow-2xl",
+            "bg-canopy-sidebar border border-canopy-border rounded-[var(--radius-lg)] shadow-2xl",
             "w-96 max-h-96 flex flex-col overflow-hidden"
           )}
         >

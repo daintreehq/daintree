@@ -147,7 +147,7 @@ export function SidecarSettingsTab() {
             return (
               <div
                 key={key}
-                className="flex items-center justify-between p-3 rounded-lg bg-canopy-bg border border-canopy-border"
+                className="flex items-center justify-between p-3 rounded-[var(--radius-lg)] bg-canopy-bg border border-canopy-border"
               >
                 {editingLinkId === link?.id ? (
                   <div className="flex items-center gap-2 flex-1">
@@ -243,7 +243,7 @@ export function SidecarSettingsTab() {
         <button
           onClick={rescan}
           disabled={isScanning}
-          className="mt-3 flex items-center gap-2 px-3 py-1.5 text-xs rounded-md border border-canopy-border hover:bg-canopy-border/50 transition-colors text-canopy-text/70"
+          className="mt-3 flex items-center gap-2 px-3 py-1.5 text-xs rounded-[var(--radius-md)] border border-canopy-border hover:bg-canopy-border/50 transition-colors text-canopy-text/70"
         >
           <RefreshCw className={cn("w-3 h-3", isScanning && "animate-spin")} />
           {isScanning ? "Scanning..." : "Re-scan for tools"}
@@ -256,7 +256,7 @@ export function SidecarSettingsTab() {
           {userLinks.map((link) => (
             <div
               key={link.id}
-              className="flex items-center justify-between p-3 rounded-lg bg-canopy-bg border border-canopy-border"
+              className="flex items-center justify-between p-3 rounded-[var(--radius-lg)] bg-canopy-bg border border-canopy-border"
             >
               {editingLinkId === link.id ? (
                 <div className="flex items-center gap-2 flex-1">
@@ -361,7 +361,7 @@ export function SidecarSettingsTab() {
             <button
               onClick={handleAddLink}
               disabled={!newLinkName.trim() || !newLinkUrl.trim()}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-md bg-canopy-accent text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-canopy-accent/90 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-[var(--radius-md)] bg-canopy-accent text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-canopy-accent/90 transition-colors"
             >
               <Plus className="w-4 h-4" />
               Add

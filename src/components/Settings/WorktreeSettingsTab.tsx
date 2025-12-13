@@ -144,7 +144,7 @@ export function WorktreeSettingsTab() {
                 setError(null);
               }}
               className={cn(
-                "flex-1 px-3 py-2 bg-canopy-bg border rounded-md text-canopy-text font-mono text-sm",
+                "flex-1 px-3 py-2 bg-canopy-bg border rounded-[var(--radius-md)] text-canopy-text font-mono text-sm",
                 "focus:outline-none focus:ring-2 focus:ring-canopy-accent",
                 !validation.valid ? "border-red-500/50" : "border-canopy-border"
               )}
@@ -152,7 +152,7 @@ export function WorktreeSettingsTab() {
             />
             <button
               onClick={handleReset}
-              className="px-3 py-2 border border-canopy-border rounded-md text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-border/50 transition-colors"
+              className="px-3 py-2 border border-canopy-border rounded-[var(--radius-md)] text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-border/50 transition-colors"
               title="Reset to default"
             >
               <RotateCcw className="w-4 h-4" />
@@ -206,7 +206,7 @@ export function WorktreeSettingsTab() {
                 key={preset.label}
                 onClick={() => handlePresetClick(preset.pattern)}
                 className={cn(
-                  "px-3 py-1.5 text-xs rounded-md border transition-colors",
+                  "px-3 py-1.5 text-xs rounded-[var(--radius-md)] border transition-colors",
                   pattern === preset.pattern
                     ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
                     : "border-canopy-border text-canopy-text/70 hover:bg-canopy-border/50"
@@ -220,7 +220,7 @@ export function WorktreeSettingsTab() {
         </div>
 
         {validation.valid && preview && (
-          <div className="space-y-2 p-3 bg-canopy-bg/50 rounded-md border border-canopy-border">
+          <div className="space-y-2 p-3 bg-canopy-bg/50 rounded-[var(--radius-md)] border border-canopy-border">
             <span className="block text-xs font-medium text-canopy-text/70">Preview:</span>
             <div className="text-xs space-y-1">
               <div className="flex items-center gap-2">
@@ -253,7 +253,7 @@ export function WorktreeSettingsTab() {
           onClick={handleSave}
           disabled={!hasChanges || !validation.valid || isSaving}
           className={cn(
-            "px-4 py-2 text-sm font-medium rounded-md transition-colors",
+            "px-4 py-2 text-sm font-medium rounded-[var(--radius-md)] transition-colors",
             hasChanges && validation.valid
               ? "bg-canopy-accent text-white hover:bg-canopy-accent/90"
               : "bg-canopy-border text-canopy-text/50 cursor-not-allowed"

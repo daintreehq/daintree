@@ -153,13 +153,13 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                   Customize how your project appears in the sidebar and dashboard.
                 </p>
 
-                <div className="flex items-start gap-3 p-3 rounded-md bg-canopy-bg border border-canopy-border">
+                <div className="flex items-start gap-3 p-3 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border">
                   <Popover open={isEmojiPickerOpen} onOpenChange={setIsEmojiPickerOpen}>
                     <PopoverTrigger asChild>
                       <button
                         type="button"
                         aria-label="Change project emoji"
-                        className="flex h-14 w-14 items-center justify-center rounded-xl shadow-inner shrink-0 bg-white/5 hover:bg-white/10 transition-colors border border-transparent hover:border-canopy-border cursor-pointer group"
+                        className="flex h-14 w-14 items-center justify-center rounded-[var(--radius-xl)] shadow-inner shrink-0 bg-white/5 hover:bg-white/10 transition-colors border border-transparent hover:border-canopy-border cursor-pointer group"
                         style={{
                           background: getProjectGradient(currentProject.color),
                         }}
@@ -208,7 +208,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                 Configure how the development server is managed for this project.
               </p>
 
-              <div className="space-y-4 p-4 rounded-md bg-canopy-bg border border-canopy-border">
+              <div className="space-y-4 p-4 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border">
                 <label className="flex items-center gap-3 cursor-pointer">
                   <input
                     type="checkbox"

@@ -216,7 +216,7 @@ export function GitHubResourceList({
   };
 
   const renderError = () => (
-    <div className="p-4 m-3 rounded-md bg-[color-mix(in_oklab,var(--color-status-error)_10%,transparent)] border border-[color-mix(in_oklab,var(--color-status-error)_20%,transparent)]">
+    <div className="p-4 m-3 rounded-[var(--radius-md)] bg-[color-mix(in_oklab,var(--color-status-error)_10%,transparent)] border border-[color-mix(in_oklab,var(--color-status-error)_20%,transparent)]">
       <div className="flex items-center gap-2 text-[var(--color-status-error)]">
         <AlertCircle className="h-4 w-4" />
         <span className="text-sm font-medium">Error</span>
@@ -255,7 +255,7 @@ export function GitHubResourceList({
             onChange={(e) => setSearchQuery(e.target.value)}
             aria-label={`Search ${type === "issue" ? "issues" : "pull requests"}`}
             className={cn(
-              "w-full h-8 pl-8 pr-3 rounded-md text-sm",
+              "w-full h-8 pl-8 pr-3 rounded-[var(--radius-md)] text-sm",
               "bg-canopy-bg border border-canopy-border",
               "text-canopy-text placeholder:text-muted-foreground",
               "focus:outline-none focus:ring-1 focus:ring-canopy-accent focus:border-canopy-accent",
@@ -265,7 +265,7 @@ export function GitHubResourceList({
         </div>
 
         <div
-          className="flex p-0.5 bg-black/20 rounded-md"
+          className="flex p-0.5 bg-black/20 rounded-[var(--radius-md)]"
           role="group"
           aria-label="Filter by state"
         >
@@ -318,7 +318,7 @@ export function GitHubResourceList({
             {hasMore && (
               <div className="p-3 space-y-2">
                 {loadMoreError && (
-                  <div className="p-2 rounded-md bg-red-500/10 border border-red-500/20">
+                  <div className="p-2 rounded-[var(--radius-md)] bg-red-500/10 border border-red-500/20">
                     <p className="text-xs text-red-400">{loadMoreError}</p>
                     <Button
                       variant="ghost"

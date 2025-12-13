@@ -4,7 +4,7 @@ export function WorktreeCardSkeleton() {
   return (
     <div
       className={cn(
-        "border rounded-lg p-3 mb-2",
+        "border rounded-[var(--radius-lg)] p-3 mb-2",
         "border-transparent bg-canopy-bg/50",
         "animate-pulse-delayed"
       )}

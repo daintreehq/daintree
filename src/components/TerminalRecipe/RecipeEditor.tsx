@@ -151,7 +151,7 @@ export function RecipeEditor({
             value={recipeName}
             onChange={(e) => setRecipeName(e.target.value)}
             placeholder="e.g., Full Stack Dev"
-            className="w-full px-3 py-2 bg-canopy-background border border-canopy-border rounded-md text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
+            className="w-full px-3 py-2 bg-canopy-background border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
           />
         </div>
 
@@ -169,7 +169,7 @@ export function RecipeEditor({
             {terminals.map((terminal, index) => (
               <div
                 key={index}
-                className="bg-canopy-background border border-canopy-border rounded-md p-3"
+                className="bg-canopy-background border border-canopy-border rounded-[var(--radius-md)] p-3"
               >
                 <div className="flex items-start gap-3">
                   <div className="flex-1">
@@ -234,7 +234,7 @@ export function RecipeEditor({
         </div>
 
         {error && (
-          <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-md text-[var(--color-status-error)] text-sm">
+          <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-[var(--radius-md)] text-[var(--color-status-error)] text-sm">
             {error}
           </div>
         )}

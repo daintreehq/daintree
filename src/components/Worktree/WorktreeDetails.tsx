@@ -208,7 +208,7 @@ export function WorktreeDetails({
                       : "Start dev server"
               }
               className={cn(
-                "py-1.5 px-3 rounded-lg font-medium text-xs transition-colors",
+                "py-1.5 px-3 rounded-[var(--radius-lg)] font-medium text-xs transition-colors",
                 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
                 serverState.status === "running"
                   ? "bg-[color-mix(in_oklab,var(--color-server-running)_20%,transparent)] text-[var(--color-server-running)] hover:bg-[color-mix(in_oklab,var(--color-server-running)_30%,transparent)]"
@@ -285,7 +285,7 @@ export function WorktreeDetails({
 
       {/* Block 2: Narrative (AI note, summary, or commit message) */}
       {effectiveNote && (
-        <div className="p-3 rounded-lg bg-yellow-500/5 border border-yellow-500/20">
+        <div className="p-3 rounded-[var(--radius-lg)] bg-yellow-500/5 border border-yellow-500/20">
           <div className="text-xs text-yellow-200/90 whitespace-pre-wrap font-mono">
             {parsedNoteSegments.map((segment, index) =>
               segment.type === "link" ? (

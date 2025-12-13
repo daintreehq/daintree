@@ -97,7 +97,7 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
           placeholder="Search shortcuts..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="w-full px-4 py-2 bg-canopy-bg border border-canopy-border rounded-md text-canopy-text placeholder-canopy-text/40 focus:outline-none focus:ring-2 focus:ring-canopy-accent"
+          className="w-full px-4 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text placeholder-canopy-text/40 focus:outline-none focus:ring-2 focus:ring-canopy-accent"
         />
       </AppDialog.Header>
 

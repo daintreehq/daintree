@@ -126,7 +126,7 @@ export function RecipeList({ worktreeId, worktreePath, showGlobal = true }: Reci
       {filteredRecipes.map((recipe) => (
         <div
           key={recipe.id}
-          className="bg-canopy-background border border-canopy-border rounded-md p-3 hover:border-canopy-accent transition-colors"
+          className="bg-canopy-background border border-canopy-border rounded-[var(--radius-md)] p-3 hover:border-canopy-accent transition-colors"
         >
           <div className="flex items-start justify-between">
             <div className="flex-1">

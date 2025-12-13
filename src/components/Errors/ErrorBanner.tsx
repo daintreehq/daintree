@@ -98,7 +98,7 @@ export function ErrorBanner({
   return (
     <div
       className={cn(
-        "border border-[var(--color-status-error)]/30 bg-[color-mix(in_oklab,var(--color-status-error)_12%,transparent)] rounded-lg overflow-hidden",
+        "border border-[var(--color-status-error)]/30 bg-[color-mix(in_oklab,var(--color-status-error)_12%,transparent)] rounded-[var(--radius-lg)] overflow-hidden",
         className
       )}
       role="alert"

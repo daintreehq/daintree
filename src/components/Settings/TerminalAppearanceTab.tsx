@@ -97,7 +97,7 @@ export function TerminalAppearanceTab() {
     <div className="space-y-6">
       <div className="space-y-2">
         <h4 className="text-sm font-medium text-canopy-text">Font size</h4>
-        <div className="bg-canopy-bg border border-canopy-border rounded-md p-4 space-y-2">
+        <div className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] p-4 space-y-2">
           <div className="flex items-center gap-2">
             <input
               type="number"
@@ -126,7 +126,7 @@ export function TerminalAppearanceTab() {
 
       <div className="space-y-2">
         <h4 className="text-sm font-medium text-canopy-text">Font family</h4>
-        <div className="bg-canopy-bg border border-canopy-border rounded-md p-4 space-y-2">
+        <div className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] p-4 space-y-2">
           <select
             value={selectedFontFamilyId}
             onChange={(e) => handleFontFamilyChange(e.target.value)}

@@ -55,7 +55,7 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
   const terminalName = terminal.title || terminal.type || "Terminal";
 
   return (
-    <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-sm bg-transparent hover:bg-white/5 transition-colors group">
+    <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-[var(--radius-sm)] bg-transparent hover:bg-white/5 transition-colors group">
       <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
         <TerminalIcon type={terminal.type} agentId={terminal.agentId} className="w-3 h-3" />
       </div>

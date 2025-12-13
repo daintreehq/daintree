@@ -82,7 +82,7 @@ export function TerminalCountBadge({
         <DropdownMenuTrigger asChild>
           <button
             className={cn(
-              "flex items-center gap-1.5 px-2 py-1 text-xs text-canopy-text/60 bg-black/20 rounded-sm",
+              "flex items-center gap-1.5 px-2 py-1 text-xs text-canopy-text/60 bg-black/20 rounded-[var(--radius-sm)]",
               "hover:bg-white/5 hover:text-canopy-text transition-colors cursor-pointer border border-transparent hover:border-white/10",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
             )}

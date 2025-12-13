@@ -323,7 +323,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
           ) : (
             <div
               className={cn(
-                "relative flex items-center bg-surface border border-canopy-border rounded-md",
+                "relative flex items-center bg-surface border border-canopy-border rounded-[var(--radius-md)]",
                 "focus-within:border-canopy-accent/50 focus-within:ring-1 focus-within:ring-canopy-accent/20 transition-all"
               )}
             >
@@ -358,7 +358,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                 <button
                   onClick={() => setRunAsDocked(!runAsDocked)}
                   className={cn(
-                    "p-1.5 rounded-sm transition-all",
+                    "p-1.5 rounded-[var(--radius-sm)] transition-all",
                     runAsDocked
                       ? "bg-canopy-accent/20 text-canopy-accent"
                       : "text-white/30 hover:text-white/60 hover:bg-white/10"
@@ -386,7 +386,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                   onClick={() => handleRun(input)}
                   disabled={!input.trim()}
                   className={cn(
-                    "p-1.5 rounded-sm transition-all",
+                    "p-1.5 rounded-[var(--radius-sm)] transition-all",
                     input.trim()
                       ? "text-white hover:bg-white/10"
                       : "text-white/10 cursor-not-allowed"
@@ -403,7 +403,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                 <div
                   role="listbox"
                   onMouseDown={(e) => e.preventDefault()}
-                  className="absolute bottom-full left-0 right-0 mb-1 bg-surface border border-canopy-border rounded-md shadow-2xl overflow-hidden z-50 max-h-64 flex flex-col"
+                  className="absolute bottom-full left-0 right-0 mb-1 bg-surface border border-canopy-border rounded-[var(--radius-md)] shadow-2xl overflow-hidden z-50 max-h-64 flex flex-col"
                 >
                   <div className="text-[10px] text-white/30 px-3 py-1 bg-black/20 border-b border-white/5 shrink-0">
                     COMMANDS

@@ -178,7 +178,7 @@ export function TroubleshootingTab({ openLogs, clearLogs }: TroubleshootingTabPr
             Enable enhanced debugging features for development and troubleshooting.
           </p>
 
-          <label className="flex items-center gap-3 cursor-pointer mb-4 p-3 border border-canopy-border rounded-md">
+          <label className="flex items-center gap-3 cursor-pointer mb-4 p-3 border border-canopy-border rounded-[var(--radius-md)]">
             <button
               onClick={handleToggleDeveloperMode}
               className={cn(
@@ -243,7 +243,7 @@ export function TroubleshootingTab({ openLogs, clearLogs }: TroubleshootingTabPr
             </label>
           </div>
 
-          <div className="mt-4 p-3 border border-canopy-border rounded-md">
+          <div className="mt-4 p-3 border border-canopy-border rounded-[var(--radius-md)]">
             <label
               className="flex items-center gap-3 cursor-pointer"
               onClick={handleToggleVerboseLogging}
@@ -289,7 +289,7 @@ export function TroubleshootingTab({ openLogs, clearLogs }: TroubleshootingTabPr
             )}
           </div>
 
-          <div className="mt-4 p-3 bg-canopy-border/30 rounded-md">
+          <div className="mt-4 p-3 bg-canopy-border/30 rounded-[var(--radius-md)]">
             <h5 className="text-xs font-medium text-canopy-text mb-2">
               Advanced: Persistent Verbose Logging
             </h5>

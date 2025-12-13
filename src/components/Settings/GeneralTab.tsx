@@ -134,9 +134,9 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
     <div className="space-y-6">
       <div className="space-y-2">
         <h4 className="text-sm font-medium text-canopy-text">About</h4>
-        <div className="bg-canopy-bg border border-canopy-border rounded-md p-4">
+        <div className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] p-4">
           <div className="flex items-center gap-3 mb-4">
-            <div className="h-12 w-12 bg-canopy-accent/20 rounded-lg flex items-center justify-center">
+            <div className="h-12 w-12 bg-canopy-accent/20 rounded-[var(--radius-lg)] flex items-center justify-center">
               <TreePine className="w-6 h-6 text-canopy-accent" />
             </div>
             <div>
@@ -168,7 +168,7 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
 
       <div className="space-y-2">
         <h4 className="text-sm font-medium text-canopy-text">System Status</h4>
-        <div className="bg-canopy-bg border border-canopy-border rounded-md p-4 space-y-3">
+        <div className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] p-4 space-y-3">
           {!cliAvailability || !agentSettings ? (
             <div className="text-sm text-canopy-text/40">Loading agent status...</div>
           ) : (
@@ -214,7 +214,7 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
       </div>
 
       {configError ? (
-        <div className="p-4 rounded-lg border border-[color-mix(in_oklab,var(--color-status-error)_50%,transparent)] bg-[color-mix(in_oklab,var(--color-status-error)_10%,transparent)]">
+        <div className="p-4 rounded-[var(--radius-lg)] border border-[color-mix(in_oklab,var(--color-status-error)_50%,transparent)] bg-[color-mix(in_oklab,var(--color-status-error)_10%,transparent)]">
           <p className="text-sm text-[var(--color-status-error)]">
             Failed to load hibernation settings: {configError}
           </p>
@@ -236,7 +236,7 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
             onClick={handleHibernationToggle}
             disabled={isSaving}
             className={cn(
-              "w-full flex items-center justify-between p-4 rounded-lg border transition-all",
+              "w-full flex items-center justify-between p-4 rounded-[var(--radius-lg)] border transition-all",
               hibernationConfig.enabled
                 ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
                 : "border-canopy-border hover:bg-white/5 text-canopy-text/70"
@@ -287,7 +287,7 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
                     disabled={isSaving}
                     onClick={() => handleThresholdChange(value)}
                     className={cn(
-                      "px-3 py-1.5 rounded-md text-xs font-medium transition-all",
+                      "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-all",
                       hibernationConfig.inactiveThresholdHours === value
                         ? "bg-canopy-accent/10 border border-canopy-accent text-canopy-accent"
                         : "border border-canopy-border hover:bg-white/5 text-canopy-text/70"
@@ -305,7 +305,7 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
         </div>
       ) : null}
 
-      <div className="border border-canopy-border rounded-md">
+      <div className="border border-canopy-border rounded-[var(--radius-md)]">
         <button
           type="button"
           onClick={() => setIsShortcutsOpen(!isShortcutsOpen)}

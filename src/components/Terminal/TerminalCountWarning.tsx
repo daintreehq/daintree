@@ -96,7 +96,7 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
   return (
     <div
       className={cn(
-        "flex items-center justify-between gap-4 px-4 py-3 rounded-lg",
+        "flex items-center justify-between gap-4 px-4 py-3 rounded-[var(--radius-lg)]",
         "bg-[color-mix(in_oklab,var(--color-status-warning)_12%,transparent)]",
         "border border-[var(--color-status-warning)]/30",
         "transition-all duration-200",
@@ -135,7 +135,7 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
         type="button"
         onClick={handleDismiss}
         className={cn(
-          "rounded-md p-1",
+          "rounded-[var(--radius-sm)] p-1",
           "text-[var(--color-status-warning)]/60 transition-colors",
           "hover:text-[var(--color-status-warning)] hover:bg-[var(--color-status-warning)]/10",
           "focus:outline-none focus:ring-1 focus:ring-[var(--color-status-warning)]/50"

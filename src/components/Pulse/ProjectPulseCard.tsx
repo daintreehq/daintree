@@ -59,7 +59,12 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
 
   if (isLoading && !pulse) {
     return (
-      <div className={cn("p-4 bg-white/[0.02] rounded-lg border border-white/5", className)}>
+      <div
+        className={cn(
+          "p-4 bg-white/[0.02] rounded-[var(--radius-lg)] border border-white/5",
+          className
+        )}
+      >
         <div className="flex items-center gap-2 text-canopy-text/50">
           <Loader2 className="w-4 h-4 animate-spin" />
           <span className="text-xs">Loading activity data...</span>
@@ -70,7 +75,12 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
 
   if (error && !pulse) {
     return (
-      <div className={cn("p-4 bg-white/[0.02] rounded-lg border border-white/5", className)}>
+      <div
+        className={cn(
+          "p-4 bg-white/[0.02] rounded-[var(--radius-lg)] border border-white/5",
+          className
+        )}
+      >
         <div className="flex items-center gap-2 text-canopy-text/50">
           <AlertCircle className="w-4 h-4 text-red-400/70" />
           <span className="text-xs">{error}</span>
@@ -91,7 +101,9 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
   }
 
   return (
-    <div className={cn("bg-white/[0.02] rounded-lg border border-white/5", className)}>
+    <div
+      className={cn("bg-white/[0.02] rounded-[var(--radius-lg)] border border-white/5", className)}
+    >
       <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Activity className="w-4 h-4 text-emerald-400/70" />

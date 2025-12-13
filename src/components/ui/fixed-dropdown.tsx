@@ -78,7 +78,7 @@ export function FixedDropdown({
       <div
         ref={contentRef}
         className={cn(
-          "absolute pointer-events-auto overflow-hidden rounded-md border border-canopy-border bg-canopy-sidebar text-canopy-text shadow-lg",
+          "absolute pointer-events-auto overflow-hidden rounded-[var(--radius-lg)] border border-canopy-border bg-canopy-sidebar text-canopy-text shadow-lg",
           className
         )}
         style={{ top: position.top, right: position.right }}

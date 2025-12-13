@@ -242,7 +242,7 @@ export function NewWorktreeDialog({
                   const branchInfo = branches.find((b) => b.name === val);
                   setFromRemote(!!branchInfo?.remote);
                 }}
-                className="w-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-md text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
+                className="w-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
                 disabled={creating}
               >
                 {branches.map((branch) => (
@@ -267,7 +267,7 @@ export function NewWorktreeDialog({
                   <select
                     value={selectedPrefix}
                     onChange={(e) => setSelectedPrefix(e.target.value)}
-                    className="appearance-none h-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-md text-canopy-text text-sm focus:outline-none focus:ring-2 focus:ring-canopy-accent pr-8"
+                    className="appearance-none h-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text text-sm focus:outline-none focus:ring-2 focus:ring-canopy-accent pr-8"
                     disabled={creating}
                   >
                     {BRANCH_TYPES.map((type) => (
@@ -290,7 +290,7 @@ export function NewWorktreeDialog({
                   value={newBranch}
                   onChange={(e) => setNewBranch(e.target.value)}
                   placeholder="my-awesome-feature"
-                  className="flex-1 px-3 py-2 bg-canopy-bg border border-canopy-border rounded-md text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
+                  className="flex-1 px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
                   disabled={creating}
                 />
               </div>
@@ -313,7 +313,7 @@ export function NewWorktreeDialog({
                   value={worktreePath}
                   onChange={(e) => setWorktreePath(e.target.value)}
                   placeholder="/path/to/worktree"
-                  className="flex-1 px-3 py-2 bg-canopy-bg border border-canopy-border rounded-md text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
+                  className="flex-1 px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
                   disabled={creating}
                 />
                 <Button
@@ -357,7 +357,7 @@ export function NewWorktreeDialog({
             </div>
 
             {error && (
-              <div className="flex items-start gap-2 p-3 bg-red-500/10 border border-red-500/20 rounded-md">
+              <div className="flex items-start gap-2 p-3 bg-red-500/10 border border-red-500/20 rounded-[var(--radius-md)]">
                 <AlertCircle className="w-4 h-4 text-[var(--color-status-error)] mt-0.5 flex-shrink-0" />
                 <p className="text-sm text-[var(--color-status-error)]">{error}</p>
               </div>

@@ -136,7 +136,8 @@ export function TerminalDock() {
               ref={combinedRef}
               className={cn(
                 "flex items-center gap-1.5 overflow-x-auto flex-1 min-h-[36px] no-scrollbar scroll-smooth px-1",
-                isOver && "bg-white/[0.03] ring-2 ring-canopy-accent/30 ring-inset rounded-md"
+                isOver &&
+                  "bg-white/[0.03] ring-2 ring-canopy-accent/30 ring-inset rounded-[var(--radius-md)]"
               )}
             >
               <SortableContext

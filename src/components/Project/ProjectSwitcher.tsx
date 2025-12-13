@@ -210,7 +210,7 @@ export function ProjectSwitcher() {
   const renderIcon = (emoji: string, color?: string, sizeClass = "h-8 w-8 text-lg") => (
     <div
       className={cn(
-        "flex items-center justify-center rounded-xl shadow-inner shrink-0 transition-all duration-200",
+        "flex items-center justify-center rounded-[var(--radius-xl)] shadow-inner shrink-0 transition-all duration-200",
         "bg-white/5",
         sizeClass
       )}
@@ -252,7 +252,7 @@ export function ProjectSwitcher() {
         }}
         disabled={isLoading}
         className={cn(
-          "gap-2 p-2 cursor-pointer mb-0.5 rounded-md transition-colors",
+          "gap-2 p-2 cursor-pointer mb-0.5 rounded-[var(--radius-md)] transition-colors",
           isActive ? "bg-accent/50" : "focus:bg-accent/30"
         )}
       >
@@ -382,7 +382,7 @@ export function ProjectSwitcher() {
                 onClick={addProject}
                 className="gap-3 p-2 cursor-pointer text-muted-foreground focus:text-foreground"
               >
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-dashed border-muted-foreground/30 bg-muted/20">
+                <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20">
                   <Plus className="h-4 w-4" />
                 </div>
                 <span className="font-medium">Add Project...</span>
@@ -446,7 +446,7 @@ export function ProjectSwitcher() {
             onClick={addProject}
             className="gap-3 p-2 cursor-pointer focus:bg-accent/30"
           >
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
+            <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
               <Plus className="h-4 w-4" />
             </div>
             <span className="font-medium text-sm text-muted-foreground">Add Project...</span>

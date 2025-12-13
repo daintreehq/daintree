@@ -78,7 +78,7 @@ function LauncherButton({
       disabled={isLoading}
       title={tooltipText}
       className={cn(
-        "group relative flex flex-col items-center justify-center gap-2.5 p-4 rounded-xl border transition-all duration-200",
+        "group relative flex flex-col items-center justify-center gap-2.5 p-4 rounded-[var(--radius-xl)] border transition-all duration-200",
         "w-28 h-28",
         "bg-canopy-bg hover:bg-surface",
         "border-canopy-border/20 hover:border-canopy-border/40",

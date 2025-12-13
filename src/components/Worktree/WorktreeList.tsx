@@ -271,7 +271,7 @@ export function WorktreeList({
   if (sortedWorktrees.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full p-4">
-        <div className="bg-canopy-bg border border-canopy-border/40 rounded-xl p-8 flex flex-col items-center max-w-sm text-center shadow-sm">
+        <div className="bg-canopy-bg border border-canopy-border/40 rounded-[var(--radius-xl)] p-8 flex flex-col items-center max-w-sm text-center shadow-sm">
           <div className="h-12 w-12 bg-canopy-accent/10 rounded-full flex items-center justify-center mb-4">
             <svg
               className="w-6 h-6 text-canopy-accent"

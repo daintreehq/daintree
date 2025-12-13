@@ -134,7 +134,7 @@ export function Toolbar({
       <div className="flex-1 flex justify-center items-center h-full opacity-70 hover:opacity-100 transition-opacity">
         {currentProject ? (
           <div
-            className="flex items-center gap-2 px-3 py-1 rounded-md select-none"
+            className="flex items-center gap-2 px-3 py-1 rounded-[var(--radius-md)] select-none"
             style={{
               background: getProjectGradient(currentProject.color),
             }}
@@ -260,7 +260,7 @@ export function Toolbar({
 
               <div
                 className={cn(
-                  "flex items-center gap-1.5 px-2 h-7 rounded-md",
+                  "flex items-center gap-1.5 px-2 h-7 rounded-[var(--radius-md)]",
                   (stats.commitCount === 0 || statsError) && "opacity-50",
                   statsError && "text-[var(--color-status-error)]"
                 )}

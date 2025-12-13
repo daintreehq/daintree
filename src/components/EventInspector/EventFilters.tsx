@@ -169,7 +169,7 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
             onChange={(e) => handleSearchChange(e.target.value)}
             placeholder="Search events..."
             className={cn(
-              "w-full pl-9 pr-9 py-2 text-sm rounded-md",
+              "w-full pl-9 pr-9 py-2 text-sm rounded-[var(--radius-md)]",
               "bg-muted/50 border border-transparent",
               "focus:bg-background focus:border-primary focus:outline-none",
               "placeholder:text-muted-foreground"
@@ -198,7 +198,7 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
               onChange={(e) => handleTraceIdChange(e.target.value)}
               placeholder="Filter by trace ID..."
               className={cn(
-                "w-full pl-3 pr-9 py-2 text-sm rounded-md font-mono",
+                "w-full pl-3 pr-9 py-2 text-sm rounded-[var(--radius-md)] font-mono",
                 "bg-muted/50 border border-transparent",
                 "focus:bg-background focus:border-primary focus:outline-none",
                 "placeholder:text-muted-foreground placeholder:font-sans"

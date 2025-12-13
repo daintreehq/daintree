@@ -112,7 +112,7 @@ export function IssueSelector({
         <div className="flex items-center border-b border-canopy-border px-3">
           <Search className="mr-2 h-4 w-4 opacity-50 shrink-0" />
           <input
-            className="flex h-10 w-full rounded-md bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex h-10 w-full rounded-[var(--radius-md)] bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
             placeholder="Search issues..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -140,7 +140,7 @@ export function IssueSelector({
                   setOpen(false);
                 }}
                 className={cn(
-                  "flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm cursor-pointer hover:bg-canopy-border",
+                  "flex items-center gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
                   selectedIssue?.number === issue.number && "bg-canopy-border"
                 )}
               >

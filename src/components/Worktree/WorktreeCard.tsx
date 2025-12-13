@@ -791,7 +791,10 @@ export function WorktreeCard({
 
         {/* Details Container - same styling for collapsed (pulse) and expanded */}
         {hasExpandableContent && (
-          <div id={detailsId} className="mt-3 p-3 bg-white/[0.01] rounded-lg border border-white/5">
+          <div
+            id={detailsId}
+            className="mt-3 p-3 bg-white/[0.01] rounded-[var(--radius-lg)] border border-white/5"
+          >
             {isExpanded ? (
               /* Expanded: full WorktreeDetails */
               <WorktreeDetails
@@ -820,7 +823,7 @@ export function WorktreeCard({
                   onClick={handleToggleExpand}
                   aria-expanded={false}
                   aria-controls={detailsId}
-                  className="w-full p-3 flex items-center justify-between min-w-0 text-left rounded-lg transition-colors hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]"
+                  className="w-full p-3 flex items-center justify-between min-w-0 text-left rounded-[var(--radius-lg)] transition-colors hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]"
                 >
                   {/* LEFT SLOT: Git Signal + Commit Message */}
                   <div className="flex items-center gap-2 min-w-0 flex-1 text-xs font-mono text-canopy-text/60">

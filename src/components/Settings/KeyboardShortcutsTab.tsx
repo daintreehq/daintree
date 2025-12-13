@@ -62,7 +62,7 @@ function KeyRecorder({ onCapture, onCancel, conflicts }: KeyRecorderProps) {
   };
 
   return (
-    <div className="bg-canopy-bg/50 border border-canopy-border rounded-lg p-4 space-y-3">
+    <div className="bg-canopy-bg/50 border border-canopy-border rounded-[var(--radius-lg)] p-4 space-y-3">
       <div className="flex items-center gap-2">
         {recording ? (
           <div className="flex-1 px-4 py-2 border border-canopy-accent rounded bg-canopy-accent/10 text-canopy-accent animate-pulse text-center">

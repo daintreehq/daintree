@@ -13,7 +13,7 @@ const VARIANT_STYLES = {
   fullscreen: "h-screen w-screen flex items-center justify-center bg-canopy-bg",
   section: "h-full w-full flex items-center justify-center p-8",
   component:
-    "p-4 rounded-lg bg-[color-mix(in_oklab,var(--color-status-error)_12%,transparent)] border border-[var(--color-status-error)]/30",
+    "p-4 rounded-[var(--radius-lg)] bg-[color-mix(in_oklab,var(--color-status-error)_12%,transparent)] border border-[var(--color-status-error)]/30",
 } as const;
 
 const VARIANT_SIZES = {

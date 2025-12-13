@@ -142,7 +142,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
       className={cn(
         "absolute top-2 right-2 z-20",
         "flex items-center gap-1 px-2 py-1.5",
-        "bg-canopy-sidebar border border-canopy-border rounded-md shadow-lg",
+        "bg-canopy-sidebar border border-canopy-border rounded-[var(--radius-md)] shadow-lg",
         className
       )}
       onClick={(e) => e.stopPropagation()}

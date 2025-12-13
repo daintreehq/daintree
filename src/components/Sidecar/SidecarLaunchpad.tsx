@@ -26,7 +26,7 @@ export function SidecarLaunchpad({ links, onOpenUrl }: SidecarLaunchpadProps) {
             <button
               key={link.id}
               onClick={() => onOpenUrl(link.url, link.title)}
-              className="flex items-center gap-4 p-4 rounded-xl bg-canopy-border hover:bg-canopy-border/80 border border-canopy-border hover:border-canopy-border transition-all group focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 focus-visible:outline-offset-2"
+              className="flex items-center gap-4 p-4 rounded-[var(--radius-xl)] bg-canopy-border hover:bg-canopy-border/80 border border-canopy-border hover:border-canopy-border transition-all group focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 focus-visible:outline-offset-2"
             >
               <div className="w-8 h-8 flex items-center justify-center text-foreground group-hover:text-white transition-colors">
                 <SidecarIcon icon={link.icon} size="launchpad" url={link.url} type={link.type} />

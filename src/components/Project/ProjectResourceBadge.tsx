@@ -74,7 +74,7 @@ export function ProjectResourceBadge() {
   }
 
   return (
-    <div className="mx-2 mb-2 p-2 rounded-md bg-green-500/10 border border-green-500/20">
+    <div className="mx-2 mb-2 p-2 rounded-[var(--radius-md)] bg-green-500/10 border border-green-500/20">
       <div className="flex items-center gap-2">
         <Circle className="h-3 w-3 fill-green-500 text-green-500 animate-pulse shrink-0" />
         <div className="flex-1 min-w-0">

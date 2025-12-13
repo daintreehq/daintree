@@ -150,7 +150,7 @@ export function GitHubSettingsTab() {
             placeholder={
               githubConfig?.hasToken ? "Enter new token to replace" : "ghp_... or github_pat_..."
             }
-            className="flex-1 bg-canopy-bg border border-canopy-border rounded-md px-3 py-2 text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:ring-1 focus:ring-canopy-accent"
+            className="flex-1 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:ring-1 focus:ring-canopy-accent"
             disabled={isValidating || isTesting}
           />
           <Button
@@ -220,7 +220,7 @@ export function GitHubSettingsTab() {
         </p>
       </div>
 
-      <div className="space-y-3 border border-canopy-border rounded-md p-4">
+      <div className="space-y-3 border border-canopy-border rounded-[var(--radius-md)] p-4">
         <h4 className="text-sm font-medium text-canopy-text">Create a New Token</h4>
         <p className="text-xs text-canopy-text/60">
           To create a personal access token with the required scopes (repo, read:org), click the

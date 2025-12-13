@@ -71,7 +71,11 @@ export function SegmentedControl({
 
   return (
     <div className={cn("pb-6", className)}>
-      <div role="tablist" aria-label={ariaLabel} className="flex p-1 bg-black/20 rounded-lg w-full">
+      <div
+        role="tablist"
+        aria-label={ariaLabel}
+        className="flex p-1 bg-black/20 rounded-[var(--radius-lg)] w-full"
+      >
         {tabs.map((tab, index) => {
           const isActive = activeTab === tab.id;
           return (
@@ -87,7 +91,7 @@ export function SegmentedControl({
               onClick={() => onTabChange(tab.id)}
               onKeyDown={(e) => handleKeyDown(e, index)}
               className={cn(
-                "flex-1 flex items-center justify-center gap-2 px-3 py-1.5 text-sm font-medium rounded-md transition-all duration-200 ease-out",
+                "flex-1 flex items-center justify-center gap-2 px-3 py-1.5 text-sm font-medium rounded-[var(--radius-md)] transition-all duration-200 ease-out",
                 isActive
                   ? "bg-canopy-accent/10 text-canopy-accent"
                   : "text-canopy-text/60 hover:text-canopy-text hover:bg-white/5"

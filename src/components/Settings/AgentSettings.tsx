@@ -104,7 +104,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
   return (
     <div className="space-y-4">
       {/* Agent Selector - Grid of pills */}
-      <div className="grid grid-cols-3 gap-1.5 p-1.5 bg-canopy-bg rounded-lg border border-canopy-border">
+      <div className="grid grid-cols-3 gap-1.5 p-1.5 bg-canopy-bg rounded-[var(--radius-lg)] border border-canopy-border">
         {agentOptions.map((agent) => {
           if (!agent) return null;
           const Icon = agent.Icon;
@@ -114,7 +114,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
               key={agent.id}
               onClick={() => setActiveAgentId(agent.id)}
               className={cn(
-                "flex items-center justify-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-all",
+                "flex items-center justify-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-sm font-medium transition-all",
                 isActive
                   ? "bg-canopy-sidebar text-canopy-text shadow-sm"
                   : "text-canopy-text/60 hover:text-canopy-text hover:bg-white/5"
@@ -141,7 +141,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
 
       {/* Agent Configuration Card */}
       {activeAgent && (
-        <div className="rounded-lg border border-canopy-border bg-canopy-bg-secondary p-4 space-y-4">
+        <div className="rounded-[var(--radius-lg)] border border-canopy-border bg-canopy-bg-secondary p-4 space-y-4">
           {/* Header with agent info */}
           <div className="flex items-center justify-between pb-3 border-b border-canopy-border">
             <div className="flex items-center gap-3">
@@ -225,7 +225,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
             </div>
 
             {activeEntry.dangerousEnabled && defaultDangerousArg && (
-              <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-[var(--color-status-error)]/10 border border-[var(--color-status-error)]/20">
+              <div className="flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-[var(--color-status-error)]/10 border border-[var(--color-status-error)]/20">
                 <code className="text-xs text-[var(--color-status-error)] font-mono">
                   {defaultDangerousArg}
                 </code>
@@ -238,7 +238,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
           <div className="space-y-2 pt-2 border-t border-canopy-border">
             <label className="text-sm font-medium text-canopy-text">Custom Arguments</label>
             <input
-              className="w-full rounded-md border border-canopy-border bg-canopy-bg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-canopy-accent/50 placeholder:text-canopy-text/30"
+              className="w-full rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-canopy-accent/50 placeholder:text-canopy-text/30"
               value={activeEntry.customFlags ?? ""}
               onChange={(e) => updateAgent(activeAgent.id, { customFlags: e.target.value })}
               placeholder="--verbose --max-tokens=4096"
