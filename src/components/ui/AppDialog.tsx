@@ -138,7 +138,7 @@ export function AppDialog({
     <AppDialogContext.Provider value={{ onClose: handleClose, titleId, descriptionId }}>
       <div
         className={cn(
-          "fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/40 backdrop-blur-sm backdrop-saturate-[1.25]",
+          "fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/50 backdrop-blur-md backdrop-saturate-[1.25]",
           "transition-opacity duration-150",
           "motion-reduce:transition-none motion-reduce:duration-0",
           isVisible ? "opacity-100" : "opacity-0"
@@ -151,7 +151,7 @@ export function AppDialog({
       >
         <div
           className={cn(
-            "bg-canopy-sidebar border border-canopy-border rounded-[var(--radius-xl)] shadow-modal mx-4 flex flex-col max-h-[80vh]",
+            "bg-canopy-sidebar border border-canopy-border border-t-white/10 rounded-[var(--radius-xl)] shadow-2xl mx-4 flex flex-col max-h-[80vh]",
             sizeClasses[size],
             "w-full",
             "transition-all duration-150",

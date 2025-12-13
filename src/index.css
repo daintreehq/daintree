@@ -508,7 +508,10 @@ body,
 .terminal-selected {
   border-color: rgba(255, 255, 255, 0.15);
   background-color: var(--color-surface-highlight);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.05),
+    0 0 0 1px var(--color-canopy-accent),
+    0 0 12px -2px rgba(16, 185, 129, 0.3);
 }
 
 /* Ensure header separator blends with selected state */
@@ -520,7 +523,10 @@ body,
 .terminal-focused {
   border-color: rgba(255, 255, 255, 0.15);
   background-color: var(--color-surface-highlight);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.05),
+    0 0 0 1px var(--color-canopy-accent),
+    0 0 12px -2px rgba(16, 185, 129, 0.3);
 }
 
 /* Terminal Pane Ping Animation
@@ -618,7 +624,10 @@ body,
     /* Settled: matches .terminal-selected exactly */
     background-color: var(--color-surface-highlight);
     border-color: rgba(255, 255, 255, 0.15);
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.05),
+      0 0 0 1px var(--color-canopy-accent),
+      0 0 12px -2px rgba(16, 185, 129, 0.3);
   }
 }
 
@@ -678,16 +687,18 @@ body,
 
   .animate-terminal-ping-select {
     animation: none !important;
-    transition:
-      background-color 0.2s,
-      border-color 0.2s,
-      box-shadow 0.2s !important;
+    transition: none !important;
   }
 
   .animate-eco-title,
   .animate-eco-title-select {
     animation: none;
     text-shadow: none;
+  }
+
+  /* Disable terminal glow transitions for reduced motion */
+  .terminal-pane {
+    transition: none !important;
   }
 }
 
@@ -940,6 +951,18 @@ body[data-performance-mode="true"] .surface-overlay {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
   background-color: var(--color-canopy-sidebar) !important;
+}
+
+/* Disable terminal glow in performance mode */
+body[data-performance-mode="true"] .terminal-selected,
+body[data-performance-mode="true"] .terminal-focused {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05) !important;
+}
+
+/* Reduce modal backdrop blur in performance mode */
+body[data-performance-mode="true"] [class*="backdrop-blur"] {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
 }
 
 @layer utilities {
