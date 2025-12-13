@@ -11,6 +11,7 @@
 
 import { MessagePort } from "node:worker_threads";
 import os from "node:os";
+import v8 from "node:v8";
 import { PtyManager } from "./services/PtyManager.js";
 import { PtyPool, getPtyPool } from "./services/PtyPool.js";
 import { ProcessTreeCache } from "./services/ProcessTreeCache.js";
@@ -64,8 +65,6 @@ class ResourceGovernor {
     const memory = process.memoryUsage();
     const heapUsedMb = memory.heapUsed / 1024 / 1024;
     // Use heap limit from V8, not heapTotal (which is current allocation, not max)
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const v8 = require("v8");
     const heapStats = v8.getHeapStatistics();
     const heapLimitMb = heapStats.heap_size_limit / 1024 / 1024;
     const utilizationPercent = (heapUsedMb / heapLimitMb) * 100;
