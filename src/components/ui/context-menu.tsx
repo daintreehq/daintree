@@ -43,7 +43,7 @@ const ContextMenuSubContent = React.forwardRef<
   <ContextMenuPrimitive.SubContent
     ref={ref}
     className={cn(
-      "z-[var(--z-popover)] min-w-[10rem] overflow-hidden rounded-[var(--radius-lg)] border border-canopy-border bg-canopy-sidebar backdrop-blur p-1 text-canopy-text shadow-xl",
+      "z-[var(--z-popover)] min-w-[10rem] overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-canopy-text",
       className
     )}
     {...props}
@@ -59,7 +59,7 @@ const ContextMenuContent = React.forwardRef<
     <ContextMenuPrimitive.Content
       ref={ref}
       className={cn(
-        "z-[var(--z-popover)] min-w-[10rem] overflow-hidden rounded-[var(--radius-lg)] border border-canopy-border bg-canopy-sidebar backdrop-blur p-1 text-canopy-text shadow-xl",
+        "z-[var(--z-popover)] min-w-[10rem] overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-canopy-text",
         "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
         className
       )}
