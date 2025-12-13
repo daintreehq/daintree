@@ -11,7 +11,7 @@ import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { getAgentIds } from "@/config/agents";
 
 function isWindows(): boolean {
-  return navigator.platform.toLowerCase().startsWith("win");
+  return /\bWindows\b|\bWin(32|64)\b/.test(navigator.userAgent);
 }
 
 function escapeShellArg(arg: string): string {
