@@ -227,7 +227,7 @@ export function WorktreeDetails({
                   </>
                 ) : serverState.status === "starting" ? (
                   <>
-                    <div className="w-1.5 h-1.5 bg-[var(--color-server-starting)] rounded-full animate-pulse" />
+                    <div className="w-1.5 h-1.5 bg-[var(--color-server-starting)] rounded-full animate-breathe" />
                     <span>Starting...</span>
                   </>
                 ) : serverState.status === "error" ? (

@@ -79,12 +79,16 @@ function LauncherButton({
       disabled={isLoading}
       title={tooltipText}
       className={cn(
-        "group relative flex flex-col items-center justify-center gap-2.5 p-4 rounded-xl border transition-all duration-200",
+        "group relative flex flex-col items-center justify-center gap-2.5 p-4 rounded-xl border",
+        "transition-[background-color,border-color,box-shadow,transform] duration-200",
         "w-28 h-28",
         "bg-canopy-bg hover:bg-surface",
         "border-canopy-border/20 hover:border-canopy-border/40",
         "shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03),inset_0_-1px_0_0_rgba(0,0,0,0.2)]",
         "hover:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05),inset_0_-1px_0_0_rgba(0,0,0,0.3),0_4px_12px_-4px_rgba(0,0,0,0.4)]",
+        "hover:-translate-y-0.5 active:-translate-y-[1px] active:scale-[0.98]",
+        "active:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04),inset_0_-1px_0_0_rgba(0,0,0,0.25),0_2px_6px_-2px_rgba(0,0,0,0.3)]",
+        "motion-reduce:transform-none",
         !available && !isLoading && "opacity-60"
       )}
     >

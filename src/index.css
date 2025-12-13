@@ -356,6 +356,31 @@ body,
   will-change: opacity;
 }
 
+/* Organic breathing animation for waiting/loading states
+ * Uses scale + opacity for a more premium feel with asymmetric timing.
+ * Matches the 2s timing of other pulse animations.
+ */
+@keyframes breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  45% {
+    transform: scale(1.05);
+    opacity: 0.9;
+  }
+  55% {
+    transform: scale(1.05);
+    opacity: 0.9;
+  }
+}
+
+.animate-breathe {
+  animation: breathe 2s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
 /* Delayed pulse animation for skeleton loading states
  * Prevents "flash of loading state" (FOLS) for fast operations (<400ms).
  * Skeleton starts invisible and fades in only when animation begins after delay.
@@ -441,12 +466,14 @@ body,
 @media (prefers-reduced-motion: reduce) {
   .animate-activity-pulse,
   .animate-agent-pulse,
+  .animate-breathe,
   .animate-pulse-delayed,
   .status-working,
   .animate-badge-bump,
   .animate-activity-blip {
     animation: none;
     opacity: 1;
+    transform: none;
     will-change: auto;
   }
 

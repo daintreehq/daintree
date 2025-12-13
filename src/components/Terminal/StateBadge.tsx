@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Loader2, Play } from "lucide-react";
+import { Loader2, Play, CircleDot } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { AgentState } from "@/types";
 
@@ -9,7 +9,7 @@ interface StateBadgeProps {
 }
 
 const STATE_CONFIG: Record<
-  Exclude<AgentState, "idle" | "waiting">,
+  Exclude<AgentState, "idle">,
   {
     icon: ReactNode;
     label: string;
@@ -23,6 +23,13 @@ const STATE_CONFIG: Record<
     className:
       "bg-[color-mix(in_oklab,var(--color-state-working)_15%,transparent)] text-[var(--color-state-working)] border-[var(--color-state-working)]/40",
     tooltip: "Agent is working on your request",
+  },
+  waiting: {
+    icon: <CircleDot className="h-3 w-3 animate-breathe" aria-hidden="true" />,
+    label: "Waiting",
+    className:
+      "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] text-[var(--color-state-waiting)] border-[var(--color-state-waiting)]/40",
+    tooltip: "Agent is waiting for input",
   },
   running: {
     icon: <Play className="h-3 w-3 text-[var(--color-status-info)]" aria-hidden="true" />,
@@ -56,8 +63,8 @@ const STATE_CONFIG: Record<
 };
 
 export function StateBadge({ state, className }: StateBadgeProps) {
-  // Don't show badge for idle or waiting states - only show when busy or exited
-  if (state === "idle" || state === "waiting") {
+  // Don't show badge for idle state
+  if (state === "idle") {
     return null;
   }
 
