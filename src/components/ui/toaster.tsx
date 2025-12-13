@@ -77,12 +77,7 @@ function Toast({ notification }: { notification: Notification }) {
 
       <div className="flex-1 space-y-1 min-w-0">
         {notification.title && (
-          <h4
-            className={cn(
-              "font-medium leading-none tracking-tight font-mono text-sm",
-              config.accentClass
-            )}
-          >
+          <h4 className={cn("font-medium leading-none tracking-tight text-sm", config.accentClass)}>
             {notification.title}
           </h4>
         )}

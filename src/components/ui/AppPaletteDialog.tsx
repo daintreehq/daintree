@@ -69,7 +69,7 @@ AppPaletteDialog.Header = function AppPaletteHeader({
 }: AppPaletteHeaderProps) {
   return (
     <div className={cn("px-3 pt-2 pb-1 border-b border-canopy-border", className)}>
-      <div className="flex justify-between items-center mb-1.5 text-[11px] text-canopy-text/40">
+      <div className="flex justify-between items-center mb-1.5 text-[11px] text-canopy-text/50">
         <span>{label}</span>
         {keyHint && <span className="font-mono">{keyHint}</span>}
       </div>
@@ -106,7 +106,7 @@ AppPaletteDialog.Footer = function AppPaletteFooter({
   return (
     <div
       className={cn(
-        "px-3 py-2 border-t border-canopy-border bg-canopy-sidebar/50 text-xs text-canopy-text/40 flex items-center gap-4",
+        "px-3 py-2 border-t border-canopy-border bg-canopy-sidebar/50 text-xs text-canopy-text/50 flex items-center gap-4",
         className
       )}
     >
