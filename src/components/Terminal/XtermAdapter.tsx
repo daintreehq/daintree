@@ -1,9 +1,9 @@
-import React, { useCallback, useLayoutEffect, useMemo, useRef, useEffect } from "react";
+import React, { useCallback, useLayoutEffect, useMemo, useRef, useEffect, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { cn } from "@/lib/utils";
 import { terminalClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
-import type { TerminalType } from "@/types";
+import type { TerminalType, AgentState } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { measureCellHeight } from "@/services/terminal/TerminalConfig";
 import { useScrollbackStore, usePerformanceModeStore, useTerminalFontStore } from "@/store";
@@ -82,6 +82,10 @@ function XtermAdapterComponent({
 
   // Track visibility for resize optimization (start pessimistic for offscreen mounts)
   const isVisibleRef = useRef(false);
+
+  // Agent state for state-aware rendering decisions (enables future defensive layers)
+  // Prefixed with _ to indicate intentionally unused for now - will be used by height ratchet, resize guard, scroll latch
+  const [_agentState, setAgentState] = useState<AgentState | undefined>(undefined);
 
   // Tall canvas mode refs (agent terminals only)
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -686,6 +690,15 @@ function XtermAdapterComponent({
 
     return () => visibilityObserver.disconnect();
   }, [terminalId, performFit]);
+
+  // Subscribe to agent state changes for state-aware rendering decisions
+  // This enables future defensive layers (height ratchet, resize guard, scroll latch)
+  useEffect(() => {
+    const unsubscribe = terminalInstanceService.addAgentStateListener(terminalId, (state) => {
+      setAgentState(state);
+    });
+    return unsubscribe;
+  }, [terminalId]);
 
   useLayoutEffect(() => {
     const container = containerRef.current;

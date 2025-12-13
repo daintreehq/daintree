@@ -5,7 +5,7 @@ import { SerializeAddon } from "@xterm/addon-serialize";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { ImageAddon } from "@xterm/addon-image";
 import { SearchAddon } from "@xterm/addon-search";
-import { TerminalRefreshTier, TerminalType, TerminalKind } from "@/types";
+import { TerminalRefreshTier, TerminalType, TerminalKind, AgentState } from "@/types";
 
 export type RefreshTierProvider = () => TerminalRefreshTier;
 
@@ -29,11 +29,15 @@ export interface ThrottledWriter {
   clear: () => void;
 }
 
+export type AgentStateCallback = (state: AgentState) => void;
+
 export interface ManagedTerminal {
   terminal: Terminal;
   type: TerminalType;
   kind?: TerminalKind;
   agentId?: string;
+  agentState?: AgentState;
+  agentStateSubscribers: Set<AgentStateCallback>;
   fitAddon: FitAddon;
   webglAddon?: WebglAddon;
   serializeAddon: SerializeAddon;

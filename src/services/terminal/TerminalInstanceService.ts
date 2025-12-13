@@ -2,10 +2,12 @@ import { Terminal } from "@xterm/xterm";
 import { terminalClient, systemClient } from "@/clients";
 import { TerminalRefreshTier, TerminalType } from "@/types";
 import { detectHardware, HardwareProfile } from "@/utils/hardwareDetection";
+import type { AgentState } from "@/types";
 import {
   ManagedTerminal,
   RefreshTierProvider,
   ResizeJobId,
+  AgentStateCallback,
   TIER_DOWNGRADE_HYSTERESIS_MS,
 } from "./types";
 import { TALL_CANVAS_ROWS, getSafeTallCanvasRows, measureCellHeight } from "./TerminalConfig";
@@ -216,6 +218,7 @@ class TerminalInstanceService {
     const listeners: Array<() => void> = [];
     const exitSubscribers = new Set<(exitCode: number) => void>();
     const outputSubscribers = new Set<() => void>();
+    const agentStateSubscribers = new Set<AgentStateCallback>();
 
     const unsubData = terminalClient.onData(id, (data: string | Uint8Array) => {
       if (this.dataBuffer.isPolling()) return;
@@ -239,6 +242,8 @@ class TerminalInstanceService {
       type,
       kind: isTallCanvas ? "agent" : undefined,
       agentId,
+      agentState: undefined,
+      agentStateSubscribers,
       ...addons,
       webglAddon: undefined, // Setup by addonManager
       hostElement,
@@ -555,11 +560,48 @@ class TerminalInstanceService {
     return lastContentRow;
   }
 
-  setAgentState(
-    _id: string,
-    _state: "working" | "running" | "idle" | "waiting" | "completed" | "failed"
-  ): void {
-    // No-op
+  setAgentState(id: string, state: AgentState): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+
+    const previousState = managed.agentState;
+    if (previousState === state) return;
+
+    managed.agentState = state;
+
+    // Notify subscribers synchronously
+    for (const callback of managed.agentStateSubscribers) {
+      try {
+        callback(state);
+      } catch (err) {
+        console.error("[TerminalInstanceService] Agent state callback error:", err);
+      }
+    }
+  }
+
+  getAgentState(id: string): AgentState | undefined {
+    const managed = this.instances.get(id);
+    return managed?.agentState;
+  }
+
+  addAgentStateListener(id: string, callback: AgentStateCallback): () => void {
+    const managed = this.instances.get(id);
+    if (!managed) return () => {};
+
+    managed.agentStateSubscribers.add(callback);
+
+    // Fire immediately with current state if available
+    if (managed.agentState !== undefined) {
+      try {
+        callback(managed.agentState);
+      } catch (err) {
+        console.error("[TerminalInstanceService] Agent state callback error:", err);
+      }
+    }
+
+    return () => {
+      managed.agentStateSubscribers.delete(callback);
+    };
   }
 
   private applyResize(id: string, cols: number, rows: number): void {
@@ -943,6 +985,7 @@ class TerminalInstanceService {
 
     managed.exitSubscribers.clear();
     managed.outputSubscribers.clear();
+    managed.agentStateSubscribers.clear();
 
     managed.throttledWriter.dispose();
 

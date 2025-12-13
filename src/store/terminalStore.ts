@@ -22,6 +22,7 @@ import {
   isAgentReady,
 } from "./slices";
 import { terminalClient } from "@/clients";
+import { terminalInstanceService } from "@/services/TerminalInstanceService";
 
 export type { TerminalInstance, AddTerminalOptions, QueuedCommand };
 export { isAgentReady };
@@ -305,6 +306,9 @@ export function setupTerminalStoreListeners() {
       console.warn(`Invalid agent state received: ${state} for terminal ${agentId}`);
       return;
     }
+
+    // Update terminal instance service (enables state-aware rendering in XtermAdapter)
+    terminalInstanceService.setAgentState(agentId, state as AgentState);
 
     useTerminalStore
       .getState()
