@@ -305,7 +305,7 @@
     inset: 0;
     background-image: url("./assets/noise.png");
     background-repeat: repeat;
-    opacity: 0.03;
+    opacity: 0.02;
     mix-blend-mode: overlay;
     pointer-events: none;
     z-index: 0;
@@ -328,8 +328,8 @@ body,
     transform: scale(1);
   }
   50% {
-    opacity: 0.7;
-    transform: scale(1.1);
+    opacity: 0.78;
+    transform: scale(1.05);
   }
 }
 
@@ -345,7 +345,7 @@ body,
     opacity: 1;
   }
   50% {
-    opacity: 0.5;
+    opacity: 0.7;
   }
 }
 
@@ -445,7 +445,6 @@ body,
   .animate-activity-blip {
     animation: none;
     opacity: 1;
-    transform: none;
     will-change: auto;
   }
 
@@ -926,6 +925,7 @@ body[data-performance-mode="true"] *::after {
   animation: none !important;
   animation-play-state: paused !important;
   transition: none !important;
+  will-change: auto !important;
 }
 
 /* Ensure delayed skeletons don't stay invisible when animations are disabled */

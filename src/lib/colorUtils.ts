@@ -14,6 +14,7 @@ export function getBrandColorHex(agentIdOrType?: string): string | undefined {
 
 /**
  * Validates color to prevent CSS injection
+ * Uses color-mix for lightness shift to create depth
  */
 export function getProjectGradient(color?: string): string | undefined {
   if (!color) {
@@ -25,9 +26,9 @@ export function getProjectGradient(color?: string): string | undefined {
     return undefined;
   }
 
-  // Only append 'dd' opacity if color doesn't already have alpha channel (8-digit hex)
-  const hasAlpha = color.length === 5 || color.length === 9; // #RGBA or #RRGGBBAA
-  const fadeColor = hasAlpha ? color : `${color}dd`;
+  // Create gradient with lightness shift for depth
+  const lighterColor = `color-mix(in oklab, ${color} 85%, white)`;
+  const darkerColor = `color-mix(in oklab, ${color} 85%, black)`;
 
-  return `linear-gradient(135deg, ${color}, ${fadeColor})`;
+  return `linear-gradient(135deg, ${lighterColor}, ${darkerColor})`;
 }
