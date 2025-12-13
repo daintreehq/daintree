@@ -12,6 +12,7 @@ import { TALL_CANVAS_ROWS, getSafeTallCanvasRows, measureCellHeight } from "./Te
 import { TerminalAddonManager } from "./TerminalAddonManager";
 import { TerminalDataBuffer } from "./TerminalDataBuffer";
 import { createThrottledWriter } from "./ThrottledWriter";
+import { setupParserHandlers } from "./TerminalParserHandler";
 
 const START_DEBOUNCING_THRESHOLD = 200;
 const HORIZONTAL_DEBOUNCE_MS = 100;
@@ -176,6 +177,19 @@ class TerminalInstanceService {
     const throttledWriter = createThrottledWriter(id, terminal, getRefreshTier, () =>
       this.dataBuffer.isEnabled()
     );
+
+    // Create managed terminal placeholder for parser handler setup
+    const managedPlaceholder: Partial<ManagedTerminal> = {
+      terminal,
+      type,
+      kind: isTallCanvas ? "agent" : undefined,
+      agentId,
+    };
+
+    // Setup parser handlers BEFORE data subscriptions to prevent race conditions
+    if (isTallCanvas) {
+      setupParserHandlers(managedPlaceholder as ManagedTerminal);
+    }
 
     const listeners: Array<() => void> = [];
     const exitSubscribers = new Set<(exitCode: number) => void>();

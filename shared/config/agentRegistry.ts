@@ -9,6 +9,8 @@ export interface AgentConfig {
   tooltip?: string;
   capabilities?: {
     scrollback?: number;
+    blockAltScreen?: boolean;
+    blockMouseReporting?: boolean;
   };
 }
 
@@ -24,6 +26,8 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     tooltip: "deep, focused work",
     capabilities: {
       scrollback: 10000,
+      blockAltScreen: true,
+      blockMouseReporting: true,
     },
   },
   gemini: {
@@ -37,6 +41,8 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     tooltip: "quick exploration",
     capabilities: {
       scrollback: 10000,
+      blockAltScreen: true,
+      blockMouseReporting: true,
     },
   },
   codex: {
@@ -50,6 +56,8 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     tooltip: "careful, methodical runs",
     capabilities: {
       scrollback: 10000,
+      blockAltScreen: true,
+      blockMouseReporting: true,
     },
   },
 };
