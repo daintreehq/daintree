@@ -1,12 +1,22 @@
 import { useState, useEffect } from "react";
-import { Server, Info } from "lucide-react";
+import {
+  Server,
+  Info,
+  Terminal,
+  Key,
+  FolderX,
+  Plus,
+  Trash2,
+  ChevronUp,
+  ChevronDown,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { EmojiPicker } from "@/components/ui/emoji-picker";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { useProjectSettings } from "@/hooks";
 import { useProjectStore } from "@/store/projectStore";
-import type { ProjectDevServerSettings } from "@/types";
+import type { ProjectDevServerSettings, RunCommand } from "@/types";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { devServerClient } from "@/clients";
@@ -33,11 +43,18 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   const [devServerAutoStart, setDevServerAutoStart] = useState(false);
   const [detectedCommand, setDetectedCommand] = useState<string | null>(null);
 
+  const [runCommands, setRunCommands] = useState<RunCommand[]>([]);
+  const [environmentVariables, setEnvironmentVariables] = useState<Record<string, string>>({});
+  const [excludedPaths, setExcludedPaths] = useState<string[]>([]);
+
   useEffect(() => {
     if (isOpen && settings) {
       setDevServerEnabled(settings.devServer?.enabled ?? false);
       setDevServerCommand(settings.devServer?.command ?? "");
       setDevServerAutoStart(settings.devServer?.autoStart ?? false);
+      setRunCommands(settings.runCommands || []);
+      setEnvironmentVariables(settings.environmentVariables || {});
+      setExcludedPaths(settings.excludedPaths || []);
     }
   }, [settings, isOpen]);
 
@@ -113,6 +130,10 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       await saveSettings({
         ...settings,
         devServer: devServerSettings,
+        runCommands,
+        environmentVariables:
+          Object.keys(environmentVariables).length > 0 ? environmentVariables : undefined,
+        excludedPaths: excludedPaths.length > 0 ? excludedPaths : undefined,
       });
       onClose();
     } catch (error) {
@@ -287,6 +308,266 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                     )}
                   </div>
                 </div>
+              </div>
+            </div>
+
+            <div className="mb-6">
+              <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+                <Terminal className="h-4 w-4" />
+                Run Commands
+              </h3>
+              <p className="text-xs text-canopy-text/60 mb-4">
+                Quick access to common project tasks (build, test, deploy).
+              </p>
+
+              <div className="space-y-3">
+                {runCommands.length === 0 ? (
+                  <div className="text-sm text-canopy-text/60 text-center py-8 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
+                    No run commands configured yet
+                  </div>
+                ) : (
+                  runCommands.map((cmd, index) => (
+                    <div
+                      key={cmd.id}
+                      className="p-3 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border"
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <input
+                              type="text"
+                              value={cmd.name}
+                              onChange={(e) => {
+                                const updated = [...runCommands];
+                                updated[index] = { ...cmd, name: e.target.value };
+                                setRunCommands(updated);
+                              }}
+                              className="flex-1 bg-transparent border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
+                              placeholder="Command name"
+                            />
+                            {cmd.icon && <span className="text-lg">{cmd.icon}</span>}
+                          </div>
+                          <input
+                            type="text"
+                            value={cmd.command}
+                            onChange={(e) => {
+                              const updated = [...runCommands];
+                              updated[index] = { ...cmd, command: e.target.value };
+                              setRunCommands(updated);
+                            }}
+                            className="w-full bg-canopy-sidebar border border-canopy-border rounded px-2 py-1 text-xs text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
+                            placeholder="npm run build"
+                          />
+                          {cmd.description && (
+                            <p className="text-xs text-canopy-text/60 mt-1">{cmd.description}</p>
+                          )}
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <button
+                            onClick={() => {
+                              if (index > 0) {
+                                const updated = [...runCommands];
+                                [updated[index - 1], updated[index]] = [
+                                  updated[index],
+                                  updated[index - 1],
+                                ];
+                                setRunCommands(updated);
+                              }
+                            }}
+                            disabled={index === 0}
+                            className="p-1 rounded hover:bg-canopy-border/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                            aria-label="Move up"
+                          >
+                            <ChevronUp className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (index < runCommands.length - 1) {
+                                const updated = [...runCommands];
+                                [updated[index], updated[index + 1]] = [
+                                  updated[index + 1],
+                                  updated[index],
+                                ];
+                                setRunCommands(updated);
+                              }
+                            }}
+                            disabled={index === runCommands.length - 1}
+                            className="p-1 rounded hover:bg-canopy-border/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                            aria-label="Move down"
+                          >
+                            <ChevronDown className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => {
+                              setRunCommands(runCommands.filter((_, i) => i !== index));
+                            }}
+                            className="p-1 rounded hover:bg-red-900/30 transition-colors"
+                            aria-label="Delete"
+                          >
+                            <Trash2 className="h-4 w-4 text-[var(--color-status-error)]" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setRunCommands([
+                      ...runCommands,
+                      {
+                        id: `cmd-${Date.now()}`,
+                        name: "",
+                        command: "",
+                      },
+                    ]);
+                  }}
+                  className="w-full"
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Command
+                </Button>
+              </div>
+            </div>
+
+            <div className="mb-6">
+              <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+                <Key className="h-4 w-4" />
+                Environment Variables
+              </h3>
+              <p className="text-xs text-canopy-text/60 mb-4">
+                Project-specific environment variables (values containing KEY, SECRET, TOKEN, or
+                PASSWORD will be masked).
+              </p>
+
+              <div className="space-y-2">
+                {Object.entries(environmentVariables).length === 0 ? (
+                  <div className="text-sm text-canopy-text/60 text-center py-8 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
+                    No environment variables configured yet
+                  </div>
+                ) : (
+                  Object.entries(environmentVariables).map(([key, value]) => {
+                    const shouldMask = /key|secret|token|password/i.test(key);
+                    return (
+                      <div
+                        key={key}
+                        className="flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border"
+                      >
+                        <input
+                          type="text"
+                          value={key}
+                          onChange={(e) => {
+                            const newKey = e.target.value;
+                            const updated = { ...environmentVariables };
+                            delete updated[key];
+                            if (newKey) {
+                              updated[newKey] = value;
+                            }
+                            setEnvironmentVariables(updated);
+                          }}
+                          className="flex-1 bg-transparent border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
+                          placeholder="VARIABLE_NAME"
+                        />
+                        <span className="text-canopy-text/60">=</span>
+                        <input
+                          type={shouldMask ? "password" : "text"}
+                          value={value}
+                          onChange={(e) => {
+                            setEnvironmentVariables({
+                              ...environmentVariables,
+                              [key]: e.target.value,
+                            });
+                          }}
+                          className="flex-1 bg-canopy-sidebar border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
+                          placeholder="value"
+                        />
+                        <button
+                          onClick={() => {
+                            const updated = { ...environmentVariables };
+                            delete updated[key];
+                            setEnvironmentVariables(updated);
+                          }}
+                          className="p-1 rounded hover:bg-red-900/30 transition-colors"
+                          aria-label="Delete"
+                        >
+                          <Trash2 className="h-4 w-4 text-[var(--color-status-error)]" />
+                        </button>
+                      </div>
+                    );
+                  })
+                )}
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    const newKey = `VAR_${Object.keys(environmentVariables).length + 1}`;
+                    setEnvironmentVariables({
+                      ...environmentVariables,
+                      [newKey]: "",
+                    });
+                  }}
+                  className="w-full"
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Variable
+                </Button>
+              </div>
+            </div>
+
+            <div className="mb-6">
+              <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+                <FolderX className="h-4 w-4" />
+                Excluded Paths
+              </h3>
+              <p className="text-xs text-canopy-text/60 mb-4">
+                Glob patterns to exclude from monitoring and context injection (e.g.,
+                node_modules/**, dist/**, .git/**).
+              </p>
+
+              <div className="space-y-2">
+                {excludedPaths.length === 0 ? (
+                  <div className="text-sm text-canopy-text/60 text-center py-8 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
+                    No excluded paths configured yet
+                  </div>
+                ) : (
+                  excludedPaths.map((path, index) => (
+                    <div
+                      key={index}
+                      className="flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border"
+                    >
+                      <input
+                        type="text"
+                        value={path}
+                        onChange={(e) => {
+                          const updated = [...excludedPaths];
+                          updated[index] = e.target.value;
+                          setExcludedPaths(updated);
+                        }}
+                        className="flex-1 bg-transparent border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
+                        placeholder="node_modules/**"
+                      />
+                      <button
+                        onClick={() => {
+                          setExcludedPaths(excludedPaths.filter((_, i) => i !== index));
+                        }}
+                        className="p-1 rounded hover:bg-red-900/30 transition-colors"
+                        aria-label="Delete"
+                      >
+                        <Trash2 className="h-4 w-4 text-[var(--color-status-error)]" />
+                      </button>
+                    </div>
+                  ))
+                )}
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setExcludedPaths([...excludedPaths, ""]);
+                  }}
+                  className="w-full"
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Path Pattern
+                </Button>
               </div>
             </div>
           </>
