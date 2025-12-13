@@ -59,7 +59,7 @@ export function GridFullOverlay({ maxTerminals, show }: GridFullOverlayProps) {
   return (
     <div
       className={cn(
-        "absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm pointer-events-none",
+        "absolute inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/60 backdrop-blur-sm pointer-events-none",
         "transition-opacity duration-150",
         "motion-reduce:transition-none motion-reduce:duration-0",
         isVisible ? "opacity-100" : "opacity-0"

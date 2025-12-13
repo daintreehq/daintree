@@ -1,10 +1,26 @@
 const BADGE_SIZE = 32;
 const BADGE_FONT_SIZE = 14;
-const BADGE_BG_WAITING = "#f59e0b"; // amber-500
-const BADGE_BG_FAILED = "#ef4444"; // red-500
+const BADGE_BG_WAITING_FALLBACK = "#f59e0b"; // amber-500
+const BADGE_BG_FAILED_FALLBACK = "#ef4444"; // red-500
 const BADGE_TEXT_COLOR = "#ffffff";
 
 let originalHref: string | null = null;
+let badgeColors: { waiting: string; failed: string } | null = null;
+
+function getBadgeColors(): { waiting: string; failed: string } {
+  if (badgeColors) return badgeColors;
+
+  const styles = getComputedStyle(document.documentElement);
+  const waiting = styles.getPropertyValue("--color-status-warning").trim();
+  const failed = styles.getPropertyValue("--color-status-error").trim();
+
+  badgeColors = {
+    waiting: waiting || BADGE_BG_WAITING_FALLBACK,
+    failed: failed || BADGE_BG_FAILED_FALLBACK,
+  };
+
+  return badgeColors;
+}
 
 function createBadgeCanvas(count: number, hasFailures: boolean): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
@@ -14,8 +30,10 @@ function createBadgeCanvas(count: number, hasFailures: boolean): HTMLCanvasEleme
 
   if (!ctx) return canvas;
 
+  const colors = getBadgeColors();
+
   // Draw badge circle
-  ctx.fillStyle = hasFailures ? BADGE_BG_FAILED : BADGE_BG_WAITING;
+  ctx.fillStyle = hasFailures ? colors.failed : colors.waiting;
   ctx.beginPath();
   ctx.arc(BADGE_SIZE / 2, BADGE_SIZE / 2, BADGE_SIZE / 2 - 2, 0, Math.PI * 2);
   ctx.fill();

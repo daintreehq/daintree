@@ -305,7 +305,7 @@ function TerminalPaneComponent({
           (isFocused ? "terminal-selected" : "border-canopy-border hover:border-white/10"),
 
         // Zen Mode styles (maximized - full immersion, no inset needed)
-        location === "grid" && isMaximized && "border-0 rounded-none z-50",
+        location === "grid" && isMaximized && "border-0 rounded-none z-[var(--z-modal)]",
 
         isExited && "opacity-75 grayscale",
 

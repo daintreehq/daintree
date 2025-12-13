@@ -33,7 +33,7 @@ export function AppPaletteDialog({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[var(--z-modal)] flex items-start justify-center pt-[15vh] bg-black/50 backdrop-blur-sm"
+      className="fixed inset-0 z-[var(--z-modal)] flex items-start justify-center pt-[15vh] bg-black/40 backdrop-blur-sm backdrop-saturate-[1.25]"
       onClick={handleBackdropClick}
       role="dialog"
       aria-modal="true"
