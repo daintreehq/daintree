@@ -1,9 +1,28 @@
-import { useState } from "react";
-import { RefreshCw, Plus, Trash2, Globe, Check, X, Search } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import {
+  RefreshCw,
+  Plus,
+  Trash2,
+  Globe,
+  Check,
+  X,
+  Search,
+  Layers,
+  ArrowRightToLine,
+  SquareStack,
+  AlertTriangle,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSidecarStore } from "@/store/sidecarStore";
 import { useLinkDiscovery } from "@/hooks/useLinkDiscovery";
-import { LINK_TEMPLATES } from "@shared/types";
+import {
+  LINK_TEMPLATES,
+  SIDECAR_MIN_WIDTH,
+  SIDECAR_MAX_WIDTH,
+  SIDECAR_DEFAULT_WIDTH,
+  MIN_GRID_WIDTH,
+} from "@shared/types";
+import type { SidecarLayoutModePreference } from "@shared/types";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 
 function ServiceIcon({ name, size = 16 }: { name: string; size?: number }) {
@@ -46,12 +65,42 @@ function FaviconIcon({ url }: { url: string }) {
   }
 }
 
+const LAYOUT_MODE_OPTIONS: Array<{
+  id: SidecarLayoutModePreference;
+  label: string;
+  description: string;
+  icon: typeof Layers;
+}> = [
+  {
+    id: "auto",
+    label: "Auto",
+    description: "Adapts to window size",
+    icon: Layers,
+  },
+  {
+    id: "push",
+    label: "Push",
+    description: "Always pushes content",
+    icon: ArrowRightToLine,
+  },
+  {
+    id: "overlay",
+    label: "Overlay",
+    description: "Always overlays content",
+    icon: SquareStack,
+  },
+];
+
 export function SidecarSettingsTab() {
   const links = useSidecarStore((s) => s.links);
   const toggleLink = useSidecarStore((s) => s.toggleLink);
   const addLink = useSidecarStore((s) => s.addLink);
   const removeLink = useSidecarStore((s) => s.removeLink);
   const updateLink = useSidecarStore((s) => s.updateLink);
+  const layoutModePreference = useSidecarStore((s) => s.layoutModePreference);
+  const setLayoutModePreference = useSidecarStore((s) => s.setLayoutModePreference);
+  const width = useSidecarStore((s) => s.width);
+  const setWidth = useSidecarStore((s) => s.setWidth);
   const { rescan, isScanning } = useLinkDiscovery();
 
   const [newLinkName, setNewLinkName] = useState("");
@@ -60,6 +109,14 @@ export function SidecarSettingsTab() {
   const [editName, setEditName] = useState("");
   const [editUrl, setEditUrl] = useState("");
   const [urlError, setUrlError] = useState("");
+  const [localWidth, setLocalWidth] = useState(width);
+  const isAdjustingWidthRef = useRef(false);
+
+  const clampWidth = (v: number) => Math.min(SIDECAR_MAX_WIDTH, Math.max(SIDECAR_MIN_WIDTH, v));
+
+  useEffect(() => {
+    if (!isAdjustingWidthRef.current) setLocalWidth(width);
+  }, [width]);
 
   const discoveredLinks = links.filter((l) => l.type === "discovered");
   const userLinks = links.filter((l) => l.type === "user");
@@ -368,6 +425,119 @@ export function SidecarSettingsTab() {
             </button>
           </div>
           {urlError && <p className="text-xs text-red-500 mt-1">{urlError}</p>}
+        </div>
+      </section>
+
+      <section className="pt-4 border-t border-canopy-border">
+        <h4 className="text-sm font-medium text-canopy-text mb-2">Layout Mode</h4>
+        <p className="text-xs text-canopy-text/50 mb-4">
+          Control how the sidecar panel interacts with the main content area.
+        </p>
+
+        <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Layout mode">
+          {LAYOUT_MODE_OPTIONS.map(({ id, label, description, icon: Icon }) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setLayoutModePreference(id)}
+              role="radio"
+              aria-checked={layoutModePreference === id}
+              aria-label={`${label} - ${description}`}
+              className={cn(
+                "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-all",
+                layoutModePreference === id
+                  ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
+                  : "border-canopy-border hover:bg-white/5 text-canopy-text/70"
+              )}
+            >
+              <Icon className="w-5 h-5 mb-1.5" />
+              <span className="text-xs font-medium">{label}</span>
+              <span className="text-[10px] mt-0.5 opacity-60">{description}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="text-xs text-canopy-text/50 space-y-1.5 bg-canopy-bg/50 rounded-[var(--radius-md)] p-3 mt-3">
+          <div className="font-medium text-canopy-text/70 mb-2">Mode behavior:</div>
+          <div className="flex justify-between">
+            <span>Auto</span>
+            <span className="text-canopy-text/70">
+              Switches to overlay when grid width &lt; {MIN_GRID_WIDTH}px
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span>Push</span>
+            <span className="text-canopy-text/70">Always pushes content aside</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Overlay</span>
+            <span className="text-canopy-text/70">Always overlays on top of content</span>
+          </div>
+        </div>
+
+        {layoutModePreference === "push" && (
+          <p className="text-xs text-amber-500/80 flex items-center gap-1.5 mt-3">
+            <AlertTriangle className="w-3 h-3" />
+            Forcing push mode on small windows may make the terminal grid unusable.
+          </p>
+        )}
+      </section>
+
+      <section className="pt-4 border-t border-canopy-border">
+        <h4 className="text-sm font-medium text-canopy-text mb-2">Default Width</h4>
+        <p className="text-xs text-canopy-text/50 mb-4">
+          Set the default width of the sidecar panel. You can still resize it manually.
+        </p>
+
+        <div className="space-y-3">
+          <div className="flex items-center gap-4">
+            <input
+              type="range"
+              min={SIDECAR_MIN_WIDTH}
+              max={SIDECAR_MAX_WIDTH}
+              value={localWidth}
+              onChange={(e) => setLocalWidth(clampWidth(Number(e.currentTarget.value)))}
+              onPointerDown={() => {
+                isAdjustingWidthRef.current = true;
+              }}
+              onPointerUp={(e) => {
+                isAdjustingWidthRef.current = false;
+                setWidth(clampWidth(Number(e.currentTarget.value)));
+              }}
+              onBlur={(e) => {
+                isAdjustingWidthRef.current = false;
+                setWidth(clampWidth(Number(e.currentTarget.value)));
+              }}
+              className="flex-1 h-2 bg-canopy-border rounded-lg appearance-none cursor-pointer accent-canopy-accent"
+              aria-label="Default sidecar width"
+            />
+            <span className="text-sm font-mono text-canopy-text/70 w-16 text-right">
+              {localWidth}px
+            </span>
+          </div>
+
+          <div className="h-4 bg-canopy-bg rounded-[var(--radius-sm)] border border-canopy-border overflow-hidden">
+            <div
+              className="h-full bg-canopy-accent/30 transition-all"
+              style={{
+                width: `${Math.max(0, Math.min(100, ((localWidth - SIDECAR_MIN_WIDTH) / (SIDECAR_MAX_WIDTH - SIDECAR_MIN_WIDTH)) * 100))}%`,
+              }}
+            />
+          </div>
+
+          <div className="flex justify-between text-[10px] text-canopy-text/40">
+            <span>{SIDECAR_MIN_WIDTH}px (min)</span>
+            <button
+              onClick={() => {
+                setLocalWidth(SIDECAR_DEFAULT_WIDTH);
+                setWidth(SIDECAR_DEFAULT_WIDTH);
+              }}
+              className="hover:text-canopy-text/70 transition-colors"
+            >
+              Reset to {SIDECAR_DEFAULT_WIDTH}px
+            </button>
+            <span>{SIDECAR_MAX_WIDTH}px (max)</span>
+          </div>
         </div>
       </section>
 

@@ -1,6 +1,12 @@
 import { create, type StateCreator } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
-import type { SidecarLayoutMode, SidecarTab, SidecarLink, CliAvailability } from "@shared/types";
+import type {
+  SidecarLayoutMode,
+  SidecarLayoutModePreference,
+  SidecarTab,
+  SidecarLink,
+  CliAvailability,
+} from "@shared/types";
 import {
   DEFAULT_SIDECAR_TABS,
   SIDECAR_MIN_WIDTH,
@@ -14,6 +20,7 @@ interface SidecarState {
   isOpen: boolean;
   width: number;
   layoutMode: SidecarLayoutMode;
+  layoutModePreference: SidecarLayoutModePreference;
   activeTabId: string | null;
   tabs: SidecarTab[];
   createdTabs: Set<string>;
@@ -34,6 +41,7 @@ interface SidecarActions {
   updateTabUrl: (id: string, url: string) => void;
   updateTabIcon: (id: string, icon: string | undefined) => void;
   updateLayoutMode: (windowWidth: number, sidebarWidth: number) => void;
+  setLayoutModePreference: (preference: SidecarLayoutModePreference) => void;
   markTabCreated: (id: string) => void;
   isTabCreated: (id: string) => boolean;
   reset: () => void;
@@ -56,6 +64,7 @@ const initialState: SidecarState = {
   isOpen: false,
   width: SIDECAR_DEFAULT_WIDTH,
   layoutMode: "push",
+  layoutModePreference: "auto",
   activeTabId: null,
   tabs: DEFAULT_SIDECAR_TABS,
   createdTabs: new Set<string>(),
@@ -66,42 +75,13 @@ const initialState: SidecarState = {
 const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, get) => ({
   ...initialState,
 
-  toggle: () =>
-    set((s) => {
-      const newOpen = !s.isOpen;
-      if (newOpen && typeof window !== "undefined") {
-        setTimeout(() => {
-          const { updateLayoutMode } = get();
-          const sidebarWidth = 350;
-          updateLayoutMode(window.innerWidth, sidebarWidth);
-        }, 0);
-      }
-      return { isOpen: newOpen };
-    }),
+  toggle: () => set((s) => ({ isOpen: !s.isOpen })),
 
-  setOpen: (open) => {
-    set({ isOpen: open });
-    if (open && typeof window !== "undefined") {
-      setTimeout(() => {
-        const { updateLayoutMode } = get();
-        const sidebarWidth = 350;
-        updateLayoutMode(window.innerWidth, sidebarWidth);
-      }, 0);
-    }
-  },
+  setOpen: (open) => set({ isOpen: open }),
 
   setWidth: (width) => {
     const validWidth = Math.min(Math.max(width, SIDECAR_MIN_WIDTH), SIDECAR_MAX_WIDTH);
     set({ width: validWidth });
-    if (typeof window !== "undefined") {
-      setTimeout(() => {
-        const { updateLayoutMode, isOpen } = get();
-        if (isOpen) {
-          const sidebarWidth = 350;
-          updateLayoutMode(window.innerWidth, sidebarWidth);
-        }
-      }, 0);
-    }
   },
 
   setActiveTab: (id) => set({ activeTabId: id }),
@@ -194,10 +174,22 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
     })),
 
   updateLayoutMode: (windowWidth, sidebarWidth) => {
-    const { width, isOpen } = get();
-    if (!isOpen) return;
+    const { width, layoutModePreference } = get();
+
+    if (layoutModePreference !== "auto") {
+      set({ layoutMode: layoutModePreference });
+      return;
+    }
+
     const remainingSpace = windowWidth - sidebarWidth - width;
     set({ layoutMode: remainingSpace < MIN_GRID_WIDTH ? "overlay" : "push" });
+  },
+
+  setLayoutModePreference: (preference) => {
+    set({
+      layoutModePreference: preference,
+      ...(preference !== "auto" ? { layoutMode: preference } : {}),
+    });
   },
 
   markTabCreated: (id) =>
@@ -343,7 +335,25 @@ const sidecarStoreCreator: StateCreator<
     links: state.links,
     width: state.width,
     tabs: state.tabs,
+    layoutModePreference: state.layoutModePreference,
   }),
+  merge: (persistedState, currentState) => {
+    const persisted = persistedState as Partial<SidecarState>;
+    return {
+      ...currentState,
+      ...persisted,
+      width:
+        typeof persisted.width === "number"
+          ? Math.min(Math.max(persisted.width, SIDECAR_MIN_WIDTH), SIDECAR_MAX_WIDTH)
+          : currentState.width,
+      layoutModePreference:
+        persisted.layoutModePreference === "auto" ||
+        persisted.layoutModePreference === "push" ||
+        persisted.layoutModePreference === "overlay"
+          ? persisted.layoutModePreference
+          : currentState.layoutModePreference,
+    };
+  },
 });
 
 export const useSidecarStore = create<SidecarState & SidecarActions>()(sidecarStoreCreator);

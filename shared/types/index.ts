@@ -238,6 +238,7 @@ export type {
 // Sidecar types - browser dock
 export type {
   SidecarLayoutMode,
+  SidecarLayoutModePreference,
   SidecarLinkType,
   SidecarLink,
   LinkTemplate,
