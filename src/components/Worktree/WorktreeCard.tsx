@@ -46,7 +46,6 @@ import {
   Plus,
   MoreHorizontal,
   Folder,
-  ChevronDown,
   ChevronRight,
   GitCommit,
   Shield,
@@ -544,11 +543,12 @@ export function WorktreeCard({
                 aria-expanded={isExpanded}
                 aria-controls={detailsId}
               >
-                {isExpanded ? (
-                  <ChevronDown className="w-3.5 h-3.5" />
-                ) : (
-                  <ChevronRight className="w-3.5 h-3.5" />
-                )}
+                <ChevronRight
+                  className={cn(
+                    "w-3.5 h-3.5 transition-transform duration-150 motion-reduce:transition-none",
+                    isExpanded && "rotate-90"
+                  )}
+                />
               </button>
             )}
           </div>

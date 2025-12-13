@@ -269,7 +269,7 @@ function TerminalHeaderComponent({
           </div>
         )}
 
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto translate-y-0.5 group-hover:translate-y-0 group-focus-within:translate-y-0 transition-[opacity,transform] duration-150 motion-reduce:transition-none motion-reduce:translate-y-0 motion-reduce:opacity-100">
           {onRestart && (
             <button
               onClick={(e) => {

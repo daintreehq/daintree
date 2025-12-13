@@ -69,7 +69,7 @@ export function PulseHeatmap({ cells, rangeDays, compact = false }: PulseHeatmap
                       className={cn(
                         cellSize,
                         colorClass,
-                        "rounded-[var(--radius-xs)] transition-all border-0 p-0 cursor-default",
+                        "rounded-[var(--radius-xs)] transition-[transform,background-color] duration-150 border-0 p-0 cursor-default",
                         cell.isToday && "ring-1 ring-white/30",
                         cell.isMostRecentActive && !cell.isToday && "ring-1 ring-emerald-400/40"
                       )}
