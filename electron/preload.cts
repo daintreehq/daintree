@@ -638,6 +638,7 @@ const api: ElectronAPI = {
       rangeDays: 60 | 120 | 180;
       includeDelta?: boolean;
       includeRecentCommits?: boolean;
+      forceRefresh?: boolean;
     }) => ipcRenderer.invoke(CHANNELS.GIT_GET_PROJECT_PULSE, options),
   },
 

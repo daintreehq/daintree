@@ -218,6 +218,7 @@ export interface ElectronAPI {
       rangeDays: import("../pulse.js").PulseRangeDays;
       includeDelta?: boolean;
       includeRecentCommits?: boolean;
+      forceRefresh?: boolean;
     }): Promise<import("../pulse.js").ProjectPulse>;
   };
   terminalConfig: {

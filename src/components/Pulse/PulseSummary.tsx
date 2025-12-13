@@ -1,6 +1,15 @@
 import type { ReactNode } from "react";
 import type { ProjectPulse } from "@shared/types";
-import { GitCommit, Calendar, Flame, GitBranch, ArrowUp, ArrowDown, FileCode } from "lucide-react";
+import {
+  GitCommit,
+  Calendar,
+  Flame,
+  GitBranch,
+  ArrowUp,
+  ArrowDown,
+  FileCode,
+  FilePenLine,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface PulseSummaryProps {
@@ -36,6 +45,7 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
   const hasStreak = (pulse.currentStreakDays ?? 0) > 1;
   const hasDelta =
     pulse.deltaToMain && (pulse.deltaToMain.ahead > 0 || pulse.deltaToMain.behind > 0);
+  const hasUncommitted = pulse.uncommitted && pulse.uncommitted.changedFiles > 0;
 
   if (compact) {
     return (
@@ -52,6 +62,13 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
             value={pulse.currentStreakDays!}
             label="streak"
             highlight
+          />
+        )}
+        {hasUncommitted && (
+          <Stat
+            icon={<FilePenLine className="w-3 h-3 text-sky-400" />}
+            value={pulse.uncommitted!.changedFiles}
+            label="files"
           />
         )}
       </div>
@@ -78,6 +95,13 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
             value={pulse.currentStreakDays!}
             label="day streak"
             highlight
+          />
+        )}
+        {hasUncommitted && (
+          <Stat
+            icon={<FilePenLine className="w-3.5 h-3.5 text-sky-400" />}
+            value={`${pulse.uncommitted!.changedFiles} files`}
+            label={`+${pulse.uncommitted!.insertions ?? 0}/-${pulse.uncommitted!.deletions ?? 0}`}
           />
         )}
       </div>

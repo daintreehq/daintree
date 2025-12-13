@@ -54,4 +54,5 @@ export interface GetProjectPulseOptions {
   rangeDays: PulseRangeDays;
   includeDelta?: boolean;
   includeRecentCommits?: boolean;
+  forceRefresh?: boolean;
 }

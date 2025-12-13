@@ -54,7 +54,7 @@ export class ProjectPulseService {
 
   private getCacheKey(options: GetProjectPulseOptions): string {
     const includeDelta = options.includeDelta ?? true;
-    const includeRecentCommits = options.includeRecentCommits ?? true;
+    const includeRecentCommits = options.includeRecentCommits ?? false;
     return `${options.worktreeId}:${options.worktreePath}:${options.mainBranch}:${options.rangeDays}:${includeDelta}:${includeRecentCommits}`;
   }
 
@@ -79,7 +79,7 @@ export class ProjectPulseService {
     const cacheKey = this.getCacheKey(options);
     const cached = this.cache.get(cacheKey);
 
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+    if (!options.forceRefresh && cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
       logDebug("ProjectPulse cache hit", { cacheKey });
       return cached.pulse;
     }
@@ -114,7 +114,7 @@ export class ProjectPulseService {
       mainBranch,
       rangeDays,
       includeDelta = true,
-      includeRecentCommits = true,
+      includeRecentCommits = false,
     } = options;
 
     if (!existsSync(worktreePath)) {
