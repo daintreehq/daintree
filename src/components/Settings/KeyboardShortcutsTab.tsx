@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Search, RotateCcw, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { keybindingService, KeybindingConfig } from "@/services/KeybindingService";
@@ -11,17 +11,48 @@ interface ShortcutBinding extends KeybindingConfig {
 interface KeyRecorderProps {
   onCapture: (combo: string) => void;
   onCancel: () => void;
-  conflicts: KeybindingConfig[];
+  excludeActionId: string;
 }
 
-function KeyRecorder({ onCapture, onCancel, conflicts }: KeyRecorderProps) {
+const CHORD_TIMEOUT_MS = 1000;
+
+function KeyRecorder({ onCapture, onCancel, excludeActionId }: KeyRecorderProps) {
   const [recording, setRecording] = useState(false);
-  const [capturedCombo, setCapturedCombo] = useState<string | null>(null);
+  const [capturedCombos, setCapturedCombos] = useState<string[]>([]);
+  const [chordStep, setChordStep] = useState<"first" | "waiting" | "complete">("first");
+  const chordTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const chordTokenRef = useRef(0);
+
+  const capturedCombo = capturedCombos.length > 0 ? capturedCombos.join(" ") : null;
+
+  const conflicts = useMemo(() => {
+    if (!capturedCombo) return [];
+    return keybindingService.findConflicts(capturedCombo, excludeActionId);
+  }, [capturedCombo, excludeActionId]);
+
+  const clearChordTimeout = useCallback(() => {
+    if (chordTimeoutRef.current) {
+      clearTimeout(chordTimeoutRef.current);
+      chordTimeoutRef.current = null;
+    }
+  }, []);
+
+  const finishRecording = useCallback(
+    (combos: string[]) => {
+      clearChordTimeout();
+      setCapturedCombos(combos);
+      setRecording(false);
+      setChordStep("complete");
+    },
+    [clearChordTimeout]
+  );
 
   useEffect(() => {
     if (!recording) return;
 
     const handler = (e: KeyboardEvent) => {
+      if (e.repeat) return;
+
       e.preventDefault();
       e.stopPropagation();
 
@@ -37,40 +68,84 @@ function KeyRecorder({ onCapture, onCancel, conflicts }: KeyRecorderProps) {
       if (!["Meta", "Control", "Alt", "Shift"].includes(key)) {
         parts.push(key);
         const combo = parts.join("+");
-        setCapturedCombo(combo);
-        setRecording(false);
+
+        setCapturedCombos((prev) => {
+          const newCombos = [...prev, combo];
+
+          if (prev.length === 0) {
+            setChordStep("waiting");
+            clearChordTimeout();
+            chordTokenRef.current += 1;
+            const token = chordTokenRef.current;
+            chordTimeoutRef.current = setTimeout(() => {
+              if (chordTokenRef.current !== token) return;
+              finishRecording(newCombos);
+            }, CHORD_TIMEOUT_MS);
+          } else {
+            chordTokenRef.current += 1;
+            finishRecording(newCombos);
+          }
+
+          return newCombos;
+        });
       }
     };
 
     window.addEventListener("keydown", handler, { capture: true });
-    return () => window.removeEventListener("keydown", handler, { capture: true });
-  }, [recording]);
+    return () => {
+      window.removeEventListener("keydown", handler, { capture: true });
+      clearChordTimeout();
+    };
+  }, [recording, clearChordTimeout, finishRecording]);
 
   const handleStartRecording = () => {
-    setCapturedCombo(null);
+    setCapturedCombos([]);
+    setChordStep("first");
     setRecording(true);
   };
 
   const handleSave = () => {
     if (capturedCombo) {
+      clearChordTimeout();
+      setRecording(false);
       onCapture(capturedCombo);
     }
   };
 
   const handleClear = () => {
+    clearChordTimeout();
+    setRecording(false);
     onCapture("");
   };
+
+  const handleCancel = () => {
+    clearChordTimeout();
+    setRecording(false);
+    onCancel();
+  };
+
+  const isChord = capturedCombos.length > 1;
 
   return (
     <div className="bg-canopy-bg/50 border border-canopy-border rounded-[var(--radius-lg)] p-4 space-y-3">
       <div className="flex items-center gap-2">
         {recording ? (
           <div className="flex-1 px-4 py-2 border border-canopy-accent rounded bg-canopy-accent/10 text-canopy-accent animate-pulse text-center">
-            Press key combination...
+            {chordStep === "first" ? (
+              "Press key combination..."
+            ) : chordStep === "waiting" ? (
+              <span>
+                <span className="font-mono">
+                  {keybindingService.formatComboForDisplay(capturedCombos[0])}
+                </span>
+                <span className="text-canopy-accent/70"> — press second key or wait to finish</span>
+              </span>
+            ) : null}
           </div>
         ) : capturedCombo ? (
           <div className="flex-1 px-4 py-2 border border-canopy-border rounded bg-canopy-bg text-canopy-text text-center font-mono">
-            {keybindingService.formatComboForDisplay(capturedCombo)}
+            <span>{keybindingService.formatComboForDisplay(capturedCombo)}</span>
+            {isChord && <span className="ml-2 text-xs text-canopy-text/50">(chord)</span>}
           </div>
         ) : (
           <button
@@ -93,7 +168,7 @@ function KeyRecorder({ onCapture, onCancel, conflicts }: KeyRecorderProps) {
 
       <div className="flex gap-2 justify-end">
         <button
-          onClick={onCancel}
+          onClick={handleCancel}
           className="px-3 py-1.5 text-sm text-canopy-text/60 hover:text-canopy-text transition-colors"
         >
           Cancel
@@ -148,21 +223,8 @@ interface ShortcutRowProps {
 }
 
 function ShortcutRow({ binding, isEditing, onEdit, onSave, onCancel, onReset }: ShortcutRowProps) {
-  const [pendingCombo, setPendingCombo] = useState<string | null>(null);
-
-  const conflicts = useMemo(() => {
-    if (!pendingCombo) return [];
-    return keybindingService.findConflicts(pendingCombo, binding.actionId);
-  }, [pendingCombo, binding.actionId]);
-
   const handleCapture = (combo: string) => {
-    if (combo === "") {
-      onSave("");
-    } else {
-      setPendingCombo(combo);
-      onSave(combo);
-    }
-    setPendingCombo(null);
+    onSave(combo);
   };
 
   if (isEditing) {
@@ -173,7 +235,11 @@ function ShortcutRow({ binding, isEditing, onEdit, onSave, onCancel, onReset }: 
             {binding.description || binding.actionId}
           </span>
         </div>
-        <KeyRecorder onCapture={handleCapture} onCancel={onCancel} conflicts={conflicts} />
+        <KeyRecorder
+          onCapture={handleCapture}
+          onCancel={onCancel}
+          excludeActionId={binding.actionId}
+        />
       </div>
     );
   }
