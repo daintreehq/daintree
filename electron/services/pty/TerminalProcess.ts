@@ -297,17 +297,22 @@ export class TerminalProcess {
 
     // Create activity monitor for agent terminals
     if (this.isAgentTerminal) {
-      this.activityMonitor = new ActivityMonitor(id, spawnedAt, (_termId, cbSpawnedAt, state) => {
-        // Validate session token to prevent stale monitor callbacks
-        if (this.terminalInfo.spawnedAt !== cbSpawnedAt) {
-          console.warn(
-            `[TerminalProcess] Rejected stale activity state from old monitor ${_termId} ` +
-              `(session ${cbSpawnedAt} vs current ${this.terminalInfo.spawnedAt})`
-          );
-          return;
-        }
-        deps.agentStateService.handleActivityState(this.terminalInfo, state);
-      }, this.getActivityMonitorOptions());
+      this.activityMonitor = new ActivityMonitor(
+        id,
+        spawnedAt,
+        (_termId, cbSpawnedAt, state) => {
+          // Validate session token to prevent stale monitor callbacks
+          if (this.terminalInfo.spawnedAt !== cbSpawnedAt) {
+            console.warn(
+              `[TerminalProcess] Rejected stale activity state from old monitor ${_termId} ` +
+                `(session ${cbSpawnedAt} vs current ${this.terminalInfo.spawnedAt})`
+            );
+            return;
+          }
+          deps.agentStateService.handleActivityState(this.terminalInfo, state);
+        },
+        this.getActivityMonitorOptions()
+      );
     }
 
     // Start process detection (only if cache is available)
@@ -767,7 +772,8 @@ export class TerminalProcess {
 
   private getActivityMonitorOptions(): { ignoredInputSequences: string[] } {
     // Shift+Enter "soft newline" differs by agent CLI; codex commonly uses LF (\n / Ctrl+J).
-    const ignoredInputSequences = this.terminalInfo.type === "codex" ? ["\n", "\x1b\r"] : ["\x1b\r"];
+    const ignoredInputSequences =
+      this.terminalInfo.type === "codex" ? ["\n", "\x1b\r"] : ["\x1b\r"];
     return { ignoredInputSequences };
   }
 
@@ -1028,11 +1034,7 @@ export class TerminalProcess {
       // For Uint8Array, decode to string, style, and re-encode
       const text = new TextDecoder().decode(data);
       const styled = styleUrls(text);
-      if (
-        process.env.CANOPY_TRACE_URL_STYLING &&
-        styled !== text &&
-        text.length < 10_000
-      ) {
+      if (process.env.CANOPY_TRACE_URL_STYLING && styled !== text && text.length < 10_000) {
         const preview = text.replace(/\s+/g, " ").slice(0, 240);
         console.log(`[TerminalProcess] URL styling applied (${this.id}): ${preview}`);
       }

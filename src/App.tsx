@@ -884,9 +884,6 @@ function App() {
     const cleanup = systemClient.onWake(({ sleepDuration }) => {
       console.log(`[App] System woke after ${Math.round(sleepDuration / 1000)}s sleep`);
 
-      // Dispatch event to notify terminal components to refresh WebGL contexts
-      window.dispatchEvent(new CustomEvent("canopy:system-wake"));
-
       // If sleep was long (>5min), refresh worktree status
       const LONG_SLEEP_THRESHOLD_MS = 5 * 60 * 1000;
       if (sleepDuration > LONG_SLEEP_THRESHOLD_MS) {

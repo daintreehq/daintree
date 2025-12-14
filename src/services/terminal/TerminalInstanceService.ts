@@ -1,7 +1,6 @@
 import { Terminal } from "@xterm/xterm";
 import { terminalClient, systemClient } from "@/clients";
 import { TerminalRefreshTier, TerminalType } from "@/types";
-import { detectHardware, HardwareProfile } from "@/utils/hardwareDetection";
 import type { AgentState } from "@/types";
 import {
   ManagedTerminal,
@@ -10,15 +9,10 @@ import {
   AgentStateCallback,
   TIER_DOWNGRADE_HYSTERESIS_MS,
 } from "./types";
-import { TerminalAddonManager } from "./TerminalAddonManager";
+import { setupTerminalAddons } from "./TerminalAddonManager";
 import { TerminalDataBuffer } from "./TerminalDataBuffer";
 import { createThrottledWriter } from "./ThrottledWriter";
 import { TerminalParserHandler } from "./TerminalParserHandler";
-import {
-  TERMINAL_DISABLE_PARSER_FILTERS,
-  TERMINAL_DISABLE_WEBGL,
-  TERMINAL_MINIMAL_MODE,
-} from "./terminalMinimalMode";
 
 const START_DEBOUNCING_THRESHOLD = 200;
 const HORIZONTAL_DEBOUNCE_MS = 100;
@@ -27,21 +21,10 @@ const IDLE_CALLBACK_TIMEOUT_MS = 1000;
 
 class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
-  private hardwareProfile: HardwareProfile;
-  private addonManager: TerminalAddonManager;
   private dataBuffer: TerminalDataBuffer;
   private suppressedExitUntil = new Map<string, number>();
 
   constructor() {
-    this.hardwareProfile = detectHardware();
-    console.log("[TerminalInstanceService] Hardware profile:", this.hardwareProfile);
-
-    this.addonManager = new TerminalAddonManager(
-      this.hardwareProfile,
-      (id) => this.instances.get(id),
-      (cb) => this.instances.forEach(cb)
-    );
-
     this.dataBuffer = new TerminalDataBuffer((id, data) => this.writeToTerminal(id, data));
     this.dataBuffer.initialize();
   }
@@ -124,14 +107,6 @@ class TerminalInstanceService {
       managed.lastActiveTime = Date.now();
 
       if (isVisible) {
-        this.addonManager.cancelWebglDispose(managed);
-
-        // Reset WebGL recovery state when becoming visible
-        if (managed.hasWebglError) {
-          managed.webglRecoveryAttempts = 0;
-          managed.hasWebglError = false;
-        }
-
         const rect = managed.hostElement.getBoundingClientRect();
         if (rect.width > 0 && rect.height > 0) {
           const widthChanged = Math.abs(managed.lastWidth - rect.width) >= 1;
@@ -143,8 +118,6 @@ class TerminalInstanceService {
           }
         }
         this.applyRendererPolicy(id, managed.getRefreshTier());
-      } else {
-        this.addonManager.disposeWebglWithGrace(id);
       }
     }
   }
@@ -177,7 +150,7 @@ class TerminalInstanceService {
     };
 
     const terminal = new Terminal(terminalOptions);
-    const addons = this.addonManager.setupAddons(terminal, openLink);
+    const addons = setupTerminalAddons(terminal, openLink);
 
     const hostElement = document.createElement("div");
     hostElement.style.width = "100%";
@@ -222,7 +195,6 @@ class TerminalInstanceService {
       agentState: undefined,
       agentStateSubscribers,
       ...addons,
-      webglAddon: undefined, // Setup by addonManager
       hostElement,
       isOpened: false,
       listeners,
@@ -233,10 +205,8 @@ class TerminalInstanceService {
       keyHandlerInstalled: false,
       lastAttachAt: 0,
       lastDetachAt: 0,
-      webglRecoveryAttempts: 0,
       isVisible: false,
       lastActiveTime: Date.now(),
-      hasWebglError: false,
       lastWidth: 0,
       lastHeight: 0,
       lastYResizeTime: 0,
@@ -247,10 +217,6 @@ class TerminalInstanceService {
     };
 
     managed.parserHandler = new TerminalParserHandler(managed);
-    if (TERMINAL_MINIMAL_MODE && TERMINAL_DISABLE_PARSER_FILTERS) {
-      managed.parserHandler.dispose();
-      managed.parserHandler = undefined;
-    }
 
     const inputDisposable = terminal.onData((data) => {
       throttledWriter.notifyInput();
@@ -634,16 +600,15 @@ class TerminalInstanceService {
     if (!managed) return;
 
     try {
-      this.addonManager.resetRenderer(id);
+      if (!managed.hostElement.isConnected) return;
+      if (managed.hostElement.clientWidth < 50 || managed.hostElement.clientHeight < 50) return;
 
-      // Re-apply policy to potentially restore WebGL if managed.webglAddon is now undefined
-      if (managed.hostElement.isConnected) {
-        const dims = this.fit(id);
-        if (dims) {
-          terminalClient.resize(id, dims.cols, dims.rows);
-        }
-        const tier = managed.getRefreshTier();
-        this.applyRendererPolicy(id, tier);
+      managed.terminal.clearTextureAtlas();
+      managed.terminal.refresh(0, managed.terminal.rows - 1);
+
+      const dims = this.fit(id);
+      if (dims) {
+        terminalClient.resize(id, dims.cols, dims.rows);
       }
     } catch (error) {
       console.error(`[TerminalInstanceService] resetRenderer failed for ${id}:`, error);
@@ -651,17 +616,13 @@ class TerminalInstanceService {
   }
 
   resetAllRenderers(): void {
-    this.instances.forEach((managed, id) => {
-      if (managed.webglAddon) {
-        this.resetRenderer(id);
-      }
-    });
+    this.instances.forEach((_managed, id) => this.resetRenderer(id));
   }
 
   /**
    * Called when the PTY backend restarts after a crash.
    * Resets all xterm renderers to fix the "white text" glitch
-   * caused by incomplete ANSI sequences or WebGL context loss.
+   * caused by incomplete ANSI sequences or renderer state desync.
    */
   handleBackendRecovery(): void {
     this.instances.forEach((managed, id) => {
@@ -676,7 +637,7 @@ class TerminalInstanceService {
           managed.parserHandler?.setAllowResets(false);
         });
 
-        // 2. Reset the renderer (WebGL context)
+        // 2. Reset the renderer (canvas refresh)
         this.resetRenderer(id);
 
         // 3. Force fit to recalculate dimensions
@@ -740,7 +701,6 @@ class TerminalInstanceService {
 
     if (tier === TerminalRefreshTier.FOCUSED || tier === TerminalRefreshTier.BURST) {
       managed.lastActiveTime = Date.now();
-      managed.hasWebglError = false;
     }
 
     const currentAppliedTier =
@@ -763,7 +723,7 @@ class TerminalInstanceService {
         managed.tierChangeTimer = undefined;
       }
       managed.pendingTier = undefined;
-      this.applyRendererPolicyImmediate(id, managed, tier);
+      this.applyRendererPolicyImmediate(managed, tier);
       return;
     }
 
@@ -779,7 +739,7 @@ class TerminalInstanceService {
     managed.tierChangeTimer = window.setTimeout(() => {
       const current = this.instances.get(id);
       if (current && current.pendingTier === tier) {
-        this.applyRendererPolicyImmediate(id, current, tier);
+        this.applyRendererPolicyImmediate(current, tier);
         current.pendingTier = undefined;
       }
       if (current) {
@@ -788,29 +748,8 @@ class TerminalInstanceService {
     }, TIER_DOWNGRADE_HYSTERESIS_MS);
   }
 
-  private applyRendererPolicyImmediate(
-    id: string,
-    managed: ManagedTerminal,
-    tier: TerminalRefreshTier
-  ): void {
+  private applyRendererPolicyImmediate(managed: ManagedTerminal, tier: TerminalRefreshTier): void {
     managed.lastAppliedTier = tier;
-
-    const wantsWebgl =
-      !TERMINAL_DISABLE_WEBGL &&
-      managed.isVisible &&
-      (tier === TerminalRefreshTier.BURST ||
-        tier === TerminalRefreshTier.FOCUSED ||
-        tier === TerminalRefreshTier.VISIBLE);
-
-    if (wantsWebgl) {
-      if (!managed.webglAddon) {
-        this.addonManager.acquireWebgl(id, managed);
-      } else if (tier === TerminalRefreshTier.FOCUSED || tier === TerminalRefreshTier.BURST) {
-        this.addonManager.promoteInLru(id);
-      }
-    } else if (tier === TerminalRefreshTier.BACKGROUND && managed.webglAddon) {
-      this.addonManager.releaseWebgl(id, managed);
-    }
   }
 
   updateRefreshTierProvider(id: string, provider: RefreshTierProvider): void {
@@ -860,7 +799,6 @@ class TerminalInstanceService {
     managed.listeners.length = 0;
 
     this.clearResizeJobs(managed);
-    this.addonManager.cancelWebglDispose(managed);
     this.dataBuffer.resetForTerminal(id);
 
     if (managed.tierChangeTimer !== undefined) {
@@ -875,7 +813,6 @@ class TerminalInstanceService {
     managed.parserHandler?.dispose();
     managed.throttledWriter.dispose();
 
-    this.addonManager.releaseWebgl(id, managed);
     managed.terminal.dispose();
 
     if (managed.hostElement.parentElement) {

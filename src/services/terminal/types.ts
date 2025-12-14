@@ -1,6 +1,5 @@
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { WebglAddon } from "@xterm/addon-webgl";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { ImageAddon } from "@xterm/addon-image";
@@ -39,7 +38,6 @@ export interface ManagedTerminal {
   agentState?: AgentState;
   agentStateSubscribers: Set<AgentStateCallback>;
   fitAddon: FitAddon;
-  webglAddon?: WebglAddon;
   serializeAddon: SerializeAddon;
   webLinksAddon: WebLinksAddon;
   imageAddon: ImageAddon;
@@ -55,17 +53,12 @@ export interface ManagedTerminal {
   keyHandlerInstalled: boolean;
   lastAttachAt: number;
   lastDetachAt: number;
-  webglRecoveryAttempts: number;
-  webglRecoveryToken?: number;
   // Visibility-aware LRU tracking
   isVisible: boolean;
   lastActiveTime: number;
-  hasWebglError: boolean;
   // Geometry caching for resize optimization
   lastWidth: number;
   lastHeight: number;
-  // WebGL dispose grace period timer
-  webglDisposeTimer?: number;
   // Renderer policy hysteresis state
   lastAppliedTier?: TerminalRefreshTier; // The tier currently in effect
   pendingTier?: TerminalRefreshTier; // Target tier for scheduled downgrade
@@ -84,6 +77,4 @@ export interface ManagedTerminal {
 
 export type SabFlushMode = "normal" | "frame";
 
-export const MAX_WEBGL_RECOVERY_ATTEMPTS = 4;
-export const WEBGL_DISPOSE_GRACE_MS = 10000;
 export const TIER_DOWNGRADE_HYSTERESIS_MS = 500;

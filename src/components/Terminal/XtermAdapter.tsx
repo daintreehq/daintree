@@ -5,7 +5,6 @@ import { terminalClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
 import type { TerminalType, AgentState } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { TERMINAL_MINIMAL_MODE } from "@/services/terminal/terminalMinimalMode";
 import { useScrollbackStore, usePerformanceModeStore, useTerminalFontStore } from "@/store";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
@@ -222,7 +221,7 @@ function XtermAdapterComponent({
     // Attach to appropriate target
     terminalInstanceService.attach(terminalId, container);
 
-    if (!TERMINAL_MINIMAL_MODE && !managed.keyHandlerInstalled) {
+    if (!managed.keyHandlerInstalled) {
       managed.terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
         // TUI reliability: keep common readline-style Ctrl+key bindings in the terminal
         const TUI_KEYBINDS = ["p", "n", "r", "f", "b", "a", "e", "k", "u", "w", "h", "d"];
@@ -325,7 +324,7 @@ function XtermAdapterComponent({
         const nowVisible = entry.isIntersecting;
         isVisibleRef.current = nowVisible;
 
-        // Notify the service about visibility change (handles WebGL and forced resize)
+        // Notify the service about visibility change (handles tiering and forced resize)
         terminalInstanceService.setVisible(terminalId, nowVisible);
 
         if (nowVisible) {
@@ -392,7 +391,7 @@ function XtermAdapterComponent({
         className
       )}
       style={{
-        // Force GPU layer promotion to prevent WebGL canvas snapshot DPI issues during drag
+        // Promote its own compositor layer to reduce drag/resize jank.
         willChange: "transform",
         transform: "translateZ(0)",
       }}
