@@ -13,6 +13,7 @@ import {
 import { TerminalAddonManager } from "./TerminalAddonManager";
 import { TerminalDataBuffer } from "./TerminalDataBuffer";
 import { createThrottledWriter } from "./ThrottledWriter";
+import { TerminalParserHandler } from "./TerminalParserHandler";
 
 const START_DEBOUNCING_THRESHOLD = 200;
 const HORIZONTAL_DEBOUNCE_MS = 100;
@@ -205,11 +206,14 @@ class TerminalInstanceService {
     });
     listeners.push(unsubExit);
 
+    const kind = type === "claude" || type === "gemini" || type === "codex" ? "agent" : "terminal";
+    const agentId = kind === "agent" ? type : undefined;
+
     const managed: ManagedTerminal = {
       terminal,
       type,
-      kind: undefined,
-      agentId: undefined,
+      kind,
+      agentId,
       agentState: undefined,
       agentStateSubscribers,
       ...addons,
@@ -236,6 +240,8 @@ class TerminalInstanceService {
       latestWasAtBottom: true,
       isFocused: false,
     };
+
+    managed.parserHandler = new TerminalParserHandler(managed);
 
     const inputDisposable = terminal.onData((data) => {
       throttledWriter.notifyInput();
@@ -651,10 +657,15 @@ class TerminalInstanceService {
   handleBackendRecovery(): void {
     this.instances.forEach((managed, id) => {
       try {
+        // Allow resets temporarily so DECSTR can clear state
+        managed.parserHandler?.setAllowResets(true);
+
         // 1. Send soft terminal reset to clear stuck ANSI state
         // \x1b[!p = DECSTR (Soft Terminal Reset)
         // Resets colors, cursor, scrolling regions but keeps text
-        managed.terminal.write("\x1b[!p");
+        managed.terminal.write("\x1b[!p", () => {
+          managed.parserHandler?.setAllowResets(false);
+        });
 
         // 2. Reset the renderer (WebGL context)
         this.resetRenderer(id);
@@ -851,6 +862,7 @@ class TerminalInstanceService {
     managed.outputSubscribers.clear();
     managed.agentStateSubscribers.clear();
 
+    managed.parserHandler?.dispose();
     managed.throttledWriter.dispose();
 
     this.addonManager.releaseWebgl(id, managed);

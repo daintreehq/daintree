@@ -50,6 +50,7 @@ export interface ManagedTerminal {
   exitSubscribers: Set<(exitCode: number) => void>;
   outputSubscribers: Set<() => void>; // For tall canvas scroll sync
   throttledWriter: ThrottledWriter;
+  parserHandler?: { dispose: () => void; setAllowResets: (allow: boolean) => void };
   getRefreshTier: RefreshTierProvider;
   keyHandlerInstalled: boolean;
   lastAttachAt: number;
