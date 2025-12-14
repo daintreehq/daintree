@@ -11,7 +11,6 @@ import {
 } from "./types";
 import { setupTerminalAddons } from "./TerminalAddonManager";
 import { TerminalDataBuffer } from "./TerminalDataBuffer";
-import { createThrottledWriter } from "./ThrottledWriter";
 import { TerminalParserHandler } from "./TerminalParserHandler";
 
 const START_DEBOUNCING_THRESHOLD = 200;
@@ -80,11 +79,6 @@ class TerminalInstanceService {
       if (shouldAck) {
         const len = typeof data === "string" ? data.length : data.byteLength;
         terminalClient.acknowledgeData(id, len);
-      }
-
-      // Notify output subscribers (for tall canvas scroll sync)
-      if (managed.outputSubscribers.size > 0) {
-        managed.outputSubscribers.forEach((cb) => cb());
       }
 
       // Focus-aware scroll behavior: only snap deselected terminals to bottom
@@ -158,13 +152,8 @@ class TerminalInstanceService {
     hostElement.style.display = "flex";
     hostElement.style.flexDirection = "column";
 
-    const throttledWriter = createThrottledWriter(id, terminal, getRefreshTier, () =>
-      this.dataBuffer.isEnabled()
-    );
-
     const listeners: Array<() => void> = [];
     const exitSubscribers = new Set<(exitCode: number) => void>();
-    const outputSubscribers = new Set<() => void>();
     const agentStateSubscribers = new Set<AgentStateCallback>();
 
     const unsubData = terminalClient.onData(id, (data: string | Uint8Array) => {
@@ -178,7 +167,6 @@ class TerminalInstanceService {
       if (this.shouldSuppressExit(id)) {
         return;
       }
-      throttledWriter.dispose();
       terminal.write(`\r\n\x1b[90m[Process exited with code ${exitCode}]\x1b[0m\r\n`);
       exitSubscribers.forEach((cb) => cb(exitCode));
     });
@@ -199,8 +187,6 @@ class TerminalInstanceService {
       isOpened: false,
       listeners,
       exitSubscribers,
-      outputSubscribers,
-      throttledWriter,
       getRefreshTier,
       keyHandlerInstalled: false,
       lastAttachAt: 0,
@@ -219,7 +205,6 @@ class TerminalInstanceService {
     managed.parserHandler = new TerminalParserHandler(managed);
 
     const inputDisposable = terminal.onData((data) => {
-      throttledWriter.notifyInput();
       terminalClient.write(id, data);
       if (onInput) {
         onInput(data);
@@ -756,14 +741,11 @@ class TerminalInstanceService {
     const managed = this.instances.get(id);
     if (!managed) return;
     managed.getRefreshTier = provider;
-    managed.throttledWriter.updateProvider(provider);
   }
 
   boostRefreshRate(id: string): void {
     const managed = this.instances.get(id);
     if (!managed) return;
-
-    managed.throttledWriter.boost();
     this.applyRendererPolicy(id, TerminalRefreshTier.BURST);
   }
 
@@ -772,13 +754,6 @@ class TerminalInstanceService {
     if (!managed) return () => {};
     managed.exitSubscribers.add(cb);
     return () => managed.exitSubscribers.delete(cb);
-  }
-
-  addOutputListener(id: string, cb: () => void): () => void {
-    const managed = this.instances.get(id);
-    if (!managed) return () => {};
-    managed.outputSubscribers.add(cb);
-    return () => managed.outputSubscribers.delete(cb);
   }
 
   destroy(id: string): void {
@@ -807,11 +782,9 @@ class TerminalInstanceService {
     }
 
     managed.exitSubscribers.clear();
-    managed.outputSubscribers.clear();
     managed.agentStateSubscribers.clear();
 
     managed.parserHandler?.dispose();
-    managed.throttledWriter.dispose();
 
     managed.terminal.dispose();
 
@@ -848,7 +821,6 @@ class TerminalInstanceService {
 
     try {
       // Clear pending output and reset terminal state for idempotent restoration
-      managed.throttledWriter.clear();
       managed.terminal.reset();
 
       // The serialized state is a sequence of escape codes that reconstructs

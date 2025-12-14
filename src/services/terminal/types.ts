@@ -10,24 +10,6 @@ export type RefreshTierProvider = () => TerminalRefreshTier;
 
 export type ResizeJobId = { type: "timeout"; id: number } | { type: "idle"; id: number };
 
-export interface ThrottledWriter {
-  readonly pendingWrites: number;
-  write: (data: string | Uint8Array) => void;
-  dispose: () => void;
-  updateProvider: (provider: RefreshTierProvider) => void;
-  notifyInput: () => void;
-  getDebugInfo: () => {
-    tierName: string;
-    fps: number;
-    isBurstMode: boolean;
-    effectiveDelay: number;
-    bufferSize: number;
-    pendingWrites: number;
-  };
-  boost: () => void;
-  clear: () => void;
-}
-
 export type AgentStateCallback = (state: AgentState) => void;
 
 export interface ManagedTerminal {
@@ -46,8 +28,6 @@ export interface ManagedTerminal {
   isOpened: boolean;
   listeners: Array<() => void>;
   exitSubscribers: Set<(exitCode: number) => void>;
-  outputSubscribers: Set<() => void>; // For tall canvas scroll sync
-  throttledWriter: ThrottledWriter;
   parserHandler?: { dispose: () => void; setAllowResets: (allow: boolean) => void };
   getRefreshTier: RefreshTierProvider;
   keyHandlerInstalled: boolean;
