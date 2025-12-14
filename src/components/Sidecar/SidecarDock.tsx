@@ -6,6 +6,7 @@ import { SidecarLaunchpad } from "./SidecarLaunchpad";
 import { SIDECAR_MIN_WIDTH, SIDECAR_MAX_WIDTH } from "@shared/types";
 import { systemClient } from "@/clients/systemClient";
 import { getAIAgentInfo } from "@/lib/aiAgentDetection";
+import { useKeybinding, useKeybindingScope } from "@/hooks/useKeybinding";
 
 export function SidecarDock() {
   const {
@@ -18,6 +19,7 @@ export function SidecarDock() {
     setOpen,
     createBlankTab,
     closeTab,
+    closeActiveTab,
     closeAllTabs,
     duplicateTab,
     closeTabsExcept,
@@ -28,8 +30,12 @@ export function SidecarDock() {
     createdTabs,
   } = useSidecarStore();
   const contentRef = useRef<HTMLDivElement>(null);
+  const dockRef = useRef<HTMLDivElement>(null);
   const [isResizing, setIsResizing] = useState(false);
   const [isSwitching, setIsSwitching] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
+
+  useKeybindingScope("sidecar", isFocused);
 
   const getPlaceholderBounds = useCallback(() => {
     if (!contentRef.current) return null;
@@ -151,6 +157,38 @@ export function SidecarDock() {
     createBlankTab();
     window.electron.sidecar.hide();
   }, [createBlankTab]);
+
+  const handleCloseTabShortcut = useCallback(() => {
+    if (tabs.length > 0) {
+      closeActiveTab();
+    }
+  }, [tabs.length, closeActiveTab]);
+
+  const handleNextTabShortcut = useCallback(() => {
+    if (tabs.length <= 1) return;
+    const currentIndex = tabs.findIndex((t) => t.id === activeTabId);
+    const nextIndex = currentIndex < tabs.length - 1 ? currentIndex + 1 : 0;
+    const nextTabId = tabs[nextIndex].id;
+    void handleTabClick(nextTabId);
+  }, [tabs, activeTabId, handleTabClick]);
+
+  const handlePrevTabShortcut = useCallback(() => {
+    if (tabs.length <= 1) return;
+    const currentIndex = tabs.findIndex((t) => t.id === activeTabId);
+    const prevIndex = currentIndex > 0 ? currentIndex - 1 : tabs.length - 1;
+    const prevTabId = tabs[prevIndex].id;
+    void handleTabClick(prevTabId);
+  }, [tabs, activeTabId, handleTabClick]);
+
+  const handleNewTabShortcut = useCallback(() => {
+    createBlankTab();
+    window.electron.sidecar.hide();
+  }, [createBlankTab]);
+
+  useKeybinding("sidecar.closeTab", handleCloseTabShortcut, { enabled: isFocused });
+  useKeybinding("sidecar.nextTab", handleNextTabShortcut, { enabled: isFocused });
+  useKeybinding("sidecar.prevTab", handlePrevTabShortcut, { enabled: isFocused });
+  useKeybinding("sidecar.newTab", handleNewTabShortcut, { enabled: isFocused });
 
   const handleOpenUrl = useCallback(
     async (url: string, title: string, background?: boolean) => {
@@ -455,8 +493,40 @@ export function SidecarDock() {
     };
   }, []);
 
+  const handleDockFocus = useCallback(() => {
+    setIsFocused(true);
+  }, []);
+
+  const handleDockBlur = useCallback((e: React.FocusEvent) => {
+    if (dockRef.current && !dockRef.current.contains(e.relatedTarget as Node)) {
+      setIsFocused(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!window.electron.sidecar.onFocus || !window.electron.sidecar.onBlur) return;
+
+    const cleanupFocus = window.electron.sidecar.onFocus(() => {
+      setIsFocused(true);
+    });
+    const cleanupBlur = window.electron.sidecar.onBlur(() => {
+      setIsFocused(false);
+    });
+    return () => {
+      cleanupFocus();
+      cleanupBlur();
+    };
+  }, []);
+
   return (
-    <div className="flex flex-col h-full bg-canopy-bg relative" style={{ width }}>
+    <div
+      ref={dockRef}
+      className="flex flex-col h-full bg-canopy-bg relative sidecar-dock"
+      style={{ width }}
+      onFocus={handleDockFocus}
+      onBlur={handleDockBlur}
+      tabIndex={-1}
+    >
       <div
         role="separator"
         aria-label="Resize sidecar panel"

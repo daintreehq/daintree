@@ -1,4 +1,4 @@
-export type KeyScope = "global" | "terminal" | "modal" | "worktreeList";
+export type KeyScope = "global" | "terminal" | "modal" | "worktreeList" | "sidecar";
 
 export interface KeybindingConfig {
   actionId: string;
@@ -347,6 +347,38 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     priority: 0,
     description: "Toggle sidecar panel",
     category: "Panels",
+  },
+  {
+    actionId: "sidecar.closeTab",
+    combo: "Cmd+W",
+    scope: "sidecar",
+    priority: 20,
+    description: "Close active sidecar tab",
+    category: "Sidecar",
+  },
+  {
+    actionId: "sidecar.nextTab",
+    combo: "Ctrl+Tab",
+    scope: "sidecar",
+    priority: 20,
+    description: "Next sidecar tab",
+    category: "Sidecar",
+  },
+  {
+    actionId: "sidecar.prevTab",
+    combo: "Ctrl+Shift+Tab",
+    scope: "sidecar",
+    priority: 20,
+    description: "Previous sidecar tab",
+    category: "Sidecar",
+  },
+  {
+    actionId: "sidecar.newTab",
+    combo: "Cmd+T",
+    scope: "sidecar",
+    priority: 20,
+    description: "New sidecar tab",
+    category: "Sidecar",
   },
   {
     actionId: "nav.toggleSidebar",

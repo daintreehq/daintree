@@ -236,6 +236,8 @@ const CHANNELS = {
   SIDECAR_GO_FORWARD: "sidecar:go-forward",
   SIDECAR_RELOAD: "sidecar:reload",
   SIDECAR_NAV_EVENT: "sidecar:nav-event",
+  SIDECAR_FOCUS: "sidecar:focus",
+  SIDECAR_BLUR: "sidecar:blur",
 
   // Hibernation channels
   HIBERNATION_GET_CONFIG: "hibernation:get-config",
@@ -689,6 +691,10 @@ const api: ElectronAPI = {
 
     onNavEvent: (callback: (data: { tabId: string; title: string; url: string }) => void) =>
       _typedOn(CHANNELS.SIDECAR_NAV_EVENT, callback),
+
+    onFocus: (callback: () => void) => _typedOn(CHANNELS.SIDECAR_FOCUS, callback),
+
+    onBlur: (callback: () => void) => _typedOn(CHANNELS.SIDECAR_BLUR, callback),
   },
 
   // Hibernation API

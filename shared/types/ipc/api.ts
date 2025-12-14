@@ -238,6 +238,8 @@ export interface ElectronAPI {
     goForward(tabId: string): Promise<boolean>;
     reload(tabId: string): Promise<void>;
     onNavEvent(callback: (data: import("../sidecar.js").SidecarNavEvent) => void): () => void;
+    onFocus(callback: () => void): () => void;
+    onBlur(callback: () => void): () => void;
   };
   hibernation: {
     getConfig(): Promise<HibernationConfig>;

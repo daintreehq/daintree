@@ -72,8 +72,25 @@ export class SidecarManager {
       view.webContents.once("destroyed", () => {
         this.viewMap.delete(tabId);
         if (this.activeTabId === tabId) {
+          try {
+            this.window.contentView.removeChildView(view);
+          } catch {
+            // ignore if already removed
+          }
           this.activeView = null;
           this.activeTabId = null;
+        }
+      });
+
+      view.webContents.on("focus", () => {
+        if (!this.window?.isDestroyed()) {
+          this.window.webContents.send(CHANNELS.SIDECAR_FOCUS);
+        }
+      });
+
+      view.webContents.on("blur", () => {
+        if (!this.window?.isDestroyed()) {
+          this.window.webContents.send(CHANNELS.SIDECAR_BLUR);
         }
       });
 

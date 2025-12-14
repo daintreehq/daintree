@@ -581,6 +581,8 @@ export interface IpcEventMap {
 
   // Sidecar events
   "sidecar:nav-event": import("../sidecar.js").SidecarNavEvent;
+  "sidecar:focus": void;
+  "sidecar:blur": void;
 
   // System Sleep events
   "system-sleep:on-wake": number;

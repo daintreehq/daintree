@@ -36,7 +36,10 @@ interface SidecarActions {
   createTab: (url: string, title: string) => string;
   createBlankTab: () => string;
   closeTab: (id: string) => void;
+  closeActiveTab: () => void;
   closeAllTabs: () => void;
+  cycleNextTab: () => void;
+  cyclePrevTab: () => void;
   duplicateTab: (id: string) => string | null;
   closeTabsExcept: (id: string) => void;
   closeTabsAfter: (id: string) => void;
@@ -119,15 +122,20 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
 
   closeTab: (id) => {
     const state = get();
+    const closingIndex = state.tabs.findIndex((t) => t.id === id);
+    const wasActive = id === state.activeTabId;
     const newTabs = state.tabs.filter((t) => t.id !== id);
     let newActiveId = state.activeTabId;
-    if (id === state.activeTabId) {
-      newActiveId = newTabs.length > 0 ? newTabs[newTabs.length - 1].id : null;
+    if (wasActive) {
+      newActiveId =
+        newTabs.length === 0 ? null : newTabs[Math.min(closingIndex, newTabs.length - 1)].id;
     }
     const nextCreatedTabs = new Set(state.createdTabs);
     nextCreatedTabs.delete(id);
     set({ tabs: newTabs, activeTabId: newActiveId, createdTabs: nextCreatedTabs });
     window.electron.sidecar.closeTab({ tabId: id });
+
+    if (!wasActive) return;
 
     if (newActiveId) {
       const newActiveTab = newTabs.find((t) => t.id === newActiveId);
@@ -153,6 +161,29 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
     } else {
       window.electron.sidecar.hide();
     }
+  },
+
+  closeActiveTab: () => {
+    const state = get();
+    if (state.activeTabId) {
+      get().closeTab(state.activeTabId);
+    }
+  },
+
+  cycleNextTab: () => {
+    const state = get();
+    if (state.tabs.length <= 1) return;
+    const currentIndex = state.tabs.findIndex((t) => t.id === state.activeTabId);
+    const nextIndex = currentIndex < state.tabs.length - 1 ? currentIndex + 1 : 0;
+    set({ activeTabId: state.tabs[nextIndex].id });
+  },
+
+  cyclePrevTab: () => {
+    const state = get();
+    if (state.tabs.length <= 1) return;
+    const currentIndex = state.tabs.findIndex((t) => t.id === state.activeTabId);
+    const prevIndex = currentIndex > 0 ? currentIndex - 1 : state.tabs.length - 1;
+    set({ activeTabId: state.tabs[prevIndex].id });
   },
 
   closeAllTabs: () => {
