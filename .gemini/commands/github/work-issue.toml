@@ -31,25 +31,41 @@ prompt = '''
 2. **Install Dependencies**: `run_shell_command("npm install", description="Install Node.js dependencies for the Canopy project")`.
 3. **Rebuild Native Modules**: `run_shell_command("npm run rebuild", description="Rebuild native modules like node-pty for Electron compatibility")`.
 
-### Step 4: Plan Implementation
+### Step 4: Codex Plan (Implementation Guidance)
 
-1. **Analyze Issue**: Read the issue body and comments.
-2. **Explore Codebase**: Use `codebase_investigator` to understand relevant parts of the Canopy system (Electron structure, React components, IPC mechanisms).
-3. **Formulate Plan**: Develop a step-by-step implementation plan, noting specific files for modification, new IPC channels, UI components, and testing strategy.
+**CRITICAL:** This step runs AUTOMATICALLY.
 
-### Step 5: Implement (Autonomous)
+1. **Check for Existing Guidance**: Review issue comments for detailed instructions.
+2. **Consult Codex**: If no detailed instructions exist, ask Codex for an implementation plan.
+   - Command: `run_shell_command("claude -p \"Analyze issue #{number} and provide a structured implementation plan including technical analysis, code mapping, and testing strategy. Current directory: $(pwd)\"")`
+3. **Internalize Plan**: Use this plan as your roadmap. Do not pause for user approval.
+
+### Step 5: Implement (Autonomous with Codex)
 
 **Loop until done:**
-1. **Implement Changes**: Use `write_file` and `replace` to apply code changes.
+
+**Principles:**
+- **Pair Program with Codex**: If uncertain (edge cases, APIs, patterns), ask Codex via `run_shell_command("claude -p \"<question>\"")`.
+- **Fix, don't ask**: Fix lint/test errors immediately.
+
+1. **Implement Changes**: Use `write_file` and `replace` to apply code changes based on the plan.
 2. **Iterative Verification**:
    - **Full Quality Check**: `run_shell_command("npm run check", description="Run Canopy's linting, type-checking, and format checks")`.
    - **Run Tests**: `run_shell_command("npm run test", description="Run Canopy's unit tests using Vitest")`.
-   - **Fix Failures**: Immediately identify and fix any errors. Use `codebase_investigator` for complex architectural diagnostics or `google_web_search` for external API/library issues.
+   - **Fix Failures**: Immediately identify and fix any errors. Use `codebase_investigator` or ask Codex.
 3. **Commit Regularly**:
    - `run_shell_command("git add -A", description="Stage all changes for commit")`.
    - `run_shell_command("git commit -m '<conventional-commit-message>'", description="Commit changes with a conventional message")`.
 
-### Step 6: Create Pull Request
+### Step 6: Codex Implementation Review
+
+**Mandatory Review:**
+
+1. **Request Review**: Ask Codex to review the implementation.
+   - Command: `run_shell_command("claude -p \"Review the implementation for issue #{number} in the current directory. Check for logic errors, edge cases, missing tests, and adherence to project patterns. List specific fixes required.\"")`
+2. **Apply Fixes**: If issues are found, fix them immediately (repeat Step 5 logic) until the review is clean.
+
+### Step 7: Create Pull Request
 
 **Mandatory Final Step:**
 

@@ -1,0 +1,6 @@
+Task Completed:
+- Implemented synchronous file logging in pty-host.ts.
+- Captured and piped pty-host output in PtyClient.ts.
+- Improved error logging in TerminalProcess.ts.
+- Verified with `npm run check` and `npm run test`.
+- Created PR #1111.
