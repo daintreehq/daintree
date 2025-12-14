@@ -36,17 +36,20 @@ export class TerminalParserHandler {
     this.disposables.push(risHandler);
 
     // Block DECSTR (Soft Terminal Reset) - CSI ! p
-    const decstrHandler = terminal.parser.registerCsiHandler({ intermediates: "!", final: "p" }, () => {
-      if (this.allowResets) return false;
-      if (!this.shouldBlock()) return false;
+    const decstrHandler = terminal.parser.registerCsiHandler(
+      { intermediates: "!", final: "p" },
+      () => {
+        if (this.allowResets) return false;
+        if (!this.shouldBlock()) return false;
 
-      if (process.env.NODE_ENV === "development") {
-        console.warn(
-          `[TerminalParser] Blocked DECSTR (CSI ! p) for agent terminal ${this.managed.agentId || "unknown"}`
-        );
+        if (process.env.NODE_ENV === "development") {
+          console.warn(
+            `[TerminalParser] Blocked DECSTR (CSI ! p) for agent terminal ${this.managed.agentId || "unknown"}`
+          );
+        }
+        return true; // Swallow the sequence
       }
-      return true; // Swallow the sequence
-    });
+    );
     this.disposables.push(decstrHandler);
   }
 

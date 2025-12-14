@@ -30,6 +30,7 @@ import { AgentSpawnedSchema, AgentStateChangedSchema } from "../../schemas/agent
 import type { PtyPool } from "../PtyPool.js";
 import { styleUrls } from "./UrlStyler.js";
 import { logError } from "../../utils/logger.js";
+import { decideTerminalExitForensics } from "./terminalForensics.js";
 
 // Flow Control Constants (VS Code values)
 const HIGH_WATERMARK_CHARS = 100000;
@@ -787,30 +788,31 @@ export class TerminalProcess {
   private logForensics(exitCode: number, signal?: number): void {
     if (!this.isAgentTerminal) return;
 
-    const shouldLog =
-      exitCode !== 0 ||
-      signal !== undefined ||
-      /error|exception|panic|fatal|segfault/i.test(this.recentOutputBuffer);
+    const terminal = this.terminalInfo;
+    const decision = decideTerminalExitForensics({
+      exitCode,
+      signal,
+      wasKilled: terminal.wasKilled,
+      recentOutput: this.recentOutputBuffer,
+    });
 
-    if (!shouldLog || this.recentOutputBuffer.length === 0) {
+    if (!decision.shouldLog || decision.strippedOutput.trim().length === 0) {
       return;
     }
-
-    const terminal = this.terminalInfo;
 
     logError(`Terminal ${this.id} exited abnormally (code ${exitCode})`, undefined, {
       terminalId: this.id,
       exitCode,
-      signal,
+      signal: decision.normalizedSignal,
       agentType: terminal.type,
       agentId: terminal.agentId,
       cwd: terminal.cwd,
-      lastOutput: this.recentOutputBuffer.slice(-1000),
+      lastOutput: decision.strippedOutput.slice(-1000),
     });
 
     if (process.env.CANOPY_VERBOSE || exitCode !== 0) {
       console.error(
-        `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nTERMINAL CRASH FORENSICS\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nTerminal ID: ${this.id}\nAgent Type:  ${terminal.type || "unknown"}\nAgent ID:    ${terminal.agentId || "N/A"}\nExit Code:   ${exitCode}\nSignal:      ${signal ?? "none"}\nCWD:         ${terminal.cwd}\nTimestamp:   ${new Date().toISOString()}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nLAST OUTPUT (${this.recentOutputBuffer.length} chars):\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n${this.recentOutputBuffer}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`
+        `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nTERMINAL CRASH FORENSICS\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nTerminal ID: ${this.id}\nAgent Type:  ${terminal.type || "unknown"}\nAgent ID:    ${terminal.agentId || "N/A"}\nExit Code:   ${exitCode}\nSignal:      ${decision.normalizedSignal ?? "none"}\nCWD:         ${terminal.cwd}\nTimestamp:   ${new Date().toISOString()}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nLAST OUTPUT (${decision.strippedOutput.length} chars):\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n${decision.strippedOutput}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`
       );
     }
   }

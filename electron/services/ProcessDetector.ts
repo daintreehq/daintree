@@ -1,5 +1,6 @@
 import type { TerminalType } from "../../shared/types/domain.js";
 import type { ProcessTreeCache } from "./ProcessTreeCache.js";
+import { logDebug, logWarn } from "../utils/logger.js";
 
 interface ChildProcess {
   pid: number;
@@ -51,11 +52,11 @@ export class ProcessDetector {
 
   start(): void {
     if (this.isStarted) {
-      console.warn(`ProcessDetector for terminal ${this.terminalId} already started`);
+      logWarn(`ProcessDetector for terminal ${this.terminalId} already started`);
       return;
     }
 
-    console.log(`Starting ProcessDetector for terminal ${this.terminalId}, PID ${this.ptyPid}`);
+    logDebug(`Starting ProcessDetector for terminal ${this.terminalId}, PID ${this.ptyPid}`);
 
     this.isStarted = true;
     this.detect();
@@ -69,7 +70,7 @@ export class ProcessDetector {
     if (this.unsubscribe) {
       this.unsubscribe();
       this.unsubscribe = null;
-      console.log(`Stopped ProcessDetector for terminal ${this.terminalId}`);
+      logDebug(`Stopped ProcessDetector for terminal ${this.terminalId}`);
     }
     this.isStarted = false;
   }
