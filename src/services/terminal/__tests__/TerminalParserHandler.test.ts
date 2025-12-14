@@ -60,7 +60,7 @@ describe("TerminalParserHandler", () => {
 
   it("should block DECSTR (CSI ! p) for agent terminals", () => {
     new TerminalParserHandler(mockManaged);
-    const decstrHandler = csiHandlers.find((h) => h.opts.prefix === "!" && h.opts.final === "p");
+    const decstrHandler = csiHandlers.find((h) => h.opts.intermediates === "!" && h.opts.final === "p");
     expect(decstrHandler).toBeDefined();
 
     const result = decstrHandler.handler();
@@ -76,7 +76,7 @@ describe("TerminalParserHandler", () => {
     const risHandler = escHandlers.find((h) => h.opts.final === "c");
     expect(risHandler.handler()).toBe(false); // Should pass through
 
-    const decstrHandler = csiHandlers.find((h) => h.opts.prefix === "!" && h.opts.final === "p");
+    const decstrHandler = csiHandlers.find((h) => h.opts.intermediates === "!" && h.opts.final === "p");
     expect(decstrHandler.handler()).toBe(false); // Should pass through
   });
 

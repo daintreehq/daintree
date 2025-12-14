@@ -36,7 +36,7 @@ export class TerminalParserHandler {
     this.disposables.push(risHandler);
 
     // Block DECSTR (Soft Terminal Reset) - CSI ! p
-    const decstrHandler = terminal.parser.registerCsiHandler({ prefix: "!", final: "p" }, () => {
+    const decstrHandler = terminal.parser.registerCsiHandler({ intermediates: "!", final: "p" }, () => {
       if (this.allowResets) return false;
       if (!this.shouldBlock()) return false;
 
