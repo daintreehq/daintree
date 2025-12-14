@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { EventEmitter } from "events";
+import type { LogBuffer } from "../LogBuffer.js";
 
 // Mock Electron modules before importing PtyClient
 vi.mock("electron", () => ({
@@ -20,11 +21,15 @@ import type { PtyClientConfig } from "../PtyClient.js";
 interface MockUtilityProcess extends EventEmitter {
   postMessage: Mock;
   kill: Mock;
+  stdout: EventEmitter;
+  stderr: EventEmitter;
 }
 
 describe("PtyClient Handshake Protocol", () => {
   let mockChild: MockUtilityProcess;
   let PtyClientClass: typeof import("../PtyClient.js").PtyClient;
+  let forkMock: Mock;
+  let logBuffer: LogBuffer;
 
   beforeEach(async () => {
     vi.useFakeTimers();
@@ -33,6 +38,8 @@ describe("PtyClient Handshake Protocol", () => {
     mockChild = Object.assign(new EventEmitter(), {
       postMessage: vi.fn(),
       kill: vi.fn(),
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
     });
 
     (utilityProcess.fork as Mock).mockReturnValue(mockChild);
@@ -53,6 +60,9 @@ describe("PtyClient Handshake Protocol", () => {
 
     const module = await import("../PtyClient.js");
     PtyClientClass = module.PtyClient;
+    forkMock = (await import("electron")).utilityProcess.fork as unknown as Mock;
+    logBuffer = (await import("../LogBuffer.js")).logBuffer;
+    logBuffer.clear();
   });
 
   afterEach(() => {
@@ -153,6 +163,28 @@ describe("PtyClient Handshake Protocol", () => {
       expect(
         mockChild.postMessage.mock.calls.filter((c) => c[0]?.type === "health-check").length
       ).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  describe("host log forwarding", () => {
+    it("should start pty-host with stdio piped", () => {
+      createClient();
+      expect(forkMock).toHaveBeenCalledWith(
+        expect.any(String),
+        [],
+        expect.objectContaining({ stdio: "pipe" })
+      );
+    });
+
+    it("should forward stdout/stderr lines into the main log buffer", () => {
+      createClient();
+
+      mockChild.stdout.emit("data", Buffer.from("hello from host\n"));
+      mockChild.stderr.emit("data", Buffer.from("warning from host\n"));
+
+      const messages = logBuffer.getAll().map((e) => e.message);
+      expect(messages.some((m) => m.includes("[PtyHost] hello from host"))).toBe(true);
+      expect(messages.some((m) => m.includes("[PtyHost] warning from host"))).toBe(true);
     });
   });
 

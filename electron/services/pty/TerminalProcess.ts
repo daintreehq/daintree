@@ -103,6 +103,9 @@ export class TerminalProcess {
   private processDetector: ProcessDetector | null = null;
   private headlineGenerator = new ActivityHeadlineGenerator();
 
+  private lastWriteErrorLogTime = 0;
+  private suppressedWriteErrorCount = 0;
+
   // Flow control state
   private _unacknowledgedCharCount = 0;
   private _isPtyPaused = false;
@@ -125,6 +128,31 @@ export class TerminalProcess {
   private readonly terminalInfo: TerminalInfo;
   private readonly isAgentTerminal: boolean;
 
+  private logWriteError(error: unknown, context: { operation: string; traceId?: string }): void {
+    const now = Date.now();
+    const THROTTLE_MS = 5000;
+    if (now - this.lastWriteErrorLogTime < THROTTLE_MS) {
+      this.suppressedWriteErrorCount++;
+      return;
+    }
+
+    const suppressed = this.suppressedWriteErrorCount;
+    this.suppressedWriteErrorCount = 0;
+    this.lastWriteErrorLogTime = now;
+
+    console.error(
+      `[TerminalProcess] PTY ${context.operation} failed for ${this.id}` +
+        (context.traceId ? ` traceId=${context.traceId}` : ""),
+      error
+    );
+
+    if (suppressed > 0) {
+      console.error(
+        `[TerminalProcess] Suppressed ${suppressed} additional PTY write errors for ${this.id} in the last ${THROTTLE_MS}ms`
+      );
+    }
+  }
+
   private ensureHeadlessResponder(): void {
     this.ensureHeadlessTerminal();
     const terminal = this.terminalInfo;
@@ -143,8 +171,8 @@ export class TerminalProcess {
         if (terminal.wasKilled) return;
         try {
           terminal.ptyProcess.write(data);
-        } catch {
-          // Ignore write errors - PTY may already be dead
+        } catch (error) {
+          this.logWriteError(error, { operation: "write(headless-responder)" });
         }
       }
     );
@@ -201,13 +229,21 @@ export class TerminalProcess {
       // Change directory if needed
       if (process.platform === "win32") {
         const shellLower = shell.toLowerCase();
-        if (shellLower.includes("powershell") || shellLower.includes("pwsh")) {
-          ptyProcess.write(`Set-Location "${options.cwd.replace(/"/g, '""')}"\r`);
-        } else {
-          ptyProcess.write(`cd /d "${options.cwd.replace(/"/g, '\\"')}"\r`);
+        try {
+          if (shellLower.includes("powershell") || shellLower.includes("pwsh")) {
+            ptyProcess.write(`Set-Location "${options.cwd.replace(/"/g, '""')}"\r`);
+          } else {
+            ptyProcess.write(`cd /d "${options.cwd.replace(/"/g, '\\"')}"\r`);
+          }
+        } catch (error) {
+          this.logWriteError(error, { operation: "write(cwd)" });
         }
       } else {
-        ptyProcess.write(`cd "${options.cwd.replace(/"/g, '\\"')}"\r`);
+        try {
+          ptyProcess.write(`cd "${options.cwd.replace(/"/g, '\\"')}"\r`);
+        } catch (error) {
+          this.logWriteError(error, { operation: "write(cwd)" });
+        }
       }
 
       if (process.env.CANOPY_VERBOSE) {
@@ -287,7 +323,11 @@ export class TerminalProcess {
         this.terminalInfo.headlessTerminal,
         (data) => {
           if (this.terminalInfo.wasKilled) return;
-          this.terminalInfo.ptyProcess.write(data);
+          try {
+            this.terminalInfo.ptyProcess.write(data);
+          } catch (error) {
+            this.logWriteError(error, { operation: "write(headless-responder)" });
+          }
         }
       );
     }
@@ -504,8 +544,8 @@ export class TerminalProcess {
     if (isBracketedPaste(data)) {
       try {
         terminal.ptyProcess.write(data);
-      } catch {
-        // Process may already be dead; swallow write errors
+      } catch (error) {
+        this.logWriteError(error, { operation: "write(bracketed-paste)", traceId });
       }
       return;
     }
@@ -1259,8 +1299,8 @@ export class TerminalProcess {
     }
     try {
       terminal.ptyProcess.write(chunk);
-    } catch {
-      // Process may already be dead; swallow write errors
+    } catch (error) {
+      this.logWriteError(error, { operation: "write(chunk)" });
     }
   }
 

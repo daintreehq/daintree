@@ -11,6 +11,8 @@
 
 import { MessagePort } from "node:worker_threads";
 import os from "node:os";
+import { appendFileSync, mkdirSync } from "node:fs";
+import path from "node:path";
 import v8 from "node:v8";
 import { PtyManager } from "./services/PtyManager.js";
 import { PtyPool, getPtyPool } from "./services/PtyPool.js";
@@ -24,26 +26,81 @@ import type {
   TerminalFlowStatus,
 } from "../shared/types/pty-host.js";
 
+function getEmergencyLogPath(): string {
+  const userData = process.env.CANOPY_USER_DATA;
+  const logDir = userData
+    ? path.join(userData, "logs")
+    : process.env.NODE_ENV === "development"
+      ? path.join(process.cwd(), "logs")
+      : path.join(process.cwd(), "logs");
+  return path.join(logDir, "pty-host.log");
+}
+
+function appendEmergencyLog(lines: string): void {
+  try {
+    const logFile = getEmergencyLogPath();
+    mkdirSync(path.dirname(logFile), { recursive: true });
+    appendFileSync(logFile, lines, "utf8");
+  } catch {
+    // best-effort only
+  }
+}
+
+function emergencyLogFatal(kind: string, error: unknown): void {
+  const timestamp = new Date().toISOString();
+  const pid = process.pid;
+  const uptimeMs = Math.round(process.uptime() * 1000);
+  const memory = process.memoryUsage();
+  const details =
+    error instanceof Error
+      ? { name: error.name, message: error.message, stack: error.stack }
+      : { message: String(error) };
+
+  appendEmergencyLog(
+    [
+      "============================================================",
+      `[${timestamp}] [${kind}] pid=${pid} uptimeMs=${uptimeMs}`,
+      `node=${process.version} platform=${process.platform} arch=${process.arch}`,
+      `memory.rss=${memory.rss} heapUsed=${memory.heapUsed} heapTotal=${memory.heapTotal} external=${memory.external}`,
+      `error=${JSON.stringify(details)}`,
+      "",
+    ].join("\n")
+  );
+}
+
 // Validate we're running in UtilityProcess context
 if (!process.parentPort) {
+  emergencyLogFatal("FATAL_INIT_NO_PARENT_PORT", new Error("Must run in UtilityProcess context"));
   throw new Error("[PtyHost] Must run in UtilityProcess context");
 }
 
 const port = process.parentPort as unknown as MessagePort;
 
+appendEmergencyLog(`[${new Date().toISOString()}] [START] pid=${process.pid}\n`);
+
 // Global error handlers to prevent silent crashes
 process.on("uncaughtException", (err) => {
   console.error("[PtyHost] Uncaught Exception:", err);
-  sendEvent({ type: "error", id: "system", error: err.message });
+  emergencyLogFatal("UNCAUGHT_EXCEPTION", err);
+  try {
+    sendEvent({ type: "error", id: "system", error: err.message });
+  } catch {
+    // ignore
+  }
 });
 
 process.on("unhandledRejection", (reason) => {
   console.error("[PtyHost] Unhandled Rejection:", reason);
-  sendEvent({
-    type: "error",
-    id: "system",
-    error: String(reason instanceof Error ? reason.message : reason),
-  });
+  emergencyLogFatal("UNHANDLED_REJECTION", reason);
+  try {
+    sendEvent({
+      type: "error",
+      id: "system",
+      error: String(reason instanceof Error ? reason.message : reason),
+    });
+  } catch {
+    // ignore
+  }
 });
 
 // Resource Governor - monitors heap usage and applies backpressure proactively
@@ -936,6 +993,7 @@ async function initialize(): Promise<void> {
     ptyManager.setPtyPool(ptyPool);
   } catch (error) {
     console.error("[PtyHost] Initialization failed:", error);
+    emergencyLogFatal("INIT_ERROR", error);
     // Even on error, we might want to stay alive to report it
   }
 }
@@ -943,4 +1001,5 @@ async function initialize(): Promise<void> {
 // Start initialization
 initialize().catch((err) => {
   console.error("[PtyHost] Fatal initialization error:", err);
+  emergencyLogFatal("FATAL_INIT_ERROR", err);
 });

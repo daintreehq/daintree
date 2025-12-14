@@ -41,8 +41,6 @@ function getLogFilePath(): string {
   return join(getLogDirectory(), "canopy.log");
 }
 
-const ENABLE_FILE_LOGGING = process.env.NODE_ENV === "development";
-
 const SENSITIVE_KEYS = new Set([
   "token",
   "password",
@@ -54,6 +52,7 @@ const SENSITIVE_KEYS = new Set([
 
 const IS_DEBUG_BOOT = process.env.NODE_ENV === "development" || Boolean(process.env.CANOPY_DEBUG);
 const IS_TEST = process.env.NODE_ENV === "test";
+const ENABLE_FILE_LOGGING = !IS_TEST && process.env.CANOPY_DISABLE_FILE_LOGGING !== "1";
 
 let verboseLogging = IS_DEBUG_BOOT;
 
@@ -178,6 +177,15 @@ function safeStringify(value: unknown): string {
 
 function writeToLogFile(level: string, message: string, context?: LogContext): void {
   if (!ENABLE_FILE_LOGGING) return;
+
+  const normalizedLevel = level.toLowerCase() as LogLevel;
+  if (
+    normalizedLevel === "debug" &&
+    !isVerboseLogging() &&
+    process.env.NODE_ENV !== "development"
+  ) {
+    return;
+  }
 
   try {
     const logFile = getLogFilePath();

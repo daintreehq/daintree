@@ -25,6 +25,7 @@ import { EventEmitter } from "events";
 import path from "path";
 import { fileURLToPath } from "url";
 import { events } from "./events.js";
+import { logInfo, logWarn } from "../utils/logger.js";
 import { SharedRingBuffer } from "../../shared/utils/SharedRingBuffer.js";
 import type {
   PtyHostRequest,
@@ -167,6 +168,9 @@ export class PtyClient extends EventEmitter {
   /** Callback to notify renderer when MessagePort needs to be refreshed */
   private onPortRefresh: (() => void) | null = null;
 
+  private hostStdoutBuffer = "";
+  private hostStderrBuffer = "";
+
   constructor(config: PtyClientConfig = {}) {
     super();
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -191,6 +195,70 @@ export class PtyClient extends EventEmitter {
     }
 
     this.startHost();
+  }
+
+  private forwardHostOutput(kind: "stdout" | "stderr", chunk: Buffer): void {
+    const text = chunk.toString("utf8");
+    if (kind === "stdout") {
+      this.hostStdoutBuffer += text;
+    } else {
+      this.hostStderrBuffer += text;
+    }
+
+    const MAX_BUFFER = 64 * 1024;
+    if (this.hostStdoutBuffer.length > MAX_BUFFER)
+      this.hostStdoutBuffer = this.hostStdoutBuffer.slice(-MAX_BUFFER);
+    if (this.hostStderrBuffer.length > MAX_BUFFER)
+      this.hostStderrBuffer = this.hostStderrBuffer.slice(-MAX_BUFFER);
+
+    const current = kind === "stdout" ? this.hostStdoutBuffer : this.hostStderrBuffer;
+    const lines = current.split(/\r?\n/);
+    const remainder = lines.pop() ?? "";
+    if (kind === "stdout") {
+      this.hostStdoutBuffer = remainder;
+    } else {
+      this.hostStderrBuffer = remainder;
+    }
+
+    for (const line of lines) {
+      const trimmed = line.trimEnd();
+      if (!trimmed) continue;
+      const message = `[PtyHost] ${trimmed.length > 4000 ? `${trimmed.slice(0, 4000)}…` : trimmed}`;
+      if (kind === "stderr") {
+        logWarn(message);
+      } else {
+        logInfo(message);
+      }
+    }
+  }
+
+  private installHostLogForwarding(): void {
+    if (!this.child) return;
+    this.hostStdoutBuffer = "";
+    this.hostStderrBuffer = "";
+
+    const stdout = (this.child as unknown as { stdout?: NodeJS.ReadableStream }).stdout;
+    const stderr = (this.child as unknown as { stderr?: NodeJS.ReadableStream }).stderr;
+
+    stdout?.on("data", (chunk: Buffer) => this.forwardHostOutput("stdout", chunk));
+    stderr?.on("data", (chunk: Buffer) => this.forwardHostOutput("stderr", chunk));
+  }
+
+  private flushHostOutputBuffers(): void {
+    const stdoutRemainder = this.hostStdoutBuffer.trim();
+    if (stdoutRemainder) {
+      logInfo(
+        `[PtyHost] ${stdoutRemainder.length > 4000 ? `${stdoutRemainder.slice(0, 4000)}…` : stdoutRemainder}`
+      );
+    }
+    const stderrRemainder = this.hostStderrBuffer.trim();
+    if (stderrRemainder) {
+      logWarn(
+        `[PtyHost] ${stderrRemainder.length > 4000 ? `${stderrRemainder.slice(0, 4000)}…` : stderrRemainder}`
+      );
+    }
+    this.hostStdoutBuffer = "";
+    this.hostStderrBuffer = "";
   }
 
   /** Wait for the host to be ready */
@@ -218,7 +286,7 @@ export class PtyClient extends EventEmitter {
     try {
       this.child = utilityProcess.fork(hostPath, [], {
         serviceName: "canopy-pty-host",
-        stdio: "inherit", // Show logs in dev
+        stdio: "pipe",
         execArgv: [`--max-old-space-size=${this.config.memoryLimitMb}`],
         env: {
           ...(process.env as Record<string, string>),
@@ -231,6 +299,8 @@ export class PtyClient extends EventEmitter {
       this.emit("host-crash", -1);
       return;
     }
+
+    this.installHostLogForwarding();
 
     this.child.on("message", (msg: PtyHostEvent) => {
       this.handleHostEvent(msg);
@@ -258,6 +328,7 @@ export class PtyClient extends EventEmitter {
     }
 
     this.child.on("exit", (code) => {
+      this.flushHostOutputBuffers();
       // Note: UtilityProcess exit event doesn't provide signal, but we can infer from code
       const signal = code !== null && code > 128 ? `SIG${code - 128}` : null;
       const crashType = classifyCrash(code, signal);
