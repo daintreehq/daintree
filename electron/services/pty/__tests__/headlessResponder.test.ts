@@ -3,10 +3,9 @@ import { installHeadlessResponder, type DataEmitterLike } from "../headlessRespo
 
 describe("installHeadlessResponder", () => {
   it("forwards terminal data to PTY write", () => {
-    let onDataCallback: ((data: string) => void) | null = null;
     const terminal: DataEmitterLike = {
       onData: (cb) => {
-        onDataCallback = cb;
+        cb("\u001b[6n");
         return { dispose: () => {} };
       },
     };
@@ -14,15 +13,13 @@ describe("installHeadlessResponder", () => {
     const writeToPty = vi.fn();
     installHeadlessResponder(terminal, writeToPty);
 
-    onDataCallback?.("\u001b[6n");
     expect(writeToPty).toHaveBeenCalledWith("\u001b[6n");
   });
 
   it("swallows PTY write errors", () => {
-    let onDataCallback: ((data: string) => void) | null = null;
     const terminal: DataEmitterLike = {
       onData: (cb) => {
-        onDataCallback = cb;
+        expect(() => cb("x")).not.toThrow();
         return { dispose: () => {} };
       },
     };
@@ -31,7 +28,5 @@ describe("installHeadlessResponder", () => {
       throw new Error("boom");
     });
     installHeadlessResponder(terminal, writeToPty);
-
-    expect(() => onDataCallback?.("x")).not.toThrow();
   });
 });

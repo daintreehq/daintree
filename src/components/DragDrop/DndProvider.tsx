@@ -141,6 +141,7 @@ export function DndProvider({ children }: DndProviderProps) {
   const terminals = useTerminalStore((state) => state.terminals);
   const reorderTerminals = useTerminalStore((s) => s.reorderTerminals);
   const moveTerminalToPosition = useTerminalStore((s) => s.moveTerminalToPosition);
+  const moveTerminalToWorktree = useTerminalStore((s) => s.moveTerminalToWorktree);
   const setFocused = useTerminalStore((s) => s.setFocused);
 
   const activeTerminal = useMemo(() => {
@@ -243,8 +244,19 @@ export function DndProvider({ children }: DndProviderProps) {
         | {
             container?: "grid" | "dock";
             sortable?: { containerId?: string; index?: number };
+            type?: string;
+            worktreeId?: string;
           }
         | undefined;
+
+      if (overData?.type === "worktree" && overData.worktreeId) {
+        const currentTerminal = terminals.find((t) => t.id === draggedId);
+        if (currentTerminal && currentTerminal.worktreeId !== overData.worktreeId) {
+          moveTerminalToWorktree(draggedId, overData.worktreeId);
+          setFocused(null);
+        }
+        return;
+      }
 
       // Determine target container
       let targetContainer: "grid" | "dock" = sourceLocation;
@@ -325,7 +337,15 @@ export function DndProvider({ children }: DndProviderProps) {
       }
       // TerminalGrid's batched fitter handles resizing automatically when gridTerminals changes
     },
-    [activeData, overContainer, terminals, reorderTerminals, moveTerminalToPosition, setFocused]
+    [
+      activeData,
+      overContainer,
+      terminals,
+      reorderTerminals,
+      moveTerminalToPosition,
+      moveTerminalToWorktree,
+      setFocused,
+    ]
   );
 
   const handleDragCancel = useCallback(() => {

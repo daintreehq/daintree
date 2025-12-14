@@ -885,6 +885,8 @@ export const createTerminalRegistrySlice =
     },
 
     moveTerminalToWorktree: (id, worktreeId) => {
+      let movedToLocation: TerminalLocation | null = null;
+
       set((state) => {
         const terminal = state.terminals.find((t) => t.id === id);
         if (!terminal) {
@@ -896,10 +898,45 @@ export const createTerminalRegistrySlice =
           return state;
         }
 
-        const newTerminals = state.terminals.map((t) => (t.id === id ? { ...t, worktreeId } : t));
+        const targetGridCount = state.terminals.filter(
+          (t) =>
+            t.worktreeId === worktreeId &&
+            t.location !== "trash" &&
+            (t.location === "grid" || t.location === undefined)
+        ).length;
+
+        const newLocation: TerminalLocation =
+          targetGridCount >= MAX_GRID_TERMINALS ? "dock" : "grid";
+        movedToLocation = newLocation;
+
+        const newTerminals = state.terminals.map((t) =>
+          t.id === id
+            ? {
+                ...t,
+                worktreeId,
+                location: newLocation,
+                isVisible: newLocation === "grid" ? true : false,
+              }
+            : t
+        );
         terminalPersistence.save(newTerminals);
         return { terminals: newTerminals };
       });
+
+      if (!movedToLocation) return;
+
+      if (movedToLocation === "dock") {
+        optimizeForDock(id);
+        return;
+      }
+
+      setTimeout(() => {
+        terminalClient.flush(id).catch((error) => {
+          console.error("Failed to flush terminal buffer:", error);
+        });
+      }, 100);
+
+      terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
     },
 
     updateFlowStatus: (id, status, timestamp) => {

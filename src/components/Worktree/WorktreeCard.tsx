@@ -6,6 +6,7 @@ import { BranchLabel } from "./BranchLabel";
 import { LiveTimeAgo } from "./LiveTimeAgo";
 import { WorktreeDetails } from "./WorktreeDetails";
 import { useWorktreeTerminals } from "../../hooks/useWorktreeTerminals";
+import { useDroppable } from "@dnd-kit/core";
 import {
   useErrorStore,
   useTerminalStore,
@@ -478,8 +479,18 @@ export function WorktreeCard({
   const isIdleCard = spineState === "idle";
   const isStaleCard = spineState === "stale";
 
+  const { setNodeRef, isOver } = useDroppable({
+    id: `worktree-drop-${worktree.id}`,
+    data: {
+      type: "worktree",
+      worktreeId: worktree.id,
+    },
+    disabled: isActive,
+  });
+
   const cardContent = (
     <div
+      ref={setNodeRef}
       className={cn(
         "group relative border-b border-canopy-border transition-all duration-200",
         isActive
@@ -487,6 +498,9 @@ export function WorktreeCard({
           : "hover:bg-white/[0.02] bg-transparent",
         isFocused && !isActive && "bg-white/[0.02]",
         (isIdleCard || isStaleCard) && !isActive && !isFocused && "opacity-70 hover:opacity-100",
+        isOver &&
+          !isActive &&
+          "ring-2 ring-canopy-accent bg-canopy-accent/10 border-canopy-accent/50 transition-all duration-200",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
       )}
       onClick={onSelect}
@@ -500,6 +514,9 @@ export function WorktreeCard({
       role="button"
       aria-label={`Worktree: ${branchLabel}${isActive ? " (selected)" : ""}${worktree.isCurrent ? " (current)" : ""}, Status: ${spineState}${worktreeErrors.length > 0 ? `, ${worktreeErrors.length} error${worktreeErrors.length !== 1 ? "s" : ""}` : ""}${hasChanges ? ", has uncommitted changes" : ""}`}
     >
+      {isOver && !isActive && (
+        <div className="absolute inset-0 z-50 bg-canopy-accent/20 border-2 border-canopy-accent pointer-events-none animate-in fade-in duration-150" />
+      )}
       {/* Status Spine - multi-state health rail on left edge */}
       <div
         className={cn(

@@ -58,6 +58,7 @@ export function TerminalContextMenu({
   const restartTerminal = useTerminalStore((s) => s.restartTerminal);
   const addTerminal = useTerminalStore((s) => s.addTerminal);
   const moveTerminalToWorktree = useTerminalStore((s) => s.moveTerminalToWorktree);
+  const setFocused = useTerminalStore((s) => s.setFocused);
   const isMaximized = useTerminalStore((s) => s.maximizedId === terminalId);
   const { worktrees } = useWorktrees();
 
@@ -146,7 +147,10 @@ export function TerminalContextMenu({
                 return (
                   <ContextMenuItem
                     key={wt.id}
-                    onClick={() => moveTerminalToWorktree(terminalId, wt.id)}
+                    onClick={() => {
+                      setFocused(null);
+                      moveTerminalToWorktree(terminalId, wt.id);
+                    }}
                     disabled={isCurrent}
                   >
                     <span className={wt.isMainWorktree ? "font-semibold" : ""}>{label}</span>
