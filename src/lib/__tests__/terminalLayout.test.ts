@@ -26,10 +26,10 @@ describe("getAutoGridCols", () => {
   });
 
   describe("count of 3 with responsive width", () => {
-    it("should return 2 for narrow screens (< 900px)", () => {
-      expect(getAutoGridCols(3, 0)).toBe(2);
-      expect(getAutoGridCols(3, 800)).toBe(2);
-      expect(getAutoGridCols(3, 899)).toBe(2);
+    it("should return 3 for narrow screens (< 900px)", () => {
+      expect(getAutoGridCols(3, 0)).toBe(3);
+      expect(getAutoGridCols(3, 800)).toBe(3);
+      expect(getAutoGridCols(3, 899)).toBe(3);
     });
 
     it("should return 3 for wide screens (>= 900px)", () => {
@@ -40,8 +40,8 @@ describe("getAutoGridCols", () => {
       expect(getAutoGridCols(3, 2560)).toBe(3);
     });
 
-    it("should return 2 when width is null (default to narrow)", () => {
-      expect(getAutoGridCols(3, null)).toBe(2);
+    it("should return 3 when width is null (default to narrow)", () => {
+      expect(getAutoGridCols(3, null)).toBe(3);
     });
   });
 

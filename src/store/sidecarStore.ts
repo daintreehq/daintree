@@ -35,9 +35,11 @@ interface SidecarActions {
   setActiveTab: (id: string | null) => void;
   createTab: (url: string, title: string) => string;
   createBlankTab: () => string;
-  duplicateTab: (tabId: string) => string | null;
   closeTab: (id: string) => void;
   closeAllTabs: () => void;
+  duplicateTab: (id: string) => string | null;
+  closeTabsExcept: (id: string) => void;
+  closeTabsAfter: (id: string) => void;
   updateTabTitle: (id: string, title: string) => void;
   updateTabUrl: (id: string, url: string) => void;
   updateTabIcon: (id: string, icon: string | undefined) => void;
@@ -115,26 +117,6 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
     return newTabId;
   },
 
-  duplicateTab: (tabId) => {
-    const state = get();
-    const sourceTab = state.tabs.find((t) => t.id === tabId);
-    if (!sourceTab || !sourceTab.url) {
-      return null;
-    }
-    const newTabId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const newTab: SidecarTab = {
-      id: newTabId,
-      url: sourceTab.url,
-      title: sourceTab.title,
-      icon: sourceTab.icon,
-    };
-    set((s) => ({
-      tabs: [...s.tabs, newTab],
-      activeTabId: newTabId,
-    }));
-    return newTabId;
-  },
-
   closeTab: (id) => {
     const state = get();
     const newTabs = state.tabs.filter((t) => t.id !== id);
@@ -142,9 +124,9 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
     if (id === state.activeTabId) {
       newActiveId = newTabs.length > 0 ? newTabs[newTabs.length - 1].id : null;
     }
-    const newCreatedTabs = new Set(state.createdTabs);
-    newCreatedTabs.delete(id);
-    set({ tabs: newTabs, activeTabId: newActiveId, createdTabs: newCreatedTabs });
+    const nextCreatedTabs = new Set(state.createdTabs);
+    nextCreatedTabs.delete(id);
+    set({ tabs: newTabs, activeTabId: newActiveId, createdTabs: nextCreatedTabs });
     window.electron.sidecar.closeTab({ tabId: id });
 
     if (newActiveId) {
@@ -175,10 +157,66 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
 
   closeAllTabs: () => {
     const state = get();
-    for (const tab of state.tabs) {
-      window.electron.sidecar.closeTab({ tabId: tab.id });
+    for (const tabId of state.createdTabs) {
+      window.electron.sidecar.closeTab({ tabId });
     }
     set({ tabs: [], activeTabId: null, createdTabs: new Set<string>() });
+  },
+
+  duplicateTab: (id) => {
+    const state = get();
+    const tab = state.tabs.find((t) => t.id === id);
+    if (!tab?.url) return null;
+
+    const newTabId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const newTab: SidecarTab = {
+      id: newTabId,
+      url: tab.url,
+      title: tab.title,
+      icon: tab.icon,
+    };
+    set((s) => ({
+      tabs: [...s.tabs, newTab],
+      activeTabId: newTabId,
+    }));
+    return newTabId;
+  },
+
+  closeTabsExcept: (id) => {
+    const state = get();
+    const keptTab = state.tabs.find((t) => t.id === id);
+    if (!keptTab) return;
+    const tabsToClose = state.tabs.filter((t) => t.id !== id);
+    for (const tab of tabsToClose) {
+      if (state.createdTabs.has(tab.id)) {
+        window.electron.sidecar.closeTab({ tabId: tab.id });
+      }
+    }
+    const nextCreatedTabs = new Set<string>();
+    if (state.createdTabs.has(id)) nextCreatedTabs.add(id);
+    set({ tabs: [keptTab], activeTabId: id, createdTabs: nextCreatedTabs });
+  },
+
+  closeTabsAfter: (id) => {
+    const state = get();
+    const index = state.tabs.findIndex((t) => t.id === id);
+    if (index === -1) return;
+
+    const tabsToClose = state.tabs.slice(index + 1);
+    if (tabsToClose.length === 0) return;
+    for (const tab of tabsToClose) {
+      if (state.createdTabs.has(tab.id)) {
+        window.electron.sidecar.closeTab({ tabId: tab.id });
+      }
+    }
+    const remainingTabs = state.tabs.slice(0, index + 1);
+    const newActiveId = remainingTabs.find((t) => t.id === state.activeTabId)
+      ? state.activeTabId
+      : (remainingTabs[remainingTabs.length - 1]?.id ?? null);
+    const nextCreatedTabs = new Set(
+      [...state.createdTabs].filter((tabId) => remainingTabs.some((t) => t.id === tabId))
+    );
+    set({ tabs: remainingTabs, activeTabId: newActiveId, createdTabs: nextCreatedTabs });
   },
 
   updateTabTitle: (id, title) =>
