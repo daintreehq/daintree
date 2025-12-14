@@ -769,53 +769,53 @@ export class TerminalProcess {
     } catch {
       // Ignore kill errors - process may already be dead
     }
+  }
+
+  // Forensic logging
+  private recentOutputBuffer = "";
+  private readonly FORENSIC_BUFFER_SIZE = 4000;
+  private textDecoder = new TextDecoder();
+
+  private captureForensics(data: string | Uint8Array): void {
+    const text = typeof data === "string" ? data : this.textDecoder.decode(data);
+    this.recentOutputBuffer += text;
+    if (this.recentOutputBuffer.length > this.FORENSIC_BUFFER_SIZE) {
+      this.recentOutputBuffer = this.recentOutputBuffer.slice(-this.FORENSIC_BUFFER_SIZE);
     }
-  
-    // Forensic logging
-    private recentOutputBuffer = "";
-    private readonly FORENSIC_BUFFER_SIZE = 4000;
-    private textDecoder = new TextDecoder();
-  
-    private captureForensics(data: string | Uint8Array): void {
-      const text = typeof data === "string" ? data : this.textDecoder.decode(data);
-      this.recentOutputBuffer += text;
-      if (this.recentOutputBuffer.length > this.FORENSIC_BUFFER_SIZE) {
-        this.recentOutputBuffer = this.recentOutputBuffer.slice(-this.FORENSIC_BUFFER_SIZE);
-      }
+  }
+
+  private logForensics(exitCode: number, signal?: number): void {
+    if (!this.isAgentTerminal) return;
+
+    const shouldLog =
+      exitCode !== 0 ||
+      signal !== undefined ||
+      /error|exception|panic|fatal|segfault/i.test(this.recentOutputBuffer);
+
+    if (!shouldLog || this.recentOutputBuffer.length === 0) {
+      return;
     }
-  
-    private logForensics(exitCode: number, signal?: number): void {
-      if (!this.isAgentTerminal) return;
-  
-      const shouldLog =
-        exitCode !== 0 ||
-        signal !== undefined ||
-        /error|exception|panic|fatal|segfault/i.test(this.recentOutputBuffer);
-  
-      if (!shouldLog || this.recentOutputBuffer.length === 0) {
-        return;
-      }
-  
-      const terminal = this.terminalInfo;
-  
-      logError(`Terminal ${this.id} exited abnormally (code ${exitCode})`, undefined, {
-        terminalId: this.id,
-        exitCode,
-        signal,
-        agentType: terminal.type,
-        agentId: terminal.agentId,
-        cwd: terminal.cwd,
-        lastOutput: this.recentOutputBuffer.slice(-1000),
-      });
-  
-      if (process.env.CANOPY_VERBOSE || exitCode !== 0) {
-        console.error(
-          `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nTERMINAL CRASH FORENSICS\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nTerminal ID: ${this.id}\nAgent Type:  ${terminal.type || "unknown"}\nAgent ID:    ${terminal.agentId || "N/A"}\nExit Code:   ${exitCode}\nSignal:      ${signal ?? "none"}\nCWD:         ${terminal.cwd}\nTimestamp:   ${new Date().toISOString()}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nLAST OUTPUT (${this.recentOutputBuffer.length} chars):\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n${this.recentOutputBuffer}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`
-        );
-      }
+
+    const terminal = this.terminalInfo;
+
+    logError(`Terminal ${this.id} exited abnormally (code ${exitCode})`, undefined, {
+      terminalId: this.id,
+      exitCode,
+      signal,
+      agentType: terminal.type,
+      agentId: terminal.agentId,
+      cwd: terminal.cwd,
+      lastOutput: this.recentOutputBuffer.slice(-1000),
+    });
+
+    if (process.env.CANOPY_VERBOSE || exitCode !== 0) {
+      console.error(
+        `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nTERMINAL CRASH FORENSICS\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nTerminal ID: ${this.id}\nAgent Type:  ${terminal.type || "unknown"}\nAgent ID:    ${terminal.agentId || "N/A"}\nExit Code:   ${exitCode}\nSignal:      ${signal ?? "none"}\nCWD:         ${terminal.cwd}\nTimestamp:   ${new Date().toISOString()}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nLAST OUTPUT (${this.recentOutputBuffer.length} chars):\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n${this.recentOutputBuffer}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`
+      );
     }
-  
-    private setupPtyHandlers(ptyProcess: pty.IPty): void {
+  }
+
+  private setupPtyHandlers(ptyProcess: pty.IPty): void {
     const terminal = this.terminalInfo;
 
     ptyProcess.onData((data) => {
