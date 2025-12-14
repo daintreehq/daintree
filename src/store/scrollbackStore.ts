@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-const DEFAULT_SCROLLBACK_LINES = 1000;
+const DEFAULT_SCROLLBACK_LINES = 5000;
 
 interface ScrollbackState {
   scrollbackLines: number;

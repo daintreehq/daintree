@@ -90,7 +90,7 @@ const storeOptions = {
       isMaximized: false,
     },
     terminalConfig: {
-      scrollbackLines: 1000,
+      scrollbackLines: 5000,
       performanceMode: false,
     },
     hibernation: {

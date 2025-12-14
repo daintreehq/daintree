@@ -26,13 +26,8 @@ const SCROLLBACK_POLICIES: Record<TerminalType, ScrollbackPolicy> = {
 export function getScrollbackForType(type: TerminalType, baseScrollback: number): number {
   const policy = SCROLLBACK_POLICIES[type] || SCROLLBACK_POLICIES.terminal;
 
-  // Handle unlimited (0) or default (1000) by using maxLines for the type
-  if (baseScrollback === 0 || baseScrollback === 1000) {
-    // Default 1000 should also respect policy, not force it
-    if (baseScrollback === 1000) {
-      const calculated = Math.floor(baseScrollback * policy.multiplier);
-      return Math.max(policy.minLines, Math.min(policy.maxLines, calculated));
-    }
+  // Handle unlimited (0) by using maxLines for the type
+  if (baseScrollback === 0) {
     return policy.maxLines;
   }
 

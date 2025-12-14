@@ -1,6 +1,6 @@
 export const SCROLLBACK_MIN = 100;
 export const SCROLLBACK_MAX = 10000;
-export const SCROLLBACK_DEFAULT = 1000;
+export const SCROLLBACK_DEFAULT = 5000;
 
 export function normalizeScrollbackLines(value: unknown): number {
   const coerced =
