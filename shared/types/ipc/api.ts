@@ -237,9 +237,13 @@ export interface ElectronAPI {
     goBack(tabId: string): Promise<boolean>;
     goForward(tabId: string): Promise<boolean>;
     reload(tabId: string): Promise<void>;
+    showNewTabMenu(payload: import("../sidecar.js").SidecarShowNewTabMenuPayload): Promise<void>;
     onNavEvent(callback: (data: import("../sidecar.js").SidecarNavEvent) => void): () => void;
     onFocus(callback: () => void): () => void;
     onBlur(callback: () => void): () => void;
+    onNewTabMenuAction(
+      callback: (action: import("../sidecar.js").SidecarNewTabMenuAction) => void
+    ): () => void;
   };
   hibernation: {
     getConfig(): Promise<HibernationConfig>;

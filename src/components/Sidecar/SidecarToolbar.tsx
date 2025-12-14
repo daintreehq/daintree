@@ -174,6 +174,7 @@ interface SidecarToolbarProps {
   onTabClick: (tabId: string) => void;
   onTabClose: (tabId: string) => void;
   onNewTab: () => void;
+  defaultNewTabUrl: string | null;
   onClose: () => void;
   onGoBack?: () => void;
   onGoForward?: () => void;
@@ -188,7 +189,6 @@ interface SidecarToolbarProps {
   onOpenTabExternal?: (tabId: string) => void;
   onReloadTab?: (tabId: string) => void;
   enabledLinks: SidecarLink[];
-  onOpenUrl: (url: string, title: string) => void;
 }
 
 export function SidecarToolbar({
@@ -197,6 +197,7 @@ export function SidecarToolbar({
   onTabClick,
   onTabClose,
   onNewTab,
+  defaultNewTabUrl,
   onClose,
   onGoBack,
   onGoForward,
@@ -211,7 +212,6 @@ export function SidecarToolbar({
   onOpenTabExternal,
   onReloadTab,
   enabledLinks,
-  onOpenUrl,
 }: SidecarToolbarProps) {
   const reorderTabs = useSidecarStore((s) => s.reorderTabs);
 
@@ -342,33 +342,24 @@ export function SidecarToolbar({
                   tabIndex={index}
                 />
               ))}
-              <ContextMenu>
-                <ContextMenuTrigger asChild>
-                  <button
-                    onClick={onNewTab}
-                    className="flex items-center justify-center w-8 h-[26px] rounded-full bg-canopy-border hover:bg-canopy-border/80 text-canopy-text hover:text-foreground border border-canopy-border hover:border-canopy-border transition-all"
-                    title="New Tab"
-                  >
-                    <Plus className="w-4 h-4" />
-                  </button>
-                </ContextMenuTrigger>
-                <ContextMenuContent>
-                  {enabledLinks.map((link) => (
-                    <ContextMenuItem
-                      key={link.url}
-                      onSelect={() => onOpenUrl(link.url, link.title)}
-                    >
-                      {link.icon && <SidecarIcon icon={link.icon} size="tab" />}
-                      {link.title}
-                    </ContextMenuItem>
-                  ))}
-                  <ContextMenuSeparator />
-                  <ContextMenuItem onSelect={onNewTab}>
-                    <Plus className="w-3.5 h-3.5 mr-2" />
-                    Blank Tab
-                  </ContextMenuItem>
-                </ContextMenuContent>
-              </ContextMenu>
+              <button
+                onClick={onNewTab}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  void window.electron.sidecar.showNewTabMenu({
+                    x: e.screenX,
+                    y: e.screenY,
+                    links: enabledLinks.map((link) => ({ title: link.title, url: link.url })),
+                    defaultNewTabUrl,
+                  });
+                }}
+                className="flex items-center justify-center w-8 h-[26px] rounded-full bg-canopy-border hover:bg-canopy-border/80 text-canopy-text hover:text-foreground border border-canopy-border hover:border-canopy-border transition-all"
+                title="New Tab"
+                aria-haspopup="menu"
+              >
+                <Plus className="w-4 h-4" />
+              </button>
             </div>
           </SortableContext>
         </DndContext>

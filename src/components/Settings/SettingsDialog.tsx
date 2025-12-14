@@ -31,7 +31,7 @@ interface SettingsDialogProps {
   onSettingsChange?: () => void;
 }
 
-type SettingsTab =
+export type SettingsTab =
   | "general"
   | "keyboard"
   | "terminal"

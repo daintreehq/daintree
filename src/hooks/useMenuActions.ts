@@ -5,6 +5,7 @@ import { isElectronAvailable } from "./useElectron";
 
 export interface UseMenuActionsOptions {
   onOpenSettings: () => void;
+  onOpenSettingsTab?: (tab: string) => void;
   onToggleSidebar: () => void;
   onOpenAgentPalette: () => void;
   onLaunchAgent: (agentId: "claude" | "gemini" | "codex" | "terminal") => void;
@@ -14,6 +15,7 @@ export interface UseMenuActionsOptions {
 
 export function useMenuActions({
   onOpenSettings,
+  onOpenSettingsTab,
   onToggleSidebar,
   onOpenAgentPalette,
   onLaunchAgent,
@@ -28,6 +30,7 @@ export function useMenuActions({
 
     const unsubscribe = window.electron.app.onMenuAction((action) => {
       const LAUNCH_AGENT_PREFIX = "launch-agent:";
+      const OPEN_SETTINGS_PREFIX = "open-settings:";
 
       if (action.startsWith(LAUNCH_AGENT_PREFIX)) {
         const agentId = action.slice(LAUNCH_AGENT_PREFIX.length);
@@ -38,6 +41,16 @@ export function useMenuActions({
         }
 
         onLaunchAgent(agentId as "claude" | "gemini" | "codex" | "terminal");
+        return;
+      }
+
+      if (action.startsWith(OPEN_SETTINGS_PREFIX)) {
+        const tab = action.slice(OPEN_SETTINGS_PREFIX.length).trim();
+        if (!tab) {
+          onOpenSettings();
+          return;
+        }
+        onOpenSettingsTab?.(tab);
         return;
       }
 
@@ -79,6 +92,7 @@ export function useMenuActions({
     addTerminal,
     openCreateWorktreeDialog,
     onOpenSettings,
+    onOpenSettingsTab,
     onToggleSidebar,
     onOpenAgentPalette,
     onLaunchAgent,

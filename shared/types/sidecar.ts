@@ -85,6 +85,32 @@ export interface SidecarNavigatePayload {
   url: string;
 }
 
+export interface SidecarNewTabMenuLink {
+  title: string;
+  url: string;
+}
+
+export interface SidecarShowNewTabMenuPayload {
+  x: number;
+  y: number;
+  links: SidecarNewTabMenuLink[];
+  defaultNewTabUrl: string | null;
+}
+
+export type SidecarNewTabMenuAction =
+  | {
+      type: "open-url";
+      url: string;
+      title: string;
+    }
+  | {
+      type: "open-launchpad";
+    }
+  | {
+      type: "set-default-new-tab-url";
+      url: string | null;
+    };
+
 export const DEFAULT_SIDECAR_TABS: SidecarTab[] = [];
 
 export const SIDECAR_MIN_WIDTH = 450;

@@ -28,7 +28,7 @@ import { WorktreeCard, WorktreePalette } from "./components/Worktree";
 import { NewWorktreeDialog } from "./components/Worktree/NewWorktreeDialog";
 import { TerminalPalette, NewTerminalPalette } from "./components/TerminalPalette";
 import { RecipeEditor } from "./components/TerminalRecipe/RecipeEditor";
-import { SettingsDialog } from "./components/Settings";
+import { SettingsDialog, type SettingsTab } from "./components/Settings";
 import { ShortcutReferenceDialog } from "./components/KeyboardShortcuts";
 import { Toaster } from "./components/ui/toaster";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -401,9 +401,7 @@ function App() {
   const removeError = useErrorStore((state) => state.removeError);
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"general" | "agents" | "troubleshooting">(
-    "general"
-  );
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [isStateLoaded, setIsStateLoaded] = useState(false);
 
@@ -518,6 +516,27 @@ function App() {
     setIsSettingsOpen(true);
   }, []);
 
+  const handleOpenSettingsTab = useCallback((tab: string) => {
+    const allowedTabs: SettingsTab[] = [
+      "general",
+      "keyboard",
+      "terminal",
+      "terminalAppearance",
+      "worktree",
+      "agents",
+      "github",
+      "sidecar",
+      "troubleshooting",
+    ];
+    if (!allowedTabs.includes(tab as SettingsTab)) {
+      setSettingsTab("general");
+      setIsSettingsOpen(true);
+      return;
+    }
+    setSettingsTab(tab as SettingsTab);
+    setIsSettingsOpen(true);
+  }, []);
+
   const handleErrorRetry = useCallback(
     async (errorId: string, action: RetryAction, args?: Record<string, unknown>) => {
       try {
@@ -539,6 +558,7 @@ function App() {
 
   useMenuActions({
     onOpenSettings: handleSettings,
+    onOpenSettingsTab: handleOpenSettingsTab,
     onToggleSidebar: handleToggleSidebar,
     onOpenAgentPalette: terminalPalette.open,
     onLaunchAgent: handleLaunchAgent,

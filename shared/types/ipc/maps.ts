@@ -479,6 +479,10 @@ export interface IpcInvokeMap {
     args: [tabId: string];
     result: void;
   };
+  "sidecar:show-new-tab-menu": {
+    args: [payload: import("../sidecar.js").SidecarShowNewTabMenuPayload];
+    result: void;
+  };
 
   // System Sleep channels
   "system-sleep:get-metrics": {
@@ -583,6 +587,7 @@ export interface IpcEventMap {
   "sidecar:nav-event": import("../sidecar.js").SidecarNavEvent;
   "sidecar:focus": void;
   "sidecar:blur": void;
+  "sidecar:new-tab-menu-action": import("../sidecar.js").SidecarNewTabMenuAction;
 
   // System Sleep events
   "system-sleep:on-wake": number;

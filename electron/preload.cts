@@ -39,6 +39,10 @@ import type {
 } from "../shared/types/ipc.js";
 import type { TerminalActivityPayload } from "../shared/types/terminal.js";
 import type { TerminalStatusPayload } from "../shared/types/pty-host.js";
+import type {
+  SidecarNewTabMenuAction,
+  SidecarShowNewTabMenuPayload,
+} from "../shared/types/sidecar.js";
 
 export type { ElectronAPI };
 
@@ -235,9 +239,11 @@ const CHANNELS = {
   SIDECAR_GO_BACK: "sidecar:go-back",
   SIDECAR_GO_FORWARD: "sidecar:go-forward",
   SIDECAR_RELOAD: "sidecar:reload",
+  SIDECAR_SHOW_NEW_TAB_MENU: "sidecar:show-new-tab-menu",
   SIDECAR_NAV_EVENT: "sidecar:nav-event",
   SIDECAR_FOCUS: "sidecar:focus",
   SIDECAR_BLUR: "sidecar:blur",
+  SIDECAR_NEW_TAB_MENU_ACTION: "sidecar:new-tab-menu-action",
 
   // Hibernation channels
   HIBERNATION_GET_CONFIG: "hibernation:get-config",
@@ -689,12 +695,18 @@ const api: ElectronAPI = {
 
     reload: (tabId: string) => ipcRenderer.invoke(CHANNELS.SIDECAR_RELOAD, tabId),
 
+    showNewTabMenu: (payload: SidecarShowNewTabMenuPayload) =>
+      _typedInvoke(CHANNELS.SIDECAR_SHOW_NEW_TAB_MENU, payload),
+
     onNavEvent: (callback: (data: { tabId: string; title: string; url: string }) => void) =>
       _typedOn(CHANNELS.SIDECAR_NAV_EVENT, callback),
 
     onFocus: (callback: () => void) => _typedOn(CHANNELS.SIDECAR_FOCUS, callback),
 
     onBlur: (callback: () => void) => _typedOn(CHANNELS.SIDECAR_BLUR, callback),
+
+    onNewTabMenuAction: (callback: (action: SidecarNewTabMenuAction) => void) =>
+      _typedOn(CHANNELS.SIDECAR_NEW_TAB_MENU_ACTION, callback),
   },
 
   // Hibernation API

@@ -142,9 +142,11 @@ export const CHANNELS = {
   SIDECAR_GO_BACK: "sidecar:go-back",
   SIDECAR_GO_FORWARD: "sidecar:go-forward",
   SIDECAR_RELOAD: "sidecar:reload",
+  SIDECAR_SHOW_NEW_TAB_MENU: "sidecar:show-new-tab-menu",
   SIDECAR_NAV_EVENT: "sidecar:nav-event",
   SIDECAR_FOCUS: "sidecar:focus",
   SIDECAR_BLUR: "sidecar:blur",
+  SIDECAR_NEW_TAB_MENU_ACTION: "sidecar:new-tab-menu-action",
 
   HIBERNATION_GET_CONFIG: "hibernation:get-config",
   HIBERNATION_UPDATE_CONFIG: "hibernation:update-config",

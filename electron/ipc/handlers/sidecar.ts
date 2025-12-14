@@ -1,4 +1,4 @@
-import { ipcMain } from "electron";
+import { BrowserWindow, Menu, ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
 import type {
@@ -7,6 +7,8 @@ import type {
   SidecarCloseTabPayload,
   SidecarNavigatePayload,
   SidecarBounds,
+  SidecarShowNewTabMenuPayload,
+  SidecarNewTabMenuAction,
 } from "../../../shared/types/sidecar.js";
 
 export function registerSidecarHandlers(deps: HandlerDependencies): () => void {
@@ -140,6 +142,86 @@ export function registerSidecarHandlers(deps: HandlerDependencies): () => void {
   };
   ipcMain.handle(CHANNELS.SIDECAR_RELOAD, handleSidecarReload);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.SIDECAR_RELOAD));
+
+  const handleShowNewTabMenu = async (
+    event: Electron.IpcMainInvokeEvent,
+    payload: SidecarShowNewTabMenuPayload
+  ): Promise<void> => {
+    if (!payload || typeof payload !== "object") return;
+    if (!Array.isArray(payload.links)) return;
+
+    const x = Number.isFinite(payload.x) ? Math.round(payload.x) : 0;
+    const y = Number.isFinite(payload.y) ? Math.round(payload.y) : 0;
+    const defaultNewTabUrl =
+      payload.defaultNewTabUrl === null ||
+      (typeof payload.defaultNewTabUrl === "string" && payload.defaultNewTabUrl.trim())
+        ? payload.defaultNewTabUrl
+        : null;
+
+    const links = payload.links
+      .filter(
+        (l): l is { title: string; url: string } =>
+          !!l &&
+          typeof l === "object" &&
+          typeof (l as { title?: unknown }).title === "string" &&
+          typeof (l as { url?: unknown }).url === "string" &&
+          (l as { title: string }).title.trim() !== "" &&
+          (l as { url: string }).url.trim() !== ""
+      )
+      .map((l) => ({ title: l.title.trim(), url: l.url.trim() }));
+
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || win.isDestroyed()) return;
+
+    const sendAction = (action: SidecarNewTabMenuAction) => {
+      if (event.sender.isDestroyed()) return;
+      event.sender.send(CHANNELS.SIDECAR_NEW_TAB_MENU_ACTION, action);
+    };
+
+    const menu = Menu.buildFromTemplate([
+      ...links.map((link) => ({
+        label: link.title,
+        click: () => sendAction({ type: "open-url", url: link.url, title: link.title }),
+      })),
+      ...(links.length > 0 ? [{ type: "separator" as const }] : []),
+      {
+        label: "Launchpad (Pick provider...)",
+        click: () => sendAction({ type: "open-launchpad" }),
+      },
+      { type: "separator" as const },
+      {
+        label: "Default New Tab",
+        submenu: [
+          {
+            label: "Launchpad",
+            type: "radio" as const,
+            checked: defaultNewTabUrl === null,
+            click: () => sendAction({ type: "set-default-new-tab-url", url: null }),
+          },
+          ...(links.length > 0 ? [{ type: "separator" as const }] : []),
+          ...links.map((link) => ({
+            label: link.title,
+            type: "radio" as const,
+            checked: defaultNewTabUrl === link.url,
+            click: () => sendAction({ type: "set-default-new-tab-url", url: link.url }),
+          })),
+          ...(links.length > 0 ? [{ type: "separator" as const }] : []),
+          {
+            label: "Manage Sidecar Settings...",
+            click: () => win.webContents.send(CHANNELS.MENU_ACTION, "open-settings:sidecar"),
+          },
+        ],
+      },
+      {
+        label: "Manage Sidecar Settings...",
+        click: () => win.webContents.send(CHANNELS.MENU_ACTION, "open-settings:sidecar"),
+      },
+    ]);
+
+    menu.popup({ window: win, x, y });
+  };
+  ipcMain.handle(CHANNELS.SIDECAR_SHOW_NEW_TAB_MENU, handleShowNewTabMenu);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.SIDECAR_SHOW_NEW_TAB_MENU));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

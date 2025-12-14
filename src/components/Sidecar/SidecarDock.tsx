@@ -269,6 +269,35 @@ export function SidecarDock() {
     ]
   );
 
+  useEffect(() => {
+    if (!window.electron.sidecar.onNewTabMenuAction) return;
+
+    const cleanup = window.electron.sidecar.onNewTabMenuAction((action) => {
+      if (!action || typeof action !== "object" || typeof action.type !== "string") return;
+
+      switch (action.type) {
+        case "open-url":
+          if (typeof action.url !== "string" || typeof action.title !== "string") return;
+          void handleOpenUrl(action.url, action.title);
+          return;
+
+        case "open-launchpad":
+          createBlankTab();
+          void window.electron.sidecar.hide();
+          return;
+
+        case "set-default-new-tab-url":
+          useSidecarStore.getState().setDefaultNewTabUrl(action.url);
+          return;
+
+        default:
+          return;
+      }
+    });
+
+    return cleanup;
+  }, [createBlankTab, handleOpenUrl]);
+
   const handleNewTab = useCallback(() => {
     if (isSwitching) return;
 
@@ -599,6 +628,7 @@ export function SidecarDock() {
         onTabClick={handleTabClick}
         onTabClose={handleTabClose}
         onNewTab={handleNewTab}
+        defaultNewTabUrl={defaultNewTabUrl}
         onClose={handleClose}
         onGoBack={handleGoBack}
         onGoForward={handleGoForward}
@@ -613,7 +643,6 @@ export function SidecarDock() {
         onOpenTabExternal={handleOpenTabExternal}
         onReloadTab={handleReloadTab}
         enabledLinks={enabledLinks}
-        onOpenUrl={handleOpenUrl}
       />
       <div ref={contentRef} className="flex-1 flex flex-col min-h-0 relative">
         {showLaunchpad ? (
