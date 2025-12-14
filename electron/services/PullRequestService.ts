@@ -22,6 +22,17 @@ export interface PRDetectionResult {
   prState: "open" | "merged" | "closed";
 }
 
+function isCandidateBranch(branchName: string | undefined): boolean {
+  if (!branchName) return false;
+  const normalized = branchName.trim();
+  if (!normalized) return false;
+
+  const lower = normalized.toLowerCase();
+  if (lower === "head") return false;
+  if (lower === "main" || lower === "master") return false;
+  return true;
+}
+
 class PullRequestService {
   private pollTimer: NodeJS.Timeout | null = null;
   private pollIntervalMs: number = DEFAULT_POLL_INTERVAL_MS;
@@ -42,20 +53,15 @@ class PullRequestService {
   }
 
   private handleWorktreeUpdate(state: WorktreeState): void {
-    if (!this.isPolling) {
-      return;
-    }
-
     const currentContext = this.candidates.get(state.worktreeId);
     const newIssueNumber = state.issueNumber;
     const newBranchName = state.branch;
 
-    const contextChanged =
-      currentContext?.issueNumber !== newIssueNumber ||
-      currentContext?.branchName !== newBranchName;
+    const branchChanged = currentContext?.branchName !== newBranchName;
+    const issueChanged = currentContext?.issueNumber !== newIssueNumber;
 
-    if (contextChanged && currentContext) {
-      logInfo("Worktree context changed - clearing PR state", {
+    if (branchChanged && currentContext) {
+      logDebug("Worktree branch changed - clearing PR state", {
         worktreeId: state.worktreeId,
         oldIssue: currentContext.issueNumber,
         newIssue: newIssueNumber,
@@ -69,22 +75,31 @@ class PullRequestService {
       events.emit("sys:pr:cleared", { worktreeId: state.worktreeId });
     }
 
-    if (newIssueNumber) {
-      this.candidates.set(state.worktreeId, {
-        issueNumber: newIssueNumber,
-        branchName: newBranchName,
-      });
+    const shouldTrack = isCandidateBranch(newBranchName);
 
-      if (contextChanged || !currentContext) {
-        this.scheduleDebounceCheck();
-      }
-    } else {
+    if (!shouldTrack) {
       if (currentContext) {
         this.candidates.delete(state.worktreeId);
-        logDebug("Worktree no longer has issue number - removed from candidates", {
-          worktreeId: state.worktreeId,
-        });
       }
+      return;
+    }
+
+    const nextContext: WorktreeContext = {
+      branchName: newBranchName,
+      issueNumber: newIssueNumber,
+    };
+
+    const wasCandidate = Boolean(currentContext);
+    this.candidates.set(state.worktreeId, nextContext);
+
+    const shouldRecheck =
+      this.isPolling &&
+      (branchChanged ||
+        !wasCandidate ||
+        (issueChanged && !this.resolvedWorktrees.has(state.worktreeId)));
+
+    if (shouldRecheck) {
+      this.scheduleDebounceCheck();
     }
   }
 
@@ -153,7 +168,9 @@ class PullRequestService {
 
     logInfo("PullRequestService started", { intervalMs: this.pollIntervalMs });
 
-    this.scheduleNextPoll();
+    void this.checkForPRs().finally(() => {
+      this.scheduleNextPoll();
+    });
   }
 
   public stop(): void {
@@ -276,7 +293,8 @@ class PullRequestService {
             prNumber: checkResult.pr.number,
             prUrl: checkResult.pr.url,
             prState: checkResult.pr.state,
-            issueNumber: checkResult.issueNumber!,
+            issueNumber:
+              checkResult.issueNumber ?? this.candidates.get(worktreeId)?.issueNumber ?? undefined,
           });
         }
       }

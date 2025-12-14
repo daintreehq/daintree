@@ -291,10 +291,7 @@ export class WorkspaceClient extends EventEmitter {
           prUrl: event.prUrl,
           prState: event.prState,
         };
-        events.emit("sys:pr:detected", {
-          ...prPayload,
-          issueNumber: 0,
-        });
+        events.emit("sys:pr:detected", prPayload);
         this.sendToRenderer(CHANNELS.PR_DETECTED, prPayload);
         break;
       }
