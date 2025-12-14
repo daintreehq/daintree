@@ -152,22 +152,37 @@ export function SidecarDock() {
   }, [createBlankTab]);
 
   const handleOpenUrl = useCallback(
-    async (url: string, title: string) => {
+    async (url: string, title: string, background?: boolean) => {
+      const agentInfo = getAIAgentInfo(url);
+      const finalTitle = agentInfo?.title ?? title;
+      const icon = agentInfo?.icon;
+
+      if (background) {
+        const newTabId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const newTab = { id: newTabId, url, title: finalTitle, icon };
+        useSidecarStore.setState((s) => ({
+          tabs: [...s.tabs, newTab],
+        }));
+        try {
+          await window.electron.sidecar.create({ tabId: newTabId, url });
+          markTabCreated(newTabId);
+        } catch (error) {
+          console.error("Failed to create background tab:", error);
+          useSidecarStore.setState((s) => ({
+            tabs: s.tabs.filter((t) => t.id !== newTabId),
+          }));
+        }
+        return;
+      }
+
       setIsSwitching(true);
 
       try {
-        // Detect if this is a known AI agent
-        const agentInfo = getAIAgentInfo(url);
-        const finalTitle = agentInfo?.title ?? title;
-        const icon = agentInfo?.icon;
-
-        // Reuse blank tab if active, otherwise create new tab
         const currentTab = activeTabId ? tabs.find((t) => t.id === activeTabId) : null;
         const isCurrentBlank = currentTab && !currentTab.url;
 
         let tabId: string;
         if (isCurrentBlank && activeTabId) {
-          // Reuse the blank tab
           tabId = activeTabId;
           updateTabUrl(tabId, url);
           updateTabTitle(tabId, finalTitle);
@@ -175,19 +190,15 @@ export function SidecarDock() {
             useSidecarStore.getState().updateTabIcon(tabId, icon);
           }
         } else {
-          // Create new tab
           const newTabId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
           const newTab = { id: newTabId, url, title: finalTitle, icon };
           useSidecarStore.setState((s) => ({
             tabs: [...s.tabs, newTab],
           }));
           tabId = newTabId;
-          // Switch to it immediately so the placeholder renders
           setActiveTab(tabId);
         }
 
-        // Poll for placeholder to exist (wait for React render cycle)
-        // The placeholder needs a frame to appear after showLaunchpad becomes false
         let bounds = getPlaceholderBounds();
         let attempts = 0;
         while (!bounds && attempts < 20) {
@@ -200,15 +211,12 @@ export function SidecarDock() {
           throw new Error("Failed to get sidecar bounds after waiting for render");
         }
 
-        // Create in main process
         await window.electron.sidecar.create({ tabId, url });
         markTabCreated(tabId);
 
-        // Show webview
         await window.electron.sidecar.show({ tabId, bounds });
       } catch (error) {
         console.error("Failed to open URL in sidecar:", error);
-        // Rollback: hide any partial webview
         await window.electron.sidecar.hide().catch(() => {});
       } finally {
         setIsSwitching(false);

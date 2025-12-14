@@ -1,13 +1,15 @@
 import { Globe } from "lucide-react";
+import { useMemo } from "react";
 import type { SidecarLink } from "@shared/types";
 import { SidecarIcon } from "./SidecarIcon";
 
 interface SidecarLaunchpadProps {
   links: SidecarLink[];
-  onOpenUrl: (url: string, title: string) => void;
+  onOpenUrl: (url: string, title: string, background?: boolean) => void;
 }
 
 export function SidecarLaunchpad({ links, onOpenUrl }: SidecarLaunchpadProps) {
+  const isMac = useMemo(() => navigator.platform.toUpperCase().includes("MAC"), []);
   if (links.length === 0) {
     return (
       <div className="flex-1 flex flex-col items-center justify-start pt-8 text-muted-foreground px-6">
@@ -25,7 +27,18 @@ export function SidecarLaunchpad({ links, onOpenUrl }: SidecarLaunchpadProps) {
           {links.map((link) => (
             <button
               key={link.id}
-              onClick={() => onOpenUrl(link.url, link.title)}
+              type="button"
+              onClick={(e) => {
+                const modifierBackground = isMac ? e.metaKey : e.ctrlKey;
+                onOpenUrl(link.url, link.title, modifierBackground);
+              }}
+              onAuxClick={(e) => {
+                if (e.button === 1) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onOpenUrl(link.url, link.title, true);
+                }
+              }}
               className="flex items-center gap-4 p-4 rounded-[var(--radius-xl)] bg-canopy-border hover:bg-canopy-border/80 border border-canopy-border hover:border-canopy-border transition-all group focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
             >
               <div className="w-8 h-8 flex items-center justify-center text-foreground group-hover:text-white transition-colors">

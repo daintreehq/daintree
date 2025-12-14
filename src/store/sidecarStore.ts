@@ -35,6 +35,7 @@ interface SidecarActions {
   setActiveTab: (id: string | null) => void;
   createTab: (url: string, title: string) => string;
   createBlankTab: () => string;
+  duplicateTab: (tabId: string) => string | null;
   closeTab: (id: string) => void;
   closeAllTabs: () => void;
   updateTabTitle: (id: string, title: string) => void;
@@ -114,6 +115,26 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
     return newTabId;
   },
 
+  duplicateTab: (tabId) => {
+    const state = get();
+    const sourceTab = state.tabs.find((t) => t.id === tabId);
+    if (!sourceTab || !sourceTab.url) {
+      return null;
+    }
+    const newTabId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const newTab: SidecarTab = {
+      id: newTabId,
+      url: sourceTab.url,
+      title: sourceTab.title,
+      icon: sourceTab.icon,
+    };
+    set((s) => ({
+      tabs: [...s.tabs, newTab],
+      activeTabId: newTabId,
+    }));
+    return newTabId;
+  },
+
   closeTab: (id) => {
     const state = get();
     const newTabs = state.tabs.filter((t) => t.id !== id);
@@ -121,7 +142,9 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
     if (id === state.activeTabId) {
       newActiveId = newTabs.length > 0 ? newTabs[newTabs.length - 1].id : null;
     }
-    set({ tabs: newTabs, activeTabId: newActiveId });
+    const newCreatedTabs = new Set(state.createdTabs);
+    newCreatedTabs.delete(id);
+    set({ tabs: newTabs, activeTabId: newActiveId, createdTabs: newCreatedTabs });
     window.electron.sidecar.closeTab({ tabId: id });
 
     if (newActiveId) {
