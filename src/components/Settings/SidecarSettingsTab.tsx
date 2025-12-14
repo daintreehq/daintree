@@ -101,6 +101,8 @@ export function SidecarSettingsTab() {
   const setLayoutModePreference = useSidecarStore((s) => s.setLayoutModePreference);
   const width = useSidecarStore((s) => s.width);
   const setWidth = useSidecarStore((s) => s.setWidth);
+  const defaultNewTabUrl = useSidecarStore((s) => s.defaultNewTabUrl);
+  const setDefaultNewTabUrl = useSidecarStore((s) => s.setDefaultNewTabUrl);
   const { rescan, isScanning } = useLinkDiscovery();
 
   const [newLinkName, setNewLinkName] = useState("");
@@ -111,6 +113,9 @@ export function SidecarSettingsTab() {
   const [urlError, setUrlError] = useState("");
   const [localWidth, setLocalWidth] = useState(width);
   const isAdjustingWidthRef = useRef(false);
+  const [showCustomUrlInput, setShowCustomUrlInput] = useState(false);
+  const [customDefaultUrl, setCustomDefaultUrl] = useState("");
+  const [customUrlError, setCustomUrlError] = useState("");
 
   const clampWidth = (v: number) => Math.min(SIDECAR_MAX_WIDTH, Math.max(SIDECAR_MIN_WIDTH, v));
 
@@ -192,9 +197,145 @@ export function SidecarSettingsTab() {
     ([_, template]) => template.cliDetector
   );
 
+  const enabledLinks = links.filter((l) => l.enabled).sort((a, b) => a.order - b.order);
+
+  const isCustomUrl =
+    defaultNewTabUrl !== null && !enabledLinks.some((l) => l.url === defaultNewTabUrl);
+
+  const handleDefaultAgentChange = (value: string) => {
+    if (value === "none") {
+      setDefaultNewTabUrl(null);
+      setShowCustomUrlInput(false);
+      setCustomDefaultUrl("");
+      setCustomUrlError("");
+    } else if (value === "custom") {
+      setShowCustomUrlInput(true);
+      if (isCustomUrl && defaultNewTabUrl) {
+        setCustomDefaultUrl(defaultNewTabUrl);
+      }
+    } else {
+      setDefaultNewTabUrl(value);
+      setShowCustomUrlInput(false);
+      setCustomDefaultUrl("");
+      setCustomUrlError("");
+    }
+  };
+
+  const handleCustomUrlSave = () => {
+    if (!customDefaultUrl.trim()) {
+      setCustomUrlError("URL is required");
+      return;
+    }
+    try {
+      const url = new URL(customDefaultUrl);
+      if (!["http:", "https:"].includes(url.protocol)) {
+        setCustomUrlError("URL must use http:// or https://");
+        return;
+      }
+      setDefaultNewTabUrl(customDefaultUrl);
+      setShowCustomUrlInput(false);
+      setCustomDefaultUrl("");
+      setCustomUrlError("");
+    } catch {
+      setCustomUrlError("Invalid URL format");
+    }
+  };
+
+  const handleCustomUrlCancel = () => {
+    setShowCustomUrlInput(false);
+    setCustomDefaultUrl("");
+    setCustomUrlError("");
+  };
+
   return (
     <div className="space-y-6">
       <section>
+        <h4 id="default-agent-label" className="text-sm font-medium text-canopy-text mb-2">
+          Default New Tab Agent
+        </h4>
+        <p className="text-xs text-canopy-text/50 mb-3">
+          Choose which agent opens when you click the + button. Select "None" to show the Launchpad.
+        </p>
+
+        <div className="space-y-3">
+          <select
+            aria-labelledby="default-agent-label"
+            value={
+              showCustomUrlInput
+                ? "custom"
+                : defaultNewTabUrl === null
+                  ? "none"
+                  : isCustomUrl
+                    ? "custom"
+                    : defaultNewTabUrl
+            }
+            onChange={(e) => handleDefaultAgentChange(e.target.value)}
+            className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-sm text-canopy-text focus:border-canopy-accent focus:outline-none"
+          >
+            <option value="none">None (show Launchpad)</option>
+            {enabledLinks.map((link) => (
+              <option key={link.id} value={link.url}>
+                {link.title}
+              </option>
+            ))}
+            <option value="custom">Custom URL...</option>
+          </select>
+
+          {showCustomUrlInput && (
+            <div className="flex gap-2">
+              <input
+                id="custom-url-input"
+                type="text"
+                placeholder="https://..."
+                value={customDefaultUrl}
+                onChange={(e) => {
+                  setCustomDefaultUrl(e.target.value);
+                  setCustomUrlError("");
+                }}
+                className="flex-1 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-sm text-canopy-text focus:border-canopy-accent focus:outline-none"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleCustomUrlSave();
+                  if (e.key === "Escape") handleCustomUrlCancel();
+                }}
+                aria-invalid={!!customUrlError}
+                aria-describedby={customUrlError ? "custom-url-error" : undefined}
+                autoFocus
+              />
+              <button
+                type="button"
+                onClick={handleCustomUrlSave}
+                aria-label="Save custom URL"
+                className="px-3 py-2 rounded-[var(--radius-md)] bg-canopy-accent text-white text-sm hover:bg-canopy-accent/90 transition-colors"
+              >
+                <Check className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={handleCustomUrlCancel}
+                aria-label="Cancel custom URL"
+                className="px-3 py-2 rounded-[var(--radius-md)] border border-canopy-border text-canopy-text/70 text-sm hover:bg-canopy-border/50 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          {customUrlError && (
+            <p id="custom-url-error" role="alert" className="text-xs text-red-500">
+              {customUrlError}
+            </p>
+          )}
+
+          {isCustomUrl && !showCustomUrlInput && defaultNewTabUrl && (
+            <div className="text-xs text-canopy-text/50 flex items-center gap-2">
+              <Globe className="w-3 h-3" />
+              <span className="truncate">{defaultNewTabUrl}</span>
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="pt-4 border-t border-canopy-border">
         <h4 className="text-sm font-medium text-canopy-text mb-3">AI Services</h4>
         <div className="space-y-2">
           {knownServices.map(([key, template]) => {

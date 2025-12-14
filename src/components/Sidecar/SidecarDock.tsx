@@ -28,6 +28,7 @@ export function SidecarDock() {
     updateTabUrl,
     updateTabTitle,
     createdTabs,
+    defaultNewTabUrl,
   } = useSidecarStore();
   const contentRef = useRef<HTMLDivElement>(null);
   const dockRef = useRef<HTMLDivElement>(null);
@@ -153,43 +154,6 @@ export function SidecarDock() {
     [closeTab]
   );
 
-  const handleNewTab = useCallback(() => {
-    createBlankTab();
-    window.electron.sidecar.hide();
-  }, [createBlankTab]);
-
-  const handleCloseTabShortcut = useCallback(() => {
-    if (tabs.length > 0) {
-      closeActiveTab();
-    }
-  }, [tabs.length, closeActiveTab]);
-
-  const handleNextTabShortcut = useCallback(() => {
-    if (tabs.length <= 1) return;
-    const currentIndex = tabs.findIndex((t) => t.id === activeTabId);
-    const nextIndex = currentIndex < tabs.length - 1 ? currentIndex + 1 : 0;
-    const nextTabId = tabs[nextIndex].id;
-    void handleTabClick(nextTabId);
-  }, [tabs, activeTabId, handleTabClick]);
-
-  const handlePrevTabShortcut = useCallback(() => {
-    if (tabs.length <= 1) return;
-    const currentIndex = tabs.findIndex((t) => t.id === activeTabId);
-    const prevIndex = currentIndex > 0 ? currentIndex - 1 : tabs.length - 1;
-    const prevTabId = tabs[prevIndex].id;
-    void handleTabClick(prevTabId);
-  }, [tabs, activeTabId, handleTabClick]);
-
-  const handleNewTabShortcut = useCallback(() => {
-    createBlankTab();
-    window.electron.sidecar.hide();
-  }, [createBlankTab]);
-
-  useKeybinding("sidecar.closeTab", handleCloseTabShortcut, { enabled: isFocused });
-  useKeybinding("sidecar.nextTab", handleNextTabShortcut, { enabled: isFocused });
-  useKeybinding("sidecar.prevTab", handlePrevTabShortcut, { enabled: isFocused });
-  useKeybinding("sidecar.newTab", handleNewTabShortcut, { enabled: isFocused });
-
   const handleOpenUrl = useCallback(
     async (url: string, title: string, background?: boolean) => {
       const agentInfo = getAIAgentInfo(url);
@@ -216,12 +180,23 @@ export function SidecarDock() {
 
       setIsSwitching(true);
 
+      const previousActiveTabId = activeTabId;
+      let createdNewTab = false;
+      let reusedTabId: string | null = null;
+      let previousTabState: { url: string | null; title: string; icon?: string } | null = null;
+
       try {
         const currentTab = activeTabId ? tabs.find((t) => t.id === activeTabId) : null;
         const isCurrentBlank = currentTab && !currentTab.url;
 
         let tabId: string;
         if (isCurrentBlank && activeTabId) {
+          reusedTabId = activeTabId;
+          previousTabState = {
+            url: currentTab.url,
+            title: currentTab.title,
+            icon: currentTab.icon,
+          };
           tabId = activeTabId;
           updateTabUrl(tabId, url);
           updateTabTitle(tabId, finalTitle);
@@ -235,6 +210,7 @@ export function SidecarDock() {
             tabs: [...s.tabs, newTab],
           }));
           tabId = newTabId;
+          createdNewTab = true;
           setActiveTab(tabId);
         }
 
@@ -257,6 +233,27 @@ export function SidecarDock() {
       } catch (error) {
         console.error("Failed to open URL in sidecar:", error);
         await window.electron.sidecar.hide().catch(() => {});
+
+        if (createdNewTab) {
+          useSidecarStore.setState((s) => ({
+            tabs: s.tabs.filter((t) => t.id !== activeTabId),
+            activeTabId: previousActiveTabId,
+          }));
+        } else if (reusedTabId && previousTabState) {
+          const restoredState = previousTabState;
+          useSidecarStore.setState((s) => ({
+            tabs: s.tabs.map((t) =>
+              t.id === reusedTabId
+                ? {
+                    ...t,
+                    url: restoredState.url,
+                    title: restoredState.title,
+                    icon: restoredState.icon,
+                  }
+                : t
+            ),
+          }));
+        }
       } finally {
         setIsSwitching(false);
       }
@@ -271,6 +268,50 @@ export function SidecarDock() {
       setActiveTab,
     ]
   );
+
+  const handleNewTab = useCallback(() => {
+    if (isSwitching) return;
+
+    if (defaultNewTabUrl) {
+      const matchingLink = links.find((l) => l.url === defaultNewTabUrl);
+      const title = matchingLink?.title ?? "New Tab";
+      void handleOpenUrl(defaultNewTabUrl, title);
+    } else {
+      createBlankTab();
+      window.electron.sidecar.hide();
+    }
+  }, [defaultNewTabUrl, links, handleOpenUrl, createBlankTab, isSwitching]);
+
+  const handleCloseTabShortcut = useCallback(() => {
+    if (tabs.length > 0) {
+      closeActiveTab();
+    }
+  }, [tabs.length, closeActiveTab]);
+
+  const handleNextTabShortcut = useCallback(() => {
+    if (tabs.length <= 1) return;
+    const currentIndex = tabs.findIndex((t) => t.id === activeTabId);
+    const nextIndex = currentIndex < tabs.length - 1 ? currentIndex + 1 : 0;
+    const nextTabId = tabs[nextIndex].id;
+    void handleTabClick(nextTabId);
+  }, [tabs, activeTabId, handleTabClick]);
+
+  const handlePrevTabShortcut = useCallback(() => {
+    if (tabs.length <= 1) return;
+    const currentIndex = tabs.findIndex((t) => t.id === activeTabId);
+    const prevIndex = currentIndex > 0 ? currentIndex - 1 : tabs.length - 1;
+    const prevTabId = tabs[prevIndex].id;
+    void handleTabClick(prevTabId);
+  }, [tabs, activeTabId, handleTabClick]);
+
+  const handleNewTabShortcut = useCallback(() => {
+    handleNewTab();
+  }, [handleNewTab]);
+
+  useKeybinding("sidecar.closeTab", handleCloseTabShortcut, { enabled: isFocused });
+  useKeybinding("sidecar.nextTab", handleNextTabShortcut, { enabled: isFocused });
+  useKeybinding("sidecar.prevTab", handlePrevTabShortcut, { enabled: isFocused });
+  useKeybinding("sidecar.newTab", handleNewTabShortcut, { enabled: isFocused });
 
   const handleClose = useCallback(async () => {
     closeAllTabs();
