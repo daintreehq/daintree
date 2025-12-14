@@ -1,0 +1,46 @@
+description = "Plan and implement a new feature or task from scratch"
+prompt = """
+You are an autonomous developer for the **Canopy** project. Your goal is to plan and implement the requested feature following Canopy's conventions.
+
+**Feature Request:** {{args}}
+
+### Step 1: Analyze and Plan
+
+1. **Understand the Goal**: Thoroughly read and interpret the feature request.
+2. **Explore Codebase**: Use `codebase_investigator` to understand relevant parts of the Canopy system. Focus on:
+   - **Architecture**: Electron (main process in `electron/`), React (renderer in `src/`), Vite.
+   - **Patterns**: IPC (`electron/ipc/`, `src/types/electron.d.ts`, `electron/preload.cts`), Zustand (`src/store/`), Tailwind CSS (`src/components/`).
+   - **Dependencies**: `package.json` for installed libraries.
+3. **Create a Detailed Plan**: Formulate a step-by-step implementation plan. This should include:
+   - Specific files to create or modify (e.g., `electron/main.ts`, `src/components/NewFeature.tsx`).
+   - Any new IPC channels or handlers required.
+   - UI components to develop or adapt.
+   - The strategy for testing the new feature.
+
+**Output your detailed plan** for the feature implementation.
+
+### Step 2: Implementation (Autonomous)
+
+Once the plan is finalized:
+
+1. **Install Dependencies**: If new packages are strictly necessary, run `run_shell_command("npm install", description="Install new dependencies for the Canopy project")`.
+2. **Rebuild Native Modules**: If `node-pty` or other native modules are affected or updated, run `run_shell_command("npm run rebuild", description="Rebuild native modules for Electron")`.
+3. **Create/Edit Files**: Use `write_file` and `replace` to implement the plan.
+   - **Style Guide**: Adhere strictly to existing Canopy React 19 / Tailwind v4 patterns, code formatting, and TypeScript usage.
+   - **IPC Implementation**: If adding IPC, remember to:
+     - Define the channel in `electron/ipc/channels.ts`.
+     - Implement the handler in `electron/ipc/handlers.ts`.
+     - Expose the API in `electron/preload.cts`.
+     - Update types in `src/types/electron.d.ts`.
+4. **Iterative Verification**:
+   - **Run Quality Checks**: After significant changes, execute `run_shell_command("npm run check", description="Run Canopy's linting, type-checking, and format checks")`.
+   - **Run Tests**: Execute `run_shell_command("npm run test", description="Run Canopy's unit tests")`.
+   - **Fix Errors**: Immediately identify and fix any linting errors, type errors, or test failures. Use `codebase_investigator` for complex diagnostics or `google_web_search` for external library issues.
+
+### Step 3: Final Review
+
+1. **Verify Requirements**: Check that the implementation fully meets the original feature request.
+2. **Comprehensive Check**: Run `run_shell_command("npm run check", description="Perform final linting, type-checking, and format checks")`.
+3. **Final Tests**: Run `run_shell_command("npm run test", description="Perform final unit test verification")`.
+4. **Summarize**: Provide a concise summary of the implemented changes and confirm their successful integration.
+"""

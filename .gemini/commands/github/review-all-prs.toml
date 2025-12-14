@@ -1,0 +1,64 @@
+description = "Review and merge all open pull requests in logical order"
+prompt = """
+**Batch Operation**: Review, test, and merge all open PRs in Canopy.
+
+**Principles**:
+- **Bias for Action**: Merge quickly, fix issues post-merge.
+- **Main Repo**: Work directly in the main repo (no worktrees).
+- **Quality**: Run `npm run check` and `npm run test` AFTER merge.
+
+### Step 1: Prepare Working Directory
+
+1. **Stash Current Changes**: `run_shell_command("git stash push -u -m \"review-all-prs-autostash\"", description="Stash any uncommitted changes in the current worktree")`.
+2. **Checkout Main Branch**: `run_shell_command("git checkout main && git pull origin main", description="Checkout the main branch and pull latest changes")`.
+
+### Step 2: Fetch Open Pull Requests
+
+1. **List PRs**: `run_shell_command("gh pr list --state open --json number,title,headRefName,baseRefName,labels,createdAt", description="Fetch all open pull requests")`.
+2. **Determine Merge Order**:
+   - Sort PRs by: dependency, priority labels (`P1`, `bug`), and age (oldest first).
+
+### Step 3: Process Each PR Sequentially
+
+For each PR in the determined merge order:
+
+1. **Fetch PR Details**:
+   - `run_shell_command("gh pr view {number} --json title,body,headRefName", description="Fetch general PR details")`.
+   - **Fetch Inline Comments (CRITICAL)**: `run_shell_command("gh api repos/{owner}/{repo}/pulls/{number}/comments", description="Fetch inline code review comments to identify specific issues")`.
+
+2. **Clean Worktree (if necessary)**:
+   - If a worktree exists for `{headRefName}`, remove it: `run_shell_command("git worktree remove {worktree-path} --force", description="Remove existing worktree for PR branch")`.
+
+3. **Checkout PR Branch**: `run_shell_command("git fetch origin && git checkout {headRefName} && git pull origin {headRefName}", description="Checkout the PR's branch and pull latest changes")`.
+
+4. **Address Feedback from Inline Comments**:
+   - Analyze inline comments. Fix P1/P2 issues directly using `replace` or `write_file`.
+   - Commit fixes: `run_shell_command("git commit -am \"chore: address review feedback\"", description="Commit fixes for review comments")`.
+   - **Consult Tools**: If stuck on a technical issue during fixes, use `codebase_investigator` for internal diagnosis or `google_web_search` for external research.
+
+5. **Merge into Main**:
+   - Checkout `main`: `run_shell_command("git checkout main", description="Switch to the main branch")`.
+   - Pull latest `main`: `run_shell_command("git pull origin main", description="Pull latest changes for main branch")`.
+   - Perform merge: `run_shell_command("git merge --no-ff {headRefName} -m \"Merge pull request #{number}: {title}\"", description="Merge the PR branch into main")`.
+   - **Resolve Conflicts**: If merge conflicts occur, attempt to resolve them. **Use `codebase_investigator` for complex conflict resolution judgment.** If unable to resolve, abort merge and skip this PR.
+
+6. **Post-Merge Verification (Canopy Specific)**:
+   - **Install Dependencies**: `run_shell_command("npm install", description="Install/update Node.js dependencies")`.
+   - **Rebuild Native Modules**: `run_shell_command("npm run rebuild", description="Rebuild native modules for Electron")`.
+   - **Run Full Quality Check**: `run_shell_command("npm run check", description="Run Canopy's linting, type-checking, and format checks")`.
+   - **Run Tests**: `run_shell_command("npm run test", description="Run Canopy's unit tests")`.
+   - **Fix Post-Merge Failures**: If any checks fail, attempt to fix them in `main` and commit. (Max 3 attempts). If still failing, reset `main` and mark PR as failed. **Use `codebase_investigator` for diagnosing complex failures or `google_web_search` for external library issues.**
+
+7. **Push Changes & Cleanup**:
+   - Push `main`: `run_shell_command("git push origin main", description="Push the merged main branch to origin")`.
+   - Close PR: `run_shell_command("gh pr close {number}", description="Close the pull request on GitHub")`.
+   - Delete Branch: `run_shell_command("git push origin --delete {headRefName} && git branch -D {headRefName}", description="Delete remote and local PR branches")`.
+
+### Step 4: Final Report
+
+1. **Restore Stash**: `run_shell_command("git stash pop || true", description="Restore any stashed changes (if they exist)")`.
+2. **Summary**:
+   - List successfully merged PRs.
+   - List failed PRs with reasons.
+   - List skipped PRs (e.g., drafts).
+""";

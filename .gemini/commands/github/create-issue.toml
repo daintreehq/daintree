@@ -1,0 +1,53 @@
+description = "Create a detailed GitHub issue for Canopy"
+prompt = """
+Create a structured GitHub issue for the **Canopy** project.
+
+**Context:** {{args}}
+
+### Step 1: Analyze Request
+
+1. **Understand Work**: Determine if the request is a Bug (`fix`), Feature (`feat`), Refactor (`refactor`), or Chore (`chore`).
+2. **Context**: Frame the issue within Canopy's architecture (Electron main/renderer, React UI, IPC).
+
+### Step 2: Structure Issue Body
+
+Use the following template for the issue body, adapting sections as necessary for clarity and completeness:
+
+## Summary
+[A concise, 1-2 sentence description of the issue or feature.]
+
+## Problem Statement / Motivation
+[Explain the problem this issue solves or the value this feature adds for Canopy users or developers.]
+
+## Context
+- **Affected Area(s)**: [e.g., Terminal, Worktree Management, IPC, UI Components, Build Process]
+- **Relevant Files/Modules**: [List key files or modules that are likely to be involved, e.g., `src/components/Terminal/...`, `electron/services/PtyManager.ts`]
+- **Existing Patterns**: [Refer to Canopy's established patterns, e.g., "Follows existing IPC patterns," "Integrates with Zustand store."]
+
+## Proposed Solution / Approach (Optional)
+[If a specific approach has been discussed or is evident, outline it here. Otherwise, state that the approach needs to be determined during implementation.]
+
+## Deliverables
+- [ ] Code changes addressing the core issue/feature.
+- [ ] New or updated unit tests (`npm run test`).
+- [ ] Updated documentation (if applicable).
+
+## Acceptance Criteria
+- [ ] `npm run check` passes cleanly (no linting, type-checking, or formatting errors).
+- [ ] `npm run test` passes (all unit tests).
+- [ ] [Specific, measurable criteria to confirm the issue is resolved or feature is implemented correctly, e.g., "New terminal instances display correct PTY information," "UI component renders as per design spec." ]
+
+### Step 3: Create Issue
+
+Use the `gh issue create` command with a conventional commit-style title:
+
+`run_shell_command('gh issue create --title "[Type]: [Concise Title Summary]" --body "..."')`
+
+**Title Format**:
+- **Type**: `feat`, `fix`, `refactor`, `chore`.
+- **Labels**: Apply appropriate labels like `bug`, `enhancement`, `refactor`, `chore`, `documentation` using `gh issue edit {number} --add-label "label1,label2"`.
+
+### Step 4: Report Success
+
+Output the URL of the newly created GitHub issue.
+"""

@@ -1,106 +1,60 @@
-description = "Create worktree and start working on a GitHub issue"
-prompt = """
-## Role & Objective
-You are an expert autonomous developer. Your goal is to take a GitHub issue (number or URL provided as arguments) and fully implement a solution, creating a Pull Request as the final artifact.
+description = "Create worktree and start working on a GitHub issue (Canopy workflow)"
+prompt = "**FULLY AUTONOMOUS EXECUTION - Canopy Project**
 
-**Arguments:** {{args}}
+**Issue Reference:** {{args}}
 
----
+**Goal:** Work autonomously to completion - PR created.
 
-## 🧠 Embedded Skills & Policies (CRITICAL)
+**Principles (from github-orchestration):**
+- **Fix, don't ask:** If `npm run check` or `npm run test` fails, fix it.
+- **Commit continuously:** Use conventional commits.
+- **Worktrees:** Use a separate worktree for isolation.
+- **Dependencies:** Use `npm install` and `npm run rebuild` for native modules.
 
-### 1. GitHub Orchestration (North-Star Guardrails)
-*   **Autonomous Execution:**
-    *   **No "Check-in" Loops:** Do not pause to ask "Shall I proceed?". **Just do it.**
-    *   **Self-Correction:** If a test fails, fix it. If a lint error occurs, fix it. Do not report intermediate failures.
-    *   **Assumption of Approval:** You have permission to edit files, run tests, and create branches.
-    *   **Stop Conditions:** Only stop if you successfully create the PR (✅) or hit a true blocker (❌).
-*   **Tool Preference:**
-    *   **Research:** Use `google_web_search` for missing imports/props or build errors. Google it immediately; don't guess.
-    *   **File Reading:** ALWAYS use the `read_file` tool. **NEVER** use `run_shell_command` with `cat` or `grep` to read full files.
-    *   **Codex:** Route all technical uncertainty to the `codex` tool.
-*   **Private Notes:** Capture context in `.gemini/tmp/pr-notes-<issue>.md` if the task is complex (5+ files), but don't let this slow you down.
+### Step 1: Parse and Fetch Issue
 
-### 2. Codex Orchestration (Intelligence)
-*   **Model:** ALWAYS use `model="gpt-5.2"` in `codex` tool calls.
-*   **Context:** ALWAYS provide the `cwd` (current worktree path) in `codex` calls.
-*   **Role:** Codex is your **Advisor**, not the Implementer. Ask for plans, analysis, and reviews. You (the agent) write the code.
-*   **Batching:** If you have multiple independent questions, ask them in a single `codex` prompt to save time.
+1. Extract issue number from `{{args}}`.
+2. Fetch issue details: `run_shell_command("gh issue view {number} --json title,body,number", description="Fetch GitHub issue details")`.
+3. Assign to self: `run_shell_command("gh issue edit {number} --add-assignee @me", description="Assign issue to self on GitHub")`.
 
----
+### Step 2: Create Worktree
 
-## Workflow Steps
+1. **Branch Name**: Determine based on issue title and type (e.g., `feature/issue-{number}-{short-desc}`, `fix/issue-{number}-{short-desc}`).
+2. **Worktree Path**: `../canopy-issue-{number}`.
+3. **Base Branch**: Use `main` (Canopy's default).
+4. **Command**: `run_shell_command("git worktree add -b <branch-name> <worktree-path> origin/main", description="Create a new git worktree for the issue")`.
 
-### Step 1: Parse & Fetch Issue
-1.  **Parse Argument:** `{{args}}` is the issue number or URL. Extract the number.
-2.  **Fetch Details:** Use `gh issue view <number> --json title,body,number,comments` to get the full context.
-3.  **Assign:** `gh issue edit <number> --add-assignee @me` (ignore failure).
+### Step 3: Setup Environment in Worktree
 
-### Step 2: Setup Worktree (Robust)
-1.  **Context:** Get repo root (`git rev-parse --show-toplevel`) and project name.
-2.  **Branch Name:** Generate `feature/issue-<number>-<brief-desc>`.
-    *   Use `bugfix/` if it's a fix.
-    *   Use `refactor/` if it's a cleanup.
-3.  **Base Branch:**
-    *   Check if `develop` exists on origin (`git ls-remote --heads origin develop`).
-    *   If yes, use `develop`. Else use default branch (`gh repo view --json defaultBranchRef`).
-4.  **Create:**
-    *   Path: `../<project-name>-issue-<number>`
-    *   Command: `git worktree add -b <branch-name> <worktree-path> <base-branch>`
-5.  **Dependencies (Strict Order):**
-    *   `cd <worktree-path>` (CRITICAL: All future steps must happen here).
-    *   **Node:** `pnpm-lock.yaml` -> `pnpm i`; `yarn.lock` -> `yarn`; `package-lock.json` -> `npm ci`; `package.json` -> `npm i`.
-    *   **Python:** `poetry.lock` -> `poetry install`; `requirements.txt` -> `pip install -r requirements.txt`.
-    *   **Rust:** `Cargo.lock` -> `cargo fetch`.
-    *   **Go:** `go.mod` -> `go mod download`.
-    *   **Others:** Detect and install appropriate deps.
+1. **Enter Worktree**: `run_shell_command("cd <worktree-path>", description="Change directory to the new worktree")`.
+2. **Install Dependencies**: `run_shell_command("npm install", description="Install Node.js dependencies for the Canopy project")`.
+3. **Rebuild Native Modules**: `run_shell_command("npm run rebuild", description="Rebuild native modules like node-pty for Electron compatibility")`.
 
-### Step 3: Plan with Codex (Strategist Mode)
-1.  **Consult Codex:** Use the `codex` tool (model="gpt-5.2", cwd=<worktree>) to create a plan.
-    *   *Prompt:*
-        """
-        Your primary role is that of a strategist. Your task is to devise a comprehensive strategic plan to accomplish: Issue #<number>: <title>
-        <body_context>
+### Step 4: Plan Implementation
 
-        You MUST NOT write code yet. Investigate and plan.
-        1. **Understanding the Goal:** Re-state the objective.
-        2. **Investigation:** What files need reading? What questions need answering?
-        3. **Proposed Strategy:** High-level phases.
-        4. **Verification:** How will we measure success?
-        5. **Risks:** Dependencies or trade-offs?
+1. **Analyze Issue**: Read the issue body and comments.
+2. **Explore Codebase**: Use `codebase_investigator` to understand relevant parts of the Canopy system (Electron structure, React components, IPC mechanisms).
+3. **Formulate Plan**: Develop a step-by-step implementation plan, noting specific files for modification, new IPC channels, UI components, and testing strategy.
 
-        Output ONLY the markdown plan.
-        """
-2.  **Review Plan:** Read the plan. This is your roadmap.
+### Step 5: Implement (Autonomous)
 
-### Step 4: Implement & Verify (Loop)
-**Goal:** Implement the plan using `codex` as your pair programmer.
-1.  **Implement:**
-    *   Read relevant files using `read_file`.
-    *   Edit files using `replace` or `write_file`.
-    *   **Unsure?** Ask `codex`: "I'm implementing X. Given patterns in [files], should I use approach A or B?"
-    *   **Error?** Google it (`google_web_search`) or ask `codex`.
-2.  **Verify:**
-    *   Run tests (`npm test`, `cargo test`, etc.).
-    *   Run lints (`npm run lint`).
-    *   **Fix failures immediately.** Do not ask for permission.
+**Loop until done:**
+1. **Implement Changes**: Use `write_file` and `replace` to apply code changes.
+2. **Iterative Verification**:
+   - **Full Quality Check**: `run_shell_command("npm run check", description="Run Canopy's linting, type-checking, and format checks")`.
+   - **Run Tests**: `run_shell_command("npm run test", description="Run Canopy's unit tests using Vitest")`.
+   - **Fix Failures**: Immediately identify and fix any errors. Use `codebase_investigator` for complex architectural diagnostics or `google_web_search` for external API/library issues.
+3. **Commit Regularly**:
+   - `run_shell_command("git add -A", description="Stage all changes for commit")`.
+   - `run_shell_command("git commit -m \"<conventional-commit-message>\"", description="Commit changes with a conventional message")`.
 
-### Step 5: Final Code Review
-1.  **Codex Review:** Ask `codex` to review the *entire* implementation.
-    *   *Prompt:* "I have implemented issue #<number>. Please review these changes for bugs, security, and quality. <cwd>"
-2.  **Apply Fixes:** Fix valid issues found by Codex.
+### Step 6: Create Pull Request
 
-### Step 6: Create Pull Request (Mandatory)
-1.  **Commit:** `git commit -am "feat: <title> (closes #<number>)"`
-2.  **Push:** `git push origin <branch-name>`
-3.  **Create PR:**
-    *   `gh pr create --fill --base <base-branch>`
-    *   If `--fill` fails or is empty, generate a title/body using `codex` summary and pass via `--title` and `--body`.
-4.  **Verify:** Ensure `gh pr create` returns a URL.
+**Mandatory Final Step:**
 
-### Step 7: Final Summary
-Output a clean summary:
-*   ✅ **Issue Complete:** <Link to PR>
-*   📂 **Worktree:** <path>
-*   📝 **Notes:** (Any specific warnings or manual steps needed)
-"""
+1. **Push Branch**: `run_shell_command("git push -u origin HEAD", description="Push the feature branch to origin")`.
+2. **Create PR**: `run_shell_command("gh pr create --title \"<PR Title>\" --body \"Closes #{number}"", description="Create a new GitHub pull request")`.
+3. **Report**: Display the URL of the created PR.
+
+**Worktree Cleanup**: Remind the user that the worktree is still available at `<worktree-path>` and should be removed with `git worktree remove <path>` when completely done.
+"

@@ -1,0 +1,40 @@
+description = "Push changes and create a pull request (Canopy)"
+prompt = """
+### Step 1: Pre-Push Quality Assurance for Canopy
+
+Before pushing, ensure the code adheres to Canopy's quality standards:
+
+1. **Full Quality Check**:
+   - Run `run_shell_command(\"npm run check\", description=\"Execute Canopy's linting, type-checking, and format-checking commands\")`.
+   - If this command reports errors, either ask the user for guidance or attempt to fix them autonomously if the fix is straightforward (e.g., `npm run fix`).
+2. **Run Tests**:
+   - Execute `run_shell_command(\"npm run test\", description=\"Run Canopy's unit tests using Vitest\")`.
+   - If tests fail, report to the user for guidance.
+
+### Step 2: Commit Changes (If Any)
+
+1. Check current git status: `run_shell_command(\"git status --short\", description=\"Check for uncommitted changes\")`.
+2. If there are uncommitted changes:
+   - Stage all changes: `run_shell_command(\"git add -A\", description=\"Stage all modified and new files\")`.
+   - Create a commit: `run_shell_command(\"git commit -m \"<Conventional Commit Message>\"\", description=\"Create a conventional commit for the changes\")`.
+     - **Commit Message Format**: Adhere to conventional commits (e.g., `feat: add new feature`, `fix: resolve bug`, `chore: update dependencies`).
+     - **No AI Attribution**: Commit messages should not mention AI or code generation.
+
+### Step 3: Push Branch and Create Pull Request
+
+1. **Push Branch**: `run_shell_command(\"git push -u origin HEAD\", description=\"Push the current branch to the remote origin\")`.
+2. **Determine PR Title and Body**:
+   - Attempt to link to a GitHub issue: Check the current branch name for an issue number pattern (e.g., `issue-123`).
+   - Construct a descriptive PR title (often derived from the last commit message or linked issue title).
+   - Construct the PR body, including `Closes #<issue-number>` if linked to an issue.
+3. **Create PR**: `run_shell_command(\"gh pr create --title \"<PR Title>\" --body \"<PR Body>\"\", description=\"Create a new GitHub pull request\")`.
+
+### Step 4: Report Success
+
+Display the URL of the newly created Pull Request to the user.
+```
+✅ **Pull request created**
+
+🔗 **PR**: {pr-url}
+```
+"

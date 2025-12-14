@@ -1,0 +1,71 @@
+description = "Synthesize multiple implementation guides into one ideal plan"
+prompt = """
+You have been given multiple implementation guides, plans, or suggestions. Your task is to thoroughly analyze and synthesize these into a single, optimal implementation plan for the **Canopy** project (Electron + React + Vite).
+
+**Input:** {{args}}
+
+**CRITICAL: Do NOT implement anything. Your only job is to produce a synthesized plan.**
+
+### Step 1: Deep Codebase Exploration
+
+Before evaluating the guides, you must understand the codebase thoroughly:
+
+1. Explore the project structure:
+   - **Main process**: `electron/`
+   - **Renderer process**: `src/`
+   - **Shared types**: `shared/types/`
+2. Identify key patterns and conventions already in use:
+   - **IPC**: Located in `electron/ipc/` and exposed via `electron/preload.cts`, typed in `src/types/electron.d.ts`.
+   - **State Management**: Zustand stores in `src/store/`.
+   - **UI Components**: React components in `src/components/` using Tailwind CSS v4.
+   - **Services**: Backend services in `electron/services/`.
+   - **Native Modules**: `node-pty` (requires `npm run rebuild`).
+3. Understand dependencies from `package.json` (e.g., `simple-git`, `xterm`).
+4. Note any constraints or technical debt that may affect implementation.
+
+Use `codebase_investigator` to explore.
+
+### Step 2: Analyze Each Implementation Guide
+
+For each guide provided, evaluate:
+
+1. **Technical Feasibility**: Can this approach work within Canopy's Electron 33 and React 19 environment?
+2. **Alignment with Patterns**: Does it follow existing Canopy conventions (e.g., IPC, Zustand, Tailwind)?
+3. **Completeness**: Does it cover all requirements and edge cases?
+4. **Trade-offs**: What are the pros and cons of this approach in the context of Canopy?
+5. **Dependencies**: What external dependencies or changes does it require?
+6. **Testing Strategy**: How testable is the proposed approach using `npm run test`?
+7. **Risk Assessment**: What could go wrong? What are the unknowns?
+
+### Step 3: Identify Commonalities and Conflicts
+
+Compare the guides to find common ground and conflicts.
+
+### Step 4: Resolve Conflicts
+
+For each conflict between guides:
+
+1. Consider which approach better fits the existing Canopy codebase patterns.
+2. Evaluate technical trade-offs (performance, maintainability, complexity).
+3. Make a decisive choice with clear reasoning.
+
+### Step 5: Produce the Synthesized Plan
+
+Create a single, comprehensive implementation plan that:
+
+1. Takes the best elements from each guide.
+2. Resolves all conflicts with clear decisions.
+3. Fills any gaps identified during analysis.
+4. Aligns with Canopy's existing architecture and patterns.
+5. Includes a clear implementation order with dependencies.
+6. Explicitly mentions `npm run check` for pre-commit validation.
+
+## Important Reminders
+
+- **Explore first**: Do not skip codebase exploration. Your synthesis must be grounded in reality.
+- **Be decisive**: Make clear choices. Do not present options—present the plan.
+- **Stay practical**: Focus on what can actually be implemented in this codebase.
+- **Acknowledge trade-offs**: Note what you're sacrificing with your choices.
+- **DO NOT IMPLEMENT**: Output only the plan. No code changes, no file edits.
+- **NEVER WRITE FILES**: Do not use `write_file`, `replace`, or any tool that modifies files. Output your synthesized plan directly in the conversation.
+"""
