@@ -9,7 +9,7 @@ prompt = '''
 **Principles (from github-orchestration):**
 - **Fix, don't ask:** If `npm run check` or `npm run test` fails, fix it.
 - **Commit continuously:** Use conventional commits.
-- **Worktrees:** Use a separate worktree for isolation.
+- **Worktrees:** Use a separate worktree for isolation. NEVER modify the main worktree.
 - **Dependencies:** Use `npm install` and `npm run rebuild` for native modules.
 
 ### Step 1: Parse and Fetch Issue
