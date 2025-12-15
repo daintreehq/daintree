@@ -11,6 +11,7 @@ export { githubClient } from "./githubClient";
 export { hibernationClient } from "./hibernationClient";
 export { logsClient } from "./logsClient";
 export { projectClient } from "./projectClient";
+export { slashCommandsClient } from "./slashCommandsClient";
 export { systemClient } from "./systemClient";
 export { terminalClient } from "./terminalClient";
 export { worktreeClient } from "./worktreeClient";

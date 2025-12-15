@@ -280,6 +280,9 @@ const CHANNELS = {
 
   // Notification channels
   NOTIFICATION_UPDATE: "notification:update",
+
+  // Slash command channels
+  SLASH_COMMANDS_LIST: "slash-commands:list",
 } as const;
 
 const api: ElectronAPI = {
@@ -442,6 +445,11 @@ const api: ElectronAPI = {
   // Files API
   files: {
     search: (payload) => _typedInvoke(CHANNELS.FILES_SEARCH, payload),
+  },
+
+  // Slash Commands API
+  slashCommands: {
+    list: (payload) => _typedInvoke(CHANNELS.SLASH_COMMANDS_LIST, payload),
   },
 
   // Artifact API

@@ -32,6 +32,11 @@ export const FileSearchPayloadSchema = z.object({
   limit: z.number().int().positive().max(100).optional(),
 });
 
+export const SlashCommandListRequestSchema = z.object({
+  agentId: z.enum(["claude", "gemini", "codex"]),
+  projectPath: z.string().optional(),
+});
+
 export const DevServerStatusSchema = z.enum(["stopped", "starting", "running", "error"]);
 
 export const DevServerStartPayloadSchema = z.object({

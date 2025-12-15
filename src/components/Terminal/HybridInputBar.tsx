@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import type { LegacyAgentType } from "@shared/types";
 import { cn } from "@/lib/utils";
 import { buildTerminalSendPayload } from "@/lib/terminalInput";
 import { useFileAutocomplete } from "@/hooks/useFileAutocomplete";
@@ -30,6 +31,7 @@ export interface HybridInputBarHandle {
 export interface HybridInputBarProps {
   onSend: (payload: { data: string; trackerData: string; text: string }) => void;
   cwd: string;
+  agentId?: LegacyAgentType;
   disabled?: boolean;
   className?: string;
 }
@@ -80,7 +82,7 @@ function getTextOffsetLeftPx(textarea: HTMLTextAreaElement, charIndex: number): 
 }
 
 export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarProps>(
-  ({ onSend, cwd, disabled = false, className }, ref) => {
+  ({ onSend, cwd, agentId, disabled = false, className }, ref) => {
     const [value, setValue] = useState("");
     const [isComposing, setIsComposing] = useState(false);
     const allowNextLineBreakRef = useRef(false);
@@ -106,10 +108,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       limit: 50,
     });
 
-    const { items: autocompleteCommands } = useSlashCommandAutocomplete({
-      query: slashContext?.query ?? "",
-      enabled: isAutocompleteOpen && activeMode === "command",
-    });
+    const { items: autocompleteCommands, isLoading: isCommandsLoading } =
+      useSlashCommandAutocomplete({
+        query: slashContext?.query ?? "",
+        enabled: isAutocompleteOpen && activeMode === "command",
+        agentId,
+        projectPath: cwd,
+      });
 
     const autocompleteItems = useMemo((): AutocompleteItem[] => {
       if (activeMode === "file") {
@@ -122,7 +127,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     }, [activeMode, autocompleteCommands, autocompleteFiles]);
 
     const menuTitle = activeMode === "file" ? "Files" : activeMode === "command" ? "Commands" : "";
-    const isLoading = activeMode === "file" ? isAutocompleteLoading : false;
+    const isLoading =
+      activeMode === "file"
+        ? isAutocompleteLoading
+        : activeMode === "command"
+          ? isCommandsLoading
+          : false;
 
     const resizeTextarea = useCallback((textarea: HTMLTextAreaElement | null) => {
       if (!textarea) return;

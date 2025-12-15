@@ -129,8 +129,13 @@ function TerminalPaneComponent({
   const isBackendRecovering = backendStatus === "recovering";
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
   const hybridInputAutoFocus = useTerminalInputStore((state) => state.hybridInputAutoFocus);
-  const effectiveAgentId = agentId ?? type;
-  const isAgentTerminal = effectiveAgentId !== undefined && effectiveAgentId !== "terminal";
+  const effectiveAgentId =
+    agentId === "claude" || agentId === "gemini" || agentId === "codex"
+      ? agentId
+      : type === "claude" || type === "gemini" || type === "codex"
+        ? type
+        : undefined;
+  const isAgentTerminal = effectiveAgentId !== undefined;
   const showHybridInputBar = isAgentTerminal && hybridInputEnabled;
 
   const queueCount = useTerminalStore(
@@ -359,7 +364,7 @@ function TerminalPaneComponent({
       tabIndex={0}
       role="group"
       aria-label={(() => {
-        if (!effectiveAgentId || effectiveAgentId === "terminal") {
+        if (!effectiveAgentId) {
           return `Terminal: ${title}`;
         }
         const agentConfig = getAgentConfig(effectiveAgentId);
@@ -550,6 +555,7 @@ function TerminalPaneComponent({
             ref={inputBarRef}
             disabled={isBackendDisconnected || isBackendRecovering}
             cwd={cwd}
+            agentId={effectiveAgentId}
             onSend={({ trackerData, text }) => {
               terminalInstanceService.notifyUserInput(id);
               // Use backend submit() which handles Codex vs other agents automatically

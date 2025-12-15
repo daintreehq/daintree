@@ -53,6 +53,7 @@ import type { KeyAction } from "../keymap.js";
 import type { TerminalStatusPayload, PtyHostActivityTier } from "../pty-host.js";
 import type { ShowContextMenuPayload } from "../menu.js";
 import type { FileSearchPayload, FileSearchResult } from "./files.js";
+import type { SlashCommand, SlashCommandListRequest } from "../slashCommands.js";
 
 // ElectronAPI Type (exposed via preload)
 
@@ -113,6 +114,9 @@ export interface ElectronAPI {
   };
   files: {
     search(payload: FileSearchPayload): Promise<FileSearchResult>;
+  };
+  slashCommands: {
+    list(payload: SlashCommandListRequest): Promise<SlashCommand[]>;
   };
   artifact: {
     onDetected(callback: (data: ArtifactDetectedPayload) => void): () => void;

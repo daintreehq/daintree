@@ -175,6 +175,8 @@ export const CHANNELS = {
   WINDOW_FULLSCREEN_CHANGE: "window:fullscreen-change",
 
   NOTIFICATION_UPDATE: "notification:update",
+
+  SLASH_COMMANDS_LIST: "slash-commands:list",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

@@ -60,6 +60,7 @@ import type { SystemSleepMetrics } from "./systemSleep.js";
 import type { TerminalFlowStatus } from "../pty-host.js";
 import type { ShowContextMenuPayload } from "../menu.js";
 import type { FileSearchPayload, FileSearchResult } from "./files.js";
+import type { SlashCommand, SlashCommandListRequest } from "../slashCommands.js";
 
 // IPC Contract Maps
 
@@ -165,6 +166,12 @@ export interface IpcInvokeMap {
   "files:search": {
     args: [payload: FileSearchPayload];
     result: FileSearchResult;
+  };
+
+  // Slash command discovery
+  "slash-commands:list": {
+    args: [payload: SlashCommandListRequest];
+    result: SlashCommand[];
   };
 
   // Agent channels
