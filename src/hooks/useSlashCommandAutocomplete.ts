@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { MOCK_SLASH_COMMANDS } from "@/components/Terminal/slashCommands";
 import type { AutocompleteItem } from "@/components/Terminal/AutocompleteMenu";
 import { slashCommandsClient } from "@/clients";
+import { rankSlashCommands } from "@/lib/slashCommandMatch";
 import {
   CLAUDE_BUILTIN_SLASH_COMMANDS,
   GEMINI_BUILTIN_SLASH_COMMANDS,
@@ -72,16 +73,14 @@ export function useSlashCommandAutocomplete({
 
   const items = useMemo((): AutocompleteItem[] => {
     if (!enabled) return [];
-    const search = query.toLowerCase();
+    const ranked = rankSlashCommands(commands, query);
 
-    return commands
-      .filter((cmd) => cmd.label.toLowerCase().startsWith(search))
-      .map((cmd) => ({
-        key: cmd.id,
-        label: cmd.label,
-        value: cmd.label,
-        description: cmd.description,
-      }));
+    return ranked.map((cmd) => ({
+      key: cmd.id,
+      label: cmd.label,
+      value: cmd.label,
+      description: cmd.description,
+    }));
   }, [commands, enabled, query]);
 
   return { items, isLoading };
