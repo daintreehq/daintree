@@ -1,36 +1,12 @@
-import { useState } from "react";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-  ContextMenuShortcut,
-  ContextMenuSub,
-  ContextMenuSubTrigger,
-  ContextMenuSubContent,
-} from "@/components/ui/context-menu";
-import {
-  Maximize2,
-  Minimize2,
-  Trash2,
-  ArrowUp,
-  ArrowDownToLine,
-  X,
-  RotateCcw,
-  Copy,
-  Eraser,
-  Info,
-  GitBranch,
-  Play,
-  PenLine,
-} from "lucide-react";
+import { useCallback, useMemo, useState } from "react";
+import type React from "react";
+import { type MenuItemOption, type TerminalLocation } from "@/types";
 import { useTerminalStore } from "@/store";
-import type { TerminalLocation } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { terminalClient } from "@/clients";
 import { TerminalInfoDialog } from "./TerminalInfoDialog";
 import { useWorktrees } from "@/hooks/useWorktrees";
+import { useNativeContextMenu } from "@/hooks";
 
 interface TerminalContextMenuProps {
   terminalId: string;
@@ -47,6 +23,7 @@ export function TerminalContextMenu({
   children,
   forceLocation,
 }: TerminalContextMenuProps) {
+  const { showMenu } = useNativeContextMenu();
   const [isInfoDialogOpen, setIsInfoDialogOpen] = useState(false);
   const terminal = useTerminalStore((state) => state.terminals.find((t) => t.id === terminalId));
 
@@ -62,7 +39,7 @@ export function TerminalContextMenu({
   const isMaximized = useTerminalStore((s) => s.maximizedId === terminalId);
   const { worktrees } = useWorktrees();
 
-  const handleDuplicate = async () => {
+  const handleDuplicate = useCallback(async () => {
     if (!terminal) return;
     try {
       await addTerminal({
@@ -76,154 +53,159 @@ export function TerminalContextMenu({
     } catch (error) {
       console.error("Failed to duplicate terminal:", error);
     }
-  };
+  }, [addTerminal, terminal]);
 
-  const handleClearBuffer = () => {
+  const handleClearBuffer = useCallback(() => {
     const managed = terminalInstanceService.get(terminalId);
     if (managed?.terminal) {
       // VS Code-style clear: clear the frontend buffer only and let the
       // shell decide how to handle `clear`/`reset` commands.
       managed.terminal.clear();
     }
-  };
+  }, [terminalId]);
 
-  const handleForceResume = () => {
+  const handleForceResume = useCallback(() => {
     terminalClient.forceResume(terminalId).catch((error) => {
       console.error("Failed to force resume terminal:", error);
     });
-  };
+  }, [terminalId]);
 
-  if (!terminal) return <>{children}</>;
+  const isPaused = terminal?.flowStatus === "paused-backpressure";
 
-  const isPaused = terminal.flowStatus === "paused-backpressure";
+  const currentLocation: TerminalLocation = forceLocation ?? terminal?.location ?? "grid";
 
-  const currentLocation: TerminalLocation = forceLocation ?? terminal.location ?? "grid";
+  const worktreeSubmenu = useMemo((): MenuItemOption[] => {
+    if (!terminal) return [];
+    return worktrees.map((wt) => {
+      const isCurrent = wt.id === terminal.worktreeId;
+      const label = (wt.branch || wt.name).trim();
+      return {
+        id: `move-to-worktree:${wt.id}`,
+        label,
+        enabled: !isCurrent,
+      };
+    });
+  }, [terminal, worktrees]);
+
+  const template = useMemo((): MenuItemOption[] => {
+    if (!terminal) return [];
+    const layoutItems: MenuItemOption[] = [
+      currentLocation === "grid"
+        ? { id: "move-to-dock", label: "Move to Dock" }
+        : { id: "move-to-grid", label: "Move to Grid" },
+    ];
+
+    if (currentLocation === "grid") {
+      layoutItems.push({
+        id: "toggle-maximize",
+        label: isMaximized ? "Restore Size" : "Maximize",
+        sublabel: "^⇧F",
+      });
+    }
+
+    if (worktrees.length > 1 && worktreeSubmenu.length > 0) {
+      layoutItems.push({
+        id: "move-to-worktree",
+        label: "Move to Worktree",
+        submenu: worktreeSubmenu,
+      });
+    }
+
+    const actions: MenuItemOption[] = [
+      ...layoutItems,
+      { type: "separator" },
+      { id: "restart", label: "Restart Terminal" },
+      ...(isPaused ? [{ id: "force-resume", label: "Force Resume (Paused)" }] : []),
+      { id: "duplicate", label: "Duplicate Terminal" },
+      { id: "rename", label: "Rename Terminal" },
+      { id: "clear-scrollback", label: "Clear Scrollback" },
+      { id: "view-info", label: "View Terminal Info" },
+      { type: "separator" },
+      { id: "trash", label: "Trash Terminal" },
+      { id: "kill", label: "Kill Terminal" },
+    ];
+
+    return actions;
+  }, [currentLocation, isMaximized, isPaused, terminal, worktrees.length, worktreeSubmenu]);
+
+  const handleContextMenu = useCallback(
+    async (event: React.MouseEvent) => {
+      if (!terminal) return;
+      const actionId = await showMenu(event, template);
+      if (!actionId) return;
+
+      if (actionId.startsWith("move-to-worktree:")) {
+        const worktreeId = actionId.slice("move-to-worktree:".length);
+        setFocused(null);
+        moveTerminalToWorktree(terminalId, worktreeId);
+        return;
+      }
+
+      switch (actionId) {
+        case "move-to-dock":
+          moveTerminalToDock(terminalId);
+          break;
+        case "move-to-grid":
+          moveTerminalToGrid(terminalId);
+          break;
+        case "toggle-maximize":
+          toggleMaximize(terminalId);
+          break;
+        case "restart":
+          restartTerminal(terminalId);
+          break;
+        case "force-resume":
+          handleForceResume();
+          break;
+        case "duplicate":
+          void handleDuplicate();
+          break;
+        case "rename":
+          window.dispatchEvent(
+            new CustomEvent("canopy:rename-terminal", { detail: { id: terminalId } })
+          );
+          break;
+        case "clear-scrollback":
+          handleClearBuffer();
+          break;
+        case "view-info":
+          setIsInfoDialogOpen(true);
+          break;
+        case "trash":
+          trashTerminal(terminalId);
+          break;
+        case "kill":
+          removeTerminal(terminalId);
+          break;
+      }
+    },
+    [
+      handleClearBuffer,
+      handleDuplicate,
+      handleForceResume,
+      moveTerminalToDock,
+      moveTerminalToGrid,
+      moveTerminalToWorktree,
+      removeTerminal,
+      restartTerminal,
+      setFocused,
+      showMenu,
+      terminal,
+      template,
+      terminalId,
+      toggleMaximize,
+      trashTerminal,
+    ]
+  );
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-      <ContextMenuContent className="w-56">
-        {/* Layout Actions */}
-        {currentLocation === "grid" ? (
-          <ContextMenuItem onClick={() => moveTerminalToDock(terminalId)}>
-            <ArrowDownToLine className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-            Move to Dock
-          </ContextMenuItem>
-        ) : (
-          <ContextMenuItem onClick={() => moveTerminalToGrid(terminalId)}>
-            <ArrowUp className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-            Move to Grid
-          </ContextMenuItem>
-        )}
-
-        {currentLocation === "grid" && (
-          <ContextMenuItem onClick={() => toggleMaximize(terminalId)}>
-            {isMaximized ? (
-              <>
-                <Minimize2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                Restore Size
-                <ContextMenuShortcut>^⇧F</ContextMenuShortcut>
-              </>
-            ) : (
-              <>
-                <Maximize2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                Maximize
-                <ContextMenuShortcut>^⇧F</ContextMenuShortcut>
-              </>
-            )}
-          </ContextMenuItem>
-        )}
-
-        {worktrees.length > 1 && (
-          <ContextMenuSub>
-            <ContextMenuSubTrigger>
-              <GitBranch className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-              Move to Worktree
-            </ContextMenuSubTrigger>
-            <ContextMenuSubContent className="w-48">
-              {worktrees.map((wt) => {
-                const isCurrent = wt.id === terminal?.worktreeId;
-                const label = wt.branch || wt.name;
-                return (
-                  <ContextMenuItem
-                    key={wt.id}
-                    onClick={() => {
-                      setFocused(null);
-                      moveTerminalToWorktree(terminalId, wt.id);
-                    }}
-                    disabled={isCurrent}
-                  >
-                    <span className={wt.isMainWorktree ? "font-semibold" : ""}>{label}</span>
-                  </ContextMenuItem>
-                );
-              })}
-            </ContextMenuSubContent>
-          </ContextMenuSub>
-        )}
-
-        <ContextMenuSeparator />
-
-        <ContextMenuItem onClick={() => restartTerminal(terminalId)}>
-          <RotateCcw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-          Restart Terminal
-        </ContextMenuItem>
-
-        {isPaused && (
-          <ContextMenuItem onClick={handleForceResume}>
-            <Play className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-            Force Resume (Paused)
-          </ContextMenuItem>
-        )}
-
-        <ContextMenuItem onClick={handleDuplicate}>
-          <Copy className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-          Duplicate Terminal
-        </ContextMenuItem>
-
-        <ContextMenuItem
-          onClick={() =>
-            window.dispatchEvent(
-              new CustomEvent("canopy:rename-terminal", { detail: { id: terminalId } })
-            )
-          }
-        >
-          <PenLine className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-          Rename Terminal
-        </ContextMenuItem>
-
-        <ContextMenuItem onClick={handleClearBuffer}>
-          <Eraser className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-          Clear Scrollback
-        </ContextMenuItem>
-
-        <ContextMenuItem onClick={() => setIsInfoDialogOpen(true)}>
-          <Info className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-          View Terminal Info
-        </ContextMenuItem>
-
-        <ContextMenuSeparator />
-
-        <ContextMenuItem
-          onClick={() => trashTerminal(terminalId)}
-          className="text-[var(--color-status-error)] focus:text-[var(--color-status-error)]"
-        >
-          <Trash2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-          Trash Terminal
-        </ContextMenuItem>
-
-        <ContextMenuItem
-          onClick={() => removeTerminal(terminalId)}
-          className="text-[var(--color-status-error)] focus:text-[var(--color-status-error)]"
-        >
-          <X className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-          Kill Terminal
-        </ContextMenuItem>
-      </ContextMenuContent>
+    <div onContextMenu={handleContextMenu} className="contents">
+      {children}
       <TerminalInfoDialog
         isOpen={isInfoDialogOpen}
         onClose={() => setIsInfoDialogOpen(false)}
         terminalId={terminalId}
       />
-    </ContextMenu>
+    </div>
   );
 }

@@ -272,3 +272,6 @@ export type {
   ProjectPulse,
   GetProjectPulseOptions,
 } from "./pulse.js";
+
+// Native menu types - renderer → main menu templates
+export type { MenuItemOption, ShowContextMenuPayload } from "./menu.js";

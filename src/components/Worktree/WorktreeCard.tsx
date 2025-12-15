@@ -1,4 +1,5 @@
 import { useCallback, useState, useEffect, useMemo, useRef } from "react";
+import type React from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { WorktreeState, AgentState } from "../../types";
 import { ActivityLight } from "./ActivityLight";
@@ -29,18 +30,6 @@ import {
   DropdownMenuTrigger,
   DropdownMenuLabel,
 } from "../ui/dropdown-menu";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuShortcut,
-  ContextMenuSeparator,
-  ContextMenuSub,
-  ContextMenuSubContent,
-  ContextMenuSubTrigger,
-  ContextMenuTrigger,
-  ContextMenuLabel,
-} from "../ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../ui/tooltip";
 import { ConfirmDialog } from "../Terminal/ConfirmDialog";
 import { WorktreeDeleteDialog } from "./WorktreeDeleteDialog";
@@ -67,6 +56,8 @@ import {
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { STATE_ICONS, STATE_COLORS, STATE_LABELS, STATE_PRIORITY } from "./terminalStateConfig";
+import { useNativeContextMenu } from "@/hooks";
+import type { MenuItemOption } from "@/types";
 
 interface StateIconProps {
   state: AgentState;
@@ -132,6 +123,7 @@ export function WorktreeCard({
   agentSettings,
   homeDir,
 }: WorktreeCardProps) {
+  const { showMenu } = useNativeContextMenu();
   const isExpanded = useWorktreeSelectionStore(
     useCallback((state) => state.expandedWorktrees.has(worktree.id), [worktree.id])
   );
@@ -584,17 +576,224 @@ export function WorktreeCard({
     []
   );
 
-  const contextComponents = useMemo(
-    () => ({
-      Item: ContextMenuItem,
-      Label: ContextMenuLabel,
-      Separator: ContextMenuSeparator,
-      Shortcut: ContextMenuShortcut,
-      Sub: ContextMenuSub,
-      SubTrigger: ContextMenuSubTrigger,
-      SubContent: ContextMenuSubContent,
-    }),
-    []
+  const contextMenuTemplate = useMemo((): MenuItemOption[] => {
+    const template: MenuItemOption[] = [
+      { id: "label:launch", label: "Launch", enabled: false },
+      { id: "launch:claude", label: "Claude", enabled: Boolean(onLaunchAgent && isClaudeEnabled) },
+      { id: "launch:gemini", label: "Gemini", enabled: Boolean(onLaunchAgent && isGeminiEnabled) },
+      { id: "launch:codex", label: "Codex", enabled: Boolean(onLaunchAgent && isCodexEnabled) },
+      { id: "launch:terminal", label: "Open Terminal", enabled: Boolean(onLaunchAgent) },
+      { type: "separator" },
+
+      { id: "label:sessions", label: "Sessions", enabled: false },
+      {
+        id: "sessions:minimize-all",
+        label: `Minimize All (${gridCount})`,
+        enabled: gridCount > 0,
+      },
+      {
+        id: "sessions:maximize-all",
+        label: `Maximize All (${dockCount})`,
+        enabled: dockCount > 0,
+      },
+      {
+        id: "sessions:restart-all",
+        label: `${isRestartValidating ? "Checking..." : "Restart All"} (${totalTerminalCount})`,
+        enabled: totalTerminalCount > 0 && !isRestartValidating,
+      },
+      { type: "separator" },
+
+      {
+        id: "sessions:close-completed",
+        label: `Close Completed (${completedCount})`,
+        enabled: completedCount > 0,
+      },
+      {
+        id: "sessions:close-failed",
+        label: `Close Failed (${failedCount})`,
+        enabled: failedCount > 0,
+      },
+      { type: "separator" },
+
+      {
+        id: "sessions:close-all",
+        label: `Close All (Trash) (${totalTerminalCount})`,
+        enabled: totalTerminalCount > 0,
+      },
+      {
+        id: "sessions:end-all",
+        label: `End All (Kill) (${allTerminalCount})`,
+        enabled: allTerminalCount > 0,
+      },
+      { type: "separator" },
+
+      { id: "label:worktree", label: "Worktree", enabled: false },
+      { id: "worktree:copy-context", label: "Copy Context" },
+      { id: "worktree:open-editor", label: "Open in Editor" },
+      { id: "worktree:reveal", label: "Reveal in Finder" },
+    ];
+
+    const hasIssueItem = Boolean(worktree.issueNumber && onOpenIssue);
+    const hasPrItem = Boolean(worktree.prNumber && onOpenPR);
+    if (hasIssueItem || hasPrItem) {
+      template.push({ type: "separator" });
+      if (hasIssueItem) {
+        template.push({
+          id: "worktree:open-issue",
+          label: `Open Issue #${worktree.issueNumber}`,
+        });
+      }
+      if (hasPrItem) {
+        template.push({
+          id: "worktree:open-pr",
+          label: `Open PR #${worktree.prNumber}`,
+        });
+      }
+    }
+
+    const hasRecipeSection =
+      recipes.length > 0 || !!onCreateRecipe || (onSaveLayout && totalTerminalCount > 0);
+    if (hasRecipeSection) {
+      template.push({ type: "separator" });
+      template.push({ id: "label:recipes", label: "Recipes", enabled: false });
+
+      if (recipes.length > 0) {
+        template.push({
+          id: "recipes:run",
+          label: "Run Recipe",
+          submenu: recipes.map((recipe) => ({
+            id: `recipes:run:${recipe.id}`,
+            label: recipe.name,
+            enabled: runningRecipeId === null,
+          })),
+        });
+      }
+
+      if (onCreateRecipe) {
+        template.push({ id: "recipes:create", label: "Create Recipe..." });
+      }
+
+      if (onSaveLayout && totalTerminalCount > 0) {
+        template.push({ id: "recipes:save-layout", label: "Save Layout as Recipe" });
+      }
+    }
+
+    if (!isMainWorktree) {
+      template.push({ type: "separator" });
+      template.push({
+        id: "worktree:delete",
+        label: "Delete Worktree...",
+      });
+    }
+
+    return template;
+  }, [
+    allTerminalCount,
+    completedCount,
+    dockCount,
+    failedCount,
+    gridCount,
+    isClaudeEnabled,
+    isCodexEnabled,
+    isGeminiEnabled,
+    isMainWorktree,
+    isRestartValidating,
+    onCreateRecipe,
+    onLaunchAgent,
+    onOpenIssue,
+    onOpenPR,
+    onSaveLayout,
+    recipes,
+    runningRecipeId,
+    totalTerminalCount,
+    worktree.issueNumber,
+    worktree.prNumber,
+  ]);
+
+  const handleContextMenu = useCallback(
+    async (event: React.MouseEvent) => {
+      const actionId = await showMenu(event, contextMenuTemplate);
+      if (!actionId) return;
+
+      if (actionId.startsWith("launch:")) {
+        handleLaunchAgent(actionId.slice("launch:".length));
+        return;
+      }
+
+      if (actionId.startsWith("recipes:run:")) {
+        const recipeId = actionId.slice("recipes:run:".length);
+        void handleRunRecipe(recipeId);
+        return;
+      }
+
+      switch (actionId) {
+        case "sessions:minimize-all":
+          handleMinimizeAll();
+          break;
+        case "sessions:maximize-all":
+          handleMaximizeAll();
+          break;
+        case "sessions:restart-all":
+          void handleRestartAll();
+          break;
+        case "sessions:close-completed":
+          handleCloseCompleted();
+          break;
+        case "sessions:close-failed":
+          handleCloseFailed();
+          break;
+        case "sessions:close-all":
+          handleCloseAll();
+          break;
+        case "sessions:end-all":
+          handleEndAll();
+          break;
+        case "worktree:copy-context":
+          void handleCopyTree();
+          break;
+        case "worktree:open-editor":
+          onOpenEditor();
+          break;
+        case "worktree:reveal":
+          handlePathClick();
+          break;
+        case "worktree:open-issue":
+          handleOpenIssue();
+          break;
+        case "worktree:open-pr":
+          handleOpenPR();
+          break;
+        case "recipes:create":
+          onCreateRecipe?.();
+          break;
+        case "recipes:save-layout":
+          onSaveLayout?.();
+          break;
+        case "worktree:delete":
+          setShowDeleteDialog(true);
+          break;
+      }
+    },
+    [
+      contextMenuTemplate,
+      handleCloseAll,
+      handleCloseCompleted,
+      handleCloseFailed,
+      handleCopyTree,
+      handleEndAll,
+      handleLaunchAgent,
+      handleMaximizeAll,
+      handleMinimizeAll,
+      handleOpenIssue,
+      handleOpenPR,
+      handlePathClick,
+      handleRestartAll,
+      handleRunRecipe,
+      onCreateRecipe,
+      onOpenEditor,
+      onSaveLayout,
+      showMenu,
+    ]
   );
 
   const cardContent = (
@@ -613,6 +812,7 @@ export function WorktreeCard({
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
       )}
       onClick={onSelect}
+      onContextMenu={handleContextMenu}
       onKeyDown={(e) => {
         if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
           e.preventDefault();
@@ -1096,52 +1296,5 @@ export function WorktreeCard({
     </div>
   );
 
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>{cardContent}</ContextMenuTrigger>
-      <ContextMenuContent onClick={(e) => e.stopPropagation()}>
-        <WorktreeMenuItems
-          worktree={worktree}
-          components={contextComponents}
-          isClaudeEnabled={Boolean(isClaudeEnabled)}
-          isGeminiEnabled={Boolean(isGeminiEnabled)}
-          isCodexEnabled={Boolean(isCodexEnabled)}
-          recipes={recipes}
-          runningRecipeId={runningRecipeId}
-          isRestartValidating={isRestartValidating}
-          counts={{
-            grid: gridCount,
-            dock: dockCount,
-            active: totalTerminalCount,
-            completed: completedCount,
-            failed: failedCount,
-            all: allTerminalCount,
-          }}
-          onLaunchAgent={onLaunchAgent ? (agentId) => handleLaunchAgent(agentId) : undefined}
-          onCopyContext={() => void handleCopyTree()}
-          onOpenEditor={onOpenEditor}
-          onRevealInFinder={handlePathClick}
-          onOpenIssue={worktree.issueNumber && onOpenIssue ? handleOpenIssue : undefined}
-          onOpenPR={worktree.prNumber && onOpenPR ? handleOpenPR : undefined}
-          onRunRecipe={(recipeId) => void handleRunRecipe(recipeId)}
-          onCreateRecipe={onCreateRecipe}
-          onSaveLayout={onSaveLayout}
-          onMinimizeAll={handleMinimizeAll}
-          onMaximizeAll={handleMaximizeAll}
-          onRestartAll={() => void handleRestartAll()}
-          onCloseCompleted={handleCloseCompleted}
-          onCloseFailed={handleCloseFailed}
-          onCloseAll={handleCloseAll}
-          onEndAll={handleEndAll}
-          onDeleteWorktree={
-            !isMainWorktree
-              ? () => {
-                  setShowDeleteDialog(true);
-                }
-              : undefined
-          }
-        />
-      </ContextMenuContent>
-    </ContextMenu>
-  );
+  return cardContent;
 }

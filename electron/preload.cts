@@ -43,6 +43,7 @@ import type {
   SidecarNewTabMenuAction,
   SidecarShowNewTabMenuPayload,
 } from "../shared/types/sidecar.js";
+import type { ShowContextMenuPayload } from "../shared/types/menu.js";
 
 export type { ElectronAPI };
 
@@ -174,6 +175,7 @@ const CHANNELS = {
   APP_GET_VERSION: "app:get-version",
   APP_HYDRATE: "app:hydrate",
   MENU_ACTION: "menu:action",
+  MENU_SHOW_CONTEXT: "menu:show-context",
 
   // Logs channels
   LOGS_GET_ALL: "logs:get-all",
@@ -493,6 +495,11 @@ const api: ElectronAPI = {
     hydrate: () => _typedInvoke(CHANNELS.APP_HYDRATE),
 
     onMenuAction: (callback: (action: string) => void) => _typedOn(CHANNELS.MENU_ACTION, callback),
+  },
+
+  menu: {
+    showContext: (payload: ShowContextMenuPayload) =>
+      _typedInvoke(CHANNELS.MENU_SHOW_CONTEXT, payload),
   },
 
   // Logs API

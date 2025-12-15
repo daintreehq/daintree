@@ -51,6 +51,7 @@ import type { HibernationConfig } from "./hibernation.js";
 import type { SystemSleepMetrics } from "./systemSleep.js";
 import type { KeyAction } from "../keymap.js";
 import type { TerminalStatusPayload } from "../pty-host.js";
+import type { ShowContextMenuPayload } from "../menu.js";
 
 // ElectronAPI Type (exposed via preload)
 
@@ -140,6 +141,9 @@ export interface ElectronAPI {
     getVersion(): Promise<string>;
     hydrate(): Promise<HydrateResult>;
     onMenuAction(callback: (action: string) => void): () => void;
+  };
+  menu: {
+    showContext(payload: ShowContextMenuPayload): Promise<string | null>;
   };
   logs: {
     getAll(filters?: LogFilterOptions): Promise<LogEntry[]>;

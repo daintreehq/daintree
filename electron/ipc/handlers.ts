@@ -18,6 +18,7 @@ import { registerSystemSleepHandlers } from "./handlers/systemSleep.js";
 import { registerKeybindingHandlers } from "./handlers/keybinding.js";
 import { registerWorktreeConfigHandlers } from "./handlers/worktreeConfig.js";
 import { registerNotificationHandlers } from "./handlers/notifications.js";
+import { registerMenuHandlers } from "./handlers/menu.js";
 import { typedHandle, typedSend, sendToRenderer } from "./utils.js";
 
 export { typedHandle, typedSend, sendToRenderer };
@@ -48,6 +49,7 @@ export function registerIpcHandlers(
     registerGithubHandlers(deps),
     registerAppHandlers(deps),
     registerSidecarHandlers(deps),
+    registerMenuHandlers(deps),
     registerHibernationHandlers(deps),
     registerSystemSleepHandlers(deps),
     registerKeybindingHandlers(deps),

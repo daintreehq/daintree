@@ -58,6 +58,7 @@ import type { GitGetFileDiffPayload } from "./git.js";
 import type { TerminalConfig } from "./config.js";
 import type { SystemSleepMetrics } from "./systemSleep.js";
 import type { TerminalFlowStatus } from "../pty-host.js";
+import type { ShowContextMenuPayload } from "../menu.js";
 
 // IPC Contract Maps
 
@@ -239,6 +240,10 @@ export interface IpcInvokeMap {
   "app:hydrate": {
     args: [];
     result: HydrateResult;
+  };
+  "menu:show-context": {
+    args: [payload: ShowContextMenuPayload];
+    result: string | null;
   };
 
   // Logs channels

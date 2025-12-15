@@ -1,10 +1,10 @@
 import { useMemo, useRef, useCallback } from "react";
+import type React from "react";
 import { useShallow } from "zustand/react/shallow";
 import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
 import { useDroppable } from "@dnd-kit/core";
-import { ChevronLeft, ChevronRight, Terminal } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getBrandColorHex } from "@/lib/colorUtils";
 import { useTerminalStore, useProjectStore, useWorktreeSelectionStore } from "@/store";
 import { DockedTerminalItem } from "./DockedTerminalItem";
 import { TrashContainer } from "./TrashContainer";
@@ -14,24 +14,20 @@ import {
   SortableDockPlaceholder,
   DOCK_PLACEHOLDER_ID,
 } from "@/components/DragDrop";
-import { ClaudeIcon, GeminiIcon, CodexIcon } from "@/components/icons";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
 import { useAgentLauncher } from "@/hooks/useAgentLauncher";
 import { useWorktrees } from "@/hooks/useWorktrees";
+import { useNativeContextMenu } from "@/hooks";
+import type { MenuItemOption } from "@/types";
 
 const AGENT_OPTIONS = [
-  { type: "claude" as const, label: "Claude", Icon: ClaudeIcon },
-  { type: "gemini" as const, label: "Gemini", Icon: GeminiIcon },
-  { type: "codex" as const, label: "Codex", Icon: CodexIcon },
-  { type: "terminal" as const, label: "Terminal", Icon: Terminal },
+  { type: "claude" as const, label: "Claude" },
+  { type: "gemini" as const, label: "Gemini" },
+  { type: "codex" as const, label: "Codex" },
+  { type: "terminal" as const, label: "Terminal" },
 ];
 
 export function TerminalDock() {
+  const { showMenu } = useNativeContextMenu();
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
 
   const dockTerminals = useTerminalStore(
@@ -88,6 +84,23 @@ export function TerminalDock() {
     [launchAgent, cwd]
   );
 
+  const handleContextMenu = useCallback(
+    async (event: React.MouseEvent) => {
+      const template: MenuItemOption[] = AGENT_OPTIONS.map(({ type, label }) => ({
+        id: `new:${type}`,
+        label: `New ${label}`,
+      }));
+
+      const actionId = await showMenu(event, template);
+      if (!actionId) return;
+
+      if (actionId.startsWith("new:")) {
+        handleAddTerminal(actionId.slice("new:".length));
+      }
+    },
+    [handleAddTerminal, showMenu]
+  );
+
   const trashedItems = Array.from(trashedTerminals.values())
     .map((trashed) => ({
       terminal: terminals.find((t) => t.id === trashed.id),
@@ -109,97 +122,79 @@ export function TerminalDock() {
   }, [activeDockTerminals]);
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <div
-          className={cn(
-            "bg-canopy-bg/95 backdrop-blur-sm border-t-2 border-canopy-border/60 shadow-[0_-4px_12px_rgba(0,0,0,0.3)]",
-            "flex items-center px-1.5 py-1 gap-1.5",
-            "z-40 shrink-0"
-          )}
-          role="list"
+    <div
+      onContextMenu={handleContextMenu}
+      className={cn(
+        "bg-canopy-bg/95 backdrop-blur-sm border-t-2 border-canopy-border/60 shadow-[0_-4px_12px_rgba(0,0,0,0.3)]",
+        "flex items-center px-1.5 py-1 gap-1.5",
+        "z-40 shrink-0"
+      )}
+      role="list"
+    >
+      <div className="flex items-center gap-1 flex-1 min-w-0">
+        {/* Left Scroll Chevron */}
+        <button
+          onClick={() => handleScroll("left")}
+          disabled={activeDockTerminals.length === 0}
+          className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/10 rounded transition-colors shrink-0 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-canopy-text/40 disabled:hover:bg-transparent"
+          aria-label="Scroll left"
+          title="Scroll left"
         >
-          <div className="flex items-center gap-1 flex-1 min-w-0">
-            {/* Left Scroll Chevron */}
-            <button
-              onClick={() => handleScroll("left")}
-              disabled={activeDockTerminals.length === 0}
-              className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/10 rounded transition-colors shrink-0 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-canopy-text/40 disabled:hover:bg-transparent"
-              aria-label="Scroll left"
-              title="Scroll left"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
+          <ChevronLeft className="w-4 h-4" />
+        </button>
 
-            {/* Scrollable Container - min-h ensures droppable area when empty */}
-            <div
-              ref={combinedRef}
-              className={cn(
-                "flex items-center gap-1.5 overflow-x-auto flex-1 min-h-[36px] no-scrollbar scroll-smooth px-1",
-                isOver &&
-                  "bg-white/[0.03] ring-2 ring-canopy-accent/30 ring-inset rounded-[var(--radius-md)]"
-              )}
-            >
-              <SortableContext
-                id="dock-container"
-                items={terminalIds}
-                strategy={horizontalListSortingStrategy}
-              >
-                {/* min-w/min-h prevent dnd-kit measureRects loop when empty
-                    (dnd-kit measures first child, which collapses to 0×0 without this) */}
-                <div className="flex items-center gap-1.5 min-w-[100px] min-h-[32px]">
-                  {activeDockTerminals.length === 0 ? (
-                    <SortableDockPlaceholder />
-                  ) : (
-                    activeDockTerminals.map((terminal, index) => (
-                      <SortableDockItem key={terminal.id} terminal={terminal} sourceIndex={index}>
-                        <DockedTerminalItem terminal={terminal} />
-                      </SortableDockItem>
-                    ))
-                  )}
-                </div>
-              </SortableContext>
-            </div>
-
-            {/* Right Scroll Chevron */}
-            <button
-              onClick={() => handleScroll("right")}
-              disabled={activeDockTerminals.length === 0}
-              className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/10 rounded transition-colors shrink-0 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-canopy-text/40 disabled:hover:bg-transparent"
-              aria-label="Scroll right"
-              title="Scroll right"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          </div>
-
-          {/* Separator between terminals and action containers */}
-          {activeDockTerminals.length > 0 && (
-            <div className="w-px h-5 bg-canopy-border mx-1 shrink-0" />
+        {/* Scrollable Container - min-h ensures droppable area when empty */}
+        <div
+          ref={combinedRef}
+          className={cn(
+            "flex items-center gap-1.5 overflow-x-auto flex-1 min-h-[36px] no-scrollbar scroll-smooth px-1",
+            isOver &&
+              "bg-white/[0.03] ring-2 ring-canopy-accent/30 ring-inset rounded-[var(--radius-md)]"
           )}
-
-          {/* Action containers: Waiting + Trash */}
-          <div className="shrink-0 pl-1 flex items-center gap-1.5">
-            <WaitingContainer />
-            <TrashContainer trashedTerminals={trashedItems} />
-          </div>
-        </div>
-      </ContextMenuTrigger>
-      <ContextMenuContent className="w-48">
-        {AGENT_OPTIONS.map(({ type, label, Icon }) => (
-          <ContextMenuItem
-            key={type}
-            onClick={() => handleAddTerminal(type)}
-            className="flex items-center gap-2"
+        >
+          <SortableContext
+            id="dock-container"
+            items={terminalIds}
+            strategy={horizontalListSortingStrategy}
           >
-            <Icon
-              className="w-4 h-4"
-              style={type !== "terminal" ? { color: getBrandColorHex(type) } : undefined}
-            />
-            <span>New {label}</span>
-          </ContextMenuItem>
-        ))}
-      </ContextMenuContent>
-    </ContextMenu>
+            {/* min-w/min-h prevent dnd-kit measureRects loop when empty
+                    (dnd-kit measures first child, which collapses to 0×0 without this) */}
+            <div className="flex items-center gap-1.5 min-w-[100px] min-h-[32px]">
+              {activeDockTerminals.length === 0 ? (
+                <SortableDockPlaceholder />
+              ) : (
+                activeDockTerminals.map((terminal, index) => (
+                  <SortableDockItem key={terminal.id} terminal={terminal} sourceIndex={index}>
+                    <DockedTerminalItem terminal={terminal} />
+                  </SortableDockItem>
+                ))
+              )}
+            </div>
+          </SortableContext>
+        </div>
+
+        {/* Right Scroll Chevron */}
+        <button
+          onClick={() => handleScroll("right")}
+          disabled={activeDockTerminals.length === 0}
+          className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/10 rounded transition-colors shrink-0 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-canopy-text/40 disabled:hover:bg-transparent"
+          aria-label="Scroll right"
+          title="Scroll right"
+        >
+          <ChevronRight className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* Separator between terminals and action containers */}
+      {activeDockTerminals.length > 0 && (
+        <div className="w-px h-5 bg-canopy-border mx-1 shrink-0" />
+      )}
+
+      {/* Action containers: Waiting + Trash */}
+      <div className="shrink-0 pl-1 flex items-center gap-1.5">
+        <WaitingContainer />
+        <TrashContainer trashedTerminals={trashedItems} />
+      </div>
+    </div>
   );
 }

@@ -45,3 +45,5 @@ export type { UseWorktreeActionsOptions, WorktreeActions } from "./useWorktreeAc
 
 export { useMenuActions } from "./useMenuActions";
 export type { UseMenuActionsOptions } from "./useMenuActions";
+
+export { useNativeContextMenu } from "./useNativeContextMenu";

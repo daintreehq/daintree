@@ -1,15 +1,6 @@
-import { memo } from "react";
-import {
-  ArrowLeft,
-  ArrowRight,
-  RotateCw,
-  X,
-  Plus,
-  ExternalLink,
-  Link2,
-  Copy,
-  Trash2,
-} from "lucide-react";
+import { memo, useCallback, useMemo } from "react";
+import type React from "react";
+import { ArrowLeft, ArrowRight, RotateCw, X, Plus, ExternalLink, Link2 } from "lucide-react";
 import {
   DndContext,
   closestCorners,
@@ -30,13 +21,8 @@ import type { SidecarTab, SidecarLink } from "@shared/types";
 import { cn } from "@/lib/utils";
 import { useSidecarStore } from "@/store/sidecarStore";
 import { SidecarIcon } from "./SidecarIcon";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+import { useNativeContextMenu } from "@/hooks";
+import type { MenuItemOption } from "@/types";
 
 const noopTabAction = (_tabId: string) => {};
 
@@ -67,6 +53,7 @@ const SortableTab = memo(function SortableTab({
   tabCount: number;
   tabIndex: number;
 }) {
+  const { showMenu } = useNativeContextMenu();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: tab.id,
     transition: {
@@ -85,86 +72,111 @@ const SortableTab = memo(function SortableTab({
   const hasTabsToRight = tabIndex < tabCount - 1;
   const hasOtherTabs = tabCount > 1;
 
+  const template = useMemo((): MenuItemOption[] => {
+    return [
+      { id: "duplicate", label: "Duplicate", enabled: hasUrl },
+      { id: "reload", label: "Reload", enabled: hasUrl },
+      { type: "separator" },
+      { id: "copy-url", label: "Copy URL", enabled: hasUrl },
+      { id: "open-external", label: "Open in Browser", enabled: hasUrl },
+      { type: "separator" },
+      { id: "close", label: "Close" },
+      { id: "close-others", label: "Close Others", enabled: hasOtherTabs },
+      { id: "close-to-right", label: "Close to Right", enabled: hasTabsToRight },
+    ];
+  }, [hasOtherTabs, hasTabsToRight, hasUrl]);
+
+  const handleContextMenu = useCallback(
+    async (event: React.MouseEvent) => {
+      if (isDragging) return;
+
+      const actionId = await showMenu(event, template);
+      if (!actionId) return;
+
+      switch (actionId) {
+        case "duplicate":
+          onDuplicate(tab.id);
+          break;
+        case "reload":
+          onReload(tab.id);
+          break;
+        case "copy-url":
+          onCopyUrl(tab.id);
+          break;
+        case "open-external":
+          onOpenExternal(tab.id);
+          break;
+        case "close":
+          onClose(tab.id);
+          break;
+        case "close-others":
+          onCloseOthers(tab.id);
+          break;
+        case "close-to-right":
+          onCloseToRight(tab.id);
+          break;
+      }
+    },
+    [
+      isDragging,
+      onClose,
+      onCloseOthers,
+      onCloseToRight,
+      onCopyUrl,
+      onDuplicate,
+      onOpenExternal,
+      onReload,
+      showMenu,
+      tab.id,
+      template,
+    ]
+  );
+
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild disabled={isDragging}>
-        <div
-          ref={setNodeRef}
-          style={style}
-          {...attributes}
-          {...listeners}
-          role="tab"
-          aria-selected={isActive}
-          aria-label={tab.title}
-          tabIndex={isActive ? 0 : -1}
-          onClick={() => onClick(tab.id)}
-          className={cn(
-            "group relative flex items-center gap-2 px-3 py-1.5 text-xs font-medium cursor-pointer select-none transition-all",
-            "rounded-full border shadow-sm",
-            "min-w-[80px] max-w-[200px]",
-            isActive
-              ? "bg-foreground text-background border-foreground/20 ring-1 ring-foreground/30"
-              : "bg-canopy-border text-canopy-text border-canopy-border hover:bg-canopy-border/80 hover:text-foreground hover:border-canopy-border",
-            isDragging && "opacity-80 scale-105 shadow-xl cursor-grabbing"
-          )}
-        >
-          {tab.icon && (
-            <div className="flex-shrink-0">
-              <SidecarIcon icon={tab.icon} size="tab" url={tab.url ?? undefined} />
-            </div>
-          )}
-          <span className="truncate max-w-[120px]">{tab.title}</span>
-          <button
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              onClose(tab.id);
-            }}
-            aria-label={`Close ${tab.title}`}
-            className={cn(
-              "p-0.5 rounded-full transition-colors ml-1",
-              isActive
-                ? "text-background hover:text-background hover:bg-foreground/20"
-                : "text-muted-foreground hover:text-foreground hover:bg-canopy-bg opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-            )}
-          >
-            <X className="w-3 h-3" />
-          </button>
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      role="tab"
+      aria-selected={isActive}
+      aria-label={tab.title}
+      tabIndex={isActive ? 0 : -1}
+      onClick={() => onClick(tab.id)}
+      onContextMenu={handleContextMenu}
+      className={cn(
+        "group relative flex items-center gap-2 px-3 py-1.5 text-xs font-medium cursor-pointer select-none transition-all",
+        "rounded-full border shadow-sm",
+        "min-w-[80px] max-w-[200px]",
+        isActive
+          ? "bg-foreground text-background border-foreground/20 ring-1 ring-foreground/30"
+          : "bg-canopy-border text-canopy-text border-canopy-border hover:bg-canopy-border/80 hover:text-foreground hover:border-canopy-border",
+        isDragging && "opacity-80 scale-105 shadow-xl cursor-grabbing"
+      )}
+    >
+      {tab.icon && (
+        <div className="flex-shrink-0">
+          <SidecarIcon icon={tab.icon} size="tab" url={tab.url ?? undefined} />
         </div>
-      </ContextMenuTrigger>
-      <ContextMenuContent>
-        <ContextMenuItem onSelect={() => onDuplicate(tab.id)} disabled={!hasUrl}>
-          <Copy className="w-3.5 h-3.5 mr-2" />
-          Duplicate
-        </ContextMenuItem>
-        <ContextMenuItem onSelect={() => onReload(tab.id)} disabled={!hasUrl}>
-          <RotateCw className="w-3.5 h-3.5 mr-2" />
-          Reload
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem onSelect={() => onCopyUrl(tab.id)} disabled={!hasUrl}>
-          <Link2 className="w-3.5 h-3.5 mr-2" />
-          Copy URL
-        </ContextMenuItem>
-        <ContextMenuItem onSelect={() => onOpenExternal(tab.id)} disabled={!hasUrl}>
-          <ExternalLink className="w-3.5 h-3.5 mr-2" />
-          Open in Browser
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem onSelect={() => onClose(tab.id)}>
-          <X className="w-3.5 h-3.5 mr-2" />
-          Close
-        </ContextMenuItem>
-        <ContextMenuItem onSelect={() => onCloseOthers(tab.id)} disabled={!hasOtherTabs}>
-          <Trash2 className="w-3.5 h-3.5 mr-2" />
-          Close Others
-        </ContextMenuItem>
-        <ContextMenuItem onSelect={() => onCloseToRight(tab.id)} disabled={!hasTabsToRight}>
-          <Trash2 className="w-3.5 h-3.5 mr-2" />
-          Close to Right
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
+      )}
+      <span className="truncate max-w-[120px]">{tab.title}</span>
+      <button
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose(tab.id);
+        }}
+        aria-label={`Close ${tab.title}`}
+        className={cn(
+          "p-0.5 rounded-full transition-colors ml-1",
+          isActive
+            ? "text-background hover:text-background hover:bg-foreground/20"
+            : "text-muted-foreground hover:text-foreground hover:bg-canopy-bg opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+        )}
+      >
+        <X className="w-3 h-3" />
+      </button>
+    </div>
   );
 });
 
