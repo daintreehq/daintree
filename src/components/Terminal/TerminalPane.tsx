@@ -291,21 +291,19 @@ function TerminalPaneComponent({
     terminalInstanceService.setFocused(id, isFocused);
 
     if (isFocused) {
-      requestAnimationFrame(() => {
-        const focusTarget = getTerminalFocusTarget({
-          isAgentTerminal,
-          isInputDisabled: isBackendDisconnected || isBackendRecovering,
-          hybridInputEnabled,
-          hybridInputAutoFocus,
-        });
-
-        if (focusTarget === "hybridInput") {
-          inputBarRef.current?.focus();
-          return;
-        }
-
-        terminalInstanceService.focus(id);
+      const focusTarget = getTerminalFocusTarget({
+        isAgentTerminal,
+        isInputDisabled: isBackendDisconnected || isBackendRecovering,
+        hybridInputEnabled,
+        hybridInputAutoFocus,
       });
+
+      if (focusTarget === "hybridInput") {
+        inputBarRef.current?.focus();
+        return;
+      }
+
+      requestAnimationFrame(() => terminalInstanceService.focus(id));
     }
   }, [
     id,

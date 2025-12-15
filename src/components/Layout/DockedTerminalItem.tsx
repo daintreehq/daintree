@@ -5,10 +5,16 @@ import { Loader2 } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
-import { useTerminalStore, useSidecarStore, type TerminalInstance } from "@/store";
+import {
+  useTerminalInputStore,
+  useTerminalStore,
+  useSidecarStore,
+  type TerminalInstance,
+} from "@/store";
 import { DockedTerminalPane } from "@/components/Terminal/DockedTerminalPane";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
+import { getTerminalFocusTarget } from "@/components/Terminal/terminalFocus";
 import type { AgentState } from "@/types";
 import { TerminalRefreshTier } from "@/types";
 import { terminalClient } from "@/clients";
@@ -43,6 +49,9 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   const activeDockTerminalId = useTerminalStore((s) => s.activeDockTerminalId);
   const openDockTerminal = useTerminalStore((s) => s.openDockTerminal);
   const closeDockTerminal = useTerminalStore((s) => s.closeDockTerminal);
+  const backendStatus = useTerminalStore((s) => s.backendStatus);
+  const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
+  const hybridInputAutoFocus = useTerminalInputStore((s) => s.hybridInputAutoFocus);
 
   // Derive isOpen from store state
   const isOpen = activeDockTerminalId === terminal.id;
@@ -233,6 +242,17 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
         onEscapeKeyDown={(e) => e.preventDefault()}
         onOpenAutoFocus={(event) => {
           event.preventDefault();
+          const focusTarget = getTerminalFocusTarget({
+            isAgentTerminal: terminal.type !== "terminal",
+            isInputDisabled: backendStatus === "disconnected" || backendStatus === "recovering",
+            hybridInputEnabled,
+            hybridInputAutoFocus,
+          });
+
+          if (focusTarget === "hybridInput") {
+            return;
+          }
+
           // Small delay to ensure xterm is fully mounted before focusing
           setTimeout(() => terminalInstanceService.focus(terminal.id), 50);
         }}
