@@ -16,6 +16,7 @@ import { buildTerminalSendPayload } from "@/lib/terminalInput";
 import { useFileAutocomplete } from "@/hooks/useFileAutocomplete";
 import { useSlashCommandAutocomplete } from "@/hooks/useSlashCommandAutocomplete";
 import { AutocompleteMenu, type AutocompleteItem } from "./AutocompleteMenu";
+import { isEnterLikeLineBreakInputEvent } from "./hybridInputEvents";
 import {
   formatAtFileToken,
   getAtFileContext,
@@ -87,8 +88,8 @@ function getTextOffsetLeftPx(textarea: HTMLTextAreaElement, charIndex: number): 
 export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarProps>(
   ({ onSend, onSendKey, cwd, agentId, disabled = false, className }, ref) => {
     const [value, setValue] = useState("");
-    const [isComposing, setIsComposing] = useState(false);
     const allowNextLineBreakRef = useRef(false);
+    const handledEnterRef = useRef(false);
     const textareaRef = useRef<HTMLTextAreaElement | null>(null);
     const inputShellRef = useRef<HTMLDivElement | null>(null);
     const menuRef = useRef<HTMLDivElement | null>(null);
@@ -268,7 +269,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       (event: KeyboardEvent<HTMLTextAreaElement>): boolean => {
         if (!onSendKey) return false;
         if (disabled) return false;
-        if (isComposing || event.nativeEvent.isComposing) return false;
+        if (event.nativeEvent.isComposing) return false;
 
         const isEmpty = value.trim().length === 0;
 
@@ -336,7 +337,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
         return false;
       },
-      [disabled, isAutocompleteOpen, isComposing, onSendKey, value]
+      [disabled, isAutocompleteOpen, onSendKey, value]
     );
 
     const refreshContextsFromTextarea = useCallback(() => {
@@ -494,8 +495,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 setSlashContext(null);
                 setAtContext(getAtFileContext(text, caret));
               }}
-              onCompositionStart={() => setIsComposing(true)}
-              onCompositionEnd={() => setIsComposing(false)}
               placeholder={placeholder}
               rows={1}
               spellCheck={false}
@@ -511,16 +510,19 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 if (root && nextTarget && root.contains(nextTarget)) return;
                 setAtContext(null);
                 setSlashContext(null);
+                allowNextLineBreakRef.current = false;
+                handledEnterRef.current = false;
               }}
               onBeforeInput={(e) => {
                 if (disabled) return;
-                if (isComposing) return;
                 const nativeEvent = e.nativeEvent as InputEvent;
+                if (!isEnterLikeLineBreakInputEvent(nativeEvent)) return;
                 if (nativeEvent.isComposing) return;
-                if (
-                  nativeEvent.inputType !== "insertLineBreak" &&
-                  nativeEvent.inputType !== "insertParagraph"
-                ) {
+
+                if (handledEnterRef.current) {
+                  handledEnterRef.current = false;
+                  e.preventDefault();
+                  e.stopPropagation();
                   return;
                 }
 
@@ -548,7 +550,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               }}
               onKeyDownCapture={(e) => {
                 if (disabled) return;
-                if (isComposing || e.nativeEvent.isComposing) return;
+                const isEnter =
+                  e.key === "Enter" ||
+                  e.key === "Return" ||
+                  e.code === "Enter" ||
+                  e.code === "NumpadEnter";
+                if (isEnter) {
+                  allowNextLineBreakRef.current = e.shiftKey;
+                }
+
+                if (e.nativeEvent.isComposing) return;
 
                 if (isAutocompleteOpen) {
                   const resultsCount = autocompleteItems.length;
@@ -581,6 +592,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                   if (resultsCount > 0 && e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
                     e.stopPropagation();
+                    handledEnterRef.current = true;
+                    setTimeout(() => {
+                      handledEnterRef.current = false;
+                    }, 0);
                     const action =
                       activeMode === "command" ? ("execute" as const) : ("insert" as const);
                     applyAutocompleteItem(autocompleteItems[selectedIndex], action);
@@ -592,19 +607,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                   return;
                 }
 
-                const isEnter =
-                  e.key === "Enter" ||
-                  e.key === "Return" ||
-                  e.code === "Enter" ||
-                  e.code === "NumpadEnter";
-                if (isEnter && e.shiftKey) {
-                  allowNextLineBreakRef.current = true;
-                  return;
-                }
-                allowNextLineBreakRef.current = false;
                 if (isEnter) {
+                  if (e.shiftKey) return;
                   e.preventDefault();
                   e.stopPropagation();
+                  handledEnterRef.current = true;
+                  setTimeout(() => {
+                    handledEnterRef.current = false;
+                  }, 0);
                   send();
                 }
               }}
