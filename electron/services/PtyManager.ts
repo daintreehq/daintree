@@ -217,6 +217,19 @@ export class PtyManager extends EventEmitter {
   }
 
   /**
+   * Submit text as a command to the terminal.
+   * Handles bracketed paste and CR timing on the backend for reliable execution.
+   */
+  submit(id: string, text: string): void {
+    const terminal = this.terminals.get(id);
+    if (!terminal) {
+      console.warn(`Terminal ${id} not found, cannot submit`);
+      return;
+    }
+    terminal.submit(text);
+  }
+
+  /**
    * Resize terminal.
    */
   resize(id: string, cols: number, rows: number): void {

@@ -190,6 +190,24 @@ function XtermAdapterComponent({
           }
           return false;
         }
+
+        if (
+          (event.key === "Enter" || event.key === "Return" || event.code === "NumpadEnter") &&
+          !event.shiftKey &&
+          !event.ctrlKey &&
+          !event.altKey &&
+          !event.metaKey
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (event.type === "keydown") {
+            const submit = "\r";
+            terminalClient.write(terminalId, submit);
+            terminalInstanceService.notifyUserInput(terminalId);
+            onInput?.(submit);
+          }
+          return false;
+        }
         return true;
       });
       managed.keyHandlerInstalled = true;

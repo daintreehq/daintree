@@ -753,6 +753,10 @@ port.on("message", async (rawMsg: any) => {
         ptyManager.write(msg.id, msg.data, msg.traceId);
         break;
 
+      case "submit":
+        ptyManager.submit(msg.id, msg.text);
+        break;
+
       case "resize":
         ptyManager.resize(msg.id, msg.cols, msg.rows);
         break;

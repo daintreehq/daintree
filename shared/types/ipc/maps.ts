@@ -103,6 +103,10 @@ export interface IpcInvokeMap {
     args: [options: TerminalSpawnOptions];
     result: string;
   };
+  "terminal:submit": {
+    args: [id: string, text: string];
+    result: void;
+  };
   "terminal:kill": {
     args: [id: string];
     result: void;

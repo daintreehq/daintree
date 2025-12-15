@@ -643,6 +643,30 @@ export class TerminalProcess {
   }
 
   /**
+   * Submit text as a command to the terminal.
+   * Handles bracketed paste for multiline/long inputs and ensures execution via CR.
+   * This is the robust way to send input from the HybridInputBar.
+   */
+  submit(text: string): void {
+    const terminal = this.terminalInfo;
+    terminal.lastInputTime = Date.now();
+
+    if (!terminal.ptyProcess) {
+      return;
+    }
+
+    // Write text + Enter directly to PTY (bypass this.write() to avoid any side effects)
+    try {
+      if (text.length > 0) {
+        terminal.ptyProcess.write(text);
+      }
+      terminal.ptyProcess.write("\r");
+    } catch (error) {
+      console.error(`[TerminalProcess] submit error for ${this.id}:`, error);
+    }
+  }
+
+  /**
    * Resize terminal.
    */
   resize(cols: number, rows: number): void {

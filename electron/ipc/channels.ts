@@ -13,6 +13,7 @@ export const CHANNELS = {
   TERMINAL_SPAWN: "terminal:spawn",
   TERMINAL_DATA: "terminal:data",
   TERMINAL_INPUT: "terminal:input",
+  TERMINAL_SUBMIT: "terminal:submit",
   TERMINAL_RESIZE: "terminal:resize",
   TERMINAL_KILL: "terminal:kill",
   TERMINAL_EXIT: "terminal:exit",

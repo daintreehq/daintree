@@ -48,6 +48,15 @@ export const terminalClient = {
     }
   },
 
+  /**
+   * Submit text as a command to the terminal.
+   * This handles bracketed paste wrapping and CR timing on the backend
+   * for reliable command execution across all CLIs.
+   */
+  submit: (id: string, text: string): Promise<void> => {
+    return window.electron.terminal.submit(id, text);
+  },
+
   resize: (id: string, cols: number, rows: number): void => {
     if (messagePort) {
       try {

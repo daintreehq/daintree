@@ -202,4 +202,3 @@ Rollback should be trivial:
 - Keep all terminal functionality unchanged.
 
 If the experiment is not a clear win, remove it and preserve any standalone improvements (e.g., bracketed paste robustness) that are generally useful.
-

@@ -96,6 +96,7 @@ const CHANNELS = {
   TERMINAL_SPAWN: "terminal:spawn",
   TERMINAL_DATA: "terminal:data",
   TERMINAL_INPUT: "terminal:input",
+  TERMINAL_SUBMIT: "terminal:submit",
   TERMINAL_RESIZE: "terminal:resize",
   TERMINAL_KILL: "terminal:kill",
   TERMINAL_EXIT: "terminal:exit",
@@ -310,6 +311,8 @@ const api: ElectronAPI = {
     spawn: (options: TerminalSpawnOptions) => _typedInvoke(CHANNELS.TERMINAL_SPAWN, options),
 
     write: (id: string, data: string) => ipcRenderer.send(CHANNELS.TERMINAL_INPUT, id, data),
+
+    submit: (id: string, text: string) => _typedInvoke(CHANNELS.TERMINAL_SUBMIT, id, text),
 
     resize: (id: string, cols: number, rows: number) =>
       ipcRenderer.send(CHANNELS.TERMINAL_RESIZE, { id, cols, rows }),

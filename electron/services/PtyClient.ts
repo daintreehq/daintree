@@ -708,6 +708,10 @@ export class PtyClient extends EventEmitter {
     this.send({ type: "write", id, data, traceId });
   }
 
+  submit(id: string, text: string): void {
+    this.send({ type: "submit", id, text });
+  }
+
   resize(id: string, cols: number, rows: number): void {
     this.send({ type: "resize", id, cols, rows });
   }

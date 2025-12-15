@@ -33,6 +33,7 @@ export type PtyHostRequest =
   | { type: "spawn"; id: string; options: PtyHostSpawnOptions }
   | { type: "resize"; id: string; cols: number; rows: number }
   | { type: "write"; id: string; data: string; traceId?: string }
+  | { type: "submit"; id: string; text: string }
   | { type: "kill"; id: string; reason?: string }
   | { type: "trash"; id: string }
   | { type: "restore"; id: string }

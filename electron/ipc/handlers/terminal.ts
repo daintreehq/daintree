@@ -199,6 +199,24 @@ export function registerTerminalHandlers(deps: HandlerDependencies): () => void 
   ipcMain.on(CHANNELS.TERMINAL_INPUT, handleTerminalInput);
   handlers.push(() => ipcMain.removeListener(CHANNELS.TERMINAL_INPUT, handleTerminalInput));
 
+  const handleTerminalSubmit = async (
+    _event: Electron.IpcMainInvokeEvent,
+    id: string,
+    text: string
+  ) => {
+    try {
+      if (typeof id !== "string" || typeof text !== "string") {
+        throw new Error("Invalid terminal submit parameters");
+      }
+      ptyClient.submit(id, text);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to submit to terminal: ${errorMessage}`);
+    }
+  };
+  ipcMain.handle(CHANNELS.TERMINAL_SUBMIT, handleTerminalSubmit);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_SUBMIT));
+
   const handleTerminalResize = (_event: Electron.IpcMainEvent, payload: TerminalResizePayload) => {
     try {
       const parseResult = TerminalResizePayloadSchema.safeParse(payload);

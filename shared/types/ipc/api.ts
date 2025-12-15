@@ -72,6 +72,7 @@ export interface ElectronAPI {
   terminal: {
     spawn(options: TerminalSpawnOptions): Promise<string>;
     write(id: string, data: string): void;
+    submit(id: string, text: string): Promise<void>;
     resize(id: string, cols: number, rows: number): void;
     kill(id: string): Promise<void>;
     trash(id: string): Promise<void>;
