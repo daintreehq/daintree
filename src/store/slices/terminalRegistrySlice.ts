@@ -15,6 +15,12 @@ import { TerminalRefreshTier } from "@/types";
 import { terminalPersistence } from "../persistence/terminalPersistence";
 import { validateTerminalConfig } from "@/utils/terminalValidation";
 import { isRegisteredAgent, getAgentConfig } from "@/config/agents";
+import { getTerminalThemeFromCSS } from "@/utils/terminalTheme";
+import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
+import { useScrollbackStore } from "@/store/scrollbackStore";
+import { usePerformanceModeStore } from "@/store/performanceModeStore";
+import { useTerminalFontStore } from "@/store/terminalFontStore";
+import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 
 export const MAX_GRID_TERMINALS = 16;
 
@@ -191,6 +197,48 @@ export const createTerminalRegistrySlice =
           });
         }
 
+        // Prewarm renderer-side xterm immediately so we never drop startup output/ANSI while hidden.
+        // For docked terminals, also open + fit offscreen so the PTY starts with correct dimensions.
+        try {
+          const { scrollbackLines } = useScrollbackStore.getState();
+          const { performanceMode } = usePerformanceModeStore.getState();
+          const { fontSize, fontFamily } = useTerminalFontStore.getState();
+
+          const effectiveScrollback = performanceMode
+            ? PERFORMANCE_MODE_SCROLLBACK
+            : getScrollbackForType(legacyType, scrollbackLines);
+
+          const terminalOptions = {
+            cursorBlink: true,
+            cursorStyle: "block" as const,
+            cursorInactiveStyle: "block" as const,
+            fontSize,
+            lineHeight: 1.1,
+            letterSpacing: 0,
+            fontFamily: fontFamily || DEFAULT_TERMINAL_FONT_FAMILY,
+            fontLigatures: false,
+            fontWeight: "normal" as const,
+            fontWeightBold: "700" as const,
+            theme: getTerminalThemeFromCSS(),
+            allowProposedApi: true,
+            smoothScrollDuration: performanceMode ? 0 : 0,
+            scrollback: effectiveScrollback,
+            macOptionIsMeta: true,
+            scrollOnUserInput: false,
+            fastScrollModifier: "alt" as const,
+            fastScrollSensitivity: 5,
+            scrollSensitivity: 1.5,
+          };
+
+          terminalInstanceService.prewarmTerminal(id, legacyType, terminalOptions, {
+            offscreen: location === "dock",
+            widthPx: DOCK_TERM_WIDTH,
+            heightPx: DOCK_TERM_HEIGHT,
+          });
+        } catch (error) {
+          console.warn(`[TerminalStore] Failed to prewarm terminal ${id}:`, error);
+        }
+
         // Determine if this is an agent terminal (by agentId or legacy type)
         const isAgent = kind === "agent";
 
@@ -223,7 +271,8 @@ export const createTerminalRegistrySlice =
         });
 
         if (location === "dock") {
-          optimizeForDock(id);
+          // Terminal is already sized via offscreen fit; keep background policy.
+          terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
         }
 
         return id;

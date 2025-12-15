@@ -22,10 +22,97 @@ class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
   private dataBuffer: TerminalDataBuffer;
   private suppressedExitUntil = new Map<string, number>();
+  private hiddenContainer: HTMLDivElement | null = null;
+  private offscreenSlots = new Map<string, HTMLDivElement>();
 
   constructor() {
     this.dataBuffer = new TerminalDataBuffer((id, data) => this.writeToTerminal(id, data));
     this.dataBuffer.initialize();
+  }
+
+  private ensureHiddenContainer(): HTMLDivElement | null {
+    if (this.hiddenContainer) return this.hiddenContainer;
+    if (typeof document === "undefined") return null;
+
+    const container = document.createElement("div");
+    container.className = "terminal-offscreen-container";
+    container.style.cssText = [
+      "position: fixed",
+      "left: -20000px",
+      "top: 0",
+      "width: 2000px",
+      "height: 2000px",
+      "overflow: hidden",
+      "opacity: 0",
+      "pointer-events: none",
+    ].join(";");
+    document.body.appendChild(container);
+
+    this.hiddenContainer = container;
+    return this.hiddenContainer;
+  }
+
+  private getOrCreateOffscreenSlot(id: string, widthPx: number, heightPx: number): HTMLDivElement {
+    if (typeof document === "undefined") {
+      throw new Error("Offscreen slot requires DOM");
+    }
+
+    const existing = this.offscreenSlots.get(id);
+    if (existing) {
+      existing.style.width = `${widthPx}px`;
+      existing.style.height = `${heightPx}px`;
+      return existing;
+    }
+
+    const hiddenContainer = this.ensureHiddenContainer();
+    if (!hiddenContainer) {
+      throw new Error("Offscreen container unavailable");
+    }
+
+    const slot = document.createElement("div");
+    slot.dataset.terminalId = id;
+    slot.style.width = `${widthPx}px`;
+    slot.style.height = `${heightPx}px`;
+    slot.style.position = "absolute";
+    slot.style.left = "0";
+    slot.style.top = "0";
+    hiddenContainer.appendChild(slot);
+
+    this.offscreenSlots.set(id, slot);
+    return slot;
+  }
+
+  /**
+   * Ensure a renderer-side xterm instance exists and is subscribed to output immediately.
+   * If `offscreen` is enabled, the terminal is opened into a hidden DOM slot and fit/resized
+   * so the PTY starts with correct dimensions even before any UI mounts.
+   */
+  prewarmTerminal(
+    id: string,
+    type: TerminalType,
+    options: ConstructorParameters<typeof Terminal>[0],
+    params: { offscreen?: boolean; widthPx?: number; heightPx?: number } = {}
+  ): ManagedTerminal {
+    const managed = this.getOrCreate(
+      id,
+      type,
+      options,
+      () => TerminalRefreshTier.BACKGROUND,
+      undefined
+    );
+
+    if (!params.offscreen) {
+      return managed;
+    }
+
+    const widthPx = params.widthPx ?? 800;
+    const heightPx = params.heightPx ?? 600;
+    const slot = this.getOrCreateOffscreenSlot(id, widthPx, heightPx);
+    this.attach(id, slot);
+
+    // Establish correct geometry early so TUIs don't render using the 80x24 spawn default.
+    this.fit(id);
+    return managed;
   }
 
   /**
@@ -117,6 +204,10 @@ class TerminalInstanceService {
     const existing = this.instances.get(id);
     if (existing) {
       existing.getRefreshTier = getRefreshTier;
+      // Keep existing terminal instance but sync its options to match the latest UI/config.
+      if (options) {
+        this.updateOptions(id, options);
+      }
       return existing;
     }
 
@@ -246,7 +337,18 @@ class TerminalInstanceService {
     if (!managed || !container) return;
 
     if (managed.hostElement.parentElement === container) {
-      container.removeChild(managed.hostElement);
+      // Preserve renderer state by reparenting into the offscreen container rather than removing.
+      const slot = this.offscreenSlots.get(id);
+      if (slot) {
+        slot.appendChild(managed.hostElement);
+      } else {
+        const hiddenContainer = this.ensureHiddenContainer();
+        if (hiddenContainer) {
+          hiddenContainer.appendChild(managed.hostElement);
+        } else {
+          container.removeChild(managed.hostElement);
+        }
+      }
     }
     managed.lastDetachAt = Date.now();
   }
@@ -799,6 +901,12 @@ class TerminalInstanceService {
     if (managed.hostElement.parentElement) {
       managed.hostElement.parentElement.removeChild(managed.hostElement);
     }
+
+    const slot = this.offscreenSlots.get(id);
+    if (slot && slot.parentElement) {
+      slot.parentElement.removeChild(slot);
+    }
+    this.offscreenSlots.delete(id);
   }
 
   dispose(): void {

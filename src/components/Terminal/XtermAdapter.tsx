@@ -8,6 +8,7 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useScrollbackStore, usePerformanceModeStore, useTerminalFontStore } from "@/store";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
+import { CANOPY_TERMINAL_THEME, getTerminalThemeFromCSS } from "@/utils/terminalTheme";
 
 export interface XtermAdapterProps {
   terminalId: string;
@@ -20,75 +21,7 @@ export interface XtermAdapterProps {
   getRefreshTier?: () => TerminalRefreshTier;
 }
 
-const CANOPY_TERMINAL_THEME_FALLBACK = {
-  background: "#18181b",
-  foreground: "#e4e4e7",
-  cursor: "#10b981",
-  cursorAccent: "#18181b",
-  selectionBackground: "#064e3b",
-  selectionForeground: "#e4e4e7",
-  black: "#18181b",
-  red: "#f87171",
-  green: "#10b981",
-  yellow: "#fbbf24",
-  blue: "#38bdf8",
-  magenta: "#a855f7",
-  cyan: "#22d3ee",
-  white: "#e4e4e7",
-  brightBlack: "#52525b",
-  brightRed: "#fca5a5",
-  brightGreen: "#34d399",
-  brightYellow: "#fcd34d",
-  brightBlue: "#7dd3fc",
-  brightMagenta: "#c084fc",
-  brightCyan: "#67e8f9",
-  brightWhite: "#fafafa",
-};
-
-let cachedTerminalTheme: typeof CANOPY_TERMINAL_THEME_FALLBACK | null = null;
-
-function getTerminalThemeFromCSS(): typeof CANOPY_TERMINAL_THEME_FALLBACK {
-  if (cachedTerminalTheme) return cachedTerminalTheme;
-
-  const styles = getComputedStyle(document.documentElement);
-  const getVar = (name: string, fallback: string): string => {
-    const value = styles.getPropertyValue(name).trim();
-    return value || fallback;
-  };
-
-  cachedTerminalTheme = {
-    background: getVar("--color-canopy-bg", CANOPY_TERMINAL_THEME_FALLBACK.background),
-    foreground: getVar("--color-canopy-text", CANOPY_TERMINAL_THEME_FALLBACK.foreground),
-    cursor: getVar("--color-canopy-accent", CANOPY_TERMINAL_THEME_FALLBACK.cursor),
-    cursorAccent: getVar("--color-canopy-bg", CANOPY_TERMINAL_THEME_FALLBACK.cursorAccent),
-    selectionBackground: "#064e3b", // Keep hardcoded - specific to terminal selection
-    selectionForeground: getVar(
-      "--color-canopy-text",
-      CANOPY_TERMINAL_THEME_FALLBACK.selectionForeground
-    ),
-    black: getVar("--color-canopy-bg", CANOPY_TERMINAL_THEME_FALLBACK.black),
-    red: getVar("--color-status-error", CANOPY_TERMINAL_THEME_FALLBACK.red),
-    green: getVar("--color-canopy-accent", CANOPY_TERMINAL_THEME_FALLBACK.green),
-    yellow: getVar("--color-status-warning", CANOPY_TERMINAL_THEME_FALLBACK.yellow),
-    blue: getVar("--color-status-info", CANOPY_TERMINAL_THEME_FALLBACK.blue),
-    magenta: "#a855f7", // No token, keep as-is
-    cyan: "#22d3ee", // No token, keep as-is
-    white: getVar("--color-canopy-text", CANOPY_TERMINAL_THEME_FALLBACK.white),
-    brightBlack: getVar("--color-state-idle", CANOPY_TERMINAL_THEME_FALLBACK.brightBlack),
-    brightRed: "#fca5a5", // Bright variant, no token
-    brightGreen: getVar("--color-canopy-success", CANOPY_TERMINAL_THEME_FALLBACK.brightGreen),
-    brightYellow: "#fcd34d", // Bright variant, no token
-    brightBlue: "#7dd3fc", // Bright variant, no token
-    brightMagenta: "#c084fc", // Bright variant, no token
-    brightCyan: "#67e8f9", // Bright variant, no token
-    brightWhite: "#fafafa", // Near-white, no token needed
-  };
-
-  return cachedTerminalTheme;
-}
-
-export { getTerminalThemeFromCSS };
-export const CANOPY_TERMINAL_THEME = CANOPY_TERMINAL_THEME_FALLBACK;
+export { getTerminalThemeFromCSS, CANOPY_TERMINAL_THEME };
 
 const MIN_CONTAINER_SIZE = 50;
 
