@@ -19,7 +19,8 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { InputTracker } from "@/services/clearCommandDetection";
 import { getAgentConfig } from "@/config/agents";
 import { terminalClient } from "@/clients";
-import { HybridInputBar } from "./HybridInputBar";
+import { HybridInputBar, type HybridInputBarHandle } from "./HybridInputBar";
+import { getTerminalFocusTarget } from "./terminalFocus";
 
 export type { TerminalType };
 
@@ -84,6 +85,7 @@ function TerminalPaneComponent({
   const containerRef = useRef<HTMLDivElement>(null);
   const prevFocusedRef = useRef(isFocused);
   const justFocusedUntilRef = useRef<number>(0);
+  const inputBarRef = useRef<HybridInputBarHandle>(null);
   const [isRestoring, setIsRestoring] = useState(true);
   const [dismissedRestartPrompt, setDismissedRestartPrompt] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -282,10 +284,20 @@ function TerminalPaneComponent({
 
     if (isFocused) {
       requestAnimationFrame(() => {
+        const focusTarget = getTerminalFocusTarget({
+          isAgentTerminal: showHybridInputBar,
+          isInputDisabled: isBackendDisconnected || isBackendRecovering,
+        });
+
+        if (focusTarget === "hybridInput") {
+          inputBarRef.current?.focus();
+          return;
+        }
+
         terminalInstanceService.focus(id);
       });
     }
-  }, [isFocused, id]);
+  }, [id, isFocused, showHybridInputBar, isBackendDisconnected, isBackendRecovering]);
 
   // Sync agent state to terminal service for scroll management
   useEffect(() => {
@@ -519,6 +531,7 @@ function TerminalPaneComponent({
 
         {showHybridInputBar && (
           <HybridInputBar
+            ref={inputBarRef}
             disabled={isBackendDisconnected || isBackendRecovering}
             onSend={({ trackerData, text }) => {
               terminalInstanceService.notifyUserInput(id);
