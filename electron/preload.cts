@@ -105,6 +105,8 @@ const CHANNELS = {
   TERMINAL_TRASHED: "terminal:trashed",
   TERMINAL_RESTORED: "terminal:restored",
   TERMINAL_FLUSH: "terminal:flush",
+  TERMINAL_SET_ACTIVITY_TIER: "terminal:set-activity-tier",
+  TERMINAL_WAKE: "terminal:wake",
   TERMINAL_GET_FOR_PROJECT: "terminal:get-for-project",
   TERMINAL_RECONNECT: "terminal:reconnect",
   TERMINAL_REPLAY_HISTORY: "terminal:replay-history",
@@ -364,6 +366,12 @@ const api: ElectronAPI = {
       _typedOn(CHANNELS.TERMINAL_RESTORED, callback),
 
     flush: (id: string) => _typedInvoke(CHANNELS.TERMINAL_FLUSH, id),
+
+    setActivityTier: (id: string, tier: "active" | "background") =>
+      ipcRenderer.send(CHANNELS.TERMINAL_SET_ACTIVITY_TIER, { id, tier }),
+
+    wake: (id: string): Promise<{ state: string | null; warnings?: string[] }> =>
+      _typedInvoke(CHANNELS.TERMINAL_WAKE, id),
 
     acknowledgeData: (id: string, length: number) =>
       ipcRenderer.send(CHANNELS.TERMINAL_ACKNOWLEDGE_DATA, { id, length }),

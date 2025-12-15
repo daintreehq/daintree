@@ -37,6 +37,12 @@ export type PtyHostRequest =
   | { type: "trash"; id: string }
   | { type: "restore"; id: string }
   | { type: "flush-buffer"; id: string }
+  | { type: "set-activity-tier"; id: string; tier: PtyHostActivityTier }
+  | { type: "wake-terminal"; id: string; requestId: string }
+  | { type: "set-active-project"; projectId: string | null }
+  | { type: "project-switch"; projectId: string }
+  | { type: "kill-by-project"; projectId: string; requestId: string }
+  | { type: "get-project-stats"; projectId: string; requestId: string }
   | { type: "get-snapshot"; id: string }
   | { type: "get-all-snapshots" }
   | { type: "mark-checked"; id: string }
@@ -89,6 +95,19 @@ export type PtyHostEvent =
   | { type: "data"; id: string; data: string }
   | { type: "exit"; id: string; exitCode: number }
   | { type: "error"; id: string; error: string }
+  | {
+      type: "wake-result";
+      requestId: string;
+      id: string;
+      state: string | null;
+      warnings?: string[];
+    }
+  | { type: "kill-by-project-result"; requestId: string; killed: number }
+  | {
+      type: "project-stats";
+      requestId: string;
+      stats: { terminalCount: number; processIds: number[]; terminalTypes: Record<string, number> };
+    }
   | {
       type: "agent-state";
       id: string;
@@ -210,7 +229,10 @@ export interface AgentKilledPayload {
 }
 
 /** Terminal flow control status */
-export type TerminalFlowStatus = "running" | "paused-backpressure" | "paused-user";
+export type TerminalFlowStatus = "running" | "paused-backpressure" | "paused-user" | "suspended";
+
+/** Terminal activity tier (streaming policy) */
+export type PtyHostActivityTier = "active" | "background";
 
 /** Crash type classification based on exit codes */
 export type CrashType =

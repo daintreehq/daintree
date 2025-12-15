@@ -287,8 +287,8 @@ export interface TerminalInstance {
   isRestarting?: boolean;
   /** Restart failure error - set when restart fails, cleared on success or manual action */
   restartError?: TerminalRestartError;
-  /** Flow control status - indicates if terminal is paused due to backpressure */
-  flowStatus?: "running" | "paused-backpressure" | "paused-user";
+  /** Flow control status - indicates if terminal is paused/suspended due to backpressure or safety policy */
+  flowStatus?: "running" | "paused-backpressure" | "paused-user" | "suspended";
   /** Timestamp when flow status last changed */
   flowStatusTimestamp?: number;
 }

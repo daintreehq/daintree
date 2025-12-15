@@ -24,6 +24,7 @@ import type {
   PtyHostEvent,
   PtyHostTerminalSnapshot,
   TerminalFlowStatus,
+  PtyHostActivityTier,
 } from "../shared/types/pty-host.js";
 
 function getEmergencyLogPath(): string {
@@ -233,6 +234,10 @@ const pauseStartTimes = new Map<string, number>();
 
 // Track current terminal flow status to avoid duplicate events
 const terminalStatuses = new Map<string, TerminalFlowStatus>();
+const terminalActivityTiers = new Map<string, PtyHostActivityTier>();
+const suspendedDueToStall = new Set<string>();
+
+const STREAM_STALL_SUSPEND_MS = 2000;
 
 // Resume threshold - use hysteresis to prevent rapid pause/resume oscillation
 const BACKPRESSURE_RESUME_THRESHOLD = 80; // Resume when buffer drops below 80%
@@ -278,6 +283,11 @@ function toStringForIpc(data: string | Uint8Array): string {
 
 // Wire up PtyManager events
 ptyManager.on("data", (id: string, data: string | Uint8Array) => {
+  const tier = terminalActivityTiers.get(id) ?? "active";
+  const isSuspended = suspendedDueToStall.has(id);
+  if (tier !== "active" || isSuspended) {
+    return;
+  }
   // ---------------------------------------------------------------------------
   // PRIORITY 1: VISUAL RENDERER (Zero-Latency Path)
   // Write to SharedArrayBuffer immediately before doing ANY processing.
@@ -350,6 +360,30 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
 
             const currentUtilization = visualBuffer.getUtilization();
             const pauseDuration = Date.now() - pauseStartTime;
+
+            // If the stream is stalled for too long, stop streaming for this terminal
+            // and rely on headless state + explicit wake to restore fidelity.
+            if (pauseDuration > STREAM_STALL_SUSPEND_MS) {
+              const terminal = ptyManager.getTerminal(id);
+              if (terminal?.ptyProcess) {
+                try {
+                  terminal.ptyProcess.resume();
+                } catch {
+                  // ignore
+                }
+              }
+
+              suspendedDueToStall.add(id);
+              emitTerminalStatus(id, "suspended", currentUtilization, pauseDuration);
+              console.warn(
+                `[PtyHost] Suspended streaming for ${id} after ${pauseDuration}ms stall (buffer ${currentUtilization.toFixed(1)}%).`
+              );
+
+              clearInterval(checkInterval);
+              pausedTerminals.delete(id);
+              pauseStartTimes.delete(id);
+              return;
+            }
 
             // Force resume if paused too long (safety against indefinite pause)
             if (pauseDuration > BACKPRESSURE_MAX_PAUSE_MS) {
@@ -438,6 +472,8 @@ ptyManager.on("exit", (id: string, exitCode: number) => {
   }
   pauseStartTimes.delete(id);
   terminalStatuses.delete(id);
+  terminalActivityTiers.delete(id);
+  suspendedDueToStall.delete(id);
 
   sendEvent({ type: "exit", id, exitCode });
 });
@@ -590,7 +626,7 @@ function toHostSnapshot(id: string): PtyHostTerminalSnapshot | null {
 }
 
 // Handle requests from Main
-port.on("message", (rawMsg: any) => {
+port.on("message", async (rawMsg: any) => {
   // Electron/Node might wrap the message in { data: ..., ports: [] }
   const msg = rawMsg?.data ? rawMsg.data : rawMsg;
   const ports = rawMsg?.ports || [];
@@ -670,6 +706,17 @@ port.on("message", (rawMsg: any) => {
         break;
       }
 
+      case "set-active-project": {
+        ptyManager.setActiveProject(msg.projectId);
+        break;
+      }
+
+      case "project-switch": {
+        ptyManager.onProjectSwitch(msg.projectId);
+        ptyManager.setActiveProject(msg.projectId);
+        break;
+      }
+
       case "spawn":
         ptyManager.spawn(msg.id, msg.options);
         break;
@@ -697,6 +744,82 @@ port.on("message", (rawMsg: any) => {
       case "flush-buffer":
         ptyManager.flushBuffer(msg.id);
         break;
+
+      case "set-activity-tier": {
+        const tier = msg.tier === "background" ? "background" : "active";
+        terminalActivityTiers.set(msg.id, tier);
+
+        // If tier flips, clear any stall suspension and unblock the PTY.
+        suspendedDueToStall.delete(msg.id);
+
+        const checkInterval = pausedTerminals.get(msg.id);
+        if (checkInterval) {
+          clearInterval(checkInterval);
+          pausedTerminals.delete(msg.id);
+        }
+        pauseStartTimes.delete(msg.id);
+
+        const terminal = ptyManager.getTerminal(msg.id);
+        if (terminal?.ptyProcess) {
+          try {
+            terminal.ptyProcess.resume();
+          } catch {
+            // ignore
+          }
+        }
+
+        emitTerminalStatus(msg.id, "running");
+        break;
+      }
+
+      case "wake-terminal": {
+        // Wake implies we want a faithful snapshot + resume streaming.
+        terminalActivityTiers.set(msg.id, "active");
+        suspendedDueToStall.delete(msg.id);
+
+        // Best-effort warning: cwd missing
+        const warnings: string[] = [];
+        try {
+          const terminal = ptyManager.getTerminal(msg.id);
+          if (terminal?.cwd && typeof terminal.cwd === "string") {
+            const fs = await import("node:fs");
+            if (!fs.existsSync(terminal.cwd)) {
+              warnings.push("cwd-missing");
+            }
+          }
+        } catch {
+          // ignore
+        }
+
+        let state: string | null = null;
+        try {
+          state = await ptyManager.getSerializedStateAsync(msg.id);
+        } catch {
+          state = ptyManager.getSerializedState(msg.id);
+        }
+
+        emitTerminalStatus(msg.id, "running");
+        sendEvent({
+          type: "wake-result",
+          requestId: msg.requestId,
+          id: msg.id,
+          state,
+          warnings: warnings.length > 0 ? warnings : undefined,
+        });
+        break;
+      }
+
+      case "kill-by-project": {
+        const killed = ptyManager.killByProject(msg.projectId);
+        sendEvent({ type: "kill-by-project-result", requestId: msg.requestId, killed });
+        break;
+      }
+
+      case "get-project-stats": {
+        const stats = ptyManager.getProjectStats(msg.projectId);
+        sendEvent({ type: "project-stats", requestId: msg.requestId, stats });
+        break;
+      }
 
       case "acknowledge-data":
         ptyManager.acknowledgeData(msg.id, msg.charCount);

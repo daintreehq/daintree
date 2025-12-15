@@ -119,6 +119,10 @@ export interface IpcInvokeMap {
     args: [id: string];
     result: void;
   };
+  "terminal:wake": {
+    args: [id: string];
+    result: { state: string | null; warnings?: string[] };
+  };
   "terminal:get-for-project": {
     args: [projectId: string];
     result: BackendTerminalInfo[];

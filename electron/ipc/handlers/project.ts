@@ -210,34 +210,32 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
     console.log("[ProjectSwitch] Starting project switch to:", project.name);
 
     const { logBuffer } = await import("../../services/LogBuffer.js");
-    const { getPtyManager } = await import("../../services/PtyManager.js");
-    const ptyManager = getPtyManager();
 
     console.log("[ProjectSwitch] Cleaning up previous project state...");
 
-    // Store previous project for rollback on failure
-    const previousProjectId = ptyManager.getActiveProjectId();
+    // Store previous project for rollback on failure (best-effort; pty-host owns filtering)
+    const previousProjectId = projectStore.getCurrentProjectId();
 
     try {
       // First: Background terminals/servers and enable buffering (onProjectSwitch)
       // This ensures output is buffered before we filter it
       const cleanupResults = await Promise.allSettled([
         deps.worktreeService?.onProjectSwitch() ?? Promise.resolve(),
-        Promise.resolve(ptyManager.onProjectSwitch(projectId)),
+        Promise.resolve(deps.ptyClient.onProjectSwitch(projectId)),
         Promise.resolve(logBuffer.onProjectSwitch()),
         Promise.resolve(deps.eventBuffer?.onProjectSwitch()),
       ]);
 
       cleanupResults.forEach((result, index) => {
         if (result.status === "rejected") {
-          const serviceNames = ["WorktreeService", "PtyManager", "LogBuffer", "EventBuffer"];
+          const serviceNames = ["WorktreeService", "PtyClient", "LogBuffer", "EventBuffer"];
           console.error(`[ProjectSwitch] ${serviceNames[index]} cleanup failed:`, result.reason);
         }
       });
 
       // Second: Set active project filter AFTER buffering is in place
       // This prevents event loss during transition - buffered output is preserved for replay
-      ptyManager.setActiveProject(projectId);
+      deps.ptyClient.setActiveProject(projectId);
 
       console.log("[ProjectSwitch] Previous project state cleaned up");
 
@@ -246,16 +244,6 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
       const updatedProject = projectStore.getProjectById(projectId);
       if (!updatedProject) {
         throw new Error(`Project not found after update: ${projectId}`);
-      }
-
-      // Replay terminal history after successful switch for smooth transition
-      try {
-        const replayedCount = ptyManager.replayProjectHistory(projectId, 100);
-        if (replayedCount > 0) {
-          console.log(`[ProjectSwitch] Replayed history for ${replayedCount} terminals`);
-        }
-      } catch (replayError) {
-        console.error("[ProjectSwitch] History replay failed (non-fatal):", replayError);
       }
 
       if (worktreeService) {
@@ -275,7 +263,7 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
     } catch (error) {
       // Rollback active project filter on failure
       console.error("[ProjectSwitch] Project switch failed, rolling back:", error);
-      ptyManager.setActiveProject(previousProjectId);
+      deps.ptyClient.setActiveProject(previousProjectId);
       throw error;
     }
   };
@@ -355,20 +343,15 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
 
     console.log(`[IPC] project:close: ${projectId}`);
 
-    const { getPtyManager } = await import("../../services/PtyManager.js");
-    const ptyManager = getPtyManager();
-
-    // Prevent closing the active project - check both ptyManager and projectStore
-    const ptyActiveProjectId = ptyManager.getActiveProjectId();
     const storeActiveProjectId = projectStore.getCurrentProjectId();
 
-    if (projectId === ptyActiveProjectId || projectId === storeActiveProjectId) {
+    if (projectId === storeActiveProjectId) {
       throw new Error("Cannot close the active project. Switch to another project first.");
     }
 
     try {
       // Kill terminals
-      const terminalsKilled = await ptyManager.killByProject(projectId);
+      const terminalsKilled = await deps.ptyClient.killByProject(projectId);
 
       // Clear persisted state
       await projectStore.clearProjectState(projectId);
@@ -401,10 +384,7 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
       throw new Error("Invalid project ID");
     }
 
-    const { getPtyManager } = await import("../../services/PtyManager.js");
-    const ptyManager = getPtyManager();
-
-    const ptyStats = ptyManager.getProjectStats(projectId);
+    const ptyStats = await deps.ptyClient.getProjectStats(projectId);
 
     // Estimate memory (rough approximation)
     const MEMORY_PER_TERMINAL_MB = 50;

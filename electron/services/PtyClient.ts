@@ -32,6 +32,7 @@ import type {
   PtyHostEvent,
   PtyHostSpawnOptions,
   TerminalStatusPayload,
+  PtyHostActivityTier,
   CrashType,
   HostCrashPayload,
 } from "../../shared/types/pty-host.js";
@@ -152,6 +153,19 @@ export class PtyClient extends EventEmitter {
     new Map();
   private replayHistoryCallbacks: Map<string, (replayed: number) => void> = new Map();
   private serializedStateCallbacks: Map<string, (state: string | null) => void> = new Map();
+  private wakeCallbacks: Map<
+    string,
+    (result: { state: string | null; warnings?: string[] }) => void
+  > = new Map();
+  private killByProjectCallbacks: Map<string, (killed: number) => void> = new Map();
+  private projectStatsCallbacks: Map<
+    string,
+    (stats: {
+      terminalCount: number;
+      processIds: number[];
+      terminalTypes: Record<string, number>;
+    }) => void
+  > = new Map();
   private terminalDiagnosticInfoCallbacks: Map<
     string,
     (info: import("../../shared/types/ipc.js").TerminalInfoPayload | null) => void
@@ -566,6 +580,33 @@ export class PtyClient extends EventEmitter {
         break;
       }
 
+      case "wake-result": {
+        const cb = this.wakeCallbacks.get((event as any).requestId);
+        if (cb) {
+          this.wakeCallbacks.delete((event as any).requestId);
+          cb({ state: (event as any).state ?? null, warnings: (event as any).warnings });
+        }
+        break;
+      }
+
+      case "kill-by-project-result": {
+        const cb = this.killByProjectCallbacks.get((event as any).requestId);
+        if (cb) {
+          this.killByProjectCallbacks.delete((event as any).requestId);
+          cb((event as any).killed ?? 0);
+        }
+        break;
+      }
+
+      case "project-stats": {
+        const cb = this.projectStatsCallbacks.get((event as any).requestId);
+        if (cb) {
+          this.projectStatsCallbacks.delete((event as any).requestId);
+          cb((event as any).stats ?? { terminalCount: 0, processIds: [], terminalTypes: {} });
+        }
+        break;
+      }
+
       case "terminal-diagnostic-info": {
         const cb = this.terminalDiagnosticInfoCallbacks.get(event.requestId);
         if (cb) {
@@ -695,6 +736,67 @@ export class PtyClient extends EventEmitter {
 
   flushBuffer(id: string): void {
     this.send({ type: "flush-buffer", id });
+  }
+
+  setActivityTier(id: string, tier: PtyHostActivityTier): void {
+    this.send({ type: "set-activity-tier", id, tier } as any);
+  }
+
+  async wakeTerminal(id: string): Promise<{ state: string | null; warnings?: string[] }> {
+    return new Promise((resolve) => {
+      const requestId = `wake-${id}-${Date.now()}`;
+      this.wakeCallbacks.set(requestId, resolve);
+      this.send({ type: "wake-terminal", id, requestId } as any);
+
+      setTimeout(() => {
+        if (this.wakeCallbacks.has(requestId)) {
+          this.wakeCallbacks.delete(requestId);
+          resolve({ state: null });
+        }
+      }, 5000);
+    });
+  }
+
+  setActiveProject(projectId: string | null): void {
+    this.send({ type: "set-active-project", projectId } as any);
+  }
+
+  onProjectSwitch(projectId: string): void {
+    this.send({ type: "project-switch", projectId } as any);
+  }
+
+  async killByProject(projectId: string): Promise<number> {
+    return new Promise((resolve) => {
+      const requestId = `kill-by-project-${projectId}-${Date.now()}`;
+      this.killByProjectCallbacks.set(requestId, resolve);
+      this.send({ type: "kill-by-project", projectId, requestId } as any);
+
+      setTimeout(() => {
+        if (this.killByProjectCallbacks.has(requestId)) {
+          this.killByProjectCallbacks.delete(requestId);
+          resolve(0);
+        }
+      }, 10000);
+    });
+  }
+
+  async getProjectStats(projectId: string): Promise<{
+    terminalCount: number;
+    processIds: number[];
+    terminalTypes: Record<string, number>;
+  }> {
+    return new Promise((resolve) => {
+      const requestId = `project-stats-${projectId}-${Date.now()}`;
+      this.projectStatsCallbacks.set(requestId, resolve);
+      this.send({ type: "get-project-stats", projectId, requestId } as any);
+
+      setTimeout(() => {
+        if (this.projectStatsCallbacks.has(requestId)) {
+          this.projectStatsCallbacks.delete(requestId);
+          resolve({ terminalCount: 0, processIds: [], terminalTypes: {} });
+        }
+      }, 5000);
+    });
   }
 
   /**
@@ -981,17 +1083,8 @@ export class PtyClient extends EventEmitter {
   }
 
   /** Handle project switch - forward to host */
-  onProjectSwitch(): void {
-    this.send({ type: "dispose" });
-    this.pendingSpawns.clear();
-    // Restart host for new project
-    if (this.child) {
-      this.child.kill();
-    }
-    setTimeout(() => {
-      this.startHost();
-    }, 100);
-  }
+  // Note: Project switching is now handled via onProjectSwitch(projectId) which
+  // preserves the host and active terminals while changing filtering/backgrounding.
 
   dispose(): void {
     if (this.isDisposed) return;
@@ -1028,6 +1121,10 @@ export class PtyClient extends EventEmitter {
     for (const cb of this.terminalInfoCallbacks.values()) cb(null);
     for (const cb of this.replayHistoryCallbacks.values()) cb(0);
     for (const cb of this.serializedStateCallbacks.values()) cb(null);
+    for (const cb of this.wakeCallbacks.values()) cb({ state: null });
+    for (const cb of this.killByProjectCallbacks.values()) cb(0);
+    for (const cb of this.projectStatsCallbacks.values())
+      cb({ terminalCount: 0, processIds: [], terminalTypes: {} });
     if (this.allSnapshotsCallback) {
       this.allSnapshotsCallback([]);
       this.allSnapshotsCallback = null;
@@ -1040,6 +1137,9 @@ export class PtyClient extends EventEmitter {
     this.terminalInfoCallbacks.clear();
     this.replayHistoryCallbacks.clear();
     this.serializedStateCallbacks.clear();
+    this.wakeCallbacks.clear();
+    this.killByProjectCallbacks.clear();
+    this.projectStatsCallbacks.clear();
     this.removeAllListeners();
 
     console.log("[PtyClient] Disposed");

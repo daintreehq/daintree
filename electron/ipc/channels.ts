@@ -22,6 +22,8 @@ export const CHANNELS = {
   TERMINAL_TRASHED: "terminal:trashed",
   TERMINAL_RESTORED: "terminal:restored",
   TERMINAL_FLUSH: "terminal:flush",
+  TERMINAL_SET_ACTIVITY_TIER: "terminal:set-activity-tier",
+  TERMINAL_WAKE: "terminal:wake",
   TERMINAL_GET_FOR_PROJECT: "terminal:get-for-project",
   TERMINAL_RECONNECT: "terminal:reconnect",
   TERMINAL_REPLAY_HISTORY: "terminal:replay-history",

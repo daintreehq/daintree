@@ -9,6 +9,7 @@ import { events, type CanopyEventMap } from "../../services/events.js";
 import type { HandlerDependencies } from "../types.js";
 import type { TerminalSpawnOptions, TerminalResizePayload } from "../../types/index.js";
 import { TerminalSpawnOptionsSchema, TerminalResizePayloadSchema } from "../../schemas/ipc.js";
+import type { PtyHostActivityTier } from "../../../shared/types/pty-host.js";
 
 export function registerTerminalHandlers(deps: HandlerDependencies): () => void {
   const { mainWindow, ptyClient, worktreeService: workspaceClient } = deps;
@@ -292,6 +293,44 @@ export function registerTerminalHandlers(deps: HandlerDependencies): () => void 
   };
   ipcMain.handle(CHANNELS.TERMINAL_FLUSH, handleTerminalFlush);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_FLUSH));
+
+  const handleTerminalSetActivityTier = (
+    _event: Electron.IpcMainEvent,
+    payload: { id: string; tier: PtyHostActivityTier }
+  ) => {
+    try {
+      if (!payload || typeof payload !== "object") {
+        return;
+      }
+      const { id, tier } = payload;
+      if (typeof id !== "string" || !id) return;
+      const effectiveTier: PtyHostActivityTier = tier === "background" ? "background" : "active";
+      ptyClient.setActivityTier(id, effectiveTier);
+    } catch (error) {
+      console.error("[IPC] Failed to set activity tier:", error);
+    }
+  };
+  ipcMain.on(CHANNELS.TERMINAL_SET_ACTIVITY_TIER, handleTerminalSetActivityTier);
+  handlers.push(() =>
+    ipcMain.removeListener(CHANNELS.TERMINAL_SET_ACTIVITY_TIER, handleTerminalSetActivityTier)
+  );
+
+  const handleTerminalWake = async (
+    _event: Electron.IpcMainInvokeEvent,
+    id: string
+  ): Promise<{ state: string | null; warnings?: string[] }> => {
+    try {
+      if (typeof id !== "string" || !id) {
+        throw new Error("Invalid terminal ID: must be a non-empty string");
+      }
+      return await ptyClient.wakeTerminal(id);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to wake terminal: ${errorMessage}`);
+    }
+  };
+  ipcMain.handle(CHANNELS.TERMINAL_WAKE, handleTerminalWake);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_WAKE));
 
   const handleTerminalAcknowledgeData = (
     _event: Electron.IpcMainEvent,

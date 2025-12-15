@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalRefreshTier } from "@/types";
 import { MAX_GRID_TERMINALS, type TerminalInstance } from "../terminalRegistrySlice";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
-    flush: vi.fn().mockResolvedValue(undefined),
     resize: vi.fn(),
+    setActivityTier: vi.fn(),
   },
   agentSettingsClient: {
     get: vi.fn().mockResolvedValue(null),
@@ -58,6 +59,7 @@ describe("moveTerminalToWorktree", () => {
       maximizedId: null,
       commandQueue: [],
     });
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-a", focusedWorktreeId: "wt-a" });
     vi.clearAllMocks();
     vi.useRealTimers();
   });
@@ -81,6 +83,7 @@ describe("moveTerminalToWorktree", () => {
       "t1",
       TerminalRefreshTier.VISIBLE
     );
+    expect(terminalClient.setActivityTier).toHaveBeenCalledWith("t1", "background");
   });
 
   it("forces terminal to dock when target worktree grid is full", () => {
@@ -98,11 +101,11 @@ describe("moveTerminalToWorktree", () => {
     expect(moved?.location).toBe("dock");
     expect(moved?.isVisible).toBe(false);
     expect(terminalPersistence.save).toHaveBeenCalledTimes(1);
-    expect(terminalClient.flush).not.toHaveBeenCalled();
     expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
       "t1",
       TerminalRefreshTier.BACKGROUND
     );
+    expect(terminalClient.setActivityTier).toHaveBeenCalledWith("t1", "background");
   });
 
   it("does nothing when moving to the same worktree", () => {
@@ -114,19 +117,16 @@ describe("moveTerminalToWorktree", () => {
     const moved = useTerminalStore.getState().terminals.find((t) => t.id === "t1");
     expect(moved?.worktreeId).toBe("wt-a");
     expect(terminalPersistence.save).not.toHaveBeenCalled();
-    expect(terminalClient.flush).not.toHaveBeenCalled();
+    expect(terminalClient.setActivityTier).not.toHaveBeenCalled();
     expect(terminalInstanceService.applyRendererPolicy).not.toHaveBeenCalled();
   });
 
-  it("flushes output after moving to grid", async () => {
-    vi.useFakeTimers();
-
+  it("backgrounds terminals moved off the active worktree", () => {
     const source = createMockTerminal("t1", "wt-a", "dock");
     useTerminalStore.setState({ terminals: [source] });
 
     useTerminalStore.getState().moveTerminalToWorktree("t1", "wt-b");
 
-    await vi.advanceTimersByTimeAsync(110);
-    expect(terminalClient.flush).toHaveBeenCalledWith("t1");
+    expect(terminalClient.setActivityTier).toHaveBeenCalledWith("t1", "background");
   });
 });

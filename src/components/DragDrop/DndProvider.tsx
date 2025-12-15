@@ -18,6 +18,7 @@ import {
 } from "@dnd-kit/core";
 import { useTerminalStore, type TerminalInstance, MAX_GRID_TERMINALS } from "@/store";
 import { TerminalDragPreview } from "./TerminalDragPreview";
+import { terminalInstanceService } from "@/services/TerminalInstanceService";
 
 // Placeholder ID used when dragging from dock to grid
 export const GRID_PLACEHOLDER_ID = "__grid-placeholder__";
@@ -152,6 +153,7 @@ export function DndProvider({ children }: DndProviderProps) {
   const handleDragStart = useCallback((event: DragStartEvent) => {
     const { active } = event;
     setActiveId(active.id as string);
+    terminalInstanceService.lockResize(active.id as string, true);
 
     const data = active.data.current as DragData | undefined;
     if (data) {
@@ -236,6 +238,8 @@ export function DndProvider({ children }: DndProviderProps) {
       if (!over || !activeData) return;
 
       const draggedId = active.id as string;
+      // Unlock resize shortly after drop to avoid accordion effects during layout thrash.
+      setTimeout(() => terminalInstanceService.lockResize(draggedId, false), 100);
       const overId = over.id as string;
 
       // Get source info
@@ -349,12 +353,15 @@ export function DndProvider({ children }: DndProviderProps) {
   );
 
   const handleDragCancel = useCallback(() => {
+    if (activeId) {
+      terminalInstanceService.lockResize(activeId, false);
+    }
     setActiveId(null);
     setActiveData(null);
     setOverContainer(null);
     setPlaceholderIndex(null);
     // No explicit refresh needed - terminals return to original state (no layout change)
-  }, []);
+  }, [activeId]);
 
   // Use rectIntersection for grid (better for 2D layouts), closestCenter for dock (1D horizontal)
   const collisionDetection: CollisionDetection = useCallback(

@@ -418,6 +418,12 @@ export function setupTerminalStoreListeners() {
   flowStatusUnsubscribe = terminalClient.onStatus((data) => {
     const { id, status, timestamp } = data;
     useTerminalStore.getState().updateFlowStatus(id, status, timestamp);
+
+    // If backend suspended streaming due to a stall, immediately request a wake snapshot
+    // so the visible renderer can recover fidelity without manual intervention.
+    if (status === "suspended") {
+      terminalInstanceService.wake(id);
+    }
   });
 
   backendCrashedUnsubscribe = terminalClient.onBackendCrashed((details) => {

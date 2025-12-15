@@ -24,6 +24,8 @@ class TerminalInstanceService {
   private suppressedExitUntil = new Map<string, number>();
   private hiddenContainer: HTMLDivElement | null = null;
   private offscreenSlots = new Map<string, HTMLDivElement>();
+  private resizeLocks = new Map<string, boolean>();
+  private lastBackendTier = new Map<string, "active" | "background">();
 
   constructor() {
     this.dataBuffer = new TerminalDataBuffer((id, data) => this.writeToTerminal(id, data));
@@ -192,6 +194,44 @@ class TerminalInstanceService {
         this.applyRendererPolicy(id, managed.getRefreshTier());
       }
     }
+  }
+
+  lockResize(id: string, locked: boolean): void {
+    if (locked) {
+      this.resizeLocks.set(id, true);
+    } else {
+      this.resizeLocks.delete(id);
+    }
+  }
+
+  private isResizeLocked(id: string): boolean {
+    return this.resizeLocks.get(id) === true;
+  }
+
+  private setBackendTier(id: string, tier: "active" | "background"): void {
+    const prev = this.lastBackendTier.get(id);
+    if (prev === tier) return;
+    this.lastBackendTier.set(id, tier);
+    terminalClient.setActivityTier(id, tier);
+  }
+
+  private async wakeAndRestore(id: string): Promise<void> {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+
+    try {
+      const { state } = await terminalClient.wake(id);
+      if (!state) return;
+      // Ensure idempotent restore (clears renderer-side terminal state first).
+      this.restoreFromSerialized(id, state);
+      managed.terminal.refresh(0, managed.terminal.rows - 1);
+    } catch (error) {
+      console.warn(`[TerminalInstanceService] wakeAndRestore failed for ${id}:`, error);
+    }
+  }
+
+  wake(id: string): void {
+    void this.wakeAndRestore(id);
   }
 
   getOrCreate(
@@ -387,6 +427,10 @@ class TerminalInstanceService {
     const managed = this.instances.get(id);
     if (!managed) return null;
 
+    if (this.isResizeLocked(id)) {
+      return null;
+    }
+
     if (Math.abs(managed.lastWidth - width) < 1 && Math.abs(managed.lastHeight - height) < 1) {
       return null;
     }
@@ -513,6 +557,10 @@ class TerminalInstanceService {
   private applyResize(id: string, cols: number, rows: number): void {
     const managed = this.instances.get(id);
     if (!managed) return;
+
+    if (this.isResizeLocked(id)) {
+      return;
+    }
 
     this.dataBuffer.flushForTerminal(id);
     this.dataBuffer.resetForTerminal(id);
@@ -818,7 +866,7 @@ class TerminalInstanceService {
         managed.tierChangeTimer = undefined;
       }
       managed.pendingTier = undefined;
-      this.applyRendererPolicyImmediate(managed, tier);
+      this.applyRendererPolicyImmediate(id, managed, tier);
       return;
     }
 
@@ -834,7 +882,7 @@ class TerminalInstanceService {
     managed.tierChangeTimer = window.setTimeout(() => {
       const current = this.instances.get(id);
       if (current && current.pendingTier === tier) {
-        this.applyRendererPolicyImmediate(current, tier);
+        this.applyRendererPolicyImmediate(id, current, tier);
         current.pendingTier = undefined;
       }
       if (current) {
@@ -843,8 +891,25 @@ class TerminalInstanceService {
     }, TIER_DOWNGRADE_HYSTERESIS_MS);
   }
 
-  private applyRendererPolicyImmediate(managed: ManagedTerminal, tier: TerminalRefreshTier): void {
+  private applyRendererPolicyImmediate(
+    id: string,
+    managed: ManagedTerminal,
+    tier: TerminalRefreshTier
+  ): void {
     managed.lastAppliedTier = tier;
+
+    // Backend streaming tier:
+    // - Focused/Visible/Burst => active stream
+    // - Background => stop streaming; rely on headless snapshot + wake for fidelity
+    const backendTier: "active" | "background" =
+      tier === TerminalRefreshTier.BACKGROUND ? "background" : "active";
+    const prevBackendTier = this.lastBackendTier.get(id) ?? "active";
+    this.setBackendTier(id, backendTier);
+
+    // On upgrade to active, request a canonical snapshot and restore before the user interacts.
+    if (backendTier === "active" && prevBackendTier !== "active") {
+      void this.wakeAndRestore(id);
+    }
   }
 
   updateRefreshTierProvider(id: string, provider: RefreshTierProvider): void {
@@ -907,6 +972,8 @@ class TerminalInstanceService {
       slot.parentElement.removeChild(slot);
     }
     this.offscreenSlots.delete(id);
+    this.resizeLocks.delete(id);
+    this.lastBackendTier.delete(id);
   }
 
   dispose(): void {

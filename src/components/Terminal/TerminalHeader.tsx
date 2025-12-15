@@ -33,7 +33,7 @@ export interface TerminalHeaderProps {
   activity?: ActivityState | null;
   lastCommand?: string;
   queueCount: number;
-  flowStatus?: "running" | "paused-backpressure" | "paused-user";
+  flowStatus?: "running" | "paused-backpressure" | "paused-user" | "suspended";
 
   // Title editing
   isEditingTitle: boolean;
@@ -246,6 +246,18 @@ function TerminalHeaderComponent({
             >
               <Pause className="w-3 h-3" aria-hidden="true" />
               Paused
+            </div>
+          )}
+
+          {flowStatus === "suspended" && (
+            <div
+              className="flex items-center gap-1 text-xs font-sans bg-[var(--color-status-warning)]/15 text-[var(--color-status-warning)] px-1.5 py-0.5 rounded ml-1"
+              role="status"
+              aria-live="polite"
+              title="Terminal output streaming suspended due to a stall (auto-recovers on focus)"
+            >
+              <Pause className="w-3 h-3" aria-hidden="true" />
+              Suspended
             </div>
           )}
         </div>

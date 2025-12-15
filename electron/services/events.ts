@@ -573,7 +573,7 @@ export type CanopyEventMap = {
    */
   "terminal:status": {
     id: string;
-    status: "running" | "paused-backpressure" | "paused-user";
+    status: "running" | "paused-backpressure" | "paused-user" | "suspended";
     bufferUtilization?: number;
     pauseDuration?: number;
     timestamp: number;

@@ -111,8 +111,6 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
 
             if (cancelled) return;
 
-            // NOW it's safe to flush - backend and frontend dimensions match
-            await terminalClient.flush(terminal.id);
             terminalInstanceService.applyRendererPolicy(terminal.id, TerminalRefreshTier.VISIBLE);
           }
         } else {

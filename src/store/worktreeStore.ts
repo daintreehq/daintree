@@ -1,5 +1,5 @@
 import { create, type StateCreator } from "zustand";
-import { appClient } from "@/clients";
+import { appClient, terminalClient } from "@/clients";
 import type { GitHubIssue } from "@shared/types/github";
 
 interface CreateDialogState {
@@ -36,6 +36,25 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     appClient.setState({ activeWorktreeId: id ?? undefined }).catch((error) => {
       console.error("Failed to persist active worktree:", error);
     });
+
+    // Reliability: terminals from inactive worktrees should not stream output to the renderer.
+    // They remain alive in the backend headless model and will be restored on wake.
+    void import("@/store/terminalStore")
+      .then(({ useTerminalStore }) => {
+        const terminals = useTerminalStore.getState().terminals;
+        const activeDockTerminalId = useTerminalStore.getState().activeDockTerminalId;
+        for (const terminal of terminals) {
+          if (terminal.id === activeDockTerminalId) {
+            continue;
+          }
+          if ((terminal.worktreeId ?? null) !== (id ?? null)) {
+            terminalClient.setActivityTier(terminal.id, "background");
+          }
+        }
+      })
+      .catch((error) => {
+        console.warn("[WorktreeStore] Failed to apply terminal streaming policy:", error);
+      });
   },
 
   setFocusedWorktree: (id) => set({ focusedWorktreeId: id }),
@@ -51,6 +70,23 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     appClient.setState({ activeWorktreeId: id }).catch((error) => {
       console.error("Failed to persist active worktree:", error);
     });
+
+    void import("@/store/terminalStore")
+      .then(({ useTerminalStore }) => {
+        const terminals = useTerminalStore.getState().terminals;
+        const activeDockTerminalId = useTerminalStore.getState().activeDockTerminalId;
+        for (const terminal of terminals) {
+          if (terminal.id === activeDockTerminalId) {
+            continue;
+          }
+          if ((terminal.worktreeId ?? null) !== id) {
+            terminalClient.setActivityTier(terminal.id, "background");
+          }
+        }
+      })
+      .catch((error) => {
+        console.warn("[WorktreeStore] Failed to apply terminal streaming policy:", error);
+      });
   },
 
   toggleWorktreeExpanded: (id) =>

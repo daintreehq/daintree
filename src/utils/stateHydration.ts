@@ -6,6 +6,7 @@ import { generateAgentFlags, type AgentSettings } from "@shared/types";
 import { keybindingService } from "@/services/KeybindingService";
 import { isRegisteredAgent, getAgentConfig } from "@/config/agents";
 import { normalizeScrollbackLines } from "@shared/config/scrollback";
+import { terminalInstanceService } from "@/services/TerminalInstanceService";
 
 export interface HydrationOptions {
   addTerminal: (options: {
@@ -127,12 +128,18 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
                 lastStateChange: currentAgentState ? Date.now() : undefined,
               });
 
-              // Request history replay for seamless restoration
+              // Restore a faithful snapshot from backend headless state.
+              // This avoids replay ordering issues and preserves alt-buffer TUIs.
               try {
-                const { replayed } = await terminalClient.replayHistory(terminal.id, 100);
-                console.log(`[Hydration] Replayed ${replayed} lines for terminal ${terminal.id}`);
-              } catch (replayError) {
-                console.warn(`[Hydration] History replay failed for ${terminal.id}:`, replayError);
+                const serialized = await terminalClient.getSerializedState(terminal.id);
+                if (serialized) {
+                  terminalInstanceService.restoreFromSerialized(terminal.id, serialized);
+                }
+              } catch (snapshotError) {
+                console.warn(
+                  `[Hydration] Serialized state restore failed for ${terminal.id}:`,
+                  snapshotError
+                );
               }
             } else {
               // Backend lost this terminal - spawn new

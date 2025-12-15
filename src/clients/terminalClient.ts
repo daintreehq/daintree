@@ -102,6 +102,14 @@ export const terminalClient = {
     return window.electron.terminal.flush(id);
   },
 
+  setActivityTier: (id: string, tier: "active" | "background"): void => {
+    window.electron.terminal.setActivityTier(id, tier);
+  },
+
+  wake: (id: string): Promise<{ state: string | null; warnings?: string[] }> => {
+    return window.electron.terminal.wake(id);
+  },
+
   /**
    * Acknowledge processed data bytes to the backend (Flow Control).
    */

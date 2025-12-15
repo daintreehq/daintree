@@ -50,7 +50,7 @@ import type { TerminalConfig } from "./config.js";
 import type { HibernationConfig } from "./hibernation.js";
 import type { SystemSleepMetrics } from "./systemSleep.js";
 import type { KeyAction } from "../keymap.js";
-import type { TerminalStatusPayload } from "../pty-host.js";
+import type { TerminalStatusPayload, PtyHostActivityTier } from "../pty-host.js";
 import type { ShowContextMenuPayload } from "../menu.js";
 
 // ElectronAPI Type (exposed via preload)
@@ -77,6 +77,8 @@ export interface ElectronAPI {
     trash(id: string): Promise<void>;
     restore(id: string): Promise<boolean>;
     flush(id: string): Promise<void>;
+    setActivityTier(id: string, tier: PtyHostActivityTier): void;
+    wake(id: string): Promise<{ state: string | null; warnings?: string[] }>;
     acknowledgeData(id: string, length: number): void;
     getForProject(projectId: string): Promise<BackendTerminalInfo[]>;
     reconnect(terminalId: string): Promise<TerminalReconnectResult>;

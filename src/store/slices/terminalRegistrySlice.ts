@@ -20,6 +20,7 @@ import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
 import { useScrollbackStore } from "@/store/scrollbackStore";
 import { usePerformanceModeStore } from "@/store/performanceModeStore";
 import { useTerminalFontStore } from "@/store/terminalFontStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 
 export const MAX_GRID_TERMINALS = 16;
@@ -454,13 +455,6 @@ export const createTerminalRegistrySlice =
 
       // Only apply side effects if the move succeeded
       if (moveSucceeded) {
-        // Delay flush to ensure the UI has subscribed to onData
-        setTimeout(() => {
-          terminalClient.flush(id).catch((error) => {
-            console.error("Failed to flush terminal buffer:", error);
-          });
-        }, 100);
-
         terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
       }
 
@@ -530,11 +524,6 @@ export const createTerminalRegistrySlice =
       if (restoreLocation === "dock") {
         optimizeForDock(id);
       } else {
-        setTimeout(() => {
-          terminalClient.flush(id).catch((error) => {
-            console.error("Failed to flush terminal buffer:", error);
-          });
-        }, 100);
         terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
       }
     },
@@ -584,11 +573,6 @@ export const createTerminalRegistrySlice =
       if (restoreLocation === "dock") {
         optimizeForDock(id);
       } else {
-        setTimeout(() => {
-          terminalClient.flush(id).catch((error) => {
-            console.error("Failed to flush terminal buffer:", error);
-          });
-        }, 100);
         terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
       }
     },
@@ -678,12 +662,6 @@ export const createTerminalRegistrySlice =
       if (location === "dock") {
         optimizeForDock(id);
       } else {
-        setTimeout(() => {
-          terminalClient.flush(id).catch((error) => {
-            console.error("Failed to flush terminal buffer:", error);
-          });
-        }, 100);
-
         terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
       }
     },
@@ -879,10 +857,6 @@ export const createTerminalRegistrySlice =
           // Force resize sync to ensure PTY dimensions match the container
           // performFit() in XtermAdapter may run before the container is laid out
           terminalInstanceService.fit(id);
-
-          terminalClient.flush(id).catch((error) => {
-            console.error("Failed to flush terminal buffer:", error);
-          });
         }
 
         // Restart complete - clear isRestarting flag
@@ -974,16 +948,15 @@ export const createTerminalRegistrySlice =
 
       if (!movedToLocation) return;
 
+      const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
+      if ((activeWorktreeId ?? null) !== (worktreeId ?? null)) {
+        terminalClient.setActivityTier(id, "background");
+      }
+
       if (movedToLocation === "dock") {
         optimizeForDock(id);
         return;
       }
-
-      setTimeout(() => {
-        terminalClient.flush(id).catch((error) => {
-          console.error("Failed to flush terminal buffer:", error);
-        });
-      }, 100);
 
       terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
     },

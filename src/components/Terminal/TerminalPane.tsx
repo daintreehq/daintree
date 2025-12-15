@@ -39,7 +39,7 @@ export interface TerminalPaneProps {
   agentState?: AgentState;
   activity?: ActivityState | null;
   lastCommand?: string;
-  flowStatus?: "running" | "paused-backpressure" | "paused-user";
+  flowStatus?: "running" | "paused-backpressure" | "paused-user" | "suspended";
   onFocus: () => void;
   onClose: (force?: boolean) => void;
   onToggleMaximize?: () => void;
