@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import type { LegacyAgentType } from "@shared/types";
+import { getAgentConfig } from "@/config/agents";
 import { cn } from "@/lib/utils";
 import { buildTerminalSendPayload } from "@/lib/terminalInput";
 import { useFileAutocomplete } from "@/hooks/useFileAutocomplete";
@@ -90,13 +91,20 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const inputShellRef = useRef<HTMLDivElement | null>(null);
     const menuRef = useRef<HTMLDivElement | null>(null);
     const rootRef = useRef<HTMLDivElement | null>(null);
+    const barContentRef = useRef<HTMLDivElement | null>(null);
     const [atContext, setAtContext] = useState<AtFileContext | null>(null);
     const [slashContext, setSlashContext] = useState<SlashCommandContext | null>(null);
     const [selectedIndex, setSelectedIndex] = useState(0);
     const lastQueryRef = useRef<string>("");
     const [menuLeftPx, setMenuLeftPx] = useState<number>(0);
+    const [collapsedHeightPx, setCollapsedHeightPx] = useState<number | null>(null);
 
     const canSend = useMemo(() => value.trim().length > 0 && !disabled, [disabled, value]);
+
+    const placeholder = useMemo(() => {
+      const agentName = agentId ? getAgentConfig(agentId)?.name : null;
+      return agentName ? `Enter your command for ${agentName}…` : "Enter your command…";
+    }, [agentId]);
 
     const activeMode = slashContext ? "command" : atContext ? "file" : null;
     const isAutocompleteOpen = activeMode !== null && !disabled;
@@ -139,6 +147,23 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const nextHeight = Math.min(textarea.scrollHeight, MAX_TEXTAREA_HEIGHT_PX);
       textarea.style.height = `${nextHeight}px`;
     }, []);
+
+    useLayoutEffect(() => {
+      resizeTextarea(textareaRef.current);
+    }, [resizeTextarea, value]);
+
+    useLayoutEffect(() => {
+      if (collapsedHeightPx !== null) return;
+      const el = barContentRef.current;
+      if (!el) return;
+      if (value.length > 0) return;
+
+      const rafId = requestAnimationFrame(() => {
+        const next = Math.ceil(el.getBoundingClientRect().height);
+        if (next > 0) setCollapsedHeightPx(next);
+      });
+      return () => cancelAnimationFrame(rafId);
+    }, [collapsedHeightPx, value]);
 
     useLayoutEffect(() => {
       if (!isAutocompleteOpen) return;
@@ -346,32 +371,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       [activeMode, applyAutocompleteItem, autocompleteItems, focusTextarea]
     );
 
-    return (
-      <div
-        ref={rootRef}
-        className={cn(
-          "shrink-0 cursor-text border-t border-white/5 bg-[var(--color-surface)] px-2 pb-1.5 pt-2",
-          className
-        )}
-        onPointerDownCapture={(e) => {
-          if (disabled) return;
-          if (e.button !== 0) return;
-          focusTextarea();
-        }}
-        onMouseDownCapture={(e) => {
-          if (e.button !== 0) return;
-          focusTextarea();
-        }}
-        onClick={() => {
-          focusTextarea();
-        }}
-      >
+    const barContent = (
+      <div ref={barContentRef} className="cursor-text bg-canopy-bg px-4 pb-5 pt-4">
         <div className="flex items-end gap-2">
           <div
             ref={inputShellRef}
             className={cn(
               "relative",
-              "flex w-full items-start gap-1.5 rounded-sm border border-white/5 bg-white/[0.03] transition-colors",
+              "flex w-full items-stretch gap-1.5 rounded-sm border border-canopy-border bg-white/[0.03] py-2 shadow-[0_8px_10px_rgba(0,0,0,0.25)] transition-colors",
               "focus-within:border-canopy-accent/30 focus-within:bg-white/[0.05]",
               disabled && "opacity-60"
             )}
@@ -388,7 +395,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               ariaLabel={activeMode === "command" ? "Command autocomplete" : "File autocomplete"}
             />
 
-            <div className="select-none pl-2 pr-1 pt-1 font-mono text-xs font-semibold leading-5 text-canopy-accent/85">
+            <div className="select-none self-start pl-2 pr-1 font-mono text-xs font-semibold leading-5 text-canopy-accent/85">
               ❯
             </div>
 
@@ -413,11 +420,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               }}
               onCompositionStart={() => setIsComposing(true)}
               onCompositionEnd={() => setIsComposing(false)}
-              placeholder="Command…"
+              placeholder={placeholder}
               rows={1}
               spellCheck={false}
               className={cn(
-                "min-h-[28px] flex-1 resize-none bg-transparent py-1 pr-2 font-mono text-xs leading-5 text-canopy-text",
+                "flex-1 resize-none bg-transparent pr-1 font-mono text-sm leading-5 text-canopy-text",
                 "placeholder:text-canopy-text/25 focus:outline-none disabled:opacity-50",
                 "max-h-40 overflow-y-auto"
               )}
@@ -532,28 +539,36 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             />
           </div>
         </div>
+      </div>
+    );
 
-        <div className="mt-1 flex items-center justify-end px-[2px]">
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={send}
-            disabled={!canSend}
-            className={cn(
-              "inline-flex items-center gap-1.5 rounded-sm border px-2 py-0.5 text-[10px] font-mono font-medium transition-colors",
-              "border-white/10 bg-white/[0.02] text-canopy-text/60 hover:border-white/20 hover:bg-white/[0.05] hover:text-canopy-text",
-              "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/35",
-              "cursor-pointer disabled:cursor-default disabled:opacity-40 disabled:hover:bg-white/[0.02] disabled:hover:text-canopy-text/60"
-            )}
-            aria-label="Send (Enter)"
-            title="Send (Enter)"
-          >
-            <span className="text-[12px] leading-none text-canopy-text/70" aria-hidden="true">
-              ↵
-            </span>
-            <span>Send</span>
-          </button>
-        </div>
+    const isOverlayMode = collapsedHeightPx !== null;
+
+    return (
+      <div
+        ref={rootRef}
+        className={cn("relative shrink-0", className)}
+        onPointerDownCapture={(e) => {
+          if (disabled) return;
+          if (e.button !== 0) return;
+          focusTextarea();
+        }}
+        onMouseDownCapture={(e) => {
+          if (e.button !== 0) return;
+          focusTextarea();
+        }}
+        onClick={() => {
+          focusTextarea();
+        }}
+      >
+        {isOverlayMode ? (
+          <>
+            <div aria-hidden="true" style={{ height: `${collapsedHeightPx}px` }} />
+            <div className="absolute inset-x-0 bottom-0 z-10">{barContent}</div>
+          </>
+        ) : (
+          barContent
+        )}
       </div>
     );
   }
