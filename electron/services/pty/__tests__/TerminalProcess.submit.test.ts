@@ -31,7 +31,9 @@ function createMockPty(): IPty {
   return pty as IPty;
 }
 
-function createTerminal(): TerminalProcess {
+type TerminalProcessOptions = ConstructorParameters<typeof TerminalProcess>[1];
+
+function createTerminal(options?: Partial<TerminalProcessOptions>): TerminalProcess {
   return new TerminalProcess(
     "t1",
     {
@@ -40,10 +42,13 @@ function createTerminal(): TerminalProcess {
       rows: 24,
       kind: "terminal",
       type: "terminal",
+      ...options,
     },
     { emitData: () => {}, onExit: () => {} },
     {
-      agentStateService: {} as any,
+      agentStateService: {
+        handleActivityState: () => {},
+      } as any,
       ptyPool: null,
       processTreeCache: null,
     }
@@ -96,5 +101,19 @@ describe("TerminalProcess.submit", () => {
     const terminal = createTerminal();
     terminal.submit("");
     expect(ptyWriteMock).toHaveBeenCalledWith("\r");
+  });
+
+  it("does not use bracketed paste for Gemini; uses soft newlines and then sends CR", async () => {
+    vi.useFakeTimers();
+    const terminal = createTerminal({ kind: "agent", type: "gemini" });
+
+    terminal.submit("line1\nline2");
+
+    expect(ptyWriteMock).toHaveBeenCalledTimes(1);
+    expect(ptyWriteMock.mock.calls[0]?.[0]).toBe("line1\x1b\rline2");
+
+    await vi.advanceTimersByTimeAsync(10);
+    expect(ptyWriteMock).toHaveBeenLastCalledWith("\r");
+    vi.useRealTimers();
   });
 });

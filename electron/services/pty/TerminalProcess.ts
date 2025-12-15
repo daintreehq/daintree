@@ -83,6 +83,31 @@ function splitTrailingNewlines(text: string): { body: string; enterCount: number
   return { body, enterCount };
 }
 
+function isGeminiTerminal(terminal: TerminalInfo): boolean {
+  return (
+    terminal.type === "gemini" ||
+    terminal.detectedAgentType === "gemini" ||
+    (terminal.kind === "agent" && terminal.agentId === "gemini")
+  );
+}
+
+function isCodexTerminal(terminal: TerminalInfo): boolean {
+  return (
+    terminal.type === "codex" ||
+    terminal.detectedAgentType === "codex" ||
+    (terminal.kind === "agent" && terminal.agentId === "codex")
+  );
+}
+
+function supportsBracketedPaste(terminal: TerminalInfo): boolean {
+  return !isGeminiTerminal(terminal);
+}
+
+function getSoftNewlineSequence(terminal: TerminalInfo): string {
+  // Shift+Enter "soft newline" differs by agent CLI; codex commonly uses LF (\n / Ctrl+J).
+  return isCodexTerminal(terminal) ? "\n" : "\x1b\r";
+}
+
 /**
  * Check if data contains a full bracketed paste (starts with ESC[200~ and contains ESC[201~).
  * Bracketed paste should be sent atomically to preserve paste detection in programs
@@ -717,12 +742,17 @@ export class TerminalProcess {
     const useBracketedPaste =
       body.includes("\n") || body.length > SUBMIT_BRACKETED_PASTE_THRESHOLD_CHARS;
 
-    if (useBracketedPaste) {
+    if (useBracketedPaste && supportsBracketedPaste(terminal)) {
       const pasteBody = body.replace(/\n/g, "\r");
       const payload = `${BRACKETED_PASTE_START}${pasteBody}${BRACKETED_PASTE_END}`;
       this.write(payload);
     } else {
-      this.write(body);
+      if (body.includes("\n") && !supportsBracketedPaste(terminal)) {
+        const softNewline = getSoftNewlineSequence(terminal);
+        this.write(body.replace(/\n/g, softNewline));
+      } else {
+        this.write(body);
+      }
     }
 
     await delay(SUBMIT_ENTER_DELAY_MS);
