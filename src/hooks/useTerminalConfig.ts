@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from "react";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { getTerminalThemeFromCSS } from "@/components/Terminal/XtermAdapter";
+import { getTerminalThemeFromCSS } from "@/utils/terminalTheme";
 import { useTerminalFontStore } from "@/store";
 import { terminalConfigClient } from "@/clients/terminalConfigClient";
 
