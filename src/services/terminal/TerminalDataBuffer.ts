@@ -1,53 +1,28 @@
 import { SharedRingBuffer, PacketParser } from "@shared/utils/SharedRingBuffer";
 import { terminalClient } from "@/clients";
-import { SabFlushMode } from "./types";
 
-const REDRAW_LOOKBACK_CHARS = 128;
-const STANDARD_FLUSH_DELAY_MS = 4;
-const REDRAW_FLUSH_DELAY_MS = 16;
-const MAX_FLUSH_DELAY_MS = 32;
-const MIN_FRAME_INTERVAL_MS = 16;
-const FRAME_SETTLE_DELAY_MS = REDRAW_FLUSH_DELAY_MS;
-const FRAME_DEADLINE_MS = MAX_FLUSH_DELAY_MS;
+const FLUSH_DELAY_MS = 4;
 const IDLE_POLL_INTERVALS = [8, 16, 33, 100] as const;
 const MAX_BUFFER_BYTES = 20 * 1024;
+const MAX_READS_PER_TICK = 50;
 
 const BYPASS_FRAME_BUFFER: boolean = false;
 
-type SabBufferEntry = {
+type BufferEntry = {
   chunks: (string | Uint8Array)[];
-  flushMode: SabFlushMode;
-  normalTimeoutId: number | null;
-  frameSettleTimeoutId: number | null;
-  frameDeadlineTimeoutId: number | null;
-  recentChars: string;
-  bytesSinceStart: number;
-  firstDataAt: number;
-  lastDataAt: number;
-  isCursorHidden: boolean;
-  hasCriticalReset: boolean;
-};
-
-type FrameQueue = { frames: (string | Uint8Array)[][]; presenterTimeoutId: number | null };
-type FrameStats = {
-  lastFlushAt: number;
-  lastIntervalMs: number | null;
-  avgIntervalMs: number | null;
+  bytes: number;
+  timeoutId: number | null;
 };
 
 export class TerminalDataBuffer {
   private ringBuffer: SharedRingBuffer | null = null;
   private packetParser = new PacketParser();
   private pollingActive = false;
-  private rafId: number | null = null;
   private pollTimeoutId: number | null = null;
   private sharedBufferEnabled = false;
   private idlePollCount = 0;
-  private readonly decoder = new TextDecoder();
 
-  private sabBuffers = new Map<string, SabBufferEntry>();
-  private sabFrameStats = new Map<string, FrameStats>();
-  private sabFrameQueues = new Map<string, FrameQueue>();
+  private buffers = new Map<string, BufferEntry>();
 
   constructor(private readonly writeToTerminal: (id: string, data: string | Uint8Array) => void) {}
 
@@ -84,13 +59,13 @@ export class TerminalDataBuffer {
 
   public stopPolling(): void {
     this.pollingActive = false;
-    if (this.rafId !== null) {
-      cancelAnimationFrame(this.rafId);
-      this.rafId = null;
-    }
     if (this.pollTimeoutId !== null) {
       clearTimeout(this.pollTimeoutId);
       this.pollTimeoutId = null;
+    }
+
+    for (const id of [...this.buffers.keys()]) {
+      this.flushBuffer(id);
     }
   }
 
@@ -100,151 +75,38 @@ export class TerminalDataBuffer {
       return;
     }
 
-    const now = Date.now();
-    let entry = this.sabBuffers.get(id);
-
-    const textThisChunk = typeof data === "string" ? data : this.decoder.decode(data);
+    let entry = this.buffers.get(id);
     const dataLength = typeof data === "string" ? data.length : data.byteLength;
-    const prevRecent = entry ? entry.recentChars : "";
-    const prevBytes = entry ? entry.bytesSinceStart : 0;
-    const combinedRecent = (prevRecent + textThisChunk).slice(-REDRAW_LOOKBACK_CHARS);
-    const bytesSinceStart = prevBytes + dataLength;
-
-    const scanWindow = prevRecent.slice(-32) + textThisChunk;
-    const isRedraw = this.detectRedrawPatternInStream(scanWindow);
-    const newCursorState = this.updateCursorState(scanWindow, entry?.isCursorHidden ?? false);
-    const isCriticalReset = this.detectCriticalReset(scanWindow);
 
     if (!entry) {
-      entry = {
-        chunks: [],
-        flushMode: isRedraw ? "frame" : "normal",
-        normalTimeoutId: null,
-        frameSettleTimeoutId: null,
-        frameDeadlineTimeoutId: null,
-        recentChars: combinedRecent,
-        bytesSinceStart,
-        firstDataAt: now,
-        lastDataAt: now,
-        isCursorHidden: newCursorState,
-        hasCriticalReset: isCriticalReset,
-      };
-      this.sabBuffers.set(id, entry);
-      entry.chunks.push(data);
-
-      if (entry.flushMode === "normal") {
-        entry.normalTimeoutId = window.setTimeout(
-          () => this.flushBuffer(id),
-          STANDARD_FLUSH_DELAY_MS
-        );
-      } else {
-        entry.frameSettleTimeoutId = window.setTimeout(
-          () => this.onFrameSettle(id),
-          FRAME_SETTLE_DELAY_MS
-        );
-        entry.frameDeadlineTimeoutId = window.setTimeout(
-          () => this.flushBuffer(id),
-          FRAME_DEADLINE_MS
-        );
-      }
-      return;
-    }
-
-    if (isRedraw && entry.flushMode === "normal") {
-      if (entry.normalTimeoutId !== null) {
-        window.clearTimeout(entry.normalTimeoutId);
-        entry.normalTimeoutId = null;
-      }
-      entry.flushMode = "frame";
+      entry = { chunks: [], bytes: 0, timeoutId: null };
+      this.buffers.set(id, entry);
     }
 
     entry.chunks.push(data);
-    entry.lastDataAt = now;
-    entry.bytesSinceStart = bytesSinceStart;
-    entry.recentChars = combinedRecent;
-    if (isCriticalReset) {
-      entry.hasCriticalReset = true;
-    }
+    entry.bytes += dataLength;
 
-    if (bytesSinceStart >= MAX_BUFFER_BYTES) {
+    if (entry.bytes >= MAX_BUFFER_BYTES) {
       this.flushBuffer(id);
       return;
     }
 
-    if (entry.isCursorHidden && !newCursorState) {
-      entry.isCursorHidden = newCursorState;
-      this.flushBuffer(id);
-      return;
-    }
-    entry.isCursorHidden = newCursorState;
-
-    if (entry.flushMode === "normal") {
-      if (entry.normalTimeoutId === null) {
-        entry.normalTimeoutId = window.setTimeout(
-          () => this.flushBuffer(id),
-          STANDARD_FLUSH_DELAY_MS
-        );
-      }
-      return;
-    }
-
-    if (entry.frameSettleTimeoutId !== null) {
-      window.clearTimeout(entry.frameSettleTimeoutId);
-    }
-    entry.frameSettleTimeoutId = window.setTimeout(
-      () => this.onFrameSettle(id),
-      FRAME_SETTLE_DELAY_MS
-    );
-
-    if (entry.frameDeadlineTimeoutId === null) {
-      entry.frameDeadlineTimeoutId = window.setTimeout(
-        () => this.flushBuffer(id),
-        FRAME_DEADLINE_MS
-      );
+    if (entry.timeoutId === null) {
+      entry.timeoutId = window.setTimeout(() => this.flushBuffer(id), FLUSH_DELAY_MS);
     }
   }
 
   public resetForTerminal(id: string): void {
-    const entry = this.sabBuffers.get(id);
-    if (entry) {
-      this.cancelBufferTimers(entry);
-      this.sabBuffers.delete(id);
+    const entry = this.buffers.get(id);
+    if (!entry) return;
+    if (entry.timeoutId !== null) {
+      window.clearTimeout(entry.timeoutId);
     }
-
-    const queue = this.sabFrameQueues.get(id);
-    if (queue) {
-      if (queue.presenterTimeoutId !== null) {
-        window.clearTimeout(queue.presenterTimeoutId);
-      }
-      this.sabFrameQueues.delete(id);
-    }
-
-    this.sabFrameStats.delete(id);
+    this.buffers.delete(id);
   }
 
   public flushForTerminal(id: string): void {
-    const entry = this.sabBuffers.get(id);
-    if (entry && entry.chunks.length > 0) {
-      this.cancelBufferTimers(entry);
-      this.sabBuffers.delete(id);
-      this.writeFrameChunks(id, entry.chunks);
-      this.recordFrameFlush(id);
-    }
-
-    const queue = this.sabFrameQueues.get(id);
-    if (queue) {
-      if (queue.presenterTimeoutId !== null) {
-        window.clearTimeout(queue.presenterTimeoutId);
-        queue.presenterTimeoutId = null;
-      }
-      while (queue.frames.length > 0) {
-        const frame = queue.frames.shift();
-        if (!frame) break;
-        this.writeFrameChunks(id, frame);
-        this.recordFrameFlush(id);
-      }
-      this.sabFrameQueues.delete(id);
-    }
+    this.flushBuffer(id);
   }
 
   private poll = (): void => {
@@ -252,14 +114,16 @@ export class TerminalDataBuffer {
     this.pollTimeoutId = null;
 
     let hasData = false;
+    let reads = 0;
 
-    while (true) {
+    while (reads < MAX_READS_PER_TICK) {
       const data = this.ringBuffer.read();
       if (!data) {
         break;
       }
 
       hasData = true;
+      reads += 1;
       const packets = this.packetParser.parse(data);
 
       for (const packet of packets) {
@@ -269,10 +133,7 @@ export class TerminalDataBuffer {
 
     if (hasData) {
       this.idlePollCount = 0;
-      this.rafId = window.requestAnimationFrame(() => {
-        this.rafId = null;
-        this.poll();
-      });
+      this.pollTimeoutId = window.setTimeout(this.poll, 0);
     } else {
       const intervalIndex = Math.min(this.idlePollCount, IDLE_POLL_INTERVALS.length - 1);
       const interval = IDLE_POLL_INTERVALS[intervalIndex];
@@ -281,183 +142,31 @@ export class TerminalDataBuffer {
     }
   };
 
-  private cancelBufferTimers(entry: SabBufferEntry): void {
-    if (entry.normalTimeoutId !== null) {
-      window.clearTimeout(entry.normalTimeoutId);
-      entry.normalTimeoutId = null;
-    }
-    if (entry.frameSettleTimeoutId !== null) {
-      window.clearTimeout(entry.frameSettleTimeoutId);
-      entry.frameSettleTimeoutId = null;
-    }
-    if (entry.frameDeadlineTimeoutId !== null) {
-      window.clearTimeout(entry.frameDeadlineTimeoutId);
-      entry.frameDeadlineTimeoutId = null;
-    }
-  }
-
-  private onFrameSettle(id: string): void {
-    const entry = this.sabBuffers.get(id);
+  private flushBuffer(id: string): void {
+    const entry = this.buffers.get(id);
     if (!entry) return;
 
-    entry.frameSettleTimeoutId = null;
+    if (entry.timeoutId !== null) {
+      window.clearTimeout(entry.timeoutId);
+      entry.timeoutId = null;
+    }
 
-    if (this.isFrameIncomplete(entry)) {
+    this.buffers.delete(id);
+    if (entry.chunks.length === 0) return;
+
+    if (entry.chunks.length === 1) {
+      this.writeToTerminal(id, entry.chunks[0]);
       return;
     }
 
-    const now = Date.now();
-    if (now - entry.lastDataAt >= FRAME_SETTLE_DELAY_MS - 1) {
-      this.flushBuffer(id);
-    }
-  }
-
-  private flushBuffer(id: string): void {
-    const entry = this.sabBuffers.get(id);
-
-    if (!entry || entry.chunks.length === 0) {
-      if (entry) {
-        this.cancelBufferTimers(entry);
-        this.sabBuffers.delete(id);
-      }
-      return;
-    }
-
-    this.cancelBufferTimers(entry);
-    this.sabBuffers.delete(id);
-
-    const { chunks } = entry;
-
-    if (entry.flushMode === "normal") {
-      this.writeFrameChunks(id, chunks);
-      this.recordFrameFlush(id);
-      return;
-    }
-
-    this.enqueueFrame(id, chunks);
-  }
-
-  private detectRedrawPatternInStream(recent: string): boolean {
-    if (!recent) return false;
-    // eslint-disable-next-line no-control-regex
-    if (/\x1b\[[0-9;]*H/.test(recent)) return true;
-    // eslint-disable-next-line no-control-regex
-    if (/\x1b\[[0-9;]*J/.test(recent)) return true;
-    return false;
-  }
-
-  private detectCriticalReset(text: string): boolean {
-    if (!text) return false;
-    if (text.includes("\x1b[2J")) return true;
-    if (text.includes("\x1b[3J")) return true;
-    if (text.includes("\x1bc")) return true;
-    return false;
-  }
-
-  private updateCursorState(text: string, currentState: boolean): boolean {
-    const lastHide = text.lastIndexOf("\x1b[?25l");
-    const lastShow = text.lastIndexOf("\x1b[?25h");
-
-    if (lastHide > lastShow) return true;
-    if (lastShow > lastHide) return false;
-    return currentState;
-  }
-
-  private isFrameIncomplete(entry: SabBufferEntry): boolean {
-    const lastClear = Math.max(
-      entry.recentChars.lastIndexOf("\x1b[2J"),
-      entry.recentChars.lastIndexOf("\x1b[H"),
-      entry.recentChars.lastIndexOf("\x1b[J")
-    );
-
-    if (lastClear !== -1 && entry.recentChars.length - lastClear < 50) {
-      return true;
-    }
-
-    return false;
-  }
-
-  private writeFrameChunks(id: string, chunks: (string | Uint8Array)[]): void {
-    if (chunks.length === 0) return;
-    if (chunks.length === 1) {
-      this.writeToTerminal(id, chunks[0]);
-      return;
-    }
-    const allStrings = chunks.every((c) => typeof c === "string");
+    const allStrings = entry.chunks.every((chunk) => typeof chunk === "string");
     if (allStrings) {
-      this.writeToTerminal(id, (chunks as string[]).join(""));
+      this.writeToTerminal(id, (entry.chunks as string[]).join(""));
       return;
     }
-    for (const chunk of chunks) {
+
+    for (const chunk of entry.chunks) {
       this.writeToTerminal(id, chunk);
-    }
-  }
-
-  private recordFrameFlush(id: string): void {
-    const now = Date.now();
-    const existing = this.sabFrameStats.get(id);
-    const lastIntervalMs = existing ? now - existing.lastFlushAt : null;
-
-    let avgIntervalMs: number | null = lastIntervalMs;
-    if (existing && existing.avgIntervalMs != null && lastIntervalMs != null) {
-      const alpha = 0.2;
-      avgIntervalMs = existing.avgIntervalMs * (1 - alpha) + lastIntervalMs * alpha;
-    }
-
-    this.sabFrameStats.set(id, {
-      lastFlushAt: now,
-      lastIntervalMs,
-      avgIntervalMs,
-    });
-  }
-
-  private enqueueFrame(id: string, chunks: (string | Uint8Array)[]): void {
-    let queue = this.sabFrameQueues.get(id);
-    if (!queue) {
-      queue = { frames: [], presenterTimeoutId: null };
-      this.sabFrameQueues.set(id, queue);
-    }
-    queue.frames.push(chunks);
-
-    const MAX_FRAMES = 3;
-    while (queue.frames.length > MAX_FRAMES) {
-      const oldest = queue.frames.shift()!;
-      queue.frames[0] = [...oldest, ...queue.frames[0]];
-    }
-
-    if (queue.presenterTimeoutId === null) {
-      this.scheduleFramePresenter(id, queue);
-    }
-  }
-
-  private scheduleFramePresenter(id: string, queue: FrameQueue): void {
-    const stats = this.sabFrameStats.get(id);
-    const now = Date.now();
-    let delay = 0;
-    if (stats && stats.lastFlushAt) {
-      const delta = now - stats.lastFlushAt;
-      if (delta < MIN_FRAME_INTERVAL_MS) {
-        delay = MIN_FRAME_INTERVAL_MS - delta;
-      }
-    }
-    queue.presenterTimeoutId = window.setTimeout(() => this.presentNextFrame(id), delay);
-  }
-
-  private presentNextFrame(id: string): void {
-    const queue = this.sabFrameQueues.get(id);
-    if (!queue) return;
-
-    queue.presenterTimeoutId = null;
-    const frame = queue.frames.shift();
-    if (!frame) {
-      return;
-    }
-
-    this.writeFrameChunks(id, frame);
-    this.recordFrameFlush(id);
-
-    if (queue.frames.length > 0) {
-      this.scheduleFramePresenter(id, queue);
     }
   }
 }

@@ -57,6 +57,4 @@ export interface ManagedTerminal {
   isFocused: boolean;
 }
 
-export type SabFlushMode = "normal" | "frame";
-
 export const TIER_DOWNGRADE_HYSTERESIS_MS = 500;
