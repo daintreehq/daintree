@@ -60,6 +60,11 @@ const LOW_WATERMARK_CHARS = 5000;
 const BRACKETED_PASTE_START = "\x1b[200~";
 const BRACKETED_PASTE_END = "\x1b[201~";
 const SUBMIT_BRACKETED_PASTE_THRESHOLD_CHARS = 200;
+const SUBMIT_ENTER_DELAY_MS = 10;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function normalizeSubmitText(text: string): string {
   return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
@@ -740,16 +745,46 @@ export class TerminalProcess {
 
     if (useBracketedPaste && supportsBracketedPaste(terminal)) {
       const pasteBody = body.replace(/\n/g, "\r");
-      const payload = `${BRACKETED_PASTE_START}${pasteBody}${BRACKETED_PASTE_END}${enterSuffix}`;
+      const payload = `${BRACKETED_PASTE_START}${pasteBody}${BRACKETED_PASTE_END}`;
       this.write(payload);
     } else {
       if (body.includes("\n") && !supportsBracketedPaste(terminal)) {
         const softNewline = getSoftNewlineSequence(terminal);
-        this.write(`${body.replace(/\n/g, softNewline)}${enterSuffix}`);
+        this.write(body.replace(/\n/g, softNewline));
       } else {
-        this.write(`${body}${enterSuffix}`);
+        this.write(body);
       }
     }
+
+    await this.waitForInputWriteDrain();
+    await delay(SUBMIT_ENTER_DELAY_MS);
+
+    if (!this.terminalInfo.ptyProcess) {
+      return;
+    }
+
+    this.write(enterSuffix);
+  }
+
+  private async waitForInputWriteDrain(): Promise<void> {
+    if (this.inputWriteQueue.length === 0 && this.inputWriteTimeout === null) {
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      const check = () => {
+        if (!this.terminalInfo.ptyProcess) {
+          resolve();
+          return;
+        }
+        if (this.inputWriteQueue.length === 0 && this.inputWriteTimeout === null) {
+          resolve();
+          return;
+        }
+        setTimeout(check, 0);
+      };
+      check();
+    });
   }
 
   /**
