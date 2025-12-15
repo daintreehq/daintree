@@ -1,14 +1,18 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from "react";
+import type React from "react";
 import { useSidecarStore } from "@/store";
 import { cn } from "@/lib/utils";
 import { SidecarToolbar } from "./SidecarToolbar";
 import { SidecarLaunchpad } from "./SidecarLaunchpad";
-import { SIDECAR_MIN_WIDTH, SIDECAR_MAX_WIDTH } from "@shared/types";
+import { SIDECAR_DEFAULT_WIDTH, SIDECAR_MIN_WIDTH, SIDECAR_MAX_WIDTH } from "@shared/types";
 import { systemClient } from "@/clients/systemClient";
 import { getAIAgentInfo } from "@/lib/aiAgentDetection";
 import { useKeybinding, useKeybindingScope } from "@/hooks/useKeybinding";
+import { useNativeContextMenu } from "@/hooks";
+import type { MenuItemOption } from "@/types";
 
 export function SidecarDock() {
+  const { showMenu } = useNativeContextMenu();
   const {
     width,
     activeTabId,
@@ -29,6 +33,9 @@ export function SidecarDock() {
     updateTabTitle,
     createdTabs,
     defaultNewTabUrl,
+    layoutModePreference,
+    setLayoutModePreference,
+    setDefaultNewTabUrl,
   } = useSidecarStore();
   const contentRef = useRef<HTMLDivElement>(null);
   const dockRef = useRef<HTMLDivElement>(null);
@@ -59,6 +66,127 @@ export function SidecarDock() {
   const showLaunchpad = activeTabId === null || tabs.length === 0 || isBlankTab;
   const hasActiveUrl =
     activeTab?.url !== undefined && activeTab.url !== null && activeTab.url !== "";
+
+  const handleGlobalContextMenu = useCallback(
+    async (event: React.MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (
+        target.closest(
+          "button,[role='tab'],[role='separator'],a,input,textarea,select,[contenteditable='true']"
+        )
+      ) {
+        return;
+      }
+
+      const defaultNewTabItems: MenuItemOption[] = [
+        {
+          id: "sidecar:default-new-tab:launchpad",
+          label: "Launchpad",
+          type: "checkbox",
+          checked: defaultNewTabUrl === null,
+        },
+        ...(enabledLinks.length > 0 ? [{ type: "separator" as const }] : []),
+        ...enabledLinks.map((link) => ({
+          id: `sidecar:default-new-tab:url:${link.url}`,
+          label: link.title,
+          type: "checkbox" as const,
+          checked: defaultNewTabUrl === link.url,
+        })),
+      ];
+
+      const template: MenuItemOption[] = [
+        { id: "sidecar:new-tab", label: "New Tab" },
+        { type: "separator" },
+        { id: "sidecar:close-tab", label: "Close Tab", enabled: activeTabId !== null },
+        { id: "sidecar:close-all", label: "Close All Tabs", enabled: tabs.length > 0 },
+        { type: "separator" },
+        {
+          id: "sidecar:layout-mode",
+          label: "Layout Mode",
+          submenu: [
+            {
+              id: "sidecar:layout-mode:auto",
+              label: "Auto",
+              type: "checkbox",
+              checked: layoutModePreference === "auto",
+            },
+            {
+              id: "sidecar:layout-mode:push",
+              label: "Push",
+              type: "checkbox",
+              checked: layoutModePreference === "push",
+            },
+            {
+              id: "sidecar:layout-mode:overlay",
+              label: "Overlay",
+              type: "checkbox",
+              checked: layoutModePreference === "overlay",
+            },
+          ],
+        },
+        { id: "sidecar:reset-width", label: "Reset Width" },
+        { type: "separator" },
+        { id: "sidecar:default-new-tab", label: "Default New Tab", submenu: defaultNewTabItems },
+        { type: "separator" },
+        { id: "settings:open:sidecar", label: "Sidecar Settings..." },
+      ];
+
+      const actionId = await showMenu(event, template);
+      if (!actionId) return;
+
+      if (actionId.startsWith("sidecar:default-new-tab:url:")) {
+        const url = actionId.slice("sidecar:default-new-tab:url:".length);
+        setDefaultNewTabUrl(url);
+        return;
+      }
+
+      switch (actionId) {
+        case "sidecar:new-tab":
+          createBlankTab();
+          void window.electron.sidecar.hide();
+          break;
+        case "sidecar:close-tab":
+          closeActiveTab();
+          break;
+        case "sidecar:close-all":
+          closeAllTabs();
+          break;
+        case "sidecar:layout-mode:auto":
+          setLayoutModePreference("auto");
+          break;
+        case "sidecar:layout-mode:push":
+          setLayoutModePreference("push");
+          break;
+        case "sidecar:layout-mode:overlay":
+          setLayoutModePreference("overlay");
+          break;
+        case "sidecar:reset-width":
+          setWidth(SIDECAR_DEFAULT_WIDTH);
+          break;
+        case "sidecar:default-new-tab:launchpad":
+          setDefaultNewTabUrl(null);
+          break;
+        case "settings:open:sidecar":
+          window.dispatchEvent(new CustomEvent("canopy:open-settings-tab", { detail: "sidecar" }));
+          break;
+      }
+    },
+    [
+      activeTabId,
+      closeActiveTab,
+      closeAllTabs,
+      createBlankTab,
+      defaultNewTabUrl,
+      enabledLinks,
+      layoutModePreference,
+      setDefaultNewTabUrl,
+      setLayoutModePreference,
+      setWidth,
+      showMenu,
+      tabs.length,
+    ]
+  );
 
   const syncBounds = useCallback(() => {
     if (!contentRef.current || !activeTabId) return;
@@ -595,6 +723,7 @@ export function SidecarDock() {
       style={{ width }}
       onFocus={handleDockFocus}
       onBlur={handleDockBlur}
+      onContextMenu={handleGlobalContextMenu}
       tabIndex={-1}
     >
       <div

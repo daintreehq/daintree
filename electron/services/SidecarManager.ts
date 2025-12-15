@@ -1,4 +1,4 @@
-import { BrowserWindow, WebContentsView } from "electron";
+import { BrowserWindow, Menu, WebContentsView, app, clipboard, shell } from "electron";
 import type { SidecarBounds, SidecarNavEvent } from "../../shared/types/sidecar.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { ClipboardFileInjector } from "./ClipboardFileInjector.js";
@@ -11,6 +11,33 @@ export class SidecarManager {
 
   constructor(window: BrowserWindow) {
     this.window = window;
+  }
+
+  private async pasteFromClipboard(webContents: Electron.WebContents): Promise<void> {
+    const hasFileData = ClipboardFileInjector.hasFileDataInClipboard();
+    if (!hasFileData) {
+      webContents.paste();
+      return;
+    }
+
+    try {
+      const filePaths = await ClipboardFileInjector.getFilePathsFromClipboard();
+      if (filePaths.length === 0) {
+        webContents.paste();
+        return;
+      }
+
+      if (filePaths.length > 1) {
+        console.warn(
+          `[SidecarManager] Multiple files in clipboard (${filePaths.length}), pasting first only`
+        );
+      }
+
+      await ClipboardFileInjector.injectFileIntoPaste(webContents, filePaths[0]);
+    } catch (error) {
+      console.error("[SidecarManager] Failed to paste from clipboard:", error);
+      webContents.paste();
+    }
   }
 
   createTab(tabId: string, url: string): void {
@@ -106,43 +133,94 @@ export class SidecarManager {
         if (isPasteShortcut) {
           // Check synchronously if clipboard has file data before intercepting
           const hasFileData = ClipboardFileInjector.hasFileDataInClipboard();
+          if (!hasFileData) return;
 
-          if (!hasFileData) {
-            // No file data - let native paste handle it (text, images, rich content)
-            return;
-          }
-
-          // File data detected - intercept and handle
           event.preventDefault();
-
-          ClipboardFileInjector.getFilePathsFromClipboard()
-            .then(async (filePaths) => {
-              if (filePaths.length > 0) {
-                if (filePaths.length > 1) {
-                  console.warn(
-                    `[SidecarManager] Multiple files in clipboard (${filePaths.length}), pasting first only`
-                  );
-                }
-
-                try {
-                  await ClipboardFileInjector.injectFileIntoPaste(view.webContents, filePaths[0]);
-                } catch (error) {
-                  console.error("[SidecarManager] Failed to inject file paste:", error);
-                  // Fallback to native paste on injection failure
-                  view.webContents.paste();
-                }
-              } else {
-                // File format detected but validation failed (too large, outside home, etc.)
-                // Fall back to native paste
-                view.webContents.paste();
-              }
-            })
-            .catch((error) => {
-              console.error("[SidecarManager] Error checking clipboard for files:", error);
-              // Always fallback to native paste on error
-              view.webContents.paste();
-            });
+          void this.pasteFromClipboard(view.webContents);
         }
+      });
+
+      view.webContents.on("context-menu", (_event, params) => {
+        const win = this.window;
+        if (!win || win.isDestroyed()) return;
+
+        const template: Electron.MenuItemConstructorOptions[] = [];
+
+        const isEditable = params.isEditable;
+        const canCopy = params.editFlags.canCopy || (params.selectionText ?? "").trim().length > 0;
+        const canCut = params.editFlags.canCut;
+        const canPaste = params.editFlags.canPaste;
+
+        if (isEditable || canCopy) {
+          if (isEditable) {
+            template.push(
+              { role: "undo" },
+              { role: "redo" },
+              { type: "separator" },
+              { role: "cut", enabled: canCut },
+              { role: "copy", enabled: canCopy },
+              {
+                label: "Paste",
+                enabled: canPaste,
+                click: () => void this.pasteFromClipboard(view.webContents),
+              },
+              { role: "selectAll" }
+            );
+          } else {
+            template.push({ role: "copy", enabled: canCopy });
+          }
+          template.push({ type: "separator" });
+        }
+
+        if (params.linkURL && params.linkURL.trim()) {
+          template.push(
+            {
+              label: "Open Link in Browser",
+              click: () => void shell.openExternal(params.linkURL),
+            },
+            {
+              label: "Copy Link Address",
+              click: () => clipboard.writeText(params.linkURL),
+            },
+            { type: "separator" }
+          );
+        }
+
+        template.push(
+          {
+            label: "Back",
+            enabled: view.webContents.canGoBack(),
+            click: () => view.webContents.goBack(),
+          },
+          {
+            label: "Forward",
+            enabled: view.webContents.canGoForward(),
+            click: () => view.webContents.goForward(),
+          },
+          { label: "Reload", click: () => view.webContents.reload() },
+          { type: "separator" }
+        );
+
+        const pageUrl = (params.pageURL ?? view.webContents.getURL()).trim();
+        if (pageUrl) {
+          template.push(
+            { label: "Copy Page URL", click: () => clipboard.writeText(pageUrl) },
+            { label: "Open Page in Browser", click: () => void shell.openExternal(pageUrl) }
+          );
+        }
+
+        if (!app.isPackaged) {
+          template.push(
+            { type: "separator" },
+            {
+              label: "Inspect Element",
+              click: () => view.webContents.inspectElement(params.x, params.y),
+            }
+          );
+        }
+
+        const menu = Menu.buildFromTemplate(template);
+        menu.popup({ window: win });
       });
 
       view.webContents.loadURL(url).catch((err) => {

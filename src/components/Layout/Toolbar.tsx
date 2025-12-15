@@ -1,4 +1,5 @@
 import { useRef, useState, useEffect } from "react";
+import type React from "react";
 import { Button } from "@/components/ui/button";
 import { FixedDropdown } from "@/components/ui/fixed-dropdown";
 import {
@@ -22,7 +23,9 @@ import { useSidecarStore } from "@/store";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { useRepositoryStats } from "@/hooks/useRepositoryStats";
+import { useNativeContextMenu } from "@/hooks";
 import type { CliAvailability, AgentSettings } from "@shared/types";
+import type { MenuItemOption } from "@/types";
 
 interface ToolbarProps {
   onLaunchAgent: (type: "claude" | "gemini" | "codex" | "terminal") => void;
@@ -47,6 +50,7 @@ export function Toolbar({
   agentAvailability,
   agentSettings,
 }: ToolbarProps) {
+  const { showMenu } = useNativeContextMenu();
   const currentProject = useProjectStore((state) => state.currentProject);
   const { stats, error: statsError, refresh: refreshStats } = useRepositoryStats();
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
@@ -69,6 +73,24 @@ export function Toolbar({
   }, []);
 
   const openAgentSettings = onOpenAgentSettings ?? onSettings;
+
+  const handleSettingsContextMenu = async (event: React.MouseEvent) => {
+    const template: MenuItemOption[] = [
+      { id: "settings:general", label: "General" },
+      { id: "settings:agents", label: "Agents" },
+      { id: "settings:terminal", label: "Terminal" },
+      { id: "settings:keyboard", label: "Keyboard" },
+      { id: "settings:sidecar", label: "Sidecar" },
+      { type: "separator" },
+      { id: "settings:troubleshooting", label: "Troubleshooting" },
+    ];
+
+    const actionId = await showMenu(event, template);
+    if (!actionId) return;
+
+    const tab = actionId.replace("settings:", "");
+    window.dispatchEvent(new CustomEvent("canopy:open-settings-tab", { detail: tab }));
+  };
 
   return (
     <header className="relative h-12 flex items-center px-4 shrink-0 app-drag-region bg-canopy-sidebar/95 backdrop-blur-sm border-b border-canopy-border shadow-sm">
@@ -297,6 +319,7 @@ export function Toolbar({
             variant="ghost"
             size="icon"
             onClick={onSettings}
+            onContextMenu={handleSettingsContextMenu}
             className="text-canopy-text hover:bg-canopy-border hover:text-canopy-accent h-8 w-8"
             title="Open Settings"
             aria-label="Open settings"

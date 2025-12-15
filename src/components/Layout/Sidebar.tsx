@@ -8,6 +8,11 @@ import {
   QuickRun,
 } from "@/components/Project";
 import { useProjectStore } from "@/store/projectStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useWorktrees } from "@/hooks/useWorktrees";
+import { useNativeContextMenu } from "@/hooks";
+import type { MenuItemOption } from "@/types";
+import { systemClient } from "@/clients/systemClient";
 import { DEFAULT_SIDEBAR_WIDTH } from "./AppLayout";
 
 interface SidebarProps {
@@ -20,10 +25,13 @@ interface SidebarProps {
 const RESIZE_STEP = 10;
 
 export function Sidebar({ width, onResize, children, className }: SidebarProps) {
+  const { showMenu } = useNativeContextMenu();
   const [isResizing, setIsResizing] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const sidebarRef = useRef<HTMLElement>(null);
   const currentProject = useProjectStore((state) => state.currentProject);
+  const openCreateWorktreeDialog = useWorktreeSelectionStore((state) => state.openCreateDialog);
+  const { refresh: refreshWorktrees } = useWorktrees();
 
   const startResizing = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -50,6 +58,52 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
   const handleResetWidth = useCallback(() => {
     onResize(DEFAULT_SIDEBAR_WIDTH);
   }, [onResize]);
+
+  const handleContextMenu = useCallback(
+    async (event: React.MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest("[role='separator']")) return;
+
+      const template: MenuItemOption[] = [
+        { id: "worktree:new", label: "New Worktree..." },
+        { id: "worktree:refresh", label: "Refresh Worktrees" },
+        { type: "separator" },
+        { id: "project:reveal", label: "Reveal Project in Finder", enabled: !!currentProject },
+        { id: "project:settings", label: "Project Settings...", enabled: !!currentProject },
+        { type: "separator" },
+        { id: "sidebar:reset-width", label: "Reset Sidebar Width" },
+        { id: "settings:worktree", label: "Worktree Settings..." },
+      ];
+
+      const actionId = await showMenu(event, template);
+      if (!actionId) return;
+
+      switch (actionId) {
+        case "worktree:new":
+          openCreateWorktreeDialog();
+          break;
+        case "worktree:refresh":
+          void refreshWorktrees();
+          break;
+        case "project:reveal":
+          if (currentProject) {
+            void systemClient.openPath(currentProject.path);
+          }
+          break;
+        case "project:settings":
+          setIsSettingsOpen(true);
+          break;
+        case "sidebar:reset-width":
+          handleResetWidth();
+          break;
+        case "settings:worktree":
+          window.dispatchEvent(new CustomEvent("canopy:open-settings-tab", { detail: "worktree" }));
+          break;
+      }
+    },
+    [currentProject, handleResetWidth, openCreateWorktreeDialog, refreshWorktrees, showMenu]
+  );
 
   const resize = useCallback(
     (e: MouseEvent) => {
@@ -86,6 +140,7 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
           className
         )}
         style={{ width }}
+        onContextMenu={handleContextMenu}
       >
         <div className="shrink-0 border-b border-canopy-border">
           <div className="flex items-center">

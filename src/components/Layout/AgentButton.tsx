@@ -2,6 +2,11 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { getAgentConfig } from "@/config/agents";
+import type React from "react";
+import { useNativeContextMenu } from "@/hooks";
+import { useAgentLauncher } from "@/hooks/useAgentLauncher";
+import { useWorktrees } from "@/hooks/useWorktrees";
+import type { MenuItemOption } from "@/types";
 
 type AgentType = "claude" | "gemini" | "codex";
 
@@ -20,6 +25,10 @@ export function AgentButton({
   onLaunch,
   onOpenSettings,
 }: AgentButtonProps) {
+  const { showMenu } = useNativeContextMenu();
+  const { launchAgent } = useAgentLauncher();
+  const { worktrees } = useWorktrees();
+
   if (!isEnabled) return null;
 
   const config = getAgentConfig(type);
@@ -50,11 +59,65 @@ export function AgentButton({
     }
   };
 
+  const handleContextMenu = async (event: React.MouseEvent) => {
+    const worktreeItems: MenuItemOption[] = worktrees.map((wt) => ({
+      id: `launch:worktree:${wt.id}`,
+      label: wt.branch?.trim() || wt.name,
+      sublabel: wt.branch?.trim() ? wt.name : undefined,
+      submenu: [
+        { id: `launch:worktree:${wt.id}:grid`, label: "Grid" },
+        { id: `launch:worktree:${wt.id}:dock`, label: "Dock" },
+      ],
+    }));
+
+    const template: MenuItemOption[] = [
+      { id: "launch:current", label: `Launch ${config.name}`, enabled: isAvailable },
+      { id: "launch:current:dock", label: `Launch ${config.name} in Dock`, enabled: isAvailable },
+      {
+        id: "launch:worktree",
+        label: "Launch in Worktree",
+        enabled: isAvailable && worktreeItems.length > 0,
+        submenu: worktreeItems,
+      },
+      { type: "separator" },
+      {
+        id: "settings:agents",
+        label: `${config.name} Settings...`,
+      },
+    ];
+
+    const actionId = await showMenu(event, template);
+    if (!actionId) return;
+
+    if (actionId === "launch:current") {
+      onLaunch();
+      return;
+    }
+
+    if (actionId === "launch:current:dock") {
+      await launchAgent(type, { location: "dock" });
+      return;
+    }
+
+    if (actionId.startsWith("launch:worktree:")) {
+      const parts = actionId.split(":");
+      const worktreeId = parts[2];
+      const location = parts[3] === "dock" ? "dock" : "grid";
+      await launchAgent(type, { worktreeId, location });
+      return;
+    }
+
+    if (actionId === "settings:agents") {
+      onOpenSettings();
+    }
+  };
+
   return (
     <Button
       variant="ghost"
       size="icon"
       onClick={handleClick}
+      onContextMenu={handleContextMenu}
       disabled={isLoading}
       className={cn(
         "text-canopy-text hover:bg-canopy-border h-8 w-8 transition-colors",

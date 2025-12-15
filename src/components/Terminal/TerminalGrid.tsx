@@ -30,7 +30,9 @@ import { systemClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
 import { getAutoGridCols } from "@/lib/terminalLayout";
 import { useWorktrees } from "@/hooks/useWorktrees";
+import { useNativeContextMenu } from "@/hooks";
 import type { CliAvailability } from "@shared/types";
+import type { MenuItemOption } from "@/types";
 
 export interface TerminalGridProps {
   className?: string;
@@ -244,6 +246,7 @@ export function TerminalGrid({
   isCheckingAvailability,
   onOpenSettings,
 }: TerminalGridProps) {
+  const { showMenu } = useNativeContextMenu();
   const { terminals, focusedId, maximizedId } = useTerminalStore(
     useShallow((state) => ({
       terminals: state.terminals,
@@ -276,6 +279,7 @@ export function TerminalGrid({
   );
 
   const layoutConfig = useLayoutConfigStore((state) => state.layoutConfig);
+  const setLayoutConfig = useLayoutConfigStore((state) => state.setLayoutConfig);
   const isGridFull = gridTerminals.length >= MAX_GRID_TERMINALS;
 
   // Make the grid a droppable area
@@ -355,6 +359,78 @@ export function TerminalGrid({
     [addTerminal, defaultCwd, onLaunchAgent]
   );
 
+  const handleGridContextMenu = useCallback(
+    async (event: React.MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest(".terminal-pane")) return;
+
+      const canLaunch = (agentId: "claude" | "gemini" | "codex" | "terminal") => {
+        if (agentId === "terminal") return true;
+        if (!agentAvailability) return true;
+        return agentAvailability[agentId] === true;
+      };
+
+      const template: MenuItemOption[] = [
+        { id: "new:terminal", label: "New Terminal" },
+        { type: "separator" },
+        { id: "new:claude", label: "New Claude", enabled: canLaunch("claude") },
+        { id: "new:gemini", label: "New Gemini", enabled: canLaunch("gemini") },
+        { id: "new:codex", label: "New Codex", enabled: canLaunch("codex") },
+        { type: "separator" },
+        {
+          id: "layout",
+          label: "Grid Layout",
+          submenu: [
+            {
+              id: "layout:automatic",
+              label: "Automatic",
+              type: "checkbox",
+              checked: layoutConfig.strategy === "automatic",
+            },
+            {
+              id: "layout:fixed-columns",
+              label: "Fixed Columns",
+              type: "checkbox",
+              checked: layoutConfig.strategy === "fixed-columns",
+            },
+            {
+              id: "layout:fixed-rows",
+              label: "Fixed Rows",
+              type: "checkbox",
+              checked: layoutConfig.strategy === "fixed-rows",
+            },
+          ],
+        },
+        { type: "separator" },
+        { id: "settings:terminal", label: "Terminal Settings..." },
+      ];
+
+      const actionId = await showMenu(event, template);
+      if (!actionId) return;
+
+      if (actionId.startsWith("new:")) {
+        const agentId = actionId.slice("new:".length) as "claude" | "gemini" | "codex" | "terminal";
+        void handleLaunchAgent(agentId);
+        return;
+      }
+
+      if (actionId.startsWith("layout:")) {
+        const nextStrategy = actionId.slice("layout:".length) as
+          | "automatic"
+          | "fixed-columns"
+          | "fixed-rows";
+        setLayoutConfig({ ...layoutConfig, strategy: nextStrategy });
+        return;
+      }
+
+      if (actionId === "settings:terminal") {
+        window.dispatchEvent(new CustomEvent("canopy:open-settings-tab", { detail: "terminal" }));
+      }
+    },
+    [agentAvailability, handleLaunchAgent, layoutConfig, setLayoutConfig, showMenu]
+  );
+
   const placeholderInGrid =
     placeholderIndex !== null && placeholderIndex >= 0 && placeholderIndex <= gridTerminals.length;
 
@@ -422,6 +498,7 @@ export function TerminalGrid({
               setNodeRef(node);
               gridContainerRef.current = node;
             }}
+            onContextMenu={handleGridContextMenu}
             className={cn(
               "h-full bg-noise p-1",
               isOver && "ring-2 ring-canopy-accent/30 ring-inset"

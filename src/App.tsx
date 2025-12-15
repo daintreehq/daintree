@@ -537,6 +537,17 @@ function App() {
     setIsSettingsOpen(true);
   }, []);
 
+  useEffect(() => {
+    const handleOpenSettingsTabEvent = (event: Event) => {
+      const customEvent = event as CustomEvent<unknown>;
+      const tab = typeof customEvent.detail === "string" ? customEvent.detail : "";
+      handleOpenSettingsTab(tab);
+    };
+
+    window.addEventListener("canopy:open-settings-tab", handleOpenSettingsTabEvent);
+    return () => window.removeEventListener("canopy:open-settings-tab", handleOpenSettingsTabEvent);
+  }, [handleOpenSettingsTab]);
+
   const handleErrorRetry = useCallback(
     async (errorId: string, action: RetryAction, args?: Record<string, unknown>) => {
       try {
