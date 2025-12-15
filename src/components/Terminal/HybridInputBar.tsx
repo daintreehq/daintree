@@ -11,7 +11,15 @@ import {
 import { cn } from "@/lib/utils";
 import { buildTerminalSendPayload } from "@/lib/terminalInput";
 import { useFileAutocomplete } from "@/hooks/useFileAutocomplete";
-import { FileAutocompleteMenu } from "./FileAutocompleteMenu";
+import { useSlashCommandAutocomplete } from "@/hooks/useSlashCommandAutocomplete";
+import { AutocompleteMenu, type AutocompleteItem } from "./AutocompleteMenu";
+import {
+  formatAtFileToken,
+  getAtFileContext,
+  getSlashCommandContext,
+  type AtFileContext,
+  type SlashCommandContext,
+} from "./hybridInputParsing";
 
 const MAX_TEXTAREA_HEIGHT_PX = 160;
 
@@ -24,41 +32,6 @@ export interface HybridInputBarProps {
   cwd: string;
   disabled?: boolean;
   className?: string;
-}
-
-interface AtFileContext {
-  atStart: number;
-  tokenEnd: number;
-  queryRaw: string;
-  queryForSearch: string;
-}
-
-function getAtFileContext(text: string, caret: number): AtFileContext | null {
-  if (caret < 0 || caret > text.length) return null;
-  const beforeCaret = text.slice(0, caret);
-  const atStart = beforeCaret.lastIndexOf("@");
-  if (atStart === -1) return null;
-  if (atStart > 0 && !/\s/.test(beforeCaret[atStart - 1])) return null;
-
-  let tokenEnd = atStart + 1;
-  while (tokenEnd < text.length && !/\s/.test(text[tokenEnd])) {
-    tokenEnd++;
-  }
-
-  if (caret < atStart + 1 || caret > tokenEnd) return null;
-
-  const token = text.slice(atStart + 1, tokenEnd);
-  if (/\s/.test(token)) return null;
-
-  const queryRaw = text.slice(atStart + 1, caret);
-  const queryForSearch = queryRaw.replace(/^['"]/, "");
-
-  return { atStart, tokenEnd, queryRaw, queryForSearch };
-}
-
-function formatAtFileToken(file: string): string {
-  const needsQuotes = /\s/.test(file);
-  return `@${needsQuotes ? `"${file}"` : file}`;
 }
 
 function getTextOffsetLeftPx(textarea: HTMLTextAreaElement, charIndex: number): number {
@@ -116,20 +89,40 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const menuRef = useRef<HTMLDivElement | null>(null);
     const rootRef = useRef<HTMLDivElement | null>(null);
     const [atContext, setAtContext] = useState<AtFileContext | null>(null);
+    const [slashContext, setSlashContext] = useState<SlashCommandContext | null>(null);
     const [selectedIndex, setSelectedIndex] = useState(0);
     const lastQueryRef = useRef<string>("");
     const [menuLeftPx, setMenuLeftPx] = useState<number>(0);
 
     const canSend = useMemo(() => value.trim().length > 0 && !disabled, [disabled, value]);
 
-    const isAutocompleteOpen = !!atContext && !disabled;
+    const activeMode = slashContext ? "command" : atContext ? "file" : null;
+    const isAutocompleteOpen = activeMode !== null && !disabled;
 
     const { files: autocompleteFiles, isLoading: isAutocompleteLoading } = useFileAutocomplete({
       cwd,
       query: atContext?.queryForSearch ?? "",
-      enabled: isAutocompleteOpen,
+      enabled: isAutocompleteOpen && activeMode === "file",
       limit: 50,
     });
+
+    const { items: autocompleteCommands } = useSlashCommandAutocomplete({
+      query: slashContext?.query ?? "",
+      enabled: isAutocompleteOpen && activeMode === "command",
+    });
+
+    const autocompleteItems = useMemo((): AutocompleteItem[] => {
+      if (activeMode === "file") {
+        return autocompleteFiles.map((file) => ({ key: file, label: file, value: file }));
+      }
+      if (activeMode === "command") {
+        return autocompleteCommands;
+      }
+      return [];
+    }, [activeMode, autocompleteCommands, autocompleteFiles]);
+
+    const menuTitle = activeMode === "file" ? "Files" : activeMode === "command" ? "Commands" : "";
+    const isLoading = activeMode === "file" ? isAutocompleteLoading : false;
 
     const resizeTextarea = useCallback((textarea: HTMLTextAreaElement | null) => {
       if (!textarea) return;
@@ -142,13 +135,17 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       if (!isAutocompleteOpen) return;
       const textarea = textareaRef.current;
       const shell = inputShellRef.current;
-      if (!textarea || !shell || !atContext) return;
+      if (!textarea || !shell) return;
+
+      const anchorIndex =
+        activeMode === "file" ? atContext?.atStart : activeMode === "command" ? 0 : null;
+      if (anchorIndex === null || anchorIndex === undefined) return;
 
       const compute = () => {
         const shellRect = shell.getBoundingClientRect();
         const textareaRect = textarea.getBoundingClientRect();
         const textareaOffsetLeft = textareaRect.left - shellRect.left;
-        const markerLeft = getTextOffsetLeftPx(textarea, atContext.atStart);
+        const markerLeft = getTextOffsetLeftPx(textarea, anchorIndex);
 
         const rawLeft = textareaOffsetLeft + markerLeft;
         const menuWidth = menuRef.current?.offsetWidth ?? 420;
@@ -169,15 +166,21 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         window.removeEventListener("resize", onResize);
         ro.disconnect();
       };
-    }, [atContext, isAutocompleteOpen]);
+    }, [activeMode, atContext?.atStart, isAutocompleteOpen]);
 
     useEffect(() => {
-      const query = atContext?.queryForSearch ?? "";
-      if (query !== lastQueryRef.current) {
-        lastQueryRef.current = query;
+      const activeQuery =
+        activeMode === "file"
+          ? `file:${atContext?.queryForSearch ?? ""}`
+          : activeMode === "command"
+            ? `command:${slashContext?.query ?? ""}`
+            : "";
+
+      if (activeQuery !== lastQueryRef.current) {
+        lastQueryRef.current = activeQuery;
         setSelectedIndex(0);
       }
-    }, [atContext?.queryForSearch]);
+    }, [activeMode, atContext?.queryForSearch, slashContext?.query]);
 
     useEffect(() => {
       if (!isAutocompleteOpen) return;
@@ -189,6 +192,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         if (!target) return;
         if (root.contains(target)) return;
         setAtContext(null);
+        setSlashContext(null);
       };
 
       document.addEventListener("pointerdown", onPointerDown, true);
@@ -197,12 +201,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     useEffect(() => {
       if (!isAutocompleteOpen) return;
-      if (autocompleteFiles.length === 0) {
+      if (autocompleteItems.length === 0) {
         setSelectedIndex(0);
         return;
       }
-      setSelectedIndex((prev) => Math.max(0, Math.min(prev, autocompleteFiles.length - 1)));
-    }, [autocompleteFiles.length, isAutocompleteOpen]);
+      setSelectedIndex((prev) => Math.max(0, Math.min(prev, autocompleteItems.length - 1)));
+    }, [autocompleteItems.length, isAutocompleteOpen]);
 
     const send = useCallback(() => {
       if (!canSend) return;
@@ -211,6 +215,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       onSend({ data: payload.data, trackerData: payload.trackerData, text: value });
       setValue("");
       setAtContext(null);
+      setSlashContext(null);
       requestAnimationFrame(() => resizeTextarea(textareaRef.current));
     }, [canSend, onSend, value, resizeTextarea]);
 
@@ -224,39 +229,72 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     useImperativeHandle(ref, () => ({ focus: focusTextarea }), [focusTextarea]);
 
-    const refreshAtContextFromTextarea = useCallback(() => {
+    const refreshContextsFromTextarea = useCallback(() => {
       const textarea = textareaRef.current;
       if (!textarea) return;
-      const next = getAtFileContext(textarea.value, textarea.selectionStart ?? textarea.value.length);
-      setAtContext(next);
+      const caret = textarea.selectionStart ?? textarea.value.length;
+      const text = textarea.value;
+
+      const slash = getSlashCommandContext(text, caret);
+      if (slash) {
+        setSlashContext(slash);
+        setAtContext(null);
+        return;
+      }
+
+      setSlashContext(null);
+      setAtContext(getAtFileContext(text, caret));
     }, []);
 
-    const insertSelectedFile = useCallback(
-      (file: string) => {
+    const insertSelectedItem = useCallback(
+      (item: AutocompleteItem) => {
         const textarea = textareaRef.current;
         if (!textarea) return;
 
-        const caret = textarea.selectionStart ?? value.length;
-        const ctx = getAtFileContext(value, caret);
-        if (!ctx) return;
+        if (activeMode === "file") {
+          const caret = textarea.selectionStart ?? value.length;
+          const ctx = getAtFileContext(value, caret);
+          if (!ctx) return;
 
-        const token = `${formatAtFileToken(file)} `;
-        const before = value.slice(0, ctx.atStart);
-        const after = value.slice(ctx.tokenEnd);
-        const nextValue = `${before}${token}${after}`;
-        const nextCaret = before.length + token.length;
+          const token = `${formatAtFileToken(item.value)} `;
+          const before = value.slice(0, ctx.atStart);
+          const after = value.slice(ctx.tokenEnd);
+          const nextValue = `${before}${token}${after}`;
+          const nextCaret = before.length + token.length;
 
-        setValue(nextValue);
-        setAtContext(null);
-        setSelectedIndex(0);
+          setValue(nextValue);
+          setAtContext(null);
+          setSlashContext(null);
+          setSelectedIndex(0);
 
-        requestAnimationFrame(() => {
-          textarea.focus();
-          textarea.setSelectionRange(nextCaret, nextCaret);
-          resizeTextarea(textarea);
-        });
+          requestAnimationFrame(() => {
+            textarea.focus();
+            textarea.setSelectionRange(nextCaret, nextCaret);
+            resizeTextarea(textarea);
+          });
+          return;
+        }
+
+        if (activeMode === "command" && slashContext) {
+          const token = `${item.value} `;
+          const before = value.slice(0, slashContext.start);
+          const after = value.slice(slashContext.tokenEnd);
+          const nextValue = `${before}${token}${after}`;
+          const nextCaret = before.length + token.length;
+
+          setValue(nextValue);
+          setAtContext(null);
+          setSlashContext(null);
+          setSelectedIndex(0);
+
+          requestAnimationFrame(() => {
+            textarea.focus();
+            textarea.setSelectionRange(nextCaret, nextCaret);
+            resizeTextarea(textarea);
+          });
+        }
       },
-      [resizeTextarea, value]
+      [activeMode, resizeTextarea, slashContext, value]
     );
 
     return (
@@ -290,14 +328,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             )}
             aria-disabled={disabled}
           >
-            <FileAutocompleteMenu
+            <AutocompleteMenu
               ref={menuRef}
               isOpen={isAutocompleteOpen}
-              files={autocompleteFiles}
+              items={autocompleteItems}
               selectedIndex={selectedIndex}
-              isLoading={isAutocompleteLoading}
-              onSelect={insertSelectedFile}
+              isLoading={isLoading}
+              onSelect={insertSelectedItem}
               style={{ left: `${menuLeftPx}px` }}
+              title={menuTitle}
+              ariaLabel={activeMode === "command" ? "Command autocomplete" : "File autocomplete"}
             />
 
             <div className="select-none pl-2 pr-1 pt-1 font-mono text-xs font-semibold leading-5 text-canopy-accent/85">
@@ -310,7 +350,18 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               onChange={(e) => {
                 setValue(e.target.value);
                 resizeTextarea(e.target);
-                setAtContext(getAtFileContext(e.target.value, e.target.selectionStart));
+                const caret = e.target.selectionStart ?? e.target.value.length;
+                const text = e.target.value;
+
+                const slash = getSlashCommandContext(text, caret);
+                if (slash) {
+                  setSlashContext(slash);
+                  setAtContext(null);
+                  return;
+                }
+
+                setSlashContext(null);
+                setAtContext(getAtFileContext(text, caret));
               }}
               onCompositionStart={() => setIsComposing(true)}
               onCompositionEnd={() => setIsComposing(false)}
@@ -328,6 +379,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 const root = rootRef.current;
                 if (root && nextTarget && root.contains(nextTarget)) return;
                 setAtContext(null);
+                setSlashContext(null);
               }}
               onBeforeInput={(e) => {
                 if (disabled) return;
@@ -341,10 +393,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                   return;
                 }
 
-                if (isAutocompleteOpen && autocompleteFiles[selectedIndex]) {
+                if (isAutocompleteOpen && autocompleteItems[selectedIndex]) {
                   e.preventDefault();
                   e.stopPropagation();
-                  insertSelectedFile(autocompleteFiles[selectedIndex]);
+                  insertSelectedItem(autocompleteItems[selectedIndex]);
                   return;
                 }
 
@@ -362,11 +414,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 if (isComposing || e.nativeEvent.isComposing) return;
 
                 if (isAutocompleteOpen) {
-                  const resultsCount = autocompleteFiles.length;
+                  const resultsCount = autocompleteItems.length;
                   if (e.key === "Escape") {
                     e.preventDefault();
                     e.stopPropagation();
                     setAtContext(null);
+                    setSlashContext(null);
                     return;
                   }
 
@@ -384,7 +437,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                   if (resultsCount > 0 && (e.key === "Enter" || e.key === "Tab")) {
                     e.preventDefault();
                     e.stopPropagation();
-                    insertSelectedFile(autocompleteFiles[selectedIndex]);
+                    insertSelectedItem(autocompleteItems[selectedIndex]);
                     return;
                   }
                 }
@@ -407,11 +460,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               }}
               onKeyUpCapture={() => {
                 if (disabled) return;
-                refreshAtContextFromTextarea();
+                refreshContextsFromTextarea();
               }}
               onClick={() => {
                 if (disabled) return;
-                refreshAtContextFromTextarea();
+                refreshContextsFromTextarea();
               }}
             />
           </div>
