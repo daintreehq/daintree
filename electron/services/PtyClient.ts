@@ -699,6 +699,51 @@ export class PtyClient extends EventEmitter {
 
   // Public API - matches PtyManager interface
 
+  private resolveKeySequence(key: string): string | null {
+    const normalizedKey = key.trim().toLowerCase();
+    if (!normalizedKey) return null;
+    if (normalizedKey.length > 64) return null;
+
+    const simpleMap: Record<string, string> = {
+      enter: "\r",
+      return: "\r",
+      tab: "\t",
+      "shift+tab": "\u001b[Z",
+      esc: "\u001b",
+      escape: "\u001b",
+      backspace: "\u007f",
+      delete: "\u001b[3~",
+      insert: "\u001b[2~",
+      home: "\u001b[H",
+      end: "\u001b[F",
+      pageup: "\u001b[5~",
+      pagedown: "\u001b[6~",
+      up: "\u001b[A",
+      down: "\u001b[B",
+      right: "\u001b[C",
+      left: "\u001b[D",
+    };
+
+    if (simpleMap[normalizedKey]) return simpleMap[normalizedKey];
+
+    const ctrlMatch = normalizedKey.match(/^ctrl\+([a-z])$/);
+    if (ctrlMatch) {
+      const char = ctrlMatch[1].toUpperCase();
+      return String.fromCharCode(char.charCodeAt(0) - 64);
+    }
+
+    const altMatch = normalizedKey.match(/^alt\+(.+)$/);
+    if (altMatch) {
+      const rest = this.resolveKeySequence(altMatch[1]);
+      if (!rest) return null;
+      return `\u001b${rest}`;
+    }
+
+    if (normalizedKey.length === 1) return normalizedKey;
+
+    return null;
+  }
+
   spawn(id: string, options: PtyHostSpawnOptions): void {
     this.pendingSpawns.set(id, options);
     this.send({ type: "spawn", id, options });
@@ -710,6 +755,15 @@ export class PtyClient extends EventEmitter {
 
   submit(id: string, text: string): void {
     this.send({ type: "submit", id, text });
+  }
+
+  sendKey(id: string, key: string): void {
+    const sequence = this.resolveKeySequence(key);
+    if (!sequence) {
+      console.warn(`[PtyClient] Ignoring unknown key sequence: ${key}`);
+      return;
+    }
+    this.write(id, sequence);
   }
 
   resize(id: string, cols: number, rows: number): void {
