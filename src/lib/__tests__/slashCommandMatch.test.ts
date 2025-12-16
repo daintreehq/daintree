@@ -18,6 +18,11 @@ describe("rankSlashCommands", () => {
     expect(ranked.map((c) => c.label)).toEqual(["/workbench", "/git:work-issue"]);
   });
 
+  it("prioritizes full-token matches over partial prefix matches", () => {
+    const ranked = rankSlashCommands([cmd("/github:work-issue"), cmd("/worktree:remove")], "/work");
+    expect(ranked.map((c) => c.label)).toEqual(["/github:work-issue", "/worktree:remove"]);
+  });
+
   it("prioritizes colon-segment start matches over dash-subword matches", () => {
     const ranked = rankSlashCommands([cmd("/git:work-issue"), cmd("/git:issue-fix")], "/issue");
     expect(ranked.map((c) => c.label)).toEqual(["/git:issue-fix", "/git:work-issue"]);

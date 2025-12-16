@@ -147,10 +147,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
               // Restore a faithful snapshot from backend headless state.
               // This avoids replay ordering issues and preserves alt-buffer TUIs.
               try {
-                const serialized = await terminalClient.getSerializedState(terminal.id);
-                if (serialized) {
-                  terminalInstanceService.restoreFromSerialized(terminal.id, serialized);
-                }
+                await terminalInstanceService.fetchAndRestore(terminal.id);
               } catch (snapshotError) {
                 console.warn(
                   `[Hydration] Serialized state restore failed for ${terminal.id}:`,

@@ -82,6 +82,8 @@ export class SharedRingBuffer {
   /**
    * Read all available data from the buffer (Single Consumer - Renderer).
    * Returns new data as Uint8Array or null if empty.
+   * CAUTION: Can allocate arbitrarily large buffers when renderer is behind.
+   * Prefer readUpTo() for main-thread consumers to cap allocations.
    */
   read(): Uint8Array | null {
     const writeIndex = Atomics.load(this.meta, SharedRingBuffer.WRITE_IDX);
@@ -109,6 +111,50 @@ export class SharedRingBuffer {
 
     // Update read index atomically
     const newReadIndex = (readIndex + availableToRead) % this.capacity;
+    Atomics.store(this.meta, SharedRingBuffer.READ_IDX, newReadIndex);
+
+    return result;
+  }
+
+  /**
+   * Read up to maxBytes from the buffer (Single Consumer).
+   * Returns new data as Uint8Array or null if empty.
+   * Bounds allocations to prevent GC spikes when catching up from behind.
+   *
+   * @param maxBytes Maximum bytes to read (must be > 0)
+   * @returns Uint8Array with up to maxBytes, or null if no data available
+   */
+  readUpTo(maxBytes: number): Uint8Array | null {
+    if (maxBytes <= 0) {
+      throw new Error(`maxBytes must be > 0, got ${maxBytes}`);
+    }
+
+    const writeIndex = Atomics.load(this.meta, SharedRingBuffer.WRITE_IDX);
+    const readIndex = Atomics.load(this.meta, SharedRingBuffer.READ_IDX);
+
+    if (readIndex === writeIndex) return null;
+
+    let availableToRead: number;
+    if (writeIndex > readIndex) {
+      availableToRead = writeIndex - readIndex;
+    } else {
+      availableToRead = this.capacity - readIndex + writeIndex;
+    }
+
+    const toRead = Math.min(availableToRead, maxBytes);
+    const result = new Uint8Array(toRead);
+
+    // Read first chunk
+    const firstChunk = Math.min(toRead, this.capacity - readIndex);
+    result.set(this.buffer.subarray(readIndex, readIndex + firstChunk), 0);
+
+    // Read wrap-around chunk
+    if (firstChunk < toRead) {
+      result.set(this.buffer.subarray(0, toRead - firstChunk), firstChunk);
+    }
+
+    // Update read index atomically
+    const newReadIndex = (readIndex + toRead) % this.capacity;
     Atomics.store(this.meta, SharedRingBuffer.READ_IDX, newReadIndex);
 
     return result;

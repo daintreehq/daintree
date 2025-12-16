@@ -11,6 +11,9 @@ export interface AgentConfig {
     scrollback?: number;
     blockAltScreen?: boolean;
     blockMouseReporting?: boolean;
+    blockScrollRegion?: boolean;
+    blockClearScreen?: boolean;
+    blockCursorToTop?: boolean;
   };
 }
 
@@ -28,6 +31,9 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       scrollback: 10000,
       blockAltScreen: true,
       blockMouseReporting: true,
+      blockScrollRegion: true,
+      blockClearScreen: true,
+      blockCursorToTop: true,
     },
   },
   gemini: {
@@ -43,6 +49,9 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       scrollback: 10000,
       blockAltScreen: true,
       blockMouseReporting: true,
+      blockScrollRegion: true,
+      blockClearScreen: true,
+      blockCursorToTop: true,
     },
   },
   codex: {
@@ -58,6 +67,9 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       scrollback: 10000,
       blockAltScreen: true,
       blockMouseReporting: true,
+      blockScrollRegion: false,
+      blockClearScreen: false,
+      blockCursorToTop: false,
     },
   },
 };
