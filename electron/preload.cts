@@ -456,7 +456,9 @@ const api: ElectronAPI = {
     sendKey: (id: string, key: string) => ipcRenderer.send(CHANNELS.TERMINAL_SEND_KEY, id, key),
 
     isSnapshotStreamingExperimentEnabled: () =>
-      process.env.CANOPY_EXPERIMENT_SNAPSHOT_STREAMING === "1",
+      process.env.CANOPY_EXPERIMENT_SNAPSHOT_STREAMING === "1" ||
+      (process.env.CANOPY_EXPERIMENT_SNAPSHOT_STREAMING !== "0" &&
+        process.env.NODE_ENV === "development"),
   },
 
   // Files API
