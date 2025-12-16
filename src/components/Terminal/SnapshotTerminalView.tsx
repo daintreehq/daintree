@@ -1,9 +1,13 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import "@xterm/xterm/css/xterm.css";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
 import { cn } from "@/lib/utils";
 import { terminalClient } from "@/clients";
 import type { TerminalScreenSnapshot } from "@/types";
 import { useTerminalFontStore } from "@/store/terminalFontStore";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { getTerminalThemeFromCSS } from "./XtermAdapter";
 
 export interface SnapshotTerminalViewProps {
   terminalId: string;
@@ -12,84 +16,6 @@ export interface SnapshotTerminalViewProps {
   refreshMs: number;
   isInputLocked?: boolean;
   className?: string;
-}
-
-function toControlChar(key: string): string | null {
-  if (key.length !== 1) return null;
-  const upper = key.toUpperCase();
-  const code = upper.charCodeAt(0);
-  if (code < 65 || code > 90) return null;
-  return String.fromCharCode(code - 64);
-}
-
-function mapKeyEventToSequence(event: React.KeyboardEvent): string | null {
-  if (event.metaKey) {
-    return null;
-  }
-
-  if (event.ctrlKey && !event.altKey && !event.shiftKey) {
-    const control = toControlChar(event.key);
-    if (control) return control;
-  }
-
-  switch (event.key) {
-    case "Enter":
-      return "\r";
-    case "Backspace":
-      return "\x7f";
-    case "Tab":
-      return "\t";
-    case "Escape":
-      return "\x1b";
-    case "ArrowUp":
-      return "\x1b[A";
-    case "ArrowDown":
-      return "\x1b[B";
-    case "ArrowRight":
-      return "\x1b[C";
-    case "ArrowLeft":
-      return "\x1b[D";
-    case "Home":
-      return "\x1b[H";
-    case "End":
-      return "\x1b[F";
-    case "PageUp":
-      return "\x1b[5~";
-    case "PageDown":
-      return "\x1b[6~";
-    case "Delete":
-      return "\x1b[3~";
-    default:
-      break;
-  }
-
-  if (!event.ctrlKey && !event.altKey && event.key.length === 1) {
-    return event.key;
-  }
-
-  return null;
-}
-
-function measureCell(container: HTMLElement): { cellWidth: number; cellHeight: number } | null {
-  const probe = document.createElement("span");
-  probe.style.position = "absolute";
-  probe.style.visibility = "hidden";
-  probe.style.whiteSpace = "pre";
-  probe.textContent = "MMMMMMMMMM";
-  container.appendChild(probe);
-  const rect = probe.getBoundingClientRect();
-  container.removeChild(probe);
-  const cellWidth = rect.width / 10;
-  const cellHeight = rect.height;
-  if (
-    !Number.isFinite(cellWidth) ||
-    !Number.isFinite(cellHeight) ||
-    cellWidth <= 0 ||
-    cellHeight <= 0
-  ) {
-    return null;
-  }
-  return { cellWidth, cellHeight };
 }
 
 export function SnapshotTerminalView({
@@ -102,9 +28,13 @@ export function SnapshotTerminalView({
 }: SnapshotTerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [snapshot, setSnapshot] = useState<TerminalScreenSnapshot | null>(null);
-  const inFlightRef = useRef(false);
-  const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null);
+
+  const xtermRef = useRef<Terminal | null>(null);
+  const fitAddonRef = useRef<FitAddon | null>(null);
+  const inFlightPollRef = useRef(false);
   const pushActiveRef = useRef(false);
+  const renderInFlightRef = useRef(false);
+  const pendingSnapshotRef = useRef<TerminalScreenSnapshot | null>(null);
 
   const fontSize = useTerminalFontStore((s) => s.fontSize);
   const fontFamily = useTerminalFontStore((s) => s.fontFamily);
@@ -118,20 +48,52 @@ export function SnapshotTerminalView({
     [fontFamily, fontSize]
   );
 
-  const poll = useCallback(async () => {
-    if (!isVisible || refreshMs <= 0) return;
-    if (pushActiveRef.current) return;
-    if (inFlightRef.current) {
-      return;
-    }
-    inFlightRef.current = true;
-    try {
-      const next = await terminalClient.getSnapshot(terminalId, { buffer: "auto" });
-      if (next) setSnapshot(next);
-    } finally {
-      inFlightRef.current = false;
-    }
-  }, [isVisible, refreshMs, terminalId]);
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const terminalTheme = getTerminalThemeFromCSS();
+    const term = new Terminal({
+      allowProposedApi: true,
+      cursorBlink: true,
+      cursorStyle: "block",
+      cursorInactiveStyle: "block",
+      fontSize,
+      lineHeight: 1.1,
+      letterSpacing: 0,
+      fontFamily: fontFamily || "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+      fontWeight: "normal",
+      fontWeightBold: "700",
+      theme: terminalTheme,
+      scrollback: 0,
+      macOptionIsMeta: true,
+      scrollOnUserInput: false,
+    });
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    term.open(container);
+    fit.fit();
+
+    xtermRef.current = term;
+    fitAddonRef.current = fit;
+
+    const onDataDisposable = term.onData((data) => {
+      if (isInputLocked) return;
+      terminalClient.write(terminalId, data);
+      terminalInstanceService.notifyUserInput(terminalId);
+    });
+
+    return () => {
+      onDataDisposable.dispose();
+      xtermRef.current = null;
+      fitAddonRef.current = null;
+      try {
+        term.dispose();
+      } catch {
+        // ignore
+      }
+    };
+  }, [fontFamily, fontSize, isInputLocked, terminalId]);
 
   const pushTier = refreshMs <= 60 ? "focused" : "visible";
 
@@ -154,6 +116,20 @@ export function SnapshotTerminalView({
     };
   }, [isVisible, refreshMs, pushTier, terminalId]);
 
+  const poll = useCallback(async () => {
+    if (!isVisible || refreshMs <= 0) return;
+    if (pushActiveRef.current) return;
+    if (inFlightPollRef.current) return;
+
+    inFlightPollRef.current = true;
+    try {
+      const next = await terminalClient.getSnapshot(terminalId, { buffer: "auto" });
+      if (next) setSnapshot(next);
+    } finally {
+      inFlightPollRef.current = false;
+    }
+  }, [isVisible, refreshMs, terminalId]);
+
   useEffect(() => {
     if (!isVisible || refreshMs <= 0) return;
     if (pushActiveRef.current) return;
@@ -167,7 +143,6 @@ export function SnapshotTerminalView({
     };
 
     void tick();
-
     return () => {
       cancelled = true;
     };
@@ -182,19 +157,13 @@ export function SnapshotTerminalView({
     const observer = new ResizeObserver(() => {
       if (rafId !== null) cancelAnimationFrame(rafId);
       rafId = requestAnimationFrame(() => {
-        const current = containerRef.current;
-        if (!current) return;
-        const metrics = measureCell(current);
-        if (!metrics) return;
+        const term = xtermRef.current;
+        const fit = fitAddonRef.current;
+        if (!term || !fit) return;
 
-        const cols = Math.max(1, Math.floor(current.clientWidth / metrics.cellWidth));
-        const rows = Math.max(1, Math.floor(current.clientHeight / metrics.cellHeight));
-
-        const prev = lastResizeRef.current;
-        if (prev && prev.cols === cols && prev.rows === rows) {
-          return;
-        }
-        lastResizeRef.current = { cols, rows };
+        fit.fit();
+        const cols = term.cols;
+        const rows = term.rows;
         terminalClient.resize(terminalId, cols, rows);
       });
     });
@@ -206,42 +175,61 @@ export function SnapshotTerminalView({
     };
   }, [isFocused, isVisible, terminalId, fontFamily, fontSize]);
 
-  const handleKeyDown = useCallback(
-    (event: React.KeyboardEvent<HTMLDivElement>) => {
-      if (isInputLocked) {
-        return;
+  const renderSnapshot = useCallback(async () => {
+    const term = xtermRef.current;
+    if (!term) return;
+    if (!snapshot) return;
+
+    pendingSnapshotRef.current = snapshot;
+    if (renderInFlightRef.current) return;
+
+    renderInFlightRef.current = true;
+    try {
+      while (pendingSnapshotRef.current) {
+        const next = pendingSnapshotRef.current;
+        pendingSnapshotRef.current = null;
+
+        if (term.cols !== next.cols || term.rows !== next.rows) {
+          try {
+            term.resize(next.cols, next.rows);
+          } catch {
+            // ignore
+          }
+        }
+
+        term.reset();
+        const payload = next.ansi ?? next.lines.join("\n");
+        await new Promise<void>((resolve) => {
+          term.write(payload, () => resolve());
+        });
       }
+    } finally {
+      renderInFlightRef.current = false;
+    }
+  }, [snapshot]);
 
-      const seq = mapKeyEventToSequence(event);
-      if (!seq) return;
+  useEffect(() => {
+    void renderSnapshot();
+  }, [renderSnapshot]);
 
-      event.preventDefault();
-      event.stopPropagation();
-
-      terminalClient.write(terminalId, seq);
-      terminalInstanceService.notifyUserInput(terminalId);
-    },
-    [isInputLocked, terminalId]
-  );
+  useEffect(() => {
+    if (!isFocused) return;
+    // Focus after mount/tier updates so typing works immediately.
+    requestAnimationFrame(() => xtermRef.current?.focus());
+  }, [isFocused]);
 
   return (
     <div
       ref={containerRef}
-      className={cn(
-        "absolute inset-0 overflow-hidden bg-canopy-bg text-canopy-text",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
-        className
-      )}
+      className={cn("absolute inset-0 overflow-hidden bg-canopy-bg", className)}
       style={style}
-      tabIndex={0}
-      onKeyDown={handleKeyDown}
       onPointerDownCapture={() => {
-        // Make the snapshot pane keyboard-active on click.
-        containerRef.current?.focus();
+        if (isFocused) {
+          xtermRef.current?.focus();
+        }
       }}
       aria-label="Terminal snapshot view"
     >
-      <pre className="m-0 p-3 whitespace-pre select-text">{(snapshot?.lines ?? []).join("\n")}</pre>
       {snapshot && snapshot.buffer === "alt" && (
         <div className="absolute top-2 right-2 text-[10px] font-sans text-canopy-text/50 bg-black/20 px-2 py-1 rounded">
           ALT

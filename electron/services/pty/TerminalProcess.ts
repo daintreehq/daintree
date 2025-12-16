@@ -979,7 +979,9 @@ export class TerminalProcess {
     const bufferName = buffer === headlessTerminal.buffer.alternate ? "alt" : "active";
     const cols = headlessTerminal.cols;
     const rows = headlessTerminal.rows;
-    const start = buffer.viewportY;
+    // Always project the bottom viewport (stable monitoring). Headless terminals have no
+    // concept of user scroll, so relying on viewportY can "stick" to old content.
+    const start = buffer.baseY;
 
     const lines: string[] = new Array(rows);
     for (let row = 0; row < rows; row++) {
@@ -991,12 +993,44 @@ export class TerminalProcess {
     const cursorX = Math.max(0, Math.min(cols - 1, buffer.cursorX));
     const cursorY = Math.max(0, Math.min(rows - 1, buffer.cursorY));
 
+    let ansi: string | undefined;
+    try {
+      const serializeAddon = terminal.serializeAddon;
+      if (serializeAddon) {
+        if (bufferName === "active") {
+          const rangeStart = Math.max(0, start);
+          const rangeEnd = Math.max(rangeStart, Math.min(buffer.length - 1, start + rows - 1));
+          ansi =
+            "\x1b[2J\x1b[H" +
+            serializeAddon.serialize({
+              range: { start: rangeStart, end: rangeEnd } as any,
+              excludeAltBuffer: true,
+              excludeModes: true,
+            } as any);
+        } else {
+          const serialized = serializeAddon.serialize({
+            scrollback: 0,
+            excludeModes: true,
+            excludeAltBuffer: false,
+          } as any);
+          const marker = "\x1b[?1049h\x1b[H";
+          const markerIndex = serialized.indexOf(marker);
+          ansi = "\x1b[2J\x1b[H" + (markerIndex >= 0 ? serialized.slice(markerIndex) : serialized);
+        }
+      }
+    } catch (error) {
+      if (process.env.CANOPY_VERBOSE) {
+        console.warn(`[TerminalProcess] Failed to produce ANSI snapshot for ${this.id}:`, error);
+      }
+    }
+
     return {
       cols,
       rows,
       buffer: bufferName,
       cursor: { x: cursorX, y: cursorY, visible: true },
       lines,
+      ansi,
       timestamp: Date.now(),
       sequence: ++this.screenSnapshotSequence,
     };

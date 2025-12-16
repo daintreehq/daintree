@@ -74,6 +74,8 @@ export interface TerminalScreenSnapshot {
   buffer: TerminalScreenSnapshotBuffer;
   cursor?: TerminalScreenSnapshotCursor;
   lines: string[];
+  /** ANSI snapshot that can be written into xterm.js to reproduce colors/styles (v1 optional) */
+  ansi?: string;
   timestamp: number;
   sequence: number;
 }
