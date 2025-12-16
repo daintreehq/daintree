@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef, createContext, useContext } from "react";
+import { useState, useCallback, useMemo, useRef, createContext, useContext, useEffect } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -125,6 +125,12 @@ export function DndProvider({ children }: DndProviderProps) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeData, setActiveData] = useState<DragData | null>(null);
   const [overContainer, setOverContainer] = useState<"grid" | "dock" | null>(null);
+
+  // Ref to track overContainer for stable collision detection (avoids infinite loops)
+  const overContainerRef = useRef<"grid" | "dock" | null>(null);
+  useEffect(() => {
+    overContainerRef.current = overContainer;
+  }, [overContainer]);
 
   // Placeholder state for cross-container drags (dock -> grid)
   const [placeholderIndex, setPlaceholderIndex] = useState<number | null>(null);
@@ -363,7 +369,8 @@ export function DndProvider({ children }: DndProviderProps) {
     // No explicit refresh needed - terminals return to original state (no layout change)
   }, [activeId]);
 
-  // Use rectIntersection for grid (better for 2D layouts), closestCenter for dock (1D horizontal)
+  // Use rectIntersection as default (stable when cursor outside containers),
+  // closestCenter only for dock (better for 1D horizontal reordering)
   const collisionDetection: CollisionDetection = useCallback(
     (args) => {
       // First check if we're directly over any droppable
@@ -372,13 +379,15 @@ export function DndProvider({ children }: DndProviderProps) {
         return pointerCollisions;
       }
 
-      // For grid, use rect intersection; for dock, use closest center
-      if (overContainer === "grid") {
-        return rectIntersection(args);
+      // For dock, use closest center (better for 1D); otherwise rect intersection
+      // Using rectIntersection as default prevents oscillation when cursor is
+      // outside all containers (e.g., over disabled worktree drop target)
+      if (overContainerRef.current === "dock") {
+        return closestCenter(args);
       }
-      return closestCenter(args);
+      return rectIntersection(args);
     },
-    [overContainer]
+    [] // Empty deps - function must be stable to prevent dnd-kit measurement loops
   );
 
   const placeholderContextValue = useMemo(

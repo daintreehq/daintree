@@ -804,7 +804,7 @@ export function WorktreeCard({
 
   const cardContent = (
     <div
-      ref={setNodeRef}
+      ref={isActive ? undefined : setNodeRef}
       className={cn(
         "group relative border-b border-canopy-border transition-all duration-200",
         isActive
