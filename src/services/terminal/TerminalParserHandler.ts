@@ -31,17 +31,31 @@ export class TerminalParserHandler {
   private getAgentCapabilities(): {
     blockAltScreen: boolean;
     blockMouseReporting: boolean;
+    blockScrollRegion: boolean;
+    blockClearScreen: boolean;
+    blockCursorToTop: boolean;
   } {
     if (this.managed.kind !== "agent") {
-      return { blockAltScreen: false, blockMouseReporting: false };
+      return {
+        blockAltScreen: false,
+        blockMouseReporting: false,
+        blockScrollRegion: false,
+        blockClearScreen: false,
+        blockCursorToTop: false,
+      };
     }
 
     const effectiveAgentId = this.managed.agentId ?? this.managed.type;
     const config = getAgentConfig(effectiveAgentId);
 
+    const defaultStableLogMode = effectiveAgentId !== "codex";
+
     return {
       blockAltScreen: config?.capabilities?.blockAltScreen ?? true,
       blockMouseReporting: config?.capabilities?.blockMouseReporting ?? true,
+      blockScrollRegion: config?.capabilities?.blockScrollRegion ?? defaultStableLogMode,
+      blockClearScreen: config?.capabilities?.blockClearScreen ?? defaultStableLogMode,
+      blockCursorToTop: config?.capabilities?.blockCursorToTop ?? defaultStableLogMode,
     };
   }
 
@@ -84,6 +98,61 @@ export class TerminalParserHandler {
       }
     );
     this.disposables.push(decstrHandler);
+
+    // Block DECSTBM (CSI ... r) - Set Scroll Region
+    // Agent CLIs often use scroll regions for full-screen UIs; we treat output as a stable log.
+    if (capabilities.blockScrollRegion) {
+      const decstbmHandler = terminal.parser.registerCsiHandler({ final: "r" }, () => {
+        if (!this.shouldBlock()) return false;
+        return true;
+      });
+      this.disposables.push(decstbmHandler);
+    }
+
+    // Block ED (CSI ... J) - Erase in Display (clear screen / scrollback).
+    // Allow partial clears (0/1) but block full clears (2/3) that nuke scrollback.
+    if (capabilities.blockClearScreen) {
+      const edHandler = terminal.parser.registerCsiHandler({ final: "J" }, (params) => {
+        if (!this.shouldBlock()) return false;
+        const p = this.normalizeCsiParams(params);
+        if (p.length === 0) return false;
+        return p.some((v) => v === 2 || v === 3);
+      });
+      this.disposables.push(edHandler);
+    }
+
+    // Block cursor moves to the top row (CUP/HVP + VPA) which cause viewport jumps in "log" mode.
+    if (capabilities.blockCursorToTop) {
+      const shouldBlockRow = (row: number | undefined): boolean => {
+        // Default is 1 if omitted; treat 0 as 1.
+        if (row === undefined) return true;
+        return row === 0 || row === 1;
+      };
+
+      const cupHandler = terminal.parser.registerCsiHandler({ final: "H" }, (params) => {
+        if (!this.shouldBlock()) return false;
+        const p = this.normalizeCsiParams(params);
+        const row = p[0];
+        return shouldBlockRow(row);
+      });
+      this.disposables.push(cupHandler);
+
+      const hvpHandler = terminal.parser.registerCsiHandler({ final: "f" }, (params) => {
+        if (!this.shouldBlock()) return false;
+        const p = this.normalizeCsiParams(params);
+        const row = p[0];
+        return shouldBlockRow(row);
+      });
+      this.disposables.push(hvpHandler);
+
+      const vpaHandler = terminal.parser.registerCsiHandler({ final: "d" }, (params) => {
+        if (!this.shouldBlock()) return false;
+        const p = this.normalizeCsiParams(params);
+        const row = p[0];
+        return shouldBlockRow(row);
+      });
+      this.disposables.push(vpaHandler);
+    }
 
     // Block DEC private mode toggles that cause full-screen "alternate screen" behavior.
     // This is commonly used by TUIs; we block it for agent terminals to keep output stable and

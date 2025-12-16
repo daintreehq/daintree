@@ -62,6 +62,18 @@ export interface ManagedTerminal {
 
   // Typing burst timer
   inputBurstTimer?: number;
+
+  // Incremental restore state
+  writeChain: Promise<void>;
+  restoreGeneration: number;
+  isSerializedRestoreInProgress: boolean;
+  deferredOutput: Array<string | Uint8Array>;
 }
 
 export const TIER_DOWNGRADE_HYSTERESIS_MS = 500;
+
+export const INCREMENTAL_RESTORE_CONFIG = {
+  chunkBytes: 32768,
+  timeBudgetMs: 10,
+  indicatorThresholdBytes: 262144,
+} as const;

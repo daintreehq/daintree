@@ -81,6 +81,60 @@ describe("TerminalParserHandler", () => {
     expect(decrst.handler([1049])).toBe(true);
   });
 
+  it("should block cursor-to-top / clear / scroll-region for Claude agent terminals", () => {
+    mockManaged.agentId = "claude";
+    mockManaged.type = "claude";
+
+    new TerminalParserHandler(mockManaged);
+
+    const decstbm = csiHandlers.find((h) => h.opts.final === "r");
+    const ed = csiHandlers.find((h) => h.opts.final === "J");
+    const cup = csiHandlers.find((h) => h.opts.final === "H");
+    const hvp = csiHandlers.find((h) => h.opts.final === "f");
+    const vpa = csiHandlers.find((h) => h.opts.final === "d");
+
+    expect(decstbm).toBeDefined();
+    expect(ed).toBeDefined();
+    expect(cup).toBeDefined();
+    expect(hvp).toBeDefined();
+    expect(vpa).toBeDefined();
+
+    expect(decstbm.handler([])).toBe(true);
+
+    expect(ed.handler([2])).toBe(true);
+    expect(ed.handler([3])).toBe(true);
+    expect(ed.handler([0])).toBe(false);
+    expect(ed.handler([])).toBe(false);
+
+    expect(cup.handler([])).toBe(true); // defaults to 1;1
+    expect(cup.handler([1, 1])).toBe(true);
+    expect(cup.handler([2, 1])).toBe(false);
+
+    expect(hvp.handler([])).toBe(true);
+    expect(hvp.handler([1, 1])).toBe(true);
+    expect(hvp.handler([2, 1])).toBe(false);
+
+    expect(vpa.handler([])).toBe(true); // defaults to row 1
+    expect(vpa.handler([1])).toBe(true);
+    expect(vpa.handler([2])).toBe(false);
+  });
+
+  it("should NOT block cursor-to-top / clear / scroll-region for Codex agent terminals", () => {
+    new TerminalParserHandler(mockManaged);
+
+    const decstbm = csiHandlers.find((h) => h.opts.final === "r");
+    const ed = csiHandlers.find((h) => h.opts.final === "J");
+    const cup = csiHandlers.find((h) => h.opts.final === "H");
+    const hvp = csiHandlers.find((h) => h.opts.final === "f");
+    const vpa = csiHandlers.find((h) => h.opts.final === "d");
+
+    expect(decstbm).toBeUndefined();
+    expect(ed).toBeUndefined();
+    expect(cup).toBeUndefined();
+    expect(hvp).toBeUndefined();
+    expect(vpa).toBeUndefined();
+  });
+
   it("should NOT block for regular terminals", () => {
     mockManaged.kind = "terminal";
     mockManaged.agentId = undefined;

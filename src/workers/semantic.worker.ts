@@ -114,6 +114,8 @@ function scheduleNext(hadData: boolean): void {
   setTimeout(pollBuffer, ms);
 }
 
+const MAX_WORKER_READ_BYTES = 128 * 1024;
+
 /**
  * Poll the ring buffer for new data.
  */
@@ -122,15 +124,12 @@ async function pollBuffer(): Promise<void> {
 
   let hadData = false;
   try {
-    // Read all available data from the ring buffer
-    const rawData = ringBuffer.read();
+    const rawData = ringBuffer.readUpTo(MAX_WORKER_READ_BYTES);
 
     if (rawData) {
       hadData = true;
-      // Parse framed packets (handles partial packets across reads)
       const packets = packetParser.parse(rawData);
 
-      // Group packets by terminal ID to enable concurrent processing per terminal
       const packetsByTerminal = new Map<string, string[]>();
       for (const packet of packets) {
         let terminalPackets = packetsByTerminal.get(packet.id);
@@ -141,10 +140,8 @@ async function pollBuffer(): Promise<void> {
         terminalPackets.push(packet.data);
       }
 
-      // Process each terminal's packets concurrently
       await Promise.all(
         Array.from(packetsByTerminal.entries()).map(async ([terminalId, dataChunks]) => {
-          // Process chunks for this terminal sequentially to maintain state order
           for (const data of dataChunks) {
             await processPacket(terminalId, data);
           }
@@ -152,7 +149,6 @@ async function pollBuffer(): Promise<void> {
       );
     }
   } catch (error) {
-    // Log error but don't stop polling loop
     postTypedMessage({
       type: "ERROR",
       error: error instanceof Error ? error.message : String(error),
