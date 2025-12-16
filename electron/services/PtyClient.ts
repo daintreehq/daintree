@@ -965,12 +965,15 @@ export class PtyClient extends EventEmitter {
       this.serializedStateCallbacks.set(requestId, resolve);
       this.send({ type: "get-serialized-state", id, requestId } as PtyHostRequest);
 
+      // Extended timeout (15s) for large terminals with lots of scrollback.
+      // Serialization can take time for terminals with >10k lines of history.
       setTimeout(() => {
         if (this.serializedStateCallbacks.has(requestId)) {
+          console.warn(`[PtyClient] getSerializedState timeout for ${id} after 15s`);
           this.serializedStateCallbacks.delete(requestId);
           resolve(null);
         }
-      }, 5000);
+      }, 15000);
     });
   }
 

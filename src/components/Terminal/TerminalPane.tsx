@@ -98,6 +98,7 @@ function TerminalPaneComponent({
   const [dismissedRestartPrompt, setDismissedRestartPrompt] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isUpdateCwdOpen, setIsUpdateCwdOpen] = useState(false);
+  const [forceLiveKey, setForceLiveKey] = useState(0);
 
   const unseenOutput = useTerminalUnseenOutput(id);
 
@@ -527,6 +528,7 @@ function TerminalPaneComponent({
                 isVisible={isVisible}
                 refreshMs={snapshotRefreshMs}
                 isInputLocked={isInputLocked}
+                forceLiveKey={forceLiveKey}
               />
             ) : (
               <XtermAdapter
@@ -644,6 +646,7 @@ function TerminalPaneComponent({
             agentId={effectiveAgentId}
             onSend={({ trackerData, text }) => {
               if (!isInputLocked) {
+                setForceLiveKey((k) => k + 1);
                 terminalInstanceService.notifyUserInput(id);
                 // Use backend submit() which handles Codex vs other agents automatically
                 terminalClient.submit(id, text);
@@ -653,6 +656,7 @@ function TerminalPaneComponent({
             }}
             onSendKey={(key) => {
               if (!isInputLocked) {
+                setForceLiveKey((k) => k + 1);
                 terminalInstanceService.notifyUserInput(id);
                 terminalClient.sendKey(id, key);
               }
