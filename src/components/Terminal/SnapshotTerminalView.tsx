@@ -100,7 +100,8 @@ export function SnapshotTerminalView({
   useEffect(() => {
     if (!isVisible || refreshMs <= 0) return;
     const unsubscribe = terminalClient.subscribeScreenSnapshot(terminalId, pushTier, (next) => {
-      setSnapshot(next);
+      if (!next) return;
+      setSnapshot((prev) => (prev?.sequence === next.sequence ? prev : next));
     });
     if (!unsubscribe) {
       pushActiveRef.current = false;
@@ -124,7 +125,9 @@ export function SnapshotTerminalView({
     inFlightPollRef.current = true;
     try {
       const next = await terminalClient.getSnapshot(terminalId, { buffer: "auto" });
-      if (next) setSnapshot(next);
+      if (next) {
+        setSnapshot((prev) => (prev?.sequence === next.sequence ? prev : next));
+      }
     } finally {
       inFlightPollRef.current = false;
     }

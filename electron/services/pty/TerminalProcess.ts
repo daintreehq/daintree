@@ -200,6 +200,8 @@ export class TerminalProcess {
   private sessionPersistDirty = false;
   private sessionPersistInFlight = false;
   private screenSnapshotSequence = 0;
+  private screenSnapshotDirty = true;
+  private lastScreenSnapshot: TerminalScreenSnapshot | null = null;
 
   private readonly terminalInfo: TerminalInfo;
   private readonly isAgentTerminal: boolean;
@@ -821,6 +823,7 @@ export class TerminalProcess {
       if (terminal.headlessTerminal) {
         terminal.headlessTerminal.resize(cols, rows);
       }
+      this.screenSnapshotDirty = true;
     } catch (error) {
       console.error(`Failed to resize terminal ${this.id}:`, error);
     }
@@ -977,6 +980,11 @@ export class TerminalProcess {
           : headlessTerminal.buffer.active;
 
     const bufferName = buffer === headlessTerminal.buffer.alternate ? "alt" : "active";
+
+    if (!this.screenSnapshotDirty && this.lastScreenSnapshot?.buffer === bufferName) {
+      return this.lastScreenSnapshot;
+    }
+
     const cols = headlessTerminal.cols;
     const rows = headlessTerminal.rows;
     // Always project the bottom viewport (stable monitoring). Headless terminals have no
@@ -1024,7 +1032,7 @@ export class TerminalProcess {
       }
     }
 
-    return {
+    const snapshot: TerminalScreenSnapshot = {
       cols,
       rows,
       buffer: bufferName,
@@ -1034,6 +1042,10 @@ export class TerminalProcess {
       timestamp: Date.now(),
       sequence: ++this.screenSnapshotSequence,
     };
+
+    this.screenSnapshotDirty = false;
+    this.lastScreenSnapshot = snapshot;
+    return snapshot;
   }
 
   /**
@@ -1293,6 +1305,7 @@ export class TerminalProcess {
 
       // Write to headless terminal (canonical state).
       terminal.headlessTerminal?.write(data);
+      this.screenSnapshotDirty = true;
       this.scheduleSessionPersist();
 
       // Emit data to host/renderer immediately. Flow control is handled

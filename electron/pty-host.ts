@@ -243,7 +243,7 @@ const STREAM_STALL_SUSPEND_MS = 2000;
 // Optional experiment: push screen snapshots directly to renderer via MessagePort
 const snapshotSubscriptions = new Map<
   string,
-  { tier: "focused" | "visible"; interval: NodeJS.Timeout }
+  { tier: "focused" | "visible"; interval: NodeJS.Timeout; lastSequence: number }
 >();
 const snapshotInFlight = new Set<string>();
 
@@ -271,15 +271,26 @@ function startSnapshotStreaming(id: string, tier: "focused" | "visible"): void {
     snapshotInFlight.add(id);
     try {
       const snapshot = await ptyManager.getScreenSnapshotAsync(id, { buffer: "auto" });
+      if (!snapshot) {
+        return;
+      }
+      const subscription = snapshotSubscriptions.get(id);
+      if (!subscription) {
+        return;
+      }
+      if (snapshot.sequence <= subscription.lastSequence) {
+        return;
+      }
+      subscription.lastSequence = snapshot.sequence;
       rendererPort.postMessage({ type: "screen-snapshot", id, snapshot });
     } catch {
-      rendererPort.postMessage({ type: "screen-snapshot", id, snapshot: null });
+      // best effort; skip emitting null frames to avoid UI churn
     } finally {
       snapshotInFlight.delete(id);
     }
   }, intervalMs);
 
-  snapshotSubscriptions.set(id, { tier, interval });
+  snapshotSubscriptions.set(id, { tier, interval, lastSequence: 0 });
 }
 
 // Resume threshold - use hysteresis to prevent rapid pause/resume oscillation

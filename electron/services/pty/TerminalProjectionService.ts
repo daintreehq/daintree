@@ -133,6 +133,10 @@ export class TerminalProjectionService {
         lastEmittedByRow: new Map(),
       } satisfies CleanLogState);
 
+    if (snapshot.sequence <= existing.latestSequence) {
+      return;
+    }
+
     existing.latestSequence = Math.max(existing.latestSequence, snapshot.sequence);
 
     const prevLines = existing.lastLines;
