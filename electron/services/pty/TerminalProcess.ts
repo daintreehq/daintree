@@ -208,6 +208,9 @@ export class TerminalProcess {
 
   private restoreSessionIfPresent(headlessTerminal: HeadlessTerminalType): void {
     if (!TERMINAL_SESSION_PERSISTENCE_ENABLED) return;
+    // Agent terminals are typically long-lived interactive sessions; restoring a prior screen
+    // on spawn can look like duplicated startup output when the agent command runs again.
+    if (this.isAgentTerminal) return;
 
     const sessionPath = getSessionPath(this.id);
     if (!sessionPath) return;
@@ -226,6 +229,7 @@ export class TerminalProcess {
 
   private scheduleSessionPersist(): void {
     if (!TERMINAL_SESSION_PERSISTENCE_ENABLED) return;
+    if (this.isAgentTerminal) return;
     if (this.terminalInfo.wasKilled) return;
 
     this.sessionPersistDirty = true;
@@ -263,6 +267,7 @@ export class TerminalProcess {
 
   private async persistSessionSnapshot(): Promise<void> {
     if (!TERMINAL_SESSION_PERSISTENCE_ENABLED) return;
+    if (this.isAgentTerminal) return;
     if (this.terminalInfo.wasKilled) return;
     if (!this.sessionPersistDirty) return;
     if (this.sessionPersistInFlight) return;
