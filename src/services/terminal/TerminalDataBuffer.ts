@@ -10,6 +10,8 @@ const IDLE_POLL_INTERVALS = [8, 16, 33, 100] as const;
 const MAX_BUFFER_BYTES = 20 * 1024;
 const MAX_READS_PER_TICK = 50;
 const BUSY_POLL_INTERVAL_MS = 8;
+const MAX_SAB_READ_BYTES = 256 * 1024;
+const MAX_SAB_BYTES_PER_TICK = 2 * 1024 * 1024;
 
 const BYPASS_FRAME_BUFFER: boolean = false;
 
@@ -153,15 +155,22 @@ export class TerminalDataBuffer {
 
     let hasData = false;
     let reads = 0;
+    let bytesReadThisTick = 0;
 
-    while (reads < MAX_READS_PER_TICK) {
-      const data = this.ringBuffer.read();
+    while (reads < MAX_READS_PER_TICK && bytesReadThisTick < MAX_SAB_BYTES_PER_TICK) {
+      const remainingBudget = MAX_SAB_BYTES_PER_TICK - bytesReadThisTick;
+      if (remainingBudget <= 0) {
+        break;
+      }
+      const perReadBudget = Math.min(MAX_SAB_READ_BYTES, remainingBudget);
+      const data = this.ringBuffer.readUpTo(perReadBudget);
       if (!data) {
         break;
       }
 
       hasData = true;
       reads += 1;
+      bytesReadThisTick += data.byteLength;
       const packets = this.packetParser.parse(data);
 
       for (const packet of packets) {
