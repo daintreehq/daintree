@@ -122,9 +122,7 @@ describe("SharedRingBuffer", () => {
         chunks.push(chunk);
       }
 
-      const reconstructed = new Uint8Array(
-        chunks.reduce((sum, c) => sum + c.length, 0)
-      );
+      const reconstructed = new Uint8Array(chunks.reduce((sum, c) => sum + c.length, 0));
       let offset = 0;
       for (const c of chunks) {
         reconstructed.set(c, offset);
