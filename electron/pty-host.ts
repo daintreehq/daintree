@@ -323,6 +323,7 @@ function emitTerminalStatus(
 // MessagePort for direct Renderer ↔ Pty Host communication (bypasses Main)
 // Note: This variable holds the port reference so the message handler stays active
 let rendererPort: MessagePort | null = null;
+let rendererPortMessageHandler: ((event: any) => void) | null = null;
 
 // Helper to send events to Main process
 function sendEvent(event: PtyHostEvent): void {
@@ -719,7 +720,25 @@ port.on("message", async (rawMsg: any) => {
       case "connect-port":
         // Receive MessagePort for direct Renderer ↔ Pty Host communication
         if (ports && ports.length > 0) {
-          const receivedPort = ports[0];
+          const receivedPort = ports[0] as MessagePort;
+          if (rendererPort === receivedPort && rendererPortMessageHandler) {
+            try {
+              receivedPort.start();
+            } catch {
+              // ignore
+            }
+            console.log("[PtyHost] MessagePort already connected, ignoring duplicate connect-port");
+            break;
+          }
+
+          if (rendererPort && rendererPortMessageHandler) {
+            try {
+              rendererPort.removeListener("message", rendererPortMessageHandler);
+            } catch {
+              // ignore
+            }
+          }
+
           rendererPort = receivedPort;
           receivedPort.start();
           console.log("[PtyHost] MessagePort received from Main, starting listener...");
@@ -729,7 +748,7 @@ port.on("message", async (rawMsg: any) => {
             stopSnapshotStreaming(id);
           }
 
-          receivedPort.on("message", (event: any) => {
+          rendererPortMessageHandler = (event: any) => {
             const portMsg = event?.data ? event.data : event;
 
             // Validate message structure
@@ -782,7 +801,9 @@ port.on("message", async (rawMsg: any) => {
             } catch (error) {
               console.error("[PtyHost] Error handling MessagePort message:", error);
             }
-          });
+          };
+
+          receivedPort.on("message", rendererPortMessageHandler);
 
           console.log("[PtyHost] MessagePort listener installed");
         } else {

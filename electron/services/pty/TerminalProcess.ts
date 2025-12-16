@@ -92,7 +92,10 @@ function estimateChangedChars(prev: string, next: string): number {
   return Math.max(1, maxLen - prefix - suffix);
 }
 
-function estimateViewportDelta(prev: string[], next: string[]): { changedLines: number; changedChars: number } {
+function estimateViewportDelta(
+  prev: string[],
+  next: string[]
+): { changedLines: number; changedChars: number } {
   const rowCount = Math.max(prev.length, next.length);
   let changedLines = 0;
   let changedChars = 0;
@@ -672,6 +675,10 @@ export class TerminalProcess {
    */
   acknowledgeData(charCount: number): void {
     if (this.terminalInfo.wasKilled) {
+      return;
+    }
+
+    if (this.isAgentTerminal) {
       return;
     }
 
@@ -1344,9 +1351,10 @@ export class TerminalProcess {
       }
 
       // Flow Control: Only apply per-terminal flow control in IPC fallback mode.
-      // In SAB mode, global SAB backpressure in pty-host handles throttling,
-      // and renderer acks may never arrive for background (non-rendered) terminals.
-      if (!this.sabModeEnabled) {
+      // In SAB mode, global SAB backpressure in pty-host handles throttling.
+      // Agent terminals are snapshot-projected and may not have a renderer consumer to ack bytes,
+      // so per-terminal IPC flow control would stall them indefinitely.
+      if (!this.sabModeEnabled && !this.isAgentTerminal) {
         this._unacknowledgedCharCount += data.length;
         if (!this._isPtyPaused && this._unacknowledgedCharCount > HIGH_WATERMARK_CHARS) {
           if (process.env.CANOPY_VERBOSE) {

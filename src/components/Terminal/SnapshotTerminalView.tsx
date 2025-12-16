@@ -31,6 +31,9 @@ export function SnapshotTerminalView({
 
   const xtermRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const disposedRef = useRef(false);
+  const writeInFlightRef = useRef(0);
+  const disposeTimerRef = useRef<number | null>(null);
   const inFlightPollRef = useRef(false);
   const pushActiveRef = useRef(false);
   const renderInFlightRef = useRef(false);
@@ -48,7 +51,30 @@ export function SnapshotTerminalView({
     [fontFamily, fontSize]
   );
 
+  const scheduleDispose = useCallback((term: Terminal) => {
+    if (disposeTimerRef.current !== null) {
+      window.clearTimeout(disposeTimerRef.current);
+      disposeTimerRef.current = null;
+    }
+
+    const tick = () => {
+      if (writeInFlightRef.current > 0 || renderInFlightRef.current) {
+        disposeTimerRef.current = window.setTimeout(tick, 25);
+        return;
+      }
+      disposeTimerRef.current = null;
+      try {
+        term.dispose();
+      } catch {
+        // ignore
+      }
+    };
+
+    disposeTimerRef.current = window.setTimeout(tick, 0);
+  }, []);
+
   useLayoutEffect(() => {
+    disposedRef.current = false;
     const container = containerRef.current;
     if (!container) return;
 
@@ -72,7 +98,14 @@ export function SnapshotTerminalView({
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(container);
-    fit.fit();
+    try {
+      const rect = container.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        fit.fit();
+      }
+    } catch {
+      // ignore
+    }
 
     xtermRef.current = term;
     fitAddonRef.current = fit;
@@ -84,16 +117,18 @@ export function SnapshotTerminalView({
     });
 
     return () => {
+      disposedRef.current = true;
       onDataDisposable.dispose();
+      pendingSnapshotRef.current = null;
       xtermRef.current = null;
       fitAddonRef.current = null;
-      try {
-        term.dispose();
-      } catch {
-        // ignore
+      if (disposeTimerRef.current !== null) {
+        window.clearTimeout(disposeTimerRef.current);
+        disposeTimerRef.current = null;
       }
+      scheduleDispose(term);
     };
-  }, [fontFamily, fontSize, isInputLocked, terminalId]);
+  }, [fontFamily, fontSize, isInputLocked, scheduleDispose, terminalId]);
 
   const pushTier = refreshMs <= 60 ? "focused" : "visible";
 
@@ -160,14 +195,21 @@ export function SnapshotTerminalView({
     const observer = new ResizeObserver(() => {
       if (rafId !== null) cancelAnimationFrame(rafId);
       rafId = requestAnimationFrame(() => {
+        if (disposedRef.current) return;
         const term = xtermRef.current;
         const fit = fitAddonRef.current;
         if (!term || !fit) return;
 
-        fit.fit();
-        const cols = term.cols;
-        const rows = term.rows;
-        terminalClient.resize(terminalId, cols, rows);
+        try {
+          const rect = container.getBoundingClientRect();
+          if (rect.width <= 0 || rect.height <= 0) return;
+          fit.fit();
+          const cols = term.cols;
+          const rows = term.rows;
+          terminalClient.resize(terminalId, cols, rows);
+        } catch {
+          // ignore
+        }
       });
     });
 
@@ -179,8 +221,6 @@ export function SnapshotTerminalView({
   }, [isFocused, isVisible, terminalId, fontFamily, fontSize]);
 
   const renderSnapshot = useCallback(async () => {
-    const term = xtermRef.current;
-    if (!term) return;
     if (!snapshot) return;
 
     pendingSnapshotRef.current = snapshot;
@@ -189,6 +229,10 @@ export function SnapshotTerminalView({
     renderInFlightRef.current = true;
     try {
       while (pendingSnapshotRef.current) {
+        if (disposedRef.current) return;
+        const term = xtermRef.current;
+        if (!term) return;
+
         const next = pendingSnapshotRef.current;
         pendingSnapshotRef.current = null;
 
@@ -200,10 +244,21 @@ export function SnapshotTerminalView({
           }
         }
 
-        term.reset();
-        const payload = next.ansi ?? next.lines.join("\n");
+        const payload =
+          next.ansi ??
+          // Ensure a full-frame snapshot even if ANSI serialization is unavailable.
+          `\x1b[0m\x1b[2J\x1b[H${next.lines.join("\n")}`;
         await new Promise<void>((resolve) => {
-          term.write(payload, () => resolve());
+          try {
+            writeInFlightRef.current += 1;
+            term.write(payload, () => {
+              writeInFlightRef.current = Math.max(0, writeInFlightRef.current - 1);
+              resolve();
+            });
+          } catch {
+            writeInFlightRef.current = Math.max(0, writeInFlightRef.current - 1);
+            resolve();
+          }
         });
       }
     } finally {
