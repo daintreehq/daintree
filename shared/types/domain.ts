@@ -293,7 +293,12 @@ export interface TerminalInstance {
   flowStatusTimestamp?: number;
   /** Whether user input is locked (read-only monitor mode) */
   isInputLocked?: boolean;
+  /** Rendering strategy for the terminal pane (experiment: snapshot streaming) */
+  viewMode?: TerminalViewMode;
 }
+
+/** Renderer view mode for a terminal */
+export type TerminalViewMode = "live" | "snapshot";
 
 /** Options for spawning a new PTY process */
 export interface PtySpawnOptions {

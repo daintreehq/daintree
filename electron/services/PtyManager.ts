@@ -15,6 +15,15 @@ import {
   type PtyManagerEvents,
 } from "./pty/index.js";
 import { disposeTerminalSerializerService } from "./pty/TerminalSerializerService.js";
+import {
+  getTerminalProjectionService,
+  disposeTerminalProjectionService,
+} from "./pty/TerminalProjectionService.js";
+import type {
+  TerminalCleanLogEntry,
+  TerminalGetScreenSnapshotOptions,
+  TerminalScreenSnapshot,
+} from "../../shared/types/ipc/terminal.js";
 
 /**
  * PtyManager - Facade for terminal process management.
@@ -190,6 +199,7 @@ export class PtyManager extends EventEmitter {
           this.emit("exit", termId, exitCode);
           this.registry.delete(termId);
           this.terminals.delete(termId);
+          getTerminalProjectionService().clear(termId);
         },
       },
       {
@@ -335,6 +345,35 @@ export class PtyManager extends EventEmitter {
    */
   getAllTerminalSnapshots(): TerminalSnapshot[] {
     return this.registry.getAllSnapshots();
+  }
+
+  /**
+   * Get a composed screen snapshot from the backend headless terminal.
+   * Single-flight is handled by TerminalProjectionService to prevent pileup.
+   */
+  async getScreenSnapshotAsync(
+    id: string,
+    options?: TerminalGetScreenSnapshotOptions
+  ): Promise<TerminalScreenSnapshot | null> {
+    const terminal = this.terminals.get(id);
+    if (!terminal) {
+      return null;
+    }
+
+    return getTerminalProjectionService().getSnapshotAsync(id, () =>
+      terminal.getScreenSnapshot(options)
+    );
+  }
+
+  /**
+   * Get bounded clean log entries derived from headless snapshots.
+   */
+  getCleanLog(
+    id: string,
+    sinceSequence?: number,
+    limit?: number
+  ): { latestSequence: number; entries: TerminalCleanLogEntry[] } {
+    return getTerminalProjectionService().getCleanLog(id, sinceSequence, limit);
   }
 
   /**
@@ -534,6 +573,7 @@ export class PtyManager extends EventEmitter {
     this.removeAllListeners();
 
     disposeTerminalSerializerService();
+    disposeTerminalProjectionService();
   }
 }
 

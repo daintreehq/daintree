@@ -5,9 +5,31 @@ import type {
   BackendTerminalInfo,
   TerminalReconnectResult,
   TerminalStatusPayload,
+  TerminalGetCleanLogRequest,
+  TerminalGetCleanLogResponse,
+  TerminalGetScreenSnapshotOptions,
+  TerminalScreenSnapshot,
 } from "@shared/types";
 
 let messagePort: MessagePort | null = null;
+let portListenerInstalled = false;
+const portSubscribers = new Set<(msg: unknown) => void>();
+const snapshotSubscriberCounts = new Map<string, number>();
+
+function ensurePortListener(): void {
+  if (!messagePort || portListenerInstalled) return;
+  portListenerInstalled = true;
+  messagePort.addEventListener("message", (event: MessageEvent) => {
+    const msg = (event as any)?.data ?? event;
+    for (const listener of Array.from(portSubscribers)) {
+      try {
+        listener(msg);
+      } catch (error) {
+        console.warn("[TerminalClient] Port listener error:", error);
+      }
+    }
+  });
+}
 
 // Listen for MessagePort transferred from preload
 if (typeof window !== "undefined") {
@@ -19,6 +41,8 @@ if (typeof window !== "undefined") {
       }
       messagePort = event.ports[0];
       messagePort.start();
+      portListenerInstalled = false;
+      ensurePortListener();
       console.log("[TerminalClient] MessagePort acquired via postMessage");
     }
   });
@@ -75,6 +99,65 @@ export const terminalClient = {
       }
     } else {
       window.electron.terminal.resize(id, cols, rows);
+    }
+  },
+
+  /**
+   * Subscribe to push-based screen snapshots from the PTY host via MessagePort.
+   * Returns an unsubscribe function, or null if MessagePort is unavailable.
+   */
+  subscribeScreenSnapshot: (
+    id: string,
+    tier: "focused" | "visible",
+    callback: (snapshot: TerminalScreenSnapshot | null) => void
+  ): (() => void) | null => {
+    if (!messagePort) {
+      return null;
+    }
+
+    ensurePortListener();
+
+    const listener = (msg: unknown) => {
+      const data = msg as any;
+      if (!data || data.type !== "screen-snapshot" || data.id !== id) return;
+      callback((data.snapshot ?? null) as TerminalScreenSnapshot | null);
+    };
+
+    portSubscribers.add(listener);
+    snapshotSubscriberCounts.set(id, (snapshotSubscriberCounts.get(id) ?? 0) + 1);
+
+    try {
+      messagePort.postMessage({ type: "subscribe-screen-snapshot", id, tier });
+    } catch (error) {
+      portSubscribers.delete(listener);
+      snapshotSubscriberCounts.set(id, Math.max(0, (snapshotSubscriberCounts.get(id) ?? 1) - 1));
+      console.warn("[TerminalClient] Failed to subscribe snapshots via MessagePort:", error);
+      return null;
+    }
+
+    return () => {
+      portSubscribers.delete(listener);
+      const nextCount = Math.max(0, (snapshotSubscriberCounts.get(id) ?? 1) - 1);
+      if (nextCount === 0) {
+        snapshotSubscriberCounts.delete(id);
+        try {
+          messagePort?.postMessage({ type: "unsubscribe-screen-snapshot", id });
+        } catch {
+          // ignore
+        }
+      } else {
+        snapshotSubscriberCounts.set(id, nextCount);
+      }
+    };
+  },
+
+  updateScreenSnapshotTier: (id: string, tier: "focused" | "visible"): void => {
+    if (!messagePort) return;
+    if ((snapshotSubscriberCounts.get(id) ?? 0) <= 0) return;
+    try {
+      messagePort.postMessage({ type: "update-screen-snapshot-tier", id, tier });
+    } catch {
+      // ignore
     }
   },
 
@@ -164,6 +247,27 @@ export const terminalClient = {
    */
   getSerializedState: (terminalId: string): Promise<string | null> => {
     return window.electron.terminal.getSerializedState(terminalId);
+  },
+
+  /**
+   * Get composed screen snapshot from backend headless terminal.
+   */
+  getSnapshot: (
+    terminalId: string,
+    options?: TerminalGetScreenSnapshotOptions
+  ): Promise<TerminalScreenSnapshot | null> => {
+    return window.electron.terminal.getSnapshot(terminalId, options);
+  },
+
+  /**
+   * Get bounded clean log derived from headless snapshots.
+   */
+  getCleanLog: (request: TerminalGetCleanLogRequest): Promise<TerminalGetCleanLogResponse> => {
+    return window.electron.terminal.getCleanLog(request);
+  },
+
+  isSnapshotStreamingExperimentEnabled: (): boolean => {
+    return window.electron.terminal.isSnapshotStreamingExperimentEnabled();
   },
 
   /**

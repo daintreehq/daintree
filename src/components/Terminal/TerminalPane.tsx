@@ -11,6 +11,7 @@ import { TerminalSearchBar } from "./TerminalSearchBar";
 import { TerminalRestartBanner } from "./TerminalRestartBanner";
 import { TerminalErrorBanner } from "./TerminalErrorBanner";
 import { UpdateCwdDialog } from "./UpdateCwdDialog";
+import { SnapshotTerminalView } from "./SnapshotTerminalView";
 import { ErrorBanner } from "../Errors/ErrorBanner";
 import {
   useErrorStore,
@@ -27,6 +28,7 @@ import { terminalClient } from "@/clients";
 import { HybridInputBar, type HybridInputBarHandle } from "./HybridInputBar";
 import { getTerminalFocusTarget } from "./terminalFocus";
 import { useTerminalUnseenOutput } from "@/hooks/useTerminalUnseenOutput";
+import { TerminalRefreshTier } from "@/types";
 
 export type { TerminalType };
 
@@ -144,6 +146,19 @@ function TerminalPaneComponent({
   const isAgentTerminal = effectiveAgentId !== undefined;
   const showHybridInputBar = isAgentTerminal && hybridInputEnabled;
 
+  const terminal = getTerminal(id);
+  const viewMode = terminal?.viewMode ?? "live";
+  const snapshotExperimentEnabled = terminalClient.isSnapshotStreamingExperimentEnabled();
+  const isSnapshotMode = snapshotExperimentEnabled && viewMode === "snapshot";
+  const refreshTier = getTerminalRefreshTier(terminal, isFocused);
+  const snapshotRefreshMs =
+    refreshTier === TerminalRefreshTier.FOCUSED
+      ? 50
+      : refreshTier === TerminalRefreshTier.VISIBLE
+        ? 150
+        : 0;
+  const isVisible = terminal?.isVisible ?? false;
+
   const queueCount = useTerminalStore(
     useShallow((state) => state.commandQueue.filter((c) => c.terminalId === id).length)
   );
@@ -250,6 +265,9 @@ function TerminalPaneComponent({
       const target = e.target as HTMLElement;
 
       if ((e.metaKey || e.ctrlKey) && e.key === "f") {
+        if (isSnapshotMode) {
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
         setIsSearchOpen(true);
@@ -272,7 +290,7 @@ function TerminalPaneComponent({
         setFocused(id);
       }
     },
-    [id, setFocused]
+    [id, isSnapshotMode, setFocused]
   );
 
   const getRefreshTierCallback = useCallback(() => {
@@ -504,20 +522,30 @@ function TerminalPaneComponent({
             )}
             onPointerDownCapture={handleXtermPointerDownCapture}
           >
-            <XtermAdapter
-              key={`${id}-${restartKey}`}
-              terminalId={id}
-              terminalType={type}
-              agentId={agentId}
-              isInputLocked={isInputLocked}
-              onReady={handleReady}
-              onExit={handleExit}
-              onInput={handleInput}
-              className="absolute inset-0"
-              getRefreshTier={getRefreshTierCallback}
-            />
+            {isSnapshotMode ? (
+              <SnapshotTerminalView
+                terminalId={id}
+                isFocused={isFocused}
+                isVisible={isVisible}
+                refreshMs={snapshotRefreshMs}
+                isInputLocked={isInputLocked}
+              />
+            ) : (
+              <XtermAdapter
+                key={`${id}-${restartKey}`}
+                terminalId={id}
+                terminalType={type}
+                agentId={agentId}
+                isInputLocked={isInputLocked}
+                onReady={handleReady}
+                onExit={handleExit}
+                onInput={handleInput}
+                className="absolute inset-0"
+                getRefreshTier={getRefreshTierCallback}
+              />
+            )}
             <ArtifactOverlay terminalId={id} worktreeId={worktreeId} cwd={cwd} />
-            {unseenOutput.isUserScrolledBack && unseenOutput.unseen > 0 && (
+            {!isSnapshotMode && unseenOutput.isUserScrolledBack && unseenOutput.unseen > 0 && (
               <button
                 onClick={() => {
                   terminalInstanceService.resumeAutoScroll(id);
@@ -530,7 +558,7 @@ function TerminalPaneComponent({
                 <span className="text-sm font-medium">Resume</span>
               </button>
             )}
-            {isSearchOpen && (
+            {!isSnapshotMode && isSearchOpen && (
               <TerminalSearchBar
                 terminalId={id}
                 onClose={() => {

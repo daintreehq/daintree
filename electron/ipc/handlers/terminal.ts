@@ -10,6 +10,12 @@ import type { HandlerDependencies } from "../types.js";
 import type { TerminalSpawnOptions, TerminalResizePayload } from "../../types/index.js";
 import { TerminalSpawnOptionsSchema, TerminalResizePayloadSchema } from "../../schemas/ipc.js";
 import type { PtyHostActivityTier } from "../../../shared/types/pty-host.js";
+import type {
+  TerminalGetCleanLogRequest,
+  TerminalGetCleanLogResponse,
+  TerminalGetScreenSnapshotOptions,
+  TerminalScreenSnapshot,
+} from "../../../shared/types/ipc/terminal.js";
 
 export function registerTerminalHandlers(deps: HandlerDependencies): () => void {
   const { mainWindow, ptyClient, worktreeService: workspaceClient } = deps;
@@ -548,6 +554,45 @@ export function registerTerminalHandlers(deps: HandlerDependencies): () => void 
   };
   ipcMain.handle(CHANNELS.TERMINAL_GET_SERIALIZED_STATE, handleTerminalGetSerializedState);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_SERIALIZED_STATE));
+
+  // Get composed screen snapshot from backend headless terminal (experiment: snapshot projection)
+  const handleTerminalGetSnapshot = async (
+    _event: Electron.IpcMainInvokeEvent,
+    terminalId: string,
+    options?: TerminalGetScreenSnapshotOptions
+  ): Promise<TerminalScreenSnapshot | null> => {
+    if (typeof terminalId !== "string" || !terminalId) {
+      throw new Error("Invalid terminal ID: must be a non-empty string");
+    }
+    if (options !== undefined && (options === null || typeof options !== "object")) {
+      throw new Error("Invalid snapshot options");
+    }
+    return ptyClient.getScreenSnapshotAsync(terminalId, options);
+  };
+  ipcMain.handle(CHANNELS.TERMINAL_GET_SNAPSHOT, handleTerminalGetSnapshot);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_SNAPSHOT));
+
+  // Get bounded clean log derived from headless snapshots (experiment)
+  const handleTerminalGetCleanLog = async (
+    _event: Electron.IpcMainInvokeEvent,
+    request: TerminalGetCleanLogRequest
+  ): Promise<TerminalGetCleanLogResponse> => {
+    if (!request || typeof request !== "object") {
+      throw new Error("Invalid request");
+    }
+    if (typeof request.id !== "string" || !request.id) {
+      throw new Error("Invalid terminal ID: must be a non-empty string");
+    }
+    if (request.sinceSequence !== undefined && typeof request.sinceSequence !== "number") {
+      throw new Error("Invalid sinceSequence");
+    }
+    if (request.limit !== undefined && typeof request.limit !== "number") {
+      throw new Error("Invalid limit");
+    }
+    return ptyClient.getCleanLogAsync(request);
+  };
+  ipcMain.handle(CHANNELS.TERMINAL_GET_CLEAN_LOG, handleTerminalGetCleanLog);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_CLEAN_LOG));
 
   // Get terminal information for diagnostic display
   const handleTerminalGetInfo = async (

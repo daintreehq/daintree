@@ -36,6 +36,13 @@ import type {
   CrashType,
   HostCrashPayload,
 } from "../../shared/types/pty-host.js";
+import type {
+  TerminalCleanLogEntry,
+  TerminalGetCleanLogRequest,
+  TerminalGetCleanLogResponse,
+  TerminalGetScreenSnapshotOptions,
+  TerminalScreenSnapshot,
+} from "../../shared/types/ipc/terminal.js";
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
 
@@ -157,6 +164,9 @@ export class PtyClient extends EventEmitter {
     string,
     (result: { state: string | null; warnings?: string[] }) => void
   > = new Map();
+  private screenSnapshotCallbacks: Map<string, (snapshot: TerminalScreenSnapshot | null) => void> =
+    new Map();
+  private cleanLogCallbacks: Map<string, (result: TerminalGetCleanLogResponse) => void> = new Map();
   private killByProjectCallbacks: Map<string, (killed: number) => void> = new Map();
   private projectStatsCallbacks: Map<
     string,
@@ -580,6 +590,28 @@ export class PtyClient extends EventEmitter {
         break;
       }
 
+      case "screen-snapshot": {
+        const cb = this.screenSnapshotCallbacks.get((event as any).requestId);
+        if (cb) {
+          this.screenSnapshotCallbacks.delete((event as any).requestId);
+          cb(((event as any).snapshot ?? null) as TerminalScreenSnapshot | null);
+        }
+        break;
+      }
+
+      case "clean-log": {
+        const cb = this.cleanLogCallbacks.get((event as any).requestId);
+        if (cb) {
+          this.cleanLogCallbacks.delete((event as any).requestId);
+          cb({
+            id: (event as any).id,
+            latestSequence: (event as any).latestSequence ?? 0,
+            entries: ((event as any).entries ?? []) as TerminalCleanLogEntry[],
+          });
+        }
+        break;
+      }
+
       case "wake-result": {
         const cb = this.wakeCallbacks.get((event as any).requestId);
         if (cb) {
@@ -937,6 +969,53 @@ export class PtyClient extends EventEmitter {
         if (this.serializedStateCallbacks.has(requestId)) {
           this.serializedStateCallbacks.delete(requestId);
           resolve(null);
+        }
+      }, 5000);
+    });
+  }
+
+  /**
+   * Get composed screen snapshot from backend headless terminal.
+   */
+  async getScreenSnapshotAsync(
+    id: string,
+    options?: TerminalGetScreenSnapshotOptions
+  ): Promise<TerminalScreenSnapshot | null> {
+    return new Promise((resolve) => {
+      const requestId = `screen-snapshot-${id}-${Date.now()}`;
+      this.screenSnapshotCallbacks.set(requestId, resolve);
+      this.send({ type: "get-screen-snapshot", id, requestId, options } as PtyHostRequest);
+
+      setTimeout(() => {
+        if (this.screenSnapshotCallbacks.has(requestId)) {
+          this.screenSnapshotCallbacks.delete(requestId);
+          resolve(null);
+        }
+      }, 5000);
+    });
+  }
+
+  /**
+   * Get bounded clean log derived from headless snapshots.
+   */
+  async getCleanLogAsync(
+    request: TerminalGetCleanLogRequest
+  ): Promise<TerminalGetCleanLogResponse> {
+    return new Promise((resolve) => {
+      const requestId = `clean-log-${request.id}-${Date.now()}`;
+      this.cleanLogCallbacks.set(requestId, resolve);
+      this.send({
+        type: "get-clean-log",
+        id: request.id,
+        requestId,
+        sinceSequence: request.sinceSequence,
+        limit: request.limit,
+      } as PtyHostRequest);
+
+      setTimeout(() => {
+        if (this.cleanLogCallbacks.has(requestId)) {
+          this.cleanLogCallbacks.delete(requestId);
+          resolve({ id: request.id, latestSequence: 0, entries: [] });
         }
       }, 5000);
     });

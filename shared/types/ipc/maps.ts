@@ -15,6 +15,10 @@ import type {
   BackendTerminalInfo,
   TerminalInfoPayload,
   TerminalActivityPayload,
+  TerminalScreenSnapshot,
+  TerminalGetScreenSnapshotOptions,
+  TerminalGetCleanLogRequest,
+  TerminalGetCleanLogResponse,
 } from "./terminal.js";
 import type {
   SaveArtifactOptions,
@@ -156,6 +160,14 @@ export interface IpcInvokeMap {
   "terminal:get-info": {
     args: [id: string];
     result: TerminalInfoPayload;
+  };
+  "terminal:get-snapshot": {
+    args: [terminalId: string, options?: TerminalGetScreenSnapshotOptions];
+    result: TerminalScreenSnapshot | null;
+  };
+  "terminal:get-clean-log": {
+    args: [request: TerminalGetCleanLogRequest];
+    result: TerminalGetCleanLogResponse;
   };
   "terminal:force-resume": {
     args: [id: string];

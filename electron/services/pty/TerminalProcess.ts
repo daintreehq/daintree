@@ -33,6 +33,10 @@ import { styleUrls } from "./UrlStyler.js";
 import { logError } from "../../utils/logger.js";
 import { decideTerminalExitForensics } from "./terminalForensics.js";
 import { installHeadlessResponder } from "./headlessResponder.js";
+import type {
+  TerminalGetScreenSnapshotOptions,
+  TerminalScreenSnapshot,
+} from "../../../shared/types/ipc/terminal.js";
 
 const TERMINAL_DISABLE_URL_STYLING: boolean = process.env.CANOPY_DISABLE_URL_STYLING === "1";
 const TERMINAL_SESSION_PERSISTENCE_ENABLED: boolean =
@@ -195,6 +199,7 @@ export class TerminalProcess {
   private sessionPersistTimer: NodeJS.Timeout | null = null;
   private sessionPersistDirty = false;
   private sessionPersistInFlight = false;
+  private screenSnapshotSequence = 0;
 
   private readonly terminalInfo: TerminalInfo;
   private readonly isAgentTerminal: boolean;
@@ -945,6 +950,56 @@ export class TerminalProcess {
       console.error(`[TerminalProcess] Failed to serialize terminal ${this.id}:`, error);
       return null;
     }
+  }
+
+  /**
+   * Get a composed screen snapshot from the backend headless terminal.
+   * This returns a stable viewport projection (rows x cols) that has already applied
+   * all escape sequences (no transient redraw frames).
+   */
+  getScreenSnapshot(options?: TerminalGetScreenSnapshotOptions): TerminalScreenSnapshot | null {
+    const terminal = this.terminalInfo;
+    if (terminal.wasKilled) {
+      return null;
+    }
+
+    const headlessTerminal = terminal.headlessTerminal;
+    if (!headlessTerminal) {
+      return null;
+    }
+
+    const preference = options?.buffer ?? "auto";
+    const buffer =
+      preference === "active"
+        ? headlessTerminal.buffer.normal
+        : preference === "alt"
+          ? headlessTerminal.buffer.alternate
+          : headlessTerminal.buffer.active;
+
+    const bufferName = buffer === headlessTerminal.buffer.alternate ? "alt" : "active";
+    const cols = headlessTerminal.cols;
+    const rows = headlessTerminal.rows;
+    const start = buffer.viewportY;
+
+    const lines: string[] = new Array(rows);
+    for (let row = 0; row < rows; row++) {
+      const line = buffer.getLine(start + row);
+      // translateToString(trimRight, startCol, endCol)
+      lines[row] = line ? line.translateToString(true, 0, cols) : "";
+    }
+
+    const cursorX = Math.max(0, Math.min(cols - 1, buffer.cursorX));
+    const cursorY = Math.max(0, Math.min(rows - 1, buffer.cursorY));
+
+    return {
+      cols,
+      rows,
+      buffer: bufferName,
+      cursor: { x: cursorX, y: cursorY, visible: true },
+      lines,
+      timestamp: Date.now(),
+      sequence: ++this.screenSnapshotSequence,
+    };
   }
 
   /**

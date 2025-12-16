@@ -29,6 +29,7 @@ export interface HydrationOptions {
     requestedId?: string; // Pass to spawn with a stable ID
     skipCommandExecution?: boolean; // Store command but don't execute on spawn
     isInputLocked?: boolean; // Restore input lock state
+    viewMode?: import("@/types").TerminalViewMode; // Restore per-terminal render mode (experiment)
   }) => Promise<string>;
   setActiveWorktree: (id: string | null) => void;
   loadRecipes: () => Promise<void>;
@@ -264,5 +265,6 @@ async function spawnNewTerminal(
     command: commandToRun,
     requestedId: terminal.id,
     isInputLocked: terminal.isInputLocked,
+    viewMode: terminal.viewMode,
   });
 }

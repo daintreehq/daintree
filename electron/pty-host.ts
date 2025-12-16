@@ -240,6 +240,48 @@ const pendingVisualPackets = new Map<string, Uint8Array>();
 
 const STREAM_STALL_SUSPEND_MS = 2000;
 
+// Optional experiment: push screen snapshots directly to renderer via MessagePort
+const snapshotSubscriptions = new Map<
+  string,
+  { tier: "focused" | "visible"; interval: NodeJS.Timeout }
+>();
+const snapshotInFlight = new Set<string>();
+
+function getSnapshotIntervalMs(tier: "focused" | "visible"): number {
+  return tier === "focused" ? 50 : 150;
+}
+
+function stopSnapshotStreaming(id: string): void {
+  const existing = snapshotSubscriptions.get(id);
+  if (existing) {
+    clearInterval(existing.interval);
+    snapshotSubscriptions.delete(id);
+  }
+  snapshotInFlight.delete(id);
+}
+
+function startSnapshotStreaming(id: string, tier: "focused" | "visible"): void {
+  stopSnapshotStreaming(id);
+  if (!rendererPort) return;
+
+  const intervalMs = getSnapshotIntervalMs(tier);
+  const interval = setInterval(async () => {
+    if (!rendererPort) return;
+    if (snapshotInFlight.has(id)) return;
+    snapshotInFlight.add(id);
+    try {
+      const snapshot = await ptyManager.getScreenSnapshotAsync(id, { buffer: "auto" });
+      rendererPort.postMessage({ type: "screen-snapshot", id, snapshot });
+    } catch {
+      rendererPort.postMessage({ type: "screen-snapshot", id, snapshot: null });
+    } finally {
+      snapshotInFlight.delete(id);
+    }
+  }, intervalMs);
+
+  snapshotSubscriptions.set(id, { tier, interval });
+}
+
 // Resume threshold - use hysteresis to prevent rapid pause/resume oscillation
 const BACKPRESSURE_RESUME_THRESHOLD = 80; // Resume when buffer drops below 80%
 const BACKPRESSURE_CHECK_INTERVAL_MS = 100; // Check every 100ms during backpressure
@@ -269,7 +311,6 @@ function emitTerminalStatus(
 
 // MessagePort for direct Renderer ↔ Pty Host communication (bypasses Main)
 // Note: This variable holds the port reference so the message handler stays active
-// @ts-expect-error - stored to keep port reference alive
 let rendererPort: MessagePort | null = null;
 
 // Helper to send events to Main process
@@ -669,6 +710,11 @@ port.on("message", async (rawMsg: any) => {
           receivedPort.start();
           console.log("[PtyHost] MessagePort received from Main, starting listener...");
 
+          // If the renderer reconnects, clear any previous snapshot subscriptions.
+          for (const id of snapshotSubscriptions.keys()) {
+            stopSnapshotStreaming(id);
+          }
+
           receivedPort.on("message", (event: any) => {
             const portMsg = event?.data ? event.data : event;
 
@@ -692,6 +738,27 @@ port.on("message", async (rawMsg: any) => {
                 typeof portMsg.rows === "number"
               ) {
                 ptyManager.resize(portMsg.id, portMsg.cols, portMsg.rows);
+              } else if (
+                portMsg.type === "subscribe-screen-snapshot" &&
+                typeof portMsg.id === "string" &&
+                (portMsg.tier === "focused" || portMsg.tier === "visible")
+              ) {
+                startSnapshotStreaming(portMsg.id, portMsg.tier);
+              } else if (
+                portMsg.type === "update-screen-snapshot-tier" &&
+                typeof portMsg.id === "string" &&
+                (portMsg.tier === "focused" || portMsg.tier === "visible")
+              ) {
+                const existing = snapshotSubscriptions.get(portMsg.id);
+                if (existing && existing.tier === portMsg.tier) {
+                  return;
+                }
+                startSnapshotStreaming(portMsg.id, portMsg.tier);
+              } else if (
+                portMsg.type === "unsubscribe-screen-snapshot" &&
+                typeof portMsg.id === "string"
+              ) {
+                stopSnapshotStreaming(portMsg.id);
               } else {
                 console.warn(
                   "[PtyHost] Unknown or invalid MessagePort message type:",
@@ -1032,6 +1099,74 @@ port.on("message", async (rawMsg: any) => {
         break;
       }
 
+      case "get-screen-snapshot": {
+        (async () => {
+          const startedAt = Date.now();
+          try {
+            const snapshot = await ptyManager.getScreenSnapshotAsync(msg.id, msg.options);
+            if (process.env.CANOPY_VERBOSE) {
+              const duration = Date.now() - startedAt;
+              const bytes = snapshot ? Buffer.byteLength(JSON.stringify(snapshot), "utf8") : 0;
+              console.log(
+                `[PtyHost] screen-snapshot id=${msg.id} seq=${snapshot?.sequence ?? 0} ` +
+                  `bytes=${bytes} durationMs=${duration}`
+              );
+            }
+            sendEvent({
+              type: "screen-snapshot",
+              requestId: msg.requestId,
+              id: msg.id,
+              snapshot,
+            });
+          } catch (error) {
+            console.error(`[PtyHost] Failed to get screen snapshot for ${msg.id}:`, error);
+            sendEvent({
+              type: "screen-snapshot",
+              requestId: msg.requestId,
+              id: msg.id,
+              snapshot: null,
+            });
+          }
+        })();
+        break;
+      }
+
+      case "get-clean-log": {
+        try {
+          const startedAt = Date.now();
+          const { latestSequence, entries } = ptyManager.getCleanLog(
+            msg.id,
+            msg.sinceSequence,
+            msg.limit
+          );
+          if (process.env.CANOPY_VERBOSE) {
+            const duration = Date.now() - startedAt;
+            const bytes = Buffer.byteLength(JSON.stringify(entries), "utf8");
+            console.log(
+              `[PtyHost] clean-log id=${msg.id} latest=${latestSequence} ` +
+                `entries=${entries.length} bytes=${bytes} durationMs=${duration}`
+            );
+          }
+          sendEvent({
+            type: "clean-log",
+            requestId: msg.requestId,
+            id: msg.id,
+            latestSequence,
+            entries,
+          });
+        } catch (error) {
+          console.error(`[PtyHost] Failed to get clean log for ${msg.id}:`, error);
+          sendEvent({
+            type: "clean-log",
+            requestId: msg.requestId,
+            id: msg.id,
+            latestSequence: 0,
+            entries: [],
+          });
+        }
+        break;
+      }
+
       case "get-terminal-info": {
         const info = ptyManager.getTerminalInfo(msg.id);
         sendEvent({
@@ -1089,6 +1224,11 @@ function cleanup(): void {
 
   // Stop resource governor
   resourceGovernor.dispose();
+
+  // Stop push snapshot streaming (if enabled)
+  for (const id of snapshotSubscriptions.keys()) {
+    stopSnapshotStreaming(id);
+  }
 
   // Clear all backpressure monitoring intervals
   for (const [id, checkInterval] of pausedTerminals) {

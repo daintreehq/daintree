@@ -10,6 +10,9 @@ import type {
   Project,
   ProjectSettings,
   TerminalSpawnOptions,
+  TerminalGetScreenSnapshotOptions,
+  TerminalGetCleanLogRequest,
+  TerminalGetCleanLogResponse,
   CopyTreeOptions,
   CopyTreeProgress,
   AppState,
@@ -112,6 +115,8 @@ const CHANNELS = {
   TERMINAL_RECONNECT: "terminal:reconnect",
   TERMINAL_REPLAY_HISTORY: "terminal:replay-history",
   TERMINAL_GET_SERIALIZED_STATE: "terminal:get-serialized-state",
+  TERMINAL_GET_SNAPSHOT: "terminal:get-snapshot",
+  TERMINAL_GET_CLEAN_LOG: "terminal:get-clean-log",
   TERMINAL_GET_SHARED_BUFFER: "terminal:get-shared-buffer",
   TERMINAL_GET_ANALYSIS_BUFFER: "terminal:get-analysis-buffer",
   TERMINAL_GET_INFO: "terminal:get-info",
@@ -399,6 +404,12 @@ const api: ElectronAPI = {
     getSerializedState: (terminalId: string) =>
       _typedInvoke(CHANNELS.TERMINAL_GET_SERIALIZED_STATE, terminalId),
 
+    getSnapshot: (terminalId: string, options?: TerminalGetScreenSnapshotOptions) =>
+      _typedInvoke(CHANNELS.TERMINAL_GET_SNAPSHOT, terminalId, options),
+
+    getCleanLog: (request: TerminalGetCleanLogRequest): Promise<TerminalGetCleanLogResponse> =>
+      _typedInvoke(CHANNELS.TERMINAL_GET_CLEAN_LOG, request),
+
     getInfo: (id: string) => _typedInvoke(CHANNELS.TERMINAL_GET_INFO, id),
 
     getSharedBuffer: (): Promise<SharedArrayBuffer | null> =>
@@ -443,6 +454,9 @@ const api: ElectronAPI = {
     },
 
     sendKey: (id: string, key: string) => ipcRenderer.send(CHANNELS.TERMINAL_SEND_KEY, id, key),
+
+    isSnapshotStreamingExperimentEnabled: () =>
+      process.env.CANOPY_EXPERIMENT_SNAPSHOT_STREAMING === "1",
   },
 
   // Files API

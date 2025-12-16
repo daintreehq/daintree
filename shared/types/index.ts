@@ -37,6 +37,7 @@ export type {
   AgentStateChangeTrigger,
   TerminalRestartError,
   TerminalInstance,
+  TerminalViewMode,
   PtySpawnOptions,
   TerminalDimensions,
 } from "./domain.js";
@@ -65,6 +66,14 @@ export type {
   // Terminal IPC types
   TerminalSpawnOptions,
   TerminalState,
+  TerminalScreenSnapshot,
+  TerminalScreenSnapshotBuffer,
+  TerminalScreenSnapshotCursor,
+  TerminalScreenSnapshotBufferPreference,
+  TerminalGetScreenSnapshotOptions,
+  TerminalCleanLogEntry,
+  TerminalGetCleanLogRequest,
+  TerminalGetCleanLogResponse,
   TerminalDataPayload,
   TerminalResizePayload,
   TerminalKillPayload,

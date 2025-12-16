@@ -7,6 +7,7 @@ import type {
   TerminalLocation,
   AgentStateChangeTrigger,
   TerminalFlowStatus,
+  TerminalViewMode,
 } from "@/types";
 import { terminalClient, agentSettingsClient } from "@/clients";
 import { generateAgentFlags } from "@shared/types";
@@ -62,6 +63,8 @@ export interface AddTerminalOptions {
   skipCommandExecution?: boolean;
   /** Restore input lock state (read-only monitor mode) */
   isInputLocked?: boolean;
+  /** Terminal rendering mode (experiment) */
+  viewMode?: TerminalViewMode;
 }
 
 function getDefaultTitle(type?: TerminalType, agentId?: string): string {
@@ -114,6 +117,7 @@ export interface TerminalRegistrySlice {
   updateLastCommand: (id: string, lastCommand: string) => void;
   updateVisibility: (id: string, isVisible: boolean) => void;
   getTerminal: (id: string) => TerminalInstance | undefined;
+  setViewMode: (id: string, viewMode: TerminalViewMode) => void;
 
   moveTerminalToDock: (id: string) => void;
   moveTerminalToGrid: (id: string) => boolean;
@@ -253,6 +257,17 @@ export const createTerminalRegistrySlice =
         const agentState = options.agentState ?? (isAgent ? "idle" : undefined);
         const lastStateChange =
           options.lastStateChange ?? (agentState !== undefined ? Date.now() : undefined);
+
+        const experimentEnabled = terminalClient.isSnapshotStreamingExperimentEnabled();
+        const isSnapshotDefaultAgent =
+          agentId === "claude" ||
+          agentId === "gemini" ||
+          legacyType === "claude" ||
+          legacyType === "gemini";
+        const defaultViewMode =
+          experimentEnabled && isSnapshotDefaultAgent ? ("snapshot" as const) : ("live" as const);
+        const viewMode = options.viewMode ?? defaultViewMode;
+
         const terminal: TerminalInstance = {
           id,
           kind,
@@ -271,6 +286,7 @@ export const createTerminalRegistrySlice =
           // IntersectionObserver will update this once mounted
           isVisible: location === "grid" ? true : false,
           isInputLocked: options.isInputLocked,
+          viewMode: experimentEnabled ? viewMode : "live",
         };
 
         set((state) => {
@@ -415,6 +431,17 @@ export const createTerminalRegistrySlice =
 
         const newTerminals = state.terminals.map((t) => (t.id === id ? { ...t, isVisible } : t));
 
+        return { terminals: newTerminals };
+      });
+    },
+
+    setViewMode: (id, viewMode) => {
+      set((state) => {
+        const terminal = state.terminals.find((t) => t.id === id);
+        if (!terminal) return state;
+
+        const newTerminals = state.terminals.map((t) => (t.id === id ? { ...t, viewMode } : t));
+        terminalPersistence.save(newTerminals);
         return { terminals: newTerminals };
       });
     },

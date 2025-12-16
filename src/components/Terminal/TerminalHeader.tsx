@@ -10,6 +10,7 @@ import {
   Activity,
   Pause,
   Lock,
+  Camera,
 } from "lucide-react";
 import type { TerminalType, AgentState } from "@/types";
 import { cn } from "@/lib/utils";
@@ -21,6 +22,7 @@ import type { ActivityState } from "./TerminalPane";
 import { useTerminalStore } from "@/store";
 import { useShallow } from "zustand/react/shallow";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
+import { terminalClient } from "@/clients";
 
 export interface TerminalHeaderProps {
   id: string;
@@ -100,6 +102,9 @@ function TerminalHeaderComponent({
   const isInputLocked = useTerminalStore((state) =>
     state.terminals.find((t) => t.id === id)
   )?.isInputLocked;
+  const viewMode = useTerminalStore((state) => state.terminals.find((t) => t.id === id)?.viewMode);
+  const setViewMode = useTerminalStore((state) => state.setViewMode);
+  const snapshotExperimentEnabled = terminalClient.isSnapshotStreamingExperimentEnabled();
   const dragHandle = useDragHandle();
   const dragListeners =
     (location === "grid" || location === "dock") && dragHandle?.listeners
@@ -303,6 +308,30 @@ function TerminalHeaderComponent({
             >
               <Lock className="w-3 h-3" aria-hidden="true" />
             </div>
+          )}
+          {snapshotExperimentEnabled && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                const next = viewMode === "snapshot" ? "live" : "snapshot";
+                setViewMode(id, next);
+              }}
+              className={cn(
+                "p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 transition-colors",
+                viewMode === "snapshot"
+                  ? "text-canopy-accent bg-canopy-accent/10 hover:bg-canopy-accent/15"
+                  : "text-canopy-text/60 hover:text-canopy-text"
+              )}
+              title={viewMode === "snapshot" ? "Snapshot view (on)" : "Snapshot view (off)"}
+              aria-label={
+                viewMode === "snapshot"
+                  ? "Disable snapshot terminal view"
+                  : "Enable snapshot terminal view"
+              }
+              aria-pressed={viewMode === "snapshot"}
+            >
+              <Camera className="w-3 h-3" aria-hidden="true" />
+            </button>
           )}
           {onRestart && (
             <button
