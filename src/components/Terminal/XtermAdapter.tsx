@@ -119,6 +119,16 @@ function XtermAdapterComponent({
     const container = containerRef.current;
     if (!container) return;
 
+    // Retry logic: if container has no size (e.g. during drag/mount transition),
+    // schedule a retry on next animation frame. This fixes blank terminals when
+    // xterm initializes with 0x0 dimensions during drag preview.
+    if (container.clientWidth === 0 || container.clientHeight === 0) {
+      requestAnimationFrame(() => {
+        if (containerRef.current) performFit();
+      });
+      return;
+    }
+
     // Subtract padding to match ResizeObserver's contentRect behavior.
     // clientWidth/Height INCLUDE padding, but contentRect EXCLUDES it.
     // This ensures consistent dimensions between performFit and handleResizeEntry.
@@ -361,8 +371,8 @@ function XtermAdapterComponent({
     <div
       ref={containerRef}
       className={cn(
-        // pl-3 pt-3 pb-3 pr-2: Clean padding on all sides, with space for scrollbar on right
-        "w-full h-full bg-canopy-bg text-white overflow-hidden rounded-b-[var(--radius-lg)] pl-3 pt-3 pb-3 pr-2",
+        // pl-3 pt-3 pb-3 pr-4: Clean padding on all sides, extra right padding for scrollbar
+        "w-full h-full bg-canopy-bg text-white overflow-hidden rounded-b-[var(--radius-lg)] pl-3 pt-3 pb-3 pr-4",
         className
       )}
       style={{

@@ -81,7 +81,7 @@ export function GridTerminalPane({
     <ErrorBoundary
       variant="component"
       componentName="TerminalPane"
-      resetKeys={[terminal.id, terminal.worktreeId, terminal.agentState].filter(
+      resetKeys={[terminal.id, terminal.worktreeId].filter(
         (key): key is string => key !== undefined
       )}
       context={{ terminalId: terminal.id, worktreeId: terminal.worktreeId }}

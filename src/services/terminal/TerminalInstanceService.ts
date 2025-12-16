@@ -434,7 +434,8 @@ class TerminalInstanceService {
     const managed = this.instances.get(id);
     if (!managed) return null;
 
-    if (managed.hostElement.parentElement !== container) {
+    const wasReparented = managed.hostElement.parentElement !== container;
+    if (wasReparented) {
       container.appendChild(managed.hostElement);
     }
 
@@ -443,6 +444,17 @@ class TerminalInstanceService {
       managed.isOpened = true;
     }
     managed.lastAttachAt = Date.now();
+
+    // Force refresh and fit after reparenting to prevent blank terminals.
+    // xterm.js can lose its render context when moved between DOM containers.
+    if (wasReparented && managed.isOpened) {
+      requestAnimationFrame(() => {
+        if (this.instances.get(id) !== managed) return;
+        if (!managed.terminal.element) return;
+        managed.terminal.refresh(0, managed.terminal.rows - 1);
+        this.fit(id);
+      });
+    }
 
     return managed;
   }

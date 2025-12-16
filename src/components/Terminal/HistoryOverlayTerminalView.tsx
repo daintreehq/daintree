@@ -775,10 +775,10 @@ export function HistoryOverlayTerminalView({
       <div
         ref={xtermContainerRef}
         className={cn(
-          "absolute inset-0 py-2 px-3",
+          "absolute inset-0 pl-3 pt-3 pb-3 pr-4",
           viewMode === "history" && "pointer-events-none"
         )}
-        style={{ opacity: viewMode === "history" ? 0.3 : 1 }}
+        style={{ opacity: viewMode === "history" ? 0 : 1 }}
         onPointerDownCapture={() => {
           if (isFocused && viewMode === "live") {
             xtermRef.current?.focus();
@@ -789,11 +789,11 @@ export function HistoryOverlayTerminalView({
       {/* History overlay layer - DOM-based, scrollable */}
       {/* Outer wrapper matches xterm container positioning so scrollbar aligns */}
       {viewMode === "history" && (
-        <div className="absolute inset-0 py-2 px-3 z-10">
+        <div className="absolute inset-0 pl-3 pt-3 pb-3 pr-4 z-10">
           <div
             ref={overlayScrollRef}
             tabIndex={-1}
-            className="history-overlay h-full overflow-y-auto overflow-x-hidden bg-canopy-bg/95 outline-none"
+            className="history-overlay h-full overflow-y-auto overflow-x-hidden bg-canopy-bg outline-none"
             style={{
               ...overlayStyle,
               overscrollBehavior: "contain",
