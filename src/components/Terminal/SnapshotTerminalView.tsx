@@ -38,8 +38,8 @@ export function SnapshotTerminalView({
   const [viewMode, setViewMode] = useState<SnapshotViewMode>("live");
   const viewModeRef = useRef<SnapshotViewMode>("live");
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [hasNewOutputWhileScrolled, setHasNewOutputWhileScrolled] = useState(false);
   const [scrollbackUnavailable, setScrollbackUnavailable] = useState(false);
+  const [isScrolledUp, setIsScrolledUp] = useState(false); // True when scrolled away from bottom
   const snapshotRef = useRef<TerminalScreenSnapshot | null>(null);
 
   const xtermRef = useRef<Terminal | null>(null);
@@ -52,7 +52,6 @@ export function SnapshotTerminalView({
   const renderInFlightRef = useRef(false);
   const pendingSnapshotRef = useRef<TerminalScreenSnapshot | null>(null);
   const lastLiveSequenceRef = useRef(0);
-  const scrolledCheckTimerRef = useRef<number | null>(null);
   const suppressResumeRef = useRef(false); // Suppress resumeLive during enterScrolledMode
 
   const fontSize = useTerminalFontStore((s) => s.fontSize);
@@ -91,10 +90,9 @@ export function SnapshotTerminalView({
   }, []);
 
   const resumeLive = useCallback(() => {
-    console.log("[SnapshotView:resumeLive] Called!", new Error().stack);
     setScrollbackUnavailable(false);
-    setHasNewOutputWhileScrolled(false);
     setHistoryLoading(false);
+    setIsScrolledUp(false);
     viewModeRef.current = "live";
     setViewMode("live");
   }, []);
@@ -105,45 +103,25 @@ export function SnapshotTerminalView({
 
   useEffect(() => {
     viewModeRef.current = viewMode;
-    if (viewMode === "live") {
-      if (scrolledCheckTimerRef.current !== null) {
-        window.clearInterval(scrolledCheckTimerRef.current);
-        scrolledCheckTimerRef.current = null;
-      }
-    }
   }, [viewMode]);
 
   const enterScrolledMode = useCallback(async () => {
-    console.log("[SnapshotView:enterScrolledMode] Starting...", {
-      currentViewMode: viewModeRef.current,
-      buffer: snapshotRef.current?.buffer,
-    });
-
-    if (viewModeRef.current === "scrolled") {
-      console.log("[SnapshotView:enterScrolledMode] Already in scrolled mode, returning");
-      return;
-    }
+    if (viewModeRef.current === "scrolled") return;
     const term = xtermRef.current;
-    if (!term) {
-      console.log("[SnapshotView:enterScrolledMode] No xterm instance, returning");
-      return;
-    }
+    if (!term) return;
 
     const currentSnapshot = snapshotRef.current;
     if (currentSnapshot?.buffer === "alt") {
-      console.log("[SnapshotView:enterScrolledMode] ALT buffer, showing unavailable");
       setScrollbackUnavailable(true);
       return;
     }
 
     setScrollbackUnavailable(false);
-    setHasNewOutputWhileScrolled(false);
     setHistoryLoading(true);
     viewModeRef.current = "scrolled";
     setViewMode("scrolled");
 
     const desiredScrollback = Math.max(1000, Math.min(20000, Math.floor(scrollbackLines)));
-    console.log("[SnapshotView:enterScrolledMode] Setting scrollback to", desiredScrollback);
 
     try {
       term.options.scrollback = desiredScrollback;
@@ -152,35 +130,21 @@ export function SnapshotTerminalView({
     }
 
     let state: string | null = null;
-    const fetchStart = performance.now();
     try {
       state = await terminalClient.getSerializedState(terminalId);
-    } catch (err) {
-      console.error("[SnapshotView:enterScrolledMode] getSerializedState error:", err);
+    } catch {
       state = null;
     }
-    const fetchMs = performance.now() - fetchStart;
-
-    console.log("[SnapshotView:enterScrolledMode] getSerializedState result:", {
-      hasState: !!state,
-      stateLength: state?.length ?? 0,
-      fetchMs: Math.round(fetchMs),
-    });
 
     if (disposedRef.current) return;
     if (viewModeRef.current !== "scrolled") return;
 
     if (!state) {
-      console.log("[SnapshotView:enterScrolledMode] No state returned, showing unavailable");
       setHistoryLoading(false);
-      // FIX: Set scrollbackUnavailable AFTER resumeLive so it doesn't get cleared
       resumeLive();
-      // Use setTimeout to ensure this runs after resumeLive's state updates
       setTimeout(() => setScrollbackUnavailable(true), 0);
       return;
     }
-
-    console.log("[SnapshotView:enterScrolledMode] Resetting terminal and writing state...");
 
     // Suppress resumeLive during terminal operations - xterm fires onData events
     // for internal escape sequences (focus reports, mode changes) which would
@@ -189,8 +153,8 @@ export function SnapshotTerminalView({
 
     try {
       term.reset();
-    } catch (err) {
-      console.error("[SnapshotView:enterScrolledMode] term.reset() failed:", err);
+    } catch {
+      // ignore
     }
 
     await new Promise<void>((resolve) => {
@@ -198,11 +162,9 @@ export function SnapshotTerminalView({
         writeInFlightRef.current += 1;
         term.write(state, () => {
           writeInFlightRef.current = Math.max(0, writeInFlightRef.current - 1);
-          console.log("[SnapshotView:enterScrolledMode] term.write() callback fired");
           resolve();
         });
-      } catch (err) {
-        console.error("[SnapshotView:enterScrolledMode] term.write() failed:", err);
+      } catch {
         writeInFlightRef.current = Math.max(0, writeInFlightRef.current - 1);
         resolve();
       }
@@ -211,44 +173,31 @@ export function SnapshotTerminalView({
     // Re-enable resumeLive now that terminal operations are complete
     suppressResumeRef.current = false;
 
-    console.log("[SnapshotView:enterScrolledMode] Write complete, setting up scroll position");
+    // Check if there's actually any scrollback content to view
+    const buffer = term.buffer.active;
+    const availableScrollback = buffer.baseY; // Lines scrolled off the top
 
-    // Scroll up significantly from bottom to make it visually obvious that
-    // history is now available for scrolling. This provides immediate feedback
-    // that scrolled mode is active.
+    if (availableScrollback < 3) {
+      // Not enough content to meaningfully scroll - abort and return to live
+      resumeLive();
+      return;
+    }
+
+    // Scroll up from bottom so it's clear we're in scroll mode.
+    // This matches the BOTTOM_BUFFER in the wheel handler.
+    const SCROLL_THRESHOLD_LINES = 6;
     try {
       term.scrollToBottom();
-      // Scroll up by ~half the viewport so user sees some history immediately
-      const scrollUpLines = Math.max(5, Math.floor(term.rows / 2));
-      term.scrollLines(-scrollUpLines);
-    } catch (err) {
-      console.error("[SnapshotView:enterScrolledMode] scroll positioning failed:", err);
+      term.scrollLines(-Math.min(SCROLL_THRESHOLD_LINES, availableScrollback - 1));
+    } catch {
+      // ignore
     }
 
-    console.log("[SnapshotView:enterScrolledMode] COMPLETE - viewMode should now be 'scrolled'");
     setHistoryLoading(false);
-
-    if (scrolledCheckTimerRef.current !== null) {
-      window.clearInterval(scrolledCheckTimerRef.current);
-    }
-    scrolledCheckTimerRef.current = window.setInterval(async () => {
-      if (disposedRef.current) return;
-      if (viewModeRef.current !== "scrolled") return;
-      try {
-        const latest = await terminalClient.getSnapshot(terminalId, { buffer: "auto" });
-        if (!latest) return;
-        if (latest.sequence > lastLiveSequenceRef.current) {
-          lastLiveSequenceRef.current = latest.sequence;
-          setHasNewOutputWhileScrolled(true);
-        }
-      } catch {
-        // ignore
-      }
-    }, 1000);
+    setIsScrolledUp(true); // We scrolled up, so show the button
   }, [resumeLive, scrollbackLines, terminalId]);
 
   useLayoutEffect(() => {
-    console.log("[SnapshotView:useLayoutEffect] Terminal setup running - this resets the terminal!");
     disposedRef.current = false;
     const container = containerRef.current;
     const xtermContainer = xtermContainerRef.current;
@@ -295,37 +244,65 @@ export function SnapshotTerminalView({
       const term = xtermRef.current;
       if (!term) return;
 
-      // DIAGNOSTIC: Log wheel events to debug scroll issues
-      console.log("[SnapshotView:wheel]", {
-        viewMode: viewModeRef.current,
-        buffer: snapshotRef.current?.buffer ?? "no-snapshot",
-        deltaY: event.deltaY,
-        target: (event.target as HTMLElement)?.className?.slice(0, 50),
-      });
-
       // In scrolled mode: manually scroll xterm based on wheel delta
       if (viewModeRef.current === "scrolled") {
         event.preventDefault();
         event.stopPropagation();
+
+        const buffer = term.buffer.active;
+        const scrollbackTop = buffer.baseY; // Lines scrolled off top
+        const viewportY = buffer.viewportY; // Current viewport position
+
+        // 6-line buffer zone at bottom - same threshold used when entering scroll mode.
+        // You can scroll UP out of this zone, but DOWN scrolls in/toward it snap to live.
+        const BOTTOM_BUFFER = 6;
+        const inBufferZone = viewportY >= scrollbackTop - BOTTOM_BUFFER;
+
         // Convert deltaY to lines (approximate - deltaY varies by browser/OS)
-        // Typical wheel event deltaY is ~100 per notch, trackpad is smaller
         const deltaLines = event.deltaY > 0 ? Math.max(1, Math.ceil(event.deltaY / 40))
                                             : Math.min(-1, Math.floor(event.deltaY / 40));
+
+        // Scrolling down into or within buffer zone → snap to live mode
+        if (deltaLines > 0) {
+          if (inBufferZone) {
+            // Already in buffer zone, scrolling down → live
+            resumeLive();
+            return;
+          }
+          const wouldLandAt = viewportY + deltaLines;
+          if (wouldLandAt >= scrollbackTop - BOTTOM_BUFFER) {
+            // Would enter buffer zone → live
+            resumeLive();
+            return;
+          }
+        }
+
+        // Perform the scroll (only reaches here for UP scrolls or safe DOWN scrolls)
         term.scrollLines(deltaLines);
+
+        // Update button visibility (still scrolled up if outside buffer zone)
+        const newViewportY = term.buffer.active.viewportY;
+        setIsScrolledUp(newViewportY < scrollbackTop - BOTTOM_BUFFER);
+
         return;
       }
 
       // In full-screen (alt buffer), show feedback instead of silently doing nothing
       const currentSnapshot = snapshotRef.current;
       if (currentSnapshot?.buffer === "alt") {
-        console.log("[SnapshotView:wheel] ALT buffer - showing unavailable notice");
         setScrollbackUnavailable(true);
         // Auto-clear after 3s so it doesn't persist forever
         setTimeout(() => setScrollbackUnavailable(false), 3000);
         return;
       }
 
-      // In live mode: intercept and enter scrolled mode
+      // In live mode: only scroll UP enters scroll mode, ignore down scrolls
+      if (event.deltaY >= 0) {
+        // Down scroll in live mode - ignore completely
+        return;
+      }
+
+      // Scroll UP - enter scroll mode
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
@@ -339,11 +316,17 @@ export function SnapshotTerminalView({
 
     const onDataDisposable = term.onData((data) => {
       if (isInputLocked) return;
+
+      // Ignore focus report escape sequences - these fire on click/focus,
+      // not actual user typing. \x1b[I = focus in, \x1b[O = focus out
+      if (data === "\x1b[I" || data === "\x1b[O") {
+        return;
+      }
+
       // If user types while in scrolled mode, immediately return to live.
       // But suppress this during enterScrolledMode operations - xterm fires
-      // onData for internal escape sequences (focus reports) which aren't user input.
+      // onData for internal escape sequences which aren't user input.
       if (viewModeRef.current === "scrolled" && !suppressResumeRef.current) {
-        console.log("[SnapshotView:onData] User input detected in scrolled mode, resuming live");
         resumeLive();
       }
       terminalClient.write(terminalId, data);
@@ -357,10 +340,6 @@ export function SnapshotTerminalView({
       pendingSnapshotRef.current = null;
       xtermRef.current = null;
       fitAddonRef.current = null;
-      if (scrolledCheckTimerRef.current !== null) {
-        window.clearInterval(scrolledCheckTimerRef.current);
-        scrolledCheckTimerRef.current = null;
-      }
       if (disposeTimerRef.current !== null) {
         window.clearTimeout(disposeTimerRef.current);
         disposeTimerRef.current = null;
@@ -538,7 +517,12 @@ export function SnapshotTerminalView({
   useEffect(() => {
     if (viewMode !== "live") return;
     const term = xtermRef.current;
+    const container = xtermContainerRef.current;
     if (!term) return;
+
+    // Hide terminal during reset to prevent scrollbar jump glitch
+    if (container) container.style.visibility = "hidden";
+
     try {
       term.options.scrollback = 0;
     } catch {
@@ -556,6 +540,10 @@ export function SnapshotTerminalView({
       } catch {
         // ignore
       }
+      // Show terminal after snapshot is set (next frame to ensure render)
+      requestAnimationFrame(() => {
+        if (container) container.style.visibility = "";
+      });
     })();
   }, [terminalId, viewMode]);
 
@@ -582,26 +570,18 @@ export function SnapshotTerminalView({
         </div>
       )}
 
-      {/* Scrolled mode control bar */}
-      {viewMode === "scrolled" && (
-        <div className="absolute bottom-0 left-0 right-0 z-30 px-4 py-3 bg-black/80 backdrop-blur-md border-t border-white/10 flex items-center justify-between">
-          <div className="text-xs font-sans text-white/70 flex items-center gap-2">
-            {historyLoading ? (
-              "Loading scrollback…"
-            ) : hasNewOutputWhileScrolled ? (
-              <span className="text-amber-400">Paused (new output available)</span>
-            ) : (
-              "Paused for scrolling"
-            )}
-          </div>
-          <button
-            type="button"
-            onClick={() => resumeLive()}
-            className="bg-canopy-primary text-canopy-primary-fg px-3 py-1.5 rounded-md text-xs font-medium hover:bg-canopy-primary/90 transition-colors"
-          >
-            Resume live
-          </button>
-        </div>
+      {/* Scroll to bottom button - only visible when actually scrolled up */}
+      {viewMode === "scrolled" && isScrolledUp && !historyLoading && (
+        <button
+          type="button"
+          onClick={() => resumeLive()}
+          className="absolute bottom-4 right-4 z-30 flex items-center gap-1.5 px-2.5 py-1.5 bg-canopy-sidebar border border-canopy-border rounded-md text-xs font-medium text-canopy-text/80 hover:bg-canopy-bg hover:text-canopy-text hover:border-canopy-border/80 transition-colors shadow-md"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+          </svg>
+          Jump to bottom
+        </button>
       )}
 
       {/* Alt buffer scrollback unavailable notice */}
