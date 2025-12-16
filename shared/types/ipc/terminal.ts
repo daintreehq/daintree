@@ -53,6 +53,8 @@ export interface TerminalState {
   lastDetectedAgent?: TerminalType;
   /** Last detected agent title (for restoration hints) */
   lastDetectedAgentTitle?: string;
+  /** Whether user input is locked (read-only monitor mode) */
+  isInputLocked?: boolean;
 }
 
 /** Terminal data payload for IPC */

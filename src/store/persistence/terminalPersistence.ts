@@ -22,6 +22,7 @@ const DEFAULT_OPTIONS: Required<TerminalPersistenceOptions> = {
     worktreeId: t.worktreeId,
     location: t.location,
     command: t.command?.trim() || undefined,
+    ...(t.isInputLocked && { isInputLocked: true }),
   }),
 };
 

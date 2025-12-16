@@ -49,6 +49,7 @@ export interface StoreSchema {
       settings?: {
         autoRestart?: boolean;
       };
+      isInputLocked?: boolean;
     }>;
     recipes?: Array<{
       id: string;

@@ -36,6 +36,7 @@ export function TerminalContextMenu({
   const addTerminal = useTerminalStore((s) => s.addTerminal);
   const moveTerminalToWorktree = useTerminalStore((s) => s.moveTerminalToWorktree);
   const setFocused = useTerminalStore((s) => s.setFocused);
+  const toggleInputLocked = useTerminalStore((s) => s.toggleInputLocked);
   const isMaximized = useTerminalStore((s) => s.maximizedId === terminalId);
   const { worktrees } = useWorktrees();
 
@@ -49,6 +50,7 @@ export function TerminalContextMenu({
         title: `${terminal.title} (copy)`,
         worktreeId: terminal.worktreeId,
         command: terminal.command,
+        isInputLocked: terminal.isInputLocked,
       });
     } catch (error) {
       console.error("Failed to duplicate terminal:", error);
@@ -116,6 +118,10 @@ export function TerminalContextMenu({
       { type: "separator" },
       { id: "restart", label: "Restart Terminal" },
       ...(isPaused ? [{ id: "force-resume", label: "Force Resume (Paused)" }] : []),
+      {
+        id: "toggle-input-lock",
+        label: terminal.isInputLocked ? "Unlock Input" : "Lock Input",
+      },
       { id: "duplicate", label: "Duplicate Terminal" },
       { id: "rename", label: "Rename Terminal" },
       { id: "clear-scrollback", label: "Clear Scrollback" },
@@ -157,6 +163,9 @@ export function TerminalContextMenu({
         case "force-resume":
           handleForceResume();
           break;
+        case "toggle-input-lock":
+          toggleInputLocked(terminalId);
+          break;
         case "duplicate":
           void handleDuplicate();
           break;
@@ -193,6 +202,7 @@ export function TerminalContextMenu({
       terminal,
       template,
       terminalId,
+      toggleInputLocked,
       toggleMaximize,
       trashTerminal,
     ]

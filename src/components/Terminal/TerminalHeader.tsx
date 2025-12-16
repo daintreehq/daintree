@@ -9,6 +9,7 @@ import {
   Grid2X2,
   Activity,
   Pause,
+  Lock,
 } from "lucide-react";
 import type { TerminalType, AgentState } from "@/types";
 import { cn } from "@/lib/utils";
@@ -96,6 +97,9 @@ function TerminalHeaderComponent({
   wasJustSelected = false,
 }: TerminalHeaderProps) {
   const showCommandPill = type === "terminal" && agentState === "running" && !!lastCommand;
+  const isInputLocked = useTerminalStore((state) =>
+    state.terminals.find((t) => t.id === id)
+  )?.isInputLocked;
   const dragHandle = useDragHandle();
   const dragListeners =
     (location === "grid" || location === "dock") && dragHandle?.listeners
@@ -291,6 +295,15 @@ function TerminalHeaderComponent({
         )}
 
         <div className="flex items-center gap-1.5">
+          {isInputLocked && (
+            <div
+              className="flex items-center gap-1 text-xs font-sans text-canopy-text/60 px-1.5"
+              role="status"
+              title="Input locked (read-only monitor mode)"
+            >
+              <Lock className="w-3 h-3" aria-hidden="true" />
+            </div>
+          )}
           {onRestart && (
             <button
               onClick={(e) => {

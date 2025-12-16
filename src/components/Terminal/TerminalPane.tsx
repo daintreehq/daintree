@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { AlertTriangle, Loader2, ArrowDown } from "lucide-react";
 import type { TerminalType, TerminalRestartError } from "@/types";
 import { cn } from "@/lib/utils";
 import { getTerminalAnimationDuration } from "@/lib/animationUtils";
@@ -26,6 +26,7 @@ import { getAgentConfig } from "@/config/agents";
 import { terminalClient } from "@/clients";
 import { HybridInputBar, type HybridInputBarHandle } from "./HybridInputBar";
 import { getTerminalFocusTarget } from "./terminalFocus";
+import { useTerminalUnseenOutput } from "@/hooks/useTerminalUnseenOutput";
 
 export type { TerminalType };
 
@@ -96,6 +97,8 @@ function TerminalPaneComponent({
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isUpdateCwdOpen, setIsUpdateCwdOpen] = useState(false);
 
+  const unseenOutput = useTerminalUnseenOutput(id);
+
   if (isFocused && !prevFocusedRef.current) {
     justFocusedUntilRef.current = performance.now() + 250;
   }
@@ -124,6 +127,9 @@ function TerminalPaneComponent({
   const updateLastCommand = useTerminalStore((state) => state.updateLastCommand);
   const backendStatus = useTerminalStore((state) => state.backendStatus);
   const lastCrashType = useTerminalStore((state) => state.lastCrashType);
+  const isInputLocked = useTerminalStore(
+    (state) => state.terminals.find((t) => t.id === id)?.isInputLocked ?? false
+  );
 
   const isBackendDisconnected = backendStatus === "disconnected";
   const isBackendRecovering = backendStatus === "recovering";
@@ -503,6 +509,7 @@ function TerminalPaneComponent({
               terminalId={id}
               terminalType={type}
               agentId={agentId}
+              isInputLocked={isInputLocked}
               onReady={handleReady}
               onExit={handleExit}
               onInput={handleInput}
@@ -510,6 +517,19 @@ function TerminalPaneComponent({
               getRefreshTier={getRefreshTierCallback}
             />
             <ArtifactOverlay terminalId={id} worktreeId={worktreeId} cwd={cwd} />
+            {unseenOutput.isUserScrolledBack && unseenOutput.unseen > 0 && (
+              <button
+                onClick={() => {
+                  terminalInstanceService.resumeAutoScroll(id);
+                  requestAnimationFrame(() => terminalInstanceService.focus(id));
+                }}
+                className="absolute bottom-4 left-4 z-10 flex items-center gap-2 bg-canopy-primary text-canopy-primary-fg px-3 py-2 rounded-md shadow-lg hover:bg-canopy-primary/90 transition-colors"
+                aria-label="Resume auto-scroll"
+              >
+                <ArrowDown className="h-4 w-4" />
+                <span className="text-sm font-medium">Resume</span>
+              </button>
+            )}
             {isSearchOpen && (
               <TerminalSearchBar
                 terminalId={id}
@@ -593,19 +613,23 @@ function TerminalPaneComponent({
         {showHybridInputBar && (
           <HybridInputBar
             ref={inputBarRef}
-            disabled={isBackendDisconnected || isBackendRecovering}
+            disabled={isBackendDisconnected || isBackendRecovering || isInputLocked}
             cwd={cwd}
             agentId={effectiveAgentId}
             onSend={({ trackerData, text }) => {
-              terminalInstanceService.notifyUserInput(id);
-              // Use backend submit() which handles Codex vs other agents automatically
-              terminalClient.submit(id, text);
-              // Feed tracker data for features like clear command detection
-              handleInput(trackerData);
+              if (!isInputLocked) {
+                terminalInstanceService.notifyUserInput(id);
+                // Use backend submit() which handles Codex vs other agents automatically
+                terminalClient.submit(id, text);
+                // Feed tracker data for features like clear command detection
+                handleInput(trackerData);
+              }
             }}
             onSendKey={(key) => {
-              terminalInstanceService.notifyUserInput(id);
-              terminalClient.sendKey(id, key);
+              if (!isInputLocked) {
+                terminalInstanceService.notifyUserInput(id);
+                terminalClient.sendKey(id, key);
+              }
             }}
           />
         )}

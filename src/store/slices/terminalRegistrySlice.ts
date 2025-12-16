@@ -60,6 +60,8 @@ export interface AddTerminalOptions {
   existingId?: string;
   /** Store command on instance but don't execute it on spawn */
   skipCommandExecution?: boolean;
+  /** Restore input lock state (read-only monitor mode) */
+  isInputLocked?: boolean;
 }
 
 function getDefaultTitle(type?: TerminalType, agentId?: string): string {
@@ -131,6 +133,8 @@ export interface TerminalRegistrySlice {
   updateTerminalCwd: (id: string, cwd: string) => void;
   moveTerminalToWorktree: (id: string, worktreeId: string) => void;
   updateFlowStatus: (id: string, status: TerminalFlowStatus, timestamp: number) => void;
+  setInputLocked: (id: string, locked: boolean) => void;
+  toggleInputLocked: (id: string) => void;
 }
 
 // Flush pending persistence - call on app quit to prevent data loss
@@ -266,6 +270,7 @@ export const createTerminalRegistrySlice =
           // Initialize grid terminals as visible to avoid initial under-throttling
           // IntersectionObserver will update this once mounted
           isVisible: location === "grid" ? true : false,
+          isInputLocked: options.isInputLocked,
         };
 
         set((state) => {
@@ -278,6 +283,8 @@ export const createTerminalRegistrySlice =
           // Terminal is already sized via offscreen fit; keep background policy.
           terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
         }
+
+        terminalInstanceService.setInputLocked(id, !!options.isInputLocked);
 
         return id;
       } catch (error) {
@@ -978,6 +985,46 @@ export const createTerminalRegistrySlice =
             t.id === id ? { ...t, flowStatus: status, flowStatusTimestamp: timestamp } : t
           ),
         };
+      });
+    },
+
+    setInputLocked: (id, locked) => {
+      set((state) => {
+        const terminal = state.terminals.find((t) => t.id === id);
+        if (!terminal) return state;
+
+        if (terminal.isInputLocked === locked) return state;
+
+        const updated = {
+          terminals: state.terminals.map((t) =>
+            t.id === id ? { ...t, isInputLocked: locked } : t
+          ),
+        };
+
+        terminalPersistence.save(updated.terminals);
+        terminalInstanceService.setInputLocked(id, locked);
+
+        return updated;
+      });
+    },
+
+    toggleInputLocked: (id) => {
+      set((state) => {
+        const terminal = state.terminals.find((t) => t.id === id);
+        if (!terminal) return state;
+
+        const locked = !terminal.isInputLocked;
+
+        const updated = {
+          terminals: state.terminals.map((t) =>
+            t.id === id ? { ...t, isInputLocked: locked } : t
+          ),
+        };
+
+        terminalPersistence.save(updated.terminals);
+        terminalInstanceService.setInputLocked(id, locked);
+
+        return updated;
       });
     },
   });

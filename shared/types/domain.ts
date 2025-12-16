@@ -291,6 +291,8 @@ export interface TerminalInstance {
   flowStatus?: "running" | "paused-backpressure" | "paused-user" | "suspended";
   /** Timestamp when flow status last changed */
   flowStatusTimestamp?: number;
+  /** Whether user input is locked (read-only monitor mode) */
+  isInputLocked?: boolean;
 }
 
 /** Options for spawning a new PTY process */

@@ -10,32 +10,35 @@ function normalizeToken(value: string): string {
   return trimmed.startsWith("/") ? trimmed.slice(1) : trimmed;
 }
 
+function extractOrderedTokens(label: string): string[] {
+  const normalizedLabel = normalizeToken(label);
+  const colonParts = normalizedLabel.split(":");
+  const tokens: string[] = [];
+
+  for (const part of colonParts) {
+    for (const segment of part.split("-")) {
+      if (!segment) continue;
+      tokens.push(segment);
+    }
+  }
+
+  return tokens;
+}
+
 function getMatchScore(label: string, query: string): MatchScore | null {
   const normalizedLabel = normalizeToken(label);
   const normalizedQuery = normalizeToken(query);
   if (!normalizedQuery) return { rank: 0, detail: 0 };
 
-  if (normalizedLabel.startsWith(normalizedQuery)) return { rank: 0, detail: 0 };
-
-  const colonParts = normalizedLabel.split(":");
-  for (let index = 1; index < colonParts.length; index++) {
-    if (colonParts[index]?.startsWith(normalizedQuery)) {
-      return { rank: 1, detail: index };
-    }
+  const tokens = extractOrderedTokens(normalizedLabel);
+  for (let index = 0; index < tokens.length; index++) {
+    if (tokens[index] === normalizedQuery) return { rank: 0, detail: index };
   }
 
-  const dashTokens: Array<{ token: string; order: number }> = [];
-  let order = 0;
-  for (const part of colonParts) {
-    for (const segment of part.split("-")) {
-      if (!segment) continue;
-      dashTokens.push({ token: segment, order });
-      order++;
-    }
-  }
+  if (normalizedLabel.startsWith(normalizedQuery)) return { rank: 1, detail: 0 };
 
-  for (const token of dashTokens) {
-    if (token.token.startsWith(normalizedQuery)) return { rank: 2, detail: token.order };
+  for (let index = 0; index < tokens.length; index++) {
+    if (tokens[index]?.startsWith(normalizedQuery)) return { rank: 2, detail: index };
   }
 
   const withinIndex = normalizedLabel.indexOf(normalizedQuery);

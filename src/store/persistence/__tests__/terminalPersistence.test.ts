@@ -176,6 +176,50 @@ describe("TerminalPersistence", () => {
       expect((savedTerminals[0] as { command?: string }).command).toBeUndefined();
     });
 
+    it("persists isInputLocked when true", async () => {
+      const client = createMockClient();
+      const persistence = new TerminalPersistence(client, { debounceMs: 100 });
+
+      const terminal = createMockTerminal({
+        id: "test-1",
+        isInputLocked: true,
+      });
+
+      persistence.save([terminal]);
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(client.setState).toHaveBeenCalledWith({
+        terminals: [
+          expect.objectContaining({
+            id: "test-1",
+            isInputLocked: true,
+          }),
+        ],
+      });
+    });
+
+    it("does not persist isInputLocked when false or undefined", async () => {
+      const client = createMockClient();
+      const persistence = new TerminalPersistence(client, { debounceMs: 100 });
+
+      const terminalUnlocked = createMockTerminal({
+        id: "test-1",
+        isInputLocked: false,
+      });
+
+      const terminalUndefined = createMockTerminal({
+        id: "test-2",
+      });
+
+      persistence.save([terminalUnlocked, terminalUndefined]);
+      await vi.advanceTimersByTimeAsync(100);
+
+      const savedTerminals = (client.setState.mock.calls[0][0] as { terminals: unknown[] })
+        .terminals;
+      expect(savedTerminals[0]).not.toHaveProperty("isInputLocked");
+      expect(savedTerminals[1]).not.toHaveProperty("isInputLocked");
+    });
+
     it("logs error on persist failure", async () => {
       const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
       const client = createMockClient();

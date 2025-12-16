@@ -18,6 +18,13 @@ export interface SlashCommandListRequest {
 
 export const CLAUDE_BUILTIN_SLASH_COMMANDS: SlashCommand[] = [
   {
+    id: "add-dir",
+    label: "/add-dir",
+    description: "Add a directory to context",
+    scope: "built-in",
+    agentId: "claude",
+  },
+  {
     id: "agents",
     label: "/agents",
     description: "Manage sub-agent orchestration",

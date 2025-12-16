@@ -8,10 +8,12 @@ import {
   ResizeJobId,
   AgentStateCallback,
   TIER_DOWNGRADE_HYSTERESIS_MS,
+  INCREMENTAL_RESTORE_CONFIG,
 } from "./types";
 import { setupTerminalAddons } from "./TerminalAddonManager";
 import { TerminalDataBuffer } from "./TerminalDataBuffer";
 import { TerminalParserHandler } from "./TerminalParserHandler";
+import { TerminalUnseenOutputTracker, UnseenOutputSnapshot } from "./TerminalUnseenOutputTracker";
 
 const START_DEBOUNCING_THRESHOLD = 200;
 const HORIZONTAL_DEBOUNCE_MS = 100;
@@ -26,6 +28,7 @@ class TerminalInstanceService {
   private offscreenSlots = new Map<string, HTMLDivElement>();
   private resizeLocks = new Map<string, boolean>();
   private lastBackendTier = new Map<string, "active" | "background">();
+  private unseenTracker = new TerminalUnseenOutputTracker();
 
   constructor() {
     this.dataBuffer = new TerminalDataBuffer((id, data) => this.writeToTerminal(id, data));
@@ -180,12 +183,20 @@ class TerminalInstanceService {
     const managed = this.instances.get(id);
     if (!managed) return;
 
+    if (managed.isSerializedRestoreInProgress) {
+      managed.deferredOutput.push(data);
+      return;
+    }
+
     const currentTier =
       managed.lastAppliedTier ?? managed.getRefreshTier?.() ?? TerminalRefreshTier.FOCUSED;
     if (currentTier === TerminalRefreshTier.BACKGROUND) {
       managed.needsWake = true;
       return;
     }
+
+    this.unseenTracker.incrementUnseen(id, managed.isUserScrolledBack);
+    const shouldStickToBottom = managed.kind === "agent" && !managed.isUserScrolledBack;
 
     // Capture SAB mode decision before write to avoid mode-flip ambiguity during callback
     const shouldAck = !this.dataBuffer.isEnabled();
@@ -198,6 +209,14 @@ class TerminalInstanceService {
       if (this.instances.get(id) !== managed) return;
 
       managed.pendingWrites = Math.max(0, (managed.pendingWrites ?? 1) - 1);
+
+      if (shouldStickToBottom) {
+        const buffer = terminal.buffer.active;
+        const isAtBottom = buffer.baseY - buffer.viewportY < 1;
+        if (!isAtBottom) {
+          terminal.scrollToBottom();
+        }
+      }
 
       // Flow control: Only send acknowledgements in IPC fallback mode.
       // In SAB mode, flow control is handled globally via SAB backpressure.
@@ -258,9 +277,16 @@ class TerminalInstanceService {
     try {
       const { state } = await terminalClient.wake(id);
       if (!state) return;
-      // Ensure idempotent restore (clears renderer-side terminal state first).
-      this.restoreFromSerialized(id, state);
-      managed.terminal.refresh(0, managed.terminal.rows - 1);
+
+      if (state.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes) {
+        await this.restoreFromSerializedIncremental(id, state);
+      } else {
+        this.restoreFromSerialized(id, state);
+      }
+
+      if (this.instances.get(id) === managed) {
+        managed.terminal.refresh(0, managed.terminal.rows - 1);
+      }
     } catch (error) {
       console.warn(`[TerminalInstanceService] wakeAndRestore failed for ${id}:`, error);
     }
@@ -360,6 +386,10 @@ class TerminalInstanceService {
       latestWasAtBottom: true,
       isUserScrolledBack: false,
       isFocused: false,
+      writeChain: Promise.resolve(),
+      restoreGeneration: 0,
+      isSerializedRestoreInProgress: false,
+      deferredOutput: [],
     };
 
     managed.parserHandler = new TerminalParserHandler(managed);
@@ -369,14 +399,22 @@ class TerminalInstanceService {
       const isAtBottom = buffer.baseY - buffer.viewportY < 1;
       managed.latestWasAtBottom = isAtBottom;
       managed.isUserScrolledBack = !isAtBottom;
+
+      if (isAtBottom) {
+        this.unseenTracker.clearUnseen(id, false);
+      } else {
+        this.unseenTracker.updateScrollState(id, true);
+      }
     });
     listeners.push(() => scrollDisposable.dispose());
 
     const inputDisposable = terminal.onData((data) => {
-      this.onUserInput(id);
-      terminalClient.write(id, data);
-      if (onInput) {
-        onInput(data);
+      if (!managed.isInputLocked) {
+        this.onUserInput(id);
+        terminalClient.write(id, data);
+        if (onInput) {
+          onInput(data);
+        }
       }
     });
     listeners.push(() => inputDisposable.dispose());
@@ -543,6 +581,22 @@ class TerminalInstanceService {
     if (managed) {
       managed.terminal.scrollToBottom();
     }
+  }
+
+  subscribeUnseenOutput(id: string, listener: () => void): () => void {
+    return this.unseenTracker.subscribe(id, listener);
+  }
+
+  getUnseenOutputSnapshot(id: string): UnseenOutputSnapshot {
+    return this.unseenTracker.getSnapshot(id);
+  }
+
+  resumeAutoScroll(id: string): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+
+    this.unseenTracker.clearUnseen(id, false);
+    this.scrollToBottom(id);
   }
 
   getSelectionRow(id: string): number | null {
@@ -995,6 +1049,7 @@ class TerminalInstanceService {
 
     this.clearResizeJobs(managed);
     this.dataBuffer.resetForTerminal(id);
+    this.unseenTracker.destroy(id);
 
     if (managed.tierChangeTimer !== undefined) {
       clearTimeout(managed.tierChangeTimer);
@@ -1004,6 +1059,10 @@ class TerminalInstanceService {
       clearTimeout(managed.inputBurstTimer);
       managed.inputBurstTimer = undefined;
     }
+
+    managed.restoreGeneration++;
+    managed.isSerializedRestoreInProgress = false;
+    managed.deferredOutput = [];
 
     managed.exitSubscribers.clear();
     managed.agentStateSubscribers.clear();
@@ -1037,6 +1096,11 @@ class TerminalInstanceService {
         console.warn(`[TerminalInstanceService] No serialized state for terminal ${id}`);
         return false;
       }
+
+      if (serializedState.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes) {
+        return await this.restoreFromSerializedIncremental(id, serializedState);
+      }
+
       return this.restoreFromSerialized(id, serializedState);
     } catch (error) {
       console.error(`[TerminalInstanceService] Failed to fetch state for terminal ${id}:`, error);
@@ -1052,11 +1116,12 @@ class TerminalInstanceService {
     }
 
     try {
-      // Clear pending output and reset terminal state for idempotent restoration
-      managed.terminal.reset();
+      if (serializedState.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes) {
+        void this.restoreFromSerializedIncremental(id, serializedState);
+        return true;
+      }
 
-      // The serialized state is a sequence of escape codes that reconstructs
-      // the terminal buffer, colors, and cursor position when written
+      managed.terminal.reset();
       managed.terminal.write(serializedState);
       return true;
     } catch (error) {
@@ -1065,10 +1130,115 @@ class TerminalInstanceService {
     }
   }
 
+  private async restoreFromSerializedIncremental(
+    id: string,
+    serializedState: string
+  ): Promise<boolean> {
+    const managed = this.instances.get(id);
+    if (!managed) {
+      console.warn(`[TerminalInstanceService] Cannot restore: terminal ${id} not found`);
+      return false;
+    }
+
+    const restoreGeneration = ++managed.restoreGeneration;
+    managed.isSerializedRestoreInProgress = true;
+
+    const task = async (): Promise<boolean> => {
+      try {
+        if (this.instances.get(id) !== managed || managed.restoreGeneration !== restoreGeneration) {
+          return false;
+        }
+
+        managed.terminal.reset();
+
+        let offset = 0;
+        const total = serializedState.length;
+
+        while (offset < total) {
+          if (
+            this.instances.get(id) !== managed ||
+            managed.restoreGeneration !== restoreGeneration
+          ) {
+            return false;
+          }
+
+          const chunkSize = Math.min(INCREMENTAL_RESTORE_CONFIG.chunkBytes, total - offset);
+          const chunk = serializedState.substring(offset, offset + chunkSize);
+          offset += chunkSize;
+
+          await Promise.race([
+            new Promise<void>((resolve, reject) => {
+              try {
+                managed.terminal.write(chunk, () => resolve());
+              } catch (err) {
+                reject(err);
+              }
+            }),
+            new Promise<void>((_, reject) =>
+              setTimeout(() => reject(new Error("Write timeout")), 5000)
+            ),
+          ]);
+
+          if (offset < total) {
+            await this.yieldToUI();
+          }
+        }
+
+        return true;
+      } catch (error) {
+        console.error(`[TerminalInstanceService] Incremental restore failed for ${id}:`, error);
+        return false;
+      } finally {
+        if (this.instances.get(id) === managed && managed.restoreGeneration === restoreGeneration) {
+          managed.isSerializedRestoreInProgress = false;
+
+          const deferredData = managed.deferredOutput;
+          managed.deferredOutput = [];
+
+          for (const data of deferredData) {
+            this.writeToTerminal(id, data);
+          }
+        }
+      }
+    };
+
+    const writePromise = managed.writeChain.then(task).catch((err) => {
+      console.error(`[TerminalInstanceService] Write chain error for ${id}:`, err);
+      return false;
+    });
+
+    managed.writeChain = writePromise.then(() => {});
+
+    return writePromise;
+  }
+
+  private yieldToUI(): Promise<void> {
+    return new Promise((resolve) => {
+      if (typeof requestIdleCallback !== "undefined") {
+        requestIdleCallback(() => resolve(), { timeout: INCREMENTAL_RESTORE_CONFIG.timeBudgetMs });
+      } else {
+        setTimeout(resolve, 0);
+      }
+    });
+  }
+
   private getBufferLineCount(id: string): number {
     const managed = this.instances.get(id);
     if (!managed) return 0;
     return managed.terminal.buffer.active.length;
+  }
+
+  setInputLocked(id: string, locked: boolean): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+
+    managed.isInputLocked = locked;
+    managed.terminal.options.disableStdin = locked;
+  }
+
+  getInputLocked(id: string): boolean {
+    const managed = this.instances.get(id);
+    return managed?.isInputLocked ?? false;
   }
 }
 

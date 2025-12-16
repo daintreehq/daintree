@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { X, ChevronUp, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { validateRegexTerm, buildSearchOptions, type SearchStatus } from "./terminalSearchUtils";
 
 interface TerminalSearchBarProps {
   terminalId: string;
@@ -12,7 +13,8 @@ interface TerminalSearchBarProps {
 export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSearchBarProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [caseSensitive, setCaseSensitive] = useState(false);
-  const [hasMatches, setHasMatches] = useState<boolean | null>(null);
+  const [regexEnabled, setRegexEnabled] = useState(false);
+  const [searchStatus, setSearchStatus] = useState<SearchStatus>("idle");
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -22,33 +24,56 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
   }, []);
 
   const performSearch = useCallback(
-    (term: string, direction: "next" | "prev") => {
+    (
+      term: string,
+      direction: "next" | "prev",
+      overrides?: { caseSensitive?: boolean; regexEnabled?: boolean }
+    ) => {
+      const effectiveCaseSensitive = overrides?.caseSensitive ?? caseSensitive;
+      const effectiveRegexEnabled = overrides?.regexEnabled ?? regexEnabled;
+
       if (!term) {
-        setHasMatches(null);
+        setSearchStatus("idle");
         return;
+      }
+
+      if (effectiveRegexEnabled) {
+        const validation = validateRegexTerm(term, effectiveCaseSensitive);
+        if (!validation.isValid) {
+          setSearchStatus("invalidRegex");
+          const managed = terminalInstanceService.get(terminalId);
+          managed?.searchAddon.clearDecorations();
+          return;
+        }
       }
 
       const managed = terminalInstanceService.get(terminalId);
       if (!managed) return;
 
-      const options = { caseSensitive };
-      const found =
-        direction === "next"
-          ? managed.searchAddon.findNext(term, options)
-          : managed.searchAddon.findPrevious(term, options);
+      const options = buildSearchOptions(effectiveCaseSensitive, effectiveRegexEnabled);
 
-      if (!found) {
+      try {
+        const found =
+          direction === "next"
+            ? managed.searchAddon.findNext(term, options)
+            : managed.searchAddon.findPrevious(term, options);
+
+        if (!found) {
+          managed.searchAddon.clearDecorations();
+        }
+        setSearchStatus(found ? "found" : "none");
+      } catch (error) {
+        setSearchStatus(effectiveRegexEnabled ? "invalidRegex" : "none");
         managed.searchAddon.clearDecorations();
       }
-      setHasMatches(found);
     },
-    [terminalId, caseSensitive]
+    [terminalId, caseSensitive, regexEnabled]
   );
 
   const clearSearch = useCallback(() => {
     const managed = terminalInstanceService.get(terminalId);
     managed?.searchAddon.clearDecorations();
-    setHasMatches(null);
+    setSearchStatus("idle");
   }, [terminalId]);
 
   const handleInputChange = useCallback(
@@ -65,7 +90,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
         return;
       }
 
-      setHasMatches(null);
+      setSearchStatus("idle");
       debounceRef.current = setTimeout(() => {
         performSearch(term, "next");
       }, 150);
@@ -98,20 +123,21 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
     setCaseSensitive((prev) => {
       const nextCaseSensitive = !prev;
       if (searchTerm) {
-        const managed = terminalInstanceService.get(terminalId);
-        if (managed) {
-          const found = managed.searchAddon.findNext(searchTerm, {
-            caseSensitive: nextCaseSensitive,
-          });
-          if (!found) {
-            managed.searchAddon.clearDecorations();
-          }
-          setHasMatches(found);
-        }
+        performSearch(searchTerm, "next", { caseSensitive: nextCaseSensitive });
       }
       return nextCaseSensitive;
     });
-  }, [terminalId, searchTerm]);
+  }, [searchTerm, performSearch]);
+
+  const handleRegexToggle = useCallback(() => {
+    setRegexEnabled((prev) => {
+      const nextRegexEnabled = !prev;
+      if (searchTerm) {
+        performSearch(searchTerm, "next", { regexEnabled: nextRegexEnabled });
+      }
+      return nextRegexEnabled;
+    });
+  }, [searchTerm, performSearch]);
 
   useEffect(() => {
     return () => {
@@ -163,14 +189,31 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
         Aa
       </button>
 
-      {searchTerm && hasMatches !== null && (
+      <button
+        onClick={handleRegexToggle}
+        className={cn(
+          "px-1.5 py-1 text-xs font-mono rounded transition-colors",
+          regexEnabled
+            ? "bg-[var(--color-status-info)] text-white"
+            : "text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-bg"
+        )}
+        title="Regex"
+        aria-label="Toggle regex mode"
+        aria-pressed={regexEnabled}
+      >
+        .*
+      </button>
+
+      {searchTerm && searchStatus !== "idle" && (
         <span
           className={cn(
             "text-xs px-1.5",
-            hasMatches ? "text-canopy-text/60" : "text-[var(--color-status-error)]"
+            searchStatus === "found" ? "text-canopy-text/60" : "text-[var(--color-status-error)]"
           )}
         >
-          {hasMatches ? "Found" : "No matches"}
+          {searchStatus === "found" && "Found"}
+          {searchStatus === "none" && "No matches"}
+          {searchStatus === "invalidRegex" && "Invalid regex"}
         </span>
       )}
 

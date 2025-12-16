@@ -14,6 +14,7 @@ export interface XtermAdapterProps {
   terminalId: string;
   terminalType?: TerminalType;
   agentId?: string;
+  isInputLocked?: boolean;
   onReady?: () => void;
   onExit?: (exitCode: number) => void;
   onInput?: (data: string) => void;
@@ -29,6 +30,7 @@ function XtermAdapterComponent({
   terminalId,
   terminalType = "terminal",
   agentId,
+  isInputLocked,
   onReady,
   onExit,
   onInput,
@@ -151,6 +153,8 @@ function XtermAdapterComponent({
       onInput
     );
 
+    terminalInstanceService.setInputLocked(terminalId, !!isInputLocked);
+
     // Attach to appropriate target
     terminalInstanceService.attach(terminalId, container);
 
@@ -179,7 +183,7 @@ function XtermAdapterComponent({
         ) {
           event.preventDefault();
           event.stopPropagation();
-          if (event.type === "keydown") {
+          if (event.type === "keydown" && !managed.isInputLocked) {
             // "Soft" newline for agent CLIs.
             // Codex CLI commonly expects LF (\n / Ctrl+J) for a newline without submit.
             // Other agent CLIs use the legacy ESC+CR sequence.
@@ -200,7 +204,7 @@ function XtermAdapterComponent({
         ) {
           event.preventDefault();
           event.stopPropagation();
-          if (event.type === "keydown") {
+          if (event.type === "keydown" && !managed.isInputLocked) {
             const submit = "\r";
             terminalClient.write(terminalId, submit);
             terminalInstanceService.notifyUserInput(terminalId);
@@ -260,6 +264,7 @@ function XtermAdapterComponent({
     terminalId,
     terminalType,
     agentId,
+    isInputLocked,
     terminalOptions,
     onExit,
     onReady,
