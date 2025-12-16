@@ -14,6 +14,29 @@ async function writeFile(filePath: string, contents: string): Promise<void> {
 }
 
 describe("SlashCommandService", () => {
+  it("includes /add-dir in Claude built-ins", async () => {
+    const homeRoot = await makeTempDir();
+    const projectRoot = await makeTempDir();
+    const service = new SlashCommandService();
+
+    const prevHome = process.env.HOME;
+    process.env.HOME = homeRoot;
+
+    try {
+      await fs.mkdir(path.join(projectRoot, ".git"));
+
+      const commands = await service.list("claude", projectRoot);
+      const addDir = commands.find((c) => c.label === "/add-dir");
+
+      expect(addDir).toBeTruthy();
+      expect(addDir?.scope).toBe("built-in");
+    } finally {
+      process.env.HOME = prevHome;
+      await fs.rm(homeRoot, { recursive: true, force: true });
+      await fs.rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it("merges project commands over built-ins and parses frontmatter description", async () => {
     const root = await makeTempDir();
     const service = new SlashCommandService();
