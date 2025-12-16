@@ -201,7 +201,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
             >
               {isWorking ? (
                 <Loader2
-                  className="w-3.5 h-3.5 animate-spin"
+                  className="w-3.5 h-3.5 animate-spin motion-reduce:animate-none"
                   style={{ color: brandColor }}
                   aria-hidden="true"
                 />

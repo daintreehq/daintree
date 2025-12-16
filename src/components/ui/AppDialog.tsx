@@ -1,7 +1,9 @@
 import { useEffect, useRef, useCallback, useId, createContext, useContext, useState } from "react";
 import { createPortal } from "react-dom";
+import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { useOverlayState } from "@/hooks";
+import { useSidecarStore } from "@/store";
 import { getUiAnimationDuration } from "@/lib/animationUtils";
 import { X } from "lucide-react";
 
@@ -46,6 +48,11 @@ export function AppDialog({
   const [shouldRender, setShouldRender] = useState(false);
   const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rafRef = useRef<number | null>(null);
+
+  const { isOpen: sidecarOpen, width: sidecarWidth } = useSidecarStore(
+    useShallow((s) => ({ isOpen: s.isOpen, width: s.width }))
+  );
+  const sidecarOffset = sidecarOpen ? sidecarWidth : 0;
 
   useOverlayState(isOpen || shouldRender);
 
@@ -143,6 +150,7 @@ export function AppDialog({
           "motion-reduce:transition-none motion-reduce:duration-0",
           isVisible ? "opacity-100" : "opacity-0"
         )}
+        style={{ right: sidecarOffset }}
         onClick={handleBackdropClick}
         role="dialog"
         aria-modal="true"

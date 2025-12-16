@@ -154,7 +154,7 @@ function TerminalHeaderComponent({
           <span className="shrink-0 flex items-center justify-center w-3.5 h-3.5 text-canopy-text">
             {isWorking ? (
               <Loader2
-                className="w-3.5 h-3.5 animate-spin"
+                className="w-3.5 h-3.5 animate-spin motion-reduce:animate-none"
                 style={{ color: getBrandColorHex(agentId ?? type) }}
                 aria-hidden="true"
               />
@@ -286,7 +286,10 @@ function TerminalHeaderComponent({
               <span className="truncate">{activeCount} Background</span>
               {workingCount > 0 && (
                 <span className="flex items-center gap-1 text-[var(--color-state-working)] ml-1">
-                  <Activity className="w-3 h-3 animate-pulse" aria-hidden="true" />
+                  <Activity
+                    className="w-3 h-3 animate-pulse motion-reduce:animate-none"
+                    aria-hidden="true"
+                  />
                   {workingCount} working
                 </span>
               )}

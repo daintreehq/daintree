@@ -77,7 +77,13 @@ function StateIcon({ state, count }: StateIconProps) {
           role="img"
           aria-label={`${count} ${label}`}
         >
-          <Icon className={cn("w-3 h-3", state === "working" && "animate-spin")} aria-hidden />
+          <Icon
+            className={cn(
+              "w-3 h-3",
+              state === "working" && "animate-spin motion-reduce:animate-none"
+            )}
+            aria-hidden
+          />
           <span className="font-mono">{count}</span>
         </span>
       </TooltipTrigger>
@@ -923,7 +929,7 @@ export function WorktreeCard({
                         aria-label={treeCopied ? "Context Copied" : "Copy Context"}
                       >
                         {isCopyingTree ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin text-canopy-text" />
+                          <Loader2 className="w-3.5 h-3.5 animate-spin motion-reduce:animate-none text-canopy-text" />
                         ) : treeCopied ? (
                           <Check className="w-3.5 h-3.5" />
                         ) : (
@@ -1227,7 +1233,7 @@ export function WorktreeCard({
                     <div className="flex items-center gap-2.5 shrink-0">
                       {term.agentState === "working" && (
                         <Loader2
-                          className="w-3 h-3 animate-spin text-[var(--color-state-working)]"
+                          className="w-3 h-3 animate-spin motion-reduce:animate-none text-[var(--color-state-working)]"
                           aria-label="Working"
                         />
                       )}

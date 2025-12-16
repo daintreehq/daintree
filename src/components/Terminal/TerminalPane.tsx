@@ -567,7 +567,7 @@ function TerminalPaneComponent({
             >
               {isBackendRecovering ? (
                 <div className="flex flex-col items-center gap-3">
-                  <Loader2 className="w-8 h-8 animate-spin text-amber-400" />
+                  <Loader2 className="w-8 h-8 animate-spin motion-reduce:animate-none text-amber-400" />
                   <span className="text-white font-medium">Reconnecting...</span>
                 </div>
               ) : (
