@@ -7,7 +7,6 @@ import type {
   TerminalLocation,
   AgentStateChangeTrigger,
   TerminalFlowStatus,
-  TerminalViewMode,
 } from "@/types";
 import { terminalClient, agentSettingsClient } from "@/clients";
 import { generateAgentFlags } from "@shared/types";
@@ -63,8 +62,6 @@ export interface AddTerminalOptions {
   skipCommandExecution?: boolean;
   /** Restore input lock state (read-only monitor mode) */
   isInputLocked?: boolean;
-  /** Terminal rendering mode (experiment) */
-  viewMode?: TerminalViewMode;
 }
 
 function getDefaultTitle(type?: TerminalType, agentId?: string): string {
@@ -117,7 +114,6 @@ export interface TerminalRegistrySlice {
   updateLastCommand: (id: string, lastCommand: string) => void;
   updateVisibility: (id: string, isVisible: boolean) => void;
   getTerminal: (id: string) => TerminalInstance | undefined;
-  setViewMode: (id: string, viewMode: TerminalViewMode) => void;
 
   moveTerminalToDock: (id: string) => void;
   moveTerminalToGrid: (id: string) => boolean;
@@ -242,11 +238,23 @@ export const createTerminalRegistrySlice =
             scrollSensitivity: 1.5,
           };
 
-          terminalInstanceService.prewarmTerminal(id, legacyType, terminalOptions, {
-            offscreen: location === "dock",
-            widthPx: location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH,
-            heightPx: location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT,
-          });
+          if (kind !== "agent") {
+            terminalInstanceService.prewarmTerminal(id, legacyType, terminalOptions, {
+              offscreen: location === "dock",
+              widthPx: location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH,
+              heightPx: location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT,
+            });
+          } else {
+            // Snapshot agent terminals don't use the renderer streaming pipeline; set a better
+            // initial PTY geometry to avoid hard-wrapping during early TUI initialization.
+            const widthPx = location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH;
+            const heightPx = location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT;
+            const cellWidth = Math.max(6, Math.floor(fontSize * 0.6));
+            const cellHeight = Math.max(10, Math.floor(fontSize * 1.1));
+            const cols = Math.max(20, Math.min(500, Math.floor(widthPx / cellWidth)));
+            const rows = Math.max(10, Math.min(200, Math.floor(heightPx / cellHeight)));
+            terminalClient.resize(id, cols, rows);
+          }
         } catch (error) {
           console.warn(`[TerminalStore] Failed to prewarm terminal ${id}:`, error);
         }
@@ -257,16 +265,6 @@ export const createTerminalRegistrySlice =
         const agentState = options.agentState ?? (isAgent ? "idle" : undefined);
         const lastStateChange =
           options.lastStateChange ?? (agentState !== undefined ? Date.now() : undefined);
-
-        const experimentEnabled = terminalClient.isSnapshotStreamingExperimentEnabled();
-        const isSnapshotDefaultAgent =
-          agentId === "claude" ||
-          agentId === "gemini" ||
-          legacyType === "claude" ||
-          legacyType === "gemini";
-        const defaultViewMode =
-          experimentEnabled && isSnapshotDefaultAgent ? ("snapshot" as const) : ("live" as const);
-        const viewMode = options.viewMode ?? defaultViewMode;
 
         const terminal: TerminalInstance = {
           id,
@@ -286,7 +284,6 @@ export const createTerminalRegistrySlice =
           // IntersectionObserver will update this once mounted
           isVisible: location === "grid" ? true : false,
           isInputLocked: options.isInputLocked,
-          viewMode: experimentEnabled ? viewMode : "live",
         };
 
         set((state) => {
@@ -431,17 +428,6 @@ export const createTerminalRegistrySlice =
 
         const newTerminals = state.terminals.map((t) => (t.id === id ? { ...t, isVisible } : t));
 
-        return { terminals: newTerminals };
-      });
-    },
-
-    setViewMode: (id, viewMode) => {
-      set((state) => {
-        const terminal = state.terminals.find((t) => t.id === id);
-        if (!terminal) return state;
-
-        const newTerminals = state.terminals.map((t) => (t.id === id ? { ...t, viewMode } : t));
-        terminalPersistence.save(newTerminals);
         return { terminals: newTerminals };
       });
     },

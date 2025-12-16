@@ -147,9 +147,7 @@ function TerminalPaneComponent({
   const showHybridInputBar = isAgentTerminal && hybridInputEnabled;
 
   const terminal = getTerminal(id);
-  const viewMode = terminal?.viewMode ?? "live";
-  const snapshotExperimentEnabled = terminalClient.isSnapshotStreamingExperimentEnabled();
-  const isSnapshotMode = snapshotExperimentEnabled && viewMode === "snapshot";
+  const isSnapshotMode = isAgentTerminal;
   const refreshTier = getTerminalRefreshTier(terminal, isFocused);
   const snapshotRefreshMs =
     refreshTier === TerminalRefreshTier.FOCUSED
