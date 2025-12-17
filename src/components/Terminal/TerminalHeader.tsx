@@ -136,7 +136,7 @@ function TerminalHeaderComponent({
       <div
         {...dragListeners}
         className={cn(
-          "flex items-center justify-between px-3 shrink-0 text-xs transition-colors relative overflow-hidden",
+          "flex items-center justify-between px-3 shrink-0 text-xs transition-colors relative overflow-hidden group",
           // Base height and separator border
           "h-8 border-b border-black/20",
           // Maximized overrides: taller height, sidebar background, standard border color
@@ -307,93 +307,95 @@ function TerminalHeaderComponent({
               <Lock className="w-3 h-3" aria-hidden="true" />
             </div>
           )}
-          {onRestart && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onRestart();
-              }}
-              className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
-              title="Restart Session"
-              aria-label="Restart Session"
-            >
-              <RotateCcw className="w-3 h-3" aria-hidden="true" />
-            </button>
-          )}
-          {onMinimize && !isMaximized && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onMinimize();
-              }}
-              className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
-              title={location === "dock" ? "Minimize" : "Minimize to dock"}
-              aria-label={location === "dock" ? "Minimize" : "Minimize to dock"}
-            >
-              <ArrowDownToLine className="w-3 h-3" aria-hidden="true" />
-            </button>
-          )}
-          {location === "dock" && onRestore && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onRestore();
-              }}
-              className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
-              title="Restore to grid"
-              aria-label="Restore to grid"
-            >
-              <Maximize2 className="w-3 h-3" aria-hidden="true" />
-            </button>
-          )}
-          {onToggleMaximize && isMaximized ? (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onFocus();
-                onToggleMaximize();
-              }}
-              className="flex items-center gap-1.5 px-2 py-1 bg-canopy-accent/10 text-canopy-accent hover:bg-canopy-accent/20 rounded transition-colors mr-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
-              title="Restore Grid View (Ctrl+Shift+F)"
-              aria-label="Exit Focus mode and restore grid view"
-            >
-              <Minimize2 className="w-3.5 h-3.5" aria-hidden="true" />
-              <span className="font-medium">Exit Focus</span>
-            </button>
-          ) : (
-            onToggleMaximize && (
+          <div className="flex items-center gap-1.5 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity motion-reduce:transition-none">
+            {onRestart && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRestart();
+                }}
+                className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
+                title="Restart Session"
+                aria-label="Restart Session"
+              >
+                <RotateCcw className="w-3 h-3" aria-hidden="true" />
+              </button>
+            )}
+            {onMinimize && !isMaximized && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onMinimize();
+                }}
+                className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
+                title={location === "dock" ? "Minimize" : "Minimize to dock"}
+                aria-label={location === "dock" ? "Minimize" : "Minimize to dock"}
+              >
+                <ArrowDownToLine className="w-3 h-3" aria-hidden="true" />
+              </button>
+            )}
+            {location === "dock" && onRestore && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRestore();
+                }}
+                className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
+                title="Restore to grid"
+                aria-label="Restore to grid"
+              >
+                <Maximize2 className="w-3 h-3" aria-hidden="true" />
+              </button>
+            )}
+            {onToggleMaximize && isMaximized ? (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
                   onFocus();
                   onToggleMaximize();
                 }}
-                className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
-                title="Maximize (Ctrl+Shift+F)"
-                aria-label="Maximize"
+                className="flex items-center gap-1.5 px-2 py-1 bg-canopy-accent/10 text-canopy-accent hover:bg-canopy-accent/20 rounded transition-colors mr-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
+                title="Restore Grid View (Ctrl+Shift+F)"
+                aria-label="Exit Focus mode and restore grid view"
               >
-                <Maximize2 className="w-3 h-3" aria-hidden="true" />
+                <Minimize2 className="w-3.5 h-3.5" aria-hidden="true" />
+                <span className="font-medium">Exit Focus</span>
               </button>
-            )
-          )}
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onClose(e.altKey);
-            }}
-            onKeyDown={(e) => {
-              if ((e.key === "Enter" || e.key === " ") && e.altKey) {
-                e.preventDefault();
+            ) : (
+              onToggleMaximize && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onFocus();
+                    onToggleMaximize();
+                  }}
+                  className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
+                  title="Maximize (Ctrl+Shift+F)"
+                  aria-label="Maximize"
+                >
+                  <Maximize2 className="w-3 h-3" aria-hidden="true" />
+                </button>
+              )
+            )}
+            <button
+              onClick={(e) => {
                 e.stopPropagation();
-                onClose(true);
-              }
-            }}
-            className="p-1.5 hover:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-status-error)] focus-visible:outline-offset-2 text-canopy-text/60 hover:text-[var(--color-status-error)] transition-colors"
-            title="Close Session (Alt+Click to force close)"
-            aria-label="Close session. Hold Alt and click to force close without recovery."
-          >
-            <X className="w-3 h-3" aria-hidden="true" />
-          </button>
+                onClose(e.altKey);
+              }}
+              onKeyDown={(e) => {
+                if ((e.key === "Enter" || e.key === " ") && e.altKey) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onClose(true);
+                }
+              }}
+              className="p-1.5 hover:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-status-error)] focus-visible:outline-offset-2 text-canopy-text/60 hover:text-[var(--color-status-error)] transition-colors"
+              title="Close Session (Alt+Click to force close)"
+              aria-label="Close session. Hold Alt and click to force close without recovery."
+            >
+              <X className="w-3 h-3" aria-hidden="true" />
+            </button>
+          </div>
         </div>
       </div>
     </TerminalContextMenu>
