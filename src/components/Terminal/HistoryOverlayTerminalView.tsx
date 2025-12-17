@@ -43,6 +43,10 @@ const SETTLE_MS = 60; // Quiet period before accepting snapshot
 const BOTTOM_EPSILON_PX = 5;
 const MIN_LINES_FOR_HISTORY = 8; // Minimum lines before allowing history mode
 
+// Jump-back persistence for history resync (defense-in-depth, mirrors backend)
+const HISTORY_JUMP_BACK_PERSIST_MS = 100;
+const HISTORY_JUMP_BACK_PERSIST_FRAMES = 2;
+
 // Xterm visual metrics for pixel-perfect alignment
 interface XtermVisualMetrics {
   cellW: number;
@@ -332,6 +336,61 @@ function shouldAcceptSnapshot(
 }
 
 /**
+ * Check if a backward window move should be accepted (persistence check).
+ * Returns { accept: boolean, updatePending: boolean } where updatePending
+ * indicates whether the pending state was updated.
+ */
+function checkJumpBackPersistence(
+  newWindowStart: number,
+  lastAcceptedWindowStart: number | null,
+  pendingJumpBack: { windowStart: number; firstSeenAt: number; stableFrames: number } | null,
+  now: number
+): {
+  accept: boolean;
+  newPendingState: { windowStart: number; firstSeenAt: number; stableFrames: number } | null;
+} {
+  // No previous accepted position - accept immediately
+  if (lastAcceptedWindowStart === null) {
+    return { accept: true, newPendingState: null };
+  }
+
+  // Forward or same position - accept immediately, clear pending
+  if (newWindowStart >= lastAcceptedWindowStart) {
+    return { accept: true, newPendingState: null };
+  }
+
+  // Backward position - apply persistence check
+  const sameCandidate = pendingJumpBack && pendingJumpBack.windowStart === newWindowStart;
+
+  let newPending: { windowStart: number; firstSeenAt: number; stableFrames: number };
+  if (sameCandidate) {
+    newPending = {
+      ...pendingJumpBack,
+      stableFrames: pendingJumpBack.stableFrames + 1,
+    };
+  } else {
+    newPending = {
+      windowStart: newWindowStart,
+      firstSeenAt: now,
+      stableFrames: 1,
+    };
+  }
+
+  // Check if persistence criteria met
+  const elapsed = now - newPending.firstSeenAt;
+  const shouldAccept =
+    elapsed >= HISTORY_JUMP_BACK_PERSIST_MS ||
+    newPending.stableFrames >= HISTORY_JUMP_BACK_PERSIST_FRAMES;
+
+  if (shouldAccept) {
+    return { accept: true, newPendingState: null };
+  }
+
+  // Not yet persistent - reject but update pending state
+  return { accept: false, newPendingState: newPending };
+}
+
+/**
  * Check if overlay is at bottom (within epsilon).
  */
 function isAtBottom(el: HTMLElement, epsilon = BOTTOM_EPSILON_PX): boolean {
@@ -371,6 +430,14 @@ export const HistoryOverlayTerminalView = forwardRef<
   // Output tracking for settle logic
   const lastOutputAtRef = useRef(0);
   const resyncInFlightRef = useRef(false);
+
+  // Jump-back persistence state (defense-in-depth, mirrors backend)
+  const lastAcceptedWindowStartRef = useRef<number | null>(null);
+  const pendingJumpBackRef = useRef<{
+    windowStart: number;
+    firstSeenAt: number;
+    stableFrames: number;
+  } | null>(null);
 
   // Scroll anchor for resync
   const anchorRef = useRef<ScrollAnchor | null>(null);
@@ -498,6 +565,10 @@ export const HistoryOverlayTerminalView = forwardRef<
       setHistoryHtmlLines(snapshot.htmlLines);
       setShowTruncationBanner(snapshot.windowStart > 0);
 
+      // Initialize jump-back persistence state
+      lastAcceptedWindowStartRef.current = snapshot.windowStart;
+      pendingJumpBackRef.current = null;
+
       // Store the initial wheel delta to apply after render
       pendingEntryDeltaPxRef.current = initialDeltaPx;
 
@@ -520,6 +591,10 @@ export const HistoryOverlayTerminalView = forwardRef<
 
     viewModeRef.current = "live";
     setViewMode("live");
+
+    // Reset jump-back persistence state
+    lastAcceptedWindowStartRef.current = null;
+    pendingJumpBackRef.current = null;
 
     // Ensure xterm is scrolled to bottom
     xtermRef.current?.scrollToBottom();
@@ -605,7 +680,7 @@ export const HistoryOverlayTerminalView = forwardRef<
       );
       const oldSnapshot = historyStateRef.current;
 
-      // 3) Check settle logic
+      // 3) Check settle logic (diff-based)
       if (
         oldSnapshot &&
         !shouldAcceptSnapshot(
@@ -620,11 +695,27 @@ export const HistoryOverlayTerminalView = forwardRef<
         return;
       }
 
+      // 3b) Check jump-back persistence (scroll monotonicity)
+      const jumpBackResult = checkJumpBackPersistence(
+        newSnapshot.windowStart,
+        lastAcceptedWindowStartRef.current,
+        pendingJumpBackRef.current,
+        now
+      );
+
+      pendingJumpBackRef.current = jumpBackResult.newPendingState;
+
+      if (!jumpBackResult.accept) {
+        // Skip this resync tick - backward window move not yet persistent
+        return;
+      }
+
       // 4) Compute trim count
       const trimmedTopCount = computeTrimmedTopCount(oldSnapshot, newSnapshot);
 
-      // 5) Update state
+      // 5) Update state and track accepted windowStart
       historyStateRef.current = newSnapshot;
+      lastAcceptedWindowStartRef.current = newSnapshot.windowStart;
       setHistoryHtmlLines(newSnapshot.htmlLines);
       setShowTruncationBanner(newSnapshot.windowStart > 0);
 

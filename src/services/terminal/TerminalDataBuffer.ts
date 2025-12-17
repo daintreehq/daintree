@@ -361,11 +361,42 @@ export class TerminalDataBuffer {
     const combined = prevRecent + nextChunk;
     if (!combined) return false;
 
+    // Clear screen (CSI 2 J) - most common TUI redraw
     const hasNewClear = this.hasNewAnsiSequence(prevRecent, nextChunk, "\x1b[2J");
     if (hasNewClear) return true;
 
+    // Cursor home at start of output - often indicates TUI redraw
     const hasNewHome = this.hasNewAnsiSequence(prevRecent, nextChunk, "\x1b[H");
     if (hasNewHome && bytesSinceStart <= EARLY_HOME_BYTE_WINDOW) return true;
+
+    // Clear scrollback (CSI 3 J) - clears the entire buffer
+    const hasNewClearScrollback = this.hasNewAnsiSequence(prevRecent, nextChunk, "\x1b[3J");
+    if (hasNewClearScrollback) return true;
+
+    // Alt buffer enter (CSI ? 1049 h) - used by TUIs like vim, htop, etc.
+    const hasAltEnter = this.hasNewAnsiSequence(prevRecent, nextChunk, "\x1b[?1049h");
+    if (hasAltEnter) return true;
+
+    // Alt buffer exit (CSI ? 1049 l) - returning from alt buffer
+    const hasAltExit = this.hasNewAnsiSequence(prevRecent, nextChunk, "\x1b[?1049l");
+    if (hasAltExit) return true;
+
+    // Alternate buffer variants (CSI ? 47 h/l and CSI ? 1047 h/l)
+    const hasAlt47h = this.hasNewAnsiSequence(prevRecent, nextChunk, "\x1b[?47h");
+    if (hasAlt47h) return true;
+
+    const hasAlt47l = this.hasNewAnsiSequence(prevRecent, nextChunk, "\x1b[?47l");
+    if (hasAlt47l) return true;
+
+    const hasAlt1047h = this.hasNewAnsiSequence(prevRecent, nextChunk, "\x1b[?1047h");
+    if (hasAlt1047h) return true;
+
+    const hasAlt1047l = this.hasNewAnsiSequence(prevRecent, nextChunk, "\x1b[?1047l");
+    if (hasAlt1047l) return true;
+
+    // RIS - full terminal reset
+    const hasRis = this.hasNewAnsiSequence(prevRecent, nextChunk, "\x1bc");
+    if (hasRis) return true;
 
     return false;
   }

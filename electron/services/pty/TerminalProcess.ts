@@ -249,6 +249,24 @@ export class TerminalProcess {
   private static readonly SNAPSHOT_MAX_IN_SETTLE_CHANGED_LINES = 2;
   private static readonly SNAPSHOT_MAX_IN_SETTLE_CHANGED_CHARS = 12;
 
+  // Jump-back persistence: suppress backward scroll position changes unless they persist.
+  // This prevents single-frame "flash to top" artifacts during TUI redraws.
+  private static readonly JUMP_BACK_PERSIST_MS = 120;
+  private static readonly JUMP_BACK_PERSIST_FRAMES = 2;
+  private static readonly JUMP_BACK_MAX_SUPPRESS_MS = 1000;
+  private static readonly RESIZE_PERSIST_MS = 200;
+
+  // Jump-back persistence state
+  private lastAcceptedViewportStart: number | null = null;
+  private lastAcceptedBuffer: "active" | "alt" | null = null;
+  private pendingJumpBack: {
+    viewportStart: number;
+    buffer: "active" | "alt";
+    firstSeenAt: number;
+    stableFrames: number;
+    reason: "backward" | "buffer_switch" | "resize";
+  } | null = null;
+
   private readonly terminalInfo: TerminalInfo;
   private readonly isAgentTerminal: boolean;
 
@@ -1000,6 +1018,10 @@ export class TerminalProcess {
    * Get a composed screen snapshot from the backend headless terminal.
    * This returns a stable viewport projection (rows x cols) that has already applied
    * all escape sequences (no transient redraw frames).
+   *
+   * Implements jump-back persistence: if scroll position moves backward or buffer switches,
+   * the change is suppressed until it persists (time or consecutive frames). This prevents
+   * single-frame "flash to top" artifacts during TUI redraws.
    */
   getScreenSnapshot(options?: TerminalGetScreenSnapshotOptions): TerminalScreenSnapshot | null {
     const terminal = this.terminalInfo;
@@ -1020,20 +1042,96 @@ export class TerminalProcess {
           ? headlessTerminal.buffer.alternate
           : headlessTerminal.buffer.active;
 
-    const bufferName = buffer === headlessTerminal.buffer.alternate ? "alt" : "active";
+    const bufferName: "active" | "alt" =
+      buffer === headlessTerminal.buffer.alternate ? "alt" : "active";
 
     if (!this.screenSnapshotDirty && this.lastScreenSnapshot?.buffer === bufferName) {
       return this.lastScreenSnapshot;
     }
 
     const now = Date.now();
-
     const cols = headlessTerminal.cols;
     const rows = headlessTerminal.rows;
     // Always project the bottom viewport (stable monitoring). Headless terminals have no
     // concept of user scroll, so relying on viewportY can "stick" to old content.
     const start = buffer.baseY;
+    const bufferLength = buffer.length;
 
+    // Jump-back persistence gate: detect backward scroll or buffer switch
+    const isBufferSwitch =
+      this.lastAcceptedBuffer !== null && bufferName !== this.lastAcceptedBuffer;
+    const isBackward =
+      this.lastAcceptedViewportStart !== null &&
+      bufferName === this.lastAcceptedBuffer &&
+      start < this.lastAcceptedViewportStart;
+    const isResize = this.screenSnapshotDirtyKind === "resize";
+
+    // Determine the persistence window based on the type of change
+    const persistMs = isResize
+      ? TerminalProcess.RESIZE_PERSIST_MS
+      : TerminalProcess.JUMP_BACK_PERSIST_MS;
+
+    if (isBufferSwitch || isBackward) {
+      const reason: "backward" | "buffer_switch" | "resize" = isBufferSwitch
+        ? "buffer_switch"
+        : isResize
+          ? "resize"
+          : "backward";
+
+      // Check if this is the same candidate as before
+      const sameCandidate =
+        this.pendingJumpBack &&
+        this.pendingJumpBack.viewportStart === start &&
+        this.pendingJumpBack.buffer === bufferName;
+
+      if (sameCandidate) {
+        // Same candidate - increment stable frame count
+        this.pendingJumpBack!.stableFrames++;
+      } else {
+        // New or different candidate - reset pending state
+        this.pendingJumpBack = {
+          viewportStart: start,
+          buffer: bufferName,
+          firstSeenAt: now,
+          stableFrames: 1,
+          reason,
+        };
+      }
+
+      // Check persistence criteria
+      const elapsed = now - this.pendingJumpBack!.firstSeenAt;
+      const shouldAccept =
+        elapsed >= persistMs ||
+        this.pendingJumpBack!.stableFrames >= TerminalProcess.JUMP_BACK_PERSIST_FRAMES ||
+        elapsed >= TerminalProcess.JUMP_BACK_MAX_SUPPRESS_MS;
+
+      if (!shouldAccept) {
+        // Suppress this frame - return last stable snapshot
+        if (process.env.CANOPY_VERBOSE) {
+          console.log(
+            `[TerminalProcess] Suppressing ${reason} for ${this.id}: ` +
+              `start=${start} (was ${this.lastAcceptedViewportStart}), ` +
+              `buffer=${bufferName} (was ${this.lastAcceptedBuffer}), ` +
+              `elapsed=${elapsed}ms, frames=${this.pendingJumpBack!.stableFrames}`
+          );
+        }
+        return this.lastScreenSnapshot;
+      }
+
+      // Accept the candidate - clear pending state
+      if (process.env.CANOPY_VERBOSE) {
+        console.log(
+          `[TerminalProcess] Accepting ${reason} for ${this.id} after ` +
+            `${elapsed}ms / ${this.pendingJumpBack!.stableFrames} frames`
+        );
+      }
+      this.pendingJumpBack = null;
+    } else {
+      // Forward progress or same position - clear any pending state
+      this.pendingJumpBack = null;
+    }
+
+    // Build the candidate snapshot lines
     const lines: string[] = new Array(rows);
     for (let row = 0; row < rows; row++) {
       const line = buffer.getLine(start + row);
@@ -1041,6 +1139,7 @@ export class TerminalProcess {
       lines[row] = line ? line.translateToString(true, 0, cols) : "";
     }
 
+    // Existing settle-window diff gate: reject large diffs during active output
     if (
       this.screenSnapshotDirty &&
       this.screenSnapshotDirtyKind === "output" &&
@@ -1101,8 +1200,16 @@ export class TerminalProcess {
       ansi,
       timestamp: now,
       sequence: ++this.screenSnapshotSequence,
+      meta: {
+        viewportStart: start,
+        baseY: buffer.baseY,
+        bufferLength,
+      },
     };
 
+    // Commit as accepted
+    this.lastAcceptedViewportStart = start;
+    this.lastAcceptedBuffer = bufferName;
     this.screenSnapshotDirty = false;
     this.screenSnapshotDirtyKind = "unknown";
     this.lastScreenSnapshot = snapshot;

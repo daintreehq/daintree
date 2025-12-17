@@ -70,6 +70,15 @@ export interface TerminalScreenSnapshotCursor {
   visible: boolean;
 }
 
+export interface TerminalScreenSnapshotMeta {
+  /** The viewport start line used for projection (typically buffer.baseY) */
+  viewportStart: number;
+  /** The buffer's baseY value */
+  baseY: number;
+  /** Total lines in the buffer */
+  bufferLength: number;
+}
+
 export interface TerminalScreenSnapshot {
   cols: number;
   rows: number;
@@ -80,6 +89,8 @@ export interface TerminalScreenSnapshot {
   ansi?: string;
   timestamp: number;
   sequence: number;
+  /** Scroll position metadata for stability filtering */
+  meta?: TerminalScreenSnapshotMeta;
 }
 
 export type TerminalScreenSnapshotBufferPreference = "auto" | "active" | "alt";
