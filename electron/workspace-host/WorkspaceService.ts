@@ -936,7 +936,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
   }
 
   private cleanupPRService(): void {
-    pullRequestService.destroy();
+    pullRequestService.reset();
     for (const unsubscribe of this.prEventUnsubscribers) {
       unsubscribe();
     }
