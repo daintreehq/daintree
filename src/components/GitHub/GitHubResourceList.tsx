@@ -181,7 +181,7 @@ export function GitHubResourceList({
     return (
       <div role="status" aria-live="polite" aria-busy="true" aria-label="Loading GitHub results">
         <span className="sr-only">Loading GitHub results</span>
-        <div aria-hidden="true" className="divide-y divide-canopy-border">
+        <div aria-hidden="true" className="divide-y divide-[var(--border-divider)]">
           {Array.from({ length: renderCount }).map((_, i) => (
             <div
               key={i}
@@ -245,7 +245,7 @@ export function GitHubResourceList({
 
   return (
     <div className="w-[450px] flex flex-col max-h-[500px]">
-      <div className="p-3 border-b border-canopy-border space-y-3 shrink-0">
+      <div className="p-3 border-b border-[var(--border-divider)] space-y-3 shrink-0">
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <input
@@ -256,7 +256,7 @@ export function GitHubResourceList({
             aria-label={`Search ${type === "issue" ? "issues" : "pull requests"}`}
             className={cn(
               "w-full h-8 pl-8 pr-3 rounded-[var(--radius-md)] text-sm",
-              "bg-canopy-bg border border-canopy-border",
+              "bg-white/[0.03] border border-[var(--border-overlay)]",
               "text-canopy-text placeholder:text-muted-foreground",
               "focus:outline-none focus:ring-1 focus:ring-canopy-accent focus:border-canopy-accent",
               "transition-colors"
@@ -265,7 +265,7 @@ export function GitHubResourceList({
         </div>
 
         <div
-          className="flex p-0.5 bg-black/20 rounded-[var(--radius-md)]"
+          className="flex p-0.5 bg-white/[0.03] border border-[var(--border-divider)] rounded-[var(--radius-md)]"
           role="group"
           aria-label="Filter by state"
         >
@@ -304,7 +304,7 @@ export function GitHubResourceList({
           renderEmpty()
         ) : (
           <>
-            <div className="divide-y divide-canopy-border">
+            <div className="divide-y divide-[var(--border-divider)]">
               {data.map((item) => (
                 <GitHubListItem
                   key={item.number}
@@ -351,7 +351,7 @@ export function GitHubResourceList({
         )}
       </div>
 
-      <div className="p-3 border-t border-canopy-border flex items-center justify-between shrink-0">
+      <div className="p-3 border-t border-[var(--border-divider)] flex items-center justify-between shrink-0">
         <Button
           variant="ghost"
           size="sm"

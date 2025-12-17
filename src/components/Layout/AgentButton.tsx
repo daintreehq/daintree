@@ -115,12 +115,12 @@ export function AgentButton({
   return (
     <Button
       variant="ghost"
-      size="icon"
+      size="icon-sm"
       onClick={handleClick}
       onContextMenu={handleContextMenu}
       disabled={isLoading}
       className={cn(
-        "text-canopy-text hover:bg-canopy-border h-8 w-8 transition-colors",
+        "text-canopy-text hover:bg-white/[0.06] transition-colors",
         isAvailable && "hover:text-canopy-accent focus-visible:text-canopy-accent",
         !isAvailable && !isLoading && "opacity-60"
       )}
@@ -128,9 +128,9 @@ export function AgentButton({
       aria-label={ariaLabel}
     >
       <div className="relative">
-        <config.icon className="h-4 w-4" brandColor={getBrandColorHex(type)} />
+        <config.icon brandColor={getBrandColorHex(type)} />
         {!isAvailable && !isLoading && (
-          <div className="absolute -top-1 -right-1 w-2 h-2 bg-amber-500 rounded-full" />
+          <div className="absolute -top-1 -right-1 w-2 h-2 bg-[var(--color-status-warning)] rounded-full ring-2 ring-canopy-sidebar" />
         )}
       </div>
     </Button>

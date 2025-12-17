@@ -16,6 +16,8 @@ import {
   Copy,
   Check,
   Loader2,
+  ChevronsUpDown,
+  Plus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
@@ -29,6 +31,15 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { useRepositoryStats } from "@/hooks/useRepositoryStats";
 import { useNativeContextMenu } from "@/hooks";
+import { useNotificationStore } from "@/store/notificationStore";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import type { CliAvailability, AgentSettings } from "@shared/types";
 import type { MenuItemOption } from "@/types";
 
@@ -57,12 +68,42 @@ export function Toolbar({
 }: ToolbarProps) {
   const { showMenu } = useNativeContextMenu();
   const currentProject = useProjectStore((state) => state.currentProject);
+  const projects = useProjectStore((state) => state.projects);
+  const switchProject = useProjectStore((state) => state.switchProject);
+  const addProject = useProjectStore((state) => state.addProject);
+  const { addNotification } = useNotificationStore();
   const { stats, error: statsError, refresh: refreshStats } = useRepositoryStats();
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const activeWorktree = useWorktreeDataStore((state) =>
     activeWorktreeId ? state.worktrees.get(activeWorktreeId) : null
   );
   const branchName = activeWorktree?.branch;
+  const switchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleProjectSwitch = (projectId: string) => {
+    if (switchTimeoutRef.current) {
+      clearTimeout(switchTimeoutRef.current);
+    }
+
+    addNotification({
+      type: "info",
+      title: "Switching projects",
+      message: "Resetting state for clean project isolation",
+      duration: 1500,
+    });
+
+    switchTimeoutRef.current = setTimeout(() => {
+      switchProject(projectId);
+    }, 1500);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (switchTimeoutRef.current) {
+        clearTimeout(switchTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const sidecarOpen = useSidecarStore((state) => state.isOpen);
   const toggleSidecar = useSidecarStore((state) => state.toggle);
@@ -139,26 +180,23 @@ export function Toolbar({
   };
 
   return (
-    <header className="relative h-12 flex items-center px-4 shrink-0 app-drag-region bg-canopy-sidebar/95 backdrop-blur-sm border-b border-canopy-border shadow-sm">
+    <header className="relative h-12 flex items-center justify-between px-4 shrink-0 app-drag-region bg-canopy-sidebar/95 backdrop-blur-sm border-b border-divider shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
       <div className="window-resize-strip" />
 
-      <div
-        className={cn("shrink-0 transition-[width] duration-200", isFullscreen ? "w-0" : "w-16")}
-      />
-
-      <div className="flex items-center gap-1 app-no-drag">
+      <div className="flex items-center gap-1.5 app-no-drag">
+        <div
+          className={cn("shrink-0 transition-[width] duration-200", isFullscreen ? "w-0" : "w-16")}
+        />
         <Button
           variant="ghost"
-          size="icon"
+          size="icon-sm"
           onClick={onToggleFocusMode}
-          className={cn(
-            "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent h-8 w-8 transition-colors mr-2"
-          )}
+          className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
           title={isFocusMode ? "Show Sidebar (Cmd+B)" : "Hide Sidebar (Cmd+B)"}
           aria-label="Toggle Sidebar"
           aria-pressed={!isFocusMode}
         >
-          {isFocusMode ? <PanelLeft className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+          {isFocusMode ? <PanelLeft /> : <PanelLeftClose />}
         </Button>
         <AgentButton
           type="claude"
@@ -183,55 +221,139 @@ export function Toolbar({
         />
         <Button
           variant="ghost"
-          size="icon"
+          size="icon-sm"
           onClick={() => onLaunchAgent("terminal")}
-          className="text-canopy-text hover:bg-white/[0.06] h-8 w-8 transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
+          className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
           title="Open Terminal (⌘T for palette)"
           aria-label="Open Terminal"
         >
-          <Terminal className="h-4 w-4" />
+          <Terminal />
         </Button>
       </div>
 
-      <div className="flex-1 flex justify-center items-center h-full opacity-70 hover:opacity-100 transition-opacity">
-        {currentProject ? (
-          <div
-            className="flex items-center gap-2 px-3 py-1 rounded-[var(--radius-md)] select-none"
-            style={{
-              background: getProjectGradient(currentProject.color),
-            }}
-          >
-            <span className="text-lg" aria-label="Project emoji">
-              {currentProject.emoji}
-            </span>
-            <span className="text-xs font-medium text-white tracking-wide drop-shadow-md">
-              {currentProject.name}
-            </span>
-            {branchName && (
-              <span
-                className="text-xs font-medium text-white/60 tracking-wide drop-shadow-md"
-                aria-label={`Current branch ${branchName}`}
-              >
-                [{branchName}]
-              </span>
+      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              className={cn(
+                "flex items-center gap-2 px-2.5 h-8 rounded-[var(--radius-md)] select-none border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] app-no-drag pointer-events-auto",
+                "opacity-80 hover:opacity-100 transition-opacity cursor-pointer"
+              )}
+              style={{
+                background: currentProject
+                  ? getProjectGradient(currentProject.color)
+                  : "linear-gradient(135deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02))",
+              }}
+            >
+              {currentProject ? (
+                <>
+                  <span className="text-base leading-none" aria-label="Project emoji">
+                    {currentProject.emoji}
+                  </span>
+                  <span className="text-xs font-medium text-white/90 tracking-wide">
+                    {currentProject.name}
+                  </span>
+                  {branchName && (
+                    <span
+                      className="font-mono text-[10px] tabular-nums text-white/70 px-1.5 py-0.5 rounded-full bg-white/10"
+                      aria-label={`Current branch ${branchName}`}
+                    >
+                      {branchName}
+                    </span>
+                  )}
+                  <ChevronsUpDown className="h-3 w-3 text-white/50 ml-0.5" />
+                </>
+              ) : (
+                <>
+                  <span className="text-xs font-medium text-canopy-text tracking-wide">
+                    Canopy Command Center
+                  </span>
+                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-canopy-accent/20 text-canopy-accent">
+                    Beta
+                  </span>
+                  <ChevronsUpDown className="h-3 w-3 text-canopy-text/50 ml-0.5" />
+                </>
+              )}
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent className="w-[260px] max-h-[60vh] overflow-y-auto p-1" align="center">
+            {currentProject && (
+              <>
+                <DropdownMenuLabel className="text-[11px] font-semibold text-muted-foreground/50 uppercase tracking-widest px-2 py-1.5">
+                  Active
+                </DropdownMenuLabel>
+                <DropdownMenuItem
+                  className="gap-2 p-2 cursor-default mb-0.5 rounded-[var(--radius-md)] bg-white/[0.03]"
+                  disabled
+                >
+                  <div
+                    className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-md)] text-sm shrink-0"
+                    style={{ background: getProjectGradient(currentProject.color) }}
+                  >
+                    {currentProject.emoji}
+                  </div>
+                  <div className="flex flex-col min-w-0 flex-1">
+                    <span className="truncate text-sm font-medium text-foreground">
+                      {currentProject.name}
+                    </span>
+                    <span className="truncate text-[11px] font-mono text-muted-foreground/70">
+                      {currentProject.path.split(/[/\\]/).pop()}
+                    </span>
+                  </div>
+                  <Check className="h-4 w-4 text-canopy-accent shrink-0" />
+                </DropdownMenuItem>
+              </>
             )}
-          </div>
-        ) : (
-          <div className="flex items-center gap-2 select-none">
-            <span className="text-xs font-medium text-canopy-text tracking-wide">
-              Canopy Command Center
-            </span>
-            <span className="text-xs font-medium px-1.5 py-0.5 rounded-full bg-canopy-accent/20 text-canopy-accent">
-              Beta
-            </span>
-          </div>
-        )}
+
+            {projects.filter((p) => p.id !== currentProject?.id).length > 0 && (
+              <>
+                <DropdownMenuSeparator className="my-1 bg-border/40" />
+                <DropdownMenuLabel className="text-[11px] font-semibold text-muted-foreground/50 uppercase tracking-widest px-2 py-1.5">
+                  Recent
+                </DropdownMenuLabel>
+                {projects
+                  .filter((p) => p.id !== currentProject?.id)
+                  .slice(0, 5)
+                  .map((project) => (
+                    <DropdownMenuItem
+                      key={project.id}
+                      onClick={() => handleProjectSwitch(project.id)}
+                      className="gap-2 p-2 cursor-pointer mb-0.5 rounded-[var(--radius-md)]"
+                    >
+                      <div
+                        className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-md)] text-sm shrink-0"
+                        style={{ background: getProjectGradient(project.color) }}
+                      >
+                        {project.emoji}
+                      </div>
+                      <div className="flex flex-col min-w-0 flex-1">
+                        <span className="truncate text-sm font-medium text-foreground/80">
+                          {project.name}
+                        </span>
+                        <span className="truncate text-[11px] font-mono text-muted-foreground/70">
+                          {project.path.split(/[/\\]/).pop()}
+                        </span>
+                      </div>
+                    </DropdownMenuItem>
+                  ))}
+              </>
+            )}
+
+            <DropdownMenuSeparator className="my-1 bg-border/40" />
+            <DropdownMenuItem onClick={addProject} className="gap-2 p-2 cursor-pointer">
+              <div className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-md)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
+                <Plus className="h-3.5 w-3.5" />
+              </div>
+              <span className="font-medium text-sm text-muted-foreground">Add Project...</span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       <div className="flex items-center gap-1 app-no-drag">
-        {stats && currentProject && (
+        {stats && currentProject && !statsError && (
           <>
-            <div className="flex items-center gap-1">
+            <div className="flex items-center rounded-[var(--radius-md)] bg-white/[0.03] border border-divider divide-x divide-[var(--border-divider)]">
               <Button
                 ref={issuesButtonRef}
                 variant="ghost"
@@ -245,22 +367,15 @@ export function Toolbar({
                   }
                 }}
                 className={cn(
-                  "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent h-7 px-2 gap-1.5",
-                  (stats.issueCount === 0 || statsError) && "opacity-50",
-                  statsError && "text-[var(--color-status-error)]",
-                  issuesOpen && "bg-canopy-border text-canopy-accent"
+                  "text-canopy-text hover:bg-white/[0.04] hover:text-canopy-accent h-7 px-2.5 gap-1.5 rounded-none rounded-l-[var(--radius-md)]",
+                  stats.issueCount === 0 && "opacity-50",
+                  issuesOpen && "bg-white/[0.04] ring-1 ring-canopy-accent/20 text-canopy-accent"
                 )}
-                title={
-                  statsError
-                    ? `GitHub error: ${statsError} (click to retry)`
-                    : "Browse GitHub Issues"
-                }
-                aria-label={
-                  statsError ? "GitHub stats error" : `${stats.issueCount ?? 0} open issues`
-                }
+                title="Browse GitHub Issues"
+                aria-label={`${stats.issueCount ?? 0} open issues`}
               >
                 <AlertTriangle className="h-3.5 w-3.5" />
-                <span className="text-xs font-medium">{stats.issueCount ?? "?"}</span>
+                <span className="text-xs font-medium tabular-nums">{stats.issueCount ?? "?"}</span>
               </Button>
               <FixedDropdown
                 open={issuesOpen}
@@ -289,22 +404,15 @@ export function Toolbar({
                   }
                 }}
                 className={cn(
-                  "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent h-7 px-2 gap-1.5",
-                  (stats.prCount === 0 || statsError) && "opacity-50",
-                  statsError && "text-[var(--color-status-error)]",
-                  prsOpen && "bg-canopy-border text-canopy-accent"
+                  "text-canopy-text hover:bg-white/[0.04] hover:text-canopy-accent h-7 px-2.5 gap-1.5 rounded-none",
+                  stats.prCount === 0 && "opacity-50",
+                  prsOpen && "bg-white/[0.04] ring-1 ring-canopy-accent/20 text-canopy-accent"
                 )}
-                title={
-                  statsError
-                    ? `GitHub error: ${statsError} (click to retry)`
-                    : "Browse GitHub Pull Requests"
-                }
-                aria-label={
-                  statsError ? "GitHub stats error" : `${stats.prCount ?? 0} open pull requests`
-                }
+                title="Browse GitHub Pull Requests"
+                aria-label={`${stats.prCount ?? 0} open pull requests`}
               >
                 <GitPullRequest className="h-3.5 w-3.5" />
-                <span className="text-xs font-medium">{stats.prCount ?? "?"}</span>
+                <span className="text-xs font-medium tabular-nums">{stats.prCount ?? "?"}</span>
               </Button>
               <FixedDropdown
                 open={prsOpen}
@@ -322,17 +430,14 @@ export function Toolbar({
 
               <div
                 className={cn(
-                  "flex items-center gap-1.5 px-2 h-7 rounded-[var(--radius-md)]",
-                  (stats.commitCount === 0 || statsError) && "opacity-50",
-                  statsError && "text-[var(--color-status-error)]"
+                  "flex items-center gap-1.5 px-2.5 h-7 rounded-r-[var(--radius-md)]",
+                  stats.commitCount === 0 && "opacity-50"
                 )}
-                title={
-                  statsError ? `GitHub error: ${statsError}` : "Total commits in current branch"
-                }
-                aria-label={statsError ? "GitHub stats error" : `${stats.commitCount} commits`}
+                title="Total commits in current branch"
+                aria-label={`${stats.commitCount} commits`}
               >
                 <GitCommit className="h-3.5 w-3.5 text-canopy-text" />
-                <span className="text-xs font-medium text-canopy-text">{stats.commitCount}</span>
+                <span className="text-xs font-medium tabular-nums text-canopy-text">{stats.commitCount}</span>
               </div>
             </div>
             <div className="w-px h-5 bg-white/[0.08]" />
@@ -342,18 +447,18 @@ export function Toolbar({
         <div className="flex items-center gap-1">
           <Button
             variant="ghost"
-            size="icon"
+            size="icon-sm"
             onClick={onToggleProblems}
             className={cn(
-              "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent h-8 w-8 relative",
+              "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent relative",
               errorCount > 0 && "text-[var(--color-status-error)]"
             )}
             title="Show Problems Panel (Ctrl+Shift+M)"
             aria-label={`Problems: ${errorCount} error${errorCount !== 1 ? "s" : ""}`}
           >
-            <AlertCircle className="h-4 w-4" />
+            <AlertCircle />
             {errorCount > 0 && (
-              <span className="absolute top-1 right-1 w-2 h-2 bg-[var(--color-status-error)] rounded-full" />
+              <span className="absolute top-0.5 right-0.5 w-2 h-2 bg-[var(--color-status-error)] rounded-full" />
             )}
           </Button>
         </div>
@@ -365,13 +470,13 @@ export function Toolbar({
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"
-                size="icon"
+                size="icon-sm"
                 onClick={handleCopyTreeClick}
                 disabled={isCopyingTree || !activeWorktree}
                 className={cn(
-                  "h-8 w-8 transition-colors",
+                  "transition-colors",
                   treeCopied
-                    ? "text-green-400 bg-green-400/10"
+                    ? "text-[var(--color-status-success)] bg-[var(--color-status-success)]/10"
                     : "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent",
                   isCopyingTree && "cursor-wait opacity-70",
                   !activeWorktree && "opacity-50"
@@ -380,11 +485,11 @@ export function Toolbar({
                 aria-label={treeCopied ? "Context Copied" : "Copy Context"}
               >
                 {isCopyingTree ? (
-                  <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+                  <Loader2 className="animate-spin motion-reduce:animate-none" />
                 ) : treeCopied ? (
-                  <Check className="h-4 w-4" />
+                  <Check />
                 ) : (
-                  <Copy className="h-4 w-4" />
+                  <Copy />
                 )}
               </Button>
             </TooltipTrigger>
@@ -401,30 +506,30 @@ export function Toolbar({
         <div className="flex items-center gap-1">
           <Button
             variant="ghost"
-            size="icon"
+            size="icon-sm"
             onClick={onSettings}
             onContextMenu={handleSettingsContextMenu}
-            className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent h-8 w-8"
+            className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent"
             title="Open Settings"
             aria-label="Open settings"
           >
-            <Settings className="h-4 w-4" />
+            <Settings />
           </Button>
           <Button
             variant="ghost"
-            size="icon"
+            size="icon-sm"
             onClick={toggleSidecar}
             className={cn(
-              "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent h-8 w-8 transition-colors"
+              "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
             )}
             title={sidecarOpen ? "Close Context Sidecar" : "Open Context Sidecar"}
             aria-label={sidecarOpen ? "Close context sidecar" : "Open context sidecar"}
             aria-pressed={sidecarOpen}
           >
             {sidecarOpen ? (
-              <PanelRightClose className="h-4 w-4" aria-hidden="true" />
+              <PanelRightClose aria-hidden="true" />
             ) : (
-              <PanelRightOpen className="h-4 w-4" aria-hidden="true" />
+              <PanelRightOpen aria-hidden="true" />
             )}
           </Button>
         </div>

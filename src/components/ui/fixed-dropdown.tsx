@@ -123,12 +123,12 @@ export function FixedDropdown({
       <div
         ref={contentRef}
         className={cn(
-          "absolute pointer-events-auto overflow-hidden rounded-[var(--radius-lg)] border border-canopy-border bg-canopy-sidebar text-canopy-text shadow-lg",
-          "transition-all duration-150",
+          "absolute pointer-events-auto overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay text-canopy-text",
+          "transition-[opacity,transform] duration-150",
           "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:transform-none",
           isVisible
             ? "opacity-100 translate-y-0 scale-100"
-            : "opacity-0 -translate-y-1 scale-[0.98]",
+            : "opacity-0 -translate-y-0.5 scale-[0.99]",
           className
         )}
         style={{ top: position.top, right: position.right }}

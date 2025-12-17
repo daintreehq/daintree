@@ -217,7 +217,7 @@ async function createWindow(): Promise<void> {
       sandbox: true,
     },
     titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 12, y: 16 },
+    trafficLightPosition: { x: 12, y: 14 },
     backgroundColor: "#18181b",
   });
 
