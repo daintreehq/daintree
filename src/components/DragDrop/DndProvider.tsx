@@ -389,9 +389,13 @@ export function DndProvider({ children }: DndProviderProps) {
           // Flush any pending resize jobs that could have stale dimensions
           terminalInstanceService.flushResize(terminal.id);
 
+          // Force store visibility to true. This is critical for HistoryOverlayTerminalView
+          // which relies on store state (via TerminalPane props) rather than the service instance.
+          useTerminalStore.getState().updateVisibility(terminal.id, true);
+
           const managed = terminalInstanceService.get(terminal.id);
           if (managed?.hostElement.isConnected) {
-            // Force visibility true since we know grid terminals should be visible
+            // Force service visibility true since we know grid terminals should be visible
             managed.isVisible = true;
             terminalInstanceService.resetRenderer(terminal.id);
           }

@@ -990,7 +990,8 @@ export const HistoryOverlayTerminalView = forwardRef<
   useLayoutEffect(() => {
     const xtermContainer = xtermContainerRef.current;
     if (!xtermContainer) return;
-    if (!isVisible && !isFocused) return;
+    // Keep observer active during drag to prevent layout thrashing
+    if (!isVisible && !isFocused && !isDragging) return;
 
     let rafId: number | null = null;
     const observer = new ResizeObserver(() => {
@@ -1029,7 +1030,33 @@ export const HistoryOverlayTerminalView = forwardRef<
       if (rafId !== null) cancelAnimationFrame(rafId);
       observer.disconnect();
     };
-  }, [isFocused, isVisible, terminalId, resyncHistory]);
+  }, [isFocused, isVisible, terminalId, resyncHistory, isDragging]);
+
+  // Post-drag stabilization: force fit when drag ends
+  useEffect(() => {
+    if (!isDragging) {
+      const timer = setTimeout(() => {
+        const term = xtermRef.current;
+        const fit = fitAddonRef.current;
+        if (term && fit) {
+          try {
+            fit.fit();
+            terminalClient.resize(terminalId, term.cols, term.rows);
+            // Update metrics after fit
+            const m = readXtermVisualMetrics(term);
+            if (m) {
+              metricsRef.current = m;
+              setMetrics(m);
+            }
+          } catch (e) {
+            console.warn("Failed to fit terminal after drag:", e);
+          }
+        }
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+    return undefined;
+  }, [isDragging, terminalId]);
 
   // Focus Handler
   useEffect(() => {
