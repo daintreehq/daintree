@@ -249,7 +249,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
       </TerminalContextMenu>
 
       <PopoverContent
-        className="w-[700px] h-[500px] p-0 border-canopy-border bg-canopy-bg shadow-2xl"
+        className="w-[700px] max-w-[90vw] h-[500px] max-h-[80vh] p-0 border-canopy-border bg-canopy-bg shadow-2xl overflow-hidden"
         side="top"
         align="start"
         sideOffset={8}
