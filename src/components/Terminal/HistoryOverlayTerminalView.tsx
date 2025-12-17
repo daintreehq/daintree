@@ -13,7 +13,16 @@
  * - Broken-frame mitigation via settle-based gating
  */
 
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import "@xterm/xterm/css/xterm.css";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -41,6 +50,13 @@ export interface HistoryOverlayTerminalViewProps {
   isVisible: boolean;
   isInputLocked?: boolean;
   className?: string;
+  /** Called when a submit occurs (Enter pressed via HybridInputBar) */
+  onSubmit?: () => void;
+}
+
+export interface HistoryOverlayTerminalViewHandle {
+  /** Notify the view that a submit occurred (exits history mode) */
+  notifySubmit: () => void;
 }
 
 type ViewMode = "live" | "history";
@@ -264,13 +280,13 @@ function isAtBottom(el: HTMLElement, epsilon = BOTTOM_EPSILON_PX): boolean {
 }
 
 // Component
-export function HistoryOverlayTerminalView({
-  terminalId,
-  isFocused,
-  isVisible,
-  isInputLocked,
-  className,
-}: HistoryOverlayTerminalViewProps) {
+export const HistoryOverlayTerminalView = forwardRef<
+  HistoryOverlayTerminalViewHandle,
+  HistoryOverlayTerminalViewProps
+>(function HistoryOverlayTerminalView(
+  { terminalId, isFocused, isVisible, isInputLocked, className },
+  ref
+) {
   // Refs
   const containerRef = useRef<HTMLDivElement>(null);
   const xtermContainerRef = useRef<HTMLDivElement>(null);
@@ -422,6 +438,17 @@ export function HistoryOverlayTerminalView({
     }
   }, []);
 
+  // Expose notifySubmit to parent for HybridInputBar submits
+  useImperativeHandle(
+    ref,
+    () => ({
+      notifySubmit: () => {
+        exitHistoryMode();
+      },
+    }),
+    [exitHistoryMode]
+  );
+
   // Scroll to Near-Bottom on History Entry
   // This useLayoutEffect runs AFTER React has rendered the overlay content,
   // ensuring scrollHeight is accurate when we scroll
@@ -572,15 +599,18 @@ export function HistoryOverlayTerminalView({
     fitAddonRef.current = fit;
     serializeAddonRef.current = serialize;
 
-    // Handle user input (use refs to avoid re-initialization on prop changes)
-    const inputDisposable = term.onData((data) => {
-      if (isInputLockedRef.current) return;
+    // Custom key handler to detect Enter (submit) without Shift.
+    // This allows us to distinguish between Enter (exit history) and Shift+Enter (newline).
+    term.attachCustomKeyEventHandler((event) => {
+      // Only handle keydown, not keyup
+      if (event.type !== "keydown") return true;
 
-      // Ignore focus report escape sequences
-      if (data === "\x1b[I" || data === "\x1b[O") return;
+      // Detect Enter without Shift (a submit)
+      const isSubmitEnter =
+        (event.key === "Enter" || event.code === "Enter" || event.code === "NumpadEnter") &&
+        !event.shiftKey;
 
-      // If user types while in history mode, return to live
-      if (viewModeRef.current === "history") {
+      if (isSubmitEnter && viewModeRef.current === "history") {
         viewModeRef.current = "live";
         setViewMode("live");
         term.scrollToBottom();
@@ -588,6 +618,20 @@ export function HistoryOverlayTerminalView({
           requestAnimationFrame(() => term.focus());
         }
       }
+
+      // Always return true to let xterm process the key normally
+      return true;
+    });
+
+    // Handle user input (use refs to avoid re-initialization on prop changes)
+    const inputDisposable = term.onData((data) => {
+      if (isInputLockedRef.current) return;
+
+      // Ignore focus report escape sequences
+      if (data === "\x1b[I" || data === "\x1b[O") return;
+
+      // Note: Enter detection for exiting history mode is handled by
+      // attachCustomKeyEventHandler above, which can distinguish Enter from Shift+Enter.
 
       terminalClient.write(terminalId, data);
       terminalInstanceService.notifyUserInput(terminalId);
@@ -600,15 +644,10 @@ export function HistoryOverlayTerminalView({
       // Track output time for settle logic
       lastOutputAtRef.current = performance.now();
 
-      // Exit history mode when new output arrives (agent is responding)
-      if (viewModeRef.current === "history") {
-        viewModeRef.current = "live";
-        setViewMode("live");
-        term.scrollToBottom();
-        if (isFocusedRef.current) {
-          requestAnimationFrame(() => term.focus());
-        }
-      }
+      // Note: We intentionally do NOT exit history mode when PTY data arrives.
+      // This allows users to browse history while an agent is working.
+      // The resync mechanism will update history content periodically,
+      // and users can exit via: scroll to bottom, "Back to live" button, or pressing Enter.
 
       term.write(str);
     });
@@ -831,4 +870,4 @@ export function HistoryOverlayTerminalView({
       )}
     </div>
   );
-}
+});

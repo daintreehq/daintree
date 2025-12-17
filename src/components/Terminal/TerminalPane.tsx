@@ -11,7 +11,10 @@ import { TerminalSearchBar } from "./TerminalSearchBar";
 import { TerminalRestartBanner } from "./TerminalRestartBanner";
 import { TerminalErrorBanner } from "./TerminalErrorBanner";
 import { UpdateCwdDialog } from "./UpdateCwdDialog";
-import { HistoryOverlayTerminalView } from "./HistoryOverlayTerminalView";
+import {
+  HistoryOverlayTerminalView,
+  type HistoryOverlayTerminalViewHandle,
+} from "./HistoryOverlayTerminalView";
 import { ErrorBanner } from "../Errors/ErrorBanner";
 import {
   useErrorStore,
@@ -93,6 +96,7 @@ function TerminalPaneComponent({
   const prevFocusedRef = useRef(isFocused);
   const justFocusedUntilRef = useRef<number>(0);
   const inputBarRef = useRef<HybridInputBarHandle>(null);
+  const historyViewRef = useRef<HistoryOverlayTerminalViewHandle>(null);
   const [isRestoring, setIsRestoring] = useState(true);
   const [dismissedRestartPrompt, setDismissedRestartPrompt] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -514,6 +518,7 @@ function TerminalPaneComponent({
           >
             {isSnapshotMode ? (
               <HistoryOverlayTerminalView
+                ref={historyViewRef}
                 terminalId={id}
                 isFocused={isFocused}
                 isVisible={isVisible}
@@ -633,6 +638,7 @@ function TerminalPaneComponent({
             disabled={isBackendDisconnected || isBackendRecovering || isInputLocked}
             cwd={cwd}
             agentId={effectiveAgentId}
+            onActivate={handleClick}
             onSend={({ trackerData, text }) => {
               if (!isInputLocked) {
                 terminalInstanceService.notifyUserInput(id);
@@ -640,12 +646,18 @@ function TerminalPaneComponent({
                 terminalClient.submit(id, text);
                 // Feed tracker data for features like clear command detection
                 handleInput(trackerData);
+                // Notify history view of submit to exit history mode
+                historyViewRef.current?.notifySubmit();
               }
             }}
             onSendKey={(key) => {
               if (!isInputLocked) {
                 terminalInstanceService.notifyUserInput(id);
                 terminalClient.sendKey(id, key);
+                // Exit history mode on Enter key (empty input bar passes Enter as sendKey)
+                if (key === "enter") {
+                  historyViewRef.current?.notifySubmit();
+                }
               }
             }}
           />
