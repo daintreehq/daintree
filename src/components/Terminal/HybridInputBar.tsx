@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { buildTerminalSendPayload } from "@/lib/terminalInput";
 import { useFileAutocomplete } from "@/hooks/useFileAutocomplete";
 import { useSlashCommandAutocomplete } from "@/hooks/useSlashCommandAutocomplete";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { AutocompleteMenu, type AutocompleteItem } from "./AutocompleteMenu";
 import { isEnterLikeLineBreakInputEvent } from "./hybridInputEvents";
 import {
@@ -32,6 +33,7 @@ export interface HybridInputBarHandle {
 }
 
 export interface HybridInputBarProps {
+  terminalId: string;
   onSend: (payload: { data: string; trackerData: string; text: string }) => void;
   onSendKey?: (key: string) => void;
   onActivate?: () => void;
@@ -87,8 +89,14 @@ function getTextOffsetLeftPx(textarea: HTMLTextAreaElement, charIndex: number): 
 }
 
 export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarProps>(
-  ({ onSend, onSendKey, onActivate, cwd, agentId, disabled = false, className }, ref) => {
-    const [value, setValue] = useState("");
+  (
+    { terminalId, onSend, onSendKey, onActivate, cwd, agentId, disabled = false, className },
+    ref
+  ) => {
+    const getDraftInput = useTerminalInputStore((s) => s.getDraftInput);
+    const setDraftInput = useTerminalInputStore((s) => s.setDraftInput);
+    const clearDraftInput = useTerminalInputStore((s) => s.clearDraftInput);
+    const [value, setValue] = useState(() => getDraftInput(terminalId));
     const allowNextLineBreakRef = useRef(false);
     const handledEnterRef = useRef(false);
     const submitAfterCompositionRef = useRef(false);
@@ -104,6 +112,19 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const lastQueryRef = useRef<string>("");
     const [menuLeftPx, setMenuLeftPx] = useState<number>(0);
     const [collapsedHeightPx, setCollapsedHeightPx] = useState<number | null>(null);
+
+    useEffect(() => {
+      setDraftInput(terminalId, value);
+    }, [terminalId, value, setDraftInput]);
+
+    useEffect(() => {
+      return () => {
+        if (sendRafRef.current !== null) {
+          cancelAnimationFrame(sendRafRef.current);
+          sendRafRef.current = null;
+        }
+      };
+    }, []);
 
     const placeholder = useMemo(() => {
       const agentName = agentId ? getAgentConfig(agentId)?.name : null;
@@ -254,10 +275,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       // Pass raw 'text' as 'text' so the backend handles formatting/bracketing cleanly
       onSend({ data: payload.data, trackerData: payload.trackerData, text });
       setValue("");
+      clearDraftInput(terminalId);
       setAtContext(null);
       setSlashContext(null);
       requestAnimationFrame(() => resizeTextarea(textareaRef.current));
-    }, [disabled, onSend, resizeTextarea, value]);
+    }, [disabled, onSend, resizeTextarea, value, clearDraftInput, terminalId]);
 
     const queueSend = useCallback(() => {
       if (sendRafRef.current !== null) return;

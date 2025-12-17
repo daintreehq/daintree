@@ -226,7 +226,7 @@ function extractSnapshot(
       for (let i = 0; i < count; i++) {
         const lineIdx = start + i;
         // Serialize just this one line using range option
-
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const serialized = serializeAddon.serialize({
           range: { start: lineIdx, end: lineIdx },
           excludeAltBuffer: true,

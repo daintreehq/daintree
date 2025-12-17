@@ -643,6 +643,7 @@ function TerminalPaneComponent({
         {showHybridInputBar && (
           <HybridInputBar
             ref={inputBarRef}
+            terminalId={id}
             disabled={isBackendDisconnected || isBackendRecovering || isInputLocked}
             cwd={cwd}
             agentId={effectiveAgentId}
