@@ -7,6 +7,11 @@
  * It forwards all operations to the Pty Host (UtilityProcess) via IPC,
  * keeping the Main thread responsive.
  *
+ * Architecture:
+ * - Uses RequestResponseBroker for unified request/response correlation
+ * - Uses PtyEventsBridge for domain event routing to internal event bus
+ * - Keeps this class focused on transport and lifecycle management
+ *
  * Why this pattern:
  * - Manages critical child process (UtilityProcess) requiring explicit lifecycle control
  * - Constructor accepts configuration: must be instantiated with specific options
@@ -24,9 +29,10 @@ import { utilityProcess, UtilityProcess, dialog, app, MessagePortMain } from "el
 import { EventEmitter } from "events";
 import path from "path";
 import { fileURLToPath } from "url";
-import { events } from "./events.js";
 import { logInfo, logWarn } from "../utils/logger.js";
 import { SharedRingBuffer } from "../../shared/utils/SharedRingBuffer.js";
+import { RequestResponseBroker } from "./rpc/index.js";
+import { bridgePtyEvent } from "./pty/PtyEventsBridge.js";
 import type {
   PtyHostRequest,
   PtyHostEvent,
@@ -37,7 +43,6 @@ import type {
   HostCrashPayload,
 } from "../../shared/types/pty-host.js";
 import type {
-  TerminalCleanLogEntry,
   TerminalGetCleanLogRequest,
   TerminalGetCleanLogResponse,
   TerminalGetScreenSnapshotOptions,
@@ -147,34 +152,21 @@ export class PtyClient extends EventEmitter {
   /** Watchdog: Track missed heartbeat responses to detect deadlocks */
   private missedHeartbeats = 0;
   private readonly MAX_MISSED_HEARTBEATS = 3;
+
+  /** Unified request/response broker for all async operations */
+  private broker = new RequestResponseBroker({
+    defaultTimeoutMs: 5000,
+    idPrefix: "pty",
+    onTimeout: (requestId) => {
+      console.warn(`[PtyClient] Request timeout: ${requestId}`);
+    },
+  });
+
+  /** Special callbacks that don't fit the request/response pattern */
   private snapshotCallbacks: Map<string, (snapshot: TerminalSnapshot | null) => void> = new Map();
   private allSnapshotsCallback: ((snapshots: TerminalSnapshot[]) => void) | null = null;
   private transitionCallbacks: Map<string, (success: boolean) => void> = new Map();
-  private terminalsForProjectCallbacks: Map<string, (ids: string[]) => void> = new Map();
-  private terminalInfoCallbacks: Map<string, (terminal: TerminalInfoResponse | null) => void> =
-    new Map();
-  private replayHistoryCallbacks: Map<string, (replayed: number) => void> = new Map();
-  private serializedStateCallbacks: Map<string, (state: string | null) => void> = new Map();
-  private wakeCallbacks: Map<
-    string,
-    (result: { state: string | null; warnings?: string[] }) => void
-  > = new Map();
-  private screenSnapshotCallbacks: Map<string, (snapshot: TerminalScreenSnapshot | null) => void> =
-    new Map();
-  private cleanLogCallbacks: Map<string, (result: TerminalGetCleanLogResponse) => void> = new Map();
-  private killByProjectCallbacks: Map<string, (killed: number) => void> = new Map();
-  private projectStatsCallbacks: Map<
-    string,
-    (stats: {
-      terminalCount: number;
-      processIds: number[];
-      terminalTypes: Record<string, number>;
-    }) => void
-  > = new Map();
-  private terminalDiagnosticInfoCallbacks: Map<
-    string,
-    (info: import("../../shared/types/ipc.js").TerminalInfoPayload | null) => void
-  > = new Map();
+
   private readyPromise: Promise<void>;
   private readyResolve: (() => void) | null = null;
 
@@ -432,10 +424,32 @@ export class PtyClient extends EventEmitter {
   }
 
   private handleHostEvent(event: PtyHostEvent): void {
+    // First, try to handle as a domain event via the bridge
+    const bridged = bridgePtyEvent(event, {
+      onTerminalStatus: (payload) => {
+        const statusPayload: TerminalStatusPayload = {
+          id: payload.id,
+          status: payload.status,
+          bufferUtilization: payload.bufferUtilization,
+          pauseDuration: payload.pauseDuration,
+          timestamp: payload.timestamp,
+        };
+        this.emit("terminal-status", statusPayload);
+      },
+      onHostThrottled: (payload) => {
+        this.emit("host-throttled", payload);
+      },
+    });
+
+    if (bridged) {
+      return;
+    }
+
+    // Handle transport-level events and request/response correlation
     switch (event.type) {
       case "ready":
         this.isInitialized = true;
-        this.restartAttempts = 0; // Reset on successful init
+        this.restartAttempts = 0;
         if (this.readyResolve) {
           this.readyResolve();
           this.readyResolve = null;
@@ -454,65 +468,6 @@ export class PtyClient extends EventEmitter {
 
       case "error":
         this.emit("error", event.id, event.error);
-        break;
-
-      case "agent-state":
-        events.emit("agent:state-changed", {
-          agentId: event.id,
-          terminalId: event.id,
-          state: event.state,
-          previousState: event.previousState,
-          timestamp: event.timestamp,
-          traceId: event.traceId,
-          trigger: event.trigger as AgentStateChangeTrigger,
-          confidence: event.confidence,
-          worktreeId: event.worktreeId,
-        });
-        break;
-
-      case "agent-detected":
-        events.emit("agent:detected", {
-          terminalId: event.terminalId,
-          agentType: event.agentType,
-          processName: event.processName,
-          timestamp: event.timestamp,
-        });
-        break;
-
-      case "agent-exited":
-        events.emit("agent:exited", {
-          terminalId: event.terminalId,
-          agentType: event.agentType,
-          timestamp: event.timestamp,
-        });
-        break;
-
-      case "agent-spawned":
-        events.emit("agent:spawned", event.payload);
-        break;
-
-      case "agent-output":
-        events.emit("agent:output", event.payload);
-        break;
-
-      case "agent-completed":
-        events.emit("agent:completed", event.payload);
-        break;
-
-      case "agent-failed":
-        events.emit("agent:failed", event.payload);
-        break;
-
-      case "agent-killed":
-        events.emit("agent:killed", event.payload);
-        break;
-
-      case "terminal-trashed":
-        events.emit("terminal:trashed", { id: event.id, expiresAt: event.expiresAt });
-        break;
-
-      case "terminal-restored":
-        events.emit("terminal:restored", { id: event.id });
         break;
 
       case "snapshot": {
@@ -543,10 +498,7 @@ export class PtyClient extends EventEmitter {
       }
 
       case "pong":
-        // Reset watchdog counter on every pong - host is responsive
         this.missedHeartbeats = 0;
-
-        // If waiting for handshake, this pong confirms host is responsive
         if (this.isWaitingForHandshake) {
           this.isWaitingForHandshake = false;
           if (this.handshakeTimeout) {
@@ -558,127 +510,58 @@ export class PtyClient extends EventEmitter {
         }
         break;
 
-      case "terminals-for-project": {
-        const cb = this.terminalsForProjectCallbacks.get((event as any).requestId);
-        if (cb) {
-          this.terminalsForProjectCallbacks.delete((event as any).requestId);
-          cb((event as any).terminalIds ?? []);
-        }
+      // Request/response events handled via broker
+      case "terminals-for-project":
+        this.broker.resolve((event as any).requestId, (event as any).terminalIds ?? []);
         break;
-      }
 
-      case "terminal-info": {
-        const cb = this.terminalInfoCallbacks.get((event as any).requestId);
-        if (cb) {
-          this.terminalInfoCallbacks.delete((event as any).requestId);
-          cb((event as any).terminal ?? null);
-        }
+      case "terminal-info":
+        this.broker.resolve((event as any).requestId, (event as any).terminal ?? null);
         break;
-      }
 
-      case "replay-history-result": {
-        const cb = this.replayHistoryCallbacks.get((event as any).requestId);
-        if (cb) {
-          this.replayHistoryCallbacks.delete((event as any).requestId);
-          cb((event as any).replayed ?? 0);
-        }
+      case "replay-history-result":
+        this.broker.resolve((event as any).requestId, (event as any).replayed ?? 0);
         break;
-      }
 
-      case "serialized-state": {
-        const cb = this.serializedStateCallbacks.get((event as any).requestId);
-        if (cb) {
-          this.serializedStateCallbacks.delete((event as any).requestId);
-          cb((event as any).state ?? null);
-        }
+      case "serialized-state":
+        this.broker.resolve((event as any).requestId, (event as any).state ?? null);
         break;
-      }
 
-      case "screen-snapshot": {
-        const cb = this.screenSnapshotCallbacks.get((event as any).requestId);
-        if (cb) {
-          this.screenSnapshotCallbacks.delete((event as any).requestId);
-          cb(((event as any).snapshot ?? null) as TerminalScreenSnapshot | null);
-        }
+      case "screen-snapshot":
+        this.broker.resolve(
+          (event as any).requestId,
+          ((event as any).snapshot ?? null) as TerminalScreenSnapshot | null
+        );
         break;
-      }
 
-      case "clean-log": {
-        const cb = this.cleanLogCallbacks.get((event as any).requestId);
-        if (cb) {
-          this.cleanLogCallbacks.delete((event as any).requestId);
-          cb({
-            id: (event as any).id,
-            latestSequence: (event as any).latestSequence ?? 0,
-            entries: ((event as any).entries ?? []) as TerminalCleanLogEntry[],
-          });
-        }
+      case "clean-log":
+        this.broker.resolve((event as any).requestId, {
+          id: (event as any).id,
+          latestSequence: (event as any).latestSequence ?? 0,
+          entries: (event as any).entries ?? [],
+        } as TerminalGetCleanLogResponse);
         break;
-      }
 
-      case "wake-result": {
-        const cb = this.wakeCallbacks.get((event as any).requestId);
-        if (cb) {
-          this.wakeCallbacks.delete((event as any).requestId);
-          cb({ state: (event as any).state ?? null, warnings: (event as any).warnings });
-        }
-        break;
-      }
-
-      case "kill-by-project-result": {
-        const cb = this.killByProjectCallbacks.get((event as any).requestId);
-        if (cb) {
-          this.killByProjectCallbacks.delete((event as any).requestId);
-          cb((event as any).killed ?? 0);
-        }
-        break;
-      }
-
-      case "project-stats": {
-        const cb = this.projectStatsCallbacks.get((event as any).requestId);
-        if (cb) {
-          this.projectStatsCallbacks.delete((event as any).requestId);
-          cb((event as any).stats ?? { terminalCount: 0, processIds: [], terminalTypes: {} });
-        }
-        break;
-      }
-
-      case "terminal-diagnostic-info": {
-        const cb = this.terminalDiagnosticInfoCallbacks.get(event.requestId);
-        if (cb) {
-          this.terminalDiagnosticInfoCallbacks.delete(event.requestId);
-          cb(event.info);
-        }
-        break;
-      }
-
-      case "terminal-status": {
-        // Forward terminal status events for flow control visibility
-        const statusPayload: TerminalStatusPayload = {
-          id: event.id,
-          status: event.status,
-          bufferUtilization: event.bufferUtilization,
-          pauseDuration: event.pauseDuration,
-          timestamp: event.timestamp,
-        };
-        this.emit("terminal-status", statusPayload);
-        events.emit("terminal:status", statusPayload);
-        break;
-      }
-
-      case "host-throttled":
-        // Forward host throttle events for memory pressure visibility
-        this.emit("host-throttled", {
-          isThrottled: event.isThrottled,
-          reason: event.reason,
-          duration: event.duration,
-          timestamp: event.timestamp,
+      case "wake-result":
+        this.broker.resolve((event as any).requestId, {
+          state: (event as any).state ?? null,
+          warnings: (event as any).warnings,
         });
         break;
 
-      case "terminal-reliability-metric":
-        // Forward reliability metrics for visibility in diagnostics
-        events.emit("terminal:reliability-metric", event.payload);
+      case "kill-by-project-result":
+        this.broker.resolve((event as any).requestId, (event as any).killed ?? 0);
+        break;
+
+      case "project-stats":
+        this.broker.resolve(
+          (event as any).requestId,
+          (event as any).stats ?? { terminalCount: 0, processIds: [], terminalTypes: {} }
+        );
+        break;
+
+      case "terminal-diagnostic-info":
+        this.broker.resolve(event.requestId, event.info);
         break;
 
       default:
@@ -839,18 +722,10 @@ export class PtyClient extends EventEmitter {
   }
 
   async wakeTerminal(id: string): Promise<{ state: string | null; warnings?: string[] }> {
-    return new Promise((resolve) => {
-      const requestId = `wake-${id}-${Date.now()}`;
-      this.wakeCallbacks.set(requestId, resolve);
-      this.send({ type: "wake-terminal", id, requestId } as any);
-
-      setTimeout(() => {
-        if (this.wakeCallbacks.has(requestId)) {
-          this.wakeCallbacks.delete(requestId);
-          resolve({ state: null });
-        }
-      }, 5000);
-    });
+    const requestId = this.broker.generateId(`wake-${id}`);
+    const promise = this.broker.register<{ state: string | null; warnings?: string[] }>(requestId);
+    this.send({ type: "wake-terminal", id, requestId } as any);
+    return promise.catch(() => ({ state: null }));
   }
 
   setActiveProject(projectId: string | null): void {
@@ -862,18 +737,10 @@ export class PtyClient extends EventEmitter {
   }
 
   async killByProject(projectId: string): Promise<number> {
-    return new Promise((resolve) => {
-      const requestId = `kill-by-project-${projectId}-${Date.now()}`;
-      this.killByProjectCallbacks.set(requestId, resolve);
-      this.send({ type: "kill-by-project", projectId, requestId } as any);
-
-      setTimeout(() => {
-        if (this.killByProjectCallbacks.has(requestId)) {
-          this.killByProjectCallbacks.delete(requestId);
-          resolve(0);
-        }
-      }, 10000);
-    });
+    const requestId = this.broker.generateId(`kill-by-project-${projectId}`);
+    const promise = this.broker.register<number>(requestId, 10000);
+    this.send({ type: "kill-by-project", projectId, requestId } as any);
+    return promise.catch(() => 0);
   }
 
   async getProjectStats(projectId: string): Promise<{
@@ -881,18 +748,14 @@ export class PtyClient extends EventEmitter {
     processIds: number[];
     terminalTypes: Record<string, number>;
   }> {
-    return new Promise((resolve) => {
-      const requestId = `project-stats-${projectId}-${Date.now()}`;
-      this.projectStatsCallbacks.set(requestId, resolve);
-      this.send({ type: "get-project-stats", projectId, requestId } as any);
-
-      setTimeout(() => {
-        if (this.projectStatsCallbacks.has(requestId)) {
-          this.projectStatsCallbacks.delete(requestId);
-          resolve({ terminalCount: 0, processIds: [], terminalTypes: {} });
-        }
-      }, 5000);
-    });
+    const requestId = this.broker.generateId(`project-stats-${projectId}`);
+    const promise = this.broker.register<{
+      terminalCount: number;
+      processIds: number[];
+      terminalTypes: Record<string, number>;
+    }>(requestId);
+    this.send({ type: "get-project-stats", projectId, requestId } as any);
+    return promise.catch(() => ({ terminalCount: 0, processIds: [], terminalTypes: {} }));
   }
 
   /**
@@ -913,50 +776,26 @@ export class PtyClient extends EventEmitter {
 
   /** Get terminal IDs for a specific project */
   async getTerminalsForProjectAsync(projectId: string): Promise<string[]> {
-    return new Promise((resolve) => {
-      const requestId = `terminals-${projectId}-${Date.now()}`;
-      this.terminalsForProjectCallbacks.set(requestId, resolve);
-      this.send({ type: "get-terminals-for-project", projectId, requestId } as any);
-
-      setTimeout(() => {
-        if (this.terminalsForProjectCallbacks.has(requestId)) {
-          this.terminalsForProjectCallbacks.delete(requestId);
-          resolve([]);
-        }
-      }, 5000);
-    });
+    const requestId = this.broker.generateId(`terminals-${projectId}`);
+    const promise = this.broker.register<string[]>(requestId);
+    this.send({ type: "get-terminals-for-project", projectId, requestId } as any);
+    return promise.catch(() => []);
   }
 
   /** Get terminal info by ID */
   async getTerminalAsync(id: string): Promise<TerminalInfoResponse | null> {
-    return new Promise((resolve) => {
-      const requestId = `terminal-${id}-${Date.now()}`;
-      this.terminalInfoCallbacks.set(requestId, resolve);
-      this.send({ type: "get-terminal", id, requestId } as any);
-
-      setTimeout(() => {
-        if (this.terminalInfoCallbacks.has(requestId)) {
-          this.terminalInfoCallbacks.delete(requestId);
-          resolve(null);
-        }
-      }, 5000);
-    });
+    const requestId = this.broker.generateId(`terminal-${id}`);
+    const promise = this.broker.register<TerminalInfoResponse | null>(requestId);
+    this.send({ type: "get-terminal", id, requestId } as any);
+    return promise.catch(() => null);
   }
 
   /** Replay terminal history */
   async replayHistoryAsync(id: string, maxLines: number = 100): Promise<number> {
-    return new Promise((resolve) => {
-      const requestId = `replay-${id}-${Date.now()}`;
-      this.replayHistoryCallbacks.set(requestId, resolve);
-      this.send({ type: "replay-history", id, maxLines, requestId } as any);
-
-      setTimeout(() => {
-        if (this.replayHistoryCallbacks.has(requestId)) {
-          this.replayHistoryCallbacks.delete(requestId);
-          resolve(0);
-        }
-      }, 5000);
-    });
+    const requestId = this.broker.generateId(`replay-${id}`);
+    const promise = this.broker.register<number>(requestId);
+    this.send({ type: "replay-history", id, maxLines, requestId } as any);
+    return promise.catch(() => 0);
   }
 
   /**
@@ -966,20 +805,13 @@ export class PtyClient extends EventEmitter {
    * @returns Serialized state string or null if terminal not found
    */
   async getSerializedStateAsync(id: string): Promise<string | null> {
-    return new Promise((resolve) => {
-      const requestId = `serialize-${id}-${Date.now()}`;
-      this.serializedStateCallbacks.set(requestId, resolve);
-      this.send({ type: "get-serialized-state", id, requestId } as PtyHostRequest);
-
-      // Extended timeout (15s) for large terminals with lots of scrollback.
-      // Serialization can take time for terminals with >10k lines of history.
-      setTimeout(() => {
-        if (this.serializedStateCallbacks.has(requestId)) {
-          console.warn(`[PtyClient] getSerializedState timeout for ${id} after 15s`);
-          this.serializedStateCallbacks.delete(requestId);
-          resolve(null);
-        }
-      }, 15000);
+    const requestId = this.broker.generateId(`serialize-${id}`);
+    // Extended timeout (15s) for large terminals with lots of scrollback.
+    const promise = this.broker.register<string | null>(requestId, 15000);
+    this.send({ type: "get-serialized-state", id, requestId } as PtyHostRequest);
+    return promise.catch(() => {
+      console.warn(`[PtyClient] getSerializedState timeout for ${id}`);
+      return null;
     });
   }
 
@@ -990,18 +822,10 @@ export class PtyClient extends EventEmitter {
     id: string,
     options?: TerminalGetScreenSnapshotOptions
   ): Promise<TerminalScreenSnapshot | null> {
-    return new Promise((resolve) => {
-      const requestId = `screen-snapshot-${id}-${Date.now()}`;
-      this.screenSnapshotCallbacks.set(requestId, resolve);
-      this.send({ type: "get-screen-snapshot", id, requestId, options } as PtyHostRequest);
-
-      setTimeout(() => {
-        if (this.screenSnapshotCallbacks.has(requestId)) {
-          this.screenSnapshotCallbacks.delete(requestId);
-          resolve(null);
-        }
-      }, 5000);
-    });
+    const requestId = this.broker.generateId(`screen-snapshot-${id}`);
+    const promise = this.broker.register<TerminalScreenSnapshot | null>(requestId);
+    this.send({ type: "get-screen-snapshot", id, requestId, options } as PtyHostRequest);
+    return promise.catch(() => null);
   }
 
   /**
@@ -1010,24 +834,16 @@ export class PtyClient extends EventEmitter {
   async getCleanLogAsync(
     request: TerminalGetCleanLogRequest
   ): Promise<TerminalGetCleanLogResponse> {
-    return new Promise((resolve) => {
-      const requestId = `clean-log-${request.id}-${Date.now()}`;
-      this.cleanLogCallbacks.set(requestId, resolve);
-      this.send({
-        type: "get-clean-log",
-        id: request.id,
-        requestId,
-        sinceSequence: request.sinceSequence,
-        limit: request.limit,
-      } as PtyHostRequest);
-
-      setTimeout(() => {
-        if (this.cleanLogCallbacks.has(requestId)) {
-          this.cleanLogCallbacks.delete(requestId);
-          resolve({ id: request.id, latestSequence: 0, entries: [] });
-        }
-      }, 5000);
-    });
+    const requestId = this.broker.generateId(`clean-log-${request.id}`);
+    const promise = this.broker.register<TerminalGetCleanLogResponse>(requestId);
+    this.send({
+      type: "get-clean-log",
+      id: request.id,
+      requestId,
+      sinceSequence: request.sinceSequence,
+      limit: request.limit,
+    } as PtyHostRequest);
+    return promise.catch(() => ({ id: request.id, latestSequence: 0, entries: [] }));
   }
 
   /**
@@ -1036,18 +852,12 @@ export class PtyClient extends EventEmitter {
   async getTerminalInfo(
     id: string
   ): Promise<import("../../shared/types/ipc.js").TerminalInfoPayload | null> {
-    return new Promise((resolve) => {
-      const requestId = `terminal-info-${id}-${Date.now()}`;
-      this.terminalDiagnosticInfoCallbacks.set(requestId, resolve);
-      this.send({ type: "get-terminal-info", id, requestId } as any);
-
-      setTimeout(() => {
-        if (this.terminalDiagnosticInfoCallbacks.has(requestId)) {
-          this.terminalDiagnosticInfoCallbacks.delete(requestId);
-          resolve(null);
-        }
-      }, 5000);
-    });
+    const requestId = this.broker.generateId(`terminal-info-${id}`);
+    const promise = this.broker.register<
+      import("../../shared/types/ipc.js").TerminalInfoPayload | null
+    >(requestId);
+    this.send({ type: "get-terminal-info", id, requestId } as any);
+    return promise.catch(() => null);
   }
 
   /** Get a snapshot of terminal state (async due to IPC) */
@@ -1260,17 +1070,12 @@ export class PtyClient extends EventEmitter {
       }, 1000);
     }
 
-    // Resolve pending callbacks before clearing to prevent hanging promises
+    // Clean up all pending requests via broker
+    this.broker.dispose();
+
+    // Clean up remaining special callbacks
     for (const cb of this.snapshotCallbacks.values()) cb(null);
     for (const cb of this.transitionCallbacks.values()) cb(false);
-    for (const cb of this.terminalsForProjectCallbacks.values()) cb([]);
-    for (const cb of this.terminalInfoCallbacks.values()) cb(null);
-    for (const cb of this.replayHistoryCallbacks.values()) cb(0);
-    for (const cb of this.serializedStateCallbacks.values()) cb(null);
-    for (const cb of this.wakeCallbacks.values()) cb({ state: null });
-    for (const cb of this.killByProjectCallbacks.values()) cb(0);
-    for (const cb of this.projectStatsCallbacks.values())
-      cb({ terminalCount: 0, processIds: [], terminalTypes: {} });
     if (this.allSnapshotsCallback) {
       this.allSnapshotsCallback([]);
       this.allSnapshotsCallback = null;
@@ -1279,13 +1084,6 @@ export class PtyClient extends EventEmitter {
     this.pendingSpawns.clear();
     this.snapshotCallbacks.clear();
     this.transitionCallbacks.clear();
-    this.terminalsForProjectCallbacks.clear();
-    this.terminalInfoCallbacks.clear();
-    this.replayHistoryCallbacks.clear();
-    this.serializedStateCallbacks.clear();
-    this.wakeCallbacks.clear();
-    this.killByProjectCallbacks.clear();
-    this.projectStatsCallbacks.clear();
     this.removeAllListeners();
 
     console.log("[PtyClient] Disposed");

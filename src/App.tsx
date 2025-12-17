@@ -1,11 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { hydrateAppState } from "./utils/stateHydration";
-import { semanticAnalysisService } from "./services/SemanticAnalysisService";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { FolderOpen } from "lucide-react";
-import { shouldShowFirstRunToast, markFirstRunToastSeen } from "./lib/firstRunToast";
-import { keybindingService } from "./services/KeybindingService";
-import { Kbd } from "./components/ui/Kbd";
 import {
   isElectronAvailable,
   useAgentLauncher,
@@ -22,6 +17,15 @@ import {
   useWorktreeActions,
   useMenuActions,
 } from "./hooks";
+import {
+  useAppHydration,
+  useProjectSwitchRehydration,
+  useFirstRunToasts,
+  useTerminalStoreBootstrap,
+  useSemanticWorkerLifecycle,
+  useSystemWakeHandler,
+  type HydrationCallbacks,
+} from "./hooks/app";
 import { AppLayout } from "./components/Layout";
 import { TerminalGrid } from "./components/Terminal";
 import { WorktreeCard, WorktreePalette } from "./components/Worktree";
@@ -38,16 +42,14 @@ import {
   useWorktreeSelectionStore,
   useProjectStore,
   useErrorStore,
-  useNotificationStore,
   useDiagnosticsStore,
   cleanupWorktreeDataStore,
   type RetryAction,
 } from "./store";
 import { useShallow } from "zustand/react/shallow";
 import { useRecipeStore } from "./store/recipeStore";
-import { setupTerminalStoreListeners } from "./store/terminalStore";
 import type { RecipeTerminal } from "./types";
-import { systemClient, projectClient, errorsClient, worktreeClient } from "@/clients";
+import { systemClient, errorsClient } from "@/clients";
 
 function SidebarContent() {
   const { worktrees, isLoading, error, refresh } = useWorktrees();
@@ -403,101 +405,22 @@ function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
-  const [isStateLoaded, setIsStateLoaded] = useState(false);
 
-  const hasRestoredState = useRef(false);
+  // Hydration callbacks for state restoration
+  const hydrationCallbacks: HydrationCallbacks = useMemo(
+    () => ({
+      addTerminal,
+      setActiveWorktree,
+      loadRecipes,
+      openDiagnosticsDock,
+    }),
+    [addTerminal, setActiveWorktree, loadRecipes, openDiagnosticsDock]
+  );
 
-  useEffect(() => {
-    if (!isElectronAvailable() || hasRestoredState.current) {
-      return;
-    }
-
-    hasRestoredState.current = true;
-
-    const restoreState = async () => {
-      try {
-        await hydrateAppState({
-          addTerminal,
-          setActiveWorktree,
-          loadRecipes,
-          openDiagnosticsDock,
-        });
-      } catch (error) {
-        console.error("Failed to restore app state:", error);
-      } finally {
-        setIsStateLoaded(true);
-      }
-    };
-
-    restoreState();
-  }, [addTerminal, setActiveWorktree, loadRecipes, openDiagnosticsDock]);
-
-  const addNotification = useNotificationStore((state) => state.addNotification);
-
-  useEffect(() => {
-    if (!isElectronAvailable() || !isStateLoaded) {
-      return;
-    }
-
-    if (shouldShowFirstRunToast()) {
-      markFirstRunToastSeen();
-
-      const shortcuts = [
-        { id: "terminal.palette", label: "switch terminals" },
-        { id: "terminal.new", label: "new terminal" },
-        { id: "worktree.openPalette", label: "worktrees" },
-      ];
-
-      const shortcutElements = shortcuts.map(({ id, label }, index) => {
-        const combo = keybindingService.getDisplayCombo(id);
-        return (
-          <span key={id}>
-            <Kbd>{combo}</Kbd> ({label}){index < shortcuts.length - 1 ? ", " : ""}
-          </span>
-        );
-      });
-
-      addNotification({
-        type: "info",
-        title: "Quick Shortcuts",
-        message: <div className="flex flex-wrap gap-x-1">{shortcutElements}</div>,
-        duration: 9000,
-      });
-    }
-  }, [isStateLoaded, addNotification]);
-
-  useEffect(() => {
-    if (!isElectronAvailable()) {
-      return;
-    }
-
-    const handleProjectSwitch = async () => {
-      console.log("[App] Received project-switched event, re-hydrating state...");
-      try {
-        await hydrateAppState({
-          addTerminal,
-          setActiveWorktree,
-          loadRecipes,
-          openDiagnosticsDock,
-        });
-        console.log("[App] State re-hydration complete");
-      } catch (error) {
-        console.error("[App] Failed to re-hydrate state after project switch:", error);
-      }
-    };
-
-    window.addEventListener("project-switched", handleProjectSwitch);
-
-    const cleanup = projectClient.onSwitch(() => {
-      console.log("[App] Received PROJECT_ON_SWITCH from main process, re-hydrating...");
-      window.dispatchEvent(new CustomEvent("project-switched"));
-    });
-
-    return () => {
-      window.removeEventListener("project-switched", handleProjectSwitch);
-      cleanup();
-    };
-  }, [addTerminal, setActiveWorktree, loadRecipes, openDiagnosticsDock]);
+  // App lifecycle hooks
+  const { isStateLoaded } = useAppHydration(hydrationCallbacks);
+  useProjectSwitchRehydration(hydrationCallbacks);
+  useFirstRunToasts(isStateLoaded);
 
   const handleLaunchAgent = useCallback(
     async (type: "claude" | "gemini" | "codex" | "terminal") => {
@@ -889,44 +812,10 @@ function App() {
     enabled: electronAvailable,
   });
 
-  useEffect(() => {
-    if (!electronAvailable) return;
-    const cleanup = setupTerminalStoreListeners();
-    return cleanup;
-  }, [electronAvailable]);
-
-  // Initialize semantic analysis Web Worker
-  useEffect(() => {
-    if (!electronAvailable) return;
-
-    semanticAnalysisService.initialize().catch((error) => {
-      console.warn("[App] Failed to initialize semantic analysis service:", error);
-    });
-
-    return () => {
-      semanticAnalysisService.dispose();
-    };
-  }, [electronAvailable]);
-
-  // Handle system wake events for renderer-side re-hydration
-  useEffect(() => {
-    if (!electronAvailable) return;
-
-    const cleanup = systemClient.onWake(({ sleepDuration }) => {
-      console.log(`[App] System woke after ${Math.round(sleepDuration / 1000)}s sleep`);
-
-      // If sleep was long (>5min), refresh worktree status
-      const LONG_SLEEP_THRESHOLD_MS = 5 * 60 * 1000;
-      if (sleepDuration > LONG_SLEEP_THRESHOLD_MS) {
-        console.log("[App] Long sleep detected, refreshing worktree status");
-        worktreeClient.refresh().catch((err) => {
-          console.warn("[App] Failed to refresh worktrees after wake:", err);
-        });
-      }
-    });
-
-    return cleanup;
-  }, [electronAvailable]);
+  // App lifecycle hooks
+  useTerminalStoreBootstrap();
+  useSemanticWorkerLifecycle();
+  useSystemWakeHandler();
 
   if (!isElectronAvailable()) {
     return (
