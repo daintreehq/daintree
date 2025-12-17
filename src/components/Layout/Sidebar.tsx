@@ -175,8 +175,8 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
           tabIndex={0}
           className={cn(
             "group absolute top-0 -right-0.5 w-1.5 h-full cursor-col-resize flex items-center justify-center z-50",
-            "hover:bg-canopy-accent/25 transition-colors focus-visible:outline-none focus-visible:bg-canopy-accent/30",
-            isResizing && "bg-canopy-accent/30"
+            "hover:bg-white/[0.03] transition-colors focus-visible:outline-none focus-visible:bg-white/[0.04] focus-visible:ring-1 focus-visible:ring-canopy-accent/50",
+            isResizing && "bg-canopy-accent/20"
           )}
           onMouseDown={startResizing}
           onKeyDown={handleKeyDown}
@@ -184,9 +184,9 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
         >
           <div
             className={cn(
-              "w-0.5 h-8 rounded-full transition-colors",
+              "w-px h-8 rounded-full transition-colors",
               "bg-canopy-text/20",
-              "group-hover:bg-canopy-accent/70",
+              "group-hover:bg-canopy-text/35 group-focus-visible:bg-canopy-accent",
               isResizing && "bg-canopy-accent"
             )}
           />

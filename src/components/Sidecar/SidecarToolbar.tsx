@@ -143,14 +143,21 @@ const SortableTab = memo(function SortableTab({
       aria-label={tab.title}
       tabIndex={isActive ? 0 : -1}
       onClick={() => onClick(tab.id)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick(tab.id);
+        }
+      }}
       onContextMenu={handleContextMenu}
       className={cn(
         "group relative flex items-center gap-2 px-3 py-1.5 text-xs font-medium cursor-pointer select-none transition-all",
         "rounded-full border shadow-sm",
         "min-w-[80px] max-w-[200px]",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
         isActive
-          ? "bg-foreground text-background border-foreground/20 ring-1 ring-foreground/30"
-          : "bg-canopy-border text-canopy-text border-canopy-border hover:bg-canopy-border/80 hover:text-foreground hover:border-canopy-border",
+          ? "bg-white/[0.03] text-canopy-text border-overlay ring-1 ring-inset ring-canopy-accent/20"
+          : "bg-white/[0.02] text-canopy-text/70 border-divider hover:bg-white/[0.03] hover:text-canopy-text",
         isDragging && "opacity-80 scale-105 shadow-xl cursor-grabbing"
       )}
     >
@@ -170,8 +177,8 @@ const SortableTab = memo(function SortableTab({
         className={cn(
           "p-0.5 rounded-full transition-colors ml-1",
           isActive
-            ? "text-background hover:text-background hover:bg-foreground/20"
-            : "text-muted-foreground hover:text-foreground hover:bg-canopy-bg opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+            ? "text-canopy-text/60 hover:text-canopy-text hover:bg-white/[0.06]"
+            : "text-canopy-text/40 hover:text-canopy-text hover:bg-white/[0.06] opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
         )}
       >
         <X className="w-3 h-3" />
@@ -257,7 +264,7 @@ export function SidecarToolbar({
             onClick={onGoBack}
             disabled={!activeTabId}
             aria-label="Go back"
-            className="p-1 rounded hover:bg-canopy-border text-muted-foreground hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="p-1 rounded hover:bg-white/[0.06] text-muted-foreground hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             title="Go back"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
@@ -266,7 +273,7 @@ export function SidecarToolbar({
             onClick={onGoForward}
             disabled={!activeTabId}
             aria-label="Go forward"
-            className="p-1 rounded hover:bg-canopy-border text-muted-foreground hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="p-1 rounded hover:bg-white/[0.06] text-muted-foreground hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             title="Go forward"
           >
             <ArrowRight className="w-3.5 h-3.5" />
@@ -275,7 +282,7 @@ export function SidecarToolbar({
             onClick={onReload}
             disabled={!activeTabId}
             aria-label="Reload"
-            className="p-1 rounded hover:bg-canopy-border text-muted-foreground hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="p-1 rounded hover:bg-white/[0.06] text-muted-foreground hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             title="Reload"
           >
             <RotateCw className="w-3.5 h-3.5" />
@@ -284,7 +291,7 @@ export function SidecarToolbar({
             onClick={onCopyUrl}
             disabled={!activeTabId || !hasActiveUrl}
             aria-label="Copy URL"
-            className="p-1 rounded hover:bg-canopy-border text-muted-foreground hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="p-1 rounded hover:bg-white/[0.06] text-muted-foreground hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             title="Copy URL"
           >
             <Link2 className="w-3.5 h-3.5" />
@@ -293,7 +300,7 @@ export function SidecarToolbar({
             onClick={onOpenExternal}
             disabled={!activeTabId || !hasActiveUrl}
             aria-label="Open in external browser"
-            className="p-1 rounded hover:bg-canopy-border text-muted-foreground hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="p-1 rounded hover:bg-white/[0.06] text-muted-foreground hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             title="Open in external browser"
           >
             <ExternalLink className="w-3.5 h-3.5" />
@@ -304,7 +311,7 @@ export function SidecarToolbar({
           <button
             onClick={onClose}
             aria-label="Close sidecar"
-            className="p-1 rounded hover:bg-canopy-border text-muted-foreground hover:text-canopy-text transition-colors ml-1"
+            className="p-1 rounded hover:bg-white/[0.06] text-muted-foreground hover:text-canopy-text transition-colors ml-1"
             title="Close sidecar"
           >
             <X className="w-4 h-4" />
@@ -366,7 +373,7 @@ export function SidecarToolbar({
                     defaultNewTabUrl,
                   });
                 }}
-                className="flex items-center justify-center w-8 h-[26px] rounded-full bg-canopy-border hover:bg-canopy-border/80 text-canopy-text hover:text-foreground border border-canopy-border hover:border-canopy-border transition-all"
+                className="flex items-center justify-center w-8 h-[26px] rounded-full bg-white/[0.02] hover:bg-white/[0.03] text-canopy-text/70 hover:text-canopy-text border border-divider transition-all"
                 title="New Tab"
                 aria-haspopup="menu"
               >

@@ -182,13 +182,15 @@ function TerminalHeaderComponent({
         className={cn(
           "flex items-center justify-between px-3 shrink-0 text-xs transition-colors relative overflow-hidden group",
           // Base height and separator border
-          "h-8 border-b border-black/20",
+          "h-8 border-b border-divider",
           // Maximized overrides: taller height, sidebar background, standard border color
           isMaximized
             ? "h-10 bg-canopy-sidebar border-canopy-border"
             : location === "dock"
               ? "bg-[var(--color-surface)]"
-              : "bg-transparent",
+              : isFocused
+                ? "bg-white/[0.02]"
+                : "bg-transparent",
           dragListeners && "cursor-grab active:cursor-grabbing",
           isPinged && !isMaximized && "animate-terminal-header-ping"
         )}
@@ -248,7 +250,7 @@ function TerminalHeaderComponent({
               {/* Command Pill - shows currently running command */}
               {showCommandPill && (
                 <span
-                  className="px-3 py-1 rounded-full text-[11px] font-mono bg-black/10 text-canopy-text/60 border border-white/10 truncate max-w-[20rem]"
+                  className="px-3 py-1 rounded-full text-[11px] font-mono bg-white/[0.03] text-canopy-text/60 border border-divider truncate max-w-[20rem]"
                   title={lastCommand}
                 >
                   {lastCommand}

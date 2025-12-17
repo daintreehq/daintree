@@ -419,7 +419,7 @@ function TerminalPaneComponent({
         location === "grid" && !isMaximized && "rounded border shadow-md",
         location === "grid" &&
           !isMaximized &&
-          (isFocused ? "terminal-selected" : "border-canopy-border hover:border-white/10"),
+          (isFocused ? "terminal-selected" : "border-overlay hover:border-white/[0.08]"),
 
         // Zen Mode styles (maximized - full immersion, no inset needed)
         location === "grid" && isMaximized && "border-0 rounded-none z-[var(--z-maximized)]",

@@ -36,9 +36,9 @@ const TabButton = memo(function TabButton({
       onClick={onClick}
       className={cn(
         "px-3 py-1.5 text-sm font-medium transition-colors relative rounded",
-        "hover:text-canopy-text",
+        "hover:text-canopy-text hover:bg-white/[0.03]",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent focus-visible:ring-offset-2 focus-visible:ring-offset-canopy-sidebar",
-        isActive ? "text-canopy-text" : "text-canopy-text/60"
+        isActive ? "text-canopy-text" : "text-canopy-text/65"
       )}
       role="tab"
       aria-selected={isActive}
@@ -46,11 +46,11 @@ const TabButton = memo(function TabButton({
     >
       {label}
       {badge !== undefined && badge > 0 && (
-        <span className="ml-1.5 px-1.5 py-0.5 text-xs bg-red-900/50 text-red-300 rounded-full">
+        <span className="ml-1.5 px-1.5 py-0.5 text-xs bg-[var(--color-status-error)]/15 text-[var(--color-status-error)] rounded-full">
           {badge}
         </span>
       )}
-      {isActive && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-canopy-accent" />}
+      {isActive && <div className="absolute bottom-0 left-0 right-0 h-px bg-canopy-accent/70" />}
     </button>
   );
 });
@@ -180,8 +180,8 @@ export function DiagnosticsDock({ onRetry, className }: DiagnosticsDockProps) {
       <div
         className={cn(
           "group h-1.5 cursor-ns-resize transition-colors flex items-center justify-center",
-          "hover:bg-canopy-accent/30 focus-visible:outline-none focus-visible:bg-canopy-accent/50",
-          isResizing && "bg-canopy-accent/50"
+          "hover:bg-white/[0.03] focus-visible:outline-none focus-visible:bg-white/[0.04] focus-visible:ring-1 focus-visible:ring-canopy-accent/50",
+          isResizing && "bg-canopy-accent/20"
         )}
         onMouseDown={handleResizeStart}
         onKeyDown={handleKeyDown}
@@ -195,9 +195,9 @@ export function DiagnosticsDock({ onRetry, className }: DiagnosticsDockProps) {
       >
         <div
           className={cn(
-            "w-8 h-0.5 rounded-full transition-colors",
+            "w-8 h-px rounded-full transition-colors",
             "bg-canopy-text/20",
-            "group-hover:bg-canopy-accent/70 group-focus:bg-canopy-accent",
+            "group-hover:bg-canopy-text/35 group-focus-visible:bg-canopy-accent",
             isResizing && "bg-canopy-accent"
           )}
         />

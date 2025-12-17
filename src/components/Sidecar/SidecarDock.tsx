@@ -736,17 +736,17 @@ export function SidecarDock() {
         tabIndex={0}
         className={cn(
           "group absolute -left-0.5 top-0 bottom-0 w-1.5 cursor-ew-resize flex items-center justify-center z-50",
-          "hover:bg-canopy-accent/25 transition-colors focus:outline-none focus:bg-canopy-accent/30",
-          isResizing && "bg-canopy-accent/30"
+          "hover:bg-white/[0.03] transition-colors focus:outline-none focus:bg-white/[0.04] focus:ring-1 focus:ring-canopy-accent/50",
+          isResizing && "bg-canopy-accent/20"
         )}
         onMouseDown={handleResizeStart}
         onKeyDown={handleKeyDown}
       >
         <div
           className={cn(
-            "w-0.5 h-8 rounded-full transition-colors",
+            "w-px h-8 rounded-full transition-colors",
             "bg-canopy-text/20",
-            "group-hover:bg-canopy-accent/70 group-focus:bg-canopy-accent",
+            "group-hover:bg-canopy-text/35 group-focus:bg-canopy-accent",
             isResizing && "bg-canopy-accent"
           )}
         />
