@@ -424,8 +424,7 @@ function TerminalPaneComponent({
         // Trash animation when being removed
         isTrashing && "terminal-trashing",
 
-        // Attention accents for waiting/failed (static, low-noise)
-        agentState === "waiting" && "ring-1 ring-inset ring-[var(--color-state-waiting)]/25",
+        // Attention accent for failed state only
         agentState === "failed" && "ring-1 ring-inset ring-[var(--color-status-error)]/25"
       )}
       onClick={handleClick}
