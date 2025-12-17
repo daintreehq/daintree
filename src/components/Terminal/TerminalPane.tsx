@@ -551,6 +551,7 @@ function TerminalPaneComponent({
                 onInput={handleInput}
                 className="absolute inset-0"
                 getRefreshTier={getRefreshTierCallback}
+                cwd={cwd}
               />
             )}
             <ArtifactOverlay terminalId={id} worktreeId={worktreeId} cwd={cwd} />

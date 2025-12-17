@@ -1,4 +1,4 @@
-import { Terminal } from "@xterm/xterm";
+import { Terminal, IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -24,6 +24,7 @@ export interface ManagedTerminal {
   webLinksAddon: WebLinksAddon;
   imageAddon: ImageAddon;
   searchAddon: SearchAddon;
+  fileLinksDisposable: IDisposable;
   hostElement: HTMLDivElement;
   isOpened: boolean;
   listeners: Array<() => void>;

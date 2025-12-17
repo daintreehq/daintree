@@ -20,6 +20,7 @@ export interface XtermAdapterProps {
   onInput?: (data: string) => void;
   className?: string;
   getRefreshTier?: () => TerminalRefreshTier;
+  cwd?: string;
 }
 
 export { getTerminalThemeFromCSS, CANOPY_TERMINAL_THEME };
@@ -36,6 +37,7 @@ function XtermAdapterComponent({
   onInput,
   className,
   getRefreshTier,
+  cwd,
 }: XtermAdapterProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const prevDimensionsRef = useRef<{ cols: number; rows: number } | null>(null);
@@ -152,7 +154,8 @@ function XtermAdapterComponent({
       terminalType,
       terminalOptions,
       getRefreshTier || (() => TerminalRefreshTier.FOCUSED),
-      onInput
+      onInput,
+      cwd ? () => cwd : undefined
     );
 
     terminalInstanceService.setInputLocked(terminalId, !!isInputLocked);
@@ -271,6 +274,7 @@ function XtermAdapterComponent({
     performFit,
     getRefreshTier,
     onInput,
+    cwd,
   ]);
 
   // Resolve current tier for dependency tracking

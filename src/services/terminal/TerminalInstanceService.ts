@@ -29,6 +29,7 @@ class TerminalInstanceService {
   private resizeLocks = new Map<string, boolean>();
   private lastBackendTier = new Map<string, "active" | "background">();
   private unseenTracker = new TerminalUnseenOutputTracker();
+  private cwdProviders = new Map<string, () => string>();
 
   constructor() {
     this.dataBuffer = new TerminalOutputIngestService((id, data) => this.writeToTerminal(id, data));
@@ -301,11 +302,15 @@ class TerminalInstanceService {
     type: TerminalType,
     options: ConstructorParameters<typeof Terminal>[0],
     getRefreshTier: RefreshTierProvider = () => TerminalRefreshTier.FOCUSED,
-    onInput?: (data: string) => void
+    onInput?: (data: string) => void,
+    getCwd?: () => string
   ): ManagedTerminal {
     const existing = this.instances.get(id);
     if (existing) {
       existing.getRefreshTier = getRefreshTier;
+      if (getCwd) {
+        this.cwdProviders.set(id, getCwd);
+      }
       // Keep existing terminal instance but sync its options to match the latest UI/config.
       if (options) {
         this.updateOptions(id, options);
@@ -328,7 +333,10 @@ class TerminalInstanceService {
     };
 
     const terminal = new Terminal(terminalOptions);
-    const addons = setupTerminalAddons(terminal, openLink);
+    this.cwdProviders.set(id, getCwd ?? (() => ""));
+    const addons = setupTerminalAddons(terminal, openLink, () =>
+      (this.cwdProviders.get(id) ?? (() => ""))()
+    );
 
     const hostElement = document.createElement("div");
     hostElement.style.width = "100%";
@@ -1084,6 +1092,12 @@ class TerminalInstanceService {
 
     managed.parserHandler?.dispose();
 
+    try {
+      managed.fileLinksDisposable?.dispose();
+    } catch (error) {
+      console.warn("[TerminalInstanceService] Error disposing file links:", error);
+    }
+
     managed.terminal.dispose();
 
     if (managed.hostElement.parentElement) {
@@ -1097,6 +1111,7 @@ class TerminalInstanceService {
     this.offscreenSlots.delete(id);
     this.resizeLocks.delete(id);
     this.lastBackendTier.delete(id);
+    this.cwdProviders.delete(id);
   }
 
   dispose(): void {
