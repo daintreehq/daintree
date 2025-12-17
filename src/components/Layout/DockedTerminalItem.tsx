@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useDndMonitor } from "@dnd-kit/core";
-import { Loader2 } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
@@ -15,33 +14,13 @@ import { DockedTerminalPane } from "@/components/Terminal/DockedTerminalPane";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { getTerminalFocusTarget } from "@/components/Terminal/terminalFocus";
-import type { AgentState } from "@/types";
+import { STATE_ICONS, STATE_COLORS } from "@/components/Worktree/terminalStateConfig";
 import { TerminalRefreshTier } from "@/types";
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 
 interface DockedTerminalItemProps {
   terminal: TerminalInstance;
-}
-
-function getStateIndicator(state?: AgentState) {
-  if (!state || state === "idle" || state === "working") return null;
-
-  switch (state) {
-    case "completed":
-      return (
-        <span
-          className="w-2 h-2 rounded-full bg-[var(--color-status-success)]"
-          aria-hidden="true"
-        />
-      );
-    case "failed":
-      return (
-        <span className="w-2 h-2 rounded-full bg-[var(--color-status-error)]" aria-hidden="true" />
-      );
-    default:
-      return null;
-  }
 }
 
 export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
@@ -187,9 +166,14 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
 
   const isWorking = terminal.agentState === "working";
   const isRunning = terminal.agentState === "running";
-  const isActive = isWorking || isRunning;
+  const isWaiting = terminal.agentState === "waiting";
+  const isActive = isWorking || isRunning || isWaiting;
   const commandText = terminal.activityHeadline || terminal.lastCommand;
   const brandColor = getBrandColorHex(terminal.type);
+  const agentState = terminal.agentState;
+  // Only show icon for non-idle, non-completed states (reduce noise)
+  const showStateIcon = agentState && agentState !== "idle" && agentState !== "completed";
+  const StateIcon = showStateIcon ? STATE_ICONS[agentState] : null;
 
   return (
     <Popover open={isOpen} onOpenChange={handleOpenChange}>
@@ -210,25 +194,12 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
           >
             <div
               className={cn(
-                "flex items-center justify-center transition-opacity",
+                "flex items-center justify-center transition-opacity shrink-0",
                 isOpen || isActive ? "opacity-100" : "opacity-70"
               )}
             >
-              {isWorking ? (
-                <Loader2
-                  className="w-3.5 h-3.5 animate-spin motion-reduce:animate-none"
-                  style={{ color: brandColor }}
-                  aria-hidden="true"
-                />
-              ) : (
-                <TerminalIcon
-                  type={terminal.type}
-                  className="w-3.5 h-3.5"
-                  brandColor={brandColor}
-                />
-              )}
+              <TerminalIcon type={terminal.type} className="w-3.5 h-3.5" brandColor={brandColor} />
             </div>
-            {getStateIndicator(terminal.agentState)}
             <span className="truncate shrink-0 min-w-[60px] max-w-[120px] font-sans font-medium">
               {terminal.title}
             </span>
@@ -243,6 +214,24 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                   {commandText}
                 </span>
               </>
+            )}
+
+            {/* State icon on the right (reduced noise: hide idle + completed) */}
+            {showStateIcon && StateIcon && (
+              <div
+                className={cn("flex items-center ml-auto shrink-0", STATE_COLORS[agentState])}
+                title={`Agent ${agentState}`}
+              >
+                <StateIcon
+                  className={cn(
+                    "w-3.5 h-3.5",
+                    agentState === "working" && "animate-spin",
+                    agentState === "waiting" && "animate-breathe",
+                    "motion-reduce:animate-none"
+                  )}
+                  aria-hidden="true"
+                />
+              </div>
             )}
           </button>
         </PopoverTrigger>

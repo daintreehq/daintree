@@ -32,7 +32,6 @@ import { HybridInputBar, type HybridInputBarHandle } from "./HybridInputBar";
 import { getTerminalFocusTarget } from "./terminalFocus";
 import { useTerminalUnseenOutput } from "@/hooks/useTerminalUnseenOutput";
 import { getCanopyCommand, isEscapedCommand, unescapeCommand } from "./canopySlashCommands";
-import { getAmbientState, getAmbientClassName } from "./terminalAmbientState";
 
 export type { TerminalType };
 
@@ -392,8 +391,6 @@ function TerminalPaneComponent({
   }, [id, agentState]);
 
   const isWorking = agentState === "working";
-  const ambientState = getAmbientState({ agentState, flowStatus, isExited });
-  const ambientClassName = getAmbientClassName(ambientState);
 
   return (
     <div
@@ -427,8 +424,9 @@ function TerminalPaneComponent({
         // Trash animation when being removed
         isTrashing && "terminal-trashing",
 
-        // Ambient state visual cues
-        ambientClassName
+        // Attention accents for waiting/failed (static, low-noise)
+        agentState === "waiting" && "ring-1 ring-inset ring-[var(--color-state-waiting)]/25",
+        agentState === "failed" && "ring-1 ring-inset ring-[var(--color-status-error)]/25"
       )}
       onClick={handleClick}
       onKeyDown={handleKeyDown}

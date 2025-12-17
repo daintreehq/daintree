@@ -4,7 +4,6 @@ import {
   Maximize2,
   Minimize2,
   ArrowDownToLine,
-  Loader2,
   RotateCcw,
   Grid2X2,
   Activity,
@@ -14,9 +13,9 @@ import {
 import type { TerminalType, AgentState } from "@/types";
 import { cn } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
-import { StateBadge } from "./StateBadge";
 import { TerminalContextMenu } from "./TerminalContextMenu";
 import { TerminalIcon } from "./TerminalIcon";
+import { STATE_ICONS, STATE_COLORS } from "@/components/Worktree/terminalStateConfig";
 import type { ActivityState } from "./TerminalPane";
 import { useTerminalStore } from "@/store";
 import { useShallow } from "zustand/react/shallow";
@@ -70,9 +69,9 @@ function TerminalHeaderComponent({
   isFocused,
   isExited,
   exitCode,
-  isWorking,
+  isWorking: _isWorking,
   agentState,
-  activity: _activity,
+  activity,
   queueCount,
   lastCommand,
   flowStatus,
@@ -131,6 +130,62 @@ function TerminalHeaderComponent({
     onToggleMaximize?.();
   };
 
+  const renderAgentStateChip = () => {
+    // Reduce grid noise: hide idle + completed in the header
+    if (!agentState || agentState === "idle" || agentState === "completed") {
+      return null;
+    }
+
+    const StateIcon = STATE_ICONS[agentState];
+    if (!StateIcon) return null;
+
+    const showLabel = agentState === "waiting" || agentState === "failed";
+    const label =
+      agentState === "working"
+        ? "Working"
+        : agentState === "waiting"
+          ? "Waiting"
+          : agentState === "running"
+            ? "Running"
+            : "Failed";
+
+    const chipStyle =
+      agentState === "working"
+        ? "bg-[color-mix(in_oklab,var(--color-state-working)_15%,transparent)] border-[var(--color-state-working)]/40"
+        : agentState === "waiting"
+          ? "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-[var(--color-state-waiting)]/40"
+          : agentState === "running"
+            ? "bg-[color-mix(in_oklab,var(--color-status-info)_15%,transparent)] border-[var(--color-status-info)]/40"
+            : "bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] border-[var(--color-status-error)]/40";
+
+    // Prefer richer context when available
+    const tooltip = activity?.headline ? activity.headline : `Agent ${agentState}`;
+
+    return (
+      <div
+        className={cn(
+          "inline-flex items-center gap-1.5 px-2 py-0.5 rounded border text-xs font-sans shrink-0",
+          chipStyle,
+          STATE_COLORS[agentState]
+        )}
+        title={tooltip}
+        role="status"
+        aria-label={`Agent state: ${label}`}
+      >
+        <StateIcon
+          className={cn(
+            "w-3.5 h-3.5",
+            agentState === "working" && "animate-spin",
+            agentState === "waiting" && "animate-breathe",
+            "motion-reduce:animate-none"
+          )}
+          aria-hidden="true"
+        />
+        {showLabel && <span className="whitespace-nowrap">{label}</span>}
+      </div>
+    );
+  };
+
   return (
     <TerminalContextMenu terminalId={id} forceLocation={location}>
       <div
@@ -152,20 +207,12 @@ function TerminalHeaderComponent({
       >
         <div className="flex items-center gap-2 min-w-0">
           <span className="shrink-0 flex items-center justify-center w-3.5 h-3.5 text-canopy-text">
-            {isWorking ? (
-              <Loader2
-                className="w-3.5 h-3.5 animate-spin motion-reduce:animate-none"
-                style={{ color: getBrandColorHex(agentId ?? type) }}
-                aria-hidden="true"
-              />
-            ) : (
-              <TerminalIcon
-                type={type}
-                agentId={agentId}
-                className="w-3.5 h-3.5"
-                brandColor={getBrandColorHex(agentId ?? type)}
-              />
-            )}
+            <TerminalIcon
+              type={type}
+              agentId={agentId}
+              className="w-3.5 h-3.5"
+              brandColor={getBrandColorHex(agentId ?? type)}
+            />
           </span>
 
           {isEditingTitle ? (
@@ -231,12 +278,6 @@ function TerminalHeaderComponent({
             </span>
           )}
 
-          {agentState &&
-            agentState !== "idle" &&
-            agentState !== "waiting" &&
-            agentState !== "working" &&
-            agentState !== "running" && <StateBadge state={agentState} className="ml-2" />}
-
           {queueCount > 0 && (
             <div
               className="inline-flex items-center gap-1 text-xs font-sans bg-canopy-accent/15 text-canopy-text px-1.5 py-0.5 rounded ml-1"
@@ -298,15 +339,7 @@ function TerminalHeaderComponent({
         )}
 
         <div className="flex items-center gap-1.5">
-          {isInputLocked && (
-            <div
-              className="flex items-center gap-1 text-xs font-sans text-canopy-text/60 px-1.5"
-              role="status"
-              title="Input locked (read-only monitor mode)"
-            >
-              <Lock className="w-3 h-3" aria-hidden="true" />
-            </div>
-          )}
+          {/* Hover-only window controls FIRST so the status chip sits at the far right edge */}
           <div className="flex items-center gap-1.5 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity motion-reduce:transition-none">
             {onRestart && (
               <button
@@ -396,6 +429,18 @@ function TerminalHeaderComponent({
               <X className="w-3 h-3" aria-hidden="true" />
             </button>
           </div>
+
+          {isInputLocked && (
+            <div
+              className="flex items-center text-canopy-text/50 shrink-0"
+              role="status"
+              title="Input locked (read-only monitor mode)"
+            >
+              <Lock className="w-3.5 h-3.5" aria-hidden="true" />
+            </div>
+          )}
+
+          {renderAgentStateChip()}
         </div>
       </div>
     </TerminalContextMenu>

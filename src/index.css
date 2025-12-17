@@ -409,6 +409,18 @@ body,
   will-change: transform, opacity;
 }
 
+/* Slower spinner to reduce "chaos" in dense terminal grids */
+@keyframes spin-slow {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin-slow {
+  animation: spin-slow 1.4s linear infinite;
+  will-change: transform;
+}
+
 /* Delayed pulse animation for skeleton loading states
  * Prevents "flash of loading state" (FOLS) for fast operations (<400ms).
  * Skeleton starts invisible and fades in only when animation begins after delay.
@@ -495,6 +507,7 @@ body,
   .animate-activity-pulse,
   .animate-agent-pulse,
   .animate-breathe,
+  .animate-spin-slow,
   .animate-pulse-delayed,
   .status-working,
   .animate-badge-bump,
@@ -577,59 +590,6 @@ body,
 .terminal-focused {
   border-color: rgba(255, 255, 255, 0.15);
   background-color: var(--color-surface-highlight);
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.05),
-    0 0 0 1px rgba(255, 255, 255, 0.1);
-}
-
-/* Terminal Ambient State Visuals */
-.terminal-ambient-waiting {
-  border-color: color-mix(in oklab, var(--color-status-warning) 30%, rgba(255, 255, 255, 0.08));
-  box-shadow:
-    inset 0 0 0 1px color-mix(in oklab, var(--color-status-warning) 8%, transparent),
-    0 0 8px 0 color-mix(in oklab, var(--color-status-warning) 10%, transparent);
-}
-
-.terminal-ambient-failed {
-  border-color: color-mix(in oklab, var(--color-status-error) 40%, rgba(255, 255, 255, 0.08));
-  box-shadow:
-    inset 0 0 0 1px color-mix(in oklab, var(--color-status-error) 12%, transparent),
-    0 0 10px 0 color-mix(in oklab, var(--color-status-error) 15%, transparent);
-}
-
-.terminal-ambient-paused,
-.terminal-ambient-suspended {
-  border-color: color-mix(in oklab, var(--color-status-warning) 25%, rgba(255, 255, 255, 0.08));
-  box-shadow:
-    inset 0 0 0 1px color-mix(in oklab, var(--color-status-warning) 6%, transparent),
-    0 0 6px 0 color-mix(in oklab, var(--color-status-warning) 8%, transparent);
-}
-
-.terminal-ambient-exited::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  border-radius: inherit;
-  background: repeating-linear-gradient(
-    45deg,
-    transparent,
-    transparent 10px,
-    rgba(255, 255, 255, 0.015) 10px,
-    rgba(255, 255, 255, 0.015) 20px
-  );
-  z-index: 0;
-}
-
-.terminal-ambient-exited > * {
-  position: relative;
-  z-index: 1;
-}
-
-.terminal-selected.terminal-ambient-waiting,
-.terminal-selected.terminal-ambient-failed,
-.terminal-selected.terminal-ambient-paused,
-.terminal-selected.terminal-ambient-suspended {
   box-shadow:
     inset 0 0 0 1px rgba(255, 255, 255, 0.05),
     0 0 0 1px rgba(255, 255, 255, 0.1);
@@ -1047,20 +1007,6 @@ body[data-performance-mode="true"] .surface-overlay.active-sessions-menu {
 body[data-performance-mode="true"] .terminal-selected,
 body[data-performance-mode="true"] .terminal-focused {
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05) !important;
-}
-
-/* Disable ambient state glow in performance mode (keep border tint) */
-body[data-performance-mode="true"] .terminal-ambient-waiting {
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--color-status-warning) 8%, transparent) !important;
-}
-
-body[data-performance-mode="true"] .terminal-ambient-failed {
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--color-status-error) 12%, transparent) !important;
-}
-
-body[data-performance-mode="true"] .terminal-ambient-paused,
-body[data-performance-mode="true"] .terminal-ambient-suspended {
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--color-status-warning) 6%, transparent) !important;
 }
 
 /* Reduce modal backdrop blur in performance mode */
