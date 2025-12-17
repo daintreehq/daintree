@@ -30,12 +30,14 @@ This experiment pivots away from stream filtering and toward **state projection*
 
 ## New Angle (Architecture)
 
-### Current “Live Stream” Mode (existing)
+### Current "Live Stream" Mode (existing)
 
-PTY bytes → SAB ring buffer → `TerminalDataBuffer` → renderer xterm writes bytes as they arrive.
+PTY bytes → SAB ring buffer → Terminal Output Worker (parsing + coalescing) → renderer xterm writes bytes.
 
-Pros: real terminal behavior; fast; minimal CPU in main.
+Pros: real terminal behavior; fast; offloaded from main thread via Web Worker.
 Cons: flicker for TUIs; frontend sees intermediate states; harder to build clean history.
+
+Note: As of issue #1119, SAB polling and packet parsing have been moved to a dedicated Web Worker using `Atomics.wait` for efficient blocking, reducing idle CPU and eliminating main-thread contention during heavy UI work.
 
 ### New “Snapshot Projection” Mode (experiment)
 

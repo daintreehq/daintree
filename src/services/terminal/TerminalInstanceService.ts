@@ -11,7 +11,7 @@ import {
   INCREMENTAL_RESTORE_CONFIG,
 } from "./types";
 import { setupTerminalAddons } from "./TerminalAddonManager";
-import { TerminalDataBuffer } from "./TerminalDataBuffer";
+import { TerminalOutputIngestService } from "./TerminalOutputIngestService";
 import { TerminalParserHandler } from "./TerminalParserHandler";
 import { TerminalUnseenOutputTracker, UnseenOutputSnapshot } from "./TerminalUnseenOutputTracker";
 
@@ -22,7 +22,7 @@ const IDLE_CALLBACK_TIMEOUT_MS = 1000;
 
 class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
-  private dataBuffer: TerminalDataBuffer;
+  private dataBuffer: TerminalOutputIngestService;
   private suppressedExitUntil = new Map<string, number>();
   private hiddenContainer: HTMLDivElement | null = null;
   private offscreenSlots = new Map<string, HTMLDivElement>();
@@ -31,7 +31,7 @@ class TerminalInstanceService {
   private unseenTracker = new TerminalUnseenOutputTracker();
 
   constructor() {
-    this.dataBuffer = new TerminalDataBuffer((id, data) => this.writeToTerminal(id, data));
+    this.dataBuffer = new TerminalOutputIngestService((id, data) => this.writeToTerminal(id, data));
     this.dataBuffer.initialize();
   }
 
