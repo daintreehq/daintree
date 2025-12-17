@@ -148,6 +148,7 @@ export function DndProvider({ children }: DndProviderProps) {
 
   // Placeholder state for cross-container drags (dock -> grid)
   const [placeholderIndex, setPlaceholderIndex] = useState<number | null>(null);
+  const stabilizationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Configure sensors with activation constraint so clicks work for popovers
   const sensors = useSensors(
@@ -368,21 +369,34 @@ export function DndProvider({ children }: DndProviderProps) {
 
       // Post-drag stabilization: Reset renderers after layout settles.
       // This fixes blank terminals caused by CSS transforms during drag.
-      // Wait 2 animation frames for transforms to be removed.
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          // Reset all visible grid terminals to ensure proper rendering
-          const gridTerminalsList = terminals.filter(
-            (t) => t.location === "grid" || t.location === undefined
-          );
-          for (const terminal of gridTerminalsList) {
-            const managed = terminalInstanceService.get(terminal.id);
-            if (managed?.hostElement.isConnected && managed.isVisible) {
-              terminalInstanceService.resetRenderer(terminal.id);
-            }
+      // Wait for dnd-kit's CSS transition to complete (~250ms) before resetting.
+      // Using setTimeout instead of RAF because transitions can outlast multiple frames.
+
+      // Cancel any pending stabilization from rapid drags
+      if (stabilizationTimerRef.current) {
+        clearTimeout(stabilizationTimerRef.current);
+      }
+
+      stabilizationTimerRef.current = setTimeout(() => {
+        stabilizationTimerRef.current = null;
+
+        // Get fresh terminal list from store to avoid stale closures
+        const currentTerminals = useTerminalStore.getState().terminals;
+        const gridTerminalsList = currentTerminals.filter(
+          (t) => t.location === "grid" || t.location === undefined
+        );
+        for (const terminal of gridTerminalsList) {
+          // Flush any pending resize jobs that could have stale dimensions
+          terminalInstanceService.flushResize(terminal.id);
+
+          const managed = terminalInstanceService.get(terminal.id);
+          if (managed?.hostElement.isConnected) {
+            // Force visibility true since we know grid terminals should be visible
+            managed.isVisible = true;
+            terminalInstanceService.resetRenderer(terminal.id);
           }
-        });
-      });
+        }
+      }, 300);
     },
     [
       activeData,

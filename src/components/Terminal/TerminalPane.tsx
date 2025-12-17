@@ -16,6 +16,7 @@ import {
   type HistoryOverlayTerminalViewHandle,
 } from "./HistoryOverlayTerminalView";
 import { ErrorBanner } from "../Errors/ErrorBanner";
+import { useIsDragging } from "@/components/DragDrop";
 import {
   useErrorStore,
   useTerminalStore,
@@ -192,12 +193,20 @@ function TerminalPaneComponent({
     restartKey,
   });
 
+  // Check if a drag is in progress to prevent false visibility updates from CSS transforms
+  const isDragging = useIsDragging();
+
   // Visibility observation
+  // Note: During drag operations, CSS transforms can cause IntersectionObserver to report
+  // false negatives. We skip visibility updates during drag to prevent tier flapping.
   useEffect(() => {
     if (!containerRef.current) return;
 
     const observer = new IntersectionObserver(
       ([entry]) => {
+        // Don't update visibility during drag - CSS transforms cause false negatives
+        if (isDragging) return;
+
         updateVisibility(id, entry.isIntersecting);
         // Notify service for visibility-aware terminal management
         terminalInstanceService.setVisible(id, entry.isIntersecting);
@@ -211,10 +220,13 @@ function TerminalPaneComponent({
 
     return () => {
       observer.disconnect();
-      updateVisibility(id, false);
-      terminalInstanceService.setVisible(id, false);
+      // Only set visibility false on actual unmount, not during drag
+      if (!isDragging) {
+        updateVisibility(id, false);
+        terminalInstanceService.setVisible(id, false);
+      }
     };
-  }, [id, updateVisibility]);
+  }, [id, updateVisibility, isDragging]);
 
   const handleReady = useCallback(() => {}, []);
 

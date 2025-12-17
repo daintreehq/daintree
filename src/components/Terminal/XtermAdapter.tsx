@@ -6,6 +6,7 @@ import { TerminalRefreshTier } from "@/types";
 import type { TerminalType, AgentState } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useScrollbackStore, usePerformanceModeStore, useTerminalFontStore } from "@/store";
+import { useIsDragging } from "@/components/DragDrop";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
 import { CANOPY_TERMINAL_THEME, getTerminalThemeFromCSS } from "@/utils/terminalTheme";
@@ -297,6 +298,9 @@ function XtermAdapterComponent({
     }
   }, [terminalId, getRefreshTier, currentTier]);
 
+  // Check if a drag is in progress to prevent false visibility updates from CSS transforms
+  const isDragging = useIsDragging();
+
   // Visibility tracking - sync with service state and trigger fit on visibility changes
   // Note: TerminalPane also has an IntersectionObserver that updates store visibility.
   // This observer is for the XtermAdapter's internal visibility ref used by resize handling.
@@ -306,6 +310,9 @@ function XtermAdapterComponent({
 
     const visibilityObserver = new IntersectionObserver(
       ([entry]) => {
+        // Don't update visibility during drag - CSS transforms cause false negatives
+        if (isDragging) return;
+
         const nowVisible = entry.isIntersecting;
         const wasVisible = isVisibleRef.current;
         isVisibleRef.current = nowVisible;
@@ -325,7 +332,7 @@ function XtermAdapterComponent({
     visibilityObserver.observe(container);
 
     return () => visibilityObserver.disconnect();
-  }, [terminalId, performFit]);
+  }, [terminalId, performFit, isDragging]);
 
   // Subscribe to agent state changes for state-aware rendering decisions
   // This enables future defensive layers (height ratchet, resize guard, scroll latch)
