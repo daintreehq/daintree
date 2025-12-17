@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { TerminalDataBuffer } from "../TerminalDataBuffer";
-import { SharedRingBuffer, PacketFramer } from "@shared/utils/SharedRingBuffer";
+import { SharedRingBuffer, PacketFramer, PacketParser } from "@shared/utils/SharedRingBuffer";
 
 describe("TerminalDataBuffer robust buffering", () => {
   beforeEach(() => {
@@ -84,7 +84,8 @@ describe("TerminalDataBuffer polling budget", () => {
     const readSpy = vi.spyOn(ringBuffer, "readUpTo");
 
     const bufferWithRing = Object.assign(buffer, {
-      ringBuffer,
+      ringBuffers: [ringBuffer],
+      packetParsers: [new PacketParser()],
       sharedBufferEnabled: true,
       pollingActive: true,
     });
@@ -108,7 +109,8 @@ describe("TerminalDataBuffer polling budget", () => {
     const timeoutSpy = vi.spyOn(window, "setTimeout");
 
     const bufferWithRing = Object.assign(buffer, {
-      ringBuffer,
+      ringBuffers: [ringBuffer],
+      packetParsers: [new PacketParser()],
       sharedBufferEnabled: true,
       pollingActive: true,
     });
@@ -132,7 +134,8 @@ describe("TerminalDataBuffer polling budget", () => {
     writeManyPackets(80, "z");
 
     const bufferWithRing = Object.assign(buffer, {
-      ringBuffer,
+      ringBuffers: [ringBuffer],
+      packetParsers: [new PacketParser()],
       sharedBufferEnabled: true,
       pollingActive: true,
     });
