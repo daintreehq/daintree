@@ -24,6 +24,7 @@ import {
   type AtFileContext,
   type SlashCommandContext,
 } from "./hybridInputParsing";
+import { isAgentReady } from "@/store/slices/terminalCommandQueueSlice";
 
 const MAX_TEXTAREA_HEIGHT_PX = 160;
 
@@ -37,6 +38,9 @@ export interface HybridInputBarProps {
   onActivate?: () => void;
   cwd: string;
   agentId?: LegacyAgentType;
+  agentState?: import("@/types").AgentState;
+  agentHasLifecycleEvent?: boolean;
+  restartKey?: number;
   disabled?: boolean;
   className?: string;
 }
@@ -87,7 +91,21 @@ function getTextOffsetLeftPx(textarea: HTMLTextAreaElement, charIndex: number): 
 }
 
 export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarProps>(
-  ({ onSend, onSendKey, onActivate, cwd, agentId, disabled = false, className }, ref) => {
+  (
+    {
+      onSend,
+      onSendKey,
+      onActivate,
+      cwd,
+      agentId,
+      agentState,
+      agentHasLifecycleEvent = false,
+      restartKey = 0,
+      disabled = false,
+      className,
+    },
+    ref
+  ) => {
     const [value, setValue] = useState("");
     const allowNextLineBreakRef = useRef(false);
     const handledEnterRef = useRef(false);
@@ -104,11 +122,37 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const lastQueryRef = useRef<string>("");
     const [menuLeftPx, setMenuLeftPx] = useState<number>(0);
     const [collapsedHeightPx, setCollapsedHeightPx] = useState<number | null>(null);
+    const [hasBecomeReadyOnce, setHasBecomeReadyOnce] = useState(false);
+
+    const isAgentTerminal = agentId !== undefined;
+
+    useEffect(() => {
+      setHasBecomeReadyOnce(false);
+    }, [restartKey]);
+
+    useEffect(() => {
+      if (isAgentTerminal && agentHasLifecycleEvent && isAgentReady(agentState)) {
+        setHasBecomeReadyOnce(true);
+      }
+    }, [isAgentTerminal, agentHasLifecycleEvent, agentState]);
+
+    useEffect(() => {
+      return () => {
+        if (sendRafRef.current !== null) {
+          cancelAnimationFrame(sendRafRef.current);
+        }
+      };
+    }, []);
+
+    const isInitialAgentLoading = isAgentTerminal && !hasBecomeReadyOnce;
 
     const placeholder = useMemo(() => {
       const agentName = agentId ? getAgentConfig(agentId)?.name : null;
+      if (isInitialAgentLoading && agentName) {
+        return `${agentName} is loading…`;
+      }
       return agentName ? `Enter your command for ${agentName}…` : "Enter your command…";
-    }, [agentId]);
+    }, [agentId, isInitialAgentLoading]);
 
     const activeMode = slashContext ? "command" : atContext ? "file" : null;
     const isAutocompleteOpen = activeMode !== null && !disabled;
@@ -247,7 +291,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     }, [autocompleteItems.length, isAutocompleteOpen]);
 
     const sendFromTextarea = useCallback(() => {
-      if (disabled) return;
+      if (disabled || isInitialAgentLoading) return;
       const text = textareaRef.current?.value ?? value;
       if (text.trim().length === 0) return;
       const payload = buildTerminalSendPayload(text);
@@ -257,7 +301,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       setAtContext(null);
       setSlashContext(null);
       requestAnimationFrame(() => resizeTextarea(textareaRef.current));
-    }, [disabled, onSend, resizeTextarea, value]);
+    }, [disabled, isInitialAgentLoading, onSend, resizeTextarea, value]);
 
     const queueSend = useCallback(() => {
       if (sendRafRef.current !== null) return;
@@ -280,6 +324,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       (event: KeyboardEvent<HTMLTextAreaElement>): boolean => {
         if (!onSendKey) return false;
         if (disabled) return false;
+        if (isInitialAgentLoading) return false;
         if (event.nativeEvent.isComposing) return false;
 
         const isEmpty = value.trim().length === 0;
@@ -348,7 +393,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
         return false;
       },
-      [disabled, isAutocompleteOpen, onSendKey, value]
+      [disabled, isInitialAgentLoading, isAutocompleteOpen, onSendKey, value]
     );
 
     const refreshContextsFromTextarea = useCallback(() => {
@@ -470,9 +515,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               "flex w-full items-stretch gap-1.5 rounded-sm border border-canopy-border bg-white/[0.03] py-2 shadow-[0_8px_10px_rgba(0,0,0,0.25)] transition-colors",
               "group-hover:border-white/10 group-hover:bg-white/[0.04]",
               "focus-within:border-white/15 focus-within:ring-1 focus-within:ring-white/10 focus-within:bg-white/[0.05]",
-              disabled && "opacity-60"
+              disabled && "opacity-60",
+              isInitialAgentLoading && "opacity-50"
             )}
-            aria-disabled={disabled}
+            aria-disabled={disabled || isInitialAgentLoading}
           >
             <AutocompleteMenu
               ref={menuRef}
@@ -551,21 +597,26 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                   return;
                 }
 
+                if (allowNextLineBreakRef.current) {
+                  allowNextLineBreakRef.current = false;
+                  return;
+                }
+
+                if (isInitialAgentLoading) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  return;
+                }
+
                 if (isAutocompleteOpen && autocompleteItems[selectedIndex]) {
-                  if (allowNextLineBreakRef.current) {
-                    allowNextLineBreakRef.current = false;
-                    return;
-                  }
                   e.preventDefault();
                   e.stopPropagation();
                   const action =
                     activeMode === "command" ? ("execute" as const) : ("insert" as const);
+                  if (action === "execute" && isInitialAgentLoading) {
+                    return;
+                  }
                   applyAutocompleteItem(autocompleteItems[selectedIndex], action);
-                  return;
-                }
-
-                if (allowNextLineBreakRef.current) {
-                  allowNextLineBreakRef.current = false;
                   return;
                 }
 
@@ -632,6 +683,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                     }, 0);
                     const action =
                       activeMode === "command" ? ("execute" as const) : ("insert" as const);
+                    if (action === "execute" && isInitialAgentLoading) {
+                      return;
+                    }
                     applyAutocompleteItem(autocompleteItems[selectedIndex], action);
                     return;
                   }
@@ -643,6 +697,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
                 if (isEnter) {
                   if (e.shiftKey) return;
+                  if (isInitialAgentLoading) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return;
+                  }
                   e.preventDefault();
                   e.stopPropagation();
                   handledEnterRef.current = true;

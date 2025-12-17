@@ -847,6 +847,8 @@ export const createTerminalRegistrySlice =
                   restartKey: (t.restartKey ?? 0) + 1,
                   agentState: isAgent ? ("idle" as const) : undefined,
                   lastStateChange: isAgent ? Date.now() : undefined,
+                  stateChangeTrigger: undefined,
+                  stateChangeConfidence: undefined,
                   command: commandToRun,
                   isRestarting: true,
                   restartError: undefined,
