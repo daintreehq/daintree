@@ -23,6 +23,7 @@ import {
 } from "./slices";
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { useTerminalInputStore } from "./terminalInputStore";
 import type { CrashType } from "@shared/types/pty-host";
 
 export type { TerminalInstance, AddTerminalOptions, QueuedCommand, CrashType };
@@ -92,6 +93,7 @@ export const useTerminalStore = create<TerminalGridState>()((set, get, api) => {
     onTerminalRemoved: (id, removedIndex, remainingTerminals) => {
       get().clearQueue(id);
       get().handleTerminalRemoved(id, remainingTerminals, removedIndex);
+      useTerminalInputStore.getState().clearDraftInput(id);
     },
   })(set, get, api);
 
@@ -225,6 +227,8 @@ export const useTerminalStore = create<TerminalGridState>()((set, get, api) => {
 
       await Promise.all(killPromises);
 
+      useTerminalInputStore.getState().clearAllDraftInputs();
+
       set({
         terminals: [],
         trashedTerminals: new Map(),
@@ -256,6 +260,8 @@ export const useTerminalStore = create<TerminalGridState>()((set, get, api) => {
       console.log(
         `[TerminalStore] Reset UI state for ${state.terminals.length} terminals (processes preserved)`
       );
+
+      useTerminalInputStore.getState().clearAllDraftInputs();
 
       set({
         terminals: [],
