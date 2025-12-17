@@ -42,7 +42,10 @@ export function getTerminalThemeFromCSS(): typeof CANOPY_TERMINAL_THEME_FALLBACK
     foreground: getVar("--color-canopy-text", CANOPY_TERMINAL_THEME_FALLBACK.foreground),
     cursor: getVar("--color-canopy-accent", CANOPY_TERMINAL_THEME_FALLBACK.cursor),
     cursorAccent: getVar("--color-canopy-bg", CANOPY_TERMINAL_THEME_FALLBACK.cursorAccent),
-    selectionBackground: "#064e3b",
+    selectionBackground: getVar(
+      "--color-terminal-selection",
+      CANOPY_TERMINAL_THEME_FALLBACK.selectionBackground
+    ),
     selectionForeground: getVar(
       "--color-canopy-text",
       CANOPY_TERMINAL_THEME_FALLBACK.selectionForeground
