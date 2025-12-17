@@ -15,7 +15,9 @@ export function useSystemWakeHandler() {
     if (!isElectronAvailable()) return;
 
     const cleanup = systemClient.onWake(({ sleepDuration }) => {
-      console.log(`[useSystemWakeHandler] System woke after ${Math.round(sleepDuration / 1000)}s sleep`);
+      console.log(
+        `[useSystemWakeHandler] System woke after ${Math.round(sleepDuration / 1000)}s sleep`
+      );
 
       if (sleepDuration > LONG_SLEEP_THRESHOLD_MS) {
         console.log("[useSystemWakeHandler] Long sleep detected, refreshing worktree status");

@@ -41,7 +41,7 @@ export function AppPaletteDialog({
     >
       <div
         className={cn(
-          "w-full max-w-xl mx-4 bg-canopy-bg border border-canopy-border rounded-[var(--radius-xl)] shadow-2xl overflow-hidden",
+          "w-full max-w-xl mx-4 bg-canopy-bg border border-[var(--border-overlay)] rounded-[var(--radius-xl)] shadow-modal overflow-hidden",
           "animate-in fade-in slide-in-from-top-4 duration-150",
           className
         )}

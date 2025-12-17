@@ -159,7 +159,7 @@ export function AppDialog({
       >
         <div
           className={cn(
-            "bg-canopy-sidebar border border-canopy-border border-t-white/10 rounded-[var(--radius-xl)] shadow-2xl mx-4 flex flex-col max-h-[80vh]",
+            "bg-canopy-sidebar border border-[var(--border-overlay)] border-t-white/[0.08] rounded-[var(--radius-xl)] shadow-modal mx-4 flex flex-col max-h-[80vh]",
             sizeClasses[size],
             "w-full",
             "transition-all duration-150",

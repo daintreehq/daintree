@@ -22,7 +22,7 @@ const DropdownMenuSubTrigger = React.forwardRef<
   <DropdownMenuPrimitive.SubTrigger
     ref={ref}
     className={cn(
-      "flex cursor-default select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1 text-xs outline-none focus:bg-canopy-accent focus:text-[var(--color-canopy-bg)] data-[state=open]:bg-canopy-accent data-[state=open]:text-[var(--color-canopy-bg)]",
+      "flex cursor-default select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-none focus:bg-white/[0.08] data-[state=open]:bg-white/[0.08]",
       inset && "pl-8",
       className
     )}
@@ -77,7 +77,7 @@ const DropdownMenuItem = React.forwardRef<
   <DropdownMenuPrimitive.Item
     ref={ref}
     className={cn(
-      "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1 text-xs outline-none transition-colors focus:bg-canopy-accent focus:text-[var(--color-canopy-bg)] data-[highlighted]:bg-canopy-accent data-[highlighted]:text-[var(--color-canopy-bg)] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-none transition-colors focus:bg-white/[0.08] data-[highlighted]:bg-white/[0.08] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       inset && "pl-8",
       className
     )}
@@ -92,7 +92,7 @@ const DropdownMenuSeparator = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DropdownMenuPrimitive.Separator
     ref={ref}
-    className={cn("-mx-1 my-1 h-px bg-canopy-border", className)}
+    className={cn("-mx-1 my-1 h-px bg-white/[0.06]", className)}
     {...props}
   />
 ));
@@ -133,7 +133,7 @@ const DropdownMenuCheckboxItem = React.forwardRef<
   <DropdownMenuPrimitive.CheckboxItem
     ref={ref}
     className={cn(
-      "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1 pl-8 pr-2.5 text-xs outline-none transition-colors focus:bg-canopy-accent focus:text-[var(--color-canopy-bg)] data-[highlighted]:bg-canopy-accent data-[highlighted]:text-[var(--color-canopy-bg)] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-none transition-colors focus:bg-white/[0.08] data-[highlighted]:bg-white/[0.08] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       className
     )}
     checked={checked}

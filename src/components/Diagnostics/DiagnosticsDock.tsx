@@ -168,7 +168,7 @@ export function DiagnosticsDock({ onRetry, className }: DiagnosticsDockProps) {
   return (
     <div
       className={cn(
-        "flex flex-col border-t-2 border-canopy-border/60 bg-canopy-bg/95 backdrop-blur-sm shadow-[0_-4px_12px_rgba(0,0,0,0.3)]",
+        "flex flex-col border-t border-white/[0.08] bg-canopy-bg/95 backdrop-blur-sm shadow-[0_-2px_8px_rgba(0,0,0,0.2)]",
         "transition-[height] duration-200 ease-out",
         isResizing && "select-none",
         className
@@ -203,7 +203,7 @@ export function DiagnosticsDock({ onRetry, className }: DiagnosticsDockProps) {
         />
       </div>
 
-      <div className="flex items-center justify-between px-4 h-9 border-b border-canopy-border bg-canopy-sidebar shrink-0">
+      <div className="flex items-center justify-between px-4 h-9 border-b border-white/[0.06] bg-canopy-sidebar shrink-0">
         <div className="flex items-center gap-2" role="tablist" aria-label="Diagnostics tabs">
           {tabs.map((tab) => (
             <TabButton

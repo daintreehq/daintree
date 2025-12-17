@@ -11,7 +11,10 @@ export function useSemanticWorkerLifecycle() {
     if (!isElectronAvailable()) return;
 
     semanticAnalysisService.initialize().catch((error) => {
-      console.warn("[useSemanticWorkerLifecycle] Failed to initialize semantic analysis service:", error);
+      console.warn(
+        "[useSemanticWorkerLifecycle] Failed to initialize semantic analysis service:",
+        error
+      );
     });
 
     return () => {

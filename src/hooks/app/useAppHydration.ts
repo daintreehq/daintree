@@ -42,7 +42,12 @@ export function useAppHydration(callbacks: HydrationCallbacks) {
     };
 
     restoreState();
-  }, [callbacks.addTerminal, callbacks.setActiveWorktree, callbacks.loadRecipes, callbacks.openDiagnosticsDock]);
+  }, [
+    callbacks.addTerminal,
+    callbacks.setActiveWorktree,
+    callbacks.loadRecipes,
+    callbacks.openDiagnosticsDock,
+  ]);
 
   return { isStateLoaded };
 }

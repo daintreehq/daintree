@@ -69,7 +69,10 @@ export class TerminalSessionManager {
       }
       this.options.writeToHeadless?.(content);
     } catch (error) {
-      console.warn(`[TerminalSessionManager] Failed to restore session for ${this.options.id}:`, error);
+      console.warn(
+        `[TerminalSessionManager] Failed to restore session for ${this.options.id}:`,
+        error
+      );
     }
   }
 
@@ -152,7 +155,10 @@ export class TerminalSessionManager {
       if (Buffer.byteLength(state, "utf8") > SESSION_SNAPSHOT_MAX_BYTES) return;
       await this.persistSessionSnapshotAsync(state);
     } catch (error) {
-      console.warn(`[TerminalSessionManager] Failed to persist session for ${this.options.id}:`, error);
+      console.warn(
+        `[TerminalSessionManager] Failed to persist session for ${this.options.id}:`,
+        error
+      );
     } finally {
       this.persistInFlight = false;
       if (this.persistDirty) {

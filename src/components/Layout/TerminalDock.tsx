@@ -186,9 +186,7 @@ export function TerminalDock() {
       </div>
 
       {/* Separator between terminals and action containers */}
-      {activeDockTerminals.length > 0 && (
-        <div className="w-px h-5 bg-canopy-border mx-1 shrink-0" />
-      )}
+      {activeDockTerminals.length > 0 && <div className="w-px h-4 bg-white/[0.08] mx-1 shrink-0" />}
 
       {/* Action containers: Waiting + Trash */}
       <div className="shrink-0 pl-1 flex items-center gap-1.5">

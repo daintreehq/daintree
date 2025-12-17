@@ -14,11 +14,7 @@
 
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import type {
-  TerminalType,
-  TerminalLocation,
-  AgentState,
-} from "@/types";
+import type { TerminalType, TerminalLocation, AgentState } from "@/types";
 import type { TerminalSpawnOptions } from "@shared/types";
 import { isRegisteredAgent, getAgentConfig } from "@/config/agents";
 import { getTerminalThemeFromCSS } from "@/utils/terminalTheme";

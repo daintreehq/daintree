@@ -91,13 +91,15 @@ export default tseslint.config(
           paths: [
             {
               name: "@/clients/terminalClient",
-              message: "Store files should not import IPC clients directly. Use controllers to encapsulate IPC calls.",
+              message:
+                "Store files should not import IPC clients directly. Use controllers to encapsulate IPC calls.",
             },
           ],
           patterns: [
             {
               group: ["@/clients"],
-              message: "Store files should not import IPC clients directly. Use controllers to encapsulate IPC calls.",
+              message:
+                "Store files should not import IPC clients directly. Use controllers to encapsulate IPC calls.",
             },
           ],
         },

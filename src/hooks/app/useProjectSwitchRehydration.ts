@@ -17,19 +17,26 @@ export function useProjectSwitchRehydration(callbacks: HydrationCallbacks) {
     }
 
     const handleProjectSwitch = async () => {
-      console.log("[useProjectSwitchRehydration] Received project-switched event, re-hydrating state...");
+      console.log(
+        "[useProjectSwitchRehydration] Received project-switched event, re-hydrating state..."
+      );
       try {
         await hydrateAppState(callbacks);
         console.log("[useProjectSwitchRehydration] State re-hydration complete");
       } catch (error) {
-        console.error("[useProjectSwitchRehydration] Failed to re-hydrate state after project switch:", error);
+        console.error(
+          "[useProjectSwitchRehydration] Failed to re-hydrate state after project switch:",
+          error
+        );
       }
     };
 
     window.addEventListener("project-switched", handleProjectSwitch);
 
     const cleanup = projectClient.onSwitch(() => {
-      console.log("[useProjectSwitchRehydration] Received PROJECT_ON_SWITCH from main process, re-hydrating...");
+      console.log(
+        "[useProjectSwitchRehydration] Received PROJECT_ON_SWITCH from main process, re-hydrating..."
+      );
       window.dispatchEvent(new CustomEvent("project-switched"));
     });
 
@@ -37,5 +44,10 @@ export function useProjectSwitchRehydration(callbacks: HydrationCallbacks) {
       window.removeEventListener("project-switched", handleProjectSwitch);
       cleanup();
     };
-  }, [callbacks.addTerminal, callbacks.setActiveWorktree, callbacks.loadRecipes, callbacks.openDiagnosticsDock]);
+  }, [
+    callbacks.addTerminal,
+    callbacks.setActiveWorktree,
+    callbacks.loadRecipes,
+    callbacks.openDiagnosticsDock,
+  ]);
 }

@@ -261,7 +261,10 @@ export class TerminalSnapshotEngine {
       }
     } catch (error) {
       if (this.options.verbose) {
-        console.warn(`[TerminalSnapshotEngine] Failed to produce ANSI snapshot for ${this.id}:`, error);
+        console.warn(
+          `[TerminalSnapshotEngine] Failed to produce ANSI snapshot for ${this.id}:`,
+          error
+        );
       }
     }
 

@@ -540,9 +540,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             ref={inputShellRef}
             className={cn(
               "relative",
-              "flex w-full items-stretch gap-1.5 rounded-sm border border-canopy-border bg-white/[0.03] py-2 shadow-[0_8px_10px_rgba(0,0,0,0.25)] transition-colors",
-              "group-hover:border-white/10 group-hover:bg-white/[0.04]",
-              "focus-within:border-white/15 focus-within:ring-1 focus-within:ring-white/10 focus-within:bg-white/[0.05]",
+              "flex w-full items-stretch gap-1.5 rounded-sm border border-white/[0.06] bg-white/[0.03] py-2 shadow-[0_6px_12px_rgba(0,0,0,0.18)] transition-colors",
+              "group-hover:border-white/[0.08] group-hover:bg-white/[0.04]",
+              "focus-within:border-white/[0.12] focus-within:ring-1 focus-within:ring-white/[0.06] focus-within:bg-white/[0.05]",
               disabled && "opacity-60",
               isInitialAgentLoading && "opacity-50"
             )}

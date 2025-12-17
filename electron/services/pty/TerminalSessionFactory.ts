@@ -47,7 +47,10 @@ export class TerminalSessionFactory {
   /**
    * Spawn a new terminal session, using the pool if eligible.
    */
-  spawn(options: TerminalSessionOptions, config: TerminalSessionFactoryConfig): TerminalSessionResult {
+  spawn(
+    options: TerminalSessionOptions,
+    config: TerminalSessionFactoryConfig
+  ): TerminalSessionResult {
     const shell = options.shell || this.getDefaultShell();
     const args = options.args || this.getDefaultShellArgs(shell);
 
@@ -59,11 +62,7 @@ export class TerminalSessionFactory {
 
     // Pool eligibility: non-agent, no custom shell/env/args
     const canUsePool =
-      this.ptyPool &&
-      !config.isAgentTerminal &&
-      !options.shell &&
-      !options.env &&
-      !options.args;
+      this.ptyPool && !config.isAgentTerminal && !options.shell && !options.env && !options.args;
 
     let pooledPty = canUsePool ? this.ptyPool!.acquire() : null;
 

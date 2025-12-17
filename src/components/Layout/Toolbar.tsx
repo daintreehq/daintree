@@ -152,7 +152,7 @@ export function Toolbar({
           size="icon"
           onClick={onToggleFocusMode}
           className={cn(
-            "text-canopy-text hover:bg-canopy-border hover:text-canopy-accent h-8 w-8 transition-colors mr-2"
+            "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent h-8 w-8 transition-colors mr-2"
           )}
           title={isFocusMode ? "Show Sidebar (Cmd+B)" : "Hide Sidebar (Cmd+B)"}
           aria-label="Toggle Sidebar"
@@ -185,7 +185,7 @@ export function Toolbar({
           variant="ghost"
           size="icon"
           onClick={() => onLaunchAgent("terminal")}
-          className="text-canopy-text hover:bg-canopy-border h-8 w-8 transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
+          className="text-canopy-text hover:bg-white/[0.06] h-8 w-8 transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
           title="Open Terminal (⌘T for palette)"
           aria-label="Open Terminal"
         >
@@ -245,7 +245,7 @@ export function Toolbar({
                   }
                 }}
                 className={cn(
-                  "text-canopy-text hover:bg-canopy-border hover:text-canopy-accent h-7 px-2 gap-1.5",
+                  "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent h-7 px-2 gap-1.5",
                   (stats.issueCount === 0 || statsError) && "opacity-50",
                   statsError && "text-[var(--color-status-error)]",
                   issuesOpen && "bg-canopy-border text-canopy-accent"
@@ -289,7 +289,7 @@ export function Toolbar({
                   }
                 }}
                 className={cn(
-                  "text-canopy-text hover:bg-canopy-border hover:text-canopy-accent h-7 px-2 gap-1.5",
+                  "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent h-7 px-2 gap-1.5",
                   (stats.prCount === 0 || statsError) && "opacity-50",
                   statsError && "text-[var(--color-status-error)]",
                   prsOpen && "bg-canopy-border text-canopy-accent"
@@ -335,7 +335,7 @@ export function Toolbar({
                 <span className="text-xs font-medium text-canopy-text">{stats.commitCount}</span>
               </div>
             </div>
-            <div className="w-px h-6 bg-canopy-border" />
+            <div className="w-px h-5 bg-white/[0.08]" />
           </>
         )}
 
@@ -345,7 +345,7 @@ export function Toolbar({
             size="icon"
             onClick={onToggleProblems}
             className={cn(
-              "text-canopy-text hover:bg-canopy-border hover:text-canopy-accent h-8 w-8 relative",
+              "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent h-8 w-8 relative",
               errorCount > 0 && "text-[var(--color-status-error)]"
             )}
             title="Show Problems Panel (Ctrl+Shift+M)"
@@ -358,7 +358,7 @@ export function Toolbar({
           </Button>
         </div>
 
-        <div className="w-px h-6 bg-canopy-border" />
+        <div className="w-px h-5 bg-white/[0.08]" />
 
         <TooltipProvider>
           <Tooltip open={treeCopied} delayDuration={0}>
@@ -372,7 +372,7 @@ export function Toolbar({
                   "h-8 w-8 transition-colors",
                   treeCopied
                     ? "text-green-400 bg-green-400/10"
-                    : "text-canopy-text hover:bg-canopy-border hover:text-canopy-accent",
+                    : "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent",
                   isCopyingTree && "cursor-wait opacity-70",
                   !activeWorktree && "opacity-50"
                 )}
@@ -396,7 +396,7 @@ export function Toolbar({
           </Tooltip>
         </TooltipProvider>
 
-        <div className="w-px h-6 bg-canopy-border" />
+        <div className="w-px h-5 bg-white/[0.08]" />
 
         <div className="flex items-center gap-1">
           <Button
@@ -404,7 +404,7 @@ export function Toolbar({
             size="icon"
             onClick={onSettings}
             onContextMenu={handleSettingsContextMenu}
-            className="text-canopy-text hover:bg-canopy-border hover:text-canopy-accent h-8 w-8"
+            className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent h-8 w-8"
             title="Open Settings"
             aria-label="Open settings"
           >
@@ -415,7 +415,7 @@ export function Toolbar({
             size="icon"
             onClick={toggleSidecar}
             className={cn(
-              "text-canopy-text hover:bg-canopy-border hover:text-canopy-accent h-8 w-8 transition-colors"
+              "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent h-8 w-8 transition-colors"
             )}
             title={sidecarOpen ? "Close Context Sidecar" : "Open Context Sidecar"}
             aria-label={sidecarOpen ? "Close context sidecar" : "Open context sidecar"}

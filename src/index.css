@@ -102,10 +102,16 @@
   --z-popover: 70;
   --z-toast: 80;
 
-  /* Overlay elevation system */
-  --shadow-overlay: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 16px 48px rgba(0, 0, 0, 0.55);
-  --shadow-modal: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 28px 90px rgba(0, 0, 0, 0.65);
-  --border-overlay: rgba(255, 255, 255, 0.08);
+  /* Overlay elevation system
+   * Shadows use large blur + low alpha for soft, diffused depth.
+   * Inset highlight creates subtle lift without harsh edges.
+   */
+  --shadow-overlay: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 12px 40px rgba(0, 0, 0, 0.4);
+  --shadow-modal: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 20px 56px rgba(0, 0, 0, 0.5);
+  --border-overlay: rgba(255, 255, 255, 0.06);
+
+  /* Subtle divider - lighter than borders for internal separations */
+  --border-divider: rgba(255, 255, 255, 0.04);
 
   --animation-duration: 150ms;
   --transition-duration: 150ms;
