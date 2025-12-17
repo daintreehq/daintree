@@ -158,6 +158,27 @@ export const CLAUDE_BUILTIN_SLASH_COMMANDS: SlashCommand[] = [
     scope: "built-in",
     agentId: "claude",
   },
+  {
+    id: "usage",
+    label: "/usage",
+    description: "Show plan usage limits",
+    scope: "built-in",
+    agentId: "claude",
+  },
+  {
+    id: "extra-usage",
+    label: "/extra-usage",
+    description: "Access and configure extra usage when limits are hit",
+    scope: "built-in",
+    agentId: "claude",
+  },
+  {
+    id: "context",
+    label: "/context",
+    description: "Visualize current context usage as a colored grid",
+    scope: "built-in",
+    agentId: "claude",
+  },
   // Priority 2: Session Management
   {
     id: "new",
