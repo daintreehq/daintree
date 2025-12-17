@@ -35,6 +35,7 @@ import { useScrollbackStore } from "@/store/scrollbackStore";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { getTerminalThemeFromCSS } from "./XtermAdapter";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
+import { useIsDragging } from "@/components/DragDrop";
 
 // Configuration
 const MAX_HISTORY_LINES = 5000;
@@ -42,6 +43,7 @@ const RESYNC_INTERVAL_MS = 3000;
 const SETTLE_MS = 60; // Quiet period before accepting snapshot
 const BOTTOM_EPSILON_PX = 5;
 const MIN_LINES_FOR_HISTORY = 8; // Minimum lines before allowing history mode
+const HISTORY_ENTRY_THRESHOLD_PX = 30; // Accumulated scroll needed to enter history (~2 lines)
 
 // Jump-back persistence for history resync (defense-in-depth, mirrors backend)
 const HISTORY_JUMP_BACK_PERSIST_MS = 100;
@@ -454,6 +456,12 @@ export const HistoryOverlayTerminalView = forwardRef<
 
   // Exit-armed state: only allow exit after user has scrolled up at least once
   const exitArmedRef = useRef(false);
+
+  // Accumulated wheel delta for history entry threshold (prevents accidental entry)
+  const accumulatedWheelDeltaRef = useRef(0);
+
+  // Check if a drag is in progress (prevents history entry during drag operations)
+  const isDragging = useIsDragging();
 
   // Refs for values used in callbacks that shouldn't trigger re-initialization
   const isFocusedRef = useRef(isFocused);
@@ -900,14 +908,27 @@ export const HistoryOverlayTerminalView = forwardRef<
         e.preventDefault();
         e.stopPropagation();
 
-        // Scroll up enters history with the wheel delta applied
+        // Block history entry during drag operations to prevent accidental mode switches
+        if (isDragging) return;
+
+        // Scroll up accumulates delta toward history entry threshold
         if (e.deltaY < 0) {
           // Convert wheel delta to pixels for seamless scroll entry
           const cellH = metricsRef.current?.cellH ?? 18;
           const pageH = containerRef.current?.clientHeight ?? 400;
           const deltaPx = wheelDeltaToPx(e, cellH, pageH);
 
-          enterHistoryMode(deltaPx);
+          // Accumulate upward scroll delta
+          accumulatedWheelDeltaRef.current += Math.abs(deltaPx);
+
+          // Only enter history mode after threshold reached (prevents accidental entry)
+          if (accumulatedWheelDeltaRef.current >= HISTORY_ENTRY_THRESHOLD_PX) {
+            accumulatedWheelDeltaRef.current = 0;
+            enterHistoryMode(deltaPx);
+          }
+        } else {
+          // Downward scroll resets accumulator
+          accumulatedWheelDeltaRef.current = 0;
         }
         // Down scrolls in live mode are ignored (we're locked to bottom)
         return;
@@ -932,8 +953,10 @@ export const HistoryOverlayTerminalView = forwardRef<
         exitArmedRef.current = true;
       }
 
-      // Check if scrolling down while at/near bottom AND exit is armed - exit to live mode
-      if (deltaPx > 0 && exitArmedRef.current) {
+      // Exit to live mode when scrolling down and at bottom
+      // Simplified: exit immediately when at bottom, regardless of exitArmed
+      // This makes accidental history entry less sticky
+      if (deltaPx > 0) {
         const atBottom = isAtBottom(overlay, 2);
         if (atBottom) {
           exitHistoryMode();
@@ -949,7 +972,7 @@ export const HistoryOverlayTerminalView = forwardRef<
     return () => {
       container.removeEventListener("wheel", handleWheel, { capture: true });
     };
-  }, [enterHistoryMode, exitHistoryMode]);
+  }, [enterHistoryMode, exitHistoryMode, isDragging]);
 
   // Periodic Resync Timer
   useEffect(() => {
@@ -1109,6 +1132,13 @@ export const HistoryOverlayTerminalView = forwardRef<
           </svg>
           Back to live
         </button>
+      )}
+
+      {/* Debug indicator for history mode (development only) */}
+      {process.env.NODE_ENV === "development" && viewMode === "history" && (
+        <div className="absolute top-2 left-2 z-50 px-2 py-1 bg-amber-500 text-black text-xs font-bold rounded shadow-lg">
+          HISTORY MODE
+        </div>
       )}
 
       {/* Scrollback unavailable notice (alt buffer) */}

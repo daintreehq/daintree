@@ -297,6 +297,9 @@ function XtermAdapterComponent({
     }
   }, [terminalId, getRefreshTier, currentTier]);
 
+  // Visibility tracking - sync with service state and trigger fit on visibility changes
+  // Note: TerminalPane also has an IntersectionObserver that updates store visibility.
+  // This observer is for the XtermAdapter's internal visibility ref used by resize handling.
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -304,13 +307,16 @@ function XtermAdapterComponent({
     const visibilityObserver = new IntersectionObserver(
       ([entry]) => {
         const nowVisible = entry.isIntersecting;
+        const wasVisible = isVisibleRef.current;
         isVisibleRef.current = nowVisible;
 
-        // Notify the service about visibility change (handles tiering and forced resize)
-        terminalInstanceService.setVisible(terminalId, nowVisible);
+        // Only update service if actually changed to avoid redundant calls
+        if (nowVisible !== wasVisible) {
+          terminalInstanceService.setVisible(terminalId, nowVisible);
+        }
 
-        if (nowVisible) {
-          // Force immediate fit with fresh dimensions
+        if (nowVisible && !wasVisible) {
+          // Force immediate fit with fresh dimensions when becoming visible
           performFit();
         }
       },

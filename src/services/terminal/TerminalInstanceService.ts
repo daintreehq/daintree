@@ -20,13 +20,16 @@ const HORIZONTAL_DEBOUNCE_MS = 100;
 const VERTICAL_THROTTLE_MS = 150;
 const IDLE_CALLBACK_TIMEOUT_MS = 1000;
 
+// Maximum time a resize lock can be held (safety net for stuck locks)
+const RESIZE_LOCK_TTL_MS = 5000;
+
 class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
   private dataBuffer: TerminalOutputIngestService;
   private suppressedExitUntil = new Map<string, number>();
   private hiddenContainer: HTMLDivElement | null = null;
   private offscreenSlots = new Map<string, HTMLDivElement>();
-  private resizeLocks = new Map<string, boolean>();
+  private resizeLocks = new Map<string, number>(); // Stores expiry timestamp, not boolean
   private lastBackendTier = new Map<string, "active" | "background">();
   private unseenTracker = new TerminalUnseenOutputTracker();
   private cwdProviders = new Map<string, () => string>();
@@ -247,21 +250,33 @@ class TerminalInstanceService {
             managed.lastHeight = 0;
           }
         }
-        this.applyRendererPolicy(id, managed.getRefreshTier());
+        // Note: Removed applyRendererPolicy call to prevent tier flapping.
+        // Tier changes should come from explicit tier provider updates in XtermAdapter,
+        // not from visibility changes. This prevents multiple observers from causing
+        // competing tier transitions during layout churn.
       }
     }
   }
 
   lockResize(id: string, locked: boolean): void {
     if (locked) {
-      this.resizeLocks.set(id, true);
+      // Store expiry timestamp instead of boolean - TTL prevents stuck locks
+      this.resizeLocks.set(id, Date.now() + RESIZE_LOCK_TTL_MS);
     } else {
       this.resizeLocks.delete(id);
     }
   }
 
   private isResizeLocked(id: string): boolean {
-    return this.resizeLocks.get(id) === true;
+    const expiry = this.resizeLocks.get(id);
+    if (!expiry) return false;
+
+    // Check if lock has expired (safety net for forgotten unlocks)
+    if (Date.now() > expiry) {
+      this.resizeLocks.delete(id);
+      return false;
+    }
+    return true;
   }
 
   private setBackendTier(id: string, tier: "active" | "background"): void {
@@ -1028,9 +1043,18 @@ class TerminalInstanceService {
     const prevBackendTier = this.lastBackendTier.get(id) ?? "active";
     this.setBackendTier(id, backendTier);
 
-    // On upgrade to active, request a canonical snapshot and restore before the user interacts.
+    // On upgrade to active, only wake if we actually dropped data while backgrounded.
+    // This prevents unnecessary wake+restore cycles during layout churn that causes
+    // tier transitions but doesn't actually miss any data.
     if (backendTier === "active" && prevBackendTier !== "active") {
-      void this.wakeAndRestore(id);
+      if (managed.needsWake) {
+        managed.needsWake = false;
+        void this.wakeAndRestore(id).catch(() => {
+          // On failure, restore the flag so we retry next time
+          const current = this.instances.get(id);
+          if (current) current.needsWake = true;
+        });
+      }
     }
   }
 
@@ -1151,10 +1175,29 @@ class TerminalInstanceService {
         return true;
       }
 
+      // Set restore flag to defer incoming output during reset+write.
+      // This makes the restore atomic - no blank terminal between reset and write completion.
+      managed.isSerializedRestoreInProgress = true;
+
       managed.terminal.reset();
-      managed.terminal.write(serializedState);
+      managed.terminal.write(serializedState, () => {
+        // Guard against stale callback after destroy/restart
+        const current = this.instances.get(id);
+        if (current !== managed) return;
+
+        current.isSerializedRestoreInProgress = false;
+
+        // Flush any output that arrived during restore
+        const deferred = current.deferredOutput;
+        current.deferredOutput = [];
+        for (const data of deferred) {
+          this.writeToTerminal(id, data);
+        }
+      });
       return true;
     } catch (error) {
+      // Ensure flag is cleared on error
+      managed.isSerializedRestoreInProgress = false;
       console.error(`[TerminalInstanceService] Failed to restore terminal ${id}:`, error);
       return false;
     }

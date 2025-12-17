@@ -36,16 +36,22 @@ interface DndPlaceholderContextValue {
   placeholderIndex: number | null;
   sourceContainer: "grid" | "dock" | null;
   activeTerminal: TerminalInstance | null;
+  isDragging: boolean;
 }
 
 const DndPlaceholderContext = createContext<DndPlaceholderContextValue>({
   placeholderIndex: null,
   sourceContainer: null,
   activeTerminal: null,
+  isDragging: false,
 });
 
 export function useDndPlaceholder() {
   return useContext(DndPlaceholderContext);
+}
+
+export function useIsDragging() {
+  return useContext(DndPlaceholderContext).isDragging;
 }
 
 // Minimum distance (px) pointer must move before drag starts
@@ -241,6 +247,9 @@ export function DndProvider({ children }: DndProviderProps) {
     (event: DragEndEvent) => {
       const { active, over } = event;
 
+      // Capture dragged ID immediately for guaranteed unlock
+      const draggedId = active?.id ? String(active.id) : null;
+
       // Capture state before clearing
       const dropContainer = overContainer;
 
@@ -249,11 +258,14 @@ export function DndProvider({ children }: DndProviderProps) {
       setOverContainer(null);
       setPlaceholderIndex(null);
 
-      if (!over || !activeData) return;
+      // ALWAYS unlock resize regardless of drop target - fixes stuck resize locks
+      // when dropping outside droppable areas (over === null)
+      if (draggedId) {
+        setTimeout(() => terminalInstanceService.lockResize(draggedId, false), 100);
+      }
 
-      const draggedId = active.id as string;
-      // Unlock resize shortly after drop to avoid accordion effects during layout thrash.
-      setTimeout(() => terminalInstanceService.lockResize(draggedId, false), 100);
+      if (!over || !activeData || !draggedId) return;
+
       const overId = over.id as string;
 
       // Get source info
@@ -353,7 +365,24 @@ export function DndProvider({ children }: DndProviderProps) {
           setFocused(null);
         }
       }
-      // TerminalGrid's batched fitter handles resizing automatically when gridTerminals changes
+
+      // Post-drag stabilization: Reset renderers after layout settles.
+      // This fixes blank terminals caused by CSS transforms during drag.
+      // Wait 2 animation frames for transforms to be removed.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          // Reset all visible grid terminals to ensure proper rendering
+          const gridTerminalsList = terminals.filter(
+            (t) => t.location === "grid" || t.location === undefined
+          );
+          for (const terminal of gridTerminalsList) {
+            const managed = terminalInstanceService.get(terminal.id);
+            if (managed?.hostElement.isConnected && managed.isVisible) {
+              terminalInstanceService.resetRenderer(terminal.id);
+            }
+          }
+        });
+      });
     },
     [
       activeData,
@@ -403,8 +432,9 @@ export function DndProvider({ children }: DndProviderProps) {
       placeholderIndex,
       sourceContainer: activeData?.sourceLocation ?? null,
       activeTerminal,
+      isDragging: activeId !== null,
     }),
-    [placeholderIndex, activeData?.sourceLocation, activeTerminal]
+    [placeholderIndex, activeData?.sourceLocation, activeTerminal, activeId]
   );
 
   return (
