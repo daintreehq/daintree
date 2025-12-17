@@ -302,7 +302,14 @@ function TerminalPaneComponent({
       if (e.button !== 0) return;
 
       const target = e.target as HTMLElement | null;
-      if (!target?.closest(".xterm")) return;
+      const xtermElement = target?.closest(".xterm");
+      if (!xtermElement) return;
+
+      // Allow clicks on links to propagate through so WebLinksAddon can handle them.
+      // When hovering over a link, xterm adds the 'xterm-cursor-pointer' class to the terminal element.
+      if (xtermElement.classList.contains("xterm-cursor-pointer")) {
+        return;
+      }
 
       const focusTarget = getTerminalFocusTarget({
         isAgentTerminal,
