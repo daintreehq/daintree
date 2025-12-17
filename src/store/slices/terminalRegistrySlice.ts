@@ -135,6 +135,7 @@ export interface TerminalRegistrySlice {
   updateFlowStatus: (id: string, status: TerminalFlowStatus, timestamp: number) => void;
   setInputLocked: (id: string, locked: boolean) => void;
   toggleInputLocked: (id: string) => void;
+  convertTerminalType: (id: string, newType: TerminalType, newAgentId?: string) => Promise<void>;
 }
 
 // Flush pending persistence - call on app quit to prevent data loss
@@ -1047,5 +1048,130 @@ export const createTerminalRegistrySlice =
 
         return updated;
       });
+    },
+
+    convertTerminalType: async (id, newType, newAgentId) => {
+      const terminal = get().terminals.find((t) => t.id === id);
+      if (!terminal) {
+        console.warn(`[TerminalStore] Cannot convert: terminal ${id} not found`);
+        return;
+      }
+
+      const effectiveAgentId = newAgentId ?? (isRegisteredAgent(newType) ? newType : undefined);
+      const newKind: "terminal" | "agent" = effectiveAgentId ? "agent" : "terminal";
+      const newTitle = getDefaultTitle(newType, effectiveAgentId);
+
+      let commandToRun: string | undefined;
+      if (effectiveAgentId) {
+        try {
+          const agentSettings = await agentSettingsClient.get();
+          if (agentSettings) {
+            const agentConfig = getAgentConfig(effectiveAgentId);
+            const baseCommand = agentConfig?.command || effectiveAgentId;
+            const flags = generateAgentFlags(
+              agentSettings.agents?.[effectiveAgentId] ?? {},
+              effectiveAgentId
+            );
+            commandToRun = flags.length > 0 ? `${baseCommand} ${flags.join(" ")}` : baseCommand;
+          }
+        } catch (error) {
+          console.warn(
+            "[TerminalStore] Failed to load agent settings for convert, using default:",
+            error
+          );
+          const agentConfig = getAgentConfig(effectiveAgentId);
+          commandToRun = agentConfig?.command || effectiveAgentId;
+        }
+      }
+
+      try {
+        const managedInstance = terminalInstanceService.get(id);
+        let spawnCols = terminal.cols || 80;
+        let spawnRows = terminal.rows || 24;
+        if (managedInstance?.terminal) {
+          spawnCols = managedInstance.terminal.cols || spawnCols;
+          spawnRows = managedInstance.terminal.rows || spawnRows;
+        }
+
+        terminalInstanceService.destroy(id);
+        terminalInstanceService.suppressNextExit(id);
+        await terminalClient.kill(id);
+
+        const isAgent = !!effectiveAgentId;
+
+        set((state) => {
+          const newTerminals = state.terminals.map((t) =>
+            t.id === id
+              ? {
+                  ...t,
+                  kind: newKind,
+                  type: newType,
+                  agentId: effectiveAgentId,
+                  title: newTitle,
+                  restartKey: (t.restartKey ?? 0) + 1,
+                  agentState: isAgent ? ("idle" as const) : undefined,
+                  lastStateChange: isAgent ? Date.now() : undefined,
+                  stateChangeTrigger: undefined,
+                  stateChangeConfidence: undefined,
+                  command: commandToRun,
+                  isRestarting: true,
+                  restartError: undefined,
+                }
+              : t
+          );
+          terminalPersistence.save(newTerminals);
+          return { terminals: newTerminals };
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        await terminalClient.spawn({
+          id,
+          cwd: terminal.cwd,
+          cols: spawnCols,
+          rows: spawnRows,
+          kind: newKind,
+          type: newType,
+          agentId: effectiveAgentId,
+          title: newTitle,
+          worktreeId: terminal.worktreeId,
+          command: commandToRun,
+          restore: false,
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        if (terminal.location === "dock") {
+          optimizeForDock(id);
+        } else {
+          terminalInstanceService.fit(id);
+        }
+
+        set((state) => ({
+          terminals: state.terminals.map((t) => (t.id === id ? { ...t, isRestarting: false } : t)),
+        }));
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorCode = (error as { code?: string })?.code;
+
+        const restartError: TerminalRestartError = {
+          message: errorMessage,
+          code: errorCode,
+          timestamp: Date.now(),
+          recoverable: false,
+          context: {
+            failedCwd: terminal.cwd,
+            command: commandToRun,
+          },
+        };
+
+        set((state) => ({
+          terminals: state.terminals.map((t) =>
+            t.id === id ? { ...t, isRestarting: false, restartError } : t
+          ),
+        }));
+
+        console.error(`[TerminalStore] Failed to convert terminal ${id}:`, error);
+      }
     },
   });

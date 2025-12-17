@@ -1,12 +1,13 @@
 import { useCallback, useMemo, useState } from "react";
 import type React from "react";
-import { type MenuItemOption, type TerminalLocation } from "@/types";
+import { type MenuItemOption, type TerminalLocation, type TerminalType } from "@/types";
 import { useTerminalStore } from "@/store";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { terminalClient } from "@/clients";
 import { TerminalInfoDialog } from "./TerminalInfoDialog";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useNativeContextMenu } from "@/hooks";
+import { AGENT_IDS, getAgentConfig } from "@/config/agents";
 
 interface TerminalContextMenuProps {
   terminalId: string;
@@ -37,6 +38,7 @@ export function TerminalContextMenu({
   const moveTerminalToWorktree = useTerminalStore((s) => s.moveTerminalToWorktree);
   const setFocused = useTerminalStore((s) => s.setFocused);
   const toggleInputLocked = useTerminalStore((s) => s.toggleInputLocked);
+  const convertTerminalType = useTerminalStore((s) => s.convertTerminalType);
   const isMaximized = useTerminalStore((s) => s.maximizedId === terminalId);
   const { worktrees } = useWorktrees();
 
@@ -89,6 +91,36 @@ export function TerminalContextMenu({
     });
   }, [terminal, worktrees]);
 
+  const convertToSubmenu = useMemo((): MenuItemOption[] => {
+    if (!terminal) return [];
+    const currentAgentId =
+      terminal.agentId ?? (terminal.type !== "terminal" ? terminal.type : null);
+    const isPlainTerminal = terminal.type === "terminal" || terminal.kind === "terminal";
+
+    const items: MenuItemOption[] = [];
+
+    if (!isPlainTerminal || currentAgentId) {
+      items.push({
+        id: "convert-to:terminal",
+        label: "Terminal",
+        enabled: !isPlainTerminal || !!currentAgentId,
+      });
+    }
+
+    for (const agentId of AGENT_IDS) {
+      const config = getAgentConfig(agentId);
+      if (!config) continue;
+      const isCurrent = currentAgentId === agentId;
+      items.push({
+        id: `convert-to:${agentId}`,
+        label: config.name,
+        enabled: !isCurrent,
+      });
+    }
+
+    return items;
+  }, [terminal]);
+
   const template = useMemo((): MenuItemOption[] => {
     if (!terminal) return [];
     const layoutItems: MenuItemOption[] = [
@@ -122,6 +154,11 @@ export function TerminalContextMenu({
         id: "toggle-input-lock",
         label: terminal.isInputLocked ? "Unlock Input" : "Lock Input",
       },
+      {
+        id: "convert-to",
+        label: "Convert to",
+        submenu: convertToSubmenu,
+      },
       { id: "duplicate", label: "Duplicate Terminal" },
       { id: "rename", label: "Rename Terminal" },
       { id: "clear-scrollback", label: "Clear Scrollback" },
@@ -132,7 +169,15 @@ export function TerminalContextMenu({
     ];
 
     return actions;
-  }, [currentLocation, isMaximized, isPaused, terminal, worktrees.length, worktreeSubmenu]);
+  }, [
+    currentLocation,
+    isMaximized,
+    isPaused,
+    terminal,
+    worktrees.length,
+    worktreeSubmenu,
+    convertToSubmenu,
+  ]);
 
   const handleContextMenu = useCallback(
     async (event: React.MouseEvent) => {
@@ -144,6 +189,12 @@ export function TerminalContextMenu({
         const worktreeId = actionId.slice("move-to-worktree:".length);
         setFocused(null);
         moveTerminalToWorktree(terminalId, worktreeId);
+        return;
+      }
+
+      if (actionId.startsWith("convert-to:")) {
+        const targetType = actionId.slice("convert-to:".length);
+        void convertTerminalType(terminalId, targetType as TerminalType);
         return;
       }
 
@@ -189,6 +240,7 @@ export function TerminalContextMenu({
       }
     },
     [
+      convertTerminalType,
       handleClearBuffer,
       handleDuplicate,
       handleForceResume,
