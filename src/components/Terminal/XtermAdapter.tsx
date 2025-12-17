@@ -298,10 +298,16 @@ function XtermAdapterComponent({
     }
   }, [terminalId, getRefreshTier, currentTier]);
 
-  // Check if a drag is in progress to prevent false visibility updates from CSS transforms
+  // Track drag state in a ref to avoid useEffect cleanup timing issues.
+  // If isDragging is in the dependency array, the effect re-runs on drag start/end,
+  // which can cause timing issues with visibility updates.
   const isDragging = useIsDragging();
+  const isDraggingRef = useRef(isDragging);
+  useEffect(() => {
+    isDraggingRef.current = isDragging;
+  }, [isDragging]);
 
-  // Visibility tracking - sync with service state and trigger fit on visibility changes
+  // Visibility tracking - stable observer, ref-gated callback
   // Note: TerminalPane also has an IntersectionObserver that updates store visibility.
   // This observer is for the XtermAdapter's internal visibility ref used by resize handling.
   useEffect(() => {
@@ -311,7 +317,7 @@ function XtermAdapterComponent({
     const visibilityObserver = new IntersectionObserver(
       ([entry]) => {
         // Don't update visibility during drag - CSS transforms cause false negatives
-        if (isDragging) return;
+        if (isDraggingRef.current) return;
 
         const nowVisible = entry.isIntersecting;
         const wasVisible = isVisibleRef.current;
@@ -332,7 +338,7 @@ function XtermAdapterComponent({
     visibilityObserver.observe(container);
 
     return () => visibilityObserver.disconnect();
-  }, [terminalId, performFit, isDragging]);
+  }, [terminalId, performFit]);
 
   // Subscribe to agent state changes for state-aware rendering decisions
   // This enables future defensive layers (height ratchet, resize guard, scroll latch)

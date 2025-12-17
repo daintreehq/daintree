@@ -153,7 +153,11 @@ function TerminalPaneComponent({
 
   const terminal = getTerminal(id);
   const isSnapshotMode = isAgentTerminal;
-  const isVisible = terminal?.isVisible ?? false;
+  // Subscribe directly to isVisible to ensure re-renders when visibility changes.
+  // Using getTerminal() alone subscribes to the function, not the value!
+  const isVisible = useTerminalStore(
+    (s) => s.terminals.find((t) => t.id === id)?.isVisible ?? false
+  );
 
   const queueCount = useTerminalStore(
     useShallow((state) => state.commandQueue.filter((c) => c.terminalId === id).length)
@@ -193,19 +197,23 @@ function TerminalPaneComponent({
     restartKey,
   });
 
-  // Check if a drag is in progress to prevent false visibility updates from CSS transforms
+  // Track drag state in a ref to avoid useEffect cleanup timing issues.
+  // If isDragging is in the dependency array, cleanup runs on drag START
+  // with the OLD isDragging=false value, which would set visibility to false!
   const isDragging = useIsDragging();
+  const isDraggingRef = useRef(isDragging);
+  useEffect(() => {
+    isDraggingRef.current = isDragging;
+  }, [isDragging]);
 
-  // Visibility observation
-  // Note: During drag operations, CSS transforms can cause IntersectionObserver to report
-  // false negatives. We skip visibility updates during drag to prevent tier flapping.
+  // Visibility observation - stable observer, ref-gated callback
   useEffect(() => {
     if (!containerRef.current) return;
 
     const observer = new IntersectionObserver(
       ([entry]) => {
         // Don't update visibility during drag - CSS transforms cause false negatives
-        if (isDragging) return;
+        if (isDraggingRef.current) return;
 
         updateVisibility(id, entry.isIntersecting);
         // Notify service for visibility-aware terminal management
@@ -217,16 +225,16 @@ function TerminalPaneComponent({
     );
 
     observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, [id, updateVisibility]);
 
+  // Separate unmount cleanup - only runs on actual unmount, not on drag changes
+  useEffect(() => {
     return () => {
-      observer.disconnect();
-      // Only set visibility false on actual unmount, not during drag
-      if (!isDragging) {
-        updateVisibility(id, false);
-        terminalInstanceService.setVisible(id, false);
-      }
+      updateVisibility(id, false);
+      terminalInstanceService.setVisible(id, false);
     };
-  }, [id, updateVisibility, isDragging]);
+  }, [id, updateVisibility]);
 
   const handleReady = useCallback(() => {}, []);
 

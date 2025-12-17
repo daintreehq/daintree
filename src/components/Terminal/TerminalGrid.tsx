@@ -17,6 +17,7 @@ import { GridFullOverlay } from "./GridFullOverlay";
 import {
   SortableTerminal,
   useDndPlaceholder,
+  useIsDragging,
   GRID_PLACEHOLDER_ID,
   SortableGridPlaceholder,
 } from "@/components/DragDrop";
@@ -27,7 +28,6 @@ import { Kbd } from "@/components/ui/Kbd";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { systemClient } from "@/clients";
-import { TerminalRefreshTier } from "@/types";
 import { getAutoGridCols } from "@/lib/terminalLayout";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useNativeContextMenu } from "@/hooks";
@@ -312,6 +312,11 @@ export function TerminalGrid({
 
   // Get placeholder state from DnD context
   const { placeholderIndex, sourceContainer } = useDndPlaceholder();
+  const isDragging = useIsDragging();
+  const isDraggingRef = useRef(isDragging);
+  useEffect(() => {
+    isDraggingRef.current = isDragging;
+  }, [isDragging]);
 
   // Show placeholder when dragging from dock to grid (only if grid not full)
   const showPlaceholder = placeholderIndex !== null && sourceContainer === "dock" && !isGridFull;
@@ -445,20 +450,28 @@ export function TerminalGrid({
   }, [gridTerminals, showPlaceholder, placeholderIndex, placeholderInGrid]);
 
   // Batch-fit grid terminals when layout (gridCols/count) changes
+  // Skip during drag to avoid tier churn from CSS transforms
   useEffect(() => {
     const ids = gridTerminals.map((t) => t.id);
     let cancelled = false;
 
     const timeoutId = window.setTimeout(() => {
+      // Skip batch fit during drag - transforms make dimensions unreliable
+      if (isDraggingRef.current) return;
+
       let index = 0;
       const processNext = () => {
         if (cancelled || index >= ids.length) return;
+        // Re-check drag state in case drag started during batch
+        if (isDraggingRef.current) return;
+
         const id = ids[index++];
         const managed = terminalInstanceService.get(id);
 
         if (managed?.hostElement.isConnected) {
           terminalInstanceService.fit(id);
-          terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+          // Only do fit, don't force tier - let the tier provider handle it
+          // Forcing VISIBLE tier here can cause churn during reorders
         }
         requestAnimationFrame(processNext);
       };
