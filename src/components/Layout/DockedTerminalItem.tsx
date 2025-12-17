@@ -96,19 +96,34 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
       try {
         if (isOpen) {
           if (!cancelled) {
-            // Wait for Popover DOM to be fully mounted and measurable
-            await new Promise((resolve) => requestAnimationFrame(resolve));
+            // Wait for Popover DOM to be fully mounted and XtermAdapter to attach the terminal.
+            // A single RAF is not enough - React needs multiple frames to mount the component tree.
+            // We retry fitting until the terminal is attached to a visible container.
+            const MAX_RETRIES = 10;
+            const RETRY_DELAY_MS = 16; // ~1 frame
 
-            if (cancelled) return;
+            let dims: { cols: number; rows: number } | null = null;
+            for (let attempt = 0; attempt < MAX_RETRIES && !cancelled; attempt++) {
+              // Wait for next frame
+              await new Promise((resolve) => requestAnimationFrame(resolve));
+              if (cancelled) return;
 
-            // Force xterm to measure the actual DOM and calculate exact dimensions
-            const dims = terminalInstanceService.fit(terminal.id);
-            if (!dims) {
-              console.warn(`Failed to fit terminal ${terminal.id}, skipping dimension sync`);
-              return;
+              // Try to fit - will return null if terminal is still in offscreen container
+              dims = terminalInstanceService.fit(terminal.id);
+              if (dims) break;
+
+              // If fit failed (terminal still offscreen), wait a bit and retry
+              if (attempt < MAX_RETRIES - 1) {
+                await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+              }
             }
 
             if (cancelled) return;
+
+            if (!dims) {
+              // Terminal never became visible - this can happen if popover closed quickly
+              return;
+            }
 
             // Synchronize PTY to match the exact frontend dimensions
             try {

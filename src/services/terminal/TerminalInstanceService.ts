@@ -484,6 +484,14 @@ class TerminalInstanceService {
     const managed = this.instances.get(id);
     if (!managed) return null;
 
+    // Guard: Skip fitting if terminal is in the offscreen container.
+    // The offscreen container is positioned at left: -20000px and has fixed dimensions (2000x2000).
+    // Fitting in this state would calculate wrong dimensions and corrupt the PTY layout.
+    const rect = managed.hostElement.getBoundingClientRect();
+    if (rect.left < -10000 || rect.width < 50 || rect.height < 50) {
+      return null;
+    }
+
     try {
       managed.fitAddon.fit();
       const { cols, rows } = managed.terminal;

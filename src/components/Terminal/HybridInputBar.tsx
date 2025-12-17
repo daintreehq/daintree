@@ -34,6 +34,7 @@ export interface HybridInputBarHandle {
 export interface HybridInputBarProps {
   onSend: (payload: { data: string; trackerData: string; text: string }) => void;
   onSendKey?: (key: string) => void;
+  onActivate?: () => void;
   cwd: string;
   agentId?: LegacyAgentType;
   disabled?: boolean;
@@ -86,7 +87,7 @@ function getTextOffsetLeftPx(textarea: HTMLTextAreaElement, charIndex: number): 
 }
 
 export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarProps>(
-  ({ onSend, onSendKey, cwd, agentId, disabled = false, className }, ref) => {
+  ({ onSend, onSendKey, onActivate, cwd, agentId, disabled = false, className }, ref) => {
     const [value, setValue] = useState("");
     const allowNextLineBreakRef = useRef(false);
     const handledEnterRef = useRef(false);
@@ -673,13 +674,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         onPointerDownCapture={(e) => {
           if (disabled) return;
           if (e.button !== 0) return;
+          onActivate?.();
           focusTextarea();
         }}
         onMouseDownCapture={(e) => {
           if (e.button !== 0) return;
+          onActivate?.();
           focusTextarea();
         }}
         onClick={() => {
+          onActivate?.();
           focusTextarea();
         }}
       >

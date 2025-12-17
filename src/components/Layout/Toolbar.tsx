@@ -13,11 +13,16 @@ import {
   PanelRightClose,
   PanelLeft,
   PanelLeftClose,
+  Copy,
+  Check,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { GitHubResourceList } from "@/components/GitHub";
 import { AgentButton } from "./AgentButton";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useWorktreeActions } from "@/hooks/useWorktreeActions";
 import { useProjectStore } from "@/store/projectStore";
 import { useSidecarStore } from "@/store";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -65,12 +70,53 @@ export function Toolbar({
   const [issuesOpen, setIssuesOpen] = useState(false);
   const [prsOpen, setPrsOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [treeCopied, setTreeCopied] = useState(false);
+  const [isCopyingTree, setIsCopyingTree] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState<string>("");
   const issuesButtonRef = useRef<HTMLButtonElement>(null);
   const prsButtonRef = useRef<HTMLButtonElement>(null);
+  const treeCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const { handleCopyTree } = useWorktreeActions();
 
   useEffect(() => {
     return window.electron.window.onFullscreenChange(setIsFullscreen);
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (treeCopyTimeoutRef.current) {
+        clearTimeout(treeCopyTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const handleCopyTreeClick = async () => {
+    if (isCopyingTree || !activeWorktree) return;
+
+    setIsCopyingTree(true);
+
+    try {
+      const resultMessage = await handleCopyTree(activeWorktree);
+
+      if (resultMessage) {
+        setTreeCopied(true);
+        setCopyFeedback(resultMessage);
+
+        if (treeCopyTimeoutRef.current) {
+          clearTimeout(treeCopyTimeoutRef.current);
+        }
+
+        treeCopyTimeoutRef.current = setTimeout(() => {
+          setTreeCopied(false);
+          setCopyFeedback("");
+          treeCopyTimeoutRef.current = null;
+        }, 2000);
+      }
+    } finally {
+      setIsCopyingTree(false);
+    }
+  };
 
   const openAgentSettings = onOpenAgentSettings ?? onSettings;
 
@@ -311,6 +357,44 @@ export function Toolbar({
             )}
           </Button>
         </div>
+
+        <div className="w-px h-6 bg-canopy-border" />
+
+        <TooltipProvider>
+          <Tooltip open={treeCopied} delayDuration={0}>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleCopyTreeClick}
+                disabled={isCopyingTree || !activeWorktree}
+                className={cn(
+                  "h-8 w-8 transition-colors",
+                  treeCopied
+                    ? "text-green-400 bg-green-400/10"
+                    : "text-canopy-text hover:bg-canopy-border hover:text-canopy-accent",
+                  isCopyingTree && "cursor-wait opacity-70",
+                  !activeWorktree && "opacity-50"
+                )}
+                title={activeWorktree ? "Copy Context" : "No active worktree"}
+                aria-label={treeCopied ? "Context Copied" : "Copy Context"}
+              >
+                {isCopyingTree ? (
+                  <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+                ) : treeCopied ? (
+                  <Check className="h-4 w-4" />
+                ) : (
+                  <Copy className="h-4 w-4" />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="font-medium">
+              <span role="status" aria-live="polite">
+                {copyFeedback}
+              </span>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
 
         <div className="w-px h-6 bg-canopy-border" />
 
