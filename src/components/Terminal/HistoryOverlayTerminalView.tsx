@@ -226,7 +226,7 @@ function extractSnapshot(
       for (let i = 0; i < count; i++) {
         const lineIdx = start + i;
         // Serialize just this one line using range option
-         
+
         const serialized = serializeAddon.serialize({
           range: { start: lineIdx, end: lineIdx },
           excludeAltBuffer: true,
