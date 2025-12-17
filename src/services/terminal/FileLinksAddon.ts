@@ -9,7 +9,7 @@ interface ResolvedFilePath {
 }
 
 const FILE_PATH_REGEX =
-  /(?:^|[\s(])((?:\/[\w\-./]+|[a-zA-Z]:[\\/][\w\-./\\]+|(?:\.\.?[\\/])+[\w\-./\\]+|[\w\-]+[\\/][\w\-./\\]+)\.[\w]+(?::\d+(?::\d+)?)?)/g;
+  /(?:^|[\s(])((?:\/[\w./-]+|[a-zA-Z]:[\\/][\w./\\-]+|(?:\.\.?[\\/])+[\w./\\-]+|[\w-]+[\\/][\w./\\-]+)\.[\w]+(?::\d+(?::\d+)?)?)/g;
 
 const WINDOWS_ABS = /^(?:[a-zA-Z]:[\\/]|\\\\)/;
 
@@ -22,10 +22,7 @@ export class FileLinksAddon implements ILinkProvider {
     this._getCwd = getCwd;
   }
 
-  provideLinks(
-    bufferLineNumber: number,
-    callback: (links: ILink[] | undefined) => void
-  ): void {
+  provideLinks(bufferLineNumber: number, callback: (links: ILink[] | undefined) => void): void {
     const links: ILink[] = [];
     if (bufferLineNumber < 1) {
       callback(undefined);
