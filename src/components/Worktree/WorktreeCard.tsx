@@ -836,10 +836,12 @@ export function WorktreeCard({
       <div
         className={cn(
           "absolute left-0 top-0 bottom-0 w-[3px] transition-all duration-300 rounded-r-sm",
-          spineState === "error" && "bg-red-500",
-          spineState === "dirty" && "bg-amber-500 shadow-[0_0_6px_rgba(251,191,36,0.3)]",
-          spineState === "stale" && "bg-zinc-500",
-          spineState === "current" && "bg-teal-500 shadow-[0_0_8px_rgba(20,184,166,0.4)]",
+          spineState === "error" && "bg-[var(--color-status-error)]",
+          spineState === "dirty" &&
+            "bg-[var(--color-status-warning)] shadow-[0_0_6px_rgba(251,191,36,0.3)]",
+          spineState === "stale" && "bg-[var(--color-state-idle)]",
+          spineState === "current" &&
+            "bg-[var(--color-status-info)] shadow-[0_0_8px_rgba(56,189,248,0.4)]",
           spineState === "idle" && "bg-transparent"
         )}
         aria-hidden="true"

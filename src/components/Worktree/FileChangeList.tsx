@@ -200,10 +200,10 @@ export function FileChangeList({
 
         <div className="flex items-center gap-2 shrink-0 text-[11px]">
           {(change.insertions ?? 0) > 0 && (
-            <span className="text-green-500/80">+{change.insertions}</span>
+            <span className="text-[var(--color-status-success)]/80">+{change.insertions}</span>
           )}
           {(change.deletions ?? 0) > 0 && (
-            <span className="text-red-500/80">-{change.deletions}</span>
+            <span className="text-[var(--color-status-error)]/80">-{change.deletions}</span>
           )}
         </div>
       </div>
