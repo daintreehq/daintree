@@ -190,6 +190,7 @@ function convertAnsiLinesToHtml(ansiLines: string[]): string[] {
 /**
  * Extract snapshot from xterm buffer.
  * Returns the last maxLines lines from the buffer with both plain text and HTML.
+ * Uses line-by-line serialization to respect xterm's column-based wrapping.
  * @param skipBottomLines - Number of lines to skip from the bottom (for seamless transition)
  */
 function extractSnapshot(
@@ -215,18 +216,26 @@ function extractSnapshot(
   }
 
   // Get ANSI-encoded content and convert to HTML
+  // IMPORTANT: Serialize each buffer line individually to respect xterm's wrapping.
+  // The buffer already wraps long content at `cols` characters, so each buffer line
+  // is one visual row. Serializing the whole buffer doesn't preserve this wrapping.
   let htmlLines: string[];
   if (serializeAddon) {
     try {
-      const serialized = serializeAddon.serialize();
-      // Split by newlines and convert to HTML
-      const allAnsiLines = serialized.split("\n");
-      // Take the relevant window (skip bottom lines, take last 'count' of remaining)
-      const relevantAnsiLines = allAnsiLines.slice(
-        Math.max(0, allAnsiLines.length - skipBottomLines - count),
-        allAnsiLines.length - skipBottomLines
-      );
-      htmlLines = convertAnsiLinesToHtml(relevantAnsiLines);
+      const ansiLines: string[] = new Array(count);
+      for (let i = 0; i < count; i++) {
+        const lineIdx = start + i;
+        // Serialize just this one line using range option
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const serialized = serializeAddon.serialize({
+          range: { start: lineIdx, end: lineIdx },
+          excludeAltBuffer: true,
+          excludeModes: true,
+        } as any);
+        // Remove trailing newline if present (single line shouldn't have one)
+        ansiLines[i] = serialized.replace(/\n$/, "");
+      }
+      htmlLines = convertAnsiLinesToHtml(ansiLines);
     } catch {
       // Fallback to plain text if serialization fails
       htmlLines = lines.map((l) => escapeHtml(l) || " ");
