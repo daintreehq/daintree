@@ -1,13 +1,25 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { FolderOpen, GitBranch, Check, AlertCircle, Loader2, ChevronDown } from "lucide-react";
+import {
+  FolderOpen,
+  GitBranch,
+  Check,
+  AlertCircle,
+  Loader2,
+  ChevronDown,
+  ChevronsUpDown,
+  Search,
+} from "lucide-react";
 import type { BranchInfo, CreateWorktreeOptions } from "@/types/electron";
 import type { GitHubIssue } from "@shared/types/github";
 import { worktreeClient } from "@/clients";
 import { IssueSelector } from "@/components/GitHub/IssueSelector";
 import { generateBranchSlug } from "@/utils/textParsing";
 import { BRANCH_TYPES } from "@shared/config/branchPrefixes";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { cn } from "@/lib/utils";
+import { toBranchOption, filterBranches, type BranchOption } from "./branchPickerUtils";
 
 interface NewWorktreeDialogProps {
   isOpen: boolean;
@@ -36,7 +48,86 @@ export function NewWorktreeDialog({
   const [selectedIssue, setSelectedIssue] = useState<GitHubIssue | null>(null);
   const [selectedPrefix, setSelectedPrefix] = useState(BRANCH_TYPES[0].prefix);
 
+  const [branchPickerOpen, setBranchPickerOpen] = useState(false);
+  const [branchQuery, setBranchQuery] = useState("");
+  const [selectedIndex, setSelectedIndex] = useState(0);
+
   const newBranchInputRef = useRef<HTMLInputElement>(null);
+  const branchInputRef = useRef<HTMLInputElement>(null);
+  const branchListRef = useRef<HTMLDivElement>(null);
+
+  const branchOptions = useMemo(() => branches.map(toBranchOption), [branches]);
+
+  const filteredBranches = useMemo(
+    () => filterBranches(branchOptions, branchQuery, 200),
+    [branchOptions, branchQuery]
+  );
+
+  const selectedBranchOption = useMemo(
+    () => branchOptions.find((b) => b.name === baseBranch),
+    [branchOptions, baseBranch]
+  );
+
+  useEffect(() => {
+    if (branchPickerOpen && branchInputRef.current) {
+      requestAnimationFrame(() => {
+        branchInputRef.current?.focus();
+      });
+    }
+  }, [branchPickerOpen]);
+
+  useEffect(() => {
+    setBranchQuery("");
+    setSelectedIndex(0);
+  }, [branchPickerOpen]);
+
+  useEffect(() => {
+    setSelectedIndex(0);
+  }, [branchQuery]);
+
+  useEffect(() => {
+    if (branchListRef.current && selectedIndex >= 0 && filteredBranches.length > 0) {
+      const selectedItem = branchListRef.current.children[selectedIndex] as HTMLElement;
+      selectedItem?.scrollIntoView({ block: "nearest" });
+    }
+  }, [selectedIndex, filteredBranches.length]);
+
+  const handleBranchSelect = (option: BranchOption) => {
+    setBaseBranch(option.name);
+    setFromRemote(option.isRemote);
+    setBranchPickerOpen(false);
+  };
+
+  const handleBranchKeyDown = (e: React.KeyboardEvent) => {
+    if (filteredBranches.length === 0) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setBranchPickerOpen(false);
+      }
+      return;
+    }
+
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        setSelectedIndex((prev) => (prev + 1) % filteredBranches.length);
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        setSelectedIndex((prev) => (prev - 1 + filteredBranches.length) % filteredBranches.length);
+        break;
+      case "Enter":
+        e.preventDefault();
+        if (filteredBranches[selectedIndex]) {
+          handleBranchSelect(filteredBranches[selectedIndex]);
+        }
+        break;
+      case "Escape":
+        e.preventDefault();
+        setBranchPickerOpen(false);
+        break;
+    }
+  };
 
   useEffect(() => {
     if (!isOpen) return;
@@ -232,27 +323,84 @@ export function NewWorktreeDialog({
               <label htmlFor="base-branch" className="block text-sm font-medium text-canopy-text">
                 Base Branch
               </label>
-              <select
-                id="base-branch"
-                value={baseBranch}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setBaseBranch(val);
-                  // Auto-update checkbox: if branch is remote, check it; else uncheck it
-                  const branchInfo = branches.find((b) => b.name === val);
-                  setFromRemote(!!branchInfo?.remote);
-                }}
-                className="w-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
-                disabled={creating}
-              >
-                {branches.map((branch) => (
-                  <option key={branch.name} value={branch.name}>
-                    {branch.name}
-                    {branch.current ? " (current)" : ""}
-                    {branch.remote ? " (remote)" : ""}
-                  </option>
-                ))}
-              </select>
+              <Popover open={branchPickerOpen} onOpenChange={setBranchPickerOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    id="base-branch"
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={branchPickerOpen}
+                    aria-haspopup="listbox"
+                    className="w-full justify-between bg-canopy-bg border-canopy-border text-canopy-text hover:bg-canopy-bg hover:text-canopy-text"
+                    disabled={creating}
+                  >
+                    <span className="truncate">
+                      {selectedBranchOption?.labelText || "Select base branch..."}
+                    </span>
+                    <ChevronsUpDown className="h-4 w-4 opacity-50 shrink-0 ml-2" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[400px] p-0" align="start">
+                  <div className="flex items-center border-b border-canopy-border px-3">
+                    <Search className="mr-2 h-4 w-4 opacity-50 shrink-0" />
+                    <input
+                      ref={branchInputRef}
+                      className="flex h-10 w-full rounded-[var(--radius-md)] bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                      placeholder="Search branches..."
+                      value={branchQuery}
+                      onChange={(e) => setBranchQuery(e.target.value)}
+                      onKeyDown={handleBranchKeyDown}
+                      role="combobox"
+                      aria-label="Search base branches"
+                      aria-autocomplete="list"
+                      aria-controls="branch-list"
+                      aria-expanded={branchPickerOpen}
+                      aria-activedescendant={
+                        filteredBranches.length > 0 && selectedIndex >= 0
+                          ? `branch-option-${selectedIndex}`
+                          : undefined
+                      }
+                    />
+                  </div>
+                  <div
+                    ref={branchListRef}
+                    id="branch-list"
+                    role="listbox"
+                    className="max-h-[300px] overflow-y-auto p-1"
+                  >
+                    {filteredBranches.length === 0 ? (
+                      <div className="py-6 text-center text-sm text-muted-foreground">
+                        {branchQuery ? "No branches found" : "No branches available"}
+                      </div>
+                    ) : (
+                      filteredBranches.map((option, index) => (
+                        <div
+                          key={option.name}
+                          id={`branch-option-${index}`}
+                          role="option"
+                          aria-selected={option.name === baseBranch}
+                          onClick={() => handleBranchSelect(option)}
+                          className={cn(
+                            "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
+                            option.name === baseBranch && "bg-canopy-border",
+                            index === selectedIndex && "bg-canopy-accent/10"
+                          )}
+                        >
+                          <span className="truncate">{option.labelText}</span>
+                          {option.name === baseBranch && (
+                            <Check className="h-4 w-4 shrink-0 text-canopy-accent" />
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                  {!branchQuery && filteredBranches.length >= 200 && (
+                    <div className="border-t border-canopy-border px-3 py-2 text-xs text-canopy-text/60">
+                      Showing first 200 branches. Type to narrow results.
+                    </div>
+                  )}
+                </PopoverContent>
+              </Popover>
               <p className="text-xs text-canopy-text/60">
                 The branch to create the new worktree from
               </p>
