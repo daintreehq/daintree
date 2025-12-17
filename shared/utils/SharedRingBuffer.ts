@@ -10,6 +10,7 @@ export class SharedRingBuffer {
 
   private static readonly READ_IDX = 0;
   private static readonly WRITE_IDX = 1;
+  static readonly SIGNAL_IDX = 2;
   private static readonly META_SIZE = 12; // 3 * 4 bytes for Int32Array
 
   constructor(sharedBuffer: SharedArrayBuffer) {
@@ -191,6 +192,30 @@ export class SharedRingBuffer {
    */
   getCapacity(): number {
     return this.capacity;
+  }
+
+  /**
+   * Get the signal view for Atomics.wait/notify operations.
+   * Used by consumers to wait for new data efficiently.
+   */
+  getSignalView(): Int32Array {
+    return this.meta;
+  }
+
+  /**
+   * Notify waiting consumers that new data is available.
+   * Call this after successful write() operations.
+   */
+  notifyConsumer(): void {
+    Atomics.add(this.meta, SharedRingBuffer.SIGNAL_IDX, 1);
+    Atomics.notify(this.meta, SharedRingBuffer.SIGNAL_IDX, 1);
+  }
+
+  /**
+   * Get current signal value for use with Atomics.wait.
+   */
+  getSignalValue(): number {
+    return Atomics.load(this.meta, SharedRingBuffer.SIGNAL_IDX);
   }
 }
 

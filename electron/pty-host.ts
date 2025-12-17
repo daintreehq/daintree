@@ -355,6 +355,9 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
     if (packet) {
       const bytesWritten = visualBuffer.write(packet);
       visualWritten = bytesWritten > 0;
+      if (visualWritten) {
+        visualBuffer.notifyConsumer();
+      }
 
       if (bytesWritten === 0) {
         // Preserve the last packet that failed to write so we can deliver it once
@@ -487,6 +490,7 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
                 if (pendingWritten === 0) {
                   return;
                 }
+                visualBuffer.notifyConsumer();
                 pendingVisualPackets.delete(id);
               }
 
