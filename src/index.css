@@ -55,6 +55,7 @@
   --color-canopy-success: #34d399; /* Emerald-400: Brighter green */
   --color-canopy-warning: #fbbf24; /* Amber-400 */
   --color-canopy-error: #f87171; /* Red-400: Soft Coral */
+  --color-terminal-selection: #064e3b; /* Emerald-950: Terminal selection background */
 
   /* Semantic status colors - for user-facing states (success, error, warning, info) */
   --color-status-success: #34d399; /* Emerald-400: Brighter green */
