@@ -46,7 +46,7 @@ const RESYNC_INTERVAL_MS = 3000;
 const SETTLE_MS = 60; // Quiet period before accepting snapshot
 const BOTTOM_EPSILON_PX = 5;
 const MIN_LINES_FOR_HISTORY = 8; // Minimum lines before allowing history mode
-const HISTORY_ENTRY_THRESHOLD_PX = 30; // Accumulated scroll needed to enter history (~2 lines)
+const HISTORY_ENTRY_THRESHOLD_PX = 1; // Immediate entry on any upward scroll
 const INITIAL_HISTORY_SKIP_LINES = 4; // Number of lines to skip from bottom when entering history mode
 
 // Jump-back persistence for history resync (defense-in-depth, mirrors backend)
