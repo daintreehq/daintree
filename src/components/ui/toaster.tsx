@@ -62,7 +62,7 @@ function Toast({ notification }: { notification: Notification }) {
         "rounded-[var(--radius-lg)] border",
         "p-4 pr-10",
         "text-sm text-canopy-text",
-        "shadow-lg",
+        "shadow-overlay",
         "transition-all duration-300 ease-out",
         isVisible ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0",
         config.containerClass
@@ -92,7 +92,7 @@ function Toast({ notification }: { notification: Notification }) {
           "absolute right-2 top-2 rounded-[var(--radius-sm)] p-1",
           "text-canopy-text/40 transition-colors",
           "hover:text-canopy-text hover:bg-white/5",
-          "focus:outline-none focus:ring-1 focus:ring-canopy-border"
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
         )}
       >
         <X className="h-4 w-4" />

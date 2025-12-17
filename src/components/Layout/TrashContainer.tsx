@@ -53,13 +53,13 @@ export function TrashContainer({ trashedTerminals }: TrashContainerProps) {
         id={contentId}
         role="dialog"
         aria-label="Recently closed terminals"
-        className="w-80 p-0 border-canopy-border bg-canopy-sidebar shadow-2xl"
+        className="w-80 p-0"
         side="top"
         align="end"
         sideOffset={8}
       >
         <div className="flex flex-col">
-          <div className="px-3 py-2 border-b border-canopy-border bg-canopy-bg/50 flex justify-between items-center">
+          <div className="px-3 py-2 border-b border-divider bg-canopy-bg/50 flex justify-between items-center">
             <span className="text-xs font-medium text-canopy-text/70">Recently Closed</span>
             <span className="text-[11px] text-canopy-text/40">Auto-clears</span>
           </div>

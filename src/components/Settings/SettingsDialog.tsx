@@ -101,24 +101,24 @@ export function SettingsDialog({
       onClick={onClose}
     >
       <div
-        className="bg-canopy-sidebar border border-canopy-border rounded-[var(--radius-xl)] shadow-xl w-full max-w-4xl mx-4 h-[75vh] min-h-xl max-h-4xl flex overflow-hidden"
+        className="bg-canopy-sidebar border border-overlay rounded-[var(--radius-xl)] shadow-modal w-full max-w-4xl mx-4 h-[75vh] min-h-xl max-h-4xl flex overflow-hidden"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-title"
       >
-        <div className="w-48 border-r border-canopy-border bg-canopy-bg/50 p-4 flex flex-col gap-2 shrink-0">
+        <div className="w-48 border-r border-divider bg-canopy-bg/50 p-4 flex flex-col gap-2 shrink-0">
           <h2 id="settings-title" className="text-sm font-semibold text-canopy-text mb-4 px-2">
             Settings
           </h2>
           <button
             onClick={() => setActiveTab("general")}
             className={cn(
-              "text-left px-3 py-2 rounded-[var(--radius-md)] text-sm transition-colors",
+              "relative text-left px-3 py-2 rounded-[var(--radius-md)] text-sm transition-colors",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
               activeTab === "general"
-                ? "bg-canopy-accent/10 text-canopy-accent"
-                : "text-canopy-text/60 hover:bg-canopy-border hover:text-canopy-text"
+                ? "bg-white/[0.03] text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+                : "text-canopy-text/60 hover:bg-white/[0.03] hover:text-canopy-text"
             )}
           >
             General
@@ -126,11 +126,11 @@ export function SettingsDialog({
           <button
             onClick={() => setActiveTab("keyboard")}
             className={cn(
-              "text-left px-3 py-2 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2",
+              "relative text-left px-3 py-2 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
               activeTab === "keyboard"
-                ? "bg-canopy-accent/10 text-canopy-accent"
-                : "text-canopy-text/60 hover:bg-canopy-border hover:text-canopy-text"
+                ? "bg-white/[0.03] text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+                : "text-canopy-text/60 hover:bg-white/[0.03] hover:text-canopy-text"
             )}
           >
             <Keyboard className="w-4 h-4" />
@@ -139,11 +139,11 @@ export function SettingsDialog({
           <button
             onClick={() => setActiveTab("terminal")}
             className={cn(
-              "text-left px-3 py-2 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2",
+              "relative text-left px-3 py-2 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
               activeTab === "terminal"
-                ? "bg-canopy-accent/10 text-canopy-accent"
-                : "text-canopy-text/60 hover:bg-canopy-border hover:text-canopy-text"
+                ? "bg-white/[0.03] text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+                : "text-canopy-text/60 hover:bg-white/[0.03] hover:text-canopy-text"
             )}
           >
             <LayoutGrid className="w-4 h-4" />
@@ -152,11 +152,11 @@ export function SettingsDialog({
           <button
             onClick={() => setActiveTab("terminalAppearance")}
             className={cn(
-              "text-left px-3 py-2 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2",
+              "relative text-left px-3 py-2 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
               activeTab === "terminalAppearance"
-                ? "bg-canopy-accent/10 text-canopy-accent"
-                : "text-canopy-text/60 hover:bg-canopy-border hover:text-canopy-text"
+                ? "bg-white/[0.03] text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+                : "text-canopy-text/60 hover:bg-white/[0.03] hover:text-canopy-text"
             )}
           >
             <Terminal className="w-4 h-4" />
@@ -165,11 +165,11 @@ export function SettingsDialog({
           <button
             onClick={() => setActiveTab("worktree")}
             className={cn(
-              "text-left px-3 py-2 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2",
+              "relative text-left px-3 py-2 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
               activeTab === "worktree"
-                ? "bg-canopy-accent/10 text-canopy-accent"
-                : "text-canopy-text/60 hover:bg-canopy-border hover:text-canopy-text"
+                ? "bg-white/[0.03] text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+                : "text-canopy-text/60 hover:bg-white/[0.03] hover:text-canopy-text"
             )}
           >
             <GitBranch className="w-4 h-4" />
@@ -178,11 +178,11 @@ export function SettingsDialog({
           <button
             onClick={() => setActiveTab("agents")}
             className={cn(
-              "text-left px-3 py-2 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2",
+              "relative text-left px-3 py-2 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
               activeTab === "agents"
-                ? "bg-canopy-accent/10 text-canopy-accent"
-                : "text-canopy-text/60 hover:bg-canopy-border hover:text-canopy-text"
+                ? "bg-white/[0.03] text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+                : "text-canopy-text/60 hover:bg-white/[0.03] hover:text-canopy-text"
             )}
           >
             <Bot className="w-4 h-4" />
@@ -191,11 +191,11 @@ export function SettingsDialog({
           <button
             onClick={() => setActiveTab("github")}
             className={cn(
-              "text-left px-3 py-2 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2",
+              "relative text-left px-3 py-2 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
               activeTab === "github"
-                ? "bg-canopy-accent/10 text-canopy-accent"
-                : "text-canopy-text/60 hover:bg-canopy-border hover:text-canopy-text"
+                ? "bg-white/[0.03] text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+                : "text-canopy-text/60 hover:bg-white/[0.03] hover:text-canopy-text"
             )}
           >
             <Github className="w-4 h-4" />
@@ -204,11 +204,11 @@ export function SettingsDialog({
           <button
             onClick={() => setActiveTab("sidecar")}
             className={cn(
-              "text-left px-3 py-2 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2",
+              "relative text-left px-3 py-2 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
               activeTab === "sidecar"
-                ? "bg-canopy-accent/10 text-canopy-accent"
-                : "text-canopy-text/60 hover:bg-canopy-border hover:text-canopy-text"
+                ? "bg-white/[0.03] text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+                : "text-canopy-text/60 hover:bg-white/[0.03] hover:text-canopy-text"
             )}
           >
             <PanelRight className="w-4 h-4" />
@@ -217,11 +217,11 @@ export function SettingsDialog({
           <button
             onClick={() => setActiveTab("troubleshooting")}
             className={cn(
-              "text-left px-3 py-2 rounded-[var(--radius-md)] text-sm transition-colors",
+              "relative text-left px-3 py-2 rounded-[var(--radius-md)] text-sm transition-colors",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
               activeTab === "troubleshooting"
-                ? "bg-canopy-accent/10 text-canopy-accent"
-                : "text-canopy-text/60 hover:bg-canopy-border hover:text-canopy-text"
+                ? "bg-white/[0.03] text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+                : "text-canopy-text/60 hover:bg-white/[0.03] hover:text-canopy-text"
             )}
           >
             Troubleshooting
@@ -229,7 +229,7 @@ export function SettingsDialog({
         </div>
 
         <div className="flex-1 flex flex-col min-w-0">
-          <div className="flex items-center justify-between px-6 py-4 border-b border-canopy-border bg-canopy-sidebar/50 shrink-0">
+          <div className="flex items-center justify-between px-6 py-4 border-b border-divider bg-canopy-sidebar/50 shrink-0">
             <h3 className="text-lg font-medium text-canopy-text capitalize">
               {activeTab === "agents"
                 ? "Agent Settings"

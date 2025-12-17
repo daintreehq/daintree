@@ -249,7 +249,7 @@ export function ProjectSwitcher() {
         disabled={isLoading}
         className={cn(
           "gap-2 p-2 cursor-pointer mb-0.5 rounded-[var(--radius-md)] transition-colors",
-          isActive ? "bg-accent/50" : "focus:bg-accent/30"
+          isActive && "bg-white/[0.03]"
         )}
       >
         <div className="w-3 flex items-center justify-center shrink-0">
@@ -360,7 +360,7 @@ export function ProjectSwitcher() {
                 <DropdownMenuItem
                   key={project.id}
                   onClick={() => handleProjectSwitch(project.id)}
-                  className="gap-3 p-2 group cursor-pointer focus:bg-canopy-accent/10"
+                  className="gap-3 p-2 group cursor-pointer"
                 >
                   {renderIcon(project.emoji || "🌲", project.color, "h-8 w-8 text-base")}
                   <div className="flex flex-col min-w-0 flex-1">
@@ -410,7 +410,7 @@ export function ProjectSwitcher() {
         <DropdownMenuTrigger asChild>
           <Button
             variant="ghost"
-            className="w-full justify-between px-2 h-14 hover:bg-canopy-bg/50 group transition-all duration-200 active:scale-100"
+            className="w-full justify-between px-2 h-14 group transition-all duration-200 active:scale-100"
             disabled={isLoading}
           >
             <div className="flex items-center gap-3 text-left min-w-0">
@@ -438,10 +438,7 @@ export function ProjectSwitcher() {
 
           <DropdownMenuSeparator className="my-1 bg-border/40" />
 
-          <DropdownMenuItem
-            onClick={addProject}
-            className="gap-3 p-2 cursor-pointer focus:bg-accent/30"
-          >
+          <DropdownMenuItem onClick={addProject} className="gap-3 p-2 cursor-pointer">
             <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
               <Plus className="h-4 w-4" />
             </div>

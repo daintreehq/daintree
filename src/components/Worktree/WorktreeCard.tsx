@@ -1194,7 +1194,7 @@ export function WorktreeCard({
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="start"
-              className="w-[var(--radix-dropdown-menu-trigger-width)] active-sessions-menu !bg-canopy-bg !border-canopy-border !shadow-2xl"
+              className="w-[var(--radix-dropdown-menu-trigger-width)] active-sessions-menu"
               sideOffset={6}
               onClick={(e) => e.stopPropagation()}
             >
@@ -1207,15 +1207,15 @@ export function WorktreeCard({
                   <DropdownMenuItem
                     key={term.id}
                     onSelect={() => handleTerminalSelect(term)}
-                    className="flex items-center justify-between gap-2.5 px-2.5 py-1.5 cursor-pointer group focus:bg-white/5 focus:text-inherit data-[highlighted]:bg-white/5 data-[highlighted]:text-inherit"
+                    className="flex items-center justify-between gap-2.5 cursor-pointer group"
                   >
                     {/* LEFT SIDE: Icon + Title */}
                     <div className="flex items-center gap-2 min-w-0 flex-1">
-                      <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
+                      <div className="shrink-0 opacity-60 group-hover:opacity-100 group-data-[highlighted]:opacity-100 transition-opacity">
                         <TerminalIcon type={term.type} agentId={term.agentId} className="w-3 h-3" />
                       </div>
                       <div className="flex flex-col min-w-0">
-                        <span className="text-xs font-medium truncate text-canopy-text/70 group-hover:text-canopy-text transition-colors">
+                        <span className="text-xs font-medium truncate text-canopy-text/70 group-hover:text-canopy-text group-data-[highlighted]:text-canopy-text transition-colors">
                           {term.title}
                         </span>
                         {term.type === "terminal" &&
@@ -1270,7 +1270,7 @@ export function WorktreeCard({
 
                       {/* Location Indicator (Grid vs Dock) */}
                       <div
-                        className="text-muted-foreground/40 group-hover:text-muted-foreground/60 transition-colors"
+                        className="text-muted-foreground/40 group-hover:text-muted-foreground/60 group-data-[highlighted]:text-muted-foreground/60 transition-colors"
                         title={term.location === "dock" ? "Docked" : "On Grid"}
                       >
                         {term.location === "dock" ? (

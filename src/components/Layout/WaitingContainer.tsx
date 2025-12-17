@@ -62,7 +62,7 @@ export function WaitingContainer() {
         id={contentId}
         role="dialog"
         aria-label="Waiting terminals"
-        className="w-80 p-0 border-canopy-border bg-canopy-sidebar shadow-2xl"
+        className="w-80 p-0"
         side="top"
         align="end"
         sideOffset={8}
@@ -70,7 +70,7 @@ export function WaitingContainer() {
         onCloseAutoFocus={(e) => e.preventDefault()}
       >
         <div className="flex flex-col">
-          <div className="px-3 py-2 border-b border-canopy-border bg-canopy-bg/50 flex justify-between items-center">
+          <div className="px-3 py-2 border-b border-divider bg-canopy-bg/50 flex justify-between items-center">
             <span className="text-xs font-medium text-canopy-text/70">Waiting For Input</span>
           </div>
 

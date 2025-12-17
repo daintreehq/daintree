@@ -41,7 +41,7 @@ export function ConfirmDialog({
         <Button
           variant="ghost"
           onClick={onCancel}
-          className="text-canopy-text hover:bg-canopy-border"
+          className="text-canopy-text/70 hover:text-canopy-text"
           ref={cancelButtonRef}
         >
           {cancelLabel}

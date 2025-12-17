@@ -112,10 +112,10 @@ export function NewTerminalPalette({
                 role="option"
                 aria-selected={index === selectedIndex}
                 className={cn(
-                  "w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors duration-100",
+                  "relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border",
                   index === selectedIndex
-                    ? "bg-canopy-accent/20 border border-canopy-accent"
-                    : "hover:bg-canopy-sidebar border border-transparent"
+                    ? "bg-white/[0.03] border-overlay text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+                    : "border-transparent text-canopy-text/70 hover:bg-white/[0.02] hover:text-canopy-text"
                 )}
                 onClick={() => onSelect(option)}
               >
