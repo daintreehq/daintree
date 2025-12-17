@@ -162,11 +162,14 @@ export const terminalClient = {
   },
 
   /**
-   * Get SharedArrayBuffer for zero-copy terminal I/O.
-   * Returns null if SharedArrayBuffer is unavailable (fallback to IPC).
+   * Get SharedArrayBuffers for zero-copy terminal I/O.
+   * Returns empty arrays if SharedArrayBuffer is unavailable (fallback to IPC).
    */
-  getSharedBuffer: (): Promise<SharedArrayBuffer | null> => {
-    return window.electron.terminal.getSharedBuffer();
+  getSharedBuffers: (): Promise<{
+    visualBuffers: SharedArrayBuffer[];
+    signalBuffer: SharedArrayBuffer | null;
+  }> => {
+    return window.electron.terminal.getSharedBuffers();
   },
 
   /**

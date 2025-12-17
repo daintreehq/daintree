@@ -178,11 +178,14 @@ export class PtyClient extends EventEmitter {
   private readyPromise: Promise<void>;
   private readyResolve: (() => void) | null = null;
 
-  /** SharedArrayBuffer for zero-copy terminal I/O (null if unavailable) */
-  private sharedBuffer: SharedArrayBuffer | null = null;
-  /** SharedArrayBuffer for semantic analysis (separate from visual buffer) */
+  /** SharedArrayBuffer array for zero-copy terminal I/O (null if unavailable) */
+  private visualBuffers: SharedArrayBuffer[] = [];
+  /** SharedArrayBuffer for semantic analysis (separate from visual buffers) */
   private analysisBuffer: SharedArrayBuffer | null = null;
+  /** SharedArrayBuffer for global wake signal */
+  private visualSignalBuffer: SharedArrayBuffer | null = null;
   private sharedBufferEnabled = false;
+  private readonly VISUAL_SHARD_COUNT = 4;
 
   /** Callback to notify renderer when MessagePort needs to be refreshed */
   private onPortRefresh: (() => void) | null = null;
@@ -200,14 +203,21 @@ export class PtyClient extends EventEmitter {
     });
 
     try {
-      this.sharedBuffer = SharedRingBuffer.create(DEFAULT_RING_BUFFER_SIZE);
+      const perShardSize = Math.floor(DEFAULT_RING_BUFFER_SIZE / this.VISUAL_SHARD_COUNT);
+      for (let i = 0; i < this.VISUAL_SHARD_COUNT; i++) {
+        this.visualBuffers.push(SharedRingBuffer.create(perShardSize));
+      }
       this.analysisBuffer = SharedRingBuffer.create(DEFAULT_RING_BUFFER_SIZE);
+      this.visualSignalBuffer = new SharedArrayBuffer(4);
       this.sharedBufferEnabled = true;
-      console.log("[PtyClient] SharedArrayBuffer enabled (dual 10MB ring buffers)");
+      console.log(
+        `[PtyClient] SharedArrayBuffer enabled (${this.VISUAL_SHARD_COUNT} visual shards × ${Math.floor(perShardSize / 1024 / 1024)}MB + 10MB analysis)`
+      );
     } catch (error) {
       console.warn("[PtyClient] SharedArrayBuffer unavailable, using IPC fallback:", error);
-      this.sharedBuffer = null;
+      this.visualBuffers = [];
       this.analysisBuffer = null;
+      this.visualSignalBuffer = null;
       this.sharedBufferEnabled = false;
     }
 
@@ -322,23 +332,26 @@ export class PtyClient extends EventEmitter {
       this.handleHostEvent(msg);
     });
 
-    // Send both SharedArrayBuffers to host immediately after spawn
-    if (this.sharedBuffer && this.analysisBuffer) {
+    // Send all SharedArrayBuffers to host immediately after spawn
+    if (this.visualBuffers.length > 0 && this.analysisBuffer && this.visualSignalBuffer) {
       try {
         this.child.postMessage({
           type: "init-buffers",
-          visualBuffer: this.sharedBuffer,
+          visualBuffers: this.visualBuffers,
           analysisBuffer: this.analysisBuffer,
+          visualSignalBuffer: this.visualSignalBuffer,
         });
-        console.log("[PtyClient] Dual SharedArrayBuffers sent to Pty Host");
+        console.log(
+          `[PtyClient] SharedArrayBuffers sent to Pty Host (${this.visualBuffers.length} visual shards + analysis + signal)`
+        );
       } catch (error) {
         console.warn(
           "[PtyClient] SharedArrayBuffer transfer failed (using IPC fallback):",
           error instanceof Error ? error.message : String(error)
         );
-        // Fallback to IPC-only mode
-        this.sharedBuffer = null;
+        this.visualBuffers = [];
         this.analysisBuffer = null;
+        this.visualSignalBuffer = null;
         this.sharedBufferEnabled = false;
       }
     }
@@ -1279,11 +1292,17 @@ export class PtyClient extends EventEmitter {
   }
 
   /**
-   * Get the SharedArrayBuffer for zero-copy terminal I/O (visual rendering).
-   * Returns null if SharedArrayBuffer is not available.
+   * Get the SharedArrayBuffers for zero-copy terminal I/O (visual rendering).
+   * Returns empty array if SharedArrayBuffer is not available.
    */
-  getSharedBuffer(): SharedArrayBuffer | null {
-    return this.sharedBuffer;
+  getSharedBuffers(): {
+    visualBuffers: SharedArrayBuffer[];
+    signalBuffer: SharedArrayBuffer | null;
+  } {
+    return {
+      visualBuffers: this.visualBuffers,
+      signalBuffer: this.visualSignalBuffer,
+    };
   }
 
   /**

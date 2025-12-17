@@ -117,7 +117,7 @@ const CHANNELS = {
   TERMINAL_GET_SERIALIZED_STATE: "terminal:get-serialized-state",
   TERMINAL_GET_SNAPSHOT: "terminal:get-snapshot",
   TERMINAL_GET_CLEAN_LOG: "terminal:get-clean-log",
-  TERMINAL_GET_SHARED_BUFFER: "terminal:get-shared-buffer",
+  TERMINAL_GET_SHARED_BUFFERS: "terminal:get-shared-buffers",
   TERMINAL_GET_ANALYSIS_BUFFER: "terminal:get-analysis-buffer",
   TERMINAL_GET_INFO: "terminal:get-info",
   TERMINAL_ACKNOWLEDGE_DATA: "terminal:acknowledge-data",
@@ -412,8 +412,10 @@ const api: ElectronAPI = {
 
     getInfo: (id: string) => _typedInvoke(CHANNELS.TERMINAL_GET_INFO, id),
 
-    getSharedBuffer: (): Promise<SharedArrayBuffer | null> =>
-      ipcRenderer.invoke(CHANNELS.TERMINAL_GET_SHARED_BUFFER),
+    getSharedBuffers: (): Promise<{
+      visualBuffers: SharedArrayBuffer[];
+      signalBuffer: SharedArrayBuffer | null;
+    }> => ipcRenderer.invoke(CHANNELS.TERMINAL_GET_SHARED_BUFFERS),
 
     getAnalysisBuffer: (): Promise<SharedArrayBuffer | null> =>
       ipcRenderer.invoke(CHANNELS.TERMINAL_GET_ANALYSIS_BUFFER),

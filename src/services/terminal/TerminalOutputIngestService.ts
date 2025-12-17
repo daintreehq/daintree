@@ -29,8 +29,8 @@ export class TerminalOutputIngestService {
 
   private async initializeImpl(): Promise<void> {
     try {
-      const buffer = await terminalClient.getSharedBuffer();
-      if (buffer) {
+      const { visualBuffers, signalBuffer } = await terminalClient.getSharedBuffers();
+      if (visualBuffers.length > 0 && signalBuffer) {
         this.sabAvailable = true;
         this.worker = new Worker(
           new URL("../../workers/terminalOutput.worker.ts", import.meta.url),
@@ -49,17 +49,21 @@ export class TerminalOutputIngestService {
         this.worker.onerror = (error) => {
           console.error("[TerminalOutputIngestService] Worker error:", error);
           this.pollingActive = false;
+          this.sabAvailable = false;
           this.worker?.terminate();
           this.worker = null;
         };
 
         const initMessage: WorkerInboundMessage = {
           type: "INIT_BUFFER",
-          buffer,
+          buffers: visualBuffers,
+          signalBuffer,
         };
         this.worker.postMessage(initMessage);
         this.pollingActive = true;
-        console.log("[TerminalOutputIngestService] Worker-based SAB ingestion enabled");
+        console.log(
+          `[TerminalOutputIngestService] Worker-based SAB ingestion enabled (${visualBuffers.length} shards)`
+        );
       } else {
         console.log("[TerminalOutputIngestService] SharedArrayBuffer unavailable, using IPC");
       }
@@ -129,7 +133,9 @@ export class TerminalOutputIngestService {
       type: "STOP",
     };
     this.worker.postMessage(message);
-    this.worker.terminate();
-    this.worker = null;
+    setTimeout(() => {
+      this.worker?.terminate();
+      this.worker = null;
+    }, 50);
   }
 }

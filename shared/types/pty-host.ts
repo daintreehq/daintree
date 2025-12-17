@@ -78,7 +78,12 @@ export type PtyHostRequest =
       options?: TerminalGetScreenSnapshotOptions;
     }
   | { type: "get-clean-log"; id: string; requestId: string; sinceSequence?: number; limit?: number }
-  | { type: "init-buffers"; visualBuffer: SharedArrayBuffer; analysisBuffer: SharedArrayBuffer }
+  | {
+      type: "init-buffers";
+      visualBuffers: SharedArrayBuffer[];
+      analysisBuffer: SharedArrayBuffer;
+      visualSignalBuffer: SharedArrayBuffer;
+    }
   | { type: "connect-port" }
   | { type: "get-terminal-info"; id: string; requestId: string }
   | { type: "force-resume"; id: string };

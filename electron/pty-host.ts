@@ -19,6 +19,7 @@ import { PtyPool, getPtyPool } from "./services/PtyPool.js";
 import { ProcessTreeCache } from "./services/ProcessTreeCache.js";
 import { events } from "./services/events.js";
 import { SharedRingBuffer, PacketFramer } from "../shared/utils/SharedRingBuffer.js";
+import { selectShard } from "../shared/utils/shardSelection.js";
 import type { AgentEvent } from "./services/AgentStateMachine.js";
 import type {
   PtyHostEvent,
@@ -217,9 +218,10 @@ let ptyPool: PtyPool | null = null;
 const resourceGovernor = new ResourceGovernor();
 
 // Zero-copy ring buffers for terminal I/O (set via init-buffers message)
-// Visual buffer: consumed by renderer (xterm.js) - critical path
+// Visual buffers: consumed by renderer (xterm.js) - critical path, sharded for isolation
 // Analysis buffer: consumed by Web Worker - best-effort, can drop frames
-let visualBuffer: SharedRingBuffer | null = null;
+let visualBuffers: SharedRingBuffer[] = [];
+let visualSignalView: Int32Array | null = null;
 let analysisBuffer: SharedRingBuffer | null = null;
 const packetFramer = new PacketFramer();
 const textDecoder = new TextDecoder();
@@ -350,23 +352,23 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
   // This ensures terminal output reaches xterm.js with minimal latency.
   let visualWritten = false;
 
-  if (!skipVisualStream && visualBuffer) {
+  if (!skipVisualStream && visualBuffers.length > 0) {
+    const shardIndex = selectShard(id, visualBuffers.length);
+    const shard = visualBuffers[shardIndex];
+
     const packet = packetFramer.frame(id, data);
     if (packet) {
-      const bytesWritten = visualBuffer.write(packet);
+      const bytesWritten = shard.write(packet);
       visualWritten = bytesWritten > 0;
-      if (visualWritten) {
-        visualBuffer.notifyConsumer();
+      if (visualWritten && visualSignalView) {
+        Atomics.add(visualSignalView, 0, 1);
+        Atomics.notify(visualSignalView, 0, 1);
       }
 
       if (bytesWritten === 0) {
-        // Preserve the last packet that failed to write so we can deliver it once
-        // buffer utilization drops, avoiding silent output loss under backpressure.
-        pendingVisualPackets.set(id, packet);
-
         // Ring buffer is full - apply backpressure by pausing the PTY
         if (!pausedTerminals.has(id)) {
-          const utilization = visualBuffer.getUtilization();
+          const utilization = shard.getUtilization();
           console.warn(
             `[PtyHost] Visual buffer full (${utilization.toFixed(1)}% utilized). Pausing PTY ${id} for backpressure.`
           );
@@ -383,10 +385,13 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
             terminal.ptyProcess.pause();
           } catch (error) {
             console.error(`[PtyHost] Failed to pause PTY ${id}:`, error);
-            // If pause fails, fall back to IPC to avoid data loss
             sendEvent({ type: "data", id, data: toStringForIpc(data) });
             return;
           }
+
+          // Preserve the last packet that failed to write so we can deliver it once
+          // buffer utilization drops, avoiding silent output loss under backpressure.
+          pendingVisualPackets.set(id, packet);
 
           // Track when we started pausing for timeout safety
           const pauseStartTime = Date.now();
@@ -397,13 +402,13 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
 
           // Start monitoring for buffer clearance
           const checkInterval = setInterval(() => {
-            if (!visualBuffer) {
+            if (visualBuffers.length === 0) {
               // Buffer disappeared - resume PTY if still exists
               const terminal = ptyManager.getTerminal(id);
               if (terminal?.ptyProcess) {
                 try {
                   terminal.ptyProcess.resume();
-                  console.log(`[PtyHost] Visual buffer removed. Resumed PTY ${id}`);
+                  console.log(`[PtyHost] Visual buffers removed. Resumed PTY ${id}`);
                   // Emit resume status
                   const pauseDuration = Date.now() - (pauseStartTimes.get(id) ?? pauseStartTime);
                   emitTerminalStatus(id, "running", undefined, pauseDuration);
@@ -421,7 +426,9 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
               return;
             }
 
-            const currentUtilization = visualBuffer.getUtilization();
+            const shardIndex = selectShard(id, visualBuffers.length);
+            const shard = visualBuffers[shardIndex];
+            const currentUtilization = shard.getUtilization();
             const pauseDuration = Date.now() - pauseStartTime;
 
             // If the stream is stalled for too long, stop streaming for this terminal
@@ -486,11 +493,14 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
             if (currentUtilization < BACKPRESSURE_RESUME_THRESHOLD) {
               const pending = pendingVisualPackets.get(id);
               if (pending) {
-                const pendingWritten = visualBuffer.write(pending);
+                const pendingWritten = shard.write(pending);
                 if (pendingWritten === 0) {
                   return;
                 }
-                visualBuffer.notifyConsumer();
+                if (visualSignalView) {
+                  Atomics.add(visualSignalView, 0, 1);
+                  Atomics.notify(visualSignalView, 0, 1);
+                }
                 pendingVisualPackets.delete(id);
               }
 
@@ -812,14 +822,25 @@ port.on("message", async (rawMsg: any) => {
         break;
 
       case "init-buffers": {
-        const visualOk = msg.visualBuffer instanceof SharedArrayBuffer;
+        const visualOk =
+          Array.isArray(msg.visualBuffers) &&
+          msg.visualBuffers.every((b: unknown) => b instanceof SharedArrayBuffer);
         const analysisOk = msg.analysisBuffer instanceof SharedArrayBuffer;
+        const signalOk = msg.visualSignalBuffer instanceof SharedArrayBuffer;
 
         if (visualOk) {
-          visualBuffer = new SharedRingBuffer(msg.visualBuffer);
+          visualBuffers = msg.visualBuffers.map(
+            (buf: SharedArrayBuffer) => new SharedRingBuffer(buf)
+          );
           ptyManager.setSabMode(true);
         } else {
-          console.warn("[PtyHost] init-buffers: visualBuffer is not SharedArrayBuffer (IPC mode)");
+          console.warn("[PtyHost] init-buffers: visualBuffers missing or invalid (IPC mode)");
+        }
+
+        if (signalOk) {
+          visualSignalView = new Int32Array(msg.visualSignalBuffer);
+        } else {
+          console.warn("[PtyHost] init-buffers: visualSignalBuffer missing or invalid");
         }
 
         if (analysisOk) {
@@ -829,7 +850,7 @@ port.on("message", async (rawMsg: any) => {
         }
 
         console.log(
-          `[PtyHost] Buffers initialized: visual=${visualOk ? "SAB" : "IPC"} analysis=${
+          `[PtyHost] Buffers initialized: visual=${visualOk ? `${visualBuffers.length} shards` : "IPC"} signal=${signalOk ? "SAB" : "disabled"} analysis=${
             analysisOk ? "SAB" : "disabled"
           } sabMode=${ptyManager.isSabMode()}`
         );
@@ -1232,7 +1253,11 @@ port.on("message", async (rawMsg: any) => {
             pauseStartTimes.delete(msg.id);
 
             // Emit resume status
-            emitTerminalStatus(msg.id, "running", visualBuffer?.getUtilization(), pauseDuration);
+            const utilization =
+              visualBuffers.length > 0
+                ? visualBuffers[selectShard(msg.id, visualBuffers.length)].getUtilization()
+                : undefined;
+            emitTerminalStatus(msg.id, "running", utilization, pauseDuration);
           } catch (error) {
             console.error(`[PtyHost] Failed to force resume PTY ${msg.id}:`, error);
           }

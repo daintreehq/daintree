@@ -44,12 +44,13 @@ type FrameQueue = {
 };
 
 export class TerminalDataBuffer {
-  private ringBuffer: SharedRingBuffer | null = null;
-  private packetParser = new PacketParser();
+  private ringBuffers: SharedRingBuffer[] = [];
+  private packetParsers: PacketParser[] = [];
   private pollingActive = false;
   private pollTimeoutId: number | null = null;
   private sharedBufferEnabled = false;
   private idlePollCount = 0;
+  private nextShardIndex = 0;
 
   private buffers = new Map<string, BufferEntry>();
   private frameQueues = new Map<string, FrameQueue>();
@@ -59,12 +60,15 @@ export class TerminalDataBuffer {
 
   public async initialize(): Promise<void> {
     try {
-      const buffer = await terminalClient.getSharedBuffer();
-      if (buffer) {
-        this.ringBuffer = new SharedRingBuffer(buffer);
+      const { visualBuffers } = await terminalClient.getSharedBuffers();
+      if (visualBuffers.length > 0) {
+        this.ringBuffers = visualBuffers.map((buf) => new SharedRingBuffer(buf));
+        this.packetParsers = visualBuffers.map(() => new PacketParser());
         this.sharedBufferEnabled = true;
         this.startPolling();
-        console.log("[TerminalDataBuffer] SharedArrayBuffer polling enabled");
+        console.log(
+          `[TerminalDataBuffer] SharedArrayBuffer polling enabled (${visualBuffers.length} shards)`
+        );
       } else {
         console.log("[TerminalDataBuffer] SharedArrayBuffer unavailable, using IPC");
       }
@@ -84,7 +88,7 @@ export class TerminalDataBuffer {
   public boost(): void {
     this.idlePollCount = 0;
 
-    if (!this.pollingActive || !this.ringBuffer) return;
+    if (!this.pollingActive || this.ringBuffers.length === 0) return;
     if (this.pollTimeoutId === null) return;
 
     window.clearTimeout(this.pollTimeoutId);
@@ -97,7 +101,7 @@ export class TerminalDataBuffer {
   }
 
   private startPolling(): void {
-    if (this.pollingActive || !this.ringBuffer) return;
+    if (this.pollingActive || this.ringBuffers.length === 0) return;
     this.pollingActive = true;
     this.idlePollCount = 0;
     this.poll();
@@ -113,6 +117,9 @@ export class TerminalDataBuffer {
     for (const id of [...this.buffers.keys()]) {
       this.flushBuffer(id);
     }
+
+    this.interactiveUntil.clear();
+    this.frameQueues.clear();
   }
 
   public bufferData(id: string, data: string | Uint8Array): void {
@@ -314,28 +321,41 @@ export class TerminalDataBuffer {
   }
 
   private poll = (): void => {
-    if (!this.pollingActive || !this.ringBuffer) return;
+    if (!this.pollingActive || this.ringBuffers.length === 0) return;
     this.pollTimeoutId = null;
 
     let hasData = false;
     let reads = 0;
     let bytesReadThisTick = 0;
+    let consecutiveEmptyShards = 0;
 
     while (reads < MAX_READS_PER_TICK && bytesReadThisTick < MAX_SAB_BYTES_PER_TICK) {
       const remainingBudget = MAX_SAB_BYTES_PER_TICK - bytesReadThisTick;
       if (remainingBudget <= 0) {
         break;
       }
+
+      const shardIndex = this.nextShardIndex % this.ringBuffers.length;
+      const shard = this.ringBuffers[shardIndex];
+      const parser = this.packetParsers[shardIndex];
+      this.nextShardIndex = (this.nextShardIndex + 1) % this.ringBuffers.length;
+
       const perReadBudget = Math.min(MAX_SAB_READ_BYTES, remainingBudget);
-      const data = this.ringBuffer.readUpTo(perReadBudget);
+      const data = shard.readUpTo(perReadBudget);
+
       if (!data) {
-        break;
+        consecutiveEmptyShards += 1;
+        if (consecutiveEmptyShards >= this.ringBuffers.length) {
+          break;
+        }
+        continue;
       }
 
       hasData = true;
+      consecutiveEmptyShards = 0;
       reads += 1;
       bytesReadThisTick += data.byteLength;
-      const packets = this.packetParser.parse(data);
+      const packets = parser.parse(data);
 
       for (const packet of packets) {
         this.bufferData(packet.id, packet.data);

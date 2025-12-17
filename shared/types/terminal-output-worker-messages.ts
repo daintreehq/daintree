@@ -1,5 +1,9 @@
 export type WorkerInboundMessage =
-  | { type: "INIT_BUFFER"; buffer: SharedArrayBuffer }
+  | {
+      type: "INIT_BUFFER";
+      buffers: SharedArrayBuffer[];
+      signalBuffer: SharedArrayBuffer;
+    }
   | { type: "SET_INTERACTIVE"; id: string; ttlMs: number }
   | { type: "FLUSH_TERMINAL"; id: string }
   | { type: "RESET_TERMINAL"; id: string }

@@ -31,7 +31,7 @@ export const CHANNELS = {
   TERMINAL_GET_SERIALIZED_STATE: "terminal:get-serialized-state",
   TERMINAL_GET_SNAPSHOT: "terminal:get-snapshot",
   TERMINAL_GET_CLEAN_LOG: "terminal:get-clean-log",
-  TERMINAL_GET_SHARED_BUFFER: "terminal:get-shared-buffer",
+  TERMINAL_GET_SHARED_BUFFERS: "terminal:get-shared-buffers",
   TERMINAL_GET_ANALYSIS_BUFFER: "terminal:get-analysis-buffer",
   TERMINAL_GET_INFO: "terminal:get-info",
   TERMINAL_ACKNOWLEDGE_DATA: "terminal:acknowledge-data",

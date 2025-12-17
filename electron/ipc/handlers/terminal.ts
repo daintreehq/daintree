@@ -619,17 +619,20 @@ export function registerTerminalHandlers(deps: HandlerDependencies): () => void 
   ipcMain.handle(CHANNELS.TERMINAL_GET_INFO, handleTerminalGetInfo);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_INFO));
 
-  // Get SharedArrayBuffer for zero-copy terminal I/O (visual rendering)
-  const handleTerminalGetSharedBuffer = async (): Promise<SharedArrayBuffer | null> => {
+  // Get SharedArrayBuffers for zero-copy terminal I/O (visual rendering)
+  const handleTerminalGetSharedBuffers = async (): Promise<{
+    visualBuffers: SharedArrayBuffer[];
+    signalBuffer: SharedArrayBuffer | null;
+  }> => {
     try {
-      return ptyClient.getSharedBuffer();
+      return ptyClient.getSharedBuffers();
     } catch (error) {
-      console.warn("[IPC] Failed to get shared buffer:", error);
-      return null;
+      console.warn("[IPC] Failed to get shared buffers:", error);
+      return { visualBuffers: [], signalBuffer: null };
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_GET_SHARED_BUFFER, handleTerminalGetSharedBuffer);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_SHARED_BUFFER));
+  ipcMain.handle(CHANNELS.TERMINAL_GET_SHARED_BUFFERS, handleTerminalGetSharedBuffers);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_SHARED_BUFFERS));
 
   // Get SharedArrayBuffer for semantic analysis (Web Worker)
   const handleTerminalGetAnalysisBuffer = async (): Promise<SharedArrayBuffer | null> => {

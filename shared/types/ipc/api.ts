@@ -96,7 +96,10 @@ export interface ElectronAPI {
       options?: TerminalGetScreenSnapshotOptions
     ): Promise<TerminalScreenSnapshot | null>;
     getCleanLog(request: TerminalGetCleanLogRequest): Promise<TerminalGetCleanLogResponse>;
-    getSharedBuffer(): Promise<SharedArrayBuffer | null>;
+    getSharedBuffers(): Promise<{
+      visualBuffers: SharedArrayBuffer[];
+      signalBuffer: SharedArrayBuffer | null;
+    }>;
     getAnalysisBuffer(): Promise<SharedArrayBuffer | null>;
     getInfo(id: string): Promise<TerminalInfoPayload>;
     getMessagePort(): Promise<any | null>;
