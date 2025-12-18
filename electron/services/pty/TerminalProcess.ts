@@ -216,6 +216,9 @@ export class TerminalProcess {
   private submitInFlight = false;
   private headlineGenerator = new ActivityHeadlineGenerator();
 
+  private resizeTimestamp = 0;
+  private static readonly RESIZE_COOLDOWN_MS = 300;
+
   private lastWriteErrorLogTime = 0;
   private suppressedWriteErrorCount = 0;
 
@@ -916,6 +919,8 @@ export class TerminalProcess {
       }
 
       terminal.ptyProcess.resize(cols, rows);
+      this.resizeTimestamp = Date.now();
+
       if (terminal.headlessTerminal) {
         terminal.headlessTerminal.resize(cols, rows);
       }
@@ -1311,7 +1316,15 @@ export class TerminalProcess {
         }
 
         if (this.activityMonitor) {
-          this.activityMonitor.onData(data);
+          const inResizeCooldown =
+            this.resizeTimestamp > 0 &&
+            Date.now() - this.resizeTimestamp < TerminalProcess.RESIZE_COOLDOWN_MS;
+
+          if (inResizeCooldown) {
+            this.activityMonitor.onData();
+          } else {
+            this.activityMonitor.onData(data);
+          }
         }
 
         if (terminal.agentId) {
