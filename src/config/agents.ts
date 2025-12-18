@@ -26,7 +26,7 @@ const ICON_MAP: Record<string, ComponentType<AgentIconProps>> = {
 
 export const AGENT_REGISTRY: Record<string, AgentConfig> = Object.fromEntries(
   Object.entries(BASE_AGENT_REGISTRY).map(([id, config]) => {
-    return [id, { ...config, icon: ICON_MAP[id] ?? ClaudeIcon }];
+    return [id, { ...config, icon: ICON_MAP[config.iconId] ?? ClaudeIcon }];
   })
 ) as Record<string, AgentConfig>;
 
@@ -35,7 +35,7 @@ export const AGENT_IDS = Object.keys(AGENT_REGISTRY) as string[];
 export function getAgentConfig(agentId: string): AgentConfig | undefined {
   const config = getBaseAgentConfig(agentId);
   if (!config) return undefined;
-  const icon = ICON_MAP[agentId] ?? ClaudeIcon;
+  const icon = ICON_MAP[config.iconId] ?? ClaudeIcon;
   return { ...config, icon };
 }
 

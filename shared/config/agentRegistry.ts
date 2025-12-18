@@ -7,6 +7,7 @@ export interface AgentConfig {
   supportsContextInjection: boolean;
   shortcut?: string | null;
   tooltip?: string;
+  usageUrl?: string;
   capabilities?: {
     scrollback?: number;
     blockAltScreen?: boolean;
@@ -27,6 +28,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     supportsContextInjection: true,
     shortcut: "Cmd/Ctrl+Alt+C",
     tooltip: "deep, focused work",
+    usageUrl: "https://claude.ai/settings/usage",
     capabilities: {
       scrollback: 10000,
       blockAltScreen: false,
@@ -63,6 +65,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     supportsContextInjection: true,
     shortcut: "Cmd/Ctrl+Alt+X",
     tooltip: "careful, methodical runs",
+    usageUrl: "https://chatgpt.com/codex/settings/usage",
     capabilities: {
       scrollback: 10000,
       blockAltScreen: false,

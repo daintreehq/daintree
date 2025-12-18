@@ -8,7 +8,7 @@ import {
   getAgentSettingsEntry,
   DEFAULT_DANGEROUS_ARGS,
 } from "@shared/types";
-import { RotateCcw } from "lucide-react";
+import { RotateCcw, ExternalLink } from "lucide-react";
 
 interface AgentSettingsProps {
   onSettingsChange?: () => void;
@@ -45,23 +45,23 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
           const config = getAgentConfig(id);
           if (!config) return null;
           const entry = getAgentSettingsEntry(effectiveSettings, id);
-          const Icon = config.icon ? config.icon : null;
           return {
             id,
             name: config.name,
             color: config.color,
-            Icon,
+            Icon: config.icon,
+            usageUrl: config.usageUrl,
             enabled: entry.enabled ?? true,
             dangerousEnabled: entry.dangerousEnabled ?? false,
             hasCustomFlags: Boolean(entry.customFlags?.trim()),
           };
         })
-        .filter(Boolean),
+        .filter((a): a is NonNullable<typeof a> => a !== null),
     [agentIds, effectiveSettings]
   );
 
   const activeAgent = activeAgentId
-    ? agentOptions.find((a) => a?.id === activeAgentId)
+    ? agentOptions.find((a) => a.id === activeAgentId)
     : agentOptions[0];
   const activeEntry = activeAgent
     ? getAgentSettingsEntry(effectiveSettings, activeAgent.id)
@@ -155,18 +155,39 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
                 </p>
               </div>
             </div>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="text-canopy-text/50 hover:text-canopy-text"
-              onClick={async () => {
-                await reset(activeAgent.id);
-                onSettingsChange?.();
-              }}
-            >
-              <RotateCcw size={14} className="mr-1.5" />
-              Reset
-            </Button>
+            <div className="flex items-center gap-2">
+              {activeAgent.usageUrl && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-canopy-text/50 hover:text-canopy-text"
+                  onClick={async () => {
+                    const url = activeAgent.usageUrl?.trim();
+                    if (!url) return;
+                    try {
+                      await window.electron.system.openExternal(url);
+                    } catch (error) {
+                      console.error("Failed to open usage URL:", error);
+                    }
+                  }}
+                >
+                  <ExternalLink size={14} className="mr-1.5" />
+                  View Usage
+                </Button>
+              )}
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-canopy-text/50 hover:text-canopy-text"
+                onClick={async () => {
+                  await reset(activeAgent.id);
+                  onSettingsChange?.();
+                }}
+              >
+                <RotateCcw size={14} className="mr-1.5" />
+                Reset
+              </Button>
+            </div>
           </div>
 
           {/* Enabled Toggle */}
