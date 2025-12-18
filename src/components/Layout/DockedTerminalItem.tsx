@@ -181,7 +181,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
         <PopoverTrigger asChild>
           <button
             className={cn(
-              "flex items-center gap-2.5 px-3.5 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition-all duration-150 max-w-[280px]",
+              "flex items-center gap-2.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition-all duration-150 max-w-[280px]",
               "bg-white/[0.02] border-divider text-canopy-text/70",
               "hover:text-canopy-text hover:bg-white/[0.03]",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",

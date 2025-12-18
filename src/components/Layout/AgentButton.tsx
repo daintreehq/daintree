@@ -115,7 +115,7 @@ export function AgentButton({
   return (
     <Button
       variant="ghost"
-      size="icon-sm"
+      size="icon"
       onClick={handleClick}
       onContextMenu={handleContextMenu}
       disabled={isLoading}
