@@ -58,58 +58,127 @@ describe("TerminalFrameStabilizer", () => {
     });
   });
 
-  describe("frame boundary detection", () => {
-    it("emits immediately when new frame starts", () => {
+  describe("synchronized output mode", () => {
+    it("buffers during sync mode and emits on sync end", () => {
       const stabilizer = new TerminalFrameStabilizer();
       const emits: string[] = [];
 
       stabilizer.attach({} as any, (data: string) => emits.push(data));
 
-      // First frame content
-      stabilizer.ingest("Frame 1 content");
+      // Start sync mode
+      stabilizer.ingest("\x1b[?2026h");
+      expect(emits).toHaveLength(0); // Still buffering
+
+      // Add content during sync mode
+      stabilizer.ingest("\x1b[2K\x1b[1Acontent");
+      expect(emits).toHaveLength(0); // Still buffering
+
+      // End sync mode - should emit complete frame
+      stabilizer.ingest("\x1b[?2026l");
+      expect(emits).toHaveLength(1);
+      expect(emits[0]).toBe("\x1b[?2026h\x1b[2K\x1b[1Acontent\x1b[?2026l");
+    });
+
+    it("handles multiple sync frames in one chunk", () => {
+      const stabilizer = new TerminalFrameStabilizer();
+      const emits: string[] = [];
+
+      stabilizer.attach({} as any, (data: string) => emits.push(data));
+
+      // Two complete sync frames in one chunk
+      stabilizer.ingest("\x1b[?2026hFrame1\x1b[?2026l\x1b[?2026hFrame2\x1b[?2026l");
+
+      expect(emits).toHaveLength(2);
+      expect(emits[0]).toBe("\x1b[?2026hFrame1\x1b[?2026l");
+      expect(emits[1]).toBe("\x1b[?2026hFrame2\x1b[?2026l");
+    });
+
+    it("emits content before sync mode starts", () => {
+      const stabilizer = new TerminalFrameStabilizer();
+      const emits: string[] = [];
+
+      stabilizer.attach({} as any, (data: string) => emits.push(data));
+
+      // Content before sync start
+      stabilizer.ingest("prefix\x1b[?2026hcontent\x1b[?2026l");
+
+      // Should emit prefix immediately (pre-sync), then complete frame
+      expect(emits).toHaveLength(2);
+      expect(emits[0]).toBe("prefix");
+      expect(emits[1]).toBe("\x1b[?2026hcontent\x1b[?2026l");
+    });
+
+    it("times out sync mode after 500ms", () => {
+      const stabilizer = new TerminalFrameStabilizer();
+      const emits: string[] = [];
+
+      stabilizer.attach({} as any, (data: string) => emits.push(data));
+
+      // Start sync mode but never end it
+      stabilizer.ingest("\x1b[?2026hhanging content");
       expect(emits).toHaveLength(0);
 
-      // New frame starts - previous content emitted
-      stabilizer.ingest("\x1b[2J\x1b[HFrame 2");
+      // Wait for sync timeout
+      vi.advanceTimersByTime(500);
       expect(emits).toHaveLength(1);
-      expect(emits[0]).toBe("Frame 1 content");
+      expect(emits[0]).toBe("\x1b[?2026hhanging content");
     });
+  });
 
-    it("handles rapid frame changes", () => {
+  describe("traditional frame boundaries (non-sync TUIs)", () => {
+    it("emits on clear screen boundary", () => {
       const stabilizer = new TerminalFrameStabilizer();
       const emits: string[] = [];
 
       stabilizer.attach({} as any, (data: string) => emits.push(data));
 
-      // Rapid frames
-      stabilizer.ingest("Content 1\x1b[2J\x1b[HContent 2\x1b[2J\x1b[HContent 3");
+      // Content followed by clear screen
+      stabilizer.ingest("old content\x1b[2Jnew content");
 
-      // Content 1 and Content 2 should be emitted (each followed by a boundary)
+      // "old content" emitted immediately at boundary
+      expect(emits).toHaveLength(1);
+      expect(emits[0]).toBe("old content");
+
+      // Remaining content emitted after stability
+      vi.advanceTimersByTime(100);
       expect(emits).toHaveLength(2);
-      expect(emits[0]).toBe("Content 1");
-      expect(emits[1]).toContain("Content 2");
+      expect(emits[1]).toBe("\x1b[2Jnew content");
+    });
 
-      // Content 3 still buffered, waiting for stability
+    it("emits on alt buffer boundary", () => {
+      const stabilizer = new TerminalFrameStabilizer();
+      const emits: string[] = [];
+
+      stabilizer.attach({} as any, (data: string) => emits.push(data));
+
+      // Content followed by alt buffer switch
+      stabilizer.ingest("normal\x1b[?1049halt screen");
+
+      expect(emits).toHaveLength(1);
+      expect(emits[0]).toBe("normal");
+
+      vi.advanceTimersByTime(100);
+      expect(emits).toHaveLength(2);
+      expect(emits[1]).toBe("\x1b[?1049halt screen");
+    });
+
+    it("handles multiple boundaries in one chunk", () => {
+      const stabilizer = new TerminalFrameStabilizer();
+      const emits: string[] = [];
+
+      stabilizer.attach({} as any, (data: string) => emits.push(data));
+
+      stabilizer.ingest("A\x1b[2JB\x1b[2JC");
+
+      // A and B emitted at boundaries
+      expect(emits).toHaveLength(2);
+      expect(emits[0]).toBe("A");
+      expect(emits[1]).toBe("\x1b[2JB");
+
+      // C emitted after stability
       vi.advanceTimersByTime(100);
       expect(emits).toHaveLength(3);
-      expect(emits[2]).toContain("Content 3");
-    });
-
-    it("keeps clear+home sequence with new frame", () => {
-      const stabilizer = new TerminalFrameStabilizer();
-      const emits: string[] = [];
-
-      stabilizer.attach({} as any, (data: string) => emits.push(data));
-
-      stabilizer.ingest("old\x1b[2J\x1b[Hnew content");
-
-      expect(emits).toHaveLength(1);
-      expect(emits[0]).toBe("old");
-
-      vi.advanceTimersByTime(100);
-      expect(emits).toHaveLength(2);
-      // New frame includes the clear+home sequence
-      expect(emits[1]).toBe("\x1b[2J\x1b[Hnew content");
+      expect(emits[2]).toBe("\x1b[2JC");
     });
   });
 
