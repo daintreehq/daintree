@@ -42,10 +42,6 @@ import type {
   CrashType,
   HostCrashPayload,
 } from "../../shared/types/pty-host.js";
-import type {
-  TerminalGetScreenSnapshotOptions,
-  TerminalScreenSnapshot,
-} from "../../shared/types/ipc/terminal.js";
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
 
@@ -523,21 +519,6 @@ export class PtyClient extends EventEmitter {
 
       case "serialized-state":
         this.broker.resolve((event as any).requestId, (event as any).state ?? null);
-        break;
-
-      case "screen-snapshot":
-        this.broker.resolve(
-          (event as any).requestId,
-          ((event as any).snapshot ?? null) as TerminalScreenSnapshot | null
-        );
-        break;
-
-      case "clean-log":
-        this.broker.resolve((event as any).requestId, {
-          id: (event as any).id,
-          latestSequence: (event as any).latestSequence ?? 0,
-          entries: (event as any).entries ?? [],
-        } as TerminalGetCleanLogResponse);
         break;
 
       case "wake-result":

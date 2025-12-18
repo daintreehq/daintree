@@ -2,6 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { terminalInstanceService } from "../TerminalInstanceService";
 import { INCREMENTAL_RESTORE_CONFIG } from "../types";
 
+vi.mock("@xterm/addon-webgl", () => ({
+  WebglAddon: class {
+    dispose() {}
+    onContextLoss() {}
+  },
+}));
+
 vi.mock("@/clients", () => ({
   terminalClient: {
     onData: vi.fn(() => vi.fn()),

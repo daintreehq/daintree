@@ -256,59 +256,6 @@ const pendingVisualPackets = new Map<string, Uint8Array[]>();
 
 const STREAM_STALL_SUSPEND_MS = 2000;
 
-// Optional experiment: push screen snapshots directly to renderer via MessagePort
-const snapshotSubscriptions = new Map<
-  string,
-  { tier: "focused" | "visible"; interval: NodeJS.Timeout; lastSequence: number }
->();
-const snapshotInFlight = new Set<string>();
-
-function getSnapshotIntervalMs(tier: "focused" | "visible"): number {
-  return tier === "focused" ? 50 : 150;
-}
-
-function stopSnapshotStreaming(id: string): void {
-  const existing = snapshotSubscriptions.get(id);
-  if (existing) {
-    clearInterval(existing.interval);
-    snapshotSubscriptions.delete(id);
-  }
-  snapshotInFlight.delete(id);
-}
-
-function startSnapshotStreaming(id: string, tier: "focused" | "visible"): void {
-  stopSnapshotStreaming(id);
-  if (!rendererPort) return;
-
-  const intervalMs = getSnapshotIntervalMs(tier);
-  const interval = setInterval(async () => {
-    if (!rendererPort) return;
-    if (snapshotInFlight.has(id)) return;
-    snapshotInFlight.add(id);
-    try {
-      const snapshot = await ptyManager.getScreenSnapshotAsync(id, { buffer: "auto" });
-      if (!snapshot) {
-        return;
-      }
-      const subscription = snapshotSubscriptions.get(id);
-      if (!subscription) {
-        return;
-      }
-      if (snapshot.sequence <= subscription.lastSequence) {
-        return;
-      }
-      subscription.lastSequence = snapshot.sequence;
-      rendererPort.postMessage({ type: "screen-snapshot", id, snapshot });
-    } catch {
-      // best effort; skip emitting null frames to avoid UI churn
-    } finally {
-      snapshotInFlight.delete(id);
-    }
-  }, intervalMs);
-
-  snapshotSubscriptions.set(id, { tier, interval, lastSequence: 0 });
-}
-
 // Resume threshold - use hysteresis to prevent rapid pause/resume oscillation
 const BACKPRESSURE_RESUME_THRESHOLD = 80; // Resume when buffer drops below 80%
 const BACKPRESSURE_CHECK_INTERVAL_MS = 100; // Check every 100ms during backpressure
@@ -860,11 +807,6 @@ port.on("message", async (rawMsg: any) => {
           receivedPort.start();
           console.log("[PtyHost] MessagePort received from Main, starting listener...");
 
-          // If the renderer reconnects, clear any previous snapshot subscriptions.
-          for (const id of snapshotSubscriptions.keys()) {
-            stopSnapshotStreaming(id);
-          }
-
           rendererPortMessageHandler = (event: any) => {
             const portMsg = event?.data ? event.data : event;
 
@@ -888,27 +830,6 @@ port.on("message", async (rawMsg: any) => {
                 typeof portMsg.rows === "number"
               ) {
                 ptyManager.resize(portMsg.id, portMsg.cols, portMsg.rows);
-              } else if (
-                portMsg.type === "subscribe-screen-snapshot" &&
-                typeof portMsg.id === "string" &&
-                (portMsg.tier === "focused" || portMsg.tier === "visible")
-              ) {
-                startSnapshotStreaming(portMsg.id, portMsg.tier);
-              } else if (
-                portMsg.type === "update-screen-snapshot-tier" &&
-                typeof portMsg.id === "string" &&
-                (portMsg.tier === "focused" || portMsg.tier === "visible")
-              ) {
-                const existing = snapshotSubscriptions.get(portMsg.id);
-                if (existing && existing.tier === portMsg.tier) {
-                  return;
-                }
-                startSnapshotStreaming(portMsg.id, portMsg.tier);
-              } else if (
-                portMsg.type === "unsubscribe-screen-snapshot" &&
-                typeof portMsg.id === "string"
-              ) {
-                stopSnapshotStreaming(portMsg.id);
               } else {
                 console.warn(
                   "[PtyHost] Unknown or invalid MessagePort message type:",
@@ -1374,11 +1295,6 @@ function cleanup(): void {
   console.log("[PtyHost] Disposing resources...");
 
   resourceGovernor.dispose();
-
-  // Stop push snapshot streaming (if enabled)
-  for (const id of snapshotSubscriptions.keys()) {
-    stopSnapshotStreaming(id);
-  }
 
   // Clear all backpressure monitoring intervals
   for (const [id, checkInterval] of pausedTerminals) {

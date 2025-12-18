@@ -11,14 +11,10 @@ import {
   TerminalProcess,
   type PtySpawnOptions,
   type TerminalInfo,
-  type TerminalSnapshot,
+  TerminalSnapshot,
   type PtyManagerEvents,
 } from "./pty/index.js";
 import { disposeTerminalSerializerService } from "./pty/TerminalSerializerService.js";
-import type {
-  TerminalGetScreenSnapshotOptions,
-  TerminalScreenSnapshot,
-} from "../../shared/types/ipc/terminal.js";
 
 /**
  * PtyManager - Facade for terminal process management.
@@ -336,23 +332,6 @@ export class PtyManager extends EventEmitter {
    */
   getAllTerminalSnapshots(): TerminalSnapshot[] {
     return this.registry.getAllSnapshots();
-  }
-
-  /**
-   * Get a composed screen snapshot from the backend headless terminal.
-   * Single-flight is handled by TerminalProjectionService to prevent pileup.
-   */
-  async getScreenSnapshotAsync(
-    id: string,
-    options?: TerminalGetScreenSnapshotOptions
-  ): Promise<TerminalScreenSnapshot | null> {
-    const terminal = this.registry.get(id);
-    if (!terminal) {
-      return null;
-    }
-
-    // Direct call since projection service is removed
-    return terminal.getScreenSnapshot(options);
   }
 
   /**

@@ -70,45 +70,6 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function estimateChangedChars(prev: string, next: string): number {
-  if (prev === next) return 0;
-  if (prev.length === 0) return next.length;
-  if (next.length === 0) return prev.length;
-
-  const maxLen = Math.max(prev.length, next.length);
-  let prefix = 0;
-  while (prefix < maxLen && prev[prefix] === next[prefix]) {
-    prefix++;
-  }
-
-  let suffix = 0;
-  while (
-    suffix < maxLen - prefix &&
-    prev[prev.length - 1 - suffix] === next[next.length - 1 - suffix]
-  ) {
-    suffix++;
-  }
-
-  return Math.max(1, maxLen - prefix - suffix);
-}
-
-function estimateViewportDelta(
-  prev: string[],
-  next: string[]
-): { changedLines: number; changedChars: number } {
-  const rowCount = Math.max(prev.length, next.length);
-  let changedLines = 0;
-  let changedChars = 0;
-  for (let i = 0; i < rowCount; i++) {
-    const a = prev[i] ?? "";
-    const b = next[i] ?? "";
-    if (a === b) continue;
-    changedLines++;
-    changedChars += estimateChangedChars(a, b);
-  }
-  return { changedLines, changedChars };
-}
-
 function normalizeSubmitText(text: string): string {
   return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 }
