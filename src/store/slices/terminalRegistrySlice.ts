@@ -998,7 +998,7 @@ export const createTerminalRegistrySlice =
       const isActiveWorktree = (activeWorktreeId ?? null) === (worktreeId ?? null);
 
       // If moving to a background worktree, we must background the terminal to stop
-      // the renderer from trying to update while detached, which can cause WebGL crashes.
+      // the renderer from trying to update while detached.
       const targetTier = isActiveWorktree
         ? TerminalRefreshTier.VISIBLE
         : TerminalRefreshTier.BACKGROUND;

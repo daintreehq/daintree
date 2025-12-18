@@ -101,7 +101,7 @@ Canopy uses a modern Electron architecture ensuring security and performance:
 | UI Framework       | React 19 + TypeScript              |
 | Build              | Vite 6                             |
 | State Management   | Zustand                            |
-| Terminal Emulation | xterm.js + @xterm/addon-fit/webgl  |
+| Terminal Emulation | xterm.js + @xterm/addon-fit/canvas |
 | PTY                | node-pty (native module)           |
 | Git                | simple-git                         |
 | Styling            | Tailwind CSS v4                    |

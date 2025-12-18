@@ -71,6 +71,7 @@ export class TerminalOutputCoalescer {
     const now = this.getNow();
     let entry = this.buffers.get(id);
     const dataLength = typeof data === "string" ? data.length : data.byteLength;
+    console.log(`[TERM_FLOW] Coalescer.bufferData(${id}): ${dataLength}b, existingEntry=${!!entry}`);
     const stringData = typeof data === "string" ? data : "";
     const prevRecent = entry ? entry.recentChars : "";
     const prevBytes = entry ? entry.bytesSinceStart : 0;
@@ -324,6 +325,7 @@ export class TerminalOutputCoalescer {
     const now = this.getNow();
     if (now - entry.lastDataAt >= REDRAW_FLUSH_DELAY_MS - 1) {
       if (entry.flushMode === "frame" && entry.flushOnRedrawOnly) {
+        console.log(`[TERM_FLOW] Coalescer.onFrameSettle(${id}): SKIPPED flushOnRedrawOnly=true`);
         return;
       }
       this.flushBuffer(id);
@@ -349,6 +351,8 @@ export class TerminalOutputCoalescer {
 
   private writeFrameChunks(id: string, chunks: (string | Uint8Array)[]): void {
     if (chunks.length === 0) return;
+    const totalBytes = chunks.reduce((sum, c) => sum + (typeof c === "string" ? c.length : c.byteLength), 0);
+    console.log(`[TERM_FLOW] Coalescer.writeFrameChunks(${id}): ${chunks.length} chunks, ${totalBytes}b -> onOutput`);
     if (chunks.length === 1) {
       this.onOutput({ id, data: chunks[0] });
       return;
@@ -414,7 +418,11 @@ export class TerminalOutputCoalescer {
 
     this.clearEntryTimers(entry);
     this.buffers.delete(id);
-    if (entry.chunks.length === 0) return;
+    if (entry.chunks.length === 0) {
+      console.log(`[TERM_FLOW] Coalescer.flushBuffer(${id}): empty, no-op`);
+      return;
+    }
+    console.log(`[TERM_FLOW] Coalescer.flushBuffer(${id}): ${entry.chunks.length} chunks, ${entry.bytes}b, mode=${entry.flushMode}`);
 
     if (entry.flushMode === "frame") {
       this.enqueueFrame(id, entry.chunks);

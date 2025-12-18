@@ -14,7 +14,6 @@ import { setupTerminalAddons } from "./TerminalAddonManager";
 import { TerminalOutputIngestService } from "./TerminalOutputIngestService";
 import { TerminalParserHandler } from "./TerminalParserHandler";
 import { TerminalUnseenOutputTracker, UnseenOutputSnapshot } from "./TerminalUnseenOutputTracker";
-import { WebGLContextManager } from "./WebGLContextManager";
 
 const START_DEBOUNCING_THRESHOLD = 200;
 const HORIZONTAL_DEBOUNCE_MS = 100;
@@ -27,7 +26,6 @@ const RESIZE_LOCK_TTL_MS = 5000;
 class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
   private dataBuffer: TerminalOutputIngestService;
-  private webglManager: WebGLContextManager;
   private suppressedExitUntil = new Map<string, number>();
   private hiddenContainer: HTMLDivElement | null = null;
   private offscreenSlots = new Map<string, HTMLDivElement>();
@@ -43,10 +41,6 @@ class TerminalInstanceService {
   constructor() {
     this.dataBuffer = new TerminalOutputIngestService((id, data) => this.writeToTerminal(id, data));
     this.dataBuffer.initialize();
-    this.webglManager = new WebGLContextManager(
-      (id) => this.instances.get(id),
-      (cb) => this.instances.forEach(cb)
-    );
   }
 
   notifyUserInput(id: string): void {
@@ -195,7 +189,10 @@ class TerminalInstanceService {
    */
   private writeToTerminal(id: string, data: string | Uint8Array): void {
     const managed = this.instances.get(id);
-    if (!managed) return;
+    if (!managed) {
+      console.warn(`[TERM_FLOW] writeToTerminal(${id}): NO MANAGED INSTANCE`);
+      return;
+    }
 
     if (managed.isSerializedRestoreInProgress) {
       managed.deferredOutput.push(data);
@@ -206,6 +203,11 @@ class TerminalInstanceService {
       managed.lastAppliedTier ?? managed.getRefreshTier?.() ?? TerminalRefreshTier.FOCUSED;
     if (currentTier === TerminalRefreshTier.BACKGROUND) {
       managed.needsWake = true;
+      const dataLen = typeof data === "string" ? data.length : data.byteLength;
+      console.warn(
+        `[TERM_FLOW] writeToTerminal(${id}): DROPPED ${dataLen}b - tier=BACKGROUND, ` +
+          `isVisible=${managed.isVisible}, lastAppliedTier=${managed.lastAppliedTier}`
+      );
       return;
     }
 
@@ -237,6 +239,10 @@ class TerminalInstanceService {
     if (!managed) return;
 
     if (managed.isVisible !== isVisible) {
+      console.log(
+        `[TERM_FLOW] setVisible(${id}): ${managed.isVisible} -> ${isVisible}, ` +
+          `lastAppliedTier=${managed.lastAppliedTier !== undefined ? TerminalRefreshTier[managed.lastAppliedTier] : "undefined"}`
+      );
       managed.isVisible = isVisible;
       managed.lastActiveTime = Date.now();
 
@@ -365,7 +371,13 @@ class TerminalInstanceService {
     const agentStateSubscribers = new Set<AgentStateCallback>();
 
     const unsubData = terminalClient.onData(id, (data: string | Uint8Array) => {
-      if (this.dataBuffer.isPolling()) return;
+      const dataLen = typeof data === "string" ? data.length : data.byteLength;
+      if (this.dataBuffer.isPolling()) {
+        // SAB mode is active, IPC data should not arrive
+        console.warn(`[TERM_FLOW] onData(${id}): ${dataLen}b arrived via IPC but SAB polling is active`);
+        return;
+      }
+      console.log(`[TERM_FLOW] onData(${id}): ${dataLen}b via IPC`);
       this.dataBuffer.bufferData(id, data);
     });
     listeners.push(unsubData);
@@ -402,11 +414,6 @@ class TerminalInstanceService {
       lastDetachAt: 0,
       isVisible: false,
       lastActiveTime: Date.now(),
-      webglAddon: undefined,
-      webglRecoveryAttempts: 0,
-      webglRecoveryToken: undefined,
-      hasWebglError: false,
-      webglDisposeTimer: undefined,
       lastWidth: 0,
       lastHeight: 0,
       lastYResizeTime: 0,
@@ -449,6 +456,10 @@ class TerminalInstanceService {
     listeners.push(() => inputDisposable.dispose());
 
     this.instances.set(id, managed);
+
+    console.log(
+      `[TERM_FLOW] getOrCreate(${id}): type=${type}, kind=${kind}, SAB=${this.dataBuffer.isPolling()}`
+    );
 
     const initialTier = getRefreshTier ? getRefreshTier() : TerminalRefreshTier.FOCUSED;
     this.applyRendererPolicy(id, initialTier);
@@ -951,26 +962,12 @@ class TerminalInstanceService {
 
       console.log(`[TERM_DEBUG] resetRenderer running for ${id}`);
 
-      // Release WebGL if present (will be re-acquired based on policy)
-      const hadWebgl = !!managed.webglAddon;
-      if (managed.webglAddon) {
-        this.webglManager.release(id, managed);
-      }
-
       managed.terminal.clearTextureAtlas();
       managed.terminal.refresh(0, managed.terminal.rows - 1);
 
       const dims = this.fit(id);
       if (dims) {
         terminalClient.resize(id, dims.cols, dims.rows);
-      }
-
-      // Re-acquire WebGL if we had it and still qualify
-      if (hadWebgl) {
-        const tier = managed.getRefreshTier();
-        if (this.webglManager.wantsWebgl(managed, tier)) {
-          this.webglManager.acquire(id, managed);
-        }
       }
     } catch (error) {
       console.error(`[TerminalInstanceService] resetRenderer failed for ${id}:`, error);
@@ -1056,7 +1053,14 @@ class TerminalInstanceService {
     const managed = this.instances.get(id);
     if (!managed) return;
 
-    // console.log(`[TERM_DEBUG] applyRendererPolicy ${id} -> ${tier}`);
+    const tierName = TerminalRefreshTier[tier] || tier;
+    const currentTierName = managed.lastAppliedTier !== undefined
+      ? (TerminalRefreshTier[managed.lastAppliedTier] || managed.lastAppliedTier)
+      : "undefined";
+    console.log(
+      `[TERM_FLOW] applyRendererPolicy(${id}): ${currentTierName} -> ${tierName}, ` +
+        `isVisible=${managed.isVisible}`
+    );
 
     if (tier === TerminalRefreshTier.FOCUSED || tier === TerminalRefreshTier.BURST) {
       managed.lastActiveTime = Date.now();
@@ -1135,22 +1139,6 @@ class TerminalInstanceService {
         });
       }
     }
-
-    // WebGL renderer management based on tier and visibility
-    const wantsWebgl = this.webglManager.wantsWebgl(managed, tier);
-
-    if (wantsWebgl) {
-      if (!managed.webglAddon) {
-        this.webglManager.acquire(id, managed);
-      } else if (tier === TerminalRefreshTier.FOCUSED || tier === TerminalRefreshTier.BURST) {
-        // Promote focused/burst terminals to end of LRU to protect from eviction
-        this.webglManager.promoteInLru(id);
-      }
-    } else if (tier === TerminalRefreshTier.BACKGROUND && managed.webglAddon) {
-      // Release WebGL for BACKGROUND tier (hidden tabs)
-      this.webglManager.release(id, managed);
-      managed.terminal.refresh(0, managed.terminal.rows - 1);
-    }
   }
 
   updateRefreshTierProvider(id: string, provider: RefreshTierProvider): void {
@@ -1201,12 +1189,6 @@ class TerminalInstanceService {
     this.clearResizeJobs(managed);
     this.dataBuffer.resetForTerminal(id);
     this.unseenTracker.destroy(id);
-
-    // Clean up WebGL resources
-    this.webglManager.cancelGracePeriod(managed);
-    if (managed.webglAddon) {
-      this.webglManager.release(id, managed);
-    }
 
     if (managed.tierChangeTimer !== undefined) {
       clearTimeout(managed.tierChangeTimer);
@@ -1424,6 +1406,39 @@ class TerminalInstanceService {
     const managed = this.instances.get(id);
     return managed?.isInputLocked ?? false;
   }
+
+  /**
+   * Diagnostic method to dump the current state of all terminals.
+   * Call from browser console: terminalInstanceService.dumpState()
+   */
+  dumpState(): void {
+    console.group("[TERM_DIAG] Terminal Instance State");
+    console.log(`SAB polling: ${this.dataBuffer.isPolling()}`);
+    console.log(`SAB enabled: ${this.dataBuffer.isEnabled()}`);
+    console.log(`Total instances: ${this.instances.size}`);
+
+    this.instances.forEach((managed, id) => {
+      const tierName = managed.lastAppliedTier !== undefined
+        ? (TerminalRefreshTier[managed.lastAppliedTier] || managed.lastAppliedTier)
+        : "undefined";
+      const currentTierName = managed.getRefreshTier
+        ? (TerminalRefreshTier[managed.getRefreshTier()] || managed.getRefreshTier())
+        : "no-provider";
+
+      console.log(
+        `  ${id}: type=${managed.type}, visible=${managed.isVisible}, ` +
+          `lastAppliedTier=${tierName}, currentTier=${currentTierName}, ` +
+          `isOpened=${managed.isOpened}, hostConnected=${managed.hostElement.isConnected}, ` +
+          `pendingWrites=${managed.pendingWrites ?? 0}, needsWake=${managed.needsWake ?? false}`
+      );
+    });
+    console.groupEnd();
+  }
 }
 
 export const terminalInstanceService = new TerminalInstanceService();
+
+// Expose for debugging in browser console
+if (typeof window !== "undefined") {
+  (window as unknown as Record<string, unknown>).terminalInstanceService = terminalInstanceService;
+}

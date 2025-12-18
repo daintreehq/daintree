@@ -41,6 +41,8 @@ export class TerminalOutputIngestService {
           const message = event.data;
           if (message.type === "OUTPUT_BATCH") {
             for (const batch of message.batches) {
+              const dataLen = typeof batch.data === "string" ? batch.data.length : batch.data.byteLength;
+              console.log(`[TERM_FLOW] SAB worker batch: ${batch.id} ${dataLen}b`);
               this.writeToTerminal(batch.id, batch.data);
             }
           }

@@ -61,7 +61,7 @@ const conversationHistory = `
 \x1b[1m\x1b[35m│\x1b[0m \x1b[38;5;245m├──────────────────────────────────────────────────────────────────────────┤\x1b[0m
 \x1b[1m\x1b[35m│\x1b[0m \x1b[38;5;245m│\x1b[0m \x1b[38;5;81mRenderer Process\x1b[0m (src/)                                                \x1b[38;5;245m│\x1b[0m
 \x1b[1m\x1b[35m│\x1b[0m \x1b[38;5;245m│\x1b[0m   - React 19 UI with Tailwind CSS v4                                   \x1b[38;5;245m│\x1b[0m
-\x1b[1m\x1b[35m│\x1b[0m \x1b[38;5;245m│\x1b[0m   - XtermAdapter: xterm.js integration with WebGL                      \x1b[38;5;245m│\x1b[0m
+\x1b[1m\x1b[35m│\x1b[0m \x1b[38;5;245m│\x1b[0m   - XtermAdapter: xterm.js integration with Canvas                     \x1b[38;5;245m│\x1b[0m
 \x1b[1m\x1b[35m│\x1b[0m \x1b[38;5;245m│\x1b[0m   - Zustand stores for state management                                \x1b[38;5;245m│\x1b[0m
 \x1b[1m\x1b[35m│\x1b[0m \x1b[38;5;245m│\x1b[0m   - IPC bridge via window.electron                                     \x1b[38;5;245m│\x1b[0m
 \x1b[1m\x1b[35m│\x1b[0m \x1b[38;5;245m└──────────────────────────────────────────────────────────────────────────┘\x1b[0m
@@ -393,7 +393,7 @@ function StressTest() {
     "Please do a comprehensive breakdown of this project - Canopy Command Center. Explore the codebase thoroughly and explain: 1. What is this project? - The core purpose and value proposition 2. Architecture overview - How the Electron main/renderer processes work together 3. Key features - What can users actually do with this tool? 4. Technical implementation - How are the major features built (terminals, worktrees, agent state tracking, etc.) 5. Target users - Who is this for and what problems does it solve? Look at the actual code structure, the services, the React components, and the IPC bridge to understand how everything fits together.";
 
   const codexPrompt2 =
-    "Analyze the terminal rendering pipeline in this Electron app. Focus on: 1. How PTY output flows from node-pty through IPC to xterm.js 2. The SharedRingBuffer implementation for zero-copy I/O 3. WebGL renderer management and context limits 4. Output throttling and batching strategies 5. The flickering issue when TUI frameworks like Ink render animations. Identify the root cause and propose solutions.";
+    "Analyze the terminal rendering pipeline in this Electron app. Focus on: 1. How PTY output flows from node-pty through IPC to xterm.js 2. The SharedRingBuffer implementation for zero-copy I/O 3. Canvas renderer configuration 4. Output throttling and batching strategies 5. The flickering issue when TUI frameworks like Ink render animations. Identify the root cause and propose solutions.";
 
   return (
     <Box flexDirection="column">

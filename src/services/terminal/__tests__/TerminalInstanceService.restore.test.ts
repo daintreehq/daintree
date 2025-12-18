@@ -2,10 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { terminalInstanceService } from "../TerminalInstanceService";
 import { INCREMENTAL_RESTORE_CONFIG } from "../types";
 
-vi.mock("@xterm/addon-webgl", () => ({
-  WebglAddon: class {
+vi.mock("@xterm/addon-canvas", () => ({
+  CanvasAddon: class {
     dispose() {}
-    onContextLoss() {}
   },
 }));
 
@@ -25,6 +24,7 @@ vi.mock("@/clients", () => ({
 
 vi.mock("../TerminalAddonManager", () => ({
   setupTerminalAddons: vi.fn(() => ({
+    canvasAddon: { dispose: vi.fn() },
     fitAddon: { fit: vi.fn() },
     serializeAddon: { serialize: vi.fn() },
     webLinksAddon: {},

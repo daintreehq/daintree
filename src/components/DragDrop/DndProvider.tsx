@@ -400,8 +400,7 @@ export function DndProvider({ children }: DndProviderProps) {
         console.log("[DND_DEBUG] Running stabilization");
 
         // Skip stabilization for remaining grid terminals if this was a worktree drop.
-        // The remaining terminals just reflow and don't require a renderer reset,
-        // which can be expensive and cause crashes if WebGL context limits are hit.
+        // The remaining terminals just reflow and don't require a renderer reset.
         if (isWorktreeDrop) {
           console.log("[DND_DEBUG] Skipping stabilization for worktree drop");
           return;

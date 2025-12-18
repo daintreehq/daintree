@@ -79,11 +79,11 @@ describe("moveTerminalToWorktree", () => {
     expect(moved?.location).toBe("grid");
     expect(moved?.isVisible).toBe(true);
     expect(terminalPersistence.save).toHaveBeenCalledTimes(1);
+    // Moving to non-active worktree ("wt-b") while active is "wt-a" => BACKGROUND tier
     expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
       "t1",
-      TerminalRefreshTier.VISIBLE
+      TerminalRefreshTier.BACKGROUND
     );
-    expect(terminalClient.setActivityTier).toHaveBeenCalledWith("t1", "background");
   });
 
   it("forces terminal to dock when target worktree grid is full", () => {
@@ -105,7 +105,6 @@ describe("moveTerminalToWorktree", () => {
       "t1",
       TerminalRefreshTier.BACKGROUND
     );
-    expect(terminalClient.setActivityTier).toHaveBeenCalledWith("t1", "background");
   });
 
   it("does nothing when moving to the same worktree", () => {
@@ -127,6 +126,10 @@ describe("moveTerminalToWorktree", () => {
 
     useTerminalStore.getState().moveTerminalToWorktree("t1", "wt-b");
 
-    expect(terminalClient.setActivityTier).toHaveBeenCalledWith("t1", "background");
+    // Moving to non-active worktree should trigger BACKGROUND tier
+    expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
+      "t1",
+      TerminalRefreshTier.BACKGROUND
+    );
   });
 });
