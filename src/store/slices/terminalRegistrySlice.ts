@@ -20,7 +20,6 @@ import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
 import { useScrollbackStore } from "@/store/scrollbackStore";
 import { usePerformanceModeStore } from "@/store/performanceModeStore";
 import { useTerminalFontStore } from "@/store/terminalFontStore";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 
 export const MAX_GRID_TERMINALS = 16;
@@ -152,7 +151,7 @@ export type TerminalRegistryMiddleware = {
 };
 
 const optimizeForDock = (id: string) => {
-  terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
+  terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
 };
 
 export const createTerminalRegistrySlice =
@@ -293,8 +292,8 @@ export const createTerminalRegistrySlice =
         });
 
         if (location === "dock") {
-          // Terminal is already sized via offscreen fit; keep background policy.
-          terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
+          // Terminal is already sized via offscreen fit.
+          terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
         }
 
         terminalInstanceService.setInputLocked(id, !!options.isInputLocked);
@@ -517,7 +516,7 @@ export const createTerminalRegistrySlice =
         return { terminals: newTerminals, trashedTerminals: newTrashed };
       });
 
-      terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
+      terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
     },
 
     restoreTerminal: (id, targetWorktreeId) => {
@@ -570,7 +569,7 @@ export const createTerminalRegistrySlice =
         terminalPersistence.save(newTerminals);
         return { trashedTerminals: newTrashed, terminals: newTerminals };
       });
-      terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
+      terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
     },
 
     markAsRestored: (id) => {
@@ -994,19 +993,8 @@ export const createTerminalRegistrySlice =
         return;
       }
 
-      const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
-      const isActiveWorktree = (activeWorktreeId ?? null) === (worktreeId ?? null);
-
-      // If moving to a background worktree, we must background the terminal to stop
-      // the renderer from trying to update while detached.
-      const targetTier = isActiveWorktree
-        ? TerminalRefreshTier.VISIBLE
-        : TerminalRefreshTier.BACKGROUND;
-
-      console.log(
-        `[TERM_DEBUG] Applying move policy: ${targetTier} (active=${activeWorktreeId}, target=${worktreeId})`
-      );
-      terminalInstanceService.applyRendererPolicy(id, targetTier);
+      // All terminals stay visible - we don't background for reliability.
+      terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
     },
 
     updateFlowStatus: (id, status, timestamp) => {

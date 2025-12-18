@@ -33,7 +33,6 @@ class TerminalInstanceService {
   private hiddenContainer: HTMLDivElement | null = null;
   private offscreenSlots = new Map<string, HTMLDivElement>();
   private resizeLocks = new Map<string, number>(); // Stores expiry timestamp, not boolean
-  private lastBackendTier = new Map<string, "active" | "background">();
   private unseenTracker = new TerminalUnseenOutputTracker();
   private cwdProviders = new Map<string, () => string>();
   private readinessWaiters = new Map<
@@ -279,9 +278,6 @@ class TerminalInstanceService {
   }
 
   private setBackendTier(id: string, tier: "active" | "background"): void {
-    const prev = this.lastBackendTier.get(id);
-    if (prev === tier) return;
-    this.lastBackendTier.set(id, tier);
     terminalClient.setActivityTier(id, tier);
   }
 
@@ -1104,27 +1100,9 @@ class TerminalInstanceService {
   ): void {
     managed.lastAppliedTier = tier;
 
-    // Backend streaming tier:
-    // - Focused/Visible/Burst => active stream
-    // - Background => stop streaming; rely on headless snapshot + wake for fidelity
-    const backendTier: "active" | "background" =
-      tier === TerminalRefreshTier.BACKGROUND ? "background" : "active";
-    const prevBackendTier = this.lastBackendTier.get(id) ?? "active";
-    this.setBackendTier(id, backendTier);
-
-    // On upgrade to active, only wake if we actually dropped data while backgrounded.
-    // This prevents unnecessary wake+restore cycles during layout churn that causes
-    // tier transitions but doesn't actually miss any data.
-    if (backendTier === "active" && prevBackendTier !== "active") {
-      if (managed.needsWake) {
-        managed.needsWake = false;
-        void this.wakeAndRestore(id).catch(() => {
-          // On failure, restore the flag so we retry next time
-          const current = this.instances.get(id);
-          if (current) current.needsWake = true;
-        });
-      }
-    }
+    // Always keep backend streaming active - never background terminals.
+    // Reliability is more important than resource optimization.
+    this.setBackendTier(id, "active");
   }
 
   updateRefreshTierProvider(id: string, provider: RefreshTierProvider): void {
@@ -1212,7 +1190,6 @@ class TerminalInstanceService {
     }
     this.offscreenSlots.delete(id);
     this.resizeLocks.delete(id);
-    this.lastBackendTier.delete(id);
     this.suppressedExitUntil.delete(id);
     this.cwdProviders.delete(id);
   }

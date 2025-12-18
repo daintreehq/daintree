@@ -314,9 +314,10 @@ function toStringForIpc(data: string | Uint8Array): string {
 
 // Wire up PtyManager events
 ptyManager.on("data", (id: string, data: string | Uint8Array) => {
-  const tier = terminalActivityTiers.get(id) ?? "active";
+  // Always forward data - never drop based on activity tier.
+  // Reliability is more important than resource optimization.
   const isSuspended = suspendedDueToStall.has(id);
-  if (tier !== "active" || isSuspended) {
+  if (isSuspended) {
     return;
   }
   const terminalInfo = ptyManager.getTerminal(id);

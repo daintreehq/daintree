@@ -6,7 +6,6 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 vi.mock("@/clients", () => ({
   terminalClient: {
     resize: vi.fn(),
-    setActivityTier: vi.fn(),
   },
   agentSettingsClient: {
     get: vi.fn().mockResolvedValue(null),
@@ -28,7 +27,6 @@ vi.mock("../../persistence/terminalPersistence", () => ({
 }));
 
 const { useTerminalStore } = await import("../../terminalStore");
-const { terminalClient } = await import("@/clients");
 const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
 const { terminalPersistence } = await import("../../persistence/terminalPersistence");
 
@@ -79,10 +77,10 @@ describe("moveTerminalToWorktree", () => {
     expect(moved?.location).toBe("grid");
     expect(moved?.isVisible).toBe(true);
     expect(terminalPersistence.save).toHaveBeenCalledTimes(1);
-    // Moving to non-active worktree ("wt-b") while active is "wt-a" => BACKGROUND tier
+    // All terminals stay VISIBLE - we don't background for reliability
     expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
       "t1",
-      TerminalRefreshTier.BACKGROUND
+      TerminalRefreshTier.VISIBLE
     );
   });
 
@@ -101,9 +99,10 @@ describe("moveTerminalToWorktree", () => {
     expect(moved?.location).toBe("dock");
     expect(moved?.isVisible).toBe(false);
     expect(terminalPersistence.save).toHaveBeenCalledTimes(1);
+    // Dock terminals get VISIBLE tier (optimizeForDock)
     expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
       "t1",
-      TerminalRefreshTier.BACKGROUND
+      TerminalRefreshTier.VISIBLE
     );
   });
 
@@ -116,20 +115,19 @@ describe("moveTerminalToWorktree", () => {
     const moved = useTerminalStore.getState().terminals.find((t) => t.id === "t1");
     expect(moved?.worktreeId).toBe("wt-a");
     expect(terminalPersistence.save).not.toHaveBeenCalled();
-    expect(terminalClient.setActivityTier).not.toHaveBeenCalled();
     expect(terminalInstanceService.applyRendererPolicy).not.toHaveBeenCalled();
   });
 
-  it("backgrounds terminals moved off the active worktree", () => {
+  it("applies VISIBLE tier when moving to any worktree", () => {
     const source = createMockTerminal("t1", "wt-a", "dock");
     useTerminalStore.setState({ terminals: [source] });
 
     useTerminalStore.getState().moveTerminalToWorktree("t1", "wt-b");
 
-    // Moving to non-active worktree should trigger BACKGROUND tier
+    // All terminals stay VISIBLE - we don't background for reliability
     expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
       "t1",
-      TerminalRefreshTier.BACKGROUND
+      TerminalRefreshTier.VISIBLE
     );
   });
 });

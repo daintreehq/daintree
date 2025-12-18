@@ -44,7 +44,7 @@ export function getTerminalRefreshTier(
   isFocused: boolean
 ): TerminalRefreshTier {
   if (!terminal) {
-    return TerminalRefreshTier.BACKGROUND;
+    return TerminalRefreshTier.VISIBLE;
   }
 
   // Always use maximum refresh rate when agent is working to prevent render jitter
@@ -56,15 +56,8 @@ export function getTerminalRefreshTier(
     return TerminalRefreshTier.FOCUSED;
   }
 
-  if (terminal.location === "dock" || terminal.location === "trash") {
-    return TerminalRefreshTier.BACKGROUND;
-  }
-
-  if (terminal.isVisible) {
-    return TerminalRefreshTier.VISIBLE;
-  }
-
-  return TerminalRefreshTier.BACKGROUND;
+  // All terminals stay at VISIBLE minimum - we don't use BACKGROUND for reliability.
+  return TerminalRefreshTier.VISIBLE;
 }
 
 export type BackendStatus = "connected" | "disconnected" | "recovering";

@@ -1,5 +1,5 @@
 import { create, type StateCreator } from "zustand";
-import { appClient, terminalClient } from "@/clients";
+import { appClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@shared/types/domain";
 import type { GitHubIssue } from "@shared/types/github";
@@ -39,9 +39,8 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       console.error("Failed to persist active worktree:", error);
     });
 
-    // Reliability: terminals from inactive worktrees should not stream output to the renderer.
-    // They remain alive in the backend headless model and will be restored on wake.
-    // Terminals in the active worktree must be activated to resume streaming.
+    // Ensure terminals in the active worktree have VISIBLE render policy.
+    // All terminals stay active - we don't background for reliability.
     void import("@/store/terminalStore")
       .then(({ useTerminalStore }) => {
         const terminals = useTerminalStore.getState().terminals;
@@ -51,14 +50,13 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
             continue;
           }
           const isInActiveWorktree = (terminal.worktreeId ?? null) === (id ?? null);
-          terminalClient.setActivityTier(terminal.id, isInActiveWorktree ? "active" : "background");
           if (isInActiveWorktree) {
             terminalInstanceService.applyRendererPolicy(terminal.id, TerminalRefreshTier.VISIBLE);
           }
         }
       })
       .catch((error) => {
-        console.warn("[WorktreeStore] Failed to apply terminal streaming policy:", error);
+        console.warn("[WorktreeStore] Failed to apply terminal render policy:", error);
       });
   },
 
@@ -85,7 +83,6 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
             continue;
           }
           const isInActiveWorktree = (terminal.worktreeId ?? null) === id;
-          terminalClient.setActivityTier(terminal.id, isInActiveWorktree ? "active" : "background");
           if (isInActiveWorktree) {
             terminalInstanceService.applyRendererPolicy(terminal.id, TerminalRefreshTier.VISIBLE);
           }
