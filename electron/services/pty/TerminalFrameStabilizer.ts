@@ -268,7 +268,9 @@ export class TerminalFrameStabilizer {
       this.syncTimeoutTimer = null;
       if (this.inSyncMode && this.buffer.length > 0) {
         this.inSyncMode = false;
-        this.emit(this.buffer, "sync-timeout");
+        // Append ESU to close the sync block - prevents renderer from getting
+        // stuck in sync mode if it ever supports DEC 2026
+        this.emit(this.buffer + SYNC_OUTPUT_END, "sync-timeout");
         this.buffer = "";
       }
     }, 500);

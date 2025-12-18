@@ -108,7 +108,7 @@ describe("TerminalFrameStabilizer", () => {
       expect(emits[1]).toBe("\x1b[?2026hcontent\x1b[?2026l");
     });
 
-    it("times out sync mode after 500ms", () => {
+    it("times out sync mode after 500ms and appends ESU", () => {
       const stabilizer = new TerminalFrameStabilizer();
       const emits: string[] = [];
 
@@ -118,10 +118,10 @@ describe("TerminalFrameStabilizer", () => {
       stabilizer.ingest("\x1b[?2026hhanging content");
       expect(emits).toHaveLength(0);
 
-      // Wait for sync timeout
+      // Wait for sync timeout - should append ESU to close the block
       vi.advanceTimersByTime(500);
       expect(emits).toHaveLength(1);
-      expect(emits[0]).toBe("\x1b[?2026hhanging content");
+      expect(emits[0]).toBe("\x1b[?2026hhanging content\x1b[?2026l");
     });
   });
 
