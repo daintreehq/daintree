@@ -550,6 +550,7 @@ function TerminalPaneComponent({
           >
             {isSnapshotMode ? (
               <HistoryOverlayTerminalView
+                key={`${id}-${restartKey}`}
                 ref={historyViewRef}
                 terminalId={id}
                 type={type || "terminal"}

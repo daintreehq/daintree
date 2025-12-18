@@ -774,11 +774,7 @@ export const createTerminalRegistrySlice =
         return;
       }
 
-      let targetLocation = currentTerminal.location;
-      if (terminal.location === "trash") {
-        const trashedInfo = currentState.trashedTerminals.get(id);
-        targetLocation = trashedInfo?.originalLocation ?? "grid";
-      }
+      const targetLocation = currentTerminal.location;
 
       // For agent terminals, regenerate command from current settings
       // For other terminals, use the saved command
@@ -828,11 +824,13 @@ export const createTerminalRegistrySlice =
         // The old frontend must stop listening before new PTY data starts flowing
         terminalInstanceService.destroy(id);
 
-        // Suppress the expected exit event from killing the old PTY.
-        // The exit can arrive after the new xterm mounts, which would incorrectly show "[exit 0]".
-        terminalInstanceService.suppressNextExit(id);
+        terminalInstanceService.suppressNextExit(id, 10000);
 
-        await terminalClient.kill(id);
+        try {
+          await terminalClient.kill(id);
+        } catch (error) {
+          console.warn(`[TerminalStore] kill(${id}) failed during restart; continuing:`, error);
+        }
 
         // Do not shrink geometry for dock; dock previews are clipped instead.
 
@@ -860,10 +858,8 @@ export const createTerminalRegistrySlice =
           return { terminals: newTerminals };
         });
 
-        // Allow React to process state update and begin remounting XtermAdapter
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        await terminalInstanceService.waitForInstance(id, { timeoutMs: 5000 });
 
-        // Spawn new PTY - output will buffer in OS pipe until new frontend attaches
         await terminalClient.spawn({
           id,
           cwd: currentTerminal.cwd,
@@ -875,11 +871,8 @@ export const createTerminalRegistrySlice =
           title: currentTerminal.title,
           worktreeId: currentTerminal.worktreeId,
           command: commandToRun,
-          restore: false, // Disable session restoration on restart for clean slate
+          restore: false,
         });
-
-        // Allow XtermAdapter to finish mounting and set up data listeners
-        await new Promise((resolve) => setTimeout(resolve, 50));
 
         if (targetLocation === "dock") {
           optimizeForDock(id);
@@ -893,18 +886,31 @@ export const createTerminalRegistrySlice =
           terminals: state.terminals.map((t) => (t.id === id ? { ...t, isRestarting: false } : t)),
         }));
       } catch (error) {
-        // Set error state instead of trashing the terminal
         const errorMessage = error instanceof Error ? error.message : String(error);
         const errorCode = (error as { code?: string })?.code;
+
+        let phase = "unknown";
+        if (errorMessage.includes("frontend readiness timeout")) {
+          phase = "frontend-readiness";
+        } else if (errorMessage.includes("spawn")) {
+          phase = "pty-spawn";
+        } else if (errorMessage.includes("kill")) {
+          phase = "pty-kill";
+        } else if (errorMessage.includes("destroy")) {
+          phase = "frontend-destroy";
+        }
 
         const restartError: TerminalRestartError = {
           message: errorMessage,
           code: errorCode,
           timestamp: Date.now(),
-          recoverable: errorCode === "ENOENT",
+          recoverable: errorCode === "ENOENT" || phase === "frontend-readiness",
           context: {
             failedCwd: currentTerminal.cwd,
             command: commandToRun,
+            phase,
+            isAgent,
+            agentId: effectiveAgentId,
           },
         };
 
@@ -914,7 +920,16 @@ export const createTerminalRegistrySlice =
           ),
         }));
 
-        console.error(`[TerminalStore] Failed to restart terminal ${id}:`, error);
+        console.error(
+          `[TerminalStore] Failed to restart terminal ${id} during ${phase}:`,
+          error,
+          {
+            cwd: currentTerminal.cwd,
+            command: commandToRun,
+            isAgent,
+            agentId: effectiveAgentId,
+          }
+        );
       }
     },
 

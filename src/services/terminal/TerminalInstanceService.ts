@@ -33,6 +33,10 @@ class TerminalInstanceService {
   private lastBackendTier = new Map<string, "active" | "background">();
   private unseenTracker = new TerminalUnseenOutputTracker();
   private cwdProviders = new Map<string, () => string>();
+  private readinessWaiters = new Map<
+    string,
+    Array<{ resolve: () => void; reject: (error: Error) => void; timeout: number }>
+  >();
 
   constructor() {
     this.dataBuffer = new TerminalOutputIngestService((id, data) => this.writeToTerminal(id, data));
@@ -446,11 +450,60 @@ class TerminalInstanceService {
 
     const initialTier = getRefreshTier ? getRefreshTier() : TerminalRefreshTier.FOCUSED;
     this.applyRendererPolicy(id, initialTier);
+
+    this.notifyReadinessWaiters(id);
+
     return managed;
   }
 
   get(id: string): ManagedTerminal | null {
     return this.instances.get(id) ?? null;
+  }
+
+  waitForInstance(id: string, options: { timeoutMs?: number } = {}): Promise<void> {
+    const existing = this.instances.get(id);
+    if (existing) {
+      return Promise.resolve();
+    }
+
+    const timeoutMs = options.timeoutMs ?? 5000;
+
+    return new Promise<void>((resolve, reject) => {
+      const timeout = window.setTimeout(() => {
+        this.removeReadinessWaiter(id, resolve);
+        reject(new Error(`Terminal ${id} frontend readiness timeout after ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      const waiters = this.readinessWaiters.get(id) || [];
+      waiters.push({ resolve, reject, timeout });
+      this.readinessWaiters.set(id, waiters);
+    });
+  }
+
+  private notifyReadinessWaiters(id: string): void {
+    const waiters = this.readinessWaiters.get(id);
+    if (!waiters) return;
+
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timeout);
+      waiter.resolve();
+    }
+
+    this.readinessWaiters.delete(id);
+  }
+
+  private removeReadinessWaiter(id: string, resolve: () => void): void {
+    const waiters = this.readinessWaiters.get(id);
+    if (!waiters) return;
+
+    const index = waiters.findIndex((w) => w.resolve === resolve);
+    if (index >= 0) {
+      waiters.splice(index, 1);
+    }
+
+    if (waiters.length === 0) {
+      this.readinessWaiters.delete(id);
+    }
   }
 
   attach(id: string, container: HTMLElement): ManagedTerminal | null {
@@ -1081,6 +1134,15 @@ class TerminalInstanceService {
     const managed = this.instances.get(id);
     if (!managed) return;
 
+    const waiters = this.readinessWaiters.get(id);
+    if (waiters) {
+      for (const waiter of waiters) {
+        clearTimeout(waiter.timeout);
+        waiter.reject(new Error(`Terminal ${id} destroyed before frontend became ready`));
+      }
+      this.readinessWaiters.delete(id);
+    }
+
     // Prevent future lookups from treating this id as active
     this.instances.delete(id);
 
@@ -1135,6 +1197,7 @@ class TerminalInstanceService {
     this.offscreenSlots.delete(id);
     this.resizeLocks.delete(id);
     this.lastBackendTier.delete(id);
+    this.suppressedExitUntil.delete(id);
     this.cwdProviders.delete(id);
   }
 

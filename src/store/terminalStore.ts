@@ -340,30 +340,38 @@ export function setupTerminalStoreListeners() {
   }
 
   agentStateUnsubscribe = terminalClient.onAgentStateChanged((data) => {
-    const { agentId, state, timestamp, trigger, confidence } = data;
+    const { agentId, terminalId, state, timestamp, trigger, confidence } = data;
 
-    const validStates: AgentState[] = [
-      "idle",
-      "working",
-      "running",
-      "waiting",
-      "completed",
-      "failed",
-    ];
-    if (!validStates.includes(state as AgentState)) {
-      console.warn(`Invalid agent state received: ${state} for terminal ${agentId}`);
+    if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) {
+      console.warn(`Invalid timestamp in agent state event:`, data);
       return;
     }
 
-    // Update terminal instance service (enables state-aware rendering in XtermAdapter)
-    terminalInstanceService.setAgentState(agentId, state as AgentState);
+    const clampedConfidence = Math.max(0, Math.min(1, confidence || 0));
+
+    const targetTerminalId = terminalId || agentId;
+    const terminal = useTerminalStore.getState().terminals.find((t) => t.id === targetTerminalId);
+
+    if (!terminal) {
+      return;
+    }
+
+    if (terminal.isRestarting) {
+      return;
+    }
+
+    if (terminal.lastStateChange && timestamp < terminal.lastStateChange) {
+      return;
+    }
+
+    terminalInstanceService.setAgentState(targetTerminalId, state);
 
     useTerminalStore
       .getState()
-      .updateAgentState(agentId, state as AgentState, undefined, timestamp, trigger, confidence);
+      .updateAgentState(targetTerminalId, state, undefined, timestamp, trigger, clampedConfidence);
 
     if (state === "waiting" || state === "idle") {
-      useTerminalStore.getState().processQueue(agentId);
+      useTerminalStore.getState().processQueue(targetTerminalId);
     }
   });
 

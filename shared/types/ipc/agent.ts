@@ -26,14 +26,21 @@ export type AgentStateChangeTrigger =
   | "exit"
   | "activity";
 
+/** Agent state */
+export type AgentState = "idle" | "working" | "running" | "waiting" | "completed" | "failed";
+
 /** Payload for agent state change events */
 export interface AgentStateChangePayload {
   /** Agent/terminal ID */
   agentId: string;
+  /** Terminal ID (unique identifier for this terminal instance) */
+  terminalId?: string;
+  /** Worktree ID (if terminal is associated with a worktree) */
+  worktreeId?: string;
   /** New state */
-  state: string;
+  state: AgentState;
   /** Previous state */
-  previousState: string;
+  previousState: AgentState;
   /** Timestamp of state change */
   timestamp: number;
   /** Optional trace ID to track event chains */
