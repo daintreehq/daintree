@@ -269,9 +269,7 @@ AppDialog.BodyScroll = function AppDialogBodyScroll({
   children,
   className,
 }: AppDialogBodyScrollProps) {
-  return (
-    <div className={cn("flex-1 overflow-auto min-h-0 p-6", className)}>{children}</div>
-  );
+  return <div className={cn("flex-1 overflow-auto min-h-0 p-6", className)}>{children}</div>;
 };
 
 export interface DialogAction {

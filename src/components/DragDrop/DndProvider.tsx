@@ -294,7 +294,9 @@ export function DndProvider({ children }: DndProviderProps) {
         console.log(`[DND_DEBUG] Worktree drop detected: ${overData.worktreeId}`);
         const currentTerminal = terminals.find((t) => t.id === draggedId);
         if (currentTerminal && currentTerminal.worktreeId !== overData.worktreeId) {
-          console.log(`[DND_DEBUG] Moving terminal ${draggedId} to worktree ${overData.worktreeId}`);
+          console.log(
+            `[DND_DEBUG] Moving terminal ${draggedId} to worktree ${overData.worktreeId}`
+          );
           moveTerminalToWorktree(draggedId, overData.worktreeId!);
           setFocused(null);
         }
@@ -418,7 +420,9 @@ export function DndProvider({ children }: DndProviderProps) {
             (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
         );
 
-        console.log(`[DND_DEBUG] Stabilizing ${gridTerminalsList.length} terminals in active worktree ${activeWorktreeId}`);
+        console.log(
+          `[DND_DEBUG] Stabilizing ${gridTerminalsList.length} terminals in active worktree ${activeWorktreeId}`
+        );
 
         for (const terminal of gridTerminalsList) {
           // Flush any pending resize jobs that could have stale dimensions

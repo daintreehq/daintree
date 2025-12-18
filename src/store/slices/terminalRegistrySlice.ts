@@ -239,17 +239,33 @@ export const createTerminalRegistrySlice =
             scrollSensitivity: 1.5,
           };
 
+          // Prewarm ALL terminal types to ensure managed instance exists.
+          // This is critical for terminals in inactive worktrees - they need a managed
+          // instance for proper BACKGROUND→VISIBLE tier transitions when worktree activates.
+          const offscreenOrInactive =
+            location === "dock" ||
+            (options.worktreeId ?? null) !==
+              (useWorktreeSelectionStore.getState().activeWorktreeId ?? null);
+
           if (kind !== "agent") {
             terminalInstanceService.prewarmTerminal(id, legacyType, terminalOptions, {
-              offscreen: location === "dock",
+              offscreen: offscreenOrInactive,
               widthPx: location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH,
               heightPx: location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT,
             });
           } else {
-            // Snapshot agent terminals don't use the renderer streaming pipeline; set a better
-            // initial PTY geometry to avoid hard-wrapping during early TUI initialization.
+            // Agent terminals also need prewarm for proper tier management.
+            // This ensures they can receive wake signals when their worktree activates.
             const widthPx = location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH;
             const heightPx = location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT;
+
+            terminalInstanceService.prewarmTerminal(id, legacyType, terminalOptions, {
+              offscreen: offscreenOrInactive,
+              widthPx,
+              heightPx,
+            });
+
+            // Also set initial PTY geometry for agent TUI initialization
             const cellWidth = Math.max(6, Math.floor(fontSize * 0.6));
             const cellHeight = Math.max(10, Math.floor(fontSize * 1.1));
             const cols = Math.max(20, Math.min(500, Math.floor(widthPx / cellWidth)));
@@ -292,8 +308,18 @@ export const createTerminalRegistrySlice =
           return { terminals: newTerminals };
         });
 
-        if (location === "dock") {
-          // Terminal is already sized via offscreen fit; keep background policy.
+        // Determine if terminal should start backgrounded:
+        // 1. Dock terminals are always backgrounded (offscreen)
+        // 2. Grid terminals in inactive worktrees should also be backgrounded
+        //    since they won't mount until the worktree becomes active
+        const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
+        const isInActiveWorktree = (options.worktreeId ?? null) === (activeWorktreeId ?? null);
+        const shouldBackground =
+          location === "dock" || (location === "grid" && !isInActiveWorktree);
+
+        if (shouldBackground) {
+          // Terminal is either in dock or in an inactive worktree.
+          // Apply BACKGROUND policy to prevent renderer updates for unmounted terminals.
           terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
         }
 

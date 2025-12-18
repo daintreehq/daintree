@@ -1,5 +1,5 @@
 import { create, type StateCreator } from "zustand";
-import { appClient, terminalClient } from "@/clients";
+import { appClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@shared/types/domain";
 import type { GitHubIssue } from "@shared/types/github";
@@ -14,6 +14,7 @@ interface WorktreeSelectionState {
   focusedWorktreeId: string | null;
   expandedWorktrees: Set<string>;
   createDialog: CreateDialogState;
+  _policyGeneration: number;
 
   setActiveWorktree: (id: string | null) => void;
   setFocusedWorktree: (id: string | null) => void;
@@ -31,6 +32,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
   focusedWorktreeId: null,
   expandedWorktrees: new Set<string>(),
   createDialog: { isOpen: false, initialIssue: null },
+  _policyGeneration: 0,
 
   setActiveWorktree: (id) => {
     set({ activeWorktreeId: id });
@@ -39,22 +41,40 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       console.error("Failed to persist active worktree:", error);
     });
 
+    const generation = get()._policyGeneration + 1;
+    set({ _policyGeneration: generation });
+
     // Reliability: terminals from inactive worktrees should not stream output to the renderer.
     // They remain alive in the backend headless model and will be restored on wake.
     // Terminals in the active worktree must be activated to resume streaming.
     void import("@/store/terminalStore")
       .then(({ useTerminalStore }) => {
+        if (get()._policyGeneration !== generation) return;
+        if ((get().activeWorktreeId ?? null) !== (id ?? null)) return;
+
         const terminals = useTerminalStore.getState().terminals;
         const activeDockTerminalId = useTerminalStore.getState().activeDockTerminalId;
         for (const terminal of terminals) {
-          if (terminal.id === activeDockTerminalId) {
+          const isInActiveWorktree = (terminal.worktreeId ?? null) === (id ?? null);
+
+          const location = terminal.location ?? "grid";
+          const isDockOrTrash = location === "dock" || location === "trash";
+
+          // Let DockedTerminalItem manage open/closed dock policy, but if the active dock
+          // terminal is not in the active worktree, force it to BACKGROUND.
+          if (terminal.id === activeDockTerminalId && isDockOrTrash && isInActiveWorktree) {
             continue;
           }
-          const isInActiveWorktree = (terminal.worktreeId ?? null) === (id ?? null);
-          terminalClient.setActivityTier(terminal.id, isInActiveWorktree ? "active" : "background");
-          if (isInActiveWorktree) {
-            terminalInstanceService.applyRendererPolicy(terminal.id, TerminalRefreshTier.VISIBLE);
-          }
+
+          // Apply appropriate renderer policy based on worktree membership.
+          // Avoid waking dock/trash terminals - they manage their own visibility.
+          // applyRendererPolicy handles backend tier transitions internally.
+          terminalInstanceService.applyRendererPolicy(
+            terminal.id,
+            isInActiveWorktree && !isDockOrTrash
+              ? TerminalRefreshTier.VISIBLE
+              : TerminalRefreshTier.BACKGROUND
+          );
         }
       })
       .catch((error) => {
@@ -76,19 +96,37 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       console.error("Failed to persist active worktree:", error);
     });
 
+    const generation = get()._policyGeneration + 1;
+    set({ _policyGeneration: generation });
+
     void import("@/store/terminalStore")
       .then(({ useTerminalStore }) => {
+        if (get()._policyGeneration !== generation) return;
+        if (get().activeWorktreeId !== id) return;
+
         const terminals = useTerminalStore.getState().terminals;
         const activeDockTerminalId = useTerminalStore.getState().activeDockTerminalId;
         for (const terminal of terminals) {
-          if (terminal.id === activeDockTerminalId) {
+          const isInActiveWorktree = (terminal.worktreeId ?? null) === (id ?? null);
+
+          const location = terminal.location ?? "grid";
+          const isDockOrTrash = location === "dock" || location === "trash";
+
+          // Let DockedTerminalItem manage open/closed dock policy, but if the active dock
+          // terminal is not in the active worktree, force it to BACKGROUND.
+          if (terminal.id === activeDockTerminalId && isDockOrTrash && isInActiveWorktree) {
             continue;
           }
-          const isInActiveWorktree = (terminal.worktreeId ?? null) === id;
-          terminalClient.setActivityTier(terminal.id, isInActiveWorktree ? "active" : "background");
-          if (isInActiveWorktree) {
-            terminalInstanceService.applyRendererPolicy(terminal.id, TerminalRefreshTier.VISIBLE);
-          }
+
+          // Apply appropriate renderer policy based on worktree membership.
+          // Avoid waking dock/trash terminals - they manage their own visibility.
+          // applyRendererPolicy handles backend tier transitions internally.
+          terminalInstanceService.applyRendererPolicy(
+            terminal.id,
+            isInActiveWorktree && !isDockOrTrash
+              ? TerminalRefreshTier.VISIBLE
+              : TerminalRefreshTier.BACKGROUND
+          );
         }
       })
       .catch((error) => {

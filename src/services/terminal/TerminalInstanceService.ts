@@ -251,7 +251,9 @@ class TerminalInstanceService {
 
         // Re-evaluate tier when visibility changes to wake up backgrounded terminals.
         // This catches terminals that initialized in BACKGROUND before the observer fired.
-        const tier = managed.getRefreshTier ? managed.getRefreshTier() : TerminalRefreshTier.VISIBLE;
+        const tier = managed.getRefreshTier
+          ? managed.getRefreshTier()
+          : TerminalRefreshTier.VISIBLE;
         this.applyRendererPolicy(id, tier);
       }
     }
@@ -285,26 +287,23 @@ class TerminalInstanceService {
     terminalClient.setActivityTier(id, tier);
   }
 
-  private async wakeAndRestore(id: string): Promise<void> {
+  private async wakeAndRestore(id: string): Promise<boolean> {
     const managed = this.instances.get(id);
-    if (!managed) return;
+    if (!managed) return false;
 
-    try {
-      const { state } = await terminalClient.wake(id);
-      if (!state) return;
+    const { state } = await terminalClient.wake(id);
+    if (!state) return false;
 
-      if (state.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes) {
-        await this.restoreFromSerializedIncremental(id, state);
-      } else {
-        this.restoreFromSerialized(id, state);
-      }
-
-      if (this.instances.get(id) === managed) {
-        managed.terminal.refresh(0, managed.terminal.rows - 1);
-      }
-    } catch (error) {
-      console.warn(`[TerminalInstanceService] wakeAndRestore failed for ${id}:`, error);
+    if (state.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes) {
+      await this.restoreFromSerializedIncremental(id, state);
+    } else {
+      this.restoreFromSerialized(id, state);
     }
+
+    if (this.instances.get(id) === managed) {
+      managed.terminal.refresh(0, managed.terminal.rows - 1);
+    }
+    return true;
   }
 
   /**
@@ -951,7 +950,9 @@ class TerminalInstanceService {
         return;
       }
       if (managed.hostElement.clientWidth < 50 || managed.hostElement.clientHeight < 50) {
-        console.log(`[TERM_DEBUG] resetRenderer skipped for ${id}: too small (${managed.hostElement.clientWidth}x${managed.hostElement.clientHeight})`);
+        console.log(
+          `[TERM_DEBUG] resetRenderer skipped for ${id}: too small (${managed.hostElement.clientWidth}x${managed.hostElement.clientHeight})`
+        );
         return;
       }
 
@@ -1112,17 +1113,26 @@ class TerminalInstanceService {
     const prevBackendTier = this.lastBackendTier.get(id) ?? "active";
     this.setBackendTier(id, backendTier);
 
-    // On upgrade to active, only wake if we actually dropped data while backgrounded.
-    // This prevents unnecessary wake+restore cycles during layout churn that causes
-    // tier transitions but doesn't actually miss any data.
+    // When backend streaming stops, mark that we'll need a snapshot sync on next activation.
+    // This ensures we capture any output that happens while backgrounded.
+    if (backendTier === "background" && prevBackendTier === "active") {
+      managed.needsWake = true;
+    }
+
+    // On upgrade to active, wake if needsWake is set (or undefined for first wake).
+    // This syncs the renderer with the backend snapshot after any period of backgrounding.
     if (backendTier === "active" && prevBackendTier !== "active") {
-      if (managed.needsWake) {
-        managed.needsWake = false;
-        void this.wakeAndRestore(id).catch(() => {
-          // On failure, restore the flag so we retry next time
-          const current = this.instances.get(id);
-          if (current) current.needsWake = true;
-        });
+      if (managed.needsWake !== false) {
+        void this.wakeAndRestore(id)
+          .then((ok) => {
+            const current = this.instances.get(id);
+            if (!current) return;
+            current.needsWake = ok ? false : true;
+          })
+          .catch(() => {
+            const current = this.instances.get(id);
+            if (current) current.needsWake = true;
+          });
       }
     }
   }

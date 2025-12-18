@@ -58,9 +58,7 @@ function XtermAdapterComponent({
   // Create a STABLE proxy function that always calls the latest getRefreshTier.
   // This function's identity never changes, preventing stale closure issues.
   const stableRefreshTierProvider = useCallback(() => {
-    return getRefreshTierRef.current
-      ? getRefreshTierRef.current()
-      : TerminalRefreshTier.FOCUSED;
+    return getRefreshTierRef.current ? getRefreshTierRef.current() : TerminalRefreshTier.FOCUSED;
   }, []);
 
   // Agent state for state-aware rendering decisions (height ratchet, resize guard, scroll latch)

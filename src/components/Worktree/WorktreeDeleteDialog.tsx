@@ -50,7 +50,13 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   };
 
   return (
-    <AppDialog isOpen={isOpen} onClose={onClose} size="sm" variant="destructive" dismissible={!isDeleting}>
+    <AppDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      size="sm"
+      variant="destructive"
+      dismissible={!isDeleting}
+    >
       <AppDialog.Body>
         <div className="flex items-center gap-3 mb-4 text-[var(--color-status-error)]">
           <div className="p-2 bg-[var(--color-status-error)]/10 rounded-full">
@@ -60,61 +66,61 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
         </div>
 
         <div className="space-y-4">
-            <p className="text-sm text-canopy-text/80">
-              Are you sure you want to delete{" "}
-              <span className="font-mono font-medium text-canopy-text">
-                {worktree.branch || worktree.name}
-              </span>
-              ?
-            </p>
+          <p className="text-sm text-canopy-text/80">
+            Are you sure you want to delete{" "}
+            <span className="font-mono font-medium text-canopy-text">
+              {worktree.branch || worktree.name}
+            </span>
+            ?
+          </p>
 
-            <div className="text-xs text-canopy-text/60 bg-canopy-bg/50 p-3 rounded border border-canopy-border font-mono break-all">
-              {worktree.path}
+          <div className="text-xs text-canopy-text/60 bg-canopy-bg/50 p-3 rounded border border-canopy-border font-mono break-all">
+            {worktree.path}
+          </div>
+
+          {hasChanges && !force && (
+            <div className="flex items-start gap-2 p-3 bg-amber-500/10 border border-amber-500/20 rounded text-amber-500 text-xs">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <p>This worktree has uncommitted changes. Standard deletion will fail.</p>
             </div>
+          )}
 
-            {hasChanges && !force && (
-              <div className="flex items-start gap-2 p-3 bg-amber-500/10 border border-amber-500/20 rounded text-amber-500 text-xs">
-                <AlertTriangle className="w-4 h-4 shrink-0" />
-                <p>This worktree has uncommitted changes. Standard deletion will fail.</p>
-              </div>
-            )}
+          {error && (
+            <div
+              role="alert"
+              aria-live="assertive"
+              className="p-3 bg-red-500/10 border border-red-500/20 rounded text-[var(--color-status-error)] text-xs"
+            >
+              {error}
+            </div>
+          )}
 
-            {error && (
-              <div
-                role="alert"
-                aria-live="assertive"
-                className="p-3 bg-red-500/10 border border-red-500/20 rounded text-[var(--color-status-error)] text-xs"
-              >
-                {error}
-              </div>
-            )}
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={force}
+              onChange={(e) => {
+                setForce(e.target.checked);
+                setError(null);
+              }}
+              className="rounded border-canopy-border bg-canopy-bg text-[var(--color-status-error)] focus:ring-[var(--color-status-error)]"
+            />
+            <span className="text-sm text-canopy-text">
+              Force delete (lose uncommitted changes)
+            </span>
+          </label>
 
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={force}
-                onChange={(e) => {
-                  setForce(e.target.checked);
-                  setError(null);
-                }}
-                className="rounded border-canopy-border bg-canopy-bg text-[var(--color-status-error)] focus:ring-[var(--color-status-error)]"
-              />
-              <span className="text-sm text-canopy-text">
-                Force delete (lose uncommitted changes)
-              </span>
-            </label>
-
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={closeTerminals}
-                onChange={(e) => setCloseTerminals(e.target.checked)}
-                className="rounded border-canopy-border bg-canopy-bg text-canopy-accent focus:ring-canopy-accent"
-              />
-              <span className="text-sm text-canopy-text">
-                Close all terminals{hasTerminals ? ` (${terminalCounts.total})` : ""}
-              </span>
-            </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={closeTerminals}
+              onChange={(e) => setCloseTerminals(e.target.checked)}
+              className="rounded border-canopy-border bg-canopy-bg text-canopy-accent focus:ring-canopy-accent"
+            />
+            <span className="text-sm text-canopy-text">
+              Close all terminals{hasTerminals ? ` (${terminalCounts.total})` : ""}
+            </span>
+          </label>
         </div>
       </AppDialog.Body>
 
@@ -122,11 +128,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
         <Button variant="ghost" onClick={onClose} disabled={isDeleting}>
           Cancel
         </Button>
-        <Button
-          variant="destructive"
-          onClick={handleDelete}
-          disabled={isDeleting}
-        >
+        <Button variant="destructive" onClick={handleDelete} disabled={isDeleting}>
           {isDeleting ? "Deleting..." : "Delete Worktree"}
         </Button>
       </AppDialog.Footer>
