@@ -256,6 +256,7 @@ export function DndProvider({ children }: DndProviderProps) {
 
       // Capture dragged ID immediately for guaranteed unlock
       const draggedId = active?.id ? String(active.id) : null;
+      console.log(`[DND_DEBUG] handleDragEnd id=${draggedId} over=${over?.id}`);
 
       // Capture source location before clearing
       const sourceLocation = activeData?.sourceLocation ?? null;
@@ -290,8 +291,10 @@ export function DndProvider({ children }: DndProviderProps) {
       // Track if this is a worktree drop (skip reorder logic, but still run stabilization)
       const isWorktreeDrop = overData?.type === "worktree" && !!overData.worktreeId;
       if (isWorktreeDrop) {
+        console.log(`[DND_DEBUG] Worktree drop detected: ${overData.worktreeId}`);
         const currentTerminal = terminals.find((t) => t.id === draggedId);
         if (currentTerminal && currentTerminal.worktreeId !== overData.worktreeId) {
+          console.log(`[DND_DEBUG] Moving terminal ${draggedId} to worktree ${overData.worktreeId}`);
           moveTerminalToWorktree(draggedId, overData.worktreeId!);
           setFocused(null);
         }
@@ -394,11 +397,13 @@ export function DndProvider({ children }: DndProviderProps) {
 
       stabilizationTimerRef.current = setTimeout(() => {
         stabilizationTimerRef.current = null;
+        console.log("[DND_DEBUG] Running stabilization");
 
         // Skip stabilization for remaining grid terminals if this was a worktree drop.
         // The remaining terminals just reflow and don't require a renderer reset,
         // which can be expensive and cause crashes if WebGL context limits are hit.
         if (isWorktreeDrop) {
+          console.log("[DND_DEBUG] Skipping stabilization for worktree drop");
           return;
         }
 
@@ -414,6 +419,8 @@ export function DndProvider({ children }: DndProviderProps) {
             (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
         );
 
+        console.log(`[DND_DEBUG] Stabilizing ${gridTerminalsList.length} terminals in active worktree ${activeWorktreeId}`);
+
         for (const terminal of gridTerminalsList) {
           // Flush any pending resize jobs that could have stale dimensions
           terminalInstanceService.flushResize(terminal.id);
@@ -423,6 +430,7 @@ export function DndProvider({ children }: DndProviderProps) {
 
           const managed = terminalInstanceService.get(terminal.id);
           if (managed?.hostElement.isConnected) {
+            console.log(`[DND_DEBUG] Resetting renderer for ${terminal.id}`);
             // Force service visibility true since we know grid terminals should be visible
             managed.isVisible = true;
 
@@ -434,6 +442,8 @@ export function DndProvider({ children }: DndProviderProps) {
             terminalInstanceService.applyRendererPolicy(terminal.id, tier);
 
             terminalInstanceService.resetRenderer(terminal.id);
+          } else {
+            console.log(`[DND_DEBUG] Skipping reset for ${terminal.id} - not connected`);
           }
         }
 

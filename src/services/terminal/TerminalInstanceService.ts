@@ -940,8 +940,16 @@ class TerminalInstanceService {
     if (!managed) return;
 
     try {
-      if (!managed.hostElement.isConnected) return;
-      if (managed.hostElement.clientWidth < 50 || managed.hostElement.clientHeight < 50) return;
+      if (!managed.hostElement.isConnected) {
+        console.log(`[TERM_DEBUG] resetRenderer skipped for ${id}: not connected`);
+        return;
+      }
+      if (managed.hostElement.clientWidth < 50 || managed.hostElement.clientHeight < 50) {
+        console.log(`[TERM_DEBUG] resetRenderer skipped for ${id}: too small (${managed.hostElement.clientWidth}x${managed.hostElement.clientHeight})`);
+        return;
+      }
+
+      console.log(`[TERM_DEBUG] resetRenderer running for ${id}`);
 
       // Release WebGL if present (will be re-acquired based on policy)
       const hadWebgl = !!managed.webglAddon;

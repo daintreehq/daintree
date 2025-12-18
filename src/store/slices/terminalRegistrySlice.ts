@@ -949,6 +949,7 @@ export const createTerminalRegistrySlice =
 
     moveTerminalToWorktree: (id, worktreeId) => {
       let movedToLocation: TerminalLocation | null = null;
+      console.log(`[TERM_DEBUG] moveTerminalToWorktree id=${id} worktree=${worktreeId}`);
 
       set((state) => {
         const terminal = state.terminals.find((t) => t.id === id);
