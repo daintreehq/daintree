@@ -149,6 +149,7 @@ export function DndProvider({ children }: DndProviderProps) {
   // Placeholder state for cross-container drags (dock -> grid)
   const [placeholderIndex, setPlaceholderIndex] = useState<number | null>(null);
   const stabilizationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dockRetryTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
 
   // Configure sensors with activation constraint so clicks work for popovers
   const sensors = useSensors(
@@ -251,6 +252,9 @@ export function DndProvider({ children }: DndProviderProps) {
       // Capture dragged ID immediately for guaranteed unlock
       const draggedId = active?.id ? String(active.id) : null;
 
+      // Capture source location before clearing
+      const sourceLocation = activeData?.sourceLocation ?? null;
+
       // Capture state before clearing
       const dropContainer = overContainer;
 
@@ -269,8 +273,6 @@ export function DndProvider({ children }: DndProviderProps) {
 
       const overId = over.id as string;
 
-      // Get source info
-      const sourceLocation = activeData.sourceLocation;
       const overData = over.data.current as
         | {
             container?: "grid" | "dock";
@@ -290,7 +292,7 @@ export function DndProvider({ children }: DndProviderProps) {
       }
 
       // Determine target container
-      let targetContainer: "grid" | "dock" = sourceLocation;
+      let targetContainer: "grid" | "dock" = sourceLocation ?? "grid";
 
       // Priority 1: Check if dropped on a container directly
       if (overData?.container) {
@@ -377,6 +379,10 @@ export function DndProvider({ children }: DndProviderProps) {
         clearTimeout(stabilizationTimerRef.current);
       }
 
+      // Cancel any pending dock retry timers
+      dockRetryTimersRef.current.forEach(clearTimeout);
+      dockRetryTimersRef.current.clear();
+
       stabilizationTimerRef.current = setTimeout(() => {
         stabilizationTimerRef.current = null;
 
@@ -398,6 +404,53 @@ export function DndProvider({ children }: DndProviderProps) {
             // Force service visibility true since we know grid terminals should be visible
             managed.isVisible = true;
             terminalInstanceService.resetRenderer(terminal.id);
+          }
+        }
+
+        // Handle dock terminal resize when terminal moved from grid to dock
+        // This ensures the terminal refreshes with the correct dock dimensions
+        if (sourceLocation === "grid" && targetContainer === "dock" && draggedId) {
+          const refreshDockTerminal = () => {
+            // Re-check current location to avoid race conditions
+            const currentTerminal = useTerminalStore
+              .getState()
+              .terminals.find((t) => t.id === draggedId);
+            if (currentTerminal?.location !== "dock") return;
+
+            terminalInstanceService.flushResize(draggedId);
+            const managed = terminalInstanceService.get(draggedId);
+            if (managed?.hostElement.isConnected) {
+              terminalInstanceService.resetRenderer(draggedId);
+            }
+          };
+
+          // Try immediate refresh first
+          const dims = terminalInstanceService.fit(draggedId);
+          if (dims) {
+            // Terminal is already attached to visible container
+            refreshDockTerminal();
+          } else {
+            // Terminal may not be mounted yet (popover timing), retry with bounded attempts
+            let attempts = 0;
+            const maxAttempts = 10;
+            const retryInterval = 16;
+
+            const retryFit = () => {
+              attempts++;
+              const fitResult = terminalInstanceService.fit(draggedId);
+              if (fitResult) {
+                refreshDockTerminal();
+                return;
+              }
+              if (attempts < maxAttempts) {
+                const timerId = setTimeout(retryFit, retryInterval);
+                dockRetryTimersRef.current.add(timerId);
+              }
+            };
+
+            // Start retry loop
+            const initialTimerId = setTimeout(retryFit, retryInterval);
+            dockRetryTimersRef.current.add(initialTimerId);
           }
         }
       }, 300);
@@ -454,6 +507,16 @@ export function DndProvider({ children }: DndProviderProps) {
     }),
     [placeholderIndex, activeData?.sourceLocation, activeTerminal, activeId]
   );
+
+  useEffect(() => {
+    return () => {
+      if (stabilizationTimerRef.current) {
+        clearTimeout(stabilizationTimerRef.current);
+      }
+      dockRetryTimersRef.current.forEach(clearTimeout);
+      dockRetryTimersRef.current.clear();
+    };
+  }, []);
 
   return (
     <DndContext
