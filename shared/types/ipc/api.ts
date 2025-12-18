@@ -248,6 +248,13 @@ export interface ElectronAPI {
       includeRecentCommits?: boolean;
       forceRefresh?: boolean;
     }): Promise<import("../pulse.js").ProjectPulse>;
+    listCommits(options: {
+      cwd: string;
+      search?: string;
+      branch?: string;
+      skip?: number;
+      limit?: number;
+    }): Promise<import("../github.js").GitCommitListResponse>;
   };
   terminalConfig: {
     get(): Promise<TerminalConfig>;

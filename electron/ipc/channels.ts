@@ -143,6 +143,7 @@ export const CHANNELS = {
 
   GIT_GET_FILE_DIFF: "git:get-file-diff",
   GIT_GET_PROJECT_PULSE: "git:get-project-pulse",
+  GIT_LIST_COMMITS: "git:list-commits",
 
   SIDECAR_CREATE: "sidecar:create",
   SIDECAR_SHOW: "sidecar:show",

@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
-import { GitHubResourceList } from "@/components/GitHub";
+import { GitHubResourceList, CommitList } from "@/components/GitHub";
 import { AgentButton } from "./AgentButton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useWorktreeActions } from "@/hooks/useWorktreeActions";
@@ -110,12 +110,14 @@ export function Toolbar({
 
   const [issuesOpen, setIssuesOpen] = useState(false);
   const [prsOpen, setPrsOpen] = useState(false);
+  const [commitsOpen, setCommitsOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [treeCopied, setTreeCopied] = useState(false);
   const [isCopyingTree, setIsCopyingTree] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState<string>("");
   const issuesButtonRef = useRef<HTMLButtonElement>(null);
   const prsButtonRef = useRef<HTMLButtonElement>(null);
+  const commitsButtonRef = useRef<HTMLButtonElement>(null);
   const treeCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { handleCopyTree } = useWorktreeActions();
@@ -360,6 +362,7 @@ export function Toolbar({
                 size="sm"
                 onClick={() => {
                   setPrsOpen(false);
+                  setCommitsOpen(false);
                   const willOpen = !issuesOpen;
                   setIssuesOpen(willOpen);
                   if (willOpen) {
@@ -397,6 +400,7 @@ export function Toolbar({
                 size="sm"
                 onClick={() => {
                   setIssuesOpen(false);
+                  setCommitsOpen(false);
                   const willOpen = !prsOpen;
                   setPrsOpen(willOpen);
                   if (willOpen) {
@@ -428,17 +432,38 @@ export function Toolbar({
                 />
               </FixedDropdown>
 
-              <div
+              <Button
+                ref={commitsButtonRef}
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setIssuesOpen(false);
+                  setPrsOpen(false);
+                  setCommitsOpen(!commitsOpen);
+                }}
                 className={cn(
-                  "flex items-center gap-1.5 px-2.5 h-7 rounded-r-[var(--radius-md)]",
-                  stats.commitCount === 0 && "opacity-50"
+                  "text-canopy-text hover:bg-white/[0.04] hover:text-canopy-accent h-7 px-2.5 gap-1.5 rounded-none rounded-r-[var(--radius-md)]",
+                  stats.commitCount === 0 && "opacity-50",
+                  commitsOpen && "bg-white/[0.04] ring-1 ring-canopy-accent/20 text-canopy-accent"
                 )}
-                title="Total commits in current branch"
+                title="Browse Git Commits"
                 aria-label={`${stats.commitCount} commits`}
               >
-                <GitCommit className="h-3.5 w-3.5 text-canopy-text" />
-                <span className="text-xs font-medium tabular-nums text-canopy-text">{stats.commitCount}</span>
-              </div>
+                <GitCommit className="h-3.5 w-3.5" />
+                <span className="text-xs font-medium tabular-nums">{stats.commitCount}</span>
+              </Button>
+              <FixedDropdown
+                open={commitsOpen}
+                onOpenChange={setCommitsOpen}
+                anchorRef={commitsButtonRef}
+                className="p-0 w-[450px]"
+              >
+                <CommitList
+                  projectPath={currentProject.path}
+                  onClose={() => setCommitsOpen(false)}
+                  initialCount={stats.commitCount}
+                />
+              </FixedDropdown>
             </div>
             <div className="w-px h-5 bg-white/[0.08]" />
           </>

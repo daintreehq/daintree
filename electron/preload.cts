@@ -244,6 +244,7 @@ const CHANNELS = {
   // Git channels
   GIT_GET_FILE_DIFF: "git:get-file-diff",
   GIT_GET_PROJECT_PULSE: "git:get-project-pulse",
+  GIT_LIST_COMMITS: "git:list-commits",
 
   // Sidecar channels
   SIDECAR_CREATE: "sidecar:create",
@@ -706,6 +707,14 @@ const api: ElectronAPI = {
       includeRecentCommits?: boolean;
       forceRefresh?: boolean;
     }) => ipcRenderer.invoke(CHANNELS.GIT_GET_PROJECT_PULSE, options),
+
+    listCommits: (options: {
+      cwd: string;
+      search?: string;
+      branch?: string;
+      skip?: number;
+      limit?: number;
+    }) => ipcRenderer.invoke(CHANNELS.GIT_LIST_COMMITS, options),
   },
 
   // Terminal Config API

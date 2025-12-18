@@ -229,5 +229,32 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
   ipcMain.handle(CHANNELS.GIT_GET_PROJECT_PULSE, handleGitGetProjectPulse);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_GET_PROJECT_PULSE));
 
+  const handleGitListCommits = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: {
+      cwd: string;
+      search?: string;
+      branch?: string;
+      skip?: number;
+      limit?: number;
+    }
+  ) => {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid payload");
+    }
+
+    const { cwd, search, branch, skip, limit } = payload;
+
+    if (typeof cwd !== "string" || !cwd) {
+      throw new Error("Invalid working directory");
+    }
+
+    const { listCommits } = await import("../../utils/git.js");
+
+    return listCommits({ cwd, search, branch, skip, limit });
+  };
+  ipcMain.handle(CHANNELS.GIT_LIST_COMMITS, handleGitListCommits);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_LIST_COMMITS));
+
   return () => handlers.forEach((cleanup) => cleanup());
 }

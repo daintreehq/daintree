@@ -116,6 +116,85 @@ export async function getCommitCount(cwd: string): Promise<number> {
   }
 }
 
+export interface CommitInfo {
+  hash: string;
+  shortHash: string;
+  message: string;
+  body?: string;
+  author: { name: string; email: string };
+  date: string;
+}
+
+export interface ListCommitsOptions {
+  cwd: string;
+  search?: string;
+  branch?: string;
+  skip?: number;
+  limit?: number;
+}
+
+export interface ListCommitsResult {
+  items: CommitInfo[];
+  hasMore: boolean;
+  total: number;
+}
+
+export async function listCommits(options: ListCommitsOptions): Promise<ListCommitsResult> {
+  const { cwd, search, branch, skip = 0, limit = 30 } = options;
+
+  try {
+    const git = simpleGit(cwd);
+
+    const totalCountStr = await git.raw(["rev-list", "--count", branch || "HEAD"]);
+    const total = parseInt(totalCountStr.trim(), 10);
+
+    const logOptions: string[] = [
+      "log",
+      "--format=%H|%h|%s|%b|%an|%ae|%aI|END",
+      `--skip=${skip}`,
+      `-n`,
+      `${limit + 1}`,
+    ];
+
+    if (search) {
+      logOptions.push(`--grep=${search}`, "-i");
+    }
+
+    if (branch) {
+      logOptions.push(branch);
+    }
+
+    const output = await git.raw(logOptions);
+
+    const commits: CommitInfo[] = [];
+    const entries = output.split("|END").filter((entry) => entry.trim());
+
+    for (const entry of entries.slice(0, limit)) {
+      const parts = entry.trim().split("|");
+      if (parts.length >= 7) {
+        const [hash, shortHash, message, body, authorName, authorEmail, date] = parts;
+        commits.push({
+          hash,
+          shortHash,
+          message,
+          body: body?.trim() || undefined,
+          author: { name: authorName, email: authorEmail },
+          date,
+        });
+      }
+    }
+
+    return {
+      items: commits,
+      hasMore: entries.length > limit,
+      total,
+    };
+  } catch (error) {
+    logWarn("Failed to list commits", { cwd, error: (error as Error).message });
+    return { items: [], hasMore: false, total: 0 };
+  }
+}
+
 export async function getWorktreeChangesWithStats(
   cwd: string,
   forceRefresh = false
