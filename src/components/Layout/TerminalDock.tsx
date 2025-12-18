@@ -125,29 +125,31 @@ export function TerminalDock() {
     <div
       onContextMenu={handleContextMenu}
       className={cn(
-        "bg-canopy-bg/95 backdrop-blur-sm border-t-2 border-canopy-border/60 shadow-[0_-4px_12px_rgba(0,0,0,0.3)]",
-        "flex items-center px-1.5 py-1 gap-1.5",
+        "bg-[var(--dock-bg)]/95 backdrop-blur-sm",
+        "border-t border-[var(--dock-border)]",
+        "shadow-[var(--dock-shadow)]",
+        "flex items-center px-[var(--dock-padding-x)] py-[var(--dock-padding-y)] gap-[var(--dock-gap)]",
         "z-40 shrink-0"
       )}
       role="list"
     >
-      <div className="flex items-center gap-1 flex-1 min-w-0">
+      <div className="flex items-center gap-1.5 flex-1 min-w-0">
         {/* Left Scroll Chevron */}
         <button
           onClick={() => handleScroll("left")}
           disabled={activeDockTerminals.length === 0}
-          className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/10 rounded transition-colors shrink-0 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-canopy-text/40 disabled:hover:bg-transparent"
+          className="p-1.5 text-canopy-text/40 hover:text-canopy-text hover:bg-white/[0.06] rounded-[var(--radius-md)] transition-colors shrink-0 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-canopy-text/40 disabled:hover:bg-transparent"
           aria-label="Scroll left"
           title="Scroll left"
         >
           <ChevronLeft className="w-4 h-4" />
         </button>
 
-        {/* Scrollable Container - min-h ensures droppable area when empty */}
+        {/* Scrollable Container */}
         <div
           ref={combinedRef}
           className={cn(
-            "flex items-center gap-1.5 overflow-x-auto flex-1 min-h-[36px] no-scrollbar scroll-smooth px-1",
+            "flex items-center gap-[var(--dock-gap)] overflow-x-auto flex-1 min-h-[var(--dock-item-height)] no-scrollbar scroll-smooth px-1",
             isOver &&
               "bg-white/[0.03] ring-2 ring-canopy-accent/30 ring-inset rounded-[var(--radius-md)]"
           )}
@@ -157,9 +159,7 @@ export function TerminalDock() {
             items={terminalIds}
             strategy={horizontalListSortingStrategy}
           >
-            {/* min-w/min-h prevent dnd-kit measureRects loop when empty
-                    (dnd-kit measures first child, which collapses to 0×0 without this) */}
-            <div className="flex items-center gap-1.5 min-w-[100px] min-h-[32px]">
+            <div className="flex items-center gap-[var(--dock-gap)] min-w-[100px] min-h-[calc(var(--dock-item-height)-4px)]">
               {activeDockTerminals.length === 0 ? (
                 <SortableDockPlaceholder />
               ) : (
@@ -177,7 +177,7 @@ export function TerminalDock() {
         <button
           onClick={() => handleScroll("right")}
           disabled={activeDockTerminals.length === 0}
-          className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/10 rounded transition-colors shrink-0 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-canopy-text/40 disabled:hover:bg-transparent"
+          className="p-1.5 text-canopy-text/40 hover:text-canopy-text hover:bg-white/[0.06] rounded-[var(--radius-md)] transition-colors shrink-0 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-canopy-text/40 disabled:hover:bg-transparent"
           aria-label="Scroll right"
           title="Scroll right"
         >
@@ -186,10 +186,12 @@ export function TerminalDock() {
       </div>
 
       {/* Separator between terminals and action containers */}
-      {activeDockTerminals.length > 0 && <div className="w-px h-4 bg-white/[0.08] mx-1 shrink-0" />}
+      {activeDockTerminals.length > 0 && (
+        <div className="w-px h-5 bg-[var(--dock-border)] mx-1 shrink-0" />
+      )}
 
       {/* Action containers: Waiting + Trash */}
-      <div className="shrink-0 pl-1 flex items-center gap-1.5">
+      <div className="shrink-0 pl-1 flex items-center gap-2">
         <WaitingContainer />
         <TrashContainer trashedTerminals={trashedItems} />
       </div>

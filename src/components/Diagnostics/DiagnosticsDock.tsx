@@ -168,7 +168,7 @@ export function DiagnosticsDock({ onRetry, className }: DiagnosticsDockProps) {
   return (
     <div
       className={cn(
-        "flex flex-col border-t border-white/[0.08] bg-canopy-bg/95 backdrop-blur-sm shadow-[0_-2px_8px_rgba(0,0,0,0.2)]",
+        "flex flex-col border-t border-[var(--dock-border)] bg-[var(--dock-bg)]/95 backdrop-blur-sm shadow-[var(--dock-shadow)]",
         "transition-[height] duration-200 ease-out",
         isResizing && "select-none",
         className
@@ -179,7 +179,7 @@ export function DiagnosticsDock({ onRetry, className }: DiagnosticsDockProps) {
     >
       <div
         className={cn(
-          "group h-1.5 cursor-ns-resize transition-colors flex items-center justify-center",
+          "group h-2 cursor-ns-resize transition-colors flex items-center justify-center",
           "hover:bg-white/[0.03] focus-visible:outline-none focus-visible:bg-white/[0.04] focus-visible:ring-1 focus-visible:ring-canopy-accent/50",
           isResizing && "bg-canopy-accent/20"
         )}
@@ -195,15 +195,15 @@ export function DiagnosticsDock({ onRetry, className }: DiagnosticsDockProps) {
       >
         <div
           className={cn(
-            "w-8 h-px rounded-full transition-colors",
-            "bg-canopy-text/20",
-            "group-hover:bg-canopy-text/35 group-focus-visible:bg-canopy-accent",
+            "w-10 h-0.5 rounded-full transition-colors",
+            "bg-canopy-text/15",
+            "group-hover:bg-canopy-text/30 group-focus-visible:bg-canopy-accent",
             isResizing && "bg-canopy-accent"
           )}
         />
       </div>
 
-      <div className="flex items-center justify-between px-4 h-9 border-b border-white/[0.06] bg-canopy-sidebar shrink-0">
+      <div className="flex items-center justify-between px-4 h-10 border-b border-[var(--dock-border)] bg-canopy-sidebar/50 shrink-0">
         <div className="flex items-center gap-2" role="tablist" aria-label="Diagnostics tabs">
           {tabs.map((tab) => (
             <TabButton
@@ -224,7 +224,7 @@ export function DiagnosticsDock({ onRetry, className }: DiagnosticsDockProps) {
 
           <button
             onClick={closeDock}
-            className="p-1.5 hover:bg-canopy-border rounded transition-colors text-canopy-text/60 hover:text-canopy-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+            className="p-1.5 hover:bg-white/[0.06] rounded-[var(--radius-md)] transition-colors text-canopy-text/60 hover:text-canopy-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
             title="Close diagnostics dock"
             aria-label="Close diagnostics dock"
           >

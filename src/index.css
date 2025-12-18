@@ -113,6 +113,20 @@
   /* Subtle divider - lighter than borders for internal separations */
   --border-divider: rgba(255, 255, 255, 0.04);
 
+  /* Dock system tokens - bottom bar styling */
+  --dock-bg: var(--color-canopy-sidebar);
+  --dock-border: var(--border-divider);
+  --dock-shadow: 0 -2px 12px rgba(0, 0, 0, 0.15);
+  --dock-padding-x: 0.75rem;
+  --dock-padding-y: 0.5rem;
+  --dock-gap: 0.375rem;
+  --dock-item-height: 2.25rem;
+  --dock-item-bg: rgba(255, 255, 255, 0.02);
+  --dock-item-bg-hover: rgba(255, 255, 255, 0.04);
+  --dock-item-bg-active: rgba(255, 255, 255, 0.05);
+  --dock-item-border: rgba(255, 255, 255, 0.06);
+  --dock-item-border-active: rgba(var(--color-canopy-accent-rgb), 0.3);
+
   --animation-duration: 150ms;
   --transition-duration: 150ms;
   --terminal-animation-duration: 150ms;
