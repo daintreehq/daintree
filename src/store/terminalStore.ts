@@ -4,7 +4,6 @@
  */
 
 import { create } from "zustand";
-import type { AgentState } from "@/types";
 import { TerminalRefreshTier } from "@/types";
 import {
   createTerminalRegistrySlice,

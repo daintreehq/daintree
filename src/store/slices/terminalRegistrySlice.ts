@@ -920,16 +920,12 @@ export const createTerminalRegistrySlice =
           ),
         }));
 
-        console.error(
-          `[TerminalStore] Failed to restart terminal ${id} during ${phase}:`,
-          error,
-          {
-            cwd: currentTerminal.cwd,
-            command: commandToRun,
-            isAgent,
-            agentId: effectiveAgentId,
-          }
-        );
+        console.error(`[TerminalStore] Failed to restart terminal ${id} during ${phase}:`, error, {
+          cwd: currentTerminal.cwd,
+          command: commandToRun,
+          isAgent,
+          agentId: effectiveAgentId,
+        });
       }
     },
 
