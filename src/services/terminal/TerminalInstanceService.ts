@@ -186,6 +186,10 @@ class TerminalInstanceService {
   /**
    * Centralized method to write data to a terminal.
    * Used by both the SharedArrayBuffer poller and the IPC fallback listener.
+   *
+   * IMPORTANT: We always write data to xterm.js regardless of tier.
+   * Xterm is optimized - writing to a hidden terminal is cheap (parsing only).
+   * Dropping data based on stale tier state caused terminal freezes.
    */
   private writeToTerminal(id: string, data: string | Uint8Array): void {
     const managed = this.instances.get(id);
@@ -196,13 +200,8 @@ class TerminalInstanceService {
       return;
     }
 
-    const currentTier =
-      managed.lastAppliedTier ?? managed.getRefreshTier?.() ?? TerminalRefreshTier.FOCUSED;
-    if (currentTier === TerminalRefreshTier.BACKGROUND) {
-      managed.needsWake = true;
-      return;
-    }
-
+    // Always write - never drop data. Stale tier state caused freezes.
+    // Xterm.js is optimized for hidden terminals (parsing is cheap, rendering is skipped).
     this.unseenTracker.incrementUnseen(id, managed.isUserScrolledBack);
 
     // Capture SAB mode decision before write to avoid mode-flip ambiguity during callback

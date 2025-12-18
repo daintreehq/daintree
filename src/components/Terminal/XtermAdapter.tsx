@@ -48,6 +48,21 @@ function XtermAdapterComponent({
   // Track visibility for resize optimization (start pessimistic for offscreen mounts)
   const isVisibleRef = useRef(false);
 
+  // Store the latest getRefreshTier in a ref to prevent stale closures.
+  // This ensures the service always calls the current version of the callback.
+  const getRefreshTierRef = useRef(getRefreshTier);
+  useEffect(() => {
+    getRefreshTierRef.current = getRefreshTier;
+  }, [getRefreshTier]);
+
+  // Create a STABLE proxy function that always calls the latest getRefreshTier.
+  // This function's identity never changes, preventing stale closure issues.
+  const stableRefreshTierProvider = useCallback(() => {
+    return getRefreshTierRef.current
+      ? getRefreshTierRef.current()
+      : TerminalRefreshTier.FOCUSED;
+  }, []);
+
   // Agent state for state-aware rendering decisions (height ratchet, resize guard, scroll latch)
   // Used via ref to avoid triggering re-renders that would cause XtermAdapter to detach/reattach
   const agentStateRef = useRef<AgentState | undefined>(undefined);
@@ -154,7 +169,7 @@ function XtermAdapterComponent({
       terminalId,
       terminalType,
       terminalOptions,
-      getRefreshTier || (() => TerminalRefreshTier.FOCUSED),
+      stableRefreshTierProvider,
       onInput,
       cwd ? () => cwd : undefined
     );
@@ -162,6 +177,10 @@ function XtermAdapterComponent({
     terminalInstanceService.setInputLocked(terminalId, !!isInputLocked);
 
     terminalInstanceService.attach(terminalId, container);
+
+    // Force visibility immediately on mount - don't wait for IntersectionObserver.
+    // This prevents data from being dropped during the brief window before the observer fires.
+    terminalInstanceService.setVisible(terminalId, true);
 
     if (!managed.keyHandlerInstalled) {
       managed.terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
@@ -273,7 +292,7 @@ function XtermAdapterComponent({
     onExit,
     onReady,
     performFit,
-    getRefreshTier,
+    stableRefreshTierProvider,
     onInput,
     cwd,
   ]);
@@ -285,10 +304,8 @@ function XtermAdapterComponent({
   );
 
   useLayoutEffect(() => {
-    terminalInstanceService.updateRefreshTierProvider(
-      terminalId,
-      getRefreshTier || (() => TerminalRefreshTier.FOCUSED)
-    );
+    // Use the stable proxy to avoid stale closures in the service
+    terminalInstanceService.updateRefreshTierProvider(terminalId, stableRefreshTierProvider);
     terminalInstanceService.applyRendererPolicy(terminalId, currentTier);
 
     // If moving to a high-priority state (Focused or Burst), boost the writer
@@ -296,7 +313,7 @@ function XtermAdapterComponent({
     if (currentTier === TerminalRefreshTier.FOCUSED || currentTier === TerminalRefreshTier.BURST) {
       terminalInstanceService.boostRefreshRate(terminalId);
     }
-  }, [terminalId, getRefreshTier, currentTier]);
+  }, [terminalId, stableRefreshTierProvider, currentTier]);
 
   // Track drag state in a ref to avoid useEffect cleanup timing issues.
   // If isDragging is in the dependency array, the effect re-runs on drag start/end,
@@ -307,9 +324,10 @@ function XtermAdapterComponent({
     isDraggingRef.current = isDragging;
   }, [isDragging]);
 
-  // Visibility tracking - stable observer, ref-gated callback
-  // Note: TerminalPane also has an IntersectionObserver that updates store visibility.
-  // This observer is for the XtermAdapter's internal visibility ref used by resize handling.
+  // Visibility tracking - internal ref only for resize handling.
+  // Note: TerminalPane has the authoritative IntersectionObserver that updates
+  // both the store and service. This observer ONLY tracks the internal ref
+  // to avoid duplicate/racing setVisible calls.
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -323,11 +341,7 @@ function XtermAdapterComponent({
         const wasVisible = isVisibleRef.current;
         isVisibleRef.current = nowVisible;
 
-        // Only update service if actually changed to avoid redundant calls
-        if (nowVisible !== wasVisible) {
-          terminalInstanceService.setVisible(terminalId, nowVisible);
-        }
-
+        // TerminalPane handles setVisible - we just track for resize logic
         if (nowVisible && !wasVisible) {
           // Force immediate fit with fresh dimensions when becoming visible
           performFit();

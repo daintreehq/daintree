@@ -21,6 +21,9 @@ const INTERACTIVE_FLUSH_THRESHOLD_BYTES = 2048;
 const INTERACTIVE_FLUSH_DELAY_MS = 0;
 const MAX_BUFFER_BYTES = 20 * 1024;
 
+// Safety valve: force flush if flushOnRedrawOnly holds data too long
+const FLUSH_ON_REDRAW_SAFETY_TIMEOUT_MS = 200;
+
 type FlushMode = "normal" | "frame";
 
 type BufferEntry = {
@@ -324,6 +327,13 @@ export class TerminalOutputCoalescer {
     const now = this.getNow();
     if (now - entry.lastDataAt >= REDRAW_FLUSH_DELAY_MS - 1) {
       if (entry.flushMode === "frame" && entry.flushOnRedrawOnly) {
+        // Safety valve: force flush if data has been buffered too long.
+        // This prevents infinite buffering if the TUI never sends a redraw signal.
+        const bufferAge = now - entry.firstDataAt;
+        if (bufferAge > FLUSH_ON_REDRAW_SAFETY_TIMEOUT_MS) {
+          entry.flushOnRedrawOnly = false;
+          this.flushBuffer(id);
+        }
         return;
       }
       this.flushBuffer(id);
