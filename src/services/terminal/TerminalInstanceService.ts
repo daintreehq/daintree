@@ -28,7 +28,9 @@ const WAKE_RATE_LIMIT_MS = 1000;
 
 class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
-  private dataBuffer = new TerminalOutputIngestService((id, data) => this.writeToTerminal(id, data));
+  private dataBuffer = new TerminalOutputIngestService((id, data) =>
+    this.writeToTerminal(id, data)
+  );
   private suppressedExitUntil = new Map<string, number>();
   private hiddenContainer: HTMLDivElement | null = null;
   private offscreenSlots = new Map<string, HTMLDivElement>();
@@ -342,7 +344,7 @@ class TerminalInstanceService {
     }
 
     const openLink = (url: string) => {
-      const normalizedUrl = /^https?:\/\/i.test(url) ? url : `https://${url}`;
+      const normalizedUrl = /^https?:\/\//i.test(url) ? url : `https://${url}`;
       systemClient.openExternal(normalizedUrl).catch((error) => {
         console.error("[TerminalInstanceService] Failed to open URL:", error);
       });
@@ -1333,8 +1335,7 @@ class TerminalInstanceService {
               }
             }),
             new Promise<void>((_, reject) =>
-              setTimeout(() => reject(new Error("Write timeout")),
- 5000)
+              setTimeout(() => reject(new Error("Write timeout")), 5000)
             ),
           ]);
 
