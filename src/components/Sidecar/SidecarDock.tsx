@@ -244,22 +244,27 @@ export function SidecarDock() {
       const bounds = getPlaceholderBounds();
       if (!bounds) return;
 
+      const previousActiveTabId = activeTabId;
       setIsSwitching(true);
+      setActiveTab(tabId);
 
       try {
         // Ensure the tab exists in main process
         if (!createdTabs.has(tabId)) {
           await window.electron.sidecar.create({ tabId, url: tab.url });
-          markTabCreated(tabId);
+          const stillExists = useSidecarStore.getState().tabs.some((t) => t.id === tabId);
+          if (stillExists) {
+            markTabCreated(tabId);
+          } else {
+            setActiveTab(previousActiveTabId);
+            return;
+          }
         }
 
-        // Wait for webview to switch before updating UI
         await window.electron.sidecar.show({ tabId, bounds });
-
-        // Only now update the UI to highlight the tab
-        setActiveTab(tabId);
       } catch (error) {
         console.error("Failed to switch tab:", error);
+        setActiveTab(previousActiveTabId);
       } finally {
         setIsSwitching(false);
       }
