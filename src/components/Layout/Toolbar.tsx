@@ -360,7 +360,7 @@ export function Toolbar({
       {/* RIGHT GROUP */}
       <div className="flex items-center gap-2 app-no-drag z-20">
         {stats && currentProject && !statsError && (
-          <div className="flex items-center h-9 rounded-[var(--radius-md)] bg-white/[0.03] border border-divider divide-x divide-[var(--border-divider)] mr-1">
+          <div className="flex items-center h-8 rounded-[var(--radius-md)] bg-white/[0.03] border border-divider divide-x divide-[var(--border-divider)] mr-1">
             <Button
               ref={issuesButtonRef}
               variant="ghost"
