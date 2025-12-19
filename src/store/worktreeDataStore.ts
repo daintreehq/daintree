@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { WorktreeState } from "@shared/types";
-import { worktreeClient } from "@/clients";
+import { worktreeClient, githubClient } from "@/clients";
 import { useWorktreeSelectionStore } from "./worktreeStore";
 import { useTerminalStore } from "./terminalStore";
 import { useNotificationStore } from "./notificationStore";
@@ -47,7 +47,17 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
           const unsubUpdate = worktreeClient.onUpdate((state) => {
             set((prev) => {
               const next = new Map(prev.worktrees);
-              next.set(state.id, state);
+              const existing = prev.worktrees.get(state.id);
+              if (existing) {
+                next.set(state.id, {
+                  ...state,
+                  prNumber: state.prNumber ?? existing.prNumber,
+                  prUrl: state.prUrl ?? existing.prUrl,
+                  prState: state.prState ?? existing.prState,
+                });
+              } else {
+                next.set(state.id, state);
+              }
               return { worktrees: next };
             });
           });
@@ -98,9 +108,43 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
             });
           });
 
+          const unsubPRDetected = githubClient.onPRDetected((data) => {
+            set((prev) => {
+              const worktree = prev.worktrees.get(data.worktreeId);
+              if (!worktree) return prev;
+
+              const next = new Map(prev.worktrees);
+              next.set(data.worktreeId, {
+                ...worktree,
+                prNumber: data.prNumber,
+                prUrl: data.prUrl,
+                prState: data.prState,
+              });
+              return { worktrees: next };
+            });
+          });
+
+          const unsubPRCleared = githubClient.onPRCleared((data) => {
+            set((prev) => {
+              const worktree = prev.worktrees.get(data.worktreeId);
+              if (!worktree) return prev;
+
+              const next = new Map(prev.worktrees);
+              next.set(data.worktreeId, {
+                ...worktree,
+                prNumber: undefined,
+                prUrl: undefined,
+                prState: undefined,
+              });
+              return { worktrees: next };
+            });
+          });
+
           cleanupListeners = () => {
             unsubUpdate();
             unsubRemove();
+            unsubPRDetected();
+            unsubPRCleared();
           };
         }
       } catch (e) {
