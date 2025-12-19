@@ -170,18 +170,16 @@ describe("ActivityMonitor", () => {
       expect(onStateChange).not.toHaveBeenCalled();
     });
 
-    it("should work with default output detection settings", () => {
+    it("should have output detection disabled by default", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange);
 
-      const chunk = "x".repeat(1000);
+      const chunk = "x".repeat(10000);
       monitor.onData(chunk);
       monitor.onData(chunk);
       monitor.onData(chunk);
 
-      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", {
-        trigger: "output-heuristic",
-      });
+      expect(onStateChange).not.toHaveBeenCalled();
     });
 
     it("should respect disabled output detection", () => {

@@ -44,7 +44,7 @@ export class ActivityMonitor {
     this.ignoredInputSequences = new Set(options?.ignoredInputSequences ?? ["\x1b\r"]);
 
     const outputDefaults = {
-      enabled: true,
+      enabled: false,
       windowMs: 500,
       minFrames: 3,
       minBytes: 2048,
