@@ -57,8 +57,7 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
           const worktreeIds = getWorktreeIds(map);
           const terminalStore = useTerminalStore.getState();
           const orphanedTerminals = terminalStore.terminals.filter((t) => {
-            const worktreeId =
-              typeof t.worktreeId === "string" ? t.worktreeId.trim() : "";
+            const worktreeId = typeof t.worktreeId === "string" ? t.worktreeId.trim() : "";
             return worktreeId && !worktreeIds.has(worktreeId) && t.location !== "trash";
           });
 

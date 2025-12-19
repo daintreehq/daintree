@@ -3,8 +3,7 @@ import { useTerminalStore, type TerminalInstance } from "@/store/terminalStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 
 function isTerminalOrphaned(terminal: TerminalInstance, worktreeIds: Set<string>): boolean {
-  const worktreeId =
-    typeof terminal.worktreeId === "string" ? terminal.worktreeId.trim() : "";
+  const worktreeId = typeof terminal.worktreeId === "string" ? terminal.worktreeId.trim() : "";
   if (!worktreeId) return false;
   return !worktreeIds.has(worktreeId);
 }
