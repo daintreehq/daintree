@@ -9,6 +9,7 @@
 2. **Native Modules:** `node-pty` must be rebuilt for Electron. `npm install` runs the rebuild hook automatically. If errors occur, run `npm run rebuild`.
 3. **Code Style:** Minimal comments. No decorative headers. High signal-to-noise ratio.
 4. **Codex MCP:** When calling `mcp__codex__codex`, always set `model: "gpt-5.2"`. Include file paths in prompts—Codex reads files directly and gives better advice when it can see the actual code.
+5. **Human-Review Label:** The `human-review` label marks issues that cannot be solved autonomously—they require a developer checking logs, observing runtime behavior, or making subjective UX judgments. Adding this label makes an issue 10-20x more expensive (human time vs agent time), so use it sparingly. Only apply when the issue genuinely requires human observation or iterative debugging that an agent cannot perform. Most issues should NOT have this label. When working issues, skip any labeled `human-review`.
 
 ## Development
 
