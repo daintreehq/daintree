@@ -22,6 +22,7 @@ import { usePerformanceModeStore } from "@/store/performanceModeStore";
 import { useTerminalFontStore } from "@/store/terminalFontStore";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { markTerminalRestarting, unmarkTerminalRestarting } from "@/store/restartExitSuppression";
 
 export const MAX_GRID_TERMINALS = 16;
 
@@ -730,7 +731,11 @@ export const createTerminalRegistrySlice =
         return;
       }
 
-      // Clear any previous restart error and mark as restarting
+      // Mark as restarting SYNCHRONOUSLY first to prevent exit event race condition.
+      // This is checked in the onExit handler before the store state.
+      markTerminalRestarting(id);
+
+      // Also set the store flag for UI and other consumers
       set((state) => ({
         terminals: state.terminals.map((t) =>
           t.id === id ? { ...t, restartError: undefined, isRestarting: true } : t
@@ -753,6 +758,7 @@ export const createTerminalRegistrySlice =
           },
         };
 
+        unmarkTerminalRestarting(id);
         set((state) => ({
           terminals: state.terminals.map((t) =>
             t.id === id ? { ...t, isRestarting: false, restartError } : t
@@ -778,6 +784,7 @@ export const createTerminalRegistrySlice =
           },
         };
 
+        unmarkTerminalRestarting(id);
         set((state) => ({
           terminals: state.terminals.map((t) =>
             t.id === id ? { ...t, isRestarting: false, restartError } : t
@@ -793,6 +800,7 @@ export const createTerminalRegistrySlice =
 
       if (!currentTerminal || currentTerminal.location === "trash") {
         // Terminal was removed or trashed while we were validating
+        unmarkTerminalRestarting(id);
         set((state) => ({
           terminals: state.terminals.map((t) => (t.id === id ? { ...t, isRestarting: false } : t)),
         }));
@@ -908,6 +916,7 @@ export const createTerminalRegistrySlice =
           terminalInstanceService.fit(id);
         }
 
+        unmarkTerminalRestarting(id);
         set((state) => ({
           terminals: state.terminals.map((t) => (t.id === id ? { ...t, isRestarting: false } : t)),
         }));
@@ -940,6 +949,7 @@ export const createTerminalRegistrySlice =
           },
         };
 
+        unmarkTerminalRestarting(id);
         set((state) => ({
           terminals: state.terminals.map((t) =>
             t.id === id ? { ...t, isRestarting: false, restartError } : t
@@ -1091,6 +1101,21 @@ export const createTerminalRegistrySlice =
         return;
       }
 
+      if (terminal.isRestarting) {
+        console.warn(`[TerminalStore] Terminal ${id} is already restarting, ignoring convert`);
+        return;
+      }
+
+      // Mark as restarting SYNCHRONOUSLY first to prevent exit event race condition.
+      markTerminalRestarting(id);
+
+      // Set store flag immediately to prevent overlapping operations
+      set((state) => ({
+        terminals: state.terminals.map((t) =>
+          t.id === id ? { ...t, restartError: undefined, isRestarting: true } : t
+        ),
+      }));
+
       const effectiveAgentId = newAgentId ?? (isRegisteredAgent(newType) ? newType : undefined);
       const newKind: "terminal" | "agent" = effectiveAgentId ? "agent" : "terminal";
       const newTitle = getDefaultTitle(newType, effectiveAgentId);
@@ -1181,6 +1206,7 @@ export const createTerminalRegistrySlice =
           terminalInstanceService.fit(id);
         }
 
+        unmarkTerminalRestarting(id);
         set((state) => ({
           terminals: state.terminals.map((t) => (t.id === id ? { ...t, isRestarting: false } : t)),
         }));
@@ -1199,6 +1225,7 @@ export const createTerminalRegistrySlice =
           },
         };
 
+        unmarkTerminalRestarting(id);
         set((state) => ({
           terminals: state.terminals.map((t) =>
             t.id === id ? { ...t, isRestarting: false, restartError } : t

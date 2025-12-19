@@ -83,6 +83,7 @@ export const useTerminalStore = create<TerminalGridState>()((set, get, api) => {
 
   const registrySlice = createTerminalRegistrySlice({
     onTerminalRemoved: (id, removedIndex, remainingTerminals) => {
+      clearTerminalRestartGuard(id);
       get().clearQueue(id);
       get().handleTerminalRemoved(id, remainingTerminals, removedIndex);
       useTerminalInputStore.getState().clearDraftInput(id);
@@ -292,7 +293,14 @@ let backendReadyUnsubscribe: (() => void) | null = null;
 let recoveryTimer: NodeJS.Timeout | null = null;
 let beforeUnloadHandler: (() => void) | null = null;
 
+import {
+  clearAllRestartGuards,
+  isTerminalRestarting,
+  clearTerminalRestartGuard,
+} from "./restartExitSuppression";
+
 export function cleanupTerminalStoreListeners() {
+  clearAllRestartGuards();
   if (agentStateUnsubscribe) {
     agentStateUnsubscribe();
     agentStateUnsubscribe = null;
@@ -413,12 +421,18 @@ export function setupTerminalStoreListeners() {
   });
 
   exitUnsubscribe = terminalClient.onExit((id) => {
+    // Check synchronous restart guard FIRST - this handles the race condition where
+    // the store's isRestarting flag hasn't propagated yet during bulk restarts
+    if (isTerminalRestarting(id)) {
+      return;
+    }
+
     const state = useTerminalStore.getState();
     const terminal = state.terminals.find((t) => t.id === id);
 
     if (!terminal) return;
 
-    // Ignore exit events during restart - the exit is expected from killing the old PTY
+    // Also check store flag for safety (handles edge cases)
     if (terminal.isRestarting) {
       return;
     }
