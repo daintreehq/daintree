@@ -105,7 +105,6 @@ const CHANNELS = {
   TERMINAL_RESTORE: "terminal:restore",
   TERMINAL_TRASHED: "terminal:trashed",
   TERMINAL_RESTORED: "terminal:restored",
-  TERMINAL_FLUSH: "terminal:flush",
   TERMINAL_SET_ACTIVITY_TIER: "terminal:set-activity-tier",
   TERMINAL_WAKE: "terminal:wake",
   TERMINAL_GET_FOR_PROJECT: "terminal:get-for-project",
@@ -378,8 +377,6 @@ const api: ElectronAPI = {
     onRestored: (callback: (data: { id: string }) => void) =>
       _typedOn(CHANNELS.TERMINAL_RESTORED, callback),
 
-    flush: (id: string) => _typedInvoke(CHANNELS.TERMINAL_FLUSH, id),
-
     setActivityTier: (id: string, tier: "active" | "background") =>
       ipcRenderer.send(CHANNELS.TERMINAL_SET_ACTIVITY_TIER, { id, tier }),
 
@@ -409,13 +406,6 @@ const api: ElectronAPI = {
 
     getAnalysisBuffer: (): Promise<SharedArrayBuffer | null> =>
       ipcRenderer.invoke(CHANNELS.TERMINAL_GET_ANALYSIS_BUFFER),
-
-    getMessagePort: (): Promise<MessagePort | null> => {
-      // MessagePort is now transferred via window.postMessage
-      return Promise.resolve(null);
-    },
-
-    isMessagePortAvailable: (): boolean => false,
 
     forceResume: (id: string): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke(CHANNELS.TERMINAL_FORCE_RESUME, id),

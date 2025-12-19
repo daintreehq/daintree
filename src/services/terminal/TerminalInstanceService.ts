@@ -184,10 +184,6 @@ class TerminalInstanceService {
     this.dataBuffer.stopPolling();
   }
 
-  isSharedBufferEnabled(): boolean {
-    return this.dataBuffer.isEnabled();
-  }
-
   /**
    * Centralized method to write data to a terminal.
    * Used by both the SharedArrayBuffer poller and the IPC fallback listener.
@@ -701,16 +697,6 @@ class TerminalInstanceService {
     this.scrollToBottom(id);
   }
 
-  getSelectionRow(id: string): number | null {
-    const managed = this.instances.get(id);
-    if (!managed) return null;
-
-    const selection = managed.terminal.getSelectionPosition();
-    if (!selection) return null;
-
-    return selection.start.y;
-  }
-
   setAgentState(id: string, state: AgentState): void {
     const managed = this.instances.get(id);
     if (!managed) return;
@@ -928,17 +914,6 @@ class TerminalInstanceService {
     managed?.terminal.focus();
   }
 
-  refresh(id: string): void {
-    const managed = this.instances.get(id);
-    if (!managed) return;
-
-    try {
-      managed.fitAddon.fit();
-    } catch (error) {
-      console.warn("[TerminalInstanceService] Refresh fit failed:", error);
-    }
-  }
-
   resetRenderer(id: string): void {
     const managed = this.instances.get(id);
     if (!managed) return;
@@ -969,10 +944,6 @@ class TerminalInstanceService {
     }
   }
 
-  resetAllRenderers(): void {
-    this.instances.forEach((_managed, id) => this.resetRenderer(id));
-  }
-
   /**
    * Called when the PTY backend restarts after a crash.
    * Resets all xterm renderers to fix the "white text" glitch
@@ -1000,12 +971,6 @@ class TerminalInstanceService {
       } catch (error) {
         console.error(`[TerminalInstanceService] Failed to recover terminal ${id}:`, error);
       }
-    });
-  }
-
-  refreshAll(): void {
-    this.instances.forEach((_, id) => {
-      this.fit(id);
     });
   }
 
@@ -1394,11 +1359,6 @@ class TerminalInstanceService {
 
     managed.isInputLocked = locked;
     managed.terminal.options.disableStdin = locked;
-  }
-
-  getInputLocked(id: string): boolean {
-    const managed = this.instances.get(id);
-    return managed?.isInputLocked ?? false;
   }
 }
 

@@ -1,5 +1,11 @@
-export const BRACKETED_PASTE_START = "\u001b[200~";
-export const BRACKETED_PASTE_END = "\u001b[201~";
+import {
+  BRACKETED_PASTE_START,
+  BRACKETED_PASTE_END,
+  shouldUseBracketedPaste,
+  PASTE_THRESHOLD_CHARS,
+} from "../../shared/utils/terminalInputProtocol.js";
+
+export { BRACKETED_PASTE_START, BRACKETED_PASTE_END };
 
 export interface TerminalSendPayload {
   data: string;
@@ -20,8 +26,8 @@ export function buildTerminalSendPayload(
 ): TerminalSendPayload {
   const normalized = normalizeText(text);
   const execute = options.execute ?? true;
-  const pasteThresholdChars = options.pasteThresholdChars ?? 200;
-  const usedBracketedPaste = normalized.includes("\n") || normalized.length > pasteThresholdChars;
+  const pasteThresholdChars = options.pasteThresholdChars ?? PASTE_THRESHOLD_CHARS;
+  const usedBracketedPaste = shouldUseBracketedPaste(normalized, pasteThresholdChars);
   const trackerData = execute ? `${normalized}\r` : normalized;
 
   if (!usedBracketedPaste) {

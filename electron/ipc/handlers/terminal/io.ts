@@ -79,23 +79,6 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
   ipcMain.on(CHANNELS.TERMINAL_RESIZE, handleTerminalResize);
   handlers.push(() => ipcMain.removeListener(CHANNELS.TERMINAL_RESIZE, handleTerminalResize));
 
-  const handleTerminalFlush = async (
-    _event: Electron.IpcMainInvokeEvent,
-    id: string
-  ): Promise<void> => {
-    try {
-      if (typeof id !== "string" || !id) {
-        throw new Error("Invalid terminal ID: must be a non-empty string");
-      }
-      ptyClient.flushBuffer(id);
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to flush terminal buffer: ${errorMessage}`);
-    }
-  };
-  ipcMain.handle(CHANNELS.TERMINAL_FLUSH, handleTerminalFlush);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_FLUSH));
-
   const handleTerminalSetActivityTier = (
     _event: Electron.IpcMainEvent,
     payload: { id: string; tier: PtyHostActivityTier }

@@ -35,6 +35,13 @@ import { decideTerminalExitForensics } from "./terminalForensics.js";
 import { installHeadlessResponder } from "./headlessResponder.js";
 import { TerminalSyncBuffer } from "./TerminalSyncBuffer.js";
 import { styleUrls } from "./UrlStyler.js";
+import {
+  BRACKETED_PASTE_START,
+  BRACKETED_PASTE_END,
+  PASTE_THRESHOLD_CHARS,
+  getSoftNewlineSequence as getSoftNewlineSequenceShared,
+  containsFullBracketedPaste,
+} from "../../../shared/utils/terminalInputProtocol.js";
 
 const TERMINAL_DISABLE_URL_STYLING: boolean = process.env.CANOPY_DISABLE_URL_STYLING === "1";
 const TERMINAL_SESSION_PERSISTENCE_ENABLED: boolean =
@@ -56,14 +63,6 @@ function getSessionPath(id: string): string | null {
   return path.join(dir, `${id}.restore`);
 }
 
-// Flow Control Constants (VS Code values)
-const HIGH_WATERMARK_CHARS = 100000;
-const LOW_WATERMARK_CHARS = 5000;
-
-// Bracketed paste mode sequences
-const BRACKETED_PASTE_START = "\x1b[200~";
-const BRACKETED_PASTE_END = "\x1b[201~";
-const SUBMIT_BRACKETED_PASTE_THRESHOLD_CHARS = 200;
 const SUBMIT_ENTER_DELAY_MS = 200; // Delay between paste and enter for reliable execution
 
 function delay(ms: number): Promise<void> {
@@ -109,7 +108,8 @@ function supportsBracketedPaste(terminal: TerminalInfo): boolean {
 
 function getSoftNewlineSequence(terminal: TerminalInfo): string {
   // Shift+Enter "soft newline" differs by agent CLI; codex commonly uses LF (\n / Ctrl+J).
-  return isCodexTerminal(terminal) ? "\n" : "\x1b\r";
+  const agentType = isCodexTerminal(terminal) ? "codex" : terminal.type;
+  return getSoftNewlineSequenceShared(agentType);
 }
 
 /**
@@ -118,10 +118,7 @@ function getSoftNewlineSequence(terminal: TerminalInfo): string {
  * like Claude Code that show "Pasted X characters" for bulk input.
  */
 function isBracketedPaste(data: string): boolean {
-  if (!data.startsWith(BRACKETED_PASTE_START)) {
-    return false;
-  }
-  return data.indexOf(BRACKETED_PASTE_END, BRACKETED_PASTE_START.length) !== -1;
+  return containsFullBracketedPaste(data);
 }
 
 /**
@@ -161,7 +158,10 @@ export interface TerminalProcessCallbacks {
 export interface TerminalProcessDependencies {
   agentStateService: AgentStateService;
   ptyPool: PtyPool | null;
-  /** When true, per-terminal flow control is bypassed in favor of global SAB backpressure */
+  /**
+   * When true, uses SAB-based backpressure in pty-host for flow control.
+   * This is the default and recommended mode. Always true in production.
+   */
   sabModeEnabled?: boolean;
   processTreeCache: ProcessTreeCache | null;
 }
@@ -182,11 +182,6 @@ export class TerminalProcess {
 
   private lastWriteErrorLogTime = 0;
   private suppressedWriteErrorCount = 0;
-
-  // Flow control state
-  private _unacknowledgedCharCount = 0;
-  private _isPtyPaused = false;
-  private sabModeEnabled: boolean;
 
   // Semantic buffer state
   private pendingSemanticData = "";
@@ -361,7 +356,6 @@ export class TerminalProcess {
     const args = options.args || this.getDefaultShellArgs(shell);
     const spawnedAt = Date.now();
 
-    this.sabModeEnabled = deps.sabModeEnabled ?? false;
     this.isAgentTerminal = options.kind === "agent" || !!options.agentId;
     const agentId = this.isAgentTerminal ? (options.agentId ?? id) : undefined;
 
@@ -669,37 +663,11 @@ export class TerminalProcess {
 
   /**
    * Acknowledge data processing from frontend (Flow Control).
-   * Only has effect in IPC fallback mode; in SAB mode, flow control is handled globally.
+   * This is a no-op since SAB mode handles flow control globally via backpressure.
+   * Kept for backwards compatibility with IPC fallback mode.
    */
-  acknowledgeData(charCount: number): void {
-    if (this.terminalInfo.wasKilled) {
-      return;
-    }
-
-    if (this.isAgentTerminal) {
-      return;
-    }
-
-    // In SAB mode, per-terminal acks are ignored - global backpressure handles flow control
-    if (this.sabModeEnabled) {
-      return;
-    }
-
-    this._unacknowledgedCharCount = Math.max(0, this._unacknowledgedCharCount - charCount);
-
-    if (this._isPtyPaused && this._unacknowledgedCharCount < LOW_WATERMARK_CHARS) {
-      if (process.env.CANOPY_VERBOSE) {
-        console.log(
-          `[TerminalProcess] Flow control: Resuming ${this.id} (${this._unacknowledgedCharCount} < ${LOW_WATERMARK_CHARS})`
-        );
-      }
-      try {
-        this.terminalInfo.ptyProcess.resume();
-      } catch {
-        // Process might be dead
-      }
-      this._isPtyPaused = false;
-    }
+  acknowledgeData(_charCount: number): void {
+    // No-op: SAB-based backpressure in pty-host.ts handles all flow control
   }
 
   /**
@@ -807,8 +775,7 @@ export class TerminalProcess {
       return;
     }
 
-    const useBracketedPaste =
-      body.includes("\n") || body.length > SUBMIT_BRACKETED_PASTE_THRESHOLD_CHARS;
+    const useBracketedPaste = body.includes("\n") || body.length > PASTE_THRESHOLD_CHARS;
 
     if (useBracketedPaste && supportsBracketedPaste(terminal)) {
       const pasteBody = body.replace(/\n/g, "\r");
@@ -933,13 +900,6 @@ export class TerminalProcess {
     } catch {
       // Process may already be dead
     }
-  }
-
-  /**
-   * Set buffering mode.
-   */
-  flushBuffer(): void {
-    // No-op in baseline: output is emitted immediately.
   }
 
   // Flood protection is handled via higher-level flow control; always no-op here.
@@ -1114,23 +1074,11 @@ export class TerminalProcess {
 
   /**
    * Update SAB mode setting dynamically.
-   * If enabling SAB mode while terminal is paused waiting for renderer acks,
-   * immediately resume the PTY to unblock.
+   * This is a no-op - SAB-based backpressure in pty-host.ts handles all flow control.
+   * Kept for API compatibility with PtyManager.setSabMode().
    */
-  setSabModeEnabled(enabled: boolean): void {
-    this.sabModeEnabled = enabled;
-    if (enabled) {
-      // Transitioning to SAB mode - clear ack-based flow control state
-      this._unacknowledgedCharCount = 0;
-      if (this._isPtyPaused) {
-        try {
-          this.terminalInfo.ptyProcess.resume();
-        } catch {
-          // Ignore resume errors - process may be dead
-        }
-        this._isPtyPaused = false;
-      }
-    }
+  setSabModeEnabled(_enabled: boolean): void {
+    // No-op: SAB mode is always used, flow control handled by pty-host.ts
   }
 
   /**
@@ -1231,27 +1179,6 @@ export class TerminalProcess {
       // Verify this is still the active terminal
       if (terminal.ptyProcess !== ptyProcess) {
         return;
-      }
-
-      // Flow Control: Only apply per-terminal flow control in IPC fallback mode.
-      // In SAB mode, global SAB backpressure in pty-host handles throttling.
-      // Agent terminals are snapshot-projected and may not have a renderer consumer to ack bytes,
-      // so per-terminal IPC flow control would stall them indefinitely.
-      if (!this.sabModeEnabled && !this.isAgentTerminal) {
-        this._unacknowledgedCharCount += data.length;
-        if (!this._isPtyPaused && this._unacknowledgedCharCount > HIGH_WATERMARK_CHARS) {
-          if (process.env.CANOPY_VERBOSE) {
-            console.log(
-              `[TerminalProcess] Flow control: Pausing ${this.id} (${this._unacknowledgedCharCount} > ${HIGH_WATERMARK_CHARS})`
-            );
-          }
-          try {
-            ptyProcess.pause();
-          } catch {
-            // Process might be dead
-          }
-          this._isPtyPaused = true;
-        }
       }
 
       terminal.lastOutputTime = Date.now();

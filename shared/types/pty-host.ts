@@ -39,7 +39,6 @@ export type PtyHostRequest =
   | { type: "kill"; id: string; reason?: string }
   | { type: "trash"; id: string }
   | { type: "restore"; id: string }
-  | { type: "flush-buffer"; id: string }
   | { type: "set-activity-tier"; id: string; tier: PtyHostActivityTier }
   | { type: "wake-terminal"; id: string; requestId: string }
   | { type: "set-active-project"; projectId: string | null }

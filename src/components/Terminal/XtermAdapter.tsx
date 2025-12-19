@@ -6,10 +6,10 @@ import { TerminalRefreshTier } from "@/types";
 import type { TerminalType, AgentState } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useScrollbackStore, usePerformanceModeStore, useTerminalFontStore } from "@/store";
-import { useIsDragging } from "@/components/DragDrop";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
 import { CANOPY_TERMINAL_THEME, getTerminalThemeFromCSS } from "@/utils/terminalTheme";
+import { getSoftNewlineSequence } from "../../../shared/utils/terminalInputProtocol.js";
 
 export interface XtermAdapterProps {
   terminalId: string;
@@ -44,9 +44,6 @@ function XtermAdapterComponent({
   const prevDimensionsRef = useRef<{ cols: number; rows: number } | null>(null);
   const exitUnsubRef = useRef<(() => void) | null>(null);
   const rafIdRef = useRef<number | null>(null);
-
-  // Track visibility for resize optimization (start pessimistic for offscreen mounts)
-  const isVisibleRef = useRef(false);
 
   // Store the latest getRefreshTier in a ref to prevent stale closures.
   // This ensures the service always calls the current version of the callback.
@@ -109,9 +106,6 @@ function XtermAdapterComponent({
   // Push-based resize handler using ResizeObserver dimensions directly
   const handleResizeEntry = useCallback(
     (entry: ResizeObserverEntry) => {
-      // Early exit if not visible (use ref for latest value)
-      if (!isVisibleRef.current) return;
-
       // Get dimensions from observer (zero DOM reads)
       const rect = entry.contentRect;
       const width = rect.width;
@@ -209,7 +203,7 @@ function XtermAdapterComponent({
             // "Soft" newline for agent CLIs.
             // Codex CLI commonly expects LF (\n / Ctrl+J) for a newline without submit.
             // Other agent CLIs use the legacy ESC+CR sequence.
-            const softNewline = terminalType === "codex" ? "\n" : "\x1b\r";
+            const softNewline = getSoftNewlineSequence(terminalType);
             terminalClient.write(terminalId, softNewline);
             terminalInstanceService.notifyUserInput(terminalId);
             onInput?.(softNewline);
@@ -312,45 +306,6 @@ function XtermAdapterComponent({
       terminalInstanceService.boostRefreshRate(terminalId);
     }
   }, [terminalId, stableRefreshTierProvider, currentTier]);
-
-  // Track drag state in a ref to avoid useEffect cleanup timing issues.
-  // If isDragging is in the dependency array, the effect re-runs on drag start/end,
-  // which can cause timing issues with visibility updates.
-  const isDragging = useIsDragging();
-  const isDraggingRef = useRef(isDragging);
-  useEffect(() => {
-    isDraggingRef.current = isDragging;
-  }, [isDragging]);
-
-  // Visibility tracking - internal ref only for resize handling.
-  // Note: TerminalPane has the authoritative IntersectionObserver that updates
-  // both the store and service. This observer ONLY tracks the internal ref
-  // to avoid duplicate/racing setVisible calls.
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    const visibilityObserver = new IntersectionObserver(
-      ([entry]) => {
-        // Don't update visibility during drag - CSS transforms cause false negatives
-        if (isDraggingRef.current) return;
-
-        const nowVisible = entry.isIntersecting;
-        const wasVisible = isVisibleRef.current;
-        isVisibleRef.current = nowVisible;
-
-        // TerminalPane handles setVisible - we just track for resize logic
-        if (nowVisible && !wasVisible) {
-          // Force immediate fit with fresh dimensions when becoming visible
-          performFit();
-        }
-      },
-      { threshold: 0.1 }
-    );
-    visibilityObserver.observe(container);
-
-    return () => visibilityObserver.disconnect();
-  }, [terminalId, performFit]);
 
   // Subscribe to agent state changes for state-aware rendering decisions
   // This enables future defensive layers (height ratchet, resize guard, scroll latch)

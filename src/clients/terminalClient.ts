@@ -109,10 +109,6 @@ export const terminalClient = {
     return window.electron.terminal.onRestored(callback);
   },
 
-  flush: (id: string): Promise<void> => {
-    return window.electron.terminal.flush(id);
-  },
-
   setActivityTier: (id: string, tier: "active" | "background"): void => {
     window.electron.terminal.setActivityTier(id, tier);
   },

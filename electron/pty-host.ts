@@ -925,10 +925,6 @@ port.on("message", async (rawMsg: any) => {
         ptyManager.restore(msg.id);
         break;
 
-      case "flush-buffer":
-        ptyManager.flushBuffer(msg.id);
-        break;
-
       case "set-activity-tier": {
         const tier = msg.tier === "background" ? "background" : "active";
         terminalActivityTiers.set(msg.id, tier);

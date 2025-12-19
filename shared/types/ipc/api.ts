@@ -79,7 +79,6 @@ export interface ElectronAPI {
     kill(id: string): Promise<void>;
     trash(id: string): Promise<void>;
     restore(id: string): Promise<boolean>;
-    flush(id: string): Promise<void>;
     setActivityTier(id: string, tier: PtyHostActivityTier): void;
     wake(id: string): Promise<{ state: string | null; warnings?: string[] }>;
     acknowledgeData(id: string, length: number): void;
@@ -93,8 +92,6 @@ export interface ElectronAPI {
     }>;
     getAnalysisBuffer(): Promise<SharedArrayBuffer | null>;
     getInfo(id: string): Promise<TerminalInfoPayload>;
-    getMessagePort(): Promise<any | null>;
-    isMessagePortAvailable(): boolean;
     onData(id: string, callback: (data: string | Uint8Array) => void): () => void;
     onExit(callback: (id: string, exitCode: number) => void): () => void;
     onAgentStateChanged(callback: (data: AgentStateChangePayload) => void): () => void;

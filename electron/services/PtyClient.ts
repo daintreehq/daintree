@@ -692,10 +692,6 @@ export class PtyClient extends EventEmitter {
     return wasTracked;
   }
 
-  flushBuffer(id: string): void {
-    this.send({ type: "flush-buffer", id });
-  }
-
   setActivityTier(id: string, tier: PtyHostActivityTier): void {
     this.send({ type: "set-activity-tier", id, tier });
   }
@@ -1066,6 +1062,7 @@ export class PtyClient extends EventEmitter {
 
   /**
    * Check if SharedArrayBuffer-based I/O is enabled.
+   * Used internally and by diagnostic/debugging code.
    */
   isSharedBufferEnabled(): boolean {
     return this.sharedBufferEnabled;

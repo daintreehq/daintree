@@ -2,10 +2,10 @@ import { ipcMain, dialog, shell } from "electron";
 import path from "path";
 import os from "os";
 import { CHANNELS } from "../channels.js";
-import { sendToRenderer } from "../utils.js";
 import { openExternalUrl } from "../../utils/openExternal.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { runCommandDetector } from "../../services/RunCommandDetector.js";
+import { ProjectSwitchService } from "../../services/ProjectSwitchService.js";
 import type { HandlerDependencies } from "../types.js";
 import type {
   SystemOpenExternalPayload,
@@ -17,6 +17,13 @@ import type {
 export function registerProjectHandlers(deps: HandlerDependencies): () => void {
   const { mainWindow, worktreeService, cliAvailabilityService } = deps;
   const handlers: Array<() => void> = [];
+
+  const projectSwitchService = new ProjectSwitchService({
+    mainWindow: deps.mainWindow,
+    ptyClient: deps.ptyClient,
+    worktreeService: deps.worktreeService,
+    eventBuffer: deps.eventBuffer,
+  });
 
   const handleSystemOpenExternal = async (
     _event: Electron.IpcMainInvokeEvent,
@@ -202,70 +209,7 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
       throw new Error("Invalid project ID");
     }
 
-    const project = projectStore.getProjectById(projectId);
-    if (!project) {
-      throw new Error(`Project not found: ${projectId}`);
-    }
-
-    console.log("[ProjectSwitch] Starting project switch to:", project.name);
-
-    const { logBuffer } = await import("../../services/LogBuffer.js");
-
-    console.log("[ProjectSwitch] Cleaning up previous project state...");
-
-    // Store previous project for rollback on failure (best-effort; pty-host owns filtering)
-    const previousProjectId = projectStore.getCurrentProjectId();
-
-    try {
-      // First: Background terminals/servers and enable buffering (onProjectSwitch)
-      // This ensures output is buffered before we filter it
-      const cleanupResults = await Promise.allSettled([
-        deps.worktreeService?.onProjectSwitch() ?? Promise.resolve(),
-        Promise.resolve(deps.ptyClient.onProjectSwitch(projectId)),
-        Promise.resolve(logBuffer.onProjectSwitch()),
-        Promise.resolve(deps.eventBuffer?.onProjectSwitch()),
-      ]);
-
-      cleanupResults.forEach((result, index) => {
-        if (result.status === "rejected") {
-          const serviceNames = ["WorktreeService", "PtyClient", "LogBuffer", "EventBuffer"];
-          console.error(`[ProjectSwitch] ${serviceNames[index]} cleanup failed:`, result.reason);
-        }
-      });
-
-      // Second: Set active project filter AFTER buffering is in place
-      // This prevents event loss during transition - buffered output is preserved for replay
-      deps.ptyClient.setActiveProject(projectId);
-
-      console.log("[ProjectSwitch] Previous project state cleaned up");
-
-      await projectStore.setCurrentProject(projectId);
-
-      const updatedProject = projectStore.getProjectById(projectId);
-      if (!updatedProject) {
-        throw new Error(`Project not found after update: ${projectId}`);
-      }
-
-      if (worktreeService) {
-        try {
-          console.log("[ProjectSwitch] Loading worktrees for new project...");
-          await worktreeService.loadProject(project.path);
-          console.log("[ProjectSwitch] Worktrees loaded successfully");
-        } catch (err) {
-          console.error("Failed to load worktrees for project:", err);
-        }
-      }
-
-      sendToRenderer(mainWindow, CHANNELS.PROJECT_ON_SWITCH, updatedProject);
-
-      console.log("[ProjectSwitch] Project switch complete");
-      return updatedProject;
-    } catch (error) {
-      // Rollback active project filter on failure
-      console.error("[ProjectSwitch] Project switch failed, rolling back:", error);
-      deps.ptyClient.setActiveProject(previousProjectId);
-      throw error;
-    }
+    return await projectSwitchService.switchProject(projectId);
   };
   ipcMain.handle(CHANNELS.PROJECT_SWITCH, handleProjectSwitch);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_SWITCH));

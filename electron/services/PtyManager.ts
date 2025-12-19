@@ -58,9 +58,9 @@ export class PtyManager extends EventEmitter {
 
   /**
    * Enable SharedArrayBuffer mode for flow control.
-   * When SAB mode is enabled, per-terminal flow control is bypassed
-   * because global SAB backpressure handles throttling instead.
-   * Propagates to all existing terminals to unblock any that are paused.
+   * SAB mode uses global backpressure in pty-host for flow control.
+   * This is the default and recommended mode. Always enabled when buffers are initialized.
+   * Propagates to all existing terminals.
    */
   setSabMode(enabled: boolean): void {
     this.sabModeEnabled = enabled;
@@ -240,21 +240,13 @@ export class PtyManager extends EventEmitter {
 
   /**
    * Acknowledge data processing for flow control.
+   * No-op in SAB mode (which is always enabled in production).
+   * Kept for backwards compatibility with IPC fallback mode.
    */
   acknowledgeData(id: string, charCount: number): void {
     const terminal = this.registry.get(id);
     if (terminal) {
       terminal.acknowledgeData(charCount);
-    }
-  }
-
-  /**
-   * Set buffering mode for a terminal.
-   */
-  flushBuffer(id: string): void {
-    const terminal = this.registry.get(id);
-    if (terminal) {
-      terminal.flushBuffer();
     }
   }
 
@@ -508,7 +500,6 @@ export class PtyManager extends EventEmitter {
           timestamp: Date.now(),
         });
 
-        terminalProcess.flushBuffer();
         terminalProcess.startProcessDetector();
         terminalProcess.startActivityMonitor();
       }

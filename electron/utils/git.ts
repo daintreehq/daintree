@@ -11,52 +11,11 @@ const GIT_WORKTREE_CHANGES_CACHE = new Cache<string, WorktreeChanges>({
   defaultTTL: 15000, // 15s to cover 10s background polling + margin
 });
 
-let cleanupInterval: NodeJS.Timeout | null = null;
-
-function runCacheCleanup(): void {
-  GIT_WORKTREE_CHANGES_CACHE.cleanup();
-}
-
-export function startWorktreeCacheCleanup(): void {
-  if (cleanupInterval) return;
-  cleanupInterval = setInterval(runCacheCleanup, 10000);
-  cleanupInterval.unref();
-}
-
-export function stopWorktreeCacheCleanup(): void {
-  if (cleanupInterval) {
-    clearInterval(cleanupInterval);
-    cleanupInterval = null;
-  }
-}
-
-if (process.env.NODE_ENV !== "test") {
-  startWorktreeCacheCleanup();
-}
-
 export function invalidateWorktreeCache(cwd: string): void {
   GIT_WORKTREE_CHANGES_CACHE.invalidate(cwd);
 }
 
 export { invalidateWorktreeCache as invalidateGitStatusCache };
-
-export function clearWorktreeCache(): void {
-  GIT_WORKTREE_CHANGES_CACHE.clear();
-}
-
-export function getWorktreeCacheMetrics(): {
-  size: number;
-  hits: number;
-  misses: number;
-  hitRate: number;
-  ttl: number;
-} {
-  const stats = GIT_WORKTREE_CHANGES_CACHE.getStats();
-  return {
-    ...stats,
-    ttl: 15000,
-  };
-}
 
 interface DiffStat {
   insertions: number | null;
