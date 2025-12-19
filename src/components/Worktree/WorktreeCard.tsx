@@ -651,7 +651,7 @@ export function WorktreeCard({
     ];
 
     const hasIssueItem = Boolean(worktree.issueNumber && onOpenIssue);
-    const hasPrItem = Boolean(worktree.prNumber && onOpenPR);
+    const hasPrItem = Boolean(worktree.issueNumber && worktree.prNumber && onOpenPR);
     if (hasIssueItem || hasPrItem) {
       template.push({ type: "separator" });
       if (hasIssueItem) {
@@ -1003,7 +1003,11 @@ export function WorktreeCard({
                       onOpenIssue={
                         worktree.issueNumber && onOpenIssue ? handleOpenIssue : undefined
                       }
-                      onOpenPR={worktree.prNumber && onOpenPR ? handleOpenPR : undefined}
+                      onOpenPR={
+                        worktree.issueNumber && worktree.prNumber && onOpenPR
+                          ? handleOpenPR
+                          : undefined
+                      }
                       onRunRecipe={(recipeId) => void handleRunRecipe(recipeId)}
                       onCreateRecipe={onCreateRecipe}
                       onSaveLayout={onSaveLayout}
@@ -1027,8 +1031,8 @@ export function WorktreeCard({
               </div>
             </div>
 
-            {/* Row 2: Context Badges (PR/Issue) */}
-            {(worktree.issueNumber || worktree.prNumber) && (
+            {/* Row 2: Context Badges (PR/Issue) - PR only shown when linked to an issue */}
+            {worktree.issueNumber && (
               <div className="flex items-center gap-2">
                 {worktree.issueNumber && (
                   <button
