@@ -1,7 +1,6 @@
 import { useEffect, useRef } from "react";
-import { useShallow } from "zustand/react/shallow";
-import { useTerminalStore } from "@/store/terminalStore";
 import { updateFaviconBadge, clearFaviconBadge } from "@/services/FaviconBadgeService";
+import { useTerminalNotificationCounts } from "@/hooks/useTerminalSelectors";
 
 const DEBOUNCE_MS = 300;
 
@@ -10,15 +9,7 @@ export function useWindowNotifications(): void {
   const windowFocusedRef = useRef(true);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  const { waitingCount, failedCount } = useTerminalStore(
-    useShallow((state) => {
-      const nonTrashedTerminals = state.terminals.filter((t) => !state.isInTrash(t.id));
-      return {
-        waitingCount: nonTrashedTerminals.filter((t) => t.agentState === "waiting").length,
-        failedCount: nonTrashedTerminals.filter((t) => t.agentState === "failed").length,
-      };
-    })
-  );
+  const { waitingCount, failedCount } = useTerminalNotificationCounts();
 
   // Handle window focus/blur for favicon badge clearing
   useEffect(() => {
