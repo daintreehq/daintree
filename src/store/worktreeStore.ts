@@ -15,6 +15,7 @@ interface WorktreeSelectionState {
   expandedWorktrees: Set<string>;
   createDialog: CreateDialogState;
   _policyGeneration: number;
+  lastFocusedTerminalByWorktree: Map<string, string>;
 
   setActiveWorktree: (id: string | null) => void;
   setFocusedWorktree: (id: string | null) => void;
@@ -24,6 +25,8 @@ interface WorktreeSelectionState {
   collapseAllWorktrees: () => void;
   openCreateDialog: (initialIssue?: GitHubIssue | null) => void;
   closeCreateDialog: () => void;
+  trackTerminalFocus: (worktreeId: string, terminalId: string) => void;
+  clearWorktreeFocusTracking: (worktreeId: string) => void;
   reset: () => void;
 }
 
@@ -33,6 +36,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
   expandedWorktrees: new Set<string>(),
   createDialog: { isOpen: false, initialIssue: null },
   _policyGeneration: 0,
+  lastFocusedTerminalByWorktree: new Map<string, string>(),
 
   setActiveWorktree: (id) => {
     set({ activeWorktreeId: id });
@@ -52,13 +56,37 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       return;
     }
 
-    set({ activeWorktreeId: id, focusedWorktreeId: id });
+    const generation = get()._policyGeneration + 1;
+    set({ activeWorktreeId: id, focusedWorktreeId: id, _policyGeneration: generation });
 
     appClient.setState({ activeWorktreeId: id }).catch((error) => {
       console.error("Failed to persist active worktree:", error);
     });
 
     applyWorktreeTerminalPolicy(get, set, id);
+
+    // Restore the last focused terminal for this worktree
+    const lastFocusedTerminalId = get().lastFocusedTerminalByWorktree.get(id);
+    if (lastFocusedTerminalId) {
+      void import("@/store/terminalStore").then(({ useTerminalStore }) => {
+        // Check generation to ensure we're not applying stale focus from a previous switch
+        if (get()._policyGeneration !== generation) return;
+        // Verify the worktree hasn't changed
+        if (get().activeWorktreeId !== id) return;
+
+        const terminals = useTerminalStore.getState().terminals;
+        const terminal = terminals.find((t) => t.id === lastFocusedTerminalId);
+
+        // Validate terminal still exists, belongs to this worktree, and isn't in trash
+        if (
+          terminal &&
+          terminal.worktreeId === id &&
+          terminal.location !== "trash"
+        ) {
+          useTerminalStore.getState().setFocused(lastFocusedTerminalId);
+        }
+      });
+    }
   },
 
   toggleWorktreeExpanded: (id) =>
@@ -89,18 +117,75 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
 
   closeCreateDialog: () => set({ createDialog: { isOpen: false, initialIssue: null } }),
 
+  trackTerminalFocus: (worktreeId, terminalId) =>
+    set((state) => {
+      const next = new Map(state.lastFocusedTerminalByWorktree);
+      next.set(worktreeId, terminalId);
+      return { lastFocusedTerminalByWorktree: next };
+    }),
+
+  clearWorktreeFocusTracking: (worktreeId) =>
+    set((state) => {
+      const next = new Map(state.lastFocusedTerminalByWorktree);
+      next.delete(worktreeId);
+      return { lastFocusedTerminalByWorktree: next };
+    }),
+
   reset: () =>
     set({
       activeWorktreeId: null,
       focusedWorktreeId: null,
       expandedWorktrees: new Set<string>(),
       createDialog: { isOpen: false, initialIssue: null },
+      lastFocusedTerminalByWorktree: new Map<string, string>(),
     }),
 });
 
 export const useWorktreeSelectionStore = create<WorktreeSelectionState>()(
   createWorktreeSelectionStore
 );
+
+let focusTrackingUnsubscribe: (() => void) | null = null;
+
+export function setupWorktreeFocusTracking() {
+  if (focusTrackingUnsubscribe !== null) {
+    return () => {
+      focusTrackingUnsubscribe?.();
+      focusTrackingUnsubscribe = null;
+    };
+  }
+
+  void import("@/store/terminalStore").then(({ useTerminalStore }) => {
+    let previousFocusedId: string | null = null;
+
+    focusTrackingUnsubscribe = useTerminalStore.subscribe((state) => {
+      const focusedId = state.focusedId;
+
+      // Only track when focus changes
+      if (focusedId === previousFocusedId) return;
+      previousFocusedId = focusedId;
+
+      if (!focusedId) return;
+
+      const terminal = state.terminals.find((t) => t.id === focusedId);
+      if (terminal?.worktreeId) {
+        useWorktreeSelectionStore.getState().trackTerminalFocus(terminal.worktreeId, focusedId);
+      }
+    });
+  });
+
+  return () => {
+    focusTrackingUnsubscribe?.();
+    focusTrackingUnsubscribe = null;
+  };
+}
+
+export function cleanupWorktreeFocusTracking() {
+  if (focusTrackingUnsubscribe) {
+    focusTrackingUnsubscribe();
+    focusTrackingUnsubscribe = null;
+  }
+}
 
 function applyWorktreeTerminalPolicy(
   get: () => WorktreeSelectionState,
