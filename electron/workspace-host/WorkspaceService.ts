@@ -11,11 +11,7 @@ import type {
   BranchInfo,
   PRServiceStatus,
 } from "../../shared/types/workspace-host.js";
-import {
-  invalidateGitStatusCache,
-  getWorktreeChangesWithStats,
-  getLatestTrackedFileMtime,
-} from "../utils/git.js";
+import { invalidateGitStatusCache, getWorktreeChangesWithStats } from "../utils/git.js";
 import { getGitDir, clearGitDirCache } from "../utils/gitUtils.js";
 import { WorktreeRemovedError } from "../utils/errorTypes.js";
 import { categorizeWorktree } from "../services/worktree/mood.js";
