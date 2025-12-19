@@ -7,7 +7,7 @@ import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
 const MIN_FONT_SIZE = 8;
 const MAX_FONT_SIZE = 24;
 
-const SYSTEM_STACK = 'Menlo, Monaco, Consolas, monospace';
+const SYSTEM_STACK = "Menlo, Monaco, Consolas, monospace";
 
 const FONT_FAMILY_OPTIONS: Array<{ id: string; label: string; value: string }> = [
   {

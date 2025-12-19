@@ -47,7 +47,7 @@ export interface PRDetectedPayload {
   worktreeId: string;
   prNumber: number;
   prUrl: string;
-  prState: string;
+  prState: "open" | "merged" | "closed";
   issueNumber?: number;
 }
 

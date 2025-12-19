@@ -50,6 +50,8 @@ export interface WorktreeChanges {
   lastUpdated?: number;
   /** Last commit message (cached to avoid extra git log calls) */
   lastCommitMessage?: string;
+  /** Last commit time (ms since epoch, committer date) */
+  lastCommitTimestampMs?: number;
 }
 
 // Worktree Types

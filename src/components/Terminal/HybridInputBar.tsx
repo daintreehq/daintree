@@ -135,19 +135,26 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const lastQueryRef = useRef<string>("");
     const [menuLeftPx, setMenuLeftPx] = useState<number>(0);
     const [collapsedHeightPx, setCollapsedHeightPx] = useState<number | null>(null);
-    const [hasBecomeReadyOnce, setHasBecomeReadyOnce] = useState(false);
+    const [initializationState, setInitializationState] = useState<"initializing" | "initialized">(
+      "initializing"
+    );
 
     const isAgentTerminal = agentId !== undefined;
 
     useEffect(() => {
-      setHasBecomeReadyOnce(false);
+      setInitializationState("initializing");
     }, [restartKey]);
 
     useEffect(() => {
-      if (isAgentTerminal && agentHasLifecycleEvent && isAgentReady(agentState)) {
-        setHasBecomeReadyOnce(true);
+      if (
+        initializationState === "initializing" &&
+        isAgentTerminal &&
+        agentHasLifecycleEvent &&
+        isAgentReady(agentState)
+      ) {
+        setInitializationState("initialized");
       }
-    }, [isAgentTerminal, agentHasLifecycleEvent, agentState]);
+    }, [initializationState, isAgentTerminal, agentHasLifecycleEvent, agentState]);
 
     useEffect(() => {
       return () => {
@@ -157,7 +164,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       };
     }, []);
 
-    const isInitialAgentLoading = isAgentTerminal && !hasBecomeReadyOnce;
+    const isInitializing = isAgentTerminal && initializationState === "initializing";
 
     useEffect(() => {
       setDraftInput(terminalId, value);
@@ -174,11 +181,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     const placeholder = useMemo(() => {
       const agentName = agentId ? getAgentConfig(agentId)?.name : null;
-      if (isInitialAgentLoading && agentName) {
+      if (isInitializing && agentName) {
         return `${agentName} is loading…`;
       }
       return agentName ? `Enter your command for ${agentName}…` : "Enter your command…";
-    }, [agentId, isInitialAgentLoading]);
+    }, [agentId, isInitializing]);
 
     const activeMode = slashContext ? "command" : atContext ? "file" : null;
     const isAutocompleteOpen = activeMode !== null && !disabled;
@@ -317,7 +324,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     }, [autocompleteItems.length, isAutocompleteOpen]);
 
     const sendFromTextarea = useCallback(() => {
-      if (disabled || isInitialAgentLoading) return;
+      if (disabled || isInitializing) return;
       const text = textareaRef.current?.value ?? value;
       if (text.trim().length === 0) return;
       const payload = buildTerminalSendPayload(text);
@@ -332,7 +339,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     }, [
       addToHistory,
       disabled,
-      isInitialAgentLoading,
+      isInitializing,
       onSend,
       resizeTextarea,
       resetHistoryIndex,
@@ -404,7 +411,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       (event: KeyboardEvent<HTMLTextAreaElement>): boolean => {
         if (!onSendKey) return false;
         if (disabled) return false;
-        if (isInitialAgentLoading) return false;
+        if (isInitializing) return false;
         if (event.nativeEvent.isComposing) return false;
 
         const isEmpty = value.trim().length === 0;
@@ -494,7 +501,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         disabled,
         handleHistoryNavigation,
         isInHistoryMode,
-        isInitialAgentLoading,
+        isInitializing,
         isAutocompleteOpen,
         onSendKey,
         value,
@@ -633,9 +640,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               "group-hover:border-white/[0.08] group-hover:bg-white/[0.04]",
               "focus-within:border-white/[0.12] focus-within:ring-1 focus-within:ring-white/[0.06] focus-within:bg-white/[0.05]",
               disabled && "opacity-60",
-              isInitialAgentLoading && "opacity-50"
+              isInitializing && "opacity-50"
             )}
-            aria-disabled={disabled || isInitialAgentLoading}
+            aria-disabled={disabled || isInitializing}
           >
             <AutocompleteMenu
               ref={menuRef}
@@ -724,7 +731,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                   return;
                 }
 
-                if (isInitialAgentLoading) {
+                if (isInitializing) {
                   e.preventDefault();
                   e.stopPropagation();
                   return;
@@ -735,7 +742,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                   e.stopPropagation();
                   const action =
                     activeMode === "command" ? ("execute" as const) : ("insert" as const);
-                  if (action === "execute" && isInitialAgentLoading) {
+                  if (action === "execute" && isInitializing) {
                     return;
                   }
                   applyAutocompleteItem(autocompleteItems[selectedIndex], action);
@@ -805,7 +812,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                     }, 0);
                     const action =
                       activeMode === "command" ? ("execute" as const) : ("insert" as const);
-                    if (action === "execute" && isInitialAgentLoading) {
+                    if (action === "execute" && isInitializing) {
                       return;
                     }
                     applyAutocompleteItem(autocompleteItems[selectedIndex], action);
@@ -819,7 +826,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
                 if (isEnter) {
                   if (e.shiftKey) return;
-                  if (isInitialAgentLoading) {
+                  if (isInitializing) {
                     e.preventDefault();
                     e.stopPropagation();
                     return;

@@ -395,6 +395,10 @@ export class WorkspaceService {
         monitor.lastActivityTimestamp = Date.now();
       }
 
+      if (isInitialLoad && isNowClean && monitor.lastActivityTimestamp === null) {
+        monitor.lastActivityTimestamp = newChanges.lastCommitTimestampMs ?? null;
+      }
+
       // Use last commit message as summary
       if (
         isNowClean ||
@@ -895,7 +899,6 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this.cleanupPRService();
 
     pullRequestService.initialize(this.projectRootPath);
-    pullRequestService.start();
 
     this.prEventUnsubscribers.push(
       events.on("sys:pr:detected", (data: any) => {
@@ -933,6 +936,8 @@ ${lines.map((l) => "+" + l).join("\n")}`;
         });
       })
     );
+
+    pullRequestService.start();
   }
 
   private cleanupPRService(): void {
