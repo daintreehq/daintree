@@ -26,7 +26,7 @@ import { AgentButton } from "./AgentButton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useWorktreeActions } from "@/hooks/useWorktreeActions";
 import { useProjectStore } from "@/store/projectStore";
-import { useSidecarStore } from "@/store";
+import { useSidecarStore, usePreferencesStore } from "@/store";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { useRepositoryStats } from "@/hooks/useRepositoryStats";
@@ -107,6 +107,7 @@ export function Toolbar({
 
   const sidecarOpen = useSidecarStore((state) => state.isOpen);
   const toggleSidecar = useSidecarStore((state) => state.toggle);
+  const showDeveloperTools = usePreferencesStore((state) => state.showDeveloperTools);
 
   const [issuesOpen, setIssuesOpen] = useState(false);
   const [prsOpen, setPrsOpen] = useState(false);
@@ -201,37 +202,42 @@ export function Toolbar({
         >
           {isFocusMode ? <PanelLeft /> : <PanelLeftClose />}
         </Button>
-        <AgentButton
-          type="claude"
-          availability={agentAvailability?.claude}
-          isEnabled={agentSettings?.agents?.claude?.enabled ?? true}
-          onLaunch={() => onLaunchAgent("claude")}
-          onOpenSettings={openAgentSettings}
-        />
-        <AgentButton
-          type="gemini"
-          availability={agentAvailability?.gemini}
-          isEnabled={agentSettings?.agents?.gemini?.enabled ?? true}
-          onLaunch={() => onLaunchAgent("gemini")}
-          onOpenSettings={openAgentSettings}
-        />
-        <AgentButton
-          type="codex"
-          availability={agentAvailability?.codex}
-          isEnabled={agentSettings?.agents?.codex?.enabled ?? true}
-          onLaunch={() => onLaunchAgent("codex")}
-          onOpenSettings={openAgentSettings}
-        />
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => onLaunchAgent("terminal")}
-          className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
-          title="Open Terminal (⌘T for palette)"
-          aria-label="Open Terminal"
-        >
-          <Terminal />
-        </Button>
+
+        <div className="w-px h-5 bg-white/[0.08] mx-1" />
+
+        <div className="flex items-center gap-0.5">
+          <AgentButton
+            type="claude"
+            availability={agentAvailability?.claude}
+            isEnabled={agentSettings?.agents?.claude?.enabled ?? true}
+            onLaunch={() => onLaunchAgent("claude")}
+            onOpenSettings={openAgentSettings}
+          />
+          <AgentButton
+            type="gemini"
+            availability={agentAvailability?.gemini}
+            isEnabled={agentSettings?.agents?.gemini?.enabled ?? true}
+            onLaunch={() => onLaunchAgent("gemini")}
+            onOpenSettings={openAgentSettings}
+          />
+          <AgentButton
+            type="codex"
+            availability={agentAvailability?.codex}
+            isEnabled={agentSettings?.agents?.codex?.enabled ?? true}
+            onLaunch={() => onLaunchAgent("codex")}
+            onOpenSettings={openAgentSettings}
+          />
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => onLaunchAgent("terminal")}
+            className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
+            title="Open Terminal (⌘T for palette)"
+            aria-label="Open Terminal"
+          >
+            <Terminal />
+          </Button>
+        </div>
       </div>
 
       {/* CENTER GROUP - Absolutely positioned dead center */}
@@ -358,9 +364,9 @@ export function Toolbar({
       </div>
 
       {/* RIGHT GROUP */}
-      <div className="flex items-center gap-2 app-no-drag z-20">
+      <div className="flex items-center gap-1.5 app-no-drag z-20">
         {stats && currentProject && !statsError && (
-          <div className="flex items-center h-8 rounded-[var(--radius-md)] bg-white/[0.03] border border-divider divide-x divide-[var(--border-divider)] mr-1">
+          <div className="flex items-center h-8 rounded-[var(--radius-md)] bg-white/[0.03] border border-divider divide-x divide-[var(--border-divider)] mr-2">
             <Button
               ref={issuesButtonRef}
               variant="ghost"
@@ -469,66 +475,42 @@ export function Toolbar({
           </div>
         )}
 
-        <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onToggleProblems}
-            className={cn(
-              "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent relative transition-colors",
-              errorCount > 0 && "text-[var(--color-status-error)]"
-            )}
-            title="Show Problems Panel (Ctrl+Shift+M)"
-            aria-label={`Problems: ${errorCount} error${errorCount !== 1 ? "s" : ""}`}
-          >
-            <AlertCircle />
-            {errorCount > 0 && (
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-[var(--color-status-error)] rounded-full" />
-            )}
-          </Button>
-        </div>
-
-        <div className="w-px h-5 bg-white/[0.08]" />
-
-        <TooltipProvider>
-          <Tooltip open={treeCopied} delayDuration={0}>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={handleCopyTreeClick}
-                disabled={isCopyingTree || !activeWorktree}
-                className={cn(
-                  "transition-colors",
-                  treeCopied
-                    ? "text-[var(--color-status-success)] bg-[var(--color-status-success)]/10"
-                    : "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent",
-                  isCopyingTree && "cursor-wait opacity-70",
-                  !activeWorktree && "opacity-50"
-                )}
-                title={activeWorktree ? "Copy Context" : "No active worktree"}
-                aria-label={treeCopied ? "Context Copied" : "Copy Context"}
-              >
-                {isCopyingTree ? (
-                  <Loader2 className="animate-spin motion-reduce:animate-none" />
-                ) : treeCopied ? (
-                  <Check />
-                ) : (
-                  <Copy />
-                )}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" className="font-medium">
-              <span role="status" aria-live="polite">
-                {copyFeedback}
-              </span>
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-
-        <div className="w-px h-5 bg-white/[0.08]" />
-
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-0.5">
+          <TooltipProvider>
+            <Tooltip open={treeCopied} delayDuration={0}>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleCopyTreeClick}
+                  disabled={isCopyingTree || !activeWorktree}
+                  className={cn(
+                    "transition-colors",
+                    treeCopied
+                      ? "text-[var(--color-status-success)] bg-[var(--color-status-success)]/10"
+                      : "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent",
+                    isCopyingTree && "cursor-wait opacity-70",
+                    !activeWorktree && "opacity-50"
+                  )}
+                  title={activeWorktree ? "Copy Context" : "No active worktree"}
+                  aria-label={treeCopied ? "Context Copied" : "Copy Context"}
+                >
+                  {isCopyingTree ? (
+                    <Loader2 className="animate-spin motion-reduce:animate-none" />
+                  ) : treeCopied ? (
+                    <Check />
+                  ) : (
+                    <Copy />
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="font-medium">
+                <span role="status" aria-live="polite">
+                  {copyFeedback}
+                </span>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
           <Button
             variant="ghost"
             size="icon"
@@ -540,24 +522,45 @@ export function Toolbar({
           >
             <Settings />
           </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={toggleSidecar}
-            className={cn(
-              "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
-            )}
-            title={sidecarOpen ? "Close Context Sidecar" : "Open Context Sidecar"}
-            aria-label={sidecarOpen ? "Close context sidecar" : "Open context sidecar"}
-            aria-pressed={sidecarOpen}
-          >
-            {sidecarOpen ? (
-              <PanelRightClose aria-hidden="true" />
-            ) : (
-              <PanelRightOpen aria-hidden="true" />
-            )}
-          </Button>
+          {showDeveloperTools && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onToggleProblems}
+              className={cn(
+                "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent relative transition-colors",
+                errorCount > 0 && "text-[var(--color-status-error)]"
+              )}
+              title="Show Problems Panel (Ctrl+Shift+M)"
+              aria-label={`Problems: ${errorCount} error${errorCount !== 1 ? "s" : ""}`}
+            >
+              <AlertCircle />
+              {errorCount > 0 && (
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-[var(--color-status-error)] rounded-full" />
+              )}
+            </Button>
+          )}
         </div>
+
+        <div className="w-px h-5 bg-white/[0.08] mx-1" />
+
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={toggleSidecar}
+          className={cn(
+            "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
+          )}
+          title={sidecarOpen ? "Close Context Sidecar" : "Open Context Sidecar"}
+          aria-label={sidecarOpen ? "Close context sidecar" : "Open context sidecar"}
+          aria-pressed={sidecarOpen}
+        >
+          {sidecarOpen ? (
+            <PanelRightClose aria-hidden="true" />
+          ) : (
+            <PanelRightOpen aria-hidden="true" />
+          )}
+        </Button>
       </div>
     </header>
   );

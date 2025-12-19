@@ -7,6 +7,7 @@ import {
   CheckCircle,
   AlertCircle,
   Activity,
+  Wrench,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { hibernationClient, cliAvailabilityClient, agentSettingsClient } from "@/clients";
@@ -72,6 +73,8 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
 
   const showProjectPulse = usePreferencesStore((s) => s.showProjectPulse);
   const setShowProjectPulse = usePreferencesStore((s) => s.setShowProjectPulse);
+  const showDeveloperTools = usePreferencesStore((s) => s.showDeveloperTools);
+  const setShowDeveloperTools = usePreferencesStore((s) => s.setShowDeveloperTools);
 
   useEffect(() => {
     hibernationClient
@@ -351,7 +354,7 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
         </div>
       ) : null}
 
-      <div className="space-y-2">
+      <div className="space-y-3">
         <h4 className="text-sm font-medium text-canopy-text flex items-center gap-2">
           <Activity className="w-4 h-4 text-canopy-accent" />
           Display
@@ -392,6 +395,47 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
               className={cn(
                 "absolute top-1 w-4 h-4 rounded-full bg-white transition-transform",
                 showProjectPulse ? "translate-x-6" : "translate-x-1"
+              )}
+            />
+          </div>
+        </button>
+
+        <button
+          onClick={() => setShowDeveloperTools(!showDeveloperTools)}
+          role="switch"
+          aria-checked={showDeveloperTools}
+          aria-label="Developer Tools Toggle"
+          className={cn(
+            "w-full flex items-center justify-between p-4 rounded-[var(--radius-lg)] border transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
+            showDeveloperTools
+              ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
+              : "border-canopy-border hover:bg-white/5 text-canopy-text/70"
+          )}
+        >
+          <div className="flex items-center gap-3">
+            <Wrench
+              className={cn(
+                "w-5 h-5",
+                showDeveloperTools ? "text-canopy-accent" : "text-canopy-text/50"
+              )}
+            />
+            <div className="text-left">
+              <div className="text-sm font-medium">Developer Tools</div>
+              <div className="text-xs opacity-70">
+                Show problems panel button in the toolbar
+              </div>
+            </div>
+          </div>
+          <div
+            className={cn(
+              "w-11 h-6 rounded-full relative transition-colors",
+              showDeveloperTools ? "bg-canopy-accent" : "bg-canopy-border"
+            )}
+          >
+            <div
+              className={cn(
+                "absolute top-1 w-4 h-4 rounded-full bg-white transition-transform",
+                showDeveloperTools ? "translate-x-6" : "translate-x-1"
               )}
             />
           </div>
