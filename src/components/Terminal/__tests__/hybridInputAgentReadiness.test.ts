@@ -2,30 +2,32 @@ import { describe, it, expect } from "vitest";
 import type { AgentState } from "@/types";
 import { isAgentReady } from "@/store/slices/terminalCommandQueueSlice";
 
+type InitializationState = "initializing" | "initialized";
+
 function computeHybridSubmitEnabled(params: {
   isAgentTerminal: boolean;
   agentState?: AgentState;
   agentHasLifecycleEvent: boolean;
-  hasBecomeReadyOnce: boolean;
+  initializationState: InitializationState;
 }): boolean {
-  const { isAgentTerminal, hasBecomeReadyOnce } = params;
-  const isInitialAgentLoading = isAgentTerminal && !hasBecomeReadyOnce;
-  return !isInitialAgentLoading;
+  const { isAgentTerminal, initializationState } = params;
+  const isInitializing = isAgentTerminal && initializationState === "initializing";
+  return !isInitializing;
 }
 
-function simulateReadinessTransition(params: {
+function simulateInitializationTransition(params: {
   isAgentTerminal: boolean;
   agentState?: AgentState;
   agentHasLifecycleEvent: boolean;
-  previouslyReady: boolean;
-}): boolean {
-  const { isAgentTerminal, agentState, agentHasLifecycleEvent, previouslyReady } = params;
+  currentState: InitializationState;
+}): InitializationState {
+  const { isAgentTerminal, agentState, agentHasLifecycleEvent, currentState } = params;
 
-  if (previouslyReady) return true;
+  if (currentState === "initialized") return "initialized";
   if (isAgentTerminal && agentHasLifecycleEvent && isAgentReady(agentState)) {
-    return true;
+    return "initialized";
   }
-  return false;
+  return "initializing";
 }
 
 describe("HybridInputBar agent readiness gating", () => {
@@ -36,7 +38,7 @@ describe("HybridInputBar agent readiness gating", () => {
           isAgentTerminal: true,
           agentState: "idle",
           agentHasLifecycleEvent: false,
-          hasBecomeReadyOnce: false,
+          initializationState: "initializing",
         })
       ).toBe(false);
     });
@@ -47,7 +49,7 @@ describe("HybridInputBar agent readiness gating", () => {
           isAgentTerminal: true,
           agentState: "working",
           agentHasLifecycleEvent: true,
-          hasBecomeReadyOnce: false,
+          initializationState: "initializing",
         })
       ).toBe(false);
     });
@@ -58,7 +60,7 @@ describe("HybridInputBar agent readiness gating", () => {
           isAgentTerminal: true,
           agentState: "idle",
           agentHasLifecycleEvent: true,
-          hasBecomeReadyOnce: true,
+          initializationState: "initialized",
         })
       ).toBe(true);
     });
@@ -69,7 +71,7 @@ describe("HybridInputBar agent readiness gating", () => {
           isAgentTerminal: true,
           agentState: "waiting",
           agentHasLifecycleEvent: true,
-          hasBecomeReadyOnce: true,
+          initializationState: "initialized",
         })
       ).toBe(true);
     });
@@ -80,7 +82,7 @@ describe("HybridInputBar agent readiness gating", () => {
           isAgentTerminal: true,
           agentState: "working",
           agentHasLifecycleEvent: true,
-          hasBecomeReadyOnce: true,
+          initializationState: "initialized",
         })
       ).toBe(true);
     });
@@ -91,97 +93,97 @@ describe("HybridInputBar agent readiness gating", () => {
           isAgentTerminal: false,
           agentState: undefined,
           agentHasLifecycleEvent: false,
-          hasBecomeReadyOnce: false,
+          initializationState: "initializing",
         })
       ).toBe(true);
     });
   });
 
-  describe("simulateReadinessTransition", () => {
-    it("transitions to ready when agent reaches idle with lifecycle event", () => {
+  describe("simulateInitializationTransition", () => {
+    it("transitions to initialized when agent reaches idle with lifecycle event", () => {
       expect(
-        simulateReadinessTransition({
+        simulateInitializationTransition({
           isAgentTerminal: true,
           agentState: "idle",
           agentHasLifecycleEvent: true,
-          previouslyReady: false,
+          currentState: "initializing",
         })
-      ).toBe(true);
+      ).toBe("initialized");
     });
 
-    it("transitions to ready when agent reaches waiting with lifecycle event", () => {
+    it("transitions to initialized when agent reaches waiting with lifecycle event", () => {
       expect(
-        simulateReadinessTransition({
+        simulateInitializationTransition({
           isAgentTerminal: true,
           agentState: "waiting",
           agentHasLifecycleEvent: true,
-          previouslyReady: false,
+          currentState: "initializing",
         })
-      ).toBe(true);
+      ).toBe("initialized");
     });
 
-    it("does not transition to ready with idle state but no lifecycle event", () => {
+    it("stays initializing with idle state but no lifecycle event", () => {
       expect(
-        simulateReadinessTransition({
+        simulateInitializationTransition({
           isAgentTerminal: true,
           agentState: "idle",
           agentHasLifecycleEvent: false,
-          previouslyReady: false,
+          currentState: "initializing",
         })
-      ).toBe(false);
+      ).toBe("initializing");
     });
 
-    it("does not transition to ready when agent is working", () => {
+    it("stays initializing when agent is working", () => {
       expect(
-        simulateReadinessTransition({
+        simulateInitializationTransition({
           isAgentTerminal: true,
           agentState: "working",
           agentHasLifecycleEvent: true,
-          previouslyReady: false,
+          currentState: "initializing",
         })
-      ).toBe(false);
+      ).toBe("initializing");
     });
 
-    it("stays ready once it has been ready (latching behavior)", () => {
+    it("stays initialized once it has been initialized (latching behavior)", () => {
       expect(
-        simulateReadinessTransition({
+        simulateInitializationTransition({
           isAgentTerminal: true,
           agentState: "working",
           agentHasLifecycleEvent: true,
-          previouslyReady: true,
+          currentState: "initialized",
         })
-      ).toBe(true);
+      ).toBe("initialized");
     });
   });
 
   describe("restart scenario", () => {
-    it("blocks submission again after restart (ready flag reset)", () => {
+    it("blocks submission again after restart (initialization state reset)", () => {
       expect(
         computeHybridSubmitEnabled({
           isAgentTerminal: true,
           agentState: "idle",
           agentHasLifecycleEvent: false,
-          hasBecomeReadyOnce: false,
+          initializationState: "initializing",
         })
       ).toBe(false);
     });
 
     it("allows submission after restart once agent becomes ready again", () => {
-      const afterRestart = simulateReadinessTransition({
+      const afterRestart = simulateInitializationTransition({
         isAgentTerminal: true,
         agentState: "idle",
         agentHasLifecycleEvent: true,
-        previouslyReady: false,
+        currentState: "initializing",
       });
 
-      expect(afterRestart).toBe(true);
+      expect(afterRestart).toBe("initialized");
 
       expect(
         computeHybridSubmitEnabled({
           isAgentTerminal: true,
           agentState: "idle",
           agentHasLifecycleEvent: true,
-          hasBecomeReadyOnce: afterRestart,
+          initializationState: afterRestart,
         })
       ).toBe(true);
     });
@@ -194,20 +196,20 @@ describe("HybridInputBar agent readiness gating", () => {
           isAgentTerminal: true,
           agentState: "failed",
           agentHasLifecycleEvent: true,
-          hasBecomeReadyOnce: false,
+          initializationState: "initializing",
         })
       ).toBe(false);
     });
 
     it("handles agent with completed state", () => {
       expect(
-        simulateReadinessTransition({
+        simulateInitializationTransition({
           isAgentTerminal: true,
           agentState: "completed",
           agentHasLifecycleEvent: true,
-          previouslyReady: false,
+          currentState: "initializing",
         })
-      ).toBe(false);
+      ).toBe("initializing");
     });
   });
 });
