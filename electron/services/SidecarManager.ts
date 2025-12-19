@@ -1,6 +1,7 @@
-import { BrowserWindow, Menu, WebContentsView, app, clipboard, shell } from "electron";
+import { BrowserWindow, Menu, WebContentsView, app, clipboard } from "electron";
 import type { SidecarBounds, SidecarNavEvent } from "../../shared/types/sidecar.js";
 import { CHANNELS } from "../ipc/channels.js";
+import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { ClipboardFileInjector } from "./ClipboardFileInjector.js";
 
 export class SidecarManager {
@@ -64,7 +65,14 @@ export class SidecarManager {
         },
       });
 
-      view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+      view.webContents.setWindowOpenHandler(({ url }) => {
+        if (typeof url === "string" && url.trim()) {
+          void openExternalUrl(url).catch((error) => {
+            console.error("[SidecarManager] Failed to open window URL:", error);
+          });
+        }
+        return { action: "deny" };
+      });
 
       const sendNavEvent = (navEvent: SidecarNavEvent) => {
         if (!this.window?.isDestroyed()) {
@@ -172,15 +180,21 @@ export class SidecarManager {
           template.push({ type: "separator" });
         }
 
-        if (params.linkURL && params.linkURL.trim()) {
+        const linkUrl = params.linkURL?.trim();
+        if (linkUrl) {
           template.push(
             {
               label: "Open Link in Browser",
-              click: () => void shell.openExternal(params.linkURL),
+              enabled: canOpenExternalUrl(linkUrl),
+              click: () => {
+                void openExternalUrl(linkUrl).catch((error) => {
+                  console.error("[SidecarManager] Failed to open link URL:", error);
+                });
+              },
             },
             {
               label: "Copy Link Address",
-              click: () => clipboard.writeText(params.linkURL),
+              click: () => clipboard.writeText(linkUrl),
             },
             { type: "separator" }
           );
@@ -205,7 +219,15 @@ export class SidecarManager {
         if (pageUrl) {
           template.push(
             { label: "Copy Page URL", click: () => clipboard.writeText(pageUrl) },
-            { label: "Open Page in Browser", click: () => void shell.openExternal(pageUrl) }
+            {
+              label: "Open Page in Browser",
+              enabled: canOpenExternalUrl(pageUrl),
+              click: () => {
+                void openExternalUrl(pageUrl).catch((error) => {
+                  console.error("[SidecarManager] Failed to open page URL:", error);
+                });
+              },
+            }
           );
         }
 
