@@ -31,6 +31,7 @@ const MAX_TEXTAREA_HEIGHT_PX = 160;
 
 export interface HybridInputBarHandle {
   focus: () => void;
+  focusWithCursorAtEnd: () => void;
 }
 
 export interface HybridInputBarProps {
@@ -362,6 +363,25 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       requestAnimationFrame(() => textarea.focus());
     }, []);
 
+    const focusTextareaWithCursorAtEnd = useCallback(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      requestAnimationFrame(() => {
+        // Verify element is still mounted and is the same instance
+        if (textareaRef.current !== textarea || !textarea.isConnected) return;
+
+        textarea.focus();
+        const len = textarea.value.length;
+        textarea.setSelectionRange(len, len);
+
+        // For long multi-line drafts, ensure caret is visible
+        if (textarea.scrollHeight > textarea.clientHeight) {
+          textarea.scrollTop = textarea.scrollHeight;
+        }
+      });
+    }, []);
+
     const handleHistoryNavigation = useCallback(
       (direction: "up" | "down"): boolean => {
         const result = navigateHistory(terminalId, direction, value);
@@ -381,7 +401,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       [navigateHistory, terminalId, value, resizeTextarea]
     );
 
-    useImperativeHandle(ref, () => ({ focus: focusTextarea }), [focusTextarea]);
+    useImperativeHandle(
+      ref,
+      () => ({ focus: focusTextarea, focusWithCursorAtEnd: focusTextareaWithCursorAtEnd }),
+      [focusTextarea, focusTextareaWithCursorAtEnd]
+    );
 
     const handleKeyPassthrough = useCallback(
       (event: KeyboardEvent<HTMLTextAreaElement>): boolean => {

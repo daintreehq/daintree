@@ -333,7 +333,7 @@ function TerminalPaneComponent({
 
       setFocused(id);
       terminalInstanceService.boostRefreshRate(id);
-      requestAnimationFrame(() => inputBarRef.current?.focus());
+      requestAnimationFrame(() => inputBarRef.current?.focusWithCursorAtEnd());
     },
     [
       id,
@@ -367,16 +367,18 @@ function TerminalPaneComponent({
 
     const focusTarget = getTerminalFocusTarget({
       isAgentTerminal,
-      isInputDisabled: isBackendDisconnected || isBackendRecovering,
+      isInputDisabled: isBackendDisconnected || isBackendRecovering || isInputLocked,
       hybridInputEnabled,
       hybridInputAutoFocus,
     });
 
     if (focusTarget === "hybridInput") {
-      const timeoutId = window.setTimeout(() => {
-        inputBarRef.current?.focus();
-      }, 10);
-      return () => window.clearTimeout(timeoutId);
+      const rafId = requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          inputBarRef.current?.focusWithCursorAtEnd();
+        });
+      });
+      return () => cancelAnimationFrame(rafId);
     }
 
     const rafId = requestAnimationFrame(() => terminalInstanceService.focus(id));
@@ -389,6 +391,7 @@ function TerminalPaneComponent({
     hybridInputAutoFocus,
     isBackendDisconnected,
     isBackendRecovering,
+    isInputLocked,
   ]);
 
   // Sync agent state to terminal service for scroll management

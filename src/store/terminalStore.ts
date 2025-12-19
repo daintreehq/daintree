@@ -86,6 +86,18 @@ export const useTerminalStore = create<TerminalGridState>()((set, get, api) => {
       get().clearQueue(id);
       get().handleTerminalRemoved(id, remainingTerminals, removedIndex);
       useTerminalInputStore.getState().clearDraftInput(id);
+
+      // Clean up worktree focus tracking if this was the last focused terminal
+      const terminal = get().terminals.find((t) => t.id === id);
+      if (terminal?.worktreeId) {
+        void import("@/store/worktreeStore").then(({ useWorktreeSelectionStore }) => {
+          const store = useWorktreeSelectionStore.getState();
+          const lastFocused = store.lastFocusedTerminalByWorktree.get(terminal.worktreeId!);
+          if (lastFocused === id) {
+            store.clearWorktreeFocusTracking(terminal.worktreeId!);
+          }
+        });
+      }
     },
   })(set, get, api);
 
