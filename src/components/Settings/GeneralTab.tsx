@@ -421,9 +421,7 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
             />
             <div className="text-left">
               <div className="text-sm font-medium">Developer Tools</div>
-              <div className="text-xs opacity-70">
-                Show problems panel button in the toolbar
-              </div>
+              <div className="text-xs opacity-70">Show problems panel button in the toolbar</div>
             </div>
           </div>
           <div
