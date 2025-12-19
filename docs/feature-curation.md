@@ -36,12 +36,12 @@ If it increases cognitive load or demands manual interaction, **reject it**.
 
 A feature belongs in Canopy **only if it satisfies at least two** of these criteria:
 
-| Criterion                         | Description                                                                           |
-| --------------------------------- | ------------------------------------------------------------------------------------- |
-| **Accelerates Context Injection** | Makes it faster to feed the "right" files/errors/diffs to an agent                                        |
-| **Unblocks the Agent**            | Detects when an agent is stuck, waiting, or failed, and helps human intervene quickly                     |
-| **Manages Multiplicity**          | Helps manage _multiple_ concurrent workstreams that a human brain can't track alone                       |
-| **Bridges the Gap**               | Fixes a friction point between the CLI and the GUI                                                        |
+| Criterion                         | Description                                                                                                    |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| **Accelerates Context Injection** | Makes it faster to feed the "right" files/errors/diffs to an agent                                             |
+| **Unblocks the Agent**            | Detects when an agent is stuck, waiting, or failed, and helps human intervene quickly                          |
+| **Manages Multiplicity**          | Helps manage _multiple_ concurrent workstreams that a human brain can't track alone                            |
+| **Bridges the Gap**               | Fixes a friction point between the CLI and the GUI                                                             |
 | **Provides Omniscience**          | Aggregates data from multiple isolated contexts (worktrees/agents) into a single view. (Pro Feature Candidate) |
 
 If a feature doesn't satisfy at least 2 of these, it doesn't belong in Canopy.

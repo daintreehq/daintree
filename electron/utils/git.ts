@@ -195,6 +195,21 @@ export async function listCommits(options: ListCommitsOptions): Promise<ListComm
   }
 }
 
+export async function getLatestTrackedFileMtime(worktreePath: string): Promise<number | null> {
+  try {
+    const git = simpleGit(worktreePath);
+    const unixSeconds = await git.raw(["log", "-1", "--format=%ct"]);
+    const parsed = Number.parseInt(unixSeconds.trim(), 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed * 1000 : null;
+  } catch (error) {
+    logWarn("Failed to get latest commit timestamp", {
+      worktreePath,
+      error: (error as Error).message,
+    });
+    return null;
+  }
+}
+
 export async function getWorktreeChangesWithStats(
   cwd: string,
   forceRefresh = false
@@ -225,11 +240,14 @@ export async function getWorktreeChangesWithStats(
     const status: StatusResult = await git.status();
     const gitRoot = realpathSync((await git.revparse(["--show-toplevel"])).trim());
 
-    // Fetch last commit message alongside status (batched to avoid separate git log call)
     let lastCommitMessage: string | undefined;
+    let lastCommitTimestampMs: number | undefined;
     try {
-      const log = await git.log({ maxCount: 1 });
-      lastCommitMessage = log.latest?.message ?? undefined;
+      const output = await git.raw(["log", "-1", "--format=%ct%n%s"]);
+      const [tsLine, ...msgLines] = output.split("\n");
+      const parsed = Number.parseInt((tsLine ?? "").trim(), 10);
+      lastCommitTimestampMs = Number.isFinite(parsed) && parsed > 0 ? parsed * 1000 : undefined;
+      lastCommitMessage = msgLines.join("\n").trim() || undefined;
     } catch {
       // Silently ignore - this is a non-critical field
     }
@@ -422,6 +440,7 @@ export async function getWorktreeChangesWithStats(
       latestFileMtime,
       lastUpdated: Date.now(),
       lastCommitMessage,
+      lastCommitTimestampMs,
     };
 
     GIT_WORKTREE_CHANGES_CACHE.set(cwd, result);

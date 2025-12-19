@@ -26,53 +26,53 @@ Main Process (electron/)     Renderer (src/)
 
 ### Main Process (`electron/`)
 
-| Path | Purpose |
-|------|---------|
-| `main.ts` | Entry point, window creation |
-| `preload.cts` | IPC bridge via contextBridge |
-| `ipc/channels.ts` | Channel name constants |
-| `ipc/handlers.ts` | Handler registration |
-| `ipc/handlers/*.ts` | Domain-specific handlers |
-| `services/` | Business logic (see below) |
-| `schemas/` | Zod validation for IPC |
+| Path                | Purpose                      |
+| ------------------- | ---------------------------- |
+| `main.ts`           | Entry point, window creation |
+| `preload.cts`       | IPC bridge via contextBridge |
+| `ipc/channels.ts`   | Channel name constants       |
+| `ipc/handlers.ts`   | Handler registration         |
+| `ipc/handlers/*.ts` | Domain-specific handlers     |
+| `services/`         | Business logic (see below)   |
+| `schemas/`          | Zod validation for IPC       |
 
 **Key Services:**
 
-| Service | Responsibility |
-|---------|----------------|
-| `PtyManager` | Terminal process pool, spawn/kill |
-| `pty/TerminalProcess` | Single PTY wrapper, data flow |
-| `pty/AgentStateService` | Idle/working/waiting detection |
-| `pty/TerminalSyncBuffer` | DEC 2026 sync for flicker-free TUI |
-| `GitService` | Git operations via simple-git |
-| `worktree/WorktreeService` | Worktree polling and status |
-| `CopyTreeService` | Context generation for agents |
-| `SidecarManager` | Localhost browser, log viewer |
-| `ProjectStore` | Multi-project persistence |
-| `HibernationService` | Terminal state save/restore |
+| Service                    | Responsibility                     |
+| -------------------------- | ---------------------------------- |
+| `PtyManager`               | Terminal process pool, spawn/kill  |
+| `pty/TerminalProcess`      | Single PTY wrapper, data flow      |
+| `pty/AgentStateService`    | Idle/working/waiting detection     |
+| `pty/TerminalSyncBuffer`   | DEC 2026 sync for flicker-free TUI |
+| `GitService`               | Git operations via simple-git      |
+| `worktree/WorktreeService` | Worktree polling and status        |
+| `CopyTreeService`          | Context generation for agents      |
+| `SidecarManager`           | Localhost browser, log viewer      |
+| `ProjectStore`             | Multi-project persistence          |
+| `HibernationService`       | Terminal state save/restore        |
 
 ### Renderer (`src/`)
 
-| Path | Purpose |
-|------|---------|
-| `components/Terminal/` | Xterm.js rendering, grid layout |
-| `components/Worktree/` | Dashboard cards, status display |
-| `components/Layout/` | App shell, toolbar, dock |
-| `components/Sidecar/` | Browser panel, artifact viewer |
-| `store/*.ts` | Zustand stores |
-| `hooks/` | React hooks for IPC subscriptions |
-| `clients/` | Typed wrappers for window.electron |
+| Path                   | Purpose                            |
+| ---------------------- | ---------------------------------- |
+| `components/Terminal/` | Xterm.js rendering, grid layout    |
+| `components/Worktree/` | Dashboard cards, status display    |
+| `components/Layout/`   | App shell, toolbar, dock           |
+| `components/Sidecar/`  | Browser panel, artifact viewer     |
+| `store/*.ts`           | Zustand stores                     |
+| `hooks/`               | React hooks for IPC subscriptions  |
+| `clients/`             | Typed wrappers for window.electron |
 
 **Key Stores:**
 
-| Store | State |
-|-------|-------|
-| `terminalStore` | Terminal instances, grid layout |
-| `terminalInputStore` | Hybrid input bar state |
-| `worktreeStore` | Active worktree, selection |
-| `worktreeDataStore` | Worktree list, git status |
-| `projectStore` | Current project, project list |
-| `sidecarStore` | Sidecar tabs, visibility |
+| Store                | State                           |
+| -------------------- | ------------------------------- |
+| `terminalStore`      | Terminal instances, grid layout |
+| `terminalInputStore` | Hybrid input bar state          |
+| `worktreeStore`      | Active worktree, selection      |
+| `worktreeDataStore`  | Worktree list, git status       |
+| `projectStore`       | Current project, project list   |
+| `sidecarStore`       | Sidecar tabs, visibility        |
 
 ### Shared Types (`shared/types/ipc/`)
 
@@ -105,12 +105,14 @@ Tests live in `__tests__/` directories adjacent to source. Use Vitest. Mock IPC 
 **Renderer**: DevTools (Cmd+Opt+I). Console, Network, React DevTools.
 
 **Main**: Logs to terminal running `npm run dev`. Use logger:
+
 ```typescript
-import { logInfo, logError } from './utils/logger';
-logInfo('ServiceName', 'message', { data });
+import { logInfo, logError } from "./utils/logger";
+logInfo("ServiceName", "message", { data });
 ```
 
 **Common fixes:**
+
 - PTY errors: `npm run rebuild`
 - Type errors in electron/: `npm run build:main`
 - Stale cache: `rm -rf node_modules/.vite && npm run dev`
