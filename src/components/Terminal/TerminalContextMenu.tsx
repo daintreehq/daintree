@@ -123,6 +123,14 @@ export function TerminalContextMenu({
       });
     }
 
+    if (items.length === 0) {
+      items.push({
+        id: "convert-to:no-agents",
+        label: "No agents available",
+        enabled: false,
+      });
+    }
+
     return items;
   }, [terminal]);
 
@@ -200,7 +208,9 @@ export function TerminalContextMenu({
 
       if (actionId.startsWith("convert-to:")) {
         const targetType = actionId.slice("convert-to:".length);
-        void convertTerminalType(terminalId, targetType as TerminalType);
+        if (targetType === "terminal" || AGENT_IDS.includes(targetType)) {
+          void convertTerminalType(terminalId, targetType as TerminalType);
+        }
         return;
       }
 
