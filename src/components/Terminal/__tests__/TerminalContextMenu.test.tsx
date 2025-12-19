@@ -50,14 +50,6 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
         });
       }
 
-      if (items.length === 0) {
-        items.push({
-          id: "convert-to:no-agents",
-          label: "No agents available",
-          enabled: false,
-        });
-      }
-
       return items;
     }
 
@@ -118,14 +110,6 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
       if (currentAgentItem && currentAgentItem.type !== "separator") {
         expect(currentAgentItem.enabled).toBe(false);
       }
-    });
-
-    it("should always return non-empty submenu", () => {
-      const plainTerminal = { type: "terminal", kind: "terminal" };
-      const agentTerminal = { type: "claude", kind: "agent", agentId: "claude" };
-
-      expect(buildConvertToSubmenu(plainTerminal).length).toBeGreaterThan(0);
-      expect(buildConvertToSubmenu(agentTerminal).length).toBeGreaterThan(0);
     });
 
     it("should return empty array when terminal is null", () => {
@@ -192,17 +176,12 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
       }
     });
 
-    it("should include fallback item if agents unavailable (edge case)", () => {
+    it("should return empty array if agents unavailable (edge case)", () => {
       const terminal = { type: "terminal", kind: "terminal" };
       const submenu = buildConvertToSubmenu(terminal);
 
       if (AGENT_IDS.length === 0) {
-        expect(submenu.length).toBe(1);
-        expect(submenu[0].id).toBe("convert-to:no-agents");
-        const firstItem = submenu[0];
-        if (firstItem.type !== "separator") {
-          expect(firstItem.enabled).toBe(false);
-        }
+        expect(submenu.length).toBe(0);
       } else {
         expect(submenu.length).toBeGreaterThan(0);
       }
