@@ -5,7 +5,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useTerminalStore } from "@/store/terminalStore";
-import { useWaitingTerminalIds } from "@/hooks/useTerminalSelectors";
+import { useWaitingTerminals } from "@/hooks/useTerminalSelectors";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import type { TerminalLocation } from "@shared/types";
@@ -17,7 +17,7 @@ function getLocationIcon(location: TerminalLocation | undefined) {
 
 export function WaitingContainer() {
   const [isOpen, setIsOpen] = useState(false);
-  const waitingIds = useWaitingTerminalIds();
+  const waitingTerminals = useWaitingTerminals();
   const { activateTerminal, pingTerminal } = useTerminalStore(
     useShallow((state) => ({
       activateTerminal: state.activateTerminal,
@@ -25,12 +25,6 @@ export function WaitingContainer() {
     }))
   );
   const shortcut = useKeybindingDisplay("agent.focusNextWaiting");
-
-  const waitingTerminals = useTerminalStore(
-    useShallow((state) =>
-      waitingIds.map((id) => state.terminals.find((t) => t.id === id)).filter(Boolean)
-    )
-  );
 
   if (waitingTerminals.length === 0) return null;
 
@@ -75,48 +69,41 @@ export function WaitingContainer() {
           </div>
 
           <div className="p-1 flex flex-col gap-1 max-h-[300px] overflow-y-auto">
-            {waitingTerminals.map((terminal) => {
-              if (!terminal) return null;
-
-              return (
-                <button
-                  key={terminal.id}
-                  onClick={() => {
-                    activateTerminal(terminal.id);
-                    pingTerminal(terminal.id);
-                    setIsOpen(false);
-                  }}
-                  className="flex items-center justify-between gap-2.5 w-full px-2.5 py-1.5 rounded-[var(--radius-sm)] transition-colors group text-left outline-none hover:bg-white/5 focus:bg-white/5"
-                >
-                  <div className="flex items-center gap-2 min-w-0 flex-1">
-                    <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
-                      <TerminalIcon
-                        type={terminal.type}
-                        agentId={terminal.agentId}
-                        className="h-3 w-3"
-                      />
-                    </div>
-                    <span className="text-xs truncate font-medium text-canopy-text/70 group-hover:text-canopy-text transition-colors">
-                      {terminal.title}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-2.5 shrink-0">
-                    <AlertCircle
-                      className="w-3 h-3 text-amber-400"
-                      aria-label="Waiting for input"
+            {waitingTerminals.map((terminal) => (
+              <button
+                key={terminal.id}
+                onClick={() => {
+                  activateTerminal(terminal.id);
+                  pingTerminal(terminal.id);
+                  setIsOpen(false);
+                }}
+                className="flex items-center justify-between gap-2.5 w-full px-2.5 py-1.5 rounded-[var(--radius-sm)] transition-colors group text-left outline-none hover:bg-white/5 focus:bg-white/5"
+              >
+                <div className="flex items-center gap-2 min-w-0 flex-1">
+                  <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
+                    <TerminalIcon
+                      type={terminal.type}
+                      agentId={terminal.agentId}
+                      className="h-3 w-3"
                     />
-
-                    <div
-                      className="text-muted-foreground/40 group-hover:text-muted-foreground/60 transition-colors"
-                      title={terminal.location === "dock" ? "Docked" : "On Grid"}
-                    >
-                      {getLocationIcon(terminal.location)}
-                    </div>
                   </div>
-                </button>
-              );
-            })}
+                  <span className="text-xs truncate font-medium text-canopy-text/70 group-hover:text-canopy-text transition-colors">
+                    {terminal.title}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2.5 shrink-0">
+                  <AlertCircle className="w-3 h-3 text-amber-400" aria-label="Waiting for input" />
+
+                  <div
+                    className="text-muted-foreground/40 group-hover:text-muted-foreground/60 transition-colors"
+                    title={terminal.location === "dock" ? "Docked" : "On Grid"}
+                  >
+                    {getLocationIcon(terminal.location)}
+                  </div>
+                </div>
+              </button>
+            ))}
           </div>
         </div>
       </PopoverContent>

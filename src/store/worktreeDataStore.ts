@@ -43,6 +43,35 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
         const map = new Map(states.map((s) => [s.id, s]));
         set({ worktrees: map, isLoading: false, isInitialized: true });
 
+        // Startup cleanup: trash orphaned terminals from deleted worktrees
+        const getWorktreeIds = (wtMap: Map<string, WorktreeState>) => {
+          const ids = new Set<string>();
+          for (const [id, wt] of wtMap) {
+            ids.add(id);
+            if (wt.worktreeId) ids.add(wt.worktreeId);
+          }
+          return ids;
+        };
+
+        const runOrphanCleanup = () => {
+          const worktreeIds = getWorktreeIds(map);
+          const terminalStore = useTerminalStore.getState();
+          const orphanedTerminals = terminalStore.terminals.filter((t) => {
+            const worktreeId =
+              typeof t.worktreeId === "string" ? t.worktreeId.trim() : "";
+            return worktreeId && !worktreeIds.has(worktreeId) && t.location !== "trash";
+          });
+
+          if (orphanedTerminals.length > 0) {
+            console.log(
+              `[WorktreeDataStore] Trashing ${orphanedTerminals.length} orphaned terminal(s) from deleted worktrees`
+            );
+            orphanedTerminals.forEach((terminal) => terminalStore.trashTerminal(terminal.id));
+          }
+        };
+
+        runOrphanCleanup();
+
         if (!cleanupListeners) {
           const unsubUpdate = worktreeClient.onUpdate((state) => {
             set((prev) => {

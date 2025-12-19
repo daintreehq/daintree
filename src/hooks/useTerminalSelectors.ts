@@ -1,12 +1,74 @@
 import { useShallow } from "zustand/react/shallow";
-import { useTerminalStore } from "@/store/terminalStore";
+import { useTerminalStore, type TerminalInstance } from "@/store/terminalStore";
+import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 
-export function useWaitingTerminalIds(): string[] {
+function isTerminalOrphaned(terminal: TerminalInstance, worktreeIds: Set<string>): boolean {
+  const worktreeId =
+    typeof terminal.worktreeId === "string" ? terminal.worktreeId.trim() : "";
+  if (!worktreeId) return false;
+  return !worktreeIds.has(worktreeId);
+}
+
+function isTerminalVisible(
+  terminal: TerminalInstance,
+  isInTrash: (id: string) => boolean,
+  worktreeIds: Set<string>
+): boolean {
+  if (isInTrash(terminal.id)) return false;
+  if (terminal.location === "trash") return false;
+  if (isTerminalOrphaned(terminal, worktreeIds)) return false;
+  return true;
+}
+
+export function useTerminalNotificationCounts(): { waitingCount: number; failedCount: number } {
+  const worktreeIds = useWorktreeDataStore(
+    useShallow((state) => {
+      const ids = new Set<string>();
+      for (const [id, wt] of state.worktrees) {
+        ids.add(id);
+        if (wt.worktreeId) ids.add(wt.worktreeId);
+      }
+      return ids;
+    })
+  );
+
+  return useTerminalStore(
+    useShallow((state) => {
+      let waitingCount = 0;
+      let failedCount = 0;
+
+      for (const terminal of state.terminals) {
+        if (!isTerminalVisible(terminal, state.isInTrash, worktreeIds)) continue;
+        if (terminal.agentState === "waiting") waitingCount += 1;
+        if (terminal.agentState === "failed") failedCount += 1;
+      }
+
+      return { waitingCount, failedCount };
+    })
+  );
+}
+
+export function useWaitingTerminals(): TerminalInstance[] {
+  const worktreeIds = useWorktreeDataStore(
+    useShallow((state) => {
+      const ids = new Set<string>();
+      for (const [id, wt] of state.worktrees) {
+        ids.add(id);
+        if (wt.worktreeId) ids.add(wt.worktreeId);
+      }
+      return ids;
+    })
+  );
+
   return useTerminalStore(
     useShallow((state) =>
-      state.terminals
-        .filter((t) => t.agentState === "waiting" && !state.isInTrash(t.id))
-        .map((t) => t.id)
+      state.terminals.filter(
+        (t) => t.agentState === "waiting" && isTerminalVisible(t, state.isInTrash, worktreeIds)
+      )
     )
   );
+}
+
+export function useWaitingTerminalIds(): string[] {
+  return useWaitingTerminals().map((t) => t.id);
 }
