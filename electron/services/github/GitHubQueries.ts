@@ -174,7 +174,7 @@ export function buildBatchPRQuery(
       `);
     }
 
-    if (candidate.branchName) {
+    if (candidate.issueNumber && candidate.branchName) {
       const escapedBranch = JSON.stringify(candidate.branchName).slice(1, -1);
       branchQueries.push(`
         ${alias}_branch: repository(owner: "${owner}", name: "${repo}") {
