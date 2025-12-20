@@ -75,15 +75,24 @@ export class WorkspaceService {
 
       const rawWorktrees = await this.listWorktreesFromGit();
       const worktrees: Worktree[] = rawWorktrees.map((wt) => {
-        const name = wt.isMainWorktree
-          ? wt.path.split(/[/\\]/).pop() || "Main"
-          : wt.branch || wt.path.split(/[/\\]/).pop() || "Worktree";
+        let name: string;
+        if (wt.isMainWorktree) {
+          name = wt.path.split(/[/\\]/).pop() || "Main";
+        } else if (wt.isDetached && wt.head) {
+          name = wt.head.substring(0, 7);
+        } else if (wt.branch) {
+          name = wt.branch;
+        } else {
+          name = wt.path.split(/[/\\]/).pop() || "Worktree";
+        }
 
         return {
           id: wt.path,
           path: wt.path,
           name: name,
-          branch: wt.branch,
+          branch: wt.branch || undefined,
+          head: wt.head,
+          isDetached: wt.isDetached,
           isCurrent: false,
           isMainWorktree: wt.isMainWorktree,
           gitDir: getGitDir(wt.path) || undefined,
@@ -107,7 +116,14 @@ export class WorkspaceService {
   }
 
   private async listWorktreesFromGit(): Promise<
-    Array<{ path: string; branch: string; bare: boolean; isMainWorktree: boolean }>
+    Array<{
+      path: string;
+      branch: string;
+      bare: boolean;
+      isMainWorktree: boolean;
+      head?: string;
+      isDetached?: boolean;
+    }>
   > {
     if (!this.git) {
       throw new Error("Git not initialized");
@@ -119,9 +135,17 @@ export class WorkspaceService {
       branch: string;
       bare: boolean;
       isMainWorktree: boolean;
+      head?: string;
+      isDetached?: boolean;
     }> = [];
 
-    let currentWorktree: Partial<{ path: string; branch: string; bare: boolean }> = {};
+    let currentWorktree: Partial<{
+      path: string;
+      branch: string;
+      bare: boolean;
+      head: string;
+      isDetached: boolean;
+    }> = {};
 
     const pushWorktree = () => {
       if (currentWorktree.path) {
@@ -130,6 +154,8 @@ export class WorkspaceService {
           branch: currentWorktree.branch || "",
           bare: currentWorktree.bare || false,
           isMainWorktree: worktrees.length === 0,
+          head: currentWorktree.isDetached ? currentWorktree.head : undefined,
+          isDetached: currentWorktree.isDetached,
         });
       }
       currentWorktree = {};
@@ -138,11 +164,15 @@ export class WorkspaceService {
     for (const line of output.split("\n")) {
       if (line.startsWith("worktree ")) {
         currentWorktree.path = line.replace("worktree ", "").trim();
+      } else if (line.startsWith("HEAD ")) {
+        currentWorktree.head = line.replace("HEAD ", "").trim();
       } else if (line.startsWith("branch ")) {
         currentWorktree.branch = line.replace("branch ", "").replace("refs/heads/", "").trim();
       } else if (line.startsWith("bare")) {
         currentWorktree.bare = true;
-      } else if (line === "") {
+      } else if (line.trim() === "detached") {
+        currentWorktree.isDetached = true;
+      } else if (line.trim() === "") {
         pushWorktree();
       }
     }
@@ -643,17 +673,30 @@ export class WorkspaceService {
 
       // Refresh worktree list
       const updatedWorktrees = await this.listWorktreesFromGit();
-      const worktreeList: Worktree[] = updatedWorktrees.map((wt) => ({
-        id: wt.path,
-        path: wt.path,
-        name: wt.isMainWorktree
-          ? wt.path.split(/[/\\]/).pop() || "Main"
-          : wt.branch || wt.path.split(/[/\\]/).pop() || wt.path,
-        branch: wt.branch,
-        isCurrent: false,
-        isMainWorktree: wt.isMainWorktree,
-        gitDir: getGitDir(wt.path) || undefined,
-      }));
+      const worktreeList: Worktree[] = updatedWorktrees.map((wt) => {
+        let name: string;
+        if (wt.isMainWorktree) {
+          name = wt.path.split(/[/\\]/).pop() || "Main";
+        } else if (wt.isDetached && wt.head) {
+          name = wt.head.substring(0, 7);
+        } else if (wt.branch) {
+          name = wt.branch;
+        } else {
+          name = wt.path.split(/[/\\]/).pop() || "Worktree";
+        }
+
+        return {
+          id: wt.path,
+          path: wt.path,
+          name: name,
+          branch: wt.branch || undefined,
+          head: wt.head,
+          isDetached: wt.isDetached,
+          isCurrent: false,
+          isMainWorktree: wt.isMainWorktree,
+          gitDir: getGitDir(wt.path) || undefined,
+        };
+      });
 
       await this.syncMonitors(worktreeList, this.activeWorktreeId, this.mainBranch);
 

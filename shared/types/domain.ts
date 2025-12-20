@@ -73,6 +73,12 @@ export interface Worktree {
   /** Git branch name if available (undefined for detached HEAD) */
   branch?: string;
 
+  /** HEAD commit hash (only populated when in detached HEAD state) */
+  head?: string;
+
+  /** Whether this worktree is in detached HEAD state */
+  isDetached?: boolean;
+
   /** Whether this is the currently active worktree based on cwd */
   isCurrent: boolean;
 

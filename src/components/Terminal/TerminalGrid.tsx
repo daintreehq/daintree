@@ -260,10 +260,9 @@ export function TerminalGrid({
   const { worktreeMap } = useWorktrees();
   const activeWorktree = activeWorktreeId ? worktreeMap.get(activeWorktreeId) : null;
   const hasActiveWorktree = activeWorktreeId !== null && activeWorktree !== undefined;
-  const activeWorktreeName =
-    activeWorktree?.branch ||
-    activeWorktree?.name ||
-    (activeWorktreeId ? "Unknown Worktree" : null);
+  const activeWorktreeName = activeWorktree
+    ? activeWorktree.branch?.trim() || activeWorktree.name?.trim() || "Unknown Worktree"
+    : null;
 
   const addTerminal = useTerminalStore((state) => state.addTerminal);
   const isInTrash = useTerminalStore((state) => state.isInTrash);

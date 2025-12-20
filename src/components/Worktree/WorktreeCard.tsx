@@ -902,7 +902,7 @@ export function WorktreeCard({
                   isActive={isActive}
                   isMainWorktree={isMainWorktree}
                 />
-                {!worktree.branch && (
+                {worktree.isDetached && (
                   <span className="text-amber-500 text-xs font-medium shrink-0">(detached)</span>
                 )}
               </div>
