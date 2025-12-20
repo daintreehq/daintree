@@ -292,6 +292,7 @@ export class WorkspaceClient extends EventEmitter {
           prNumber: event.prNumber,
           prUrl: event.prUrl,
           prState: event.prState,
+          timestamp: Date.now(),
         };
         events.emit("sys:pr:detected", prPayload);
         this.sendToRenderer(CHANNELS.PR_DETECTED, prPayload);
@@ -299,7 +300,7 @@ export class WorkspaceClient extends EventEmitter {
       }
 
       case "pr-cleared": {
-        const clearPayload = { worktreeId: event.worktreeId };
+        const clearPayload = { worktreeId: event.worktreeId, timestamp: Date.now() };
         events.emit("sys:pr:cleared", clearPayload);
         this.sendToRenderer(CHANNELS.PR_CLEARED, clearPayload);
         break;

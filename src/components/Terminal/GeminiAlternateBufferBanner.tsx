@@ -50,10 +50,7 @@ function GeminiAlternateBufferBannerComponent({
       data-terminal-id={terminalId}
     >
       <div className="flex items-center gap-2 min-w-0">
-        <Terminal
-          className="w-4 h-4 shrink-0 text-[var(--color-status-info)]"
-          aria-hidden="true"
-        />
+        <Terminal className="w-4 h-4 shrink-0 text-[var(--color-status-info)]" aria-hidden="true" />
         <span className="text-sm text-canopy-text/80">
           Canopy supports synchronized rendering. For flicker-free Gemini output, run{" "}
           <code className="px-1 py-0.5 bg-canopy-text/10 rounded text-canopy-text/90 font-mono text-xs">

@@ -72,7 +72,7 @@ class PullRequestService {
       this.resolvedWorktrees.delete(state.worktreeId);
       this.detectedPRs.delete(state.worktreeId);
 
-      events.emit("sys:pr:cleared", { worktreeId: state.worktreeId });
+      events.emit("sys:pr:cleared", { worktreeId: state.worktreeId, timestamp: Date.now() });
     }
 
     const shouldTrack = isCandidateBranch(newBranchName);
@@ -109,7 +109,7 @@ class PullRequestService {
       this.resolvedWorktrees.delete(worktreeId);
       this.detectedPRs.delete(worktreeId);
 
-      events.emit("sys:pr:cleared", { worktreeId });
+      events.emit("sys:pr:cleared", { worktreeId, timestamp: Date.now() });
 
       logDebug("Worktree removed - cleared PR state", { worktreeId });
     }
@@ -295,6 +295,7 @@ class PullRequestService {
             prState: checkResult.pr.state,
             issueNumber:
               checkResult.issueNumber ?? this.candidates.get(worktreeId)?.issueNumber ?? undefined,
+            timestamp: Date.now(),
           });
         }
       }

@@ -148,7 +148,7 @@ describe("PullRequestService", () => {
     );
 
     expect(cleared).toHaveLength(1);
-    expect(cleared[0]).toEqual({ worktreeId: "wt-1" });
+    expect(cleared[0]).toMatchObject({ worktreeId: "wt-1", timestamp: expect.any(Number) });
 
     unsubscribeCleared();
     pullRequestService.destroy();

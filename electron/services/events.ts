@@ -433,9 +433,11 @@ export type CanopyEventMap = {
     prUrl: string;
     prState: "open" | "merged" | "closed";
     issueNumber?: number;
+    timestamp: number;
   };
   "sys:pr:cleared": {
     worktreeId: string;
+    timestamp: number;
   };
 
   /**
