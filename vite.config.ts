@@ -27,7 +27,6 @@ const PROD_CSP = [
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'none'",
-  "frame-ancestors 'none'",
 ].join("; ");
 
 // Plugin to transform CSP meta tag based on build mode
