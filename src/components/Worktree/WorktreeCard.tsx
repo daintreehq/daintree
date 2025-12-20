@@ -43,7 +43,6 @@ import {
   Play,
   MoreHorizontal,
   ChevronRight,
-  GitCommit,
   Shield,
   Terminal,
   LayoutGrid,
@@ -469,6 +468,32 @@ export function WorktreeCard({
 
   const effectiveSummary = isSummarySameAsCommit ? null : worktree.summary;
 
+  // Priority-based computed subtitle for collapsed view
+  // Note: Terminal states (waiting/failed) are shown in the footer, not here
+  const computedSubtitle = useMemo((): { text: string; tone: "error" | "warning" | "info" | "muted" } => {
+    // 1. Worktree errors take highest priority
+    if (worktreeErrors.length > 0) {
+      return {
+        text: worktreeErrors.length === 1 ? "1 error" : `${worktreeErrors.length} errors`,
+        tone: "error",
+      };
+    }
+
+    // 2. Uncommitted changes - this is the primary git status info
+    // Note: tone "changes" signals we need custom rendering with colored +/-
+    if (hasChanges && worktree.worktreeChanges) {
+      return { text: "", tone: "warning" };
+    }
+
+    // 3. Commit message
+    if (firstLineLastCommitMessage) {
+      return { text: firstLineLastCommitMessage, tone: "muted" };
+    }
+
+    // 4. Fallback
+    return { text: "No recent activity", tone: "muted" };
+  }, [worktreeErrors.length, hasChanges, worktree.worktreeChanges, firstLineLastCommitMessage]);
+
   const handleToggleExpand = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
@@ -482,12 +507,22 @@ export function WorktreeCard({
     effectiveNote ||
     !!effectiveSummary ||
     worktreeErrors.length > 0 ||
-    terminalCounts.total > 0 ||
-    !!rawLastCommitMessage;
+    terminalCounts.total > 0;
 
   const showTimeInHeader = !hasExpandableContent;
 
   const showMetaFooter = terminalCounts.total > 0;
+
+  // Get the highest-priority state for simplified footer display
+  const topTerminalState = useMemo((): { state: AgentState; count: number } | null => {
+    for (const state of STATE_PRIORITY) {
+      const count = terminalCounts.byState[state];
+      if (count > 0) {
+        return { state, count };
+      }
+    }
+    return null;
+  }, [terminalCounts.byState]);
 
   const orderedWorktreeTerminals = useMemo(() => {
     if (worktreeTerminals.length === 0) return worktreeTerminals;
@@ -536,16 +571,6 @@ export function WorktreeCard({
   }, [worktreeTerminals]);
 
   const detailsId = useMemo(() => `worktree-${worktree.id}-details`, [worktree.id]);
-
-  const workspaceScenario: "dirty" | "clean-feature" | "clean-main" = useMemo(() => {
-    if (hasChanges) {
-      return "dirty";
-    }
-    if (isMainWorktree) {
-      return "clean-main";
-    }
-    return "clean-feature";
-  }, [hasChanges, isMainWorktree]);
 
   type SpineState = "error" | "dirty" | "current" | "stale" | "idle";
   const spineState: SpineState = useMemo(() => {
@@ -927,8 +952,15 @@ export function WorktreeCard({
                 </div>
               )}
 
-              {/* Right: Actions */}
-              <div className="flex items-center gap-1 shrink-0">
+              {/* Right: Actions - hidden until hover/active */}
+              <div
+                className={cn(
+                  "flex items-center gap-1 shrink-0 transition-opacity duration-150",
+                  isActive || treeCopied || isCopyingTree
+                    ? "opacity-100"
+                    : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                )}
+              >
                 <TooltipProvider>
                   <Tooltip open={treeCopied} delayDuration={0}>
                     <TooltipTrigger asChild>
@@ -1097,7 +1129,7 @@ export function WorktreeCard({
                 showTime={!showTimeInHeader}
               />
             ) : (
-              /* Collapsed: Pulse line summary */
+              /* Collapsed: Single subtitle + time */
               <div className="-m-3">
                 <button
                   onClick={handleToggleExpand}
@@ -1105,74 +1137,64 @@ export function WorktreeCard({
                   aria-controls={detailsId}
                   className="w-full p-3 flex items-center justify-between min-w-0 text-left rounded-[var(--radius-lg)] transition-colors hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]"
                 >
-                  {/* LEFT SLOT: Git Signal + Commit Message */}
-                  <div className="flex items-center gap-2 min-w-0 flex-1 text-xs font-sans text-canopy-text/60">
-                    {workspaceScenario === "dirty" && worktree.worktreeChanges && (
-                      <>
-                        <span className="shrink-0">
+                  {/* LEFT: Priority-based subtitle */}
+                  <span className="text-xs truncate min-w-0 flex-1">
+                    {hasChanges && worktree.worktreeChanges ? (
+                      // Custom rendering for git changes with colored +/-
+                      <span className="flex items-center gap-1.5 text-canopy-text/60">
+                        <span>
                           {worktree.worktreeChanges.changedFileCount} file
                           {worktree.worktreeChanges.changedFileCount !== 1 ? "s" : ""}
                         </span>
                         {((worktree.worktreeChanges.insertions ?? 0) > 0 ||
                           (worktree.worktreeChanges.deletions ?? 0) > 0) && (
-                          <>
-                            <span className="text-canopy-text/40 shrink-0">·</span>
-                            <span className="shrink-0">
-                              {(worktree.worktreeChanges.insertions ?? 0) > 0 && (
-                                <span className="text-[var(--color-status-success)]">
-                                  +{worktree.worktreeChanges.insertions}
-                                </span>
+                          <span className="flex items-center gap-0.5">
+                            {(worktree.worktreeChanges.insertions ?? 0) > 0 && (
+                              <span className="text-[var(--color-status-success)]">
+                                +{worktree.worktreeChanges.insertions}
+                              </span>
+                            )}
+                            {(worktree.worktreeChanges.insertions ?? 0) > 0 &&
+                              (worktree.worktreeChanges.deletions ?? 0) > 0 && (
+                                <span className="text-canopy-text/30">/</span>
                               )}
-                              {(worktree.worktreeChanges.insertions ?? 0) > 0 &&
-                                (worktree.worktreeChanges.deletions ?? 0) > 0 && (
-                                  <span className="text-canopy-text/40">/</span>
-                                )}
-                              {(worktree.worktreeChanges.deletions ?? 0) > 0 && (
-                                <span className="text-[var(--color-status-error)]">
-                                  -{worktree.worktreeChanges.deletions}
-                                </span>
-                              )}
-                            </span>
-                          </>
+                            {(worktree.worktreeChanges.deletions ?? 0) > 0 && (
+                              <span className="text-[var(--color-status-error)]">
+                                -{worktree.worktreeChanges.deletions}
+                              </span>
+                            )}
+                          </span>
                         )}
-                        {/* Commit message in remaining space */}
-                        {firstLineLastCommitMessage && (
-                          <>
-                            <span className="text-canopy-text/30 shrink-0">·</span>
-                            <span className="truncate text-canopy-text/40">
-                              {firstLineLastCommitMessage}
-                            </span>
-                          </>
+                      </span>
+                    ) : (
+                      // Standard text rendering for other states
+                      <span
+                        className={cn(
+                          computedSubtitle.tone === "error" && "text-[var(--color-status-error)]",
+                          computedSubtitle.tone === "warning" && "text-[var(--color-status-warning)]",
+                          computedSubtitle.tone === "info" && "text-[var(--color-status-info)]",
+                          computedSubtitle.tone === "muted" && "text-canopy-text/50"
                         )}
-                      </>
-                    )}
-                    {workspaceScenario !== "dirty" && firstLineLastCommitMessage && (
-                      <>
-                        <GitCommit className="w-3 h-3 shrink-0 opacity-60" />
-                        <span className="truncate">{firstLineLastCommitMessage}</span>
-                      </>
-                    )}
-                  </div>
-
-                  {/* RIGHT SLOT: Time & Runtime Signal */}
-                  <div className="flex items-center gap-3 shrink-0 ml-2">
-                    {/* Time display (only when moved from header) */}
-                    {!showTimeInHeader && (
-                      <div
-                        className="flex items-center gap-1.5 text-xs text-canopy-text/40"
-                        title={
-                          worktree.lastActivityTimestamp
-                            ? `Last activity: ${new Date(worktree.lastActivityTimestamp).toLocaleString()}`
-                            : "No recent activity recorded"
-                        }
                       >
-                        <ActivityLight
-                          lastActivityTimestamp={worktree.lastActivityTimestamp}
-                          className="w-1.5 h-1.5"
-                        />
-                        <LiveTimeAgo timestamp={worktree.lastActivityTimestamp} />
-                      </div>
+                        {computedSubtitle.text}
+                      </span>
                     )}
+                  </span>
+
+                  {/* RIGHT: Time (always visible) */}
+                  <div
+                    className="flex items-center gap-1.5 text-xs text-canopy-text/40 shrink-0 ml-3"
+                    title={
+                      worktree.lastActivityTimestamp
+                        ? `Last activity: ${new Date(worktree.lastActivityTimestamp).toLocaleString()}`
+                        : "No recent activity recorded"
+                    }
+                  >
+                    <ActivityLight
+                      lastActivityTimestamp={worktree.lastActivityTimestamp}
+                      className="w-1.5 h-1.5"
+                    />
+                    <LiveTimeAgo timestamp={worktree.lastActivityTimestamp} />
                   </div>
                 </button>
               </div>
@@ -1197,16 +1219,12 @@ export function WorktreeCard({
                   </span>
                 </div>
 
-                {/* Right: State breakdown (icons + counts) */}
-                <TooltipProvider>
-                  <div className="flex items-center gap-3">
-                    {STATE_PRIORITY.map((state) => {
-                      const count = terminalCounts.byState[state];
-                      if (count === 0) return null;
-                      return <StateIcon key={state} state={state} count={count} />;
-                    })}
-                  </div>
-                </TooltipProvider>
+                {/* Right: Top priority state only */}
+                {topTerminalState && (
+                  <TooltipProvider>
+                    <StateIcon state={topTerminalState.state} count={topTerminalState.count} />
+                  </TooltipProvider>
+                )}
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
