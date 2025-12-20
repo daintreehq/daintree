@@ -3,7 +3,6 @@ import { useShallow } from "zustand/react/shallow";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import type { TerminalType, TerminalRestartError } from "@/types";
 import { cn } from "@/lib/utils";
-import { getTerminalAnimationDuration } from "@/lib/animationUtils";
 import { XtermAdapter } from "./XtermAdapter";
 import { ArtifactOverlay } from "./ArtifactOverlay";
 import { TerminalHeader } from "./TerminalHeader";
@@ -97,7 +96,6 @@ function TerminalPaneComponent({
   const prevFocusedRef = useRef(isFocused);
   const justFocusedUntilRef = useRef<number>(0);
   const inputBarRef = useRef<HybridInputBarHandle>(null);
-  const [isRestoring, setIsRestoring] = useState(true);
   const [dismissedRestartPrompt, setDismissedRestartPrompt] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isUpdateCwdOpen, setIsUpdateCwdOpen] = useState(false);
@@ -110,13 +108,6 @@ function TerminalPaneComponent({
   useEffect(() => {
     prevFocusedRef.current = isFocused;
   }, [isFocused]);
-
-  useEffect(() => {
-    if (!isRestoring) return;
-    const duration = getTerminalAnimationDuration();
-    const timer = setTimeout(() => setIsRestoring(false), duration);
-    return () => clearTimeout(timer);
-  }, [isRestoring]);
 
   useEffect(() => {
     setDismissedRestartPrompt(false);
@@ -465,9 +456,6 @@ function TerminalPaneComponent({
         isPinged &&
           allowPing &&
           (wasJustSelected ? "animate-terminal-ping-select" : "animate-terminal-ping"),
-
-        // Restore animation on mount (skip if trashing)
-        isRestoring && !isTrashing && "terminal-restoring",
 
         // Trash animation when being removed
         isTrashing && "terminal-trashing",
