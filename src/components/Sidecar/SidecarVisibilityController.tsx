@@ -7,11 +7,13 @@ import { useUIStore } from "@/store/uiStore";
  * Mount once in AppLayout - handles IPC hide/show calls when:
  * - Overlays open/close (modal dialogs, etc.)
  * - Sidecar is collapsed and re-expanded
+ * - App starts up with persisted tabs (auto-creates backend views)
  */
 export function SidecarVisibilityController(): null {
   const sidecarOpen = useSidecarStore((state) => state.isOpen);
   const activeTabId = useSidecarStore((state) => state.activeTabId);
   const tabs = useSidecarStore((state) => state.tabs);
+  const createdTabs = useSidecarStore((state) => state.createdTabs);
   const markTabCreated = useSidecarStore((state) => state.markTabCreated);
   const overlayCount = useUIStore((state) => state.overlayCount);
   const hasOverlays = overlayCount > 0;
@@ -19,6 +21,7 @@ export function SidecarVisibilityController(): null {
 
   const prevHasOverlaysRef = useRef(hasOverlays);
   const prevSidecarOpenRef = useRef(sidecarOpen);
+  const prevActiveTabIdRef = useRef(activeTabId);
 
   const ensureTabAndRestore = useCallback(
     async (tabId: string, tabUrl: string) => {
@@ -95,6 +98,31 @@ export function SidecarVisibilityController(): null {
 
     useSidecarStore.getState().setActiveTab(tabs[0].id);
   }, [sidecarOpen, tabs, activeTabId]);
+
+  // Handle active tab changes (e.g., initial auto-select or programmatic switch)
+  // This fixes the issue where the first tab is selected but not loaded on startup
+  useEffect(() => {
+    const prevId = prevActiveTabIdRef.current;
+    prevActiveTabIdRef.current = activeTabId;
+
+    // Trigger restore if:
+    // - Active tab changed
+    // - Sidecar is open
+    // - No overlays blocking
+    // - Tab not yet created in backend (means app just started or tab never loaded)
+    if (
+      activeTabId &&
+      activeTabId !== prevId &&
+      sidecarOpen &&
+      !hasOverlays &&
+      !createdTabs.has(activeTabId)
+    ) {
+      const activeTab = tabs.find((t) => t.id === activeTabId);
+      if (activeTab?.url) {
+        void ensureTabAndRestore(activeTabId, activeTab.url);
+      }
+    }
+  }, [activeTabId, sidecarOpen, hasOverlays, tabs, createdTabs, ensureTabAndRestore]);
 
   // Handle overlay visibility changes
   useEffect(() => {
