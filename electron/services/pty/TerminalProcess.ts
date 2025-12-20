@@ -488,8 +488,7 @@ export class TerminalProcess {
       );
     }
 
-    // Initialize sync buffer for agent terminals to implement DEC 2026
-    // This gates output emission to prevent TUI flicker during synchronized updates
+    // DEC 2026 synchronized output for flicker-free agent terminal rendering
     if (TERMINAL_FRAME_STABILIZER_ENABLED && this.isAgentTerminal && headlessTerminal) {
       this.syncBuffer = new TerminalSyncBuffer({
         verbose: process.env.CANOPY_VERBOSE === "1",
@@ -1273,21 +1272,15 @@ export class TerminalProcess {
     });
   }
 
-  /**
-   * Emit data through the frame stabilizer (if enabled) or directly.
-   * The stabilizer gates output to prevent TUI flicker during redraws.
-   */
+  /** Emit data through the frame stabilizer (if enabled) or directly. */
   private emitData(data: string | Uint8Array): void {
-    // Convert to string for stabilizer processing
     const text = typeof data === "string" ? data : new TextDecoder().decode(data);
 
-    // Route through stabilizer if available
     if (this.syncBuffer) {
       this.syncBuffer.ingest(text);
       return;
     }
 
-    // No stabilizer - emit directly
     this.emitDataDirect(text);
   }
 

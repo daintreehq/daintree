@@ -38,11 +38,6 @@ const SYNC_OUTPUT_END = "\x1b[?2026l"; // ESU
 const CLEAR_SCREEN = "\x1b[2J";
 const ALT_BUFFER_ON = "\x1b[?1049h";
 
-// Gemini multi-line erase pattern: erase line + cursor up, repeated for TUI redraw
-// Pattern: \x1b[2K\x1b[1A (erase entire line + cursor up 1)
-// When detected at buffer start, indicates incomplete redraw - extend hold time
-const GEMINI_REDRAW_START = "\x1b[2K\x1b[1A";
-
 // How long to wait before assuming current frame is complete
 const STABILITY_MS = 100;
 
@@ -263,15 +258,6 @@ export class TerminalSyncBuffer {
     this.processFrameBoundaries();
   }
 
-  /**
-   * Check if buffer appears to be mid-Gemini-redraw.
-   * Gemini redraws start with repeated \x1b[2K\x1b[1A sequences.
-   * If we're in this state, we should wait longer before emitting.
-   */
-  private isGeminiRedrawInProgress(): boolean {
-    return this.buffer.startsWith(GEMINI_REDRAW_START);
-  }
-
   private scheduleStabilityFlush(): void {
     this.cancelStabilityTimer();
 
@@ -281,15 +267,6 @@ export class TerminalSyncBuffer {
       this.stabilityTimer = null;
 
       if (this.buffer.length > 0) {
-        // If we're mid-Gemini-redraw, don't emit on stability timeout.
-        // Wait for max hold timer or more data to complete the frame.
-        // This prevents emitting partial redraws that cause flicker.
-        if (this.isGeminiRedrawInProgress()) {
-          // Reschedule stability check - frame might complete soon
-          this.scheduleStabilityFlush();
-          return;
-        }
-
         this.cancelMaxHoldTimer();
         this.emit(this.buffer, "stable");
         this.buffer = "";

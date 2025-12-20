@@ -181,60 +181,18 @@ describe("TerminalSyncBuffer", () => {
       expect(emits[2]).toBe("\x1b[2JC");
     });
 
-    it("delays emission when buffer starts with Gemini redraw pattern", () => {
+    it("emits escape sequences after stability timeout", () => {
       const stabilizer = new TerminalSyncBuffer();
       const emits: string[] = [];
 
       stabilizer.attach({} as any, (data: string) => emits.push(data));
 
-      // Buffer starts with Gemini erase pattern - indicates incomplete redraw
-      stabilizer.ingest("\x1b[2K\x1b[1A\x1b[2K\x1b[1Apartial content");
+      // Escape sequences are emitted normally after stability timeout
+      stabilizer.ingest("\x1b[2K\x1b[1A\x1b[2K\x1b[1Acontent");
 
-      // Should NOT emit on first stability timeout - mid-redraw detected
-      vi.advanceTimersByTime(100);
-      expect(emits).toHaveLength(0);
-
-      // Add more content that completes the frame (doesn't start with erase)
-      stabilizer.ingest("more content");
-
-      // Now stability timeout should emit
       vi.advanceTimersByTime(100);
       expect(emits).toHaveLength(1);
-      expect(emits[0]).toBe("\x1b[2K\x1b[1A\x1b[2K\x1b[1Apartial contentmore content");
-    });
-
-    it("emits Gemini redraw on max hold timeout", () => {
-      const stabilizer = new TerminalSyncBuffer();
-      const emits: string[] = [];
-
-      stabilizer.attach({} as any, (data: string) => emits.push(data));
-
-      // Buffer starts with Gemini erase pattern
-      stabilizer.ingest("\x1b[2K\x1b[1A\x1b[2K\x1b[1Aspinner");
-
-      // Stability timeout keeps rescheduling due to Gemini pattern
-      vi.advanceTimersByTime(100);
-      expect(emits).toHaveLength(0);
-
-      // But max hold (200ms) forces emission
-      vi.advanceTimersByTime(100);
-      expect(emits).toHaveLength(1);
-      expect(emits[0]).toBe("\x1b[2K\x1b[1A\x1b[2K\x1b[1Aspinner");
-    });
-
-    it("emits normally when buffer does not start with Gemini pattern", () => {
-      const stabilizer = new TerminalSyncBuffer();
-      const emits: string[] = [];
-
-      stabilizer.attach({} as any, (data: string) => emits.push(data));
-
-      // Normal content (Gemini pattern in middle, not at start)
-      stabilizer.ingest("normal output\x1b[2K\x1b[1Asome text");
-
-      // Should emit on stability timeout - no special handling
-      vi.advanceTimersByTime(100);
-      expect(emits).toHaveLength(1);
-      expect(emits[0]).toBe("normal output\x1b[2K\x1b[1Asome text");
+      expect(emits[0]).toBe("\x1b[2K\x1b[1A\x1b[2K\x1b[1Acontent");
     });
   });
 
