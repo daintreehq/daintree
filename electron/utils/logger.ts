@@ -1,5 +1,5 @@
 import { getErrorDetails } from "./errorTypes.js";
-import { appendFileSync, mkdirSync, existsSync } from "fs";
+import { appendFileSync, mkdirSync, existsSync, writeFileSync, readdirSync } from "fs";
 import { join } from "path";
 import type { BrowserWindow } from "electron";
 import { logBuffer, type LogEntry } from "../services/LogBuffer.js";
@@ -13,8 +13,46 @@ interface LogContext {
 
 let storagePath: string | null = null;
 
+function clearSessionLogs(basePath: string): void {
+  const logsDir = join(basePath, "logs");
+  const debugDir = join(basePath, "debug");
+
+  // Clear main logs directory
+  if (existsSync(logsDir)) {
+    try {
+      const files = readdirSync(logsDir);
+      for (const file of files) {
+        if (file.endsWith(".log")) {
+          const filePath = join(logsDir, file);
+          writeFileSync(filePath, "", "utf8");
+        }
+      }
+    } catch {
+      // Ignore errors during cleanup
+    }
+  }
+
+  // Clear debug directory (frame-sequences.log, etc.)
+  if (existsSync(debugDir)) {
+    try {
+      const files = readdirSync(debugDir);
+      for (const file of files) {
+        if (file.endsWith(".log")) {
+          const filePath = join(debugDir, file);
+          writeFileSync(filePath, "", "utf8");
+        }
+      }
+    } catch {
+      // Ignore errors during cleanup
+    }
+  }
+}
+
 export function initializeLogger(path: string): void {
   storagePath = path;
+
+  // Clear all log files at startup for single-session logging
+  clearSessionLogs(path);
 }
 
 function getLogDirectory(): string {
