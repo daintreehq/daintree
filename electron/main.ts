@@ -1,11 +1,32 @@
-import { app, BrowserWindow, ipcMain, dialog, powerMonitor, MessageChannelMain } from "electron";
+import {
+  app,
+  BrowserWindow,
+  ipcMain,
+  dialog,
+  powerMonitor,
+  MessageChannelMain,
+  protocol,
+  net,
+} from "electron";
 import path from "path";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 import os from "os";
 import { randomBytes } from "crypto";
 import fixPath from "fix-path";
 
 fixPath();
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: "app",
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+    },
+  },
+]);
 
 // Increase V8 heap size for renderer processes to handle large clipboard data
 // Maximum is 4GB due to V8 pointer compression in Electron 9+
@@ -27,6 +48,7 @@ import { openExternalUrl } from "./utils/openExternal.js";
 import { EventBuffer } from "./services/EventBuffer.js";
 import { CHANNELS } from "./ipc/channels.js";
 import { createApplicationMenu } from "./menu.js";
+import { resolveAppUrlToDistPath, getMimeType, buildHeaders } from "./utils/appProtocol.js";
 
 // Initialize logger early with userData path
 initializeLogger(app.getPath("userData"));
@@ -82,7 +104,10 @@ if (!gotTheLock) {
     }
   });
 
-  app.whenReady().then(createWindow);
+  app.whenReady().then(() => {
+    registerAppProtocol();
+    createWindow();
+  });
 
   app.on("window-all-closed", () => {
     if (process.platform !== "darwin") {
@@ -140,6 +165,58 @@ if (!gotTheLock) {
         console.error("[MAIN] Error during cleanup:", error);
         app.exit(1);
       });
+  });
+}
+
+function registerAppProtocol(): void {
+  const distPath = path.join(__dirname, "../../dist");
+
+  protocol.handle("app", async (request) => {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      return new Response("Method Not Allowed", {
+        status: 405,
+        headers: buildHeaders("text/plain"),
+      });
+    }
+
+    const { filePath, error } = resolveAppUrlToDistPath(request.url, distPath, {
+      expectedHostname: "canopy",
+    });
+
+    if (error || !filePath) {
+      console.error("[MAIN] App protocol error:", error);
+      return new Response("Not Found", {
+        status: 404,
+        headers: buildHeaders("text/plain"),
+      });
+    }
+
+    try {
+      const fileUrl = pathToFileURL(filePath).toString();
+      const response = await net.fetch(fileUrl);
+
+      if (!response.ok) {
+        return new Response("Not Found", {
+          status: 404,
+          headers: { "Content-Type": "text/plain" },
+        });
+      }
+
+      const mimeType = getMimeType(filePath);
+      const headers = buildHeaders(mimeType);
+      const buffer = await response.arrayBuffer();
+
+      return new Response(buffer, {
+        status: 200,
+        headers: headers,
+      });
+    } catch (err) {
+      console.error("[MAIN] Error serving file:", filePath, err);
+      return new Response("Internal Server Error", {
+        status: 500,
+        headers: { "Content-Type": "text/plain" },
+      });
+    }
   });
 }
 
@@ -229,8 +306,8 @@ async function createWindow(): Promise<void> {
     console.log("[MAIN] Loading Vite dev server at http://localhost:5173");
     mainWindow.loadURL("http://localhost:5173");
   } else {
-    console.log("[MAIN] Loading production build");
-    mainWindow.loadFile(path.join(__dirname, "../../dist/index.html"));
+    console.log("[MAIN] Loading production build via app:// protocol");
+    mainWindow.loadURL("app://canopy/index.html");
   }
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {

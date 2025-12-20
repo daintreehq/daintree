@@ -55,8 +55,7 @@ let cachedToken: string | null = null;
 
 function isAllowedTerminalPortTarget(): boolean {
   const { protocol, origin } = window.location;
-  // file:// protocol always has origin "null" as a string, but check protocol as fallback
-  if (protocol === "file:") return true;
+  if (protocol === "app:" && origin === "app://canopy") return true;
   if (protocol === "http:" || protocol === "https:") return origin === "http://localhost:5173";
   return false;
 }
@@ -67,9 +66,7 @@ ipcRenderer.on("terminal-port-token", (_event, payload: { token: string }) => {
   if (window.top !== window) return;
   if (!isAllowedTerminalPortTarget()) return;
 
-  const targetOrigin =
-    window.location.origin === "null" ? window.location.origin : window.location.origin;
-  window.postMessage({ type: "terminal-port-token", token: payload.token }, targetOrigin);
+  window.postMessage({ type: "terminal-port-token", token: payload.token }, window.location.origin);
 });
 
 ipcRenderer.on("terminal-port", (event, payload: { token: string }) => {
