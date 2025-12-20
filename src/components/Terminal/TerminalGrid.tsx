@@ -318,14 +318,15 @@ export function TerminalGrid({
     isDraggingRef.current = isDragging;
   }, [isDragging]);
 
+  const placeholderInGrid =
+    placeholderIndex !== null && placeholderIndex >= 0 && placeholderIndex <= gridTerminals.length;
+
   // Show placeholder when dragging from dock to grid (only if grid not full)
-  const showPlaceholder = placeholderIndex !== null && sourceContainer === "dock" && !isGridFull;
+  const showPlaceholder = placeholderInGrid && sourceContainer === "dock" && !isGridFull;
+  const gridItemCount = gridTerminals.length + (showPlaceholder ? 1 : 0);
 
   const gridCols = useMemo(() => {
-    // Count includes placeholder when dragging from dock to grid
-    const baseCount = gridTerminals.length;
-    const count = showPlaceholder ? baseCount + 1 : baseCount;
-    if (count === 0) return 1;
+    if (gridItemCount === 0) return 1;
 
     const { strategy, value } = layoutConfig;
 
@@ -335,12 +336,12 @@ export function TerminalGrid({
 
     if (strategy === "fixed-rows") {
       const rows = Math.max(1, Math.min(value, 10));
-      return Math.ceil(count / rows);
+      return Math.ceil(gridItemCount / rows);
     }
 
     // Automatic rectangular layout via deterministic mapping
-    return getAutoGridCols(count, gridWidth);
-  }, [gridTerminals.length, layoutConfig, gridWidth, showPlaceholder]);
+    return getAutoGridCols(gridItemCount, gridWidth);
+  }, [gridItemCount, layoutConfig, gridWidth]);
 
   const handleLaunchAgent = useCallback(
     async (type: "claude" | "gemini" | "codex" | "terminal") => {
@@ -436,9 +437,6 @@ export function TerminalGrid({
     [agentAvailability, handleLaunchAgent, layoutConfig, setLayoutConfig, showMenu]
   );
 
-  const placeholderInGrid =
-    placeholderIndex !== null && placeholderIndex >= 0 && placeholderIndex <= gridTerminals.length;
-
   // Terminal IDs for SortableContext - Include placeholder if visible
   const terminalIds = useMemo(() => {
     const ids = gridTerminals.map((t) => t.id);
@@ -493,7 +491,12 @@ export function TerminalGrid({
     if (terminal) {
       return (
         <div className={cn("h-full relative bg-canopy-bg", className)}>
-          <GridTerminalPane terminal={terminal} isFocused={true} isMaximized={true} />
+          <GridTerminalPane
+            terminal={terminal}
+            isFocused={true}
+            isMaximized={true}
+            gridTerminalCount={gridItemCount}
+          />
         </div>
       );
     }
@@ -558,7 +561,11 @@ export function TerminalGrid({
                       sourceIndex={index}
                       disabled={isTerminalInTrash}
                     >
-                      <GridTerminalPane terminal={terminal} isFocused={terminal.id === focusedId} />
+                      <GridTerminalPane
+                        terminal={terminal}
+                        isFocused={terminal.id === focusedId}
+                        gridTerminalCount={gridItemCount}
+                      />
                     </SortableTerminal>
                   );
 

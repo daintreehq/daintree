@@ -8,12 +8,14 @@ export interface GridTerminalPaneProps {
   terminal: TerminalInstance;
   isFocused: boolean;
   isMaximized?: boolean;
+  gridTerminalCount?: number;
 }
 
 export function GridTerminalPane({
   terminal,
   isFocused,
   isMaximized = false,
+  gridTerminalCount,
 }: GridTerminalPaneProps) {
   const setFocused = useTerminalStore((state) => state.setFocused);
   const trashTerminal = useTerminalStore((state) => state.trashTerminal);
@@ -115,6 +117,7 @@ export function GridTerminalPane({
         onTitleChange={handleTitleChange}
         onMinimize={handleMinimize}
         isTrashing={isTrashing}
+        gridTerminalCount={gridTerminalCount}
       />
     </ErrorBoundary>
   );

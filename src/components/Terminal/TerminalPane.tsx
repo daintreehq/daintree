@@ -64,6 +64,8 @@ export interface TerminalPaneProps {
   isTrashing?: boolean;
   /** Error from a failed restart attempt */
   restartError?: TerminalRestartError;
+  /** Number of terminals in the grid (used to reduce visual noise when only one terminal) */
+  gridTerminalCount?: number;
 }
 
 function TerminalPaneComponent({
@@ -89,6 +91,7 @@ function TerminalPaneComponent({
   restartKey = 0,
   isTrashing = false,
   restartError,
+  gridTerminalCount,
 }: TerminalPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const prevFocusedRef = useRef(isFocused);
@@ -400,6 +403,8 @@ function TerminalPaneComponent({
   }, [id, agentState]);
 
   const isWorking = agentState === "working";
+  const showGridAttention = location === "grid" && !isMaximized && (gridTerminalCount ?? 2) > 1;
+  const allowPing = !isMaximized && (location !== "grid" || (gridTerminalCount ?? 2) > 1);
 
   return (
     <div
@@ -408,24 +413,23 @@ function TerminalPaneComponent({
         "flex flex-col h-full overflow-hidden group terminal-pane",
 
         // Background color: surface tint for cards, canvas for maximized
-        // When focused, .terminal-selected handles the background color
-        location === "grid" && !isMaximized && !isFocused && "bg-[var(--color-surface)]",
+        location === "grid" && !isMaximized && "bg-[var(--color-surface)]",
         (location === "dock" || isMaximized) && "bg-canopy-bg",
 
         // Grid styles (standard - non-maximized)
         location === "grid" && !isMaximized && "rounded border shadow-md",
         location === "grid" &&
           !isMaximized &&
-          (isFocused ? "terminal-selected" : "border-overlay hover:border-white/[0.08]"),
+          (isFocused && showGridAttention
+            ? "terminal-selected"
+            : "border-overlay hover:border-white/[0.08]"),
 
         // Zen Mode styles (maximized - full immersion, no inset needed)
         location === "grid" && isMaximized && "border-0 rounded-none z-[var(--z-maximized)]",
 
         isExited && "opacity-75 grayscale",
 
-        isPinged &&
-          !isMaximized &&
-          (wasJustSelected ? "animate-terminal-ping-select" : "animate-terminal-ping"),
+        isPinged && allowPing && (wasJustSelected ? "animate-terminal-ping-select" : "animate-terminal-ping"),
 
         // Restore animation on mount (skip if trashing)
         isRestoring && !isTrashing && "terminal-restoring",

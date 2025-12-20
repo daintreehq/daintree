@@ -228,9 +228,12 @@ export function DndProvider({ children }: DndProviderProps) {
       // Handle placeholder for cross-container drag (dock -> grid)
       const sourceContainer = activeDataCurrent?.sourceLocation;
       if (sourceContainer === "dock" && detectedContainer === "grid") {
+        const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
         // Find grid terminals to calculate insertion index (match TerminalGrid filter)
         const gridTerminals = terminals.filter(
-          (t) => t.location === "grid" || t.location === undefined
+          (t) =>
+            (t.location === "grid" || t.location === undefined) &&
+            (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
         );
         const overId = over.id as string;
         const overIndex = gridTerminals.findIndex((t) => t.id === overId);
