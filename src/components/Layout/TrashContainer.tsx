@@ -36,7 +36,7 @@ export function TrashContainer({ trashedTerminals }: TrashContainerProps) {
           size="sm"
           className={cn(
             "px-3",
-            isOpen && "bg-canopy-border border-canopy-border ring-1 ring-canopy-accent/20"
+            isOpen && "bg-canopy-border border-canopy-accent/40 ring-1 ring-canopy-accent/30"
           )}
           title="View recently closed terminals"
           aria-haspopup="dialog"

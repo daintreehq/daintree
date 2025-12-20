@@ -183,11 +183,11 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
             className={cn(
               "flex items-center gap-2.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition-all duration-150 max-w-[280px]",
               "bg-white/[0.02] border-divider text-canopy-text/70",
-              "hover:text-canopy-text hover:bg-white/[0.03]",
+              "hover:text-canopy-text hover:bg-white/[0.04]",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
               "cursor-grab active:cursor-grabbing",
               isOpen &&
-                "bg-white/[0.03] text-canopy-text border-overlay ring-1 ring-inset ring-canopy-accent/20"
+                "bg-white/[0.08] text-canopy-text border-canopy-accent/40 ring-1 ring-inset ring-canopy-accent/30"
             )}
             onClick={() => setFocused(terminal.id)}
             title={`${terminal.title} - Click to preview, drag to reorder`}

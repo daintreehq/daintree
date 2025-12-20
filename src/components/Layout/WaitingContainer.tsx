@@ -39,7 +39,7 @@ export function WaitingContainer() {
           size="sm"
           className={cn(
             "px-3",
-            isOpen && "bg-canopy-border border-canopy-border ring-1 ring-canopy-accent/20"
+            isOpen && "bg-canopy-border border-canopy-accent/40 ring-1 ring-canopy-accent/30"
           )}
           title={`View agents waiting for input${shortcut ? ` (${shortcut})` : ""}`}
           aria-haspopup="dialog"

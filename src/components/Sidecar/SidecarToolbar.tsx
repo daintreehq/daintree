@@ -156,8 +156,8 @@ const SortableTab = memo(function SortableTab({
         "min-w-[80px] max-w-[200px]",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
         isActive
-          ? "bg-white/[0.03] text-canopy-text border-overlay ring-1 ring-inset ring-canopy-accent/20"
-          : "bg-white/[0.02] text-canopy-text/70 border-divider hover:bg-white/[0.03] hover:text-canopy-text",
+          ? "bg-white/[0.08] text-canopy-text border-canopy-accent/40 ring-1 ring-inset ring-canopy-accent/30"
+          : "bg-white/[0.02] text-canopy-text/70 border-divider hover:bg-white/[0.04] hover:text-canopy-text",
         isDragging && "opacity-80 scale-105 shadow-xl cursor-grabbing"
       )}
     >
