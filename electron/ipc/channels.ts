@@ -182,6 +182,9 @@ export const CHANNELS = {
   SLASH_COMMANDS_LIST: "slash-commands:list",
 
   WINDOW_VISIBILITY_CHANGE: "window:visibility-change",
+
+  GEMINI_GET_STATUS: "gemini:get-status",
+  GEMINI_ENABLE_ALTERNATE_BUFFER: "gemini:enable-alternate-buffer",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

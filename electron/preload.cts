@@ -320,6 +320,10 @@ const CHANNELS = {
 
   // Slash command channels
   SLASH_COMMANDS_LIST: "slash-commands:list",
+
+  // Gemini channels
+  GEMINI_GET_STATUS: "gemini:get-status",
+  GEMINI_ENABLE_ALTERNATE_BUFFER: "gemini:enable-alternate-buffer",
 } as const;
 
 const api: ElectronAPI = {
@@ -850,6 +854,13 @@ const api: ElectronAPI = {
   notification: {
     updateBadge: (state: { waitingCount: number; failedCount: number }) =>
       ipcRenderer.send(CHANNELS.NOTIFICATION_UPDATE, state),
+  },
+
+  // Gemini API
+  gemini: {
+    getStatus: () => _typedInvoke(CHANNELS.GEMINI_GET_STATUS),
+
+    enableAlternateBuffer: () => _typedInvoke(CHANNELS.GEMINI_ENABLE_ALTERNATE_BUFFER),
   },
 };
 

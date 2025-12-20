@@ -308,4 +308,10 @@ export interface ElectronAPI {
     /** Update window title and dock badge based on terminal attention state */
     updateBadge(state: { waitingCount: number; failedCount: number }): void;
   };
+  gemini: {
+    /** Get Gemini config status (exists, alternate buffer enabled) */
+    getStatus(): Promise<{ exists: boolean; alternateBufferEnabled: boolean; error?: string }>;
+    /** Enable alternate buffer in Gemini settings */
+    enableAlternateBuffer(): Promise<{ success: boolean }>;
+  };
 }

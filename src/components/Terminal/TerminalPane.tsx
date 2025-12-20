@@ -10,6 +10,7 @@ import { TerminalHeader } from "./TerminalHeader";
 import { TerminalSearchBar } from "./TerminalSearchBar";
 import { TerminalRestartBanner } from "./TerminalRestartBanner";
 import { TerminalErrorBanner } from "./TerminalErrorBanner";
+import { GeminiAlternateBufferBanner } from "./GeminiAlternateBufferBanner";
 import { UpdateCwdDialog } from "./UpdateCwdDialog";
 import { ErrorBanner } from "../Errors/ErrorBanner";
 import { useIsDragging } from "@/components/DragDrop";
@@ -101,6 +102,7 @@ function TerminalPaneComponent({
   const [dismissedRestartPrompt, setDismissedRestartPrompt] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isUpdateCwdOpen, setIsUpdateCwdOpen] = useState(false);
+  const [showGeminiBanner, setShowGeminiBanner] = useState(false);
 
   const unseenOutput = useTerminalUnseenOutput(id);
 
@@ -123,6 +125,40 @@ function TerminalPaneComponent({
     setDismissedRestartPrompt(false);
     inputTrackerRef.current?.reset();
   }, [restartKey]);
+
+  useEffect(() => {
+    let isActive = true;
+
+    if (type !== "gemini") {
+      setShowGeminiBanner(false);
+      return;
+    }
+
+    const dismissed = localStorage.getItem("gemini-alt-buffer-dismissed");
+    if (dismissed === "true") {
+      setShowGeminiBanner(false);
+      return;
+    }
+
+    window.electron.gemini
+      .getStatus()
+      .then((status) => {
+        if (!isActive) return;
+        if (status.exists && !status.alternateBufferEnabled && !status.error) {
+          setShowGeminiBanner(true);
+        } else {
+          setShowGeminiBanner(false);
+        }
+      })
+      .catch(() => {
+        if (!isActive) return;
+        setShowGeminiBanner(false);
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [type, restartKey]);
 
   const updateVisibility = useTerminalStore((state) => state.updateVisibility);
   const getTerminal = useTerminalStore((state) => state.getTerminal);
@@ -533,6 +569,13 @@ function TerminalPaneComponent({
             onDismiss={() => setDismissedRestartPrompt(true)}
           />
         )}
+
+      {showGeminiBanner && (
+        <GeminiAlternateBufferBanner
+          terminalId={id}
+          onDismiss={() => setShowGeminiBanner(false)}
+        />
+      )}
 
       <div className="flex-1 min-h-0 bg-canopy-bg flex flex-col">
         <div className="flex-1 relative min-h-0">

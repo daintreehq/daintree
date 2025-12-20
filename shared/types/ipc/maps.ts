@@ -556,6 +556,16 @@ export interface IpcInvokeMap {
     args: [payload: { pattern: string }];
     result: WorktreeConfig;
   };
+
+  // Gemini channels
+  "gemini:get-status": {
+    args: [];
+    result: { exists: boolean; alternateBufferEnabled: boolean; error?: string };
+  };
+  "gemini:enable-alternate-buffer": {
+    args: [];
+    result: { success: boolean };
+  };
 }
 
 /**
