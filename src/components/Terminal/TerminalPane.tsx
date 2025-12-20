@@ -429,7 +429,9 @@ function TerminalPaneComponent({
 
         isExited && "opacity-75 grayscale",
 
-        isPinged && allowPing && (wasJustSelected ? "animate-terminal-ping-select" : "animate-terminal-ping"),
+        isPinged &&
+          allowPing &&
+          (wasJustSelected ? "animate-terminal-ping-select" : "animate-terminal-ping"),
 
         // Restore animation on mount (skip if trashing)
         isRestoring && !isTrashing && "terminal-restoring",
