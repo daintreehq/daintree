@@ -52,7 +52,7 @@ function GeminiAlternateBufferBannerComponent({
       <div className="flex items-center gap-2 min-w-0">
         <Terminal className="w-4 h-4 shrink-0 text-[var(--color-status-info)]" aria-hidden="true" />
         <span className="text-sm text-canopy-text/80">
-          Canopy supports synchronized rendering. For flicker-free Gemini output, run{" "}
+          For flicker-free output, run{" "}
           <code className="px-1 py-0.5 bg-canopy-text/10 rounded text-canopy-text/90 font-mono text-xs">
             /settings
           </code>{" "}
@@ -60,6 +60,7 @@ function GeminiAlternateBufferBannerComponent({
           <code className="px-1 py-0.5 bg-canopy-text/10 rounded text-canopy-text/90 font-mono text-xs">
             Use Alternate Screen Buffer
           </code>
+          {" "}(currently loses scrolling)
         </span>
       </div>
 

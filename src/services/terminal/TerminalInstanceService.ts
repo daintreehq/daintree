@@ -402,7 +402,6 @@ class TerminalInstanceService {
       exitSubscribers,
       getRefreshTier,
       keyHandlerInstalled: false,
-      wheelHandlerInstalled: false,
       lastAttachAt: 0,
       lastDetachAt: 0,
       isVisible: false,

@@ -45,7 +45,7 @@ export class TerminalParserHandler {
 
     return {
       blockAltScreen: config?.capabilities?.blockAltScreen ?? false,
-      blockMouseReporting: config?.capabilities?.blockMouseReporting ?? true,
+      blockMouseReporting: config?.capabilities?.blockMouseReporting ?? false,
       blockScrollRegion: config?.capabilities?.blockScrollRegion ?? false,
       blockClearScreen: config?.capabilities?.blockClearScreen ?? false,
       blockCursorToTop: config?.capabilities?.blockCursorToTop ?? false,

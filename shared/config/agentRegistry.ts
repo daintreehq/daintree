@@ -31,7 +31,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     capabilities: {
       scrollback: 10000,
       blockAltScreen: false,
-      blockMouseReporting: true,
+      blockMouseReporting: false,
       blockScrollRegion: false,
       blockClearScreen: false,
       blockCursorToTop: false,
@@ -49,7 +49,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     capabilities: {
       scrollback: 10000,
       blockAltScreen: false,
-      blockMouseReporting: true,
+      blockMouseReporting: false,
       blockScrollRegion: false,
       blockClearScreen: false,
       blockCursorToTop: false,
@@ -68,7 +68,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     capabilities: {
       scrollback: 10000,
       blockAltScreen: false,
-      blockMouseReporting: true,
+      blockMouseReporting: false,
       blockScrollRegion: false,
       blockClearScreen: false,
       blockCursorToTop: false,

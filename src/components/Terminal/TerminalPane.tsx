@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { AlertTriangle, Loader2, ArrowDown } from "lucide-react";
+import { AlertTriangle, Loader2 } from "lucide-react";
 import type { TerminalType, TerminalRestartError } from "@/types";
 import { cn } from "@/lib/utils";
 import { getTerminalAnimationDuration } from "@/lib/animationUtils";
@@ -28,7 +28,6 @@ import { getAgentConfig } from "@/config/agents";
 import { terminalClient } from "@/clients";
 import { HybridInputBar, type HybridInputBarHandle } from "./HybridInputBar";
 import { getTerminalFocusTarget } from "./terminalFocus";
-import { useTerminalUnseenOutput } from "@/hooks/useTerminalUnseenOutput";
 import { getCanopyCommand, isEscapedCommand, unescapeCommand } from "./canopySlashCommands";
 
 export type { TerminalType };
@@ -103,8 +102,6 @@ function TerminalPaneComponent({
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isUpdateCwdOpen, setIsUpdateCwdOpen] = useState(false);
   const [showGeminiBanner, setShowGeminiBanner] = useState(false);
-
-  const unseenOutput = useTerminalUnseenOutput(id);
 
   if (isFocused && !prevFocusedRef.current) {
     justFocusedUntilRef.current = performance.now() + 250;
@@ -597,19 +594,6 @@ function TerminalPaneComponent({
               cwd={cwd}
             />
             <ArtifactOverlay terminalId={id} worktreeId={worktreeId} cwd={cwd} />
-            {unseenOutput.isUserScrolledBack && unseenOutput.unseen > 0 && (
-              <button
-                onClick={() => {
-                  terminalInstanceService.resumeAutoScroll(id);
-                  requestAnimationFrame(() => terminalInstanceService.focus(id));
-                }}
-                className="absolute bottom-4 left-4 z-10 flex items-center gap-2 bg-canopy-primary text-canopy-primary-fg px-3 py-2 rounded-md shadow-lg hover:bg-canopy-primary/90 transition-colors"
-                aria-label="Resume auto-scroll"
-              >
-                <ArrowDown className="h-4 w-4" />
-                <span className="text-sm font-medium">Resume</span>
-              </button>
-            )}
             {isSearchOpen && (
               <TerminalSearchBar
                 terminalId={id}

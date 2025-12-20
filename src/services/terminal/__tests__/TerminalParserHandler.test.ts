@@ -43,24 +43,13 @@ describe("TerminalParserHandler", () => {
     process.env = originalEnv;
   });
 
-  it("should register handlers on initialization", () => {
+  it("should NOT register mouse blocking handlers by default", () => {
     new TerminalParserHandler(mockManaged);
-    expect(mockTerminal.parser.registerCsiHandler).toHaveBeenCalled();
-  });
-
-  it("should block mouse reporting toggles for agent terminals", () => {
-    new TerminalParserHandler(mockManaged);
+    // With blockMouseReporting: false (default), no mouse handlers should be registered
     const decset = csiHandlers.find((h) => h.opts.prefix === "?" && h.opts.final === "h");
     const decrst = csiHandlers.find((h) => h.opts.prefix === "?" && h.opts.final === "l");
-    expect(decset).toBeDefined();
-    expect(decrst).toBeDefined();
-
-    expect(decset.handler([1000])).toBe(true);
-    expect(decrst.handler([1000])).toBe(true);
-
-    // Non-mouse private modes should pass through.
-    expect(decset.handler([1049])).toBe(false);
-    expect(decrst.handler([1049])).toBe(false);
+    expect(decset).toBeUndefined();
+    expect(decrst).toBeUndefined();
   });
 
   it("should NOT block TUI sequences for Claude agent terminals", () => {
@@ -109,11 +98,9 @@ describe("TerminalParserHandler", () => {
 
   it("should dispose handlers correctly", () => {
     const handler = new TerminalParserHandler(mockManaged);
-    expect(csiHandlers.length).toBeGreaterThan(0);
-
-    handler.dispose();
-
-    csiHandlers.forEach((h) => expect(h.disposable.dispose).toHaveBeenCalled());
+    // With default config (no blocking), no handlers are registered
+    // But dispose should still work without errors
+    expect(() => handler.dispose()).not.toThrow();
   });
 
   it("should handle missing parser API gracefully", () => {

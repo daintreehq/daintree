@@ -95,6 +95,7 @@ function XtermAdapterComponent({
       smoothScrollDuration: performanceMode ? 0 : 0, // Already 0, but keep explicit
       scrollback: effectiveScrollback,
       macOptionIsMeta: true,
+      macOptionClickForcesSelection: true,
       scrollOnUserInput: false,
       fastScrollModifier: "alt" as const,
       fastScrollSensitivity: 5,
@@ -231,26 +232,6 @@ function XtermAdapterComponent({
         return true;
       });
       managed.keyHandlerInstalled = true;
-    }
-
-    if (!managed.wheelHandlerInstalled) {
-      managed.terminal.attachCustomWheelEventHandler((event: WheelEvent) => {
-        const viewport = managed.terminal.element?.querySelector(".xterm-viewport") as
-          | HTMLElement
-          | undefined
-          | null;
-        if (!viewport) return true;
-
-        const scrollTop = viewport.scrollTop;
-        const scrollBottom = scrollTop + viewport.clientHeight;
-        const scrollHeight = viewport.scrollHeight;
-
-        if (scrollTop <= 0 && event.deltaY < 0) return false;
-        if (scrollBottom >= scrollHeight - 1 && event.deltaY > 0) return false;
-
-        return true;
-      });
-      managed.wheelHandlerInstalled = true;
     }
 
     exitUnsubRef.current = terminalInstanceService.addExitListener(terminalId, (code) => {

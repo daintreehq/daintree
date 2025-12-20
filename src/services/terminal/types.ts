@@ -32,7 +32,6 @@ export interface ManagedTerminal {
   parserHandler?: { dispose: () => void; setAllowResets?: (allow: boolean) => void };
   getRefreshTier: RefreshTierProvider;
   keyHandlerInstalled: boolean;
-  wheelHandlerInstalled: boolean;
   lastAttachAt: number;
   lastDetachAt: number;
   // Visibility tracking
