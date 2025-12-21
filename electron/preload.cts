@@ -849,8 +849,7 @@ const api: ElectronAPI = {
       ipcRenderer.on(CHANNELS.WINDOW_FULLSCREEN_CHANGE, handler);
       return () => ipcRenderer.removeListener(CHANNELS.WINDOW_FULLSCREEN_CHANGE, handler);
     },
-    toggleFullscreen: (): Promise<boolean> =>
-      ipcRenderer.invoke(CHANNELS.WINDOW_TOGGLE_FULLSCREEN),
+    toggleFullscreen: (): Promise<boolean> => ipcRenderer.invoke(CHANNELS.WINDOW_TOGGLE_FULLSCREEN),
   },
 
   // Notification API

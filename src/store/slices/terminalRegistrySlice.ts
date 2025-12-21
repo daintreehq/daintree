@@ -23,8 +23,11 @@ import { useTerminalFontStore } from "@/store/terminalFontStore";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { markTerminalRestarting, unmarkTerminalRestarting } from "@/store/restartExitSuppression";
+import { useLayoutConfigStore } from "@/store/layoutConfigStore";
+import { ABSOLUTE_MAX_GRID_TERMINALS } from "@/lib/terminalLayout";
 
-export const MAX_GRID_TERMINALS = 16;
+// Re-export for backward compatibility
+export const MAX_GRID_TERMINALS = ABSOLUTE_MAX_GRID_TERMINALS;
 
 const DOCK_WIDTH = 700;
 const DOCK_HEIGHT = 500;
@@ -173,12 +176,14 @@ export const createTerminalRegistrySlice =
       const title = options.title || getDefaultTitle(legacyType, agentId);
 
       // Auto-dock if grid is full and user requested grid location
+      // Use dynamic capacity based on current viewport dimensions
+      const maxCapacity = useLayoutConfigStore.getState().getMaxGridCapacity();
       const currentGridCount = get().terminals.filter(
         (t) => t.location === "grid" || t.location === undefined
       ).length;
       const requestedLocation = options.location || "grid";
       const location =
-        requestedLocation === "grid" && currentGridCount >= MAX_GRID_TERMINALS
+        requestedLocation === "grid" && currentGridCount >= maxCapacity
           ? "dock"
           : requestedLocation;
 

@@ -35,7 +35,7 @@ const STRATEGIES: Array<{
   {
     id: "automatic",
     label: "Automatic",
-    description: "Smart Grid",
+    description: "2→3→4 cols",
     icon: LayoutGrid,
   },
   {

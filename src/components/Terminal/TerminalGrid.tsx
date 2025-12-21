@@ -8,7 +8,6 @@ import {
   useLayoutConfigStore,
   useWorktreeSelectionStore,
   usePreferencesStore,
-  MAX_GRID_TERMINALS,
   type TerminalInstance,
 } from "@/store";
 import { GridTerminalPane } from "./GridTerminalPane";
@@ -28,7 +27,7 @@ import { Kbd } from "@/components/ui/Kbd";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { systemClient } from "@/clients";
-import { getAutoGridCols } from "@/lib/terminalLayout";
+import { getAutoGridCols, MIN_TERMINAL_HEIGHT_PX } from "@/lib/terminalLayout";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useNativeContextMenu } from "@/hooks";
 import type { CliAvailability } from "@shared/types";
@@ -279,7 +278,12 @@ export function TerminalGrid({
 
   const layoutConfig = useLayoutConfigStore((state) => state.layoutConfig);
   const setLayoutConfig = useLayoutConfigStore((state) => state.setLayoutConfig);
-  const isGridFull = gridTerminals.length >= MAX_GRID_TERMINALS;
+  const setGridDimensions = useLayoutConfigStore((state) => state.setGridDimensions);
+  const getMaxGridCapacity = useLayoutConfigStore((state) => state.getMaxGridCapacity);
+
+  // Dynamic grid capacity based on current dimensions
+  const maxGridCapacity = getMaxGridCapacity();
+  const isGridFull = gridTerminals.length >= maxGridCapacity;
 
   // Make the grid a droppable area
   const { setNodeRef, isOver } = useDroppable({
@@ -287,7 +291,7 @@ export function TerminalGrid({
     data: { container: "grid" },
   });
 
-  // Track container width for responsive layout decisions
+  // Track container dimensions for responsive layout and capacity calculation
   const gridContainerRef = useRef<HTMLDivElement>(null);
   const [gridWidth, setGridWidth] = useState<number | null>(null);
 
@@ -298,16 +302,22 @@ export function TerminalGrid({
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0];
       if (entry) {
-        const newWidth = entry.contentRect.width;
-        setGridWidth((prev) => (prev === newWidth ? prev : newWidth));
+        const { width, height } = entry.contentRect;
+        setGridWidth((prev) => (prev === width ? prev : width));
+        // Report dimensions to store for capacity calculation
+        setGridDimensions({ width, height });
       }
     });
 
     observer.observe(container);
     setGridWidth(container.clientWidth);
+    setGridDimensions({ width: container.clientWidth, height: container.clientHeight });
 
-    return () => observer.disconnect();
-  }, []);
+    return () => {
+      observer.disconnect();
+      setGridDimensions(null);
+    };
+  }, [setGridDimensions]);
 
   // Get placeholder state from DnD context
   const { placeholderIndex, sourceContainer } = useDndPlaceholder();
@@ -521,9 +531,15 @@ export function TerminalGrid({
             style={{
               display: "grid",
               gridTemplateColumns: `repeat(${gridCols}, 1fr)`,
-              gridAutoRows: "1fr",
+              // Use minmax to prevent pancake terminals while still filling space
+              // Terminals stretch to fill available space but never shrink below minimum
+              gridAutoRows: `minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`,
               gap: "4px",
               backgroundColor: "var(--color-grid-bg)",
+              // Smooth transition for column count changes
+              transition: "grid-template-columns 200ms ease-out",
+              // Allow scrolling if terminals exceed viewport (rather than crushing them)
+              overflowY: "auto",
             }}
             role="grid"
             id="terminal-grid"
@@ -580,7 +596,7 @@ export function TerminalGrid({
           </div>
         </SortableContext>
 
-        <GridFullOverlay maxTerminals={MAX_GRID_TERMINALS} show={showGridFullOverlay} />
+        <GridFullOverlay maxTerminals={maxGridCapacity} show={showGridFullOverlay} />
       </div>
     </div>
   );

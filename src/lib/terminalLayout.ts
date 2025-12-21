@@ -1,28 +1,94 @@
 /**
+ * Minimum terminal width in pixels for readability.
+ * Terminals narrower than this become difficult to read due to line wrapping.
+ */
+export const MIN_TERMINAL_WIDTH_PX = 380;
+
+/**
+ * Minimum terminal height in pixels to prevent "pancake" terminals.
+ * Terminals shorter than this make it hard to see enough context.
+ */
+export const MIN_TERMINAL_HEIGHT_PX = 200;
+
+/**
+ * Hard upper limit for grid terminals, regardless of screen size.
+ * Even on very large screens, more than this becomes unmanageable.
+ */
+export const ABSOLUTE_MAX_GRID_TERMINALS = 16;
+
+/**
+ * Calculate the maximum number of terminals that can fit in the grid
+ * while maintaining readable dimensions.
+ *
+ * Examples:
+ * - 15" laptop (~1200x700 usable): 3 cols × 3 rows = 9 terminals
+ * - 27" monitor (~1800x1000 usable): 4 cols × 5 rows = 16 terminals (capped)
+ * - 32" monitor (~2200x1200 usable): 5 cols × 6 rows = 16 terminals (capped)
+ *
+ * @param width - Grid container width in pixels
+ * @param height - Grid container height in pixels
+ * @returns Maximum number of terminals that fit with readable dimensions
+ */
+export function getMaxGridCapacity(width: number | null, height: number | null): number {
+  if (!width || !height) return ABSOLUTE_MAX_GRID_TERMINALS;
+
+  // Account for grid gap (4px between terminals) and padding (8px total)
+  const gap = 4;
+  const padding = 8;
+  const effectiveWidth = width - padding;
+  const effectiveHeight = height - padding;
+
+  // Calculate max columns and rows that fit with readable dimensions
+  const maxCols = Math.max(1, Math.floor((effectiveWidth + gap) / (MIN_TERMINAL_WIDTH_PX + gap)));
+  const maxRows = Math.max(1, Math.floor((effectiveHeight + gap) / (MIN_TERMINAL_HEIGHT_PX + gap)));
+
+  // Calculate capacity based on readable grid size
+  const capacity = maxCols * maxRows;
+
+  // Apply absolute limits
+  return Math.min(capacity, ABSOLUTE_MAX_GRID_TERMINALS);
+}
+
+/**
  * Pure function to calculate optimal grid columns for automatic layout.
  *
  * Design principles:
- * - Rectangular grids: uniform column count per row, accept empty cells
- * - Vertical-first: preserve height for AI log streams
- * - Predictable: deterministic mapping from count to columns
- * - Responsive: single width breakpoint at N=3
+ * - Spatial permanence: column count based on viewport width, not terminal count
+ * - Progressive density: allow more columns as fleet grows to prevent pancakes
+ * - Readable terminals: respect minimum width, prevent both noodles and pancakes
+ * - Predictable: same inputs always produce same outputs
+ * - Fleet monitoring: optimize for scanning status across multiple agents
+ *
+ * Column progression (when width permits):
+ * - 1 terminal: 1 column
+ * - 2-5 terminals: 2 columns (stable for common use, max 3 rows)
+ * - 6-11 terminals: 3 columns (prevents pancakes, max 4 rows)
+ * - 12+ terminals: 4 columns (high density fleet, max 4 rows)
  */
 export function getAutoGridCols(count: number, width: number | null): number {
   if (count <= 1) return 1;
-  if (count === 2) return 2;
 
-  // Width-responsive decision for 3 terminals
-  if (count === 3) {
-    const w = width ?? 0;
-    return w >= 0 ? 3 : 2; // Favor columns: always 3
+  // Calculate max feasible columns based on minimum terminal width
+  const containerWidth = width ?? 800; // Fallback for SSR/initial render
+  const maxFeasibleCols = Math.max(1, Math.floor(containerWidth / MIN_TERMINAL_WIDTH_PX));
+
+  // Progressive column caps based on terminal count
+  // Goal: keep rows reasonable (2-4) to prevent pancake terminals
+  let targetCols: number;
+  if (count <= 5) {
+    // 2-5 terminals: 2 columns (1-3 rows) - stable for common use
+    targetCols = 2;
+  } else if (count <= 11) {
+    // 6-11 terminals: 3 columns (2-4 rows) - prevents pancakes
+    targetCols = 3;
+  } else {
+    // 12-16 terminals: 4 columns (3-4 rows) - high density fleet
+    targetCols = 4;
   }
 
-  // Deterministic rectangular layouts
-  if (count <= 4) return 2; // 3-4 -> 2 columns (max 2x2)
-  if (count <= 6) return 3; // 5-6 -> 3 columns (max 2x3)
-  if (count <= 8) return 4; // 7-8 -> 4 columns (max 2x4)
-  if (count === 9) return 3; // 9 -> 3x3 (pivot from wide to square)
+  // Don't use more columns than we have terminals (no empty columns)
+  targetCols = Math.min(targetCols, count);
 
-  // 10+ terminals: 4 columns, rows grow
-  return 4;
+  // Respect width constraints - never exceed what the viewport can fit
+  return Math.min(maxFeasibleCols, targetCols);
 }
