@@ -1137,7 +1137,12 @@ export function WorktreeCard({
                   <span className="text-xs text-canopy-text/50 font-medium">Details</span>
                   <ChevronRight className="w-3 h-3 text-canopy-text/40 rotate-90" />
                 </button>
-                <div id={detailsPanelId} role="region" aria-labelledby={`${detailsId}-button`} className="p-3">
+                <div
+                  id={detailsPanelId}
+                  role="region"
+                  aria-labelledby={`${detailsId}-button`}
+                  className="p-3"
+                >
                   <WorktreeDetails
                     worktree={worktree}
                     homeDir={homeDir}
@@ -1253,7 +1258,12 @@ export function WorktreeCard({
                   </span>
                   <ChevronRight className="w-3 h-3 text-canopy-text/40 rotate-90" />
                 </button>
-                <div id={terminalsPanelId} role="region" aria-labelledby={`${terminalsId}-button`} className="max-h-[300px] overflow-y-auto">
+                <div
+                  id={terminalsPanelId}
+                  role="region"
+                  aria-labelledby={`${terminalsId}-button`}
+                  className="max-h-[300px] overflow-y-auto"
+                >
                   {orderedWorktreeTerminals.map((term) => (
                     <button
                       key={term.id}

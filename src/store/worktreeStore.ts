@@ -235,7 +235,6 @@ function applyWorktreeTerminalPolicy(
   targetWorktreeId: string | null,
   generation: number
 ) {
-
   // Reliability: terminals from inactive worktrees should not stream output to the renderer.
   // They remain alive in the backend headless model and will be restored on wake.
   // Terminals in the active worktree must be activated to resume streaming.
