@@ -581,7 +581,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           const shouldAppendSpace = action === "insert" && !hasLeadingSpace;
           const token = shouldAppendSpace ? `${item.value} ` : item.value;
           const nextValue = `${before}${token}${after}`;
-          const nextCaret = before.length + token.length + (action === "insert" && hasLeadingSpace ? 1 : 0);
+          const nextCaret =
+            before.length + token.length + (action === "insert" && hasLeadingSpace ? 1 : 0);
 
           if (action === "execute") {
             const payload = buildTerminalSendPayload(nextValue);
