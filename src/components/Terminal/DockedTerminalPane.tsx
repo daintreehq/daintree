@@ -2,6 +2,7 @@ import { useCallback, useState, useEffect, useRef } from "react";
 import { useTerminalStore, type TerminalInstance } from "@/store";
 import { getTerminalAnimationDuration } from "@/lib/animationUtils";
 import { TerminalPane } from "./TerminalPane";
+import { BrowserPane } from "@/components/Browser";
 
 export interface DockedTerminalPaneProps {
   terminal: TerminalInstance;
@@ -76,6 +77,24 @@ export function DockedTerminalPane({ terminal, onPopoverClose }: DockedTerminalP
 
   const focusedId = useTerminalStore((state) => state.focusedId);
   const isFocused = focusedId === terminal.id;
+
+  // Render BrowserPane for browser kind
+  if (terminal.kind === "browser") {
+    return (
+      <BrowserPane
+        id={terminal.id}
+        title={terminal.title}
+        initialUrl={terminal.browserUrl || "http://localhost:3000"}
+        worktreeId={terminal.worktreeId}
+        isFocused={isFocused}
+        location="dock"
+        onFocus={handleFocus}
+        onClose={handleClose}
+        onTitleChange={handleTitleChange}
+        isTrashing={isTrashing}
+      />
+    );
+  }
 
   return (
     <TerminalPane

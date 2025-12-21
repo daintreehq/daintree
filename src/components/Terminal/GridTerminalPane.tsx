@@ -2,6 +2,7 @@ import { useCallback, useState, useEffect, useRef } from "react";
 import { useTerminalStore, type TerminalInstance } from "@/store";
 import { getTerminalAnimationDuration } from "@/lib/animationUtils";
 import { TerminalPane } from "./TerminalPane";
+import { BrowserPane } from "@/components/Browser";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 export interface GridTerminalPaneProps {
@@ -78,6 +79,37 @@ export function GridTerminalPane({
   const handleMinimize = useCallback(() => {
     moveTerminalToDock(terminal.id);
   }, [moveTerminalToDock, terminal.id]);
+
+  // Render BrowserPane for browser kind
+  if (terminal.kind === "browser") {
+    return (
+      <ErrorBoundary
+        variant="component"
+        componentName="BrowserPane"
+        resetKeys={[terminal.id, terminal.worktreeId].filter(
+          (key): key is string => key !== undefined
+        )}
+        context={{ terminalId: terminal.id, worktreeId: terminal.worktreeId }}
+      >
+        <BrowserPane
+          id={terminal.id}
+          title={terminal.title}
+          initialUrl={terminal.browserUrl || "http://localhost:3000"}
+          worktreeId={terminal.worktreeId}
+          isFocused={isFocused}
+          isMaximized={isMaximized}
+          location="grid"
+          onFocus={handleFocus}
+          onClose={handleClose}
+          onToggleMaximize={handleToggleMaximize}
+          onTitleChange={handleTitleChange}
+          onMinimize={handleMinimize}
+          isTrashing={isTrashing}
+          gridTerminalCount={gridTerminalCount}
+        />
+      </ErrorBoundary>
+    );
+  }
 
   return (
     <ErrorBoundary

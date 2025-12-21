@@ -192,8 +192,8 @@ export interface RunRecord {
 // Terminal Types
 export type AgentId = string;
 export type LegacyAgentType = "claude" | "gemini" | "codex";
-/** Terminal kind: distinguishes between default terminals and agent-driven terminals */
-export type TerminalKind = "terminal" | "agent";
+/** Terminal kind: distinguishes between default terminals, agent-driven terminals, and browser panes */
+export type TerminalKind = "terminal" | "agent" | "browser";
 /**
  * @deprecated Use TerminalKind + agentId instead. This is kept for backward compatibility/migrations.
  */
@@ -304,6 +304,8 @@ export interface TerminalInstance {
   flowStatusTimestamp?: number;
   /** Whether user input is locked (read-only monitor mode) */
   isInputLocked?: boolean;
+  /** Current URL for browser panes (kind === 'browser') */
+  browserUrl?: string;
 }
 
 /** Options for spawning a new PTY process */
@@ -368,6 +370,8 @@ export interface TerminalSnapshot {
   location: TerminalLocation;
   /** Command to execute after shell starts (e.g., 'claude --model sonnet-4' for AI agents) */
   command?: string;
+  /** Current URL for browser panes (kind === 'browser') */
+  browserUrl?: string;
 }
 
 /** Terminal layout metadata */

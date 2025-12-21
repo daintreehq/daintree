@@ -29,6 +29,7 @@ export interface HydrationOptions {
     requestedId?: string; // Pass to spawn with a stable ID
     skipCommandExecution?: boolean; // Store command but don't execute on spawn
     isInputLocked?: boolean; // Restore input lock state
+    browserUrl?: string; // URL for browser panes
   }) => Promise<string>;
   setActiveWorktree: (id: string | null) => void;
   loadRecipes: () => Promise<void>;
@@ -107,6 +108,20 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
           if (terminal.id === "default") continue;
 
           const cwd = terminal.cwd || projectRoot || "";
+
+          // Handle browser panes separately - they don't need backend PTY
+          if (terminal.kind === "browser") {
+            await addTerminal({
+              kind: "browser",
+              title: terminal.title,
+              cwd,
+              worktreeId: terminal.worktreeId,
+              location: terminal.location === "dock" ? "dock" : "grid",
+              requestedId: terminal.id,
+              browserUrl: terminal.browserUrl,
+            });
+            continue;
+          }
 
           // Check if backend already has this terminal (from Phase 1 process preservation)
           if (backendTerminalIds.has(terminal.id)) {

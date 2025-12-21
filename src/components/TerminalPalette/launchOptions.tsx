@@ -1,11 +1,12 @@
-import { Terminal } from "lucide-react";
+import { Terminal, Globe } from "lucide-react";
 import { ClaudeIcon, GeminiIcon, CodexIcon } from "@/components/icons";
 import { getBrandColorHex } from "@/lib/colorUtils";
-import type { TerminalType } from "@/types";
+import type { TerminalType, TerminalKind } from "@/types";
 
 export interface LaunchOption {
   id: string;
   type: TerminalType;
+  kind?: TerminalKind;
   label: string;
   description: string;
   icon: React.ReactNode;
@@ -40,6 +41,14 @@ export function getLaunchOptions(): LaunchOption[] {
       label: "Terminal",
       description: "Standard system shell (zsh/bash/powershell).",
       icon: <Terminal className="w-4 h-4" />,
+    },
+    {
+      id: "browser",
+      type: "terminal",
+      kind: "browser",
+      label: "Browser",
+      description: "Embed localhost dev server preview.",
+      icon: <Globe className="w-4 h-4 text-blue-400" />,
     },
   ];
 }

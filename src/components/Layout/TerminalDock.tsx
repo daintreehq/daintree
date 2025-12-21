@@ -24,6 +24,7 @@ const AGENT_OPTIONS = [
   { type: "gemini" as const, label: "Gemini" },
   { type: "codex" as const, label: "Codex" },
   { type: "terminal" as const, label: "Terminal" },
+  { type: "browser" as const, label: "Browser" },
 ];
 
 export function TerminalDock() {
@@ -77,11 +78,23 @@ export function TerminalDock() {
     }
   };
 
+  const addTerminal = useTerminalStore((state) => state.addTerminal);
+
   const handleAddTerminal = useCallback(
     (agentId: string) => {
+      // Handle browser pane specially
+      if (agentId === "browser") {
+        addTerminal({
+          kind: "browser",
+          cwd,
+          worktreeId: activeWorktreeId || undefined,
+          location: "dock",
+        });
+        return;
+      }
       launchAgent(agentId, { location: "dock", cwd });
     },
-    [launchAgent, cwd]
+    [launchAgent, addTerminal, cwd, activeWorktreeId]
   );
 
   const handleContextMenu = useCallback(

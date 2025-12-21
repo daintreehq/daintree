@@ -58,7 +58,11 @@ export const createTerminalFocusSlice =
         if (id) {
           // Wake-on-focus: sync terminal state from backend when focused.
           // This is a safety net to recover from any missed data.
-          terminalInstanceService.wake(id);
+          // Skip wake for browser panes - they don't have backend PTY processes.
+          const terminal = getTerminals().find((t) => t.id === id);
+          if (terminal?.kind !== "browser") {
+            terminalInstanceService.wake(id);
+          }
           if (shouldPing) {
             get().pingTerminal(id);
           }
@@ -141,7 +145,11 @@ export const createTerminalFocusSlice =
       },
 
       openDockTerminal: (id) => {
-        terminalInstanceService.wake(id);
+        // Skip wake for browser panes - they don't have backend PTY processes.
+        const terminal = getTerminals().find((t) => t.id === id);
+        if (terminal?.kind !== "browser") {
+          terminalInstanceService.wake(id);
+        }
         set({ activeDockTerminalId: id, focusedId: id });
       },
 
@@ -153,7 +161,10 @@ export const createTerminalFocusSlice =
         if (!terminal) return;
 
         // Wake-on-focus: sync terminal state from backend when activated.
-        terminalInstanceService.wake(id);
+        // Skip wake for browser panes - they don't have backend PTY processes.
+        if (terminal.kind !== "browser") {
+          terminalInstanceService.wake(id);
+        }
 
         if (terminal.location === "dock") {
           set({ activeDockTerminalId: id, focusedId: id });
