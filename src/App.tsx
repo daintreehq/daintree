@@ -117,7 +117,7 @@ function SidebarContent() {
   if (isLoading) {
     return (
       <div className="flex flex-col h-full">
-        <div className="flex items-center px-4 py-2 border-b border-divider shrink-0">
+        <div className="flex items-center px-4 py-4 border-b border-divider shrink-0">
           <h2 className="text-canopy-text font-semibold text-sm tracking-wide">Worktrees</h2>
         </div>
         <div className="px-4 py-4 text-canopy-text/60 text-sm">Loading worktrees...</div>
@@ -128,7 +128,7 @@ function SidebarContent() {
   if (error) {
     return (
       <div className="flex flex-col h-full">
-        <div className="flex items-center px-4 py-2 border-b border-divider shrink-0">
+        <div className="flex items-center px-4 py-4 border-b border-divider shrink-0">
           <h2 className="text-canopy-text font-semibold text-sm tracking-wide">Worktrees</h2>
         </div>
         <div className="px-4 py-4">
@@ -147,7 +147,7 @@ function SidebarContent() {
   if (worktrees.length === 0) {
     return (
       <div className="flex flex-col h-full">
-        <div className="flex items-center px-4 py-2 border-b border-divider shrink-0">
+        <div className="flex items-center px-4 py-4 border-b border-divider shrink-0">
           <h2 className="text-canopy-text font-semibold text-sm tracking-wide">Worktrees</h2>
         </div>
 
@@ -182,7 +182,7 @@ function SidebarContent() {
   return (
     <div className="flex flex-col h-full">
       {/* Header Section */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-divider bg-transparent shrink-0">
+      <div className="flex items-center justify-between px-4 py-4 border-b border-divider bg-transparent shrink-0">
         <h2 className="text-canopy-text font-semibold text-sm tracking-wide">Worktrees</h2>
         <button
           onClick={() => openCreateDialog()}

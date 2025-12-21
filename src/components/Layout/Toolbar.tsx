@@ -18,6 +18,7 @@ import {
   Loader2,
   ChevronsUpDown,
   Plus,
+  Settings2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
@@ -42,6 +43,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { CliAvailability, AgentSettings } from "@shared/types";
 import type { MenuItemOption } from "@/types";
+import { projectClient } from "@/clients";
 
 interface ToolbarProps {
   onLaunchAgent: (type: "claude" | "gemini" | "codex" | "terminal") => void;
@@ -71,6 +73,8 @@ export function Toolbar({
   const projects = useProjectStore((state) => state.projects);
   const switchProject = useProjectStore((state) => state.switchProject);
   const addProject = useProjectStore((state) => state.addProject);
+  const loadProjects = useProjectStore((state) => state.loadProjects);
+  const getCurrentProject = useProjectStore((state) => state.getCurrentProject);
   const { addNotification } = useNotificationStore();
   const { stats, error: statsError, refresh: refreshStats } = useRepositoryStats();
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
@@ -104,6 +108,18 @@ export function Toolbar({
       }
     };
   }, []);
+
+  useEffect(() => {
+    loadProjects();
+    getCurrentProject();
+
+    const cleanup = projectClient.onSwitch(() => {
+      getCurrentProject();
+      loadProjects();
+    });
+
+    return cleanup;
+  }, [loadProjects, getCurrentProject]);
 
   const sidecarOpen = useSidecarStore((state) => state.isOpen);
   const toggleSidecar = useSidecarStore((state) => state.toggle);
@@ -246,7 +262,7 @@ export function Toolbar({
           <DropdownMenuTrigger asChild>
             <button
               className={cn(
-                "flex items-center justify-center gap-2 px-3 h-9 rounded-[var(--radius-md)] select-none border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] app-no-drag pointer-events-auto",
+                "flex items-center justify-center gap-2 px-3 h-9 rounded-[var(--radius-md)] select-none border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] app-no-drag pointer-events-auto outline-none",
                 "opacity-80 hover:opacity-100 transition-opacity cursor-pointer"
               )}
               style={{
@@ -353,6 +369,21 @@ export function Toolbar({
             )}
 
             <DropdownMenuSeparator className="my-1 bg-border/40" />
+
+            {currentProject && (
+              <DropdownMenuItem
+                onClick={() => {
+                  window.dispatchEvent(new CustomEvent("canopy:open-project-settings"));
+                }}
+                className="gap-2 p-2 cursor-pointer"
+              >
+                <div className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-md)] bg-white/[0.04] text-muted-foreground">
+                  <Settings2 className="h-3.5 w-3.5" />
+                </div>
+                <span className="font-medium text-sm text-foreground/80">Project Settings...</span>
+              </DropdownMenuItem>
+            )}
+
             <DropdownMenuItem onClick={addProject} className="gap-2 p-2 cursor-pointer">
               <div className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-md)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
                 <Plus className="h-3.5 w-3.5" />

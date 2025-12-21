@@ -5,7 +5,9 @@ import { TerminalDock } from "./TerminalDock";
 import { DiagnosticsDock } from "../Diagnostics";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { SidecarDock, SidecarVisibilityController } from "../Sidecar";
+import { ProjectSettingsDialog } from "@/components/Project";
 import { useDiagnosticsStore, type PanelState } from "@/store";
+import { useProjectStore } from "@/store/projectStore";
 import type { RetryAction } from "@/store";
 import { appClient } from "@/clients";
 import type { CliAvailability, AgentSettings } from "@shared/types";
@@ -38,7 +40,9 @@ export function AppLayout({
 }: AppLayoutProps) {
   const [isTerminalDockVisible, setIsTerminalDockVisible] = useState(true);
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
+  const [isProjectSettingsOpen, setIsProjectSettingsOpen] = useState(false);
 
+  const currentProject = useProjectStore((state) => state.currentProject);
   const layout = useLayoutState();
 
   useEffect(() => {
@@ -188,6 +192,12 @@ export function AppLayout({
   }, [layout.toggleSidecar]);
 
   useEffect(() => {
+    const handleOpenProjectSettings = () => setIsProjectSettingsOpen(true);
+    window.addEventListener("canopy:open-project-settings", handleOpenProjectSettings);
+    return () => window.removeEventListener("canopy:open-project-settings", handleOpenProjectSettings);
+  }, []);
+
+  useEffect(() => {
     const handleResize = () => {
       layout.updateSidecarLayoutMode(window.innerWidth, layout.isFocusMode ? 0 : sidebarWidth);
     };
@@ -310,6 +320,14 @@ export function AppLayout({
           <DiagnosticsDock onRetry={onRetry} />
         </ErrorBoundary>
       </div>
+
+      {currentProject && isProjectSettingsOpen && (
+        <ProjectSettingsDialog
+          projectId={currentProject.id}
+          isOpen={isProjectSettingsOpen}
+          onClose={() => setIsProjectSettingsOpen(false)}
+        />
+      )}
     </div>
   );
 }

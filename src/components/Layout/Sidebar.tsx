@@ -1,12 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
-import {
-  ProjectSwitcher,
-  ProjectSettingsDialog,
-  ProjectResourceBadge,
-  QuickRun,
-} from "@/components/Project";
+import { ProjectResourceBadge, QuickRun } from "@/components/Project";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktrees } from "@/hooks/useWorktrees";
@@ -27,7 +21,6 @@ const RESIZE_STEP = 10;
 export function Sidebar({ width, onResize, children, className }: SidebarProps) {
   const { showMenu } = useNativeContextMenu();
   const [isResizing, setIsResizing] = useState(false);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const sidebarRef = useRef<HTMLElement>(null);
   const currentProject = useProjectStore((state) => state.currentProject);
   const openCreateWorktreeDialog = useWorktreeSelectionStore((state) => state.openCreateDialog);
@@ -92,7 +85,7 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
           }
           break;
         case "project:settings":
-          setIsSettingsOpen(true);
+          window.dispatchEvent(new CustomEvent("canopy:open-project-settings"));
           break;
         case "sidebar:reset-width":
           handleResetWidth();
@@ -145,23 +138,6 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
         style={{ width }}
         onContextMenu={handleContextMenu}
       >
-        <div className="shrink-0 border-b border-divider bg-canopy-sidebar/95 backdrop-blur-sm">
-          <div className="flex items-center gap-2 px-3 py-3">
-            <div className="flex-1 min-w-0">
-              <ProjectSwitcher />
-            </div>
-            {currentProject && (
-              <button
-                onClick={() => setIsSettingsOpen(true)}
-                className="p-2 text-canopy-text/60 hover:text-canopy-text hover:bg-white/[0.06] rounded-[var(--radius-md)] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-                title="Project Settings"
-              >
-                <Settings className="h-4 w-4" />
-              </button>
-            )}
-          </div>
-        </div>
-
         <div className="flex-1 min-h-0 overflow-hidden">{children}</div>
 
         {currentProject && <QuickRun projectId={currentProject.id} />}
@@ -195,15 +171,6 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
           />
         </div>
       </aside>
-
-      {/* Project Settings Dialog - Only mount when open to avoid duplicate hook calls */}
-      {currentProject && isSettingsOpen && (
-        <ProjectSettingsDialog
-          projectId={currentProject.id}
-          isOpen={isSettingsOpen}
-          onClose={() => setIsSettingsOpen(false)}
-        />
-      )}
     </>
   );
 }
