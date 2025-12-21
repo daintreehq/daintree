@@ -245,6 +245,15 @@ export class WorkspaceService {
         const issueNumber = wt.branch ? extractIssueNumberSync(wt.branch, wt.name) : null;
         const interval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
 
+        // Compute createdAt from directory birthtime (macOS/Windows) or ctime (Linux fallback)
+        let createdAt: number | undefined;
+        try {
+          const stats = await stat(wt.path);
+          createdAt = stats.birthtimeMs > 0 ? stats.birthtimeMs : stats.ctimeMs;
+        } catch {
+          // If stat fails, leave undefined
+        }
+
         const monitor: MonitorState = {
           id: wt.id,
           path: wt.path,
@@ -258,6 +267,7 @@ export class WorkspaceService {
           mood: "stable",
           modifiedCount: 0,
           lastActivityTimestamp: null,
+          createdAt,
           issueNumber: issueNumber ?? undefined,
           pollingTimer: null,
           resumeTimer: null,
@@ -531,6 +541,7 @@ export class WorkspaceService {
       changes: monitor.changes,
       mood: monitor.mood,
       lastActivityTimestamp: monitor.lastActivityTimestamp,
+      createdAt: monitor.createdAt,
       aiNote: monitor.aiNote,
       aiNoteTimestamp: monitor.aiNoteTimestamp,
       issueNumber: monitor.issueNumber,

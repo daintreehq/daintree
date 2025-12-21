@@ -60,6 +60,7 @@ export interface WorktreeSnapshot {
   changes?: FileChangeDetail[];
   mood?: WorktreeMood;
   lastActivityTimestamp?: number | null;
+  createdAt?: number;
   aiNote?: string;
   aiNoteTimestamp?: number;
   issueNumber?: number;

@@ -103,6 +103,9 @@ export interface Worktree {
   /** Timestamp of last git activity (milliseconds since epoch, null if no activity yet) */
   lastActivityTimestamp?: number | null;
 
+  /** Timestamp when worktree directory was created (milliseconds since epoch, for sorting) */
+  createdAt?: number;
+
   /** Content from .git/canopy/note file (for AI agent status communication) */
   aiNote?: string;
 

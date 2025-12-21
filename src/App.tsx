@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
-import { FolderOpen } from "lucide-react";
+import { FolderOpen, FilterX } from "lucide-react";
 import {
   isElectronAvailable,
   useAgentLauncher,
@@ -28,7 +28,7 @@ import {
 } from "./hooks/app";
 import { AppLayout } from "./components/Layout";
 import { TerminalGrid } from "./components/Terminal";
-import { WorktreeCard, WorktreePalette } from "./components/Worktree";
+import { WorktreeCard, WorktreePalette, WorktreeFilterPopover } from "./components/Worktree";
 import { NewWorktreeDialog } from "./components/Worktree/NewWorktreeDialog";
 import { TerminalPalette, NewTerminalPalette } from "./components/TerminalPalette";
 import { RecipeEditor } from "./components/TerminalRecipe/RecipeEditor";
@@ -50,6 +50,15 @@ import { useShallow } from "zustand/react/shallow";
 import { useRecipeStore } from "./store/recipeStore";
 import type { RecipeTerminal } from "./types";
 import { systemClient, errorsClient } from "@/clients";
+import { useWorktreeFilterStore } from "./store/worktreeFilterStore";
+import {
+  matchesFilters,
+  sortWorktrees,
+  groupByType,
+  type DerivedWorktreeMeta,
+  type FilterState,
+} from "./lib/worktreeFilters";
+import type { WorktreeState } from "./types";
 
 function SidebarContent() {
   const { worktrees, isLoading, error, refresh } = useWorktrees();
@@ -74,6 +83,40 @@ function SidebarContent() {
       closeCreateDialog: state.closeCreateDialog,
     }))
   );
+
+  // Filter/sort state - destructured for stable memoization
+  const {
+    query,
+    orderBy,
+    groupByType: isGroupedByType,
+    statusFilters,
+    typeFilters,
+    githubFilters,
+    sessionFilters,
+    activityFilters,
+    alwaysShowActive,
+  } = useWorktreeFilterStore(
+    useShallow((state) => ({
+      query: state.query,
+      orderBy: state.orderBy,
+      groupByType: state.groupByType,
+      statusFilters: state.statusFilters,
+      typeFilters: state.typeFilters,
+      githubFilters: state.githubFilters,
+      sessionFilters: state.sessionFilters,
+      activityFilters: state.activityFilters,
+      alwaysShowActive: state.alwaysShowActive,
+    }))
+  );
+  const clearAllFilters = useWorktreeFilterStore((state) => state.clearAll);
+  const hasActiveFilters = useWorktreeFilterStore((state) => state.hasActiveFilters);
+
+  // Terminal store for derived metadata
+  const terminals = useTerminalStore(useShallow((state) => state.terminals));
+
+  // Error store for derived metadata
+  const getWorktreeErrors = useErrorStore((state) => state.getWorktreeErrors);
+
   const [isRecipeEditorOpen, setIsRecipeEditorOpen] = useState(false);
   const [recipeEditorWorktreeId, setRecipeEditorWorktreeId] = useState<string | undefined>(
     undefined
@@ -93,6 +136,86 @@ function SidebarContent() {
       setActiveWorktree(worktrees[0].id);
     }
   }, [worktrees, activeWorktreeId, setActiveWorktree]);
+
+  // Compute derived metadata for each worktree
+  const derivedMetaMap = useMemo(() => {
+    const map = new Map<string, DerivedWorktreeMeta>();
+    for (const worktree of worktrees) {
+      const worktreeTerminals = terminals.filter(
+        (t) => t.worktreeId === worktree.id && t.location !== "trash"
+      );
+      const errors = getWorktreeErrors(worktree.id);
+      map.set(worktree.id, {
+        hasErrors: errors.length > 0,
+        terminalCount: worktreeTerminals.length,
+        hasWorkingAgent: worktreeTerminals.some((t) => t.agentState === "working"),
+        hasRunningAgent: worktreeTerminals.some((t) => t.agentState === "running"),
+        hasWaitingAgent: worktreeTerminals.some((t) => t.agentState === "waiting"),
+        hasFailedAgent: worktreeTerminals.some((t) => t.agentState === "failed"),
+        hasCompletedAgent: worktreeTerminals.some((t) => t.agentState === "completed"),
+      });
+    }
+    return map;
+  }, [worktrees, terminals, getWorktreeErrors]);
+
+  // Apply filters and sorting
+  const { filteredWorktrees, groupedSections } = useMemo(() => {
+    const filters: FilterState = {
+      query,
+      statusFilters,
+      typeFilters,
+      githubFilters,
+      sessionFilters,
+      activityFilters,
+    };
+
+    // Filter worktrees
+    let filtered = worktrees.filter((worktree) => {
+      const derived = derivedMetaMap.get(worktree.id) ?? {
+        hasErrors: false,
+        terminalCount: 0,
+        hasWorkingAgent: false,
+        hasRunningAgent: false,
+        hasWaitingAgent: false,
+        hasFailedAgent: false,
+        hasCompletedAgent: false,
+      };
+      const isActive = worktree.id === activeWorktreeId;
+
+      // Always show active worktree if setting is enabled
+      if (alwaysShowActive && isActive) {
+        return true;
+      }
+
+      return matchesFilters(worktree, filters, derived, isActive);
+    });
+
+    // Sort worktrees
+    const sorted = sortWorktrees(filtered, orderBy);
+
+    // Group if enabled
+    if (isGroupedByType) {
+      return {
+        filteredWorktrees: sorted,
+        groupedSections: groupByType(sorted, orderBy),
+      };
+    }
+
+    return { filteredWorktrees: sorted, groupedSections: null };
+  }, [
+    worktrees,
+    query,
+    orderBy,
+    isGroupedByType,
+    statusFilters,
+    typeFilters,
+    githubFilters,
+    sessionFilters,
+    activityFilters,
+    alwaysShowActive,
+    derivedMetaMap,
+    activeWorktreeId,
+  ]);
 
   const handleOpenRecipeEditor = useCallback(
     (worktreeId: string, initialTerminals?: RecipeTerminal[]) => {
@@ -179,45 +302,72 @@ function SidebarContent() {
   const rootPath =
     worktrees.length > 0 && worktrees[0].path ? worktrees[0].path.split("/.git/")[0] : "";
 
+  const renderWorktreeCard = (worktree: WorktreeState) => (
+    <WorktreeCard
+      key={worktree.id}
+      worktree={worktree}
+      isActive={worktree.id === activeWorktreeId}
+      isFocused={worktree.id === focusedWorktreeId}
+      onSelect={() => selectWorktree(worktree.id)}
+      onCopyTree={() => worktreeActions.handleCopyTree(worktree)}
+      onOpenEditor={() => worktreeActions.handleOpenEditor(worktree)}
+      onOpenIssue={
+        worktree.issueNumber ? () => worktreeActions.handleOpenIssue(worktree) : undefined
+      }
+      onOpenPR={worktree.prUrl ? () => worktreeActions.handleOpenPR(worktree) : undefined}
+      onCreateRecipe={() => worktreeActions.handleCreateRecipe(worktree.id)}
+      onSaveLayout={() => worktreeActions.handleSaveLayout(worktree)}
+      onLaunchAgent={(type) => worktreeActions.handleLaunchAgent(worktree.id, type)}
+      agentAvailability={availability}
+      agentSettings={agentSettings}
+      homeDir={homeDir}
+    />
+  );
+
   return (
     <div className="flex flex-col h-full">
       {/* Header Section */}
       <div className="flex items-center justify-between px-4 py-4 border-b border-divider bg-transparent shrink-0">
         <h2 className="text-canopy-text font-semibold text-sm tracking-wide">Worktrees</h2>
-        <button
-          onClick={() => openCreateDialog()}
-          className="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 text-canopy-text/60 hover:text-canopy-text hover:bg-white/[0.06] rounded transition-colors"
-          title="Create new worktree"
-        >
-          <span className="text-[11px]">+</span> New
-        </button>
+        <div className="flex items-center gap-1">
+          <WorktreeFilterPopover />
+          <button
+            onClick={() => openCreateDialog()}
+            className="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 text-canopy-text/60 hover:text-canopy-text hover:bg-white/[0.06] rounded transition-colors"
+            title="Create new worktree"
+          >
+            <span className="text-[11px]">+</span> New
+          </button>
+        </div>
       </div>
 
-      {/* List Section - Flat list with borders */}
+      {/* List Section */}
       <div className="flex-1 overflow-y-auto">
-        <div className="flex flex-col">
-          {worktrees.map((worktree) => (
-            <WorktreeCard
-              key={worktree.id}
-              worktree={worktree}
-              isActive={worktree.id === activeWorktreeId}
-              isFocused={worktree.id === focusedWorktreeId}
-              onSelect={() => selectWorktree(worktree.id)}
-              onCopyTree={() => worktreeActions.handleCopyTree(worktree)}
-              onOpenEditor={() => worktreeActions.handleOpenEditor(worktree)}
-              onOpenIssue={
-                worktree.issueNumber ? () => worktreeActions.handleOpenIssue(worktree) : undefined
-              }
-              onOpenPR={worktree.prUrl ? () => worktreeActions.handleOpenPR(worktree) : undefined}
-              onCreateRecipe={() => worktreeActions.handleCreateRecipe(worktree.id)}
-              onSaveLayout={() => worktreeActions.handleSaveLayout(worktree)}
-              onLaunchAgent={(type) => worktreeActions.handleLaunchAgent(worktree.id, type)}
-              agentAvailability={availability}
-              agentSettings={agentSettings}
-              homeDir={homeDir}
-            />
-          ))}
-        </div>
+        {filteredWorktrees.length === 0 && hasActiveFilters() ? (
+          <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+            <FilterX className="w-10 h-10 text-canopy-text/40 mb-3" />
+            <p className="text-sm text-canopy-text/60 mb-3">No worktrees match your filters</p>
+            <button
+              onClick={clearAllFilters}
+              className="text-xs px-3 py-1.5 text-canopy-accent hover:bg-canopy-accent/10 rounded transition-colors"
+            >
+              Clear filters
+            </button>
+          </div>
+        ) : groupedSections ? (
+          <div className="flex flex-col">
+            {groupedSections.map((section) => (
+              <div key={section.type}>
+                <div className="sticky top-0 z-10 px-4 py-2 text-[10px] font-medium text-canopy-text/50 uppercase tracking-wide bg-canopy-sidebar border-b border-divider">
+                  {section.displayName} ({section.worktrees.length})
+                </div>
+                {section.worktrees.map(renderWorktreeCard)}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="flex flex-col">{filteredWorktrees.map(renderWorktreeCard)}</div>
+        )}
       </div>
 
       <RecipeEditor
