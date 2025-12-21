@@ -13,6 +13,7 @@ interface WorktreeSelectionState {
   activeWorktreeId: string | null;
   focusedWorktreeId: string | null;
   expandedWorktrees: Set<string>;
+  expandedTerminals: Set<string>;
   createDialog: CreateDialogState;
   _policyGeneration: number;
   lastFocusedTerminalByWorktree: Map<string, string>;
@@ -23,6 +24,8 @@ interface WorktreeSelectionState {
   toggleWorktreeExpanded: (id: string) => void;
   setWorktreeExpanded: (id: string, expanded: boolean) => void;
   collapseAllWorktrees: () => void;
+  toggleTerminalsExpanded: (id: string) => void;
+  setTerminalsExpanded: (id: string, expanded: boolean) => void;
   openCreateDialog: (initialIssue?: GitHubIssue | null) => void;
   closeCreateDialog: () => void;
   trackTerminalFocus: (worktreeId: string, terminalId: string) => void;
@@ -34,18 +37,32 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
   activeWorktreeId: null,
   focusedWorktreeId: null,
   expandedWorktrees: new Set<string>(),
+  expandedTerminals: new Set<string>(),
   createDialog: { isOpen: false, initialIssue: null },
   _policyGeneration: 0,
   lastFocusedTerminalByWorktree: new Map<string, string>(),
 
   setActiveWorktree: (id) => {
-    set({ activeWorktreeId: id });
+    const previousId = get().activeWorktreeId;
+    const generation = get()._policyGeneration + 1;
+
+    // Auto-collapse terminals accordion when switching worktrees
+    const updates: Partial<WorktreeSelectionState> = {
+      activeWorktreeId: id,
+      _policyGeneration: generation,
+    };
+
+    if (previousId !== id) {
+      updates.expandedTerminals = new Set<string>();
+    }
+
+    set(updates);
 
     appClient.setState({ activeWorktreeId: id ?? undefined }).catch((error) => {
       console.error("Failed to persist active worktree:", error);
     });
 
-    applyWorktreeTerminalPolicy(get, set, id);
+    applyWorktreeTerminalPolicy(get, set, id, generation);
   },
 
   setFocusedWorktree: (id) => set({ focusedWorktreeId: id }),
@@ -57,13 +74,19 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     }
 
     const generation = get()._policyGeneration + 1;
-    set({ activeWorktreeId: id, focusedWorktreeId: id, _policyGeneration: generation });
+    // Auto-collapse terminals accordion when switching worktrees
+    set({
+      activeWorktreeId: id,
+      focusedWorktreeId: id,
+      _policyGeneration: generation,
+      expandedTerminals: new Set<string>(),
+    });
 
     appClient.setState({ activeWorktreeId: id }).catch((error) => {
       console.error("Failed to persist active worktree:", error);
     });
 
-    applyWorktreeTerminalPolicy(get, set, id);
+    applyWorktreeTerminalPolicy(get, set, id, generation);
 
     // Restore the last focused terminal for this worktree
     const lastFocusedTerminalId = get().lastFocusedTerminalByWorktree.get(id);
@@ -109,6 +132,28 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
 
   collapseAllWorktrees: () => set({ expandedWorktrees: new Set<string>() }),
 
+  toggleTerminalsExpanded: (id) =>
+    set((state) => {
+      const next = new Set(state.expandedTerminals);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return { expandedTerminals: next };
+    }),
+
+  setTerminalsExpanded: (id, expanded) =>
+    set((state) => {
+      const next = new Set(state.expandedTerminals);
+      if (expanded) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return { expandedTerminals: next };
+    }),
+
   openCreateDialog: (initialIssue = null) => set({ createDialog: { isOpen: true, initialIssue } }),
 
   closeCreateDialog: () => set({ createDialog: { isOpen: false, initialIssue: null } }),
@@ -132,6 +177,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       activeWorktreeId: null,
       focusedWorktreeId: null,
       expandedWorktrees: new Set<string>(),
+      expandedTerminals: new Set<string>(),
       createDialog: { isOpen: false, initialIssue: null },
       lastFocusedTerminalByWorktree: new Map<string, string>(),
     }),
@@ -185,11 +231,10 @@ export function cleanupWorktreeFocusTracking() {
 
 function applyWorktreeTerminalPolicy(
   get: () => WorktreeSelectionState,
-  set: (partial: Partial<WorktreeSelectionState>) => void,
-  targetWorktreeId: string | null
+  _set: (partial: Partial<WorktreeSelectionState>) => void,
+  targetWorktreeId: string | null,
+  generation: number
 ) {
-  const generation = get()._policyGeneration + 1;
-  set({ _policyGeneration: generation });
 
   // Reliability: terminals from inactive worktrees should not stream output to the renderer.
   // They remain alive in the backend headless model and will be restored on wake.
