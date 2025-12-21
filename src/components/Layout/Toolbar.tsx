@@ -240,9 +240,8 @@ export function Toolbar({
         </div>
       </div>
 
-      {/* CENTER GROUP - Absolutely positioned dead center, hidden in fullscreen since info is in sidebar */}
-      {!isFullscreen && (
-        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center z-10 pointer-events-none">
+      {/* CENTER GROUP - Absolutely positioned dead center */}
+      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center z-10 pointer-events-none">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
@@ -362,8 +361,7 @@ export function Toolbar({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-        </div>
-      )}
+      </div>
 
       {/* RIGHT GROUP */}
       <div className="flex items-center gap-1.5 app-no-drag z-20">
