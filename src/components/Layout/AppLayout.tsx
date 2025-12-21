@@ -194,7 +194,8 @@ export function AppLayout({
   useEffect(() => {
     const handleOpenProjectSettings = () => setIsProjectSettingsOpen(true);
     window.addEventListener("canopy:open-project-settings", handleOpenProjectSettings);
-    return () => window.removeEventListener("canopy:open-project-settings", handleOpenProjectSettings);
+    return () =>
+      window.removeEventListener("canopy:open-project-settings", handleOpenProjectSettings);
   }, []);
 
   useEffect(() => {
