@@ -128,6 +128,7 @@ export function Toolbar({
   const [issuesOpen, setIssuesOpen] = useState(false);
   const [prsOpen, setPrsOpen] = useState(false);
   const [commitsOpen, setCommitsOpen] = useState(false);
+  const [projectSelectorOpen, setProjectSelectorOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [treeCopied, setTreeCopied] = useState(false);
   const [isCopyingTree, setIsCopyingTree] = useState(false);
@@ -136,6 +137,7 @@ export function Toolbar({
   const prsButtonRef = useRef<HTMLButtonElement>(null);
   const commitsButtonRef = useRef<HTMLButtonElement>(null);
   const treeCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const projectSelectorTriggerRef = useRef<HTMLButtonElement>(null);
 
   const { handleCopyTree } = useWorktreeActions();
 
@@ -198,8 +200,13 @@ export function Toolbar({
     window.dispatchEvent(new CustomEvent("canopy:open-settings-tab", { detail: tab }));
   };
 
+  const headerRef = useRef<HTMLElement>(null);
+
   return (
-    <header className="relative flex h-12 items-center justify-between px-4 pt-1 shrink-0 app-drag-region bg-canopy-sidebar/95 backdrop-blur-sm border-b border-divider shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+    <header
+      ref={headerRef}
+      className="relative flex h-12 items-center justify-between px-4 pt-1 shrink-0 app-drag-region bg-canopy-sidebar/95 backdrop-blur-sm border-b border-divider shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
+    >
       <div className="window-resize-strip" />
 
       {/* LEFT GROUP */}
@@ -258,9 +265,10 @@ export function Toolbar({
 
       {/* CENTER GROUP - Absolutely positioned dead center */}
       <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center z-10 pointer-events-none">
-        <DropdownMenu>
+        <DropdownMenu open={projectSelectorOpen} onOpenChange={setProjectSelectorOpen}>
           <DropdownMenuTrigger asChild>
             <button
+              ref={projectSelectorTriggerRef}
               className={cn(
                 "flex items-center justify-center gap-2 px-3 h-9 rounded-[var(--radius-md)] select-none border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] app-no-drag pointer-events-auto outline-none",
                 "opacity-80 hover:opacity-100 transition-opacity cursor-pointer"
@@ -305,6 +313,15 @@ export function Toolbar({
           <DropdownMenuContent
             className="w-[260px] max-h-[60vh] overflow-y-auto p-1"
             align="center"
+            onInteractOutside={(event) => {
+              const target = event.target as HTMLElement;
+              const trigger = projectSelectorTriggerRef.current;
+              const header = headerRef.current;
+
+              if (header?.contains(target) && !trigger?.contains(target)) {
+                setProjectSelectorOpen(false);
+              }
+            }}
           >
             {currentProject && (
               <>
