@@ -890,222 +890,214 @@ export function WorktreeCard({
         aria-hidden="true"
       />
       <div className="px-4 py-5">
-        {/* Header section with chevron gutter (grid layout) */}
-        <div className="flex gap-2">
-          {/* Chevron column */}
-          <div className="flex items-start pt-0.5 w-4 shrink-0">
-            {hasExpandableContent && (
-              <button
-                onClick={handleToggleExpand}
-                className="p-0.5 text-canopy-text/60 hover:text-canopy-text transition-colors rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
-                aria-label={isExpanded ? "Collapse details" : "Expand details"}
-                aria-expanded={isExpanded}
-                aria-controls={detailsId}
-              >
-                <ChevronRight
-                  className={cn(
-                    "w-3.5 h-3.5 transition-transform duration-150 motion-reduce:transition-none",
-                    isExpanded && "rotate-90"
-                  )}
+        {/* Header section */}
+        <div className="space-y-1">
+          {/* Row 1: Identity bar */}
+          <div className="flex items-center gap-2 min-h-[22px]">
+            {/* Left: Branch identity */}
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              {isActive && (
+                <CheckCircle2
+                  className="w-3.5 h-3.5 text-canopy-accent shrink-0 motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in motion-safe:duration-200"
+                  aria-hidden="true"
                 />
-              </button>
-            )}
-          </div>
-
-          {/* Main content column */}
-          <div className="flex-1 min-w-0 space-y-1">
-            {/* Row 1: Identity bar */}
-            <div className="flex items-center gap-2 min-h-[22px]">
-              {/* Left: Branch identity */}
-              <div className="flex items-center gap-2 min-w-0 flex-1">
-                {isActive && (
-                  <CheckCircle2
-                    className="w-3.5 h-3.5 text-canopy-accent shrink-0 motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in motion-safe:duration-200"
-                    aria-hidden="true"
-                  />
-                )}
-                {isMainWorktree && <Shield className="w-3.5 h-3.5 text-canopy-text/30 shrink-0" />}
-                <BranchLabel
-                  label={branchLabel}
-                  isActive={isActive}
-                  isMainWorktree={isMainWorktree}
-                />
-                {worktree.isDetached && (
-                  <span className="text-amber-500 text-xs font-medium shrink-0">(detached)</span>
-                )}
-              </div>
-
-              {/* Center: Activity chip (only shown in header for main worktree or when no expandable content) */}
-              {showTimeInHeader && (
-                <div
-                  className={cn(
-                    "flex items-center gap-1.5 shrink-0 text-xs px-2 py-0.5 rounded-full",
-                    worktree.lastActivityTimestamp
-                      ? "bg-white/[0.03] text-canopy-text/60"
-                      : "bg-transparent text-canopy-text/40"
-                  )}
-                  title={
-                    worktree.lastActivityTimestamp
-                      ? `Last activity: ${new Date(worktree.lastActivityTimestamp).toLocaleString()}`
-                      : "No recent activity recorded"
-                  }
-                >
-                  <ActivityLight lastActivityTimestamp={worktree.lastActivityTimestamp} />
-                  <LiveTimeAgo timestamp={worktree.lastActivityTimestamp} className="font-medium" />
-                </div>
               )}
-
-              {/* Right: Actions - hidden until hover/active */}
-              <div
-                className={cn(
-                  "flex items-center gap-1 shrink-0 transition-opacity duration-150",
-                  isActive || treeCopied || isCopyingTree
-                    ? "opacity-100"
-                    : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
-                )}
-              >
-                <TooltipProvider>
-                  <Tooltip open={treeCopied} delayDuration={0}>
-                    <TooltipTrigger asChild>
-                      <button
-                        onClick={handleCopyTreeClick}
-                        disabled={isCopyingTree}
-                        className={cn(
-                          "p-1 rounded transition-colors",
-                          treeCopied
-                            ? "text-green-400 bg-green-400/10"
-                            : "text-canopy-text/40 hover:text-canopy-text hover:bg-white/5",
-                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
-                          isCopyingTree && "cursor-wait opacity-70"
-                        )}
-                        aria-label={treeCopied ? "Context Copied" : "Copy Context"}
-                      >
-                        {isCopyingTree ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin motion-reduce:animate-none text-canopy-text" />
-                        ) : treeCopied ? (
-                          <Check className="w-3.5 h-3.5" />
-                        ) : (
-                          <Copy className="w-3.5 h-3.5" />
-                        )}
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="top" className="font-medium">
-                      <span role="status" aria-live="polite">
-                        {copyFeedback}
-                      </span>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      onClick={(e) => e.stopPropagation()}
-                      className="p-1 text-canopy-text/60 hover:text-white hover:bg-white/5 rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-                      aria-label="More actions"
-                    >
-                      <MoreHorizontal className="w-3.5 h-3.5" />
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent
-                    align="end"
-                    sideOffset={4}
-                    onClick={(e) => e.stopPropagation()}
-                    className="w-64"
-                  >
-                    <WorktreeMenuItems
-                      worktree={worktree}
-                      components={dropdownComponents}
-                      isClaudeEnabled={Boolean(isClaudeEnabled)}
-                      isGeminiEnabled={Boolean(isGeminiEnabled)}
-                      isCodexEnabled={Boolean(isCodexEnabled)}
-                      recipes={recipes}
-                      runningRecipeId={runningRecipeId}
-                      isRestartValidating={isRestartValidating}
-                      counts={{
-                        grid: gridCount,
-                        dock: dockCount,
-                        active: totalTerminalCount,
-                        completed: completedCount,
-                        failed: failedCount,
-                        all: allTerminalCount,
-                      }}
-                      onLaunchAgent={
-                        onLaunchAgent ? (agentId) => handleLaunchAgent(agentId) : undefined
-                      }
-                      onCopyContext={() => void handleCopyTree()}
-                      onOpenEditor={onOpenEditor}
-                      onRevealInFinder={handlePathClick}
-                      onOpenIssue={
-                        worktree.issueNumber && onOpenIssue ? handleOpenIssue : undefined
-                      }
-                      onOpenPR={
-                        worktree.issueNumber && worktree.prNumber && onOpenPR
-                          ? handleOpenPR
-                          : undefined
-                      }
-                      onRunRecipe={(recipeId) => void handleRunRecipe(recipeId)}
-                      onCreateRecipe={onCreateRecipe}
-                      onSaveLayout={onSaveLayout}
-                      onMinimizeAll={handleMinimizeAll}
-                      onMaximizeAll={handleMaximizeAll}
-                      onRestartAll={() => void handleRestartAll()}
-                      onCloseCompleted={handleCloseCompleted}
-                      onCloseFailed={handleCloseFailed}
-                      onCloseAll={handleCloseAll}
-                      onEndAll={handleEndAll}
-                      onDeleteWorktree={
-                        !isMainWorktree
-                          ? () => {
-                              setShowDeleteDialog(true);
-                            }
-                          : undefined
-                      }
-                    />
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
+              {isMainWorktree && <Shield className="w-3.5 h-3.5 text-canopy-text/30 shrink-0" />}
+              <BranchLabel
+                label={branchLabel}
+                isActive={isActive}
+                isMainWorktree={isMainWorktree}
+              />
+              {worktree.isDetached && (
+                <span className="text-amber-500 text-xs font-medium shrink-0">(detached)</span>
+              )}
             </div>
 
-            {/* Row 2: Context Badges (PR/Issue) - PR only shown when linked to an issue */}
-            {worktree.issueNumber && (
-              <div className="flex items-center gap-2">
-                {worktree.issueNumber && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onOpenIssue?.();
-                    }}
-                    className="flex items-center gap-1 text-xs text-emerald-400/80 hover:text-emerald-400 hover:underline transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-                    title="Open Issue on GitHub"
-                  >
-                    <CircleDot className="w-2.5 h-2.5" />
-                    <span className="font-mono">#{worktree.issueNumber}</span>
-                  </button>
+            {/* Error badge in header - errors need immediate visibility */}
+            {worktreeErrors.length > 0 && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="flex items-center gap-0.5 text-[var(--color-status-error)] text-xs font-mono shrink-0">
+                      <AlertCircle className="w-3 h-3" />
+                      <span>{worktreeErrors.length}</span>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="text-xs">
+                    {worktreeErrors.length} error{worktreeErrors.length !== 1 ? "s" : ""}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+
+            {/* Center: Activity chip (only shown in header for main worktree or when no expandable content) */}
+            {showTimeInHeader && (
+              <div
+                className={cn(
+                  "flex items-center gap-1.5 shrink-0 text-xs px-2 py-0.5 rounded-full",
+                  worktree.lastActivityTimestamp
+                    ? "bg-white/[0.03] text-canopy-text/60"
+                    : "bg-transparent text-canopy-text/40"
                 )}
-                {worktree.prNumber && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onOpenPR?.();
-                    }}
-                    className={cn(
-                      "flex items-center gap-1 text-xs hover:underline transition-colors",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
-                      worktree.prState === "merged"
-                        ? "text-violet-400/80 hover:text-violet-400"
-                        : worktree.prState === "closed"
-                          ? "text-red-400/80 hover:text-red-400"
-                          : "text-sky-400/80 hover:text-sky-400"
-                    )}
-                    title={`PR #${worktree.prNumber} · ${worktree.prState ?? "open"}`}
-                  >
-                    <GitPullRequest className="w-2.5 h-2.5" />
-                    <span className="font-mono">#{worktree.prNumber}</span>
-                  </button>
-                )}
+                title={
+                  worktree.lastActivityTimestamp
+                    ? `Last activity: ${new Date(worktree.lastActivityTimestamp).toLocaleString()}`
+                    : "No recent activity recorded"
+                }
+              >
+                <ActivityLight lastActivityTimestamp={worktree.lastActivityTimestamp} />
+                <LiveTimeAgo timestamp={worktree.lastActivityTimestamp} className="font-medium" />
               </div>
             )}
+
+            {/* Right: Actions - hidden until hover/active */}
+            <div
+              className={cn(
+                "flex items-center gap-1 shrink-0 transition-opacity duration-150",
+                isActive || treeCopied || isCopyingTree
+                  ? "opacity-100"
+                  : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+              )}
+            >
+              <TooltipProvider>
+                <Tooltip open={treeCopied} delayDuration={0}>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={handleCopyTreeClick}
+                      disabled={isCopyingTree}
+                      className={cn(
+                        "p-1 rounded transition-colors",
+                        treeCopied
+                          ? "text-green-400 bg-green-400/10"
+                          : "text-canopy-text/40 hover:text-canopy-text hover:bg-white/5",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
+                        isCopyingTree && "cursor-wait opacity-70"
+                      )}
+                      aria-label={treeCopied ? "Context Copied" : "Copy Context"}
+                    >
+                      {isCopyingTree ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin motion-reduce:animate-none text-canopy-text" />
+                      ) : treeCopied ? (
+                        <Check className="w-3.5 h-3.5" />
+                      ) : (
+                        <Copy className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="font-medium">
+                    <span role="status" aria-live="polite">
+                      {copyFeedback}
+                    </span>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    onClick={(e) => e.stopPropagation()}
+                    className="p-1 text-canopy-text/60 hover:text-white hover:bg-white/5 rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                    aria-label="More actions"
+                  >
+                    <MoreHorizontal className="w-3.5 h-3.5" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  align="end"
+                  sideOffset={4}
+                  onClick={(e) => e.stopPropagation()}
+                  className="w-64"
+                >
+                  <WorktreeMenuItems
+                    worktree={worktree}
+                    components={dropdownComponents}
+                    isClaudeEnabled={Boolean(isClaudeEnabled)}
+                    isGeminiEnabled={Boolean(isGeminiEnabled)}
+                    isCodexEnabled={Boolean(isCodexEnabled)}
+                    recipes={recipes}
+                    runningRecipeId={runningRecipeId}
+                    isRestartValidating={isRestartValidating}
+                    counts={{
+                      grid: gridCount,
+                      dock: dockCount,
+                      active: totalTerminalCount,
+                      completed: completedCount,
+                      failed: failedCount,
+                      all: allTerminalCount,
+                    }}
+                    onLaunchAgent={
+                      onLaunchAgent ? (agentId) => handleLaunchAgent(agentId) : undefined
+                    }
+                    onCopyContext={() => void handleCopyTree()}
+                    onOpenEditor={onOpenEditor}
+                    onRevealInFinder={handlePathClick}
+                    onOpenIssue={worktree.issueNumber && onOpenIssue ? handleOpenIssue : undefined}
+                    onOpenPR={
+                      worktree.issueNumber && worktree.prNumber && onOpenPR
+                        ? handleOpenPR
+                        : undefined
+                    }
+                    onRunRecipe={(recipeId) => void handleRunRecipe(recipeId)}
+                    onCreateRecipe={onCreateRecipe}
+                    onSaveLayout={onSaveLayout}
+                    onMinimizeAll={handleMinimizeAll}
+                    onMaximizeAll={handleMaximizeAll}
+                    onRestartAll={() => void handleRestartAll()}
+                    onCloseCompleted={handleCloseCompleted}
+                    onCloseFailed={handleCloseFailed}
+                    onCloseAll={handleCloseAll}
+                    onEndAll={handleEndAll}
+                    onDeleteWorktree={
+                      !isMainWorktree
+                        ? () => {
+                            setShowDeleteDialog(true);
+                          }
+                        : undefined
+                    }
+                  />
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
           </div>
+
+          {/* Row 2: Context Badges (PR/Issue) - PR only shown when linked to an issue */}
+          {worktree.issueNumber && (
+            <div className="flex items-center gap-2">
+              {worktree.issueNumber && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenIssue?.();
+                  }}
+                  className="flex items-center gap-1 text-xs text-emerald-400/80 hover:text-emerald-400 hover:underline transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                  title="Open Issue on GitHub"
+                >
+                  <CircleDot className="w-2.5 h-2.5" />
+                  <span className="font-mono">#{worktree.issueNumber}</span>
+                </button>
+              )}
+              {worktree.prNumber && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenPR?.();
+                  }}
+                  className={cn(
+                    "flex items-center gap-1 text-xs hover:underline transition-colors",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
+                    worktree.prState === "merged"
+                      ? "text-violet-400/80 hover:text-violet-400"
+                      : worktree.prState === "closed"
+                        ? "text-red-400/80 hover:text-red-400"
+                        : "text-sky-400/80 hover:text-sky-400"
+                  )}
+                  title={`PR #${worktree.prNumber} · ${worktree.prState ?? "open"}`}
+                >
+                  <GitPullRequest className="w-2.5 h-2.5" />
+                  <span className="font-mono">#{worktree.prNumber}</span>
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Details Container - same styling for collapsed (pulse) and expanded */}
@@ -1115,22 +1107,35 @@ export function WorktreeCard({
             className="mt-3 p-3 bg-white/[0.01] rounded-[var(--radius-lg)] border border-white/5"
           >
             {isExpanded ? (
-              /* Expanded: full WorktreeDetails */
-              <WorktreeDetails
-                worktree={worktree}
-                homeDir={homeDir}
-                effectiveNote={effectiveNote}
-                effectiveSummary={effectiveSummary}
-                worktreeErrors={worktreeErrors}
-                hasChanges={hasChanges}
-                isFocused={isFocused}
-                onPathClick={handlePathClick}
-                onDismissError={dismissError}
-                onRetryError={handleErrorRetry}
-                showLastCommit={true}
-                lastActivityTimestamp={worktree.lastActivityTimestamp}
-                showTime={!showTimeInHeader}
-              />
+              /* Expanded: full WorktreeDetails with collapse header */
+              <div className="-m-3">
+                <button
+                  onClick={handleToggleExpand}
+                  aria-expanded={true}
+                  aria-controls={detailsId}
+                  className="w-full px-3 py-2.5 flex items-center justify-between text-left border-b border-white/5 transition-colors hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px] rounded-t-[var(--radius-lg)]"
+                >
+                  <span className="text-xs text-canopy-text/50 font-medium">Details</span>
+                  <ChevronRight className="w-3 h-3 text-canopy-text/40 rotate-90" />
+                </button>
+                <div className="p-3">
+                  <WorktreeDetails
+                    worktree={worktree}
+                    homeDir={homeDir}
+                    effectiveNote={effectiveNote}
+                    effectiveSummary={effectiveSummary}
+                    worktreeErrors={worktreeErrors}
+                    hasChanges={hasChanges}
+                    isFocused={isFocused}
+                    onPathClick={handlePathClick}
+                    onDismissError={dismissError}
+                    onRetryError={handleErrorRetry}
+                    showLastCommit={true}
+                    lastActivityTimestamp={worktree.lastActivityTimestamp}
+                    showTime={!showTimeInHeader}
+                  />
+                </div>
+              </div>
             ) : (
               /* Collapsed: Single subtitle + time */
               <div className="-m-3">
@@ -1138,7 +1143,7 @@ export function WorktreeCard({
                   onClick={handleToggleExpand}
                   aria-expanded={false}
                   aria-controls={detailsId}
-                  className="w-full p-3 flex items-center justify-between min-w-0 text-left rounded-[var(--radius-lg)] transition-colors hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]"
+                  className="w-full px-3 py-2.5 flex items-center justify-between min-w-0 text-left rounded-[var(--radius-lg)] transition-colors hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]"
                 >
                   {/* LEFT: Priority-based subtitle */}
                   <span className="text-xs truncate min-w-0 flex-1">
