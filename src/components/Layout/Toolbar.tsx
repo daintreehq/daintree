@@ -240,128 +240,130 @@ export function Toolbar({
         </div>
       </div>
 
-      {/* CENTER GROUP - Absolutely positioned dead center */}
-      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center z-10 pointer-events-none">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button
-              className={cn(
-                "flex items-center justify-center gap-2 px-3 h-9 rounded-[var(--radius-md)] select-none border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] app-no-drag pointer-events-auto",
-                "opacity-80 hover:opacity-100 transition-opacity cursor-pointer"
-              )}
-              style={{
-                background: currentProject
-                  ? getProjectGradient(currentProject.color)
-                  : "linear-gradient(135deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02))",
-              }}
-            >
-              {currentProject ? (
-                <>
-                  <span className="text-base leading-none" aria-label="Project emoji">
-                    {currentProject.emoji}
-                  </span>
-                  <span className="text-xs font-medium text-white/90 tracking-wide">
-                    {currentProject.name}
-                  </span>
-                  {branchName && (
-                    <span
-                      className="font-mono text-[10px] tabular-nums text-white/70 px-1.5 py-0.5 rounded-full bg-white/10"
-                      aria-label={`Current branch ${branchName}`}
-                    >
-                      {branchName}
+      {/* CENTER GROUP - Absolutely positioned dead center, hidden in fullscreen since info is in sidebar */}
+      {!isFullscreen && (
+        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center z-10 pointer-events-none">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                className={cn(
+                  "flex items-center justify-center gap-2 px-3 h-9 rounded-[var(--radius-md)] select-none border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] app-no-drag pointer-events-auto",
+                  "opacity-80 hover:opacity-100 transition-opacity cursor-pointer"
+                )}
+                style={{
+                  background: currentProject
+                    ? getProjectGradient(currentProject.color)
+                    : "linear-gradient(135deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02))",
+                }}
+              >
+                {currentProject ? (
+                  <>
+                    <span className="text-base leading-none" aria-label="Project emoji">
+                      {currentProject.emoji}
                     </span>
-                  )}
-                  <ChevronsUpDown className="h-3 w-3 text-white/50 ml-0.5" />
-                </>
-              ) : (
-                <>
-                  <span className="text-xs font-medium text-canopy-text tracking-wide">
-                    Canopy Command Center
-                  </span>
-                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-canopy-accent/20 text-canopy-accent">
-                    Beta
-                  </span>
-                  <ChevronsUpDown className="h-3 w-3 text-canopy-text/50 ml-0.5" />
-                </>
-              )}
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            className="w-[260px] max-h-[60vh] overflow-y-auto p-1"
-            align="center"
-          >
-            {currentProject && (
-              <>
-                <DropdownMenuLabel className="text-[11px] font-semibold text-muted-foreground/50 uppercase tracking-widest px-2 py-1.5">
-                  Active
-                </DropdownMenuLabel>
-                <DropdownMenuItem
-                  className="gap-2 p-2 cursor-default mb-0.5 rounded-[var(--radius-md)] bg-white/[0.03]"
-                  disabled
-                >
-                  <div
-                    className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-md)] text-sm shrink-0"
-                    style={{ background: getProjectGradient(currentProject.color) }}
-                  >
-                    {currentProject.emoji}
-                  </div>
-                  <div className="flex flex-col min-w-0 flex-1">
-                    <span className="truncate text-sm font-medium text-foreground">
+                    <span className="text-xs font-medium text-white/90 tracking-wide">
                       {currentProject.name}
                     </span>
-                    <span className="truncate text-[11px] font-mono text-muted-foreground/70">
-                      {currentProject.path.split(/[/\\]/).pop()}
-                    </span>
-                  </div>
-                  <Check className="h-4 w-4 text-canopy-accent shrink-0" />
-                </DropdownMenuItem>
-              </>
-            )}
-
-            {projects.filter((p) => p.id !== currentProject?.id).length > 0 && (
-              <>
-                <DropdownMenuSeparator className="my-1 bg-border/40" />
-                <DropdownMenuLabel className="text-[11px] font-semibold text-muted-foreground/50 uppercase tracking-widest px-2 py-1.5">
-                  Recent
-                </DropdownMenuLabel>
-                {projects
-                  .filter((p) => p.id !== currentProject?.id)
-                  .slice(0, 5)
-                  .map((project) => (
-                    <DropdownMenuItem
-                      key={project.id}
-                      onClick={() => handleProjectSwitch(project.id)}
-                      className="gap-2 p-2 cursor-pointer mb-0.5 rounded-[var(--radius-md)]"
-                    >
-                      <div
-                        className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-md)] text-sm shrink-0"
-                        style={{ background: getProjectGradient(project.color) }}
+                    {branchName && (
+                      <span
+                        className="font-mono text-[10px] tabular-nums text-white/70 px-1.5 py-0.5 rounded-full bg-white/10"
+                        aria-label={`Current branch ${branchName}`}
                       >
-                        {project.emoji}
-                      </div>
-                      <div className="flex flex-col min-w-0 flex-1">
-                        <span className="truncate text-sm font-medium text-foreground/80">
-                          {project.name}
-                        </span>
-                        <span className="truncate text-[11px] font-mono text-muted-foreground/70">
-                          {project.path.split(/[/\\]/).pop()}
-                        </span>
-                      </div>
-                    </DropdownMenuItem>
-                  ))}
-              </>
-            )}
+                        {branchName}
+                      </span>
+                    )}
+                    <ChevronsUpDown className="h-3 w-3 text-white/50 ml-0.5" />
+                  </>
+                ) : (
+                  <>
+                    <span className="text-xs font-medium text-canopy-text tracking-wide">
+                      Canopy Command Center
+                    </span>
+                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-canopy-accent/20 text-canopy-accent">
+                      Beta
+                    </span>
+                    <ChevronsUpDown className="h-3 w-3 text-canopy-text/50 ml-0.5" />
+                  </>
+                )}
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              className="w-[260px] max-h-[60vh] overflow-y-auto p-1"
+              align="center"
+            >
+              {currentProject && (
+                <>
+                  <DropdownMenuLabel className="text-[11px] font-semibold text-muted-foreground/50 uppercase tracking-widest px-2 py-1.5">
+                    Active
+                  </DropdownMenuLabel>
+                  <DropdownMenuItem
+                    className="gap-2 p-2 cursor-default mb-0.5 rounded-[var(--radius-md)] bg-white/[0.03]"
+                    disabled
+                  >
+                    <div
+                      className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-md)] text-sm shrink-0"
+                      style={{ background: getProjectGradient(currentProject.color) }}
+                    >
+                      {currentProject.emoji}
+                    </div>
+                    <div className="flex flex-col min-w-0 flex-1">
+                      <span className="truncate text-sm font-medium text-foreground">
+                        {currentProject.name}
+                      </span>
+                      <span className="truncate text-[11px] font-mono text-muted-foreground/70">
+                        {currentProject.path.split(/[/\\]/).pop()}
+                      </span>
+                    </div>
+                    <Check className="h-4 w-4 text-canopy-accent shrink-0" />
+                  </DropdownMenuItem>
+                </>
+              )}
 
-            <DropdownMenuSeparator className="my-1 bg-border/40" />
-            <DropdownMenuItem onClick={addProject} className="gap-2 p-2 cursor-pointer">
-              <div className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-md)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
-                <Plus className="h-3.5 w-3.5" />
-              </div>
-              <span className="font-medium text-sm text-muted-foreground">Add Project...</span>
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
+              {projects.filter((p) => p.id !== currentProject?.id).length > 0 && (
+                <>
+                  <DropdownMenuSeparator className="my-1 bg-border/40" />
+                  <DropdownMenuLabel className="text-[11px] font-semibold text-muted-foreground/50 uppercase tracking-widest px-2 py-1.5">
+                    Recent
+                  </DropdownMenuLabel>
+                  {projects
+                    .filter((p) => p.id !== currentProject?.id)
+                    .slice(0, 5)
+                    .map((project) => (
+                      <DropdownMenuItem
+                        key={project.id}
+                        onClick={() => handleProjectSwitch(project.id)}
+                        className="gap-2 p-2 cursor-pointer mb-0.5 rounded-[var(--radius-md)]"
+                      >
+                        <div
+                          className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-md)] text-sm shrink-0"
+                          style={{ background: getProjectGradient(project.color) }}
+                        >
+                          {project.emoji}
+                        </div>
+                        <div className="flex flex-col min-w-0 flex-1">
+                          <span className="truncate text-sm font-medium text-foreground/80">
+                            {project.name}
+                          </span>
+                          <span className="truncate text-[11px] font-mono text-muted-foreground/70">
+                            {project.path.split(/[/\\]/).pop()}
+                          </span>
+                        </div>
+                      </DropdownMenuItem>
+                    ))}
+                </>
+              )}
+
+              <DropdownMenuSeparator className="my-1 bg-border/40" />
+              <DropdownMenuItem onClick={addProject} className="gap-2 p-2 cursor-pointer">
+                <div className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-md)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
+                  <Plus className="h-3.5 w-3.5" />
+                </div>
+                <span className="font-medium text-sm text-muted-foreground">Add Project...</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      )}
 
       {/* RIGHT GROUP */}
       <div className="flex items-center gap-1.5 app-no-drag z-20">

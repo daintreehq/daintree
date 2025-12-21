@@ -59,8 +59,8 @@ function GeminiAlternateBufferBannerComponent({
           and enable{" "}
           <code className="px-1 py-0.5 bg-canopy-text/10 rounded text-canopy-text/90 font-mono text-xs">
             Use Alternate Screen Buffer
-          </code>
-          {" "}(currently loses scrolling)
+          </code>{" "}
+          (currently loses scrolling)
         </span>
       </div>
 

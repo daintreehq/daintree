@@ -89,7 +89,7 @@
     "autoprefixer": "^10.4.20",
     "concurrently": "^9.1.0",
     "cross-env": "^7.0.3",
-    "electron": "^33.2.0",
+    "electron": "^33.4.11",
     "electron-builder": "^25.1.8",
     "eslint": "^9.39.1",
     "eslint-config-prettier": "^10.1.8",
@@ -129,6 +129,9 @@
     "mac": {
       "category": "public.app-category.developer-tools",
       "icon": "build/icon.icns",
+      "extendInfo": {
+        "NSPrefersDisplaySafeAreaCompatibilityMode": false
+      },
       "target": [
         {
           "target": "dmg",

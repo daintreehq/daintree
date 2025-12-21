@@ -470,7 +470,10 @@ export function WorktreeCard({
 
   // Priority-based computed subtitle for collapsed view
   // Note: Terminal states (waiting/failed) are shown in the footer, not here
-  const computedSubtitle = useMemo((): { text: string; tone: "error" | "warning" | "info" | "muted" } => {
+  const computedSubtitle = useMemo((): {
+    text: string;
+    tone: "error" | "warning" | "info" | "muted";
+  } => {
     // 1. Worktree errors take highest priority
     if (worktreeErrors.length > 0) {
       return {
@@ -1171,7 +1174,8 @@ export function WorktreeCard({
                       <span
                         className={cn(
                           computedSubtitle.tone === "error" && "text-[var(--color-status-error)]",
-                          computedSubtitle.tone === "warning" && "text-[var(--color-status-warning)]",
+                          computedSubtitle.tone === "warning" &&
+                            "text-[var(--color-status-warning)]",
                           computedSubtitle.tone === "info" && "text-[var(--color-status-info)]",
                           computedSubtitle.tone === "muted" && "text-canopy-text/50"
                         )}
