@@ -7,6 +7,7 @@ import { TerminalInfoDialog } from "./TerminalInfoDialog";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useNativeContextMenu } from "@/hooks";
 import { AGENT_IDS, getAgentConfig } from "@/config/agents";
+import { isValidBrowserUrl } from "@/components/Browser/browserUtils";
 
 interface TerminalContextMenuProps {
   terminalId: string;
@@ -305,12 +306,12 @@ export function TerminalContextMenu({
           );
           break;
         case "open-external":
-          if (terminal.browserUrl) {
+          if (terminal.browserUrl && isValidBrowserUrl(terminal.browserUrl)) {
             window.electron.system.openExternal(terminal.browserUrl);
           }
           break;
         case "copy-url":
-          if (terminal.browserUrl) {
+          if (terminal.browserUrl && isValidBrowserUrl(terminal.browserUrl)) {
             navigator.clipboard.writeText(terminal.browserUrl).catch((err) => {
               console.error("Failed to copy URL:", err);
             });

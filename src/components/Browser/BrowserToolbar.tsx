@@ -8,6 +8,7 @@ interface BrowserToolbarProps {
   canGoBack: boolean;
   canGoForward: boolean;
   isLoading: boolean;
+  urlMightBeStale?: boolean;
   onNavigate: (url: string) => void;
   onBack: () => void;
   onForward: () => void;
@@ -20,6 +21,7 @@ export function BrowserToolbar({
   canGoBack,
   canGoForward,
   isLoading,
+  urlMightBeStale = false,
   onNavigate,
   onBack,
   onForward,
@@ -122,6 +124,12 @@ export function BrowserToolbar({
       <form onSubmit={handleSubmit} className="flex-1 min-w-0">
         <div className="relative flex items-center">
           <Globe className="absolute left-2 w-3.5 h-3.5 text-canopy-text/40 pointer-events-none" />
+          {urlMightBeStale && !isEditing && (
+            <span
+              className="absolute left-6 w-1.5 h-1.5 rounded-full bg-amber-400/60"
+              title="URL may differ from page shown (in-page navigation)"
+            />
+          )}
           <input
             ref={inputRef}
             type="text"

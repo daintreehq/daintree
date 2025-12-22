@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { AlertTriangle, ExternalLink, Home } from "lucide-react";
-import { useTerminalStore } from "@/store";
+import { useTerminalStore, useBrowserStateStore } from "@/store";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { BrowserToolbar } from "./BrowserToolbar";
 import { normalizeBrowserUrl, extractHostPort, isValidBrowserUrl } from "./browserUtils";
@@ -33,8 +33,18 @@ export function BrowserPane({
 }: BrowserPaneProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const setBrowserUrl = useTerminalStore((state) => state.setBrowserUrl);
+  const browserStateStore = useBrowserStateStore();
 
+  // Initialize history from persisted state or initialUrl
   const [history, setHistory] = useState<BrowserHistory>(() => {
+    const savedState = browserStateStore.getState(id);
+    if (savedState) {
+      return {
+        past: savedState.history.past,
+        present: savedState.url,
+        future: savedState.history.future,
+      };
+    }
     const normalized = normalizeBrowserUrl(initialUrl);
     return {
       past: [],
@@ -45,7 +55,10 @@ export function BrowserPane({
 
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [navigationId, setNavigationId] = useState(0);
+  // Track if user has navigated inside the iframe (URL might be stale)
+  const [urlMightBeStale, setUrlMightBeStale] = useState(false);
+  // Track the last URL we set on the iframe to detect in-iframe navigation
+  const lastSetUrlRef = useRef<string>(history.present);
 
   const currentUrl = history.present;
   const canGoBack = history.past.length > 0;
@@ -57,6 +70,17 @@ export function BrowserPane({
     setBrowserUrl(id, currentUrl);
   }, [id, currentUrl, setBrowserUrl]);
 
+  // Persist state changes (debounced via effect cleanup)
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      browserStateStore.updateUrl(id, currentUrl, {
+        past: history.past,
+        future: history.future,
+      });
+    }, 300);
+    return () => clearTimeout(timeoutId);
+  }, [id, currentUrl, history.past, history.future, browserStateStore]);
+
   const handleNavigate = useCallback((url: string) => {
     const result = normalizeBrowserUrl(url);
     if (result.error || !result.url) return;
@@ -66,9 +90,15 @@ export function BrowserPane({
       present: result.url!,
       future: [],
     }));
-    setNavigationId((id) => id + 1);
     setIsLoading(true);
     setLoadError(null);
+    setUrlMightBeStale(false);
+    lastSetUrlRef.current = result.url!;
+
+    // Update iframe src directly instead of remounting
+    if (iframeRef.current) {
+      iframeRef.current.src = result.url!;
+    }
   }, []);
 
   const handleBack = useCallback(() => {
@@ -76,40 +106,55 @@ export function BrowserPane({
       if (prev.past.length === 0) return prev;
       const newPast = [...prev.past];
       const previousUrl = newPast.pop()!;
+
+      // Update iframe directly
+      if (iframeRef.current) {
+        iframeRef.current.src = previousUrl;
+      }
+      lastSetUrlRef.current = previousUrl;
+
       return {
         past: newPast,
         present: previousUrl,
         future: [prev.present, ...prev.future],
       };
     });
-    setNavigationId((id) => id + 1);
     setIsLoading(true);
     setLoadError(null);
+    setUrlMightBeStale(false);
   }, []);
 
   const handleForward = useCallback(() => {
     setHistory((prev) => {
       if (prev.future.length === 0) return prev;
       const [nextUrl, ...restFuture] = prev.future;
+
+      // Update iframe directly
+      if (iframeRef.current) {
+        iframeRef.current.src = nextUrl;
+      }
+      lastSetUrlRef.current = nextUrl;
+
       return {
         past: [...prev.past, prev.present],
         present: nextUrl,
         future: restFuture,
       };
     });
-    setNavigationId((id) => id + 1);
     setIsLoading(true);
     setLoadError(null);
+    setUrlMightBeStale(false);
   }, []);
 
   const handleReload = useCallback(() => {
-    setNavigationId((id) => id + 1);
     setIsLoading(true);
     setLoadError(null);
-    if (iframeRef.current?.contentWindow) {
+    if (iframeRef.current) {
+      // Try to reload via contentWindow first (works if same-origin)
       try {
-        iframeRef.current.contentWindow.location.reload();
+        iframeRef.current.contentWindow?.location.reload();
       } catch {
+        // Cross-origin: toggle src to force reload
         const currentSrc = iframeRef.current.src;
         iframeRef.current.src = "";
         requestAnimationFrame(() => {
@@ -145,24 +190,20 @@ export function BrowserPane({
     }
   }, [currentUrl, hasValidUrl]);
 
-  const handleIframeLoad = useCallback(
-    (currentNavId: number) => () => {
-      if (navigationId === currentNavId) {
-        setIsLoading(false);
-      }
-    },
-    [navigationId]
-  );
+  const handleIframeLoad = useCallback(() => {
+    setIsLoading(false);
+    // After load, mark URL as potentially stale since user may navigate inside iframe
+    // We set a small delay to avoid marking it stale immediately on initial load
+    const timeoutId = setTimeout(() => {
+      setUrlMightBeStale(true);
+    }, 1000);
+    return () => clearTimeout(timeoutId);
+  }, []);
 
-  const handleIframeError = useCallback(
-    (currentNavId: number) => () => {
-      if (navigationId === currentNavId) {
-        setIsLoading(false);
-        setLoadError("Failed to load page. The site may refuse embedding or be unavailable.");
-      }
-    },
-    [navigationId]
-  );
+  const handleIframeError = useCallback(() => {
+    setIsLoading(false);
+    setLoadError("Failed to load page. The site may refuse embedding or be unavailable.");
+  }, []);
 
   const displayTitle = useMemo(() => {
     if (title && title !== "Browser") return title;
@@ -175,6 +216,7 @@ export function BrowserPane({
       canGoBack={canGoBack}
       canGoForward={canGoForward}
       isLoading={isLoading}
+      urlMightBeStale={urlMightBeStale}
       onNavigate={handleNavigate}
       onBack={handleBack}
       onForward={handleForward}
@@ -249,14 +291,13 @@ export function BrowserPane({
               </div>
             )}
             <iframe
-              key={navigationId}
               ref={iframeRef}
               src={currentUrl}
               title={displayTitle}
               className="w-full h-full border-0"
-              sandbox="allow-scripts allow-forms"
-              onLoad={handleIframeLoad(navigationId)}
-              onError={handleIframeError(navigationId)}
+              sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+              onLoad={handleIframeLoad}
+              onError={handleIframeError}
             />
           </>
         )}

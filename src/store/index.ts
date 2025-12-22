@@ -56,3 +56,6 @@ export { useAgentSettingsStore, cleanupAgentSettingsStore } from "./agentSetting
 export { usePulseStore } from "./pulseStore";
 
 export { usePreferencesStore } from "./preferencesStore";
+
+export { useBrowserStateStore } from "./browserStateStore";
+export type { BrowserPanelState, BrowserHistory } from "./browserStateStore";
