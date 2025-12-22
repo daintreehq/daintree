@@ -198,7 +198,12 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                 isOpen || isActive ? "opacity-100" : "opacity-70"
               )}
             >
-              <TerminalIcon type={terminal.type} className="w-3.5 h-3.5" brandColor={brandColor} />
+              <TerminalIcon
+                type={terminal.type}
+                kind={terminal.kind}
+                className="w-3.5 h-3.5"
+                brandColor={brandColor}
+              />
             </div>
             <span className="truncate shrink-0 min-w-[60px] max-w-[120px] font-sans font-medium">
               {terminal.title}

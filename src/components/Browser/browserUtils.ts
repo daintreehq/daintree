@@ -1,4 +1,4 @@
-const ALLOWED_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
+const ALLOWED_HOSTS = ["localhost", "127.0.0.1", "::1"];
 const ALLOWED_PROTOCOLS = ["http:", "https:"];
 
 export interface NormalizeResult {
@@ -76,4 +76,10 @@ export function extractHostPort(url: string): string {
   } catch {
     return "localhost";
   }
+}
+
+export function isValidBrowserUrl(url: string | undefined | null): boolean {
+  if (!url || !url.trim()) return false;
+  const normalized = normalizeBrowserUrl(url);
+  return !normalized.error && !!normalized.url;
 }

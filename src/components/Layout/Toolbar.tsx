@@ -19,6 +19,7 @@ import {
   ChevronsUpDown,
   Plus,
   Settings2,
+  Globe,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
@@ -46,7 +47,7 @@ import type { MenuItemOption } from "@/types";
 import { projectClient } from "@/clients";
 
 interface ToolbarProps {
-  onLaunchAgent: (type: "claude" | "gemini" | "codex" | "terminal") => void;
+  onLaunchAgent: (type: "claude" | "gemini" | "codex" | "terminal" | "browser") => void;
   onSettings: () => void;
   onOpenAgentSettings?: () => void;
   errorCount?: number;
@@ -259,6 +260,16 @@ export function Toolbar({
             aria-label="Open Terminal"
           >
             <Terminal />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => onLaunchAgent("browser")}
+            className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-blue-400 focus-visible:text-blue-400"
+            title="Open Browser"
+            aria-label="Open Browser"
+          >
+            <Globe />
           </Button>
         </div>
       </div>

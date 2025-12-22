@@ -150,10 +150,6 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         return null;
       }
 
-      // Get agent config from registry, fall back for "terminal" type
-      const agentConfig = getAgentConfig(agentId);
-      const isAgent = isRegisteredAgent(agentId);
-
       const targetWorktreeId = launchOptions?.worktreeId ?? activeWorktreeId;
       const targetWorktree = targetWorktreeId ? worktreeMap.get(targetWorktreeId) : null;
 
@@ -163,6 +159,26 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
       }
 
       const cwd = launchOptions?.cwd ?? targetWorktree?.path ?? currentProject?.path ?? "";
+
+      // Handle browser pane specially
+      if (agentId === "browser") {
+        try {
+          const terminalId = await addTerminal({
+            kind: "browser",
+            cwd,
+            worktreeId: targetWorktreeId || undefined,
+            location: launchOptions?.location,
+          });
+          return terminalId;
+        } catch (error) {
+          console.error("Failed to launch browser pane:", error);
+          return null;
+        }
+      }
+
+      // Get agent config from registry, fall back for "terminal" type
+      const agentConfig = getAgentConfig(agentId);
+      const isAgent = isRegisteredAgent(agentId);
 
       let command: string | undefined;
       if (agentConfig) {

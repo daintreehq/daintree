@@ -1,9 +1,9 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { AlertTriangle, ExternalLink, Globe, X } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { AlertTriangle, ExternalLink, Home } from "lucide-react";
 import { useTerminalStore } from "@/store";
+import { ContentPane, type BasePaneProps } from "@/components/Pane";
 import { BrowserToolbar } from "./BrowserToolbar";
-import { normalizeBrowserUrl, extractHostPort } from "./browserUtils";
+import { normalizeBrowserUrl, extractHostPort, isValidBrowserUrl } from "./browserUtils";
 
 interface BrowserHistory {
   past: string[];
@@ -11,21 +11,8 @@ interface BrowserHistory {
   future: string[];
 }
 
-export interface BrowserPaneProps {
-  id: string;
-  title: string;
+export interface BrowserPaneProps extends BasePaneProps {
   initialUrl: string;
-  worktreeId?: string;
-  isFocused: boolean;
-  isMaximized?: boolean;
-  location?: "grid" | "dock";
-  onFocus: () => void;
-  onClose: (force?: boolean) => void;
-  onToggleMaximize?: () => void;
-  onTitleChange?: (newTitle: string) => void;
-  onMinimize?: () => void;
-  isTrashing?: boolean;
-  gridTerminalCount?: number;
 }
 
 export function BrowserPane({
@@ -40,27 +27,30 @@ export function BrowserPane({
   onToggleMaximize,
   onTitleChange,
   onMinimize,
+  onRestore,
   isTrashing = false,
   gridTerminalCount,
 }: BrowserPaneProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const setBrowserUrl = useTerminalStore((state) => state.setBrowserUrl);
 
-  const [history, setHistory] = useState<BrowserHistory>(() => ({
-    past: [],
-    present: initialUrl,
-    future: [],
-  }));
+  const [history, setHistory] = useState<BrowserHistory>(() => {
+    const normalized = normalizeBrowserUrl(initialUrl);
+    return {
+      past: [],
+      present: normalized.url || initialUrl,
+      future: [],
+    };
+  });
 
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [isEditingTitle, setIsEditingTitle] = useState(false);
-  const [editingValue, setEditingValue] = useState(title);
-  const titleInputRef = useRef<HTMLInputElement>(null);
+  const [navigationId, setNavigationId] = useState(0);
 
   const currentUrl = history.present;
   const canGoBack = history.past.length > 0;
   const canGoForward = history.future.length > 0;
+  const hasValidUrl = isValidBrowserUrl(currentUrl);
 
   // Sync URL changes to store
   useEffect(() => {
@@ -76,6 +66,7 @@ export function BrowserPane({
       present: result.url!,
       future: [],
     }));
+    setNavigationId((id) => id + 1);
     setIsLoading(true);
     setLoadError(null);
   }, []);
@@ -91,6 +82,7 @@ export function BrowserPane({
         future: [prev.present, ...prev.future],
       };
     });
+    setNavigationId((id) => id + 1);
     setIsLoading(true);
     setLoadError(null);
   }, []);
@@ -105,61 +97,53 @@ export function BrowserPane({
         future: restFuture,
       };
     });
+    setNavigationId((id) => id + 1);
     setIsLoading(true);
     setLoadError(null);
   }, []);
 
   const handleReload = useCallback(() => {
+    setNavigationId((id) => id + 1);
     setIsLoading(true);
     setLoadError(null);
-    if (iframeRef.current) {
-      // Force reload by toggling src
-      const currentSrc = iframeRef.current.src;
-      iframeRef.current.src = "";
-      requestAnimationFrame(() => {
-        if (iframeRef.current) {
-          iframeRef.current.src = currentSrc;
-        }
-      });
+    if (iframeRef.current?.contentWindow) {
+      try {
+        iframeRef.current.contentWindow.location.reload();
+      } catch {
+        const currentSrc = iframeRef.current.src;
+        iframeRef.current.src = "";
+        requestAnimationFrame(() => {
+          if (iframeRef.current) {
+            iframeRef.current.src = currentSrc;
+          }
+        });
+      }
     }
   }, []);
 
   const handleOpenExternal = useCallback(() => {
-    window.electron.system.openExternal(currentUrl);
-  }, [currentUrl]);
-
-  const handleIframeLoad = useCallback(() => {
-    setIsLoading(false);
-  }, []);
-
-  const handleIframeError = useCallback(() => {
-    setIsLoading(false);
-    setLoadError("Failed to load page. The site may refuse embedding or be unavailable.");
-  }, []);
-
-  const handleTitleDoubleClick = useCallback(() => {
-    setEditingValue(title);
-    setIsEditingTitle(true);
-    requestAnimationFrame(() => titleInputRef.current?.select());
-  }, [title]);
-
-  const handleTitleSave = useCallback(() => {
-    setIsEditingTitle(false);
-    if (editingValue.trim() && editingValue !== title) {
-      onTitleChange?.(editingValue.trim());
+    if (hasValidUrl) {
+      window.electron.system.openExternal(currentUrl);
     }
-  }, [editingValue, title, onTitleChange]);
+  }, [currentUrl, hasValidUrl]);
 
-  const handleTitleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "Enter") {
-        handleTitleSave();
-      } else if (e.key === "Escape") {
-        setIsEditingTitle(false);
-        setEditingValue(title);
+  const handleIframeLoad = useCallback(
+    (currentNavId: number) => () => {
+      if (navigationId === currentNavId) {
+        setIsLoading(false);
       }
     },
-    [handleTitleSave, title]
+    [navigationId]
+  );
+
+  const handleIframeError = useCallback(
+    (currentNavId: number) => () => {
+      if (navigationId === currentNavId) {
+        setIsLoading(false);
+        setLoadError("Failed to load page. The site may refuse embedding or be unavailable.");
+      }
+    },
+    [navigationId]
   );
 
   const displayTitle = useMemo(() => {
@@ -167,110 +151,65 @@ export function BrowserPane({
     return extractHostPort(currentUrl);
   }, [title, currentUrl]);
 
-  const showGridAttention = location === "grid" && !isMaximized && (gridTerminalCount ?? 2) > 1;
+  const browserToolbar = (
+    <BrowserToolbar
+      url={currentUrl}
+      canGoBack={canGoBack}
+      canGoForward={canGoForward}
+      isLoading={isLoading}
+      onNavigate={handleNavigate}
+      onBack={handleBack}
+      onForward={handleForward}
+      onReload={handleReload}
+      onOpenExternal={handleOpenExternal}
+    />
+  );
 
   return (
-    <div
-      className={cn(
-        "flex flex-col h-full overflow-hidden group",
-        location === "grid" && !isMaximized && "bg-[var(--color-surface)]",
-        (location === "dock" || isMaximized) && "bg-canopy-bg",
-        location === "grid" && !isMaximized && "rounded border shadow-md",
-        location === "grid" &&
-          !isMaximized &&
-          (isFocused && showGridAttention
-            ? "terminal-selected"
-            : "border-overlay hover:border-white/[0.08]"),
-        location === "grid" && isMaximized && "border-0 rounded-none z-[var(--z-maximized)]",
-        isTrashing && "terminal-trashing"
-      )}
-      onClick={onFocus}
+    <ContentPane
+      id={id}
+      title={displayTitle}
+      kind="browser"
+      isFocused={isFocused}
+      isMaximized={isMaximized}
+      location={location}
+      isTrashing={isTrashing}
+      gridTerminalCount={gridTerminalCount}
+      onFocus={onFocus}
+      onClose={onClose}
+      onToggleMaximize={onToggleMaximize}
+      onTitleChange={onTitleChange}
+      onMinimize={onMinimize}
+      onRestore={onRestore}
+      toolbar={browserToolbar}
     >
-      {/* Header */}
-      <div
-        className={cn(
-          "flex items-center h-8 px-2 gap-2 shrink-0",
-          "border-b border-overlay bg-[var(--color-surface)]"
-        )}
-      >
-        <Globe className="w-4 h-4 text-blue-400 shrink-0" />
-
-        {isEditingTitle ? (
-          <input
-            ref={titleInputRef}
-            type="text"
-            value={editingValue}
-            onChange={(e) => setEditingValue(e.target.value)}
-            onBlur={handleTitleSave}
-            onKeyDown={handleTitleKeyDown}
-            className="flex-1 min-w-0 text-sm bg-canopy-bg border border-overlay rounded px-1 py-0.5 focus:outline-none focus:border-white/20"
-          />
-        ) : (
-          <span
-            className="flex-1 min-w-0 text-sm truncate cursor-default"
-            onDoubleClick={handleTitleDoubleClick}
-          >
-            {displayTitle}
-          </span>
-        )}
-
-        <div className="flex items-center gap-1">
-          {onMinimize && location === "grid" && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onMinimize();
-              }}
-              className="p-1 rounded hover:bg-white/10 transition-colors opacity-0 group-hover:opacity-100"
-              title="Move to dock"
-            >
-              <div className="w-3 h-0.5 bg-current rounded-full" />
-            </button>
-          )}
-          {onToggleMaximize && location === "grid" && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onToggleMaximize();
-              }}
-              className="p-1 rounded hover:bg-white/10 transition-colors opacity-0 group-hover:opacity-100"
-              title={isMaximized ? "Restore" : "Maximize"}
-            >
-              <div className="w-3 h-3 border border-current rounded-sm" />
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onClose();
-            }}
-            className="p-1 rounded hover:bg-red-500/20 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
-            title="Close"
-          >
-            <X className="w-3 h-3" />
-          </button>
-        </div>
-      </div>
-
-      {/* Browser toolbar */}
-      <BrowserToolbar
-        url={currentUrl}
-        canGoBack={canGoBack}
-        canGoForward={canGoForward}
-        isLoading={isLoading}
-        onNavigate={handleNavigate}
-        onBack={handleBack}
-        onForward={handleForward}
-        onReload={handleReload}
-        onOpenExternal={handleOpenExternal}
-      />
-
-      {/* Content area */}
-      <div className="flex-1 min-h-0 relative bg-white">
-        {loadError ? (
+      <div className="h-full bg-white">
+        {!hasValidUrl ? (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
+            <div className="flex flex-col items-center text-center max-w-md">
+              <div className="w-16 h-16 rounded-2xl bg-blue-500/10 flex items-center justify-center mb-6">
+                <Home className="w-8 h-8 text-blue-400" />
+              </div>
+              <h3 className="text-lg font-medium mb-2">Localhost Browser</h3>
+              <p className="text-sm text-canopy-text/60 mb-6 leading-relaxed">
+                Preview your local development server. Enter a localhost URL in the address bar
+                above to get started.
+              </p>
+              <div className="flex flex-wrap justify-center gap-2">
+                {["localhost:3000", "localhost:5173", "localhost:8080"].map((example) => (
+                  <button
+                    key={example}
+                    type="button"
+                    onClick={() => handleNavigate(`http://${example}`)}
+                    className="px-3 py-1.5 text-xs font-mono bg-white/5 hover:bg-white/10 border border-white/10 rounded-md transition-colors"
+                  >
+                    {example}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : loadError ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
             <AlertTriangle className="w-12 h-12 text-amber-400 mb-4" />
             <h3 className="text-lg font-medium mb-2">Unable to Display Page</h3>
@@ -292,17 +231,18 @@ export function BrowserPane({
               </div>
             )}
             <iframe
+              key={navigationId}
               ref={iframeRef}
               src={currentUrl}
               title={displayTitle}
               className="w-full h-full border-0"
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-              onLoad={handleIframeLoad}
-              onError={handleIframeError}
+              sandbox="allow-scripts allow-forms"
+              onLoad={handleIframeLoad(navigationId)}
+              onError={handleIframeError(navigationId)}
             />
           </>
         )}
       </div>
-    </div>
+    </ContentPane>
   );
 }

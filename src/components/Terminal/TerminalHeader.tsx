@@ -10,7 +10,7 @@ import {
   Pause,
   Lock,
 } from "lucide-react";
-import type { TerminalType, AgentState } from "@/types";
+import type { TerminalType, TerminalKind, AgentState } from "@/types";
 import { cn } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { TerminalContextMenu } from "./TerminalContextMenu";
@@ -25,15 +25,16 @@ export interface TerminalHeaderProps {
   id: string;
   title: string;
   type?: TerminalType;
+  kind?: TerminalKind;
   agentId?: string;
   isFocused: boolean;
-  isExited: boolean;
-  exitCode: number | null;
-  isWorking: boolean;
+  isExited?: boolean;
+  exitCode?: number | null;
+  isWorking?: boolean;
   agentState?: AgentState;
   activity?: ActivityState | null;
   lastCommand?: string;
-  queueCount: number;
+  queueCount?: number;
   flowStatus?: "running" | "paused-backpressure" | "paused-user" | "suspended";
 
   // Title editing
@@ -65,14 +66,15 @@ function TerminalHeaderComponent({
   id,
   title,
   type,
+  kind,
   agentId,
   isFocused,
-  isExited,
-  exitCode,
-  isWorking: _isWorking,
+  isExited = false,
+  exitCode = null,
+  isWorking: _isWorking = false,
   agentState,
   activity,
-  queueCount,
+  queueCount = 0,
   lastCommand,
   flowStatus,
   isEditingTitle,
@@ -95,7 +97,9 @@ function TerminalHeaderComponent({
   isPinged,
   wasJustSelected = false,
 }: TerminalHeaderProps) {
-  const showCommandPill = type === "terminal" && agentState === "running" && !!lastCommand;
+  const isBrowser = kind === "browser";
+  const showCommandPill =
+    !isBrowser && type === "terminal" && agentState === "running" && !!lastCommand;
   const isInputLocked = useTerminalStore((state) =>
     state.terminals.find((t) => t.id === id)
   )?.isInputLocked;
@@ -200,6 +204,7 @@ function TerminalHeaderComponent({
           <span className="shrink-0 flex items-center justify-center w-3.5 h-3.5 text-canopy-text">
             <TerminalIcon
               type={type}
+              kind={kind}
               agentId={agentId}
               className="w-3.5 h-3.5"
               brandColor={getBrandColorHex(agentId ?? type)}
@@ -216,7 +221,11 @@ function TerminalHeaderComponent({
               onBlur={onTitleSave}
               className="text-sm font-medium bg-canopy-bg/60 border border-canopy-accent/50 px-1 h-5 min-w-32 text-canopy-text select-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
               aria-label={
-                !agentId && type === "terminal" ? "Edit terminal title" : "Edit agent title"
+                kind === "browser"
+                  ? "Edit browser title"
+                  : !agentId && type === "terminal"
+                    ? "Edit terminal title"
+                    : "Edit agent title"
               }
             />
           ) : (
@@ -238,9 +247,11 @@ function TerminalHeaderComponent({
                 title={onTitleChange ? `${title} — Double-click to edit` : title}
                 aria-label={
                   onTitleChange
-                    ? !agentId && type === "terminal"
-                      ? `Terminal title: ${title}. Press Enter or F2 to edit`
-                      : `Agent title: ${title}. Press Enter or F2 to edit`
+                    ? kind === "browser"
+                      ? `Browser title: ${title}. Press Enter or F2 to edit`
+                      : !agentId && type === "terminal"
+                        ? `Terminal title: ${title}. Press Enter or F2 to edit`
+                        : `Agent title: ${title}. Press Enter or F2 to edit`
                     : undefined
                 }
               >
@@ -259,7 +270,7 @@ function TerminalHeaderComponent({
             </div>
           )}
 
-          {isExited && (
+          {!isBrowser && isExited && (
             <span
               className="text-xs font-mono text-[var(--color-status-error)] ml-1"
               role="status"
@@ -269,7 +280,7 @@ function TerminalHeaderComponent({
             </span>
           )}
 
-          {queueCount > 0 && (
+          {!isBrowser && queueCount > 0 && (
             <div
               className="inline-flex items-center gap-1 text-xs font-sans bg-canopy-accent/15 text-canopy-text px-1.5 py-0.5 rounded ml-1"
               role="status"
@@ -281,7 +292,7 @@ function TerminalHeaderComponent({
             </div>
           )}
 
-          {flowStatus === "paused-backpressure" && (
+          {!isBrowser && flowStatus === "paused-backpressure" && (
             <div
               className="flex items-center gap-1 text-xs font-sans bg-[var(--color-status-warning)]/15 text-[var(--color-status-warning)] px-1.5 py-0.5 rounded ml-1"
               role="status"
@@ -293,7 +304,7 @@ function TerminalHeaderComponent({
             </div>
           )}
 
-          {flowStatus === "suspended" && (
+          {!isBrowser && flowStatus === "suspended" && (
             <div
               className="flex items-center gap-1 text-xs font-sans bg-[var(--color-status-warning)]/15 text-[var(--color-status-warning)] px-1.5 py-0.5 rounded ml-1"
               role="status"
@@ -332,7 +343,7 @@ function TerminalHeaderComponent({
         <div className="flex items-center gap-1.5">
           {/* Hover-only window controls FIRST so the status chip sits at the far right edge */}
           <div className="flex items-center gap-1.5 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity motion-reduce:transition-none">
-            {onRestart && (
+            {!isBrowser && onRestart && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -421,7 +432,7 @@ function TerminalHeaderComponent({
             </button>
           </div>
 
-          {isInputLocked && (
+          {!isBrowser && isInputLocked && (
             <div
               className="flex items-center text-canopy-text/50 shrink-0"
               role="status"
@@ -431,7 +442,7 @@ function TerminalHeaderComponent({
             </div>
           )}
 
-          {renderAgentStateChip()}
+          {!isBrowser && renderAgentStateChip()}
         </div>
       </div>
     </TerminalContextMenu>

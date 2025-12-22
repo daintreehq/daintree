@@ -7,7 +7,8 @@ interface TerminalDragPreviewProps {
 }
 
 export function TerminalDragPreview({ terminal }: TerminalDragPreviewProps) {
-  const brandColor = getBrandColorHex(terminal.type);
+  // Browser panes get blue, agents get their brand color
+  const brandColor = terminal.kind === "browser" ? "#3b82f6" : getBrandColorHex(terminal.type);
   const isWorking = terminal.agentState === "working";
 
   return (

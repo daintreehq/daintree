@@ -7,6 +7,7 @@ import {
   Copy,
   Folder,
   GitPullRequest,
+  Globe,
   Maximize2,
   Minimize2,
   Play,
@@ -47,7 +48,7 @@ export interface WorktreeMenuItemsProps {
     failed: number;
     all: number;
   };
-  onLaunchAgent?: (agentId: "claude" | "gemini" | "codex" | "terminal") => void;
+  onLaunchAgent?: (agentId: "claude" | "gemini" | "codex" | "terminal" | "browser") => void;
   onCopyContext: () => void;
   onOpenEditor: () => void;
   onRevealInFinder: () => void;
@@ -125,6 +126,10 @@ export function WorktreeMenuItems({
       <C.Item onSelect={() => onLaunchAgent?.("terminal")} disabled={!onLaunchAgent}>
         <Terminal className="w-3.5 h-3.5 mr-2" />
         Open Terminal
+      </C.Item>
+      <C.Item onSelect={() => onLaunchAgent?.("browser")} disabled={!onLaunchAgent}>
+        <Globe className="w-3.5 h-3.5 mr-2 text-blue-400" />
+        Open Browser
       </C.Item>
 
       <C.Separator />
