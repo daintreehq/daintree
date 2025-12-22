@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, forwardRef, useMemo, type ReactNode } from "react";
+import React, { useCallback, useRef, forwardRef, useMemo, useEffect, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { PanelHeader } from "./PanelHeader";
 import { useIsDragging } from "@/components/DragDrop";
@@ -27,9 +27,6 @@ export interface BasePanelProps {
   onMinimize?: () => void;
   onRestore?: () => void;
 }
-
-/** @deprecated Use BasePanelProps instead */
-export type BasePaneProps = BasePanelProps;
 
 export interface ContentPanelProps extends BasePanelProps {
   kind: PanelKind;
@@ -108,6 +105,13 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   const titleInputRef = useRef<HTMLInputElement>(null);
   const titleEditing = useTitleEditing();
 
+  // Focus and select input when editing starts (handles context menu rename)
+  useEffect(() => {
+    if (titleEditing.isEditingTitle && titleInputRef.current) {
+      requestAnimationFrame(() => titleInputRef.current?.select());
+    }
+  }, [titleEditing.isEditingTitle]);
+
   const showGridAttention = location === "grid" && !isMaximized && (gridPanelCount ?? 2) > 1;
 
   // Auto-construct TerminalHeaderContent for terminal/agent kinds if headerContent not provided
@@ -117,6 +121,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
       return (
         <TerminalHeaderContent
           id={id}
+          kind={kind}
           type={type}
           agentState={agentState}
           activity={activity}
@@ -249,7 +254,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
 
       {toolbar}
 
-      <div className="flex-1 min-h-0 relative">{children}</div>
+      <div className="flex-1 min-h-0 relative flex flex-col">{children}</div>
     </div>
   );
 });
@@ -267,6 +272,3 @@ export const ContentPanel = forwardRef<HTMLDivElement, ContentPanelProps>(
     );
   }
 );
-
-/** @deprecated Use ContentPanel instead */
-export const ContentPane = ContentPanel;

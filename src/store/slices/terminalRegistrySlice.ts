@@ -15,7 +15,7 @@ import { TerminalRefreshTier } from "@/types";
 import { terminalPersistence } from "../persistence/terminalPersistence";
 import { validateTerminalConfig } from "@/utils/terminalValidation";
 import { isRegisteredAgent, getAgentConfig } from "@/config/agents";
-import { getDefaultPanelTitle } from "@shared/config/panelKindRegistry";
+import { getDefaultPanelTitle, panelKindHasPty } from "@shared/config/panelKindRegistry";
 import type { PanelKind } from "@/types";
 import { getTerminalThemeFromCSS } from "@/utils/terminalTheme";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
@@ -48,7 +48,7 @@ const DOCK_PREWARM_HEIGHT_PX = 800;
 export type TerminalInstance = TerminalInstanceType;
 
 export interface AddTerminalOptions {
-  kind?: "terminal" | "agent" | "browser";
+  kind?: PanelKind;
   type?: TerminalType;
   /** Agent ID when type is an agent - enables extensibility for new agents */
   agentId?: string;
@@ -161,11 +161,15 @@ export const createTerminalRegistrySlice =
     trashedTerminals: new Map(),
 
     addTerminal: async (options) => {
-      // Handle browser panes separately - they don't need PTY
-      if (options.kind === "browser") {
+      const requestedKind = options.kind ?? (options.agentId ? "agent" : "terminal");
+      const legacyType = options.type || "terminal";
+
+      // Handle non-PTY panels (browser, extensions) separately
+      if (!panelKindHasPty(requestedKind)) {
         const id =
-          options.requestedId || `browser-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-        const title = options.title || getDefaultTitle("browser");
+          options.requestedId ||
+          `${requestedKind}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+        const title = options.title || getDefaultTitle(requestedKind);
 
         const maxCapacity = useLayoutConfigStore.getState().getMaxGridCapacity();
         const currentGridCount = get().terminals.filter(
@@ -179,7 +183,7 @@ export const createTerminalRegistrySlice =
 
         const terminal: TerminalInstance = {
           id,
-          kind: "browser",
+          kind: requestedKind,
           type: "terminal",
           title,
           worktreeId: options.worktreeId,
@@ -187,7 +191,8 @@ export const createTerminalRegistrySlice =
           cols: 80,
           rows: 24,
           location,
-          browserUrl: options.browserUrl || "http://localhost:3000",
+          browserUrl:
+            requestedKind === "browser" ? options.browserUrl || "http://localhost:3000" : undefined,
           isVisible: location === "grid",
         };
 
@@ -200,11 +205,12 @@ export const createTerminalRegistrySlice =
         return id;
       }
 
-      const requestedKind = options.kind ?? (options.agentId ? "agent" : "terminal");
-      const legacyType = options.type || "terminal";
+      // PTY panels: terminal/agent
       // Derive agentId: explicit option, or from legacy type if it's a registered agent
       const agentId = options.agentId ?? (isRegisteredAgent(legacyType) ? legacyType : undefined);
-      const kind: "terminal" | "agent" = agentId ? "agent" : requestedKind;
+      // Narrow kind to terminal|agent for PTY handling
+      const kind: "terminal" | "agent" =
+        agentId || requestedKind === "agent" ? "agent" : "terminal";
       const title = options.title || getDefaultTitle(kind, legacyType, agentId);
 
       // Auto-dock if grid is full and user requested grid location

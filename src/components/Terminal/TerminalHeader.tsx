@@ -1,3 +1,10 @@
+/**
+ * @deprecated Use PanelHeader + TerminalHeaderContent instead.
+ * This component is kept for backward compatibility but will be removed in a future version.
+ * New code should use:
+ * - PanelHeader from @/components/Panel for the generic header chrome
+ * - TerminalHeaderContent for terminal-specific status indicators
+ */
 import React from "react";
 import {
   X,

@@ -50,6 +50,10 @@ import { useShallow } from "zustand/react/shallow";
 import { useRecipeStore } from "./store/recipeStore";
 import type { RecipeTerminal } from "./types";
 import { systemClient, errorsClient } from "@/clients";
+import { registerBuiltInPanelComponents } from "./registry";
+
+// Register built-in panel components before any renders
+registerBuiltInPanelComponents();
 import { useWorktreeFilterStore } from "./store/worktreeFilterStore";
 import {
   matchesFilters,

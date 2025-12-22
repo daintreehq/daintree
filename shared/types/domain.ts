@@ -229,8 +229,13 @@ export function isBuiltInPanelKind(kind: PanelKind): kind is BuiltInPanelKind {
   return kind === "terminal" || kind === "agent" || kind === "browser";
 }
 
-/** Type guard to check if a panel requires PTY (terminal or agent) */
+/**
+ * Check if a built-in panel kind requires PTY (terminal or agent).
+ * For extension kinds, use `panelKindHasPty()` from panelKindRegistry
+ * which consults the runtime registry configuration.
+ */
 export function isPtyPanelKind(kind: PanelKind): boolean {
+  // Built-in kinds - for extension kinds, use panelKindHasPty() from registry
   return kind === "terminal" || kind === "agent";
 }
 

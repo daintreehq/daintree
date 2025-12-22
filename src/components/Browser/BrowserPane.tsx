@@ -201,7 +201,7 @@ export function BrowserPane({
       onRestore={onRestore}
       toolbar={browserToolbar}
     >
-      <div className="h-full bg-white">
+      <div className="flex-1 min-h-0 bg-white">
         {!hasValidUrl ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
             <div className="flex flex-col items-center text-center max-w-md">

@@ -12,6 +12,7 @@ import { GeminiAlternateBufferBanner } from "./GeminiAlternateBufferBanner";
 import { UpdateCwdDialog } from "./UpdateCwdDialog";
 import { ErrorBanner } from "../Errors/ErrorBanner";
 import { ContentPanel } from "@/components/Panel";
+import { useIsDragging } from "@/components/DragDrop";
 import {
   useErrorStore,
   useTerminalStore,
@@ -194,7 +195,13 @@ function TerminalPaneComponent({
   });
 
   // Track drag state in a ref to avoid useEffect cleanup timing issues.
-  const isDraggingRef = useRef(false);
+  // If isDragging is in the dependency array, cleanup runs on drag START
+  // with the OLD isDragging=false value, which would set visibility to false!
+  const isDragging = useIsDragging();
+  const isDraggingRef = useRef(isDragging);
+  useEffect(() => {
+    isDraggingRef.current = isDragging;
+  }, [isDragging]);
 
   // Visibility observation - stable observer, ref-gated callback
   useEffect(() => {
