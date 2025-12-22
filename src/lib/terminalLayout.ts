@@ -1,3 +1,5 @@
+import type { TerminalLayoutStrategy } from "@shared/types";
+
 /**
  * Minimum terminal width in pixels for readability.
  * Terminals narrower than this become difficult to read due to line wrapping.
@@ -91,4 +93,39 @@ export function getAutoGridCols(count: number, width: number | null): number {
 
   // Respect width constraints - never exceed what the viewport can fit
   return Math.min(maxFeasibleCols, targetCols);
+}
+
+/**
+ * Single source of truth for grid column calculation across all layout strategies.
+ * Enforces the 2-pane invariant: exactly 2 panes should ALWAYS be 2x1 layout.
+ *
+ * This function is used by both TerminalGrid.tsx (for rendering) and
+ * useGridNavigation.ts (for keyboard navigation) to ensure consistency.
+ */
+export function computeGridColumns(
+  count: number,
+  gridWidth: number | null,
+  strategy: TerminalLayoutStrategy,
+  value?: number
+): number {
+  if (count === 0) return 1;
+
+  // 2-pane invariant: always use 2 columns for exactly 2 panes
+  // This prevents the undesirable 1x2 (vertical stacking) layout
+  if (count === 2) {
+    return 2;
+  }
+
+  switch (strategy) {
+    case "automatic":
+      return getAutoGridCols(count, gridWidth);
+    case "fixed-rows": {
+      const rows = Math.max(1, Math.min(value ?? 3, 10));
+      return Math.ceil(count / rows);
+    }
+    case "fixed-columns":
+      return Math.max(1, Math.min(value ?? 2, 10));
+    default:
+      return getAutoGridCols(count, gridWidth);
+  }
 }

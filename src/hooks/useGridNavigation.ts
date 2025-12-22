@@ -1,7 +1,7 @@
 import { useMemo, useCallback, useRef, useEffect, useState } from "react";
 import { useTerminalStore, useLayoutConfigStore, useWorktreeSelectionStore } from "@/store";
 import { useShallow } from "zustand/react/shallow";
-import { getAutoGridCols } from "@/lib/terminalLayout";
+import { computeGridColumns } from "@/lib/terminalLayout";
 
 export type NavigationDirection = "up" | "down" | "left" | "right";
 
@@ -82,21 +82,8 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
 
   // Compute gridCols using the same logic as TerminalGrid
   const gridCols = useMemo(() => {
-    const count = gridTerminals.length;
-    if (count === 0) return 1;
-
     const { strategy, value } = layoutConfig;
-
-    if (strategy === "fixed-columns") {
-      return Math.max(1, Math.min(value, 10));
-    }
-
-    if (strategy === "fixed-rows") {
-      const rows = Math.max(1, Math.min(value, 10));
-      return Math.ceil(count / rows);
-    }
-
-    return getAutoGridCols(count, gridWidth);
+    return computeGridColumns(gridTerminals.length, gridWidth, strategy, value);
   }, [gridTerminals.length, layoutConfig, gridWidth]);
 
   // Compute grid layout from indices (no DOM measurement)

@@ -27,7 +27,7 @@ import { Kbd } from "@/components/ui/Kbd";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { systemClient } from "@/clients";
-import { getAutoGridCols, MIN_TERMINAL_HEIGHT_PX } from "@/lib/terminalLayout";
+import { computeGridColumns, MIN_TERMINAL_HEIGHT_PX } from "@/lib/terminalLayout";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useNativeContextMenu } from "@/hooks";
 import type { CliAvailability } from "@shared/types";
@@ -335,21 +335,8 @@ export function TerminalGrid({
   const gridItemCount = gridTerminals.length + (showPlaceholder ? 1 : 0);
 
   const gridCols = useMemo(() => {
-    if (gridItemCount === 0) return 1;
-
     const { strategy, value } = layoutConfig;
-
-    if (strategy === "fixed-columns") {
-      return Math.max(1, Math.min(value, 10));
-    }
-
-    if (strategy === "fixed-rows") {
-      const rows = Math.max(1, Math.min(value, 10));
-      return Math.ceil(gridItemCount / rows);
-    }
-
-    // Automatic rectangular layout via deterministic mapping
-    return getAutoGridCols(gridItemCount, gridWidth);
+    return computeGridColumns(gridItemCount, gridWidth, strategy, value);
   }, [gridItemCount, layoutConfig, gridWidth]);
 
   const handleLaunchAgent = useCallback(
