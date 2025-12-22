@@ -11,7 +11,7 @@ const DEV_CSP = [
   "font-src 'self' data:",
   "connect-src 'self' http://localhost:5173 ws://localhost:5173",
   "img-src 'self' http://localhost:5173 https://avatars.githubusercontent.com data:",
-  "frame-src 'self' https://www.youtube.com",
+  "frame-src 'self' https://www.youtube.com http://localhost:* http://127.0.0.1:* http://[::1]:* https://localhost:* https://127.0.0.1:*",
 ].join("; ");
 
 const PROD_CSP = [
@@ -22,7 +22,7 @@ const PROD_CSP = [
   "font-src 'self' data:",
   "connect-src 'self'",
   "img-src 'self' https://avatars.githubusercontent.com data: blob:",
-  "frame-src 'self' https://www.youtube.com",
+  "frame-src 'self' https://www.youtube.com http://localhost:* http://127.0.0.1:* http://[::1]:* https://localhost:* https://127.0.0.1:*",
   "worker-src 'self' blob:",
   "object-src 'none'",
   "base-uri 'self'",

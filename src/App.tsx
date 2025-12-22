@@ -27,7 +27,7 @@ import {
   type HydrationCallbacks,
 } from "./hooks/app";
 import { AppLayout } from "./components/Layout";
-import { TerminalGrid } from "./components/Terminal";
+import { ContentGrid } from "./components/Terminal";
 import { WorktreeCard, WorktreePalette, WorktreeFilterPopover } from "./components/Worktree";
 import { NewWorktreeDialog } from "./components/Worktree/NewWorktreeDialog";
 import { TerminalPalette, NewTerminalPalette } from "./components/TerminalPalette";
@@ -50,6 +50,10 @@ import { useShallow } from "zustand/react/shallow";
 import { useRecipeStore } from "./store/recipeStore";
 import type { RecipeTerminal } from "./types";
 import { systemClient, errorsClient } from "@/clients";
+import { registerBuiltInPanelComponents } from "./registry";
+
+// Register built-in panel components before any renders
+registerBuiltInPanelComponents();
 import { useWorktreeFilterStore } from "./store/worktreeFilterStore";
 import {
   matchesFilters,
@@ -581,7 +585,7 @@ function App() {
   useFirstRunToasts(isStateLoaded);
 
   const handleLaunchAgent = useCallback(
-    async (type: "claude" | "gemini" | "codex" | "terminal") => {
+    async (type: "claude" | "gemini" | "codex" | "terminal" | "browser") => {
       await launchAgent(type);
     },
     [launchAgent]
@@ -1001,7 +1005,7 @@ function App() {
           agentAvailability={availability}
           agentSettings={agentSettings}
         >
-          <TerminalGrid
+          <ContentGrid
             className="h-full w-full"
             onLaunchAgent={handleLaunchAgent}
             agentAvailability={availability}

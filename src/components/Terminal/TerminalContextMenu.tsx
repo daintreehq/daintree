@@ -44,6 +44,19 @@ export function TerminalContextMenu({
   const handleDuplicate = useCallback(async () => {
     if (!terminal) return;
     try {
+      // Handle browser pane duplication specially
+      if (terminal.kind === "browser") {
+        await addTerminal({
+          kind: "browser",
+          cwd: terminal.cwd,
+          location: terminal.location === "trash" ? "grid" : terminal.location,
+          title: `${terminal.title} (copy)`,
+          worktreeId: terminal.worktreeId,
+          browserUrl: terminal.browserUrl,
+        });
+        return;
+      }
+
       await addTerminal({
         type: terminal.type,
         cwd: terminal.cwd,
@@ -114,6 +127,8 @@ export function TerminalContextMenu({
   const template = useMemo((): MenuItemOption[] => {
     if (!terminal) return [];
 
+    const isBrowser = terminal.kind === "browser";
+
     // Layout section: worktree navigation first (most common workflow), then positioning
     const layoutItems: MenuItemOption[] = [];
 
@@ -138,6 +153,35 @@ export function TerminalContextMenu({
         label: isMaximized ? "Restore Size" : "Maximize",
         sublabel: "^⇧F",
       });
+    }
+
+    // Browser-specific actions
+    if (isBrowser) {
+      const browserActions: MenuItemOption[] = [
+        { id: "reload-browser", label: "Reload Page" },
+        { id: "open-external", label: "Open in Browser" },
+        { id: "copy-url", label: "Copy URL" },
+      ];
+
+      const browserManagementItems: MenuItemOption[] = [
+        { id: "duplicate", label: "Duplicate Browser" },
+        { id: "rename", label: "Rename Browser" },
+      ];
+
+      const destructiveItems: MenuItemOption[] = [
+        { id: "trash", label: "Close Browser" },
+        { id: "kill", label: "Remove Browser" },
+      ];
+
+      return [
+        ...layoutItems,
+        { type: "separator" },
+        ...browserActions,
+        { type: "separator" },
+        ...browserManagementItems,
+        { type: "separator" },
+        ...destructiveItems,
+      ];
     }
 
     // Terminal actions section
@@ -253,6 +297,24 @@ export function TerminalContextMenu({
           break;
         case "kill":
           removeTerminal(terminalId);
+          break;
+        // Browser-specific actions
+        case "reload-browser":
+          window.dispatchEvent(
+            new CustomEvent("canopy:reload-browser", { detail: { id: terminalId } })
+          );
+          break;
+        case "open-external":
+          if (terminal.browserUrl) {
+            window.electron.system.openExternal(terminal.browserUrl);
+          }
+          break;
+        case "copy-url":
+          if (terminal.browserUrl) {
+            navigator.clipboard.writeText(terminal.browserUrl).catch((err) => {
+              console.error("Failed to copy URL:", err);
+            });
+          }
           break;
       }
     },

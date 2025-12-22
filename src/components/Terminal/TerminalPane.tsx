@@ -5,13 +5,13 @@ import type { TerminalType, TerminalRestartError } from "@/types";
 import { cn } from "@/lib/utils";
 import { XtermAdapter } from "./XtermAdapter";
 import { ArtifactOverlay } from "./ArtifactOverlay";
-import { TerminalHeader } from "./TerminalHeader";
 import { TerminalSearchBar } from "./TerminalSearchBar";
 import { TerminalRestartBanner } from "./TerminalRestartBanner";
 import { TerminalErrorBanner } from "./TerminalErrorBanner";
 import { GeminiAlternateBufferBanner } from "./GeminiAlternateBufferBanner";
 import { UpdateCwdDialog } from "./UpdateCwdDialog";
 import { ErrorBanner } from "../Errors/ErrorBanner";
+import { ContentPanel } from "@/components/Panel";
 import { useIsDragging } from "@/components/DragDrop";
 import {
   useErrorStore,
@@ -57,14 +57,10 @@ export interface TerminalPaneProps {
   onMinimize?: () => void;
   onRestore?: () => void;
   location?: "grid" | "dock";
-  /** Counter incremented on restart to trigger XtermAdapter re-mount */
   restartKey?: number;
-  /** Terminal is animating out before being trashed */
   isTrashing?: boolean;
-  /** Error from a failed restart attempt */
   restartError?: TerminalRestartError;
-  /** Number of terminals in the grid (used to reduce visual noise when only one terminal) */
-  gridTerminalCount?: number;
+  gridPanelCount?: number;
 }
 
 function TerminalPaneComponent({
@@ -90,7 +86,7 @@ function TerminalPaneComponent({
   restartKey = 0,
   isTrashing = false,
   restartError,
-  gridTerminalCount,
+  gridPanelCount,
 }: TerminalPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const prevFocusedRef = useRef(isFocused);
@@ -192,23 +188,8 @@ function TerminalPaneComponent({
   const dismissError = useErrorStore((state) => state.dismissError);
   const removeError = useErrorStore((state) => state.removeError);
 
-  const {
-    isEditingTitle,
-    editingValue,
-    titleInputRef,
-    setEditingValue,
-    handleTitleDoubleClick,
-    handleTitleKeyDown,
-    handleTitleInputKeyDown,
-    handleTitleSave,
-    isExited,
-    exitCode,
-    handleExit,
-    handleErrorRetry,
-  } = useTerminalLogic({
+  const { isExited, exitCode, handleExit, handleErrorRetry } = useTerminalLogic({
     id,
-    title,
-    onTitleChange,
     removeError,
     restartKey,
   });
@@ -232,7 +213,6 @@ function TerminalPaneComponent({
         if (isDraggingRef.current) return;
 
         updateVisibility(id, entry.isIntersecting);
-        // Notify service for visibility-aware terminal management
         terminalInstanceService.setVisible(id, entry.isIntersecting);
       },
       {
@@ -268,10 +248,6 @@ function TerminalPaneComponent({
       const results = tracker.process(data);
 
       for (const result of results) {
-        // Intercept user-initiated clear commands to provide immediate visual feedback.
-        // This is separate from blocking agent-generated escape sequences (handled by
-        // setupParserHandlers in TerminalInstanceService) which prevent dangerous
-        // screen jumping that could trigger photosensitive epileptic seizures.
         if (result.isClear) {
           const managed = terminalInstanceService.get(id);
           if (managed?.terminal) {
@@ -339,8 +315,6 @@ function TerminalPaneComponent({
       const xtermElement = target?.closest(".xterm");
       if (!xtermElement) return;
 
-      // Allow clicks on links to propagate through so WebLinksAddon can handle them.
-      // When hovering over a link, xterm adds the 'xterm-cursor-pointer' class to the terminal element.
       if (xtermElement.classList.contains("xterm-cursor-pointer")) {
         return;
       }
@@ -427,40 +401,47 @@ function TerminalPaneComponent({
   }, [id, agentState]);
 
   const isWorking = agentState === "working";
-  const showGridAttention = location === "grid" && !isMaximized && (gridTerminalCount ?? 2) > 1;
-  const allowPing = !isMaximized && (location !== "grid" || (gridTerminalCount ?? 2) > 1);
+  const allowPing = !isMaximized && (location !== "grid" || (gridPanelCount ?? 2) > 1);
+
+  // Determine panel kind based on agent
+  const kind = effectiveAgentId ? "agent" : "terminal";
 
   return (
-    <div
+    <ContentPanel
       ref={containerRef}
+      id={id}
+      title={title}
+      kind={kind}
+      type={type}
+      agentId={agentId}
+      isFocused={isFocused}
+      isMaximized={isMaximized}
+      location={location}
+      isTrashing={isTrashing}
+      gridPanelCount={gridPanelCount}
+      onFocus={onFocus}
+      onClose={onClose}
+      onToggleMaximize={onToggleMaximize}
+      onTitleChange={onTitleChange}
+      onMinimize={onMinimize}
+      onRestore={onRestore}
+      onRestart={handleRestart}
+      isExited={isExited}
+      exitCode={exitCode}
+      isWorking={isWorking}
+      agentState={agentState}
+      activity={activity}
+      lastCommand={lastCommand}
+      queueCount={queueCount}
+      flowStatus={flowStatus}
+      isPinged={isPinged}
+      wasJustSelected={wasJustSelected}
       className={cn(
-        "flex flex-col h-full overflow-hidden group terminal-pane",
-
-        // Background color: surface tint for cards, canvas for maximized
-        location === "grid" && !isMaximized && "bg-[var(--color-surface)]",
-        (location === "dock" || isMaximized) && "bg-canopy-bg",
-
-        // Grid styles (standard - non-maximized)
-        location === "grid" && !isMaximized && "rounded border shadow-md",
-        location === "grid" &&
-          !isMaximized &&
-          (isFocused && showGridAttention
-            ? "terminal-selected"
-            : "border-overlay hover:border-white/[0.08]"),
-
-        // Zen Mode styles (maximized - full immersion, no inset needed)
-        location === "grid" && isMaximized && "border-0 rounded-none z-[var(--z-maximized)]",
-
+        "terminal-pane",
         isExited && "opacity-75 grayscale",
-
         isPinged &&
           allowPing &&
           (wasJustSelected ? "animate-terminal-ping-select" : "animate-terminal-ping"),
-
-        // Trash animation when being removed
-        isTrashing && "terminal-trashing",
-
-        // Attention accent for failed state only
         agentState === "failed" && "ring-1 ring-inset ring-[var(--color-status-error)]/25"
       )}
       onClick={handleClick}
@@ -478,40 +459,6 @@ function TerminalPaneComponent({
         return `${effectiveAgentId} session: ${title}`;
       })()}
     >
-      <TerminalHeader
-        id={id}
-        title={title}
-        type={type}
-        isFocused={isFocused}
-        isExited={isExited}
-        exitCode={exitCode}
-        isWorking={isWorking}
-        agentState={agentState}
-        activity={activity}
-        lastCommand={lastCommand}
-        queueCount={queueCount}
-        flowStatus={flowStatus}
-        isEditingTitle={isEditingTitle}
-        editingValue={editingValue}
-        titleInputRef={titleInputRef}
-        onEditingValueChange={setEditingValue}
-        onTitleDoubleClick={handleTitleDoubleClick}
-        onTitleKeyDown={handleTitleKeyDown}
-        onTitleInputKeyDown={handleTitleInputKeyDown}
-        onTitleSave={handleTitleSave}
-        onClose={onClose}
-        onFocus={onFocus}
-        onToggleMaximize={onToggleMaximize}
-        onTitleChange={onTitleChange}
-        onMinimize={onMinimize}
-        onRestore={onRestore}
-        onRestart={handleRestart}
-        isMaximized={isMaximized}
-        location={location}
-        isPinged={isPinged}
-        wasJustSelected={wasJustSelected}
-      />
-
       {terminalErrors.length > 0 && (
         <div className="px-2 py-1 border-b border-canopy-border bg-[color-mix(in_oklab,var(--color-status-error)_5%,transparent)] space-y-1 shrink-0">
           {terminalErrors.slice(0, 2).map((error) => (
@@ -675,7 +622,6 @@ function TerminalPaneComponent({
             onActivate={handleClick}
             onSend={({ trackerData, text }) => {
               if (!isInputLocked) {
-                // Handle escaped commands: \/ prefix -> pass through to PTY without backslash
                 if (isEscapedCommand(text)) {
                   const unescapedText = unescapeCommand(text);
                   terminalInstanceService.notifyUserInput(id);
@@ -684,7 +630,6 @@ function TerminalPaneComponent({
                   return;
                 }
 
-                // Check for Canopy commands (e.g., /restart) and intercept
                 const canopyCommand = getCanopyCommand(text);
                 if (canopyCommand) {
                   terminalInstanceService.notifyUserInput(id);
@@ -697,9 +642,7 @@ function TerminalPaneComponent({
                 }
 
                 terminalInstanceService.notifyUserInput(id);
-                // Use backend submit() which handles Codex vs other agents automatically
                 terminalClient.submit(id, text);
-                // Feed tracker data for features like clear command detection
                 handleInput(trackerData);
               }
             }}
@@ -719,7 +662,7 @@ function TerminalPaneComponent({
         currentCwd={cwd}
         onClose={() => setIsUpdateCwdOpen(false)}
       />
-    </div>
+    </ContentPanel>
   );
 }
 

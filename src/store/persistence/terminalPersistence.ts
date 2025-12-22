@@ -15,6 +15,7 @@ const DEFAULT_OPTIONS: Required<TerminalPersistenceOptions> = {
   filter: (t) => t.location !== "trash",
   transform: (t) => ({
     id: t.id,
+    kind: t.kind,
     type: t.type,
     agentId: t.agentId,
     title: t.title,
@@ -23,6 +24,7 @@ const DEFAULT_OPTIONS: Required<TerminalPersistenceOptions> = {
     location: t.location,
     command: t.command?.trim() || undefined,
     ...(t.isInputLocked && { isInputLocked: true }),
+    ...(t.kind === "browser" && t.browserUrl && { browserUrl: t.browserUrl }),
   }),
 };
 

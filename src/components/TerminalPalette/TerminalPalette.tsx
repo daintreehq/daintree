@@ -117,6 +117,7 @@ export function TerminalPalette({
                 id={`terminal-option-${terminal.id}`}
                 title={terminal.title}
                 type={terminal.type}
+                kind={terminal.kind}
                 agentId={terminal.agentId}
                 worktreeName={terminal.worktreeName}
                 cwd={terminal.cwd}

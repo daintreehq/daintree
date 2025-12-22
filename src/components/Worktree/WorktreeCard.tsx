@@ -641,6 +641,7 @@ export function WorktreeCard({
       { id: "launch:gemini", label: "Gemini", enabled: Boolean(onLaunchAgent && isGeminiEnabled) },
       { id: "launch:codex", label: "Codex", enabled: Boolean(onLaunchAgent && isCodexEnabled) },
       { id: "launch:terminal", label: "Open Terminal", enabled: Boolean(onLaunchAgent) },
+      { id: "launch:browser", label: "Open Browser", enabled: Boolean(onLaunchAgent) },
       { type: "separator" },
 
       { id: "label:sessions", label: "Sessions", enabled: false },
@@ -1278,6 +1279,7 @@ export function WorktreeCard({
                         <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
                           <TerminalIcon
                             type={term.type}
+                            kind={term.kind}
                             agentId={term.agentId}
                             className="w-3 h-3"
                           />

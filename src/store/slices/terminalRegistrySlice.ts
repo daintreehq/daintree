@@ -15,6 +15,8 @@ import { TerminalRefreshTier } from "@/types";
 import { terminalPersistence } from "../persistence/terminalPersistence";
 import { validateTerminalConfig } from "@/utils/terminalValidation";
 import { isRegisteredAgent, getAgentConfig } from "@/config/agents";
+import { getDefaultPanelTitle, panelKindHasPty } from "@shared/config/panelKindRegistry";
+import type { PanelKind } from "@/types";
 import { getTerminalThemeFromCSS } from "@/utils/terminalTheme";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
 import { useScrollbackStore } from "@/store/scrollbackStore";
@@ -46,7 +48,7 @@ const DOCK_PREWARM_HEIGHT_PX = 800;
 export type TerminalInstance = TerminalInstanceType;
 
 export interface AddTerminalOptions {
-  kind?: "terminal" | "agent";
+  kind?: PanelKind;
   type?: TerminalType;
   /** Agent ID when type is an agent - enables extensibility for new agents */
   agentId?: string;
@@ -66,24 +68,14 @@ export interface AddTerminalOptions {
   skipCommandExecution?: boolean;
   /** Restore input lock state (read-only monitor mode) */
   isInputLocked?: boolean;
+  /** Initial URL for browser panes (kind === 'browser') */
+  browserUrl?: string;
 }
 
-function getDefaultTitle(type?: TerminalType, agentId?: string): string {
-  // If agentId is provided, try to get the title from the registry
-  if (agentId) {
-    const config = getAgentConfig(agentId);
-    if (config) {
-      return config.name;
-    }
-  }
-  // Fall back to checking type as agent ID (backward compat)
-  if (type && type !== "terminal") {
-    const config = getAgentConfig(type);
-    if (config) {
-      return config.name;
-    }
-  }
-  return "Terminal";
+function getDefaultTitle(kind?: PanelKind, type?: TerminalType, agentId?: string): string {
+  // Use panel kind registry for proper title resolution
+  const effectiveKind = kind ?? (agentId ? "agent" : "terminal");
+  return getDefaultPanelTitle(effectiveKind, agentId ?? (type !== "terminal" ? type : undefined));
 }
 
 export interface TrashedTerminal {
@@ -140,6 +132,7 @@ export interface TerminalRegistrySlice {
   setInputLocked: (id: string, locked: boolean) => void;
   toggleInputLocked: (id: string) => void;
   convertTerminalType: (id: string, newType: TerminalType, newAgentId?: string) => Promise<void>;
+  setBrowserUrl: (id: string, url: string) => void;
 }
 
 // Flush pending persistence - call on app quit to prevent data loss
@@ -170,10 +163,55 @@ export const createTerminalRegistrySlice =
     addTerminal: async (options) => {
       const requestedKind = options.kind ?? (options.agentId ? "agent" : "terminal");
       const legacyType = options.type || "terminal";
+
+      // Handle non-PTY panels (browser, extensions) separately
+      if (!panelKindHasPty(requestedKind)) {
+        const id =
+          options.requestedId ||
+          `${requestedKind}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+        const title = options.title || getDefaultTitle(requestedKind);
+
+        const maxCapacity = useLayoutConfigStore.getState().getMaxGridCapacity();
+        const currentGridCount = get().terminals.filter(
+          (t) => t.location === "grid" || t.location === undefined
+        ).length;
+        const requestedLocation = options.location || "grid";
+        const location =
+          requestedLocation === "grid" && currentGridCount >= maxCapacity
+            ? "dock"
+            : requestedLocation;
+
+        const terminal: TerminalInstance = {
+          id,
+          kind: requestedKind,
+          type: "terminal",
+          title,
+          worktreeId: options.worktreeId,
+          cwd: options.cwd || "",
+          cols: 80,
+          rows: 24,
+          location,
+          browserUrl:
+            requestedKind === "browser" ? options.browserUrl || "http://localhost:3000" : undefined,
+          isVisible: location === "grid",
+        };
+
+        set((state) => {
+          const newTerminals = [...state.terminals, terminal];
+          terminalPersistence.save(newTerminals);
+          return { terminals: newTerminals };
+        });
+
+        return id;
+      }
+
+      // PTY panels: terminal/agent
       // Derive agentId: explicit option, or from legacy type if it's a registered agent
       const agentId = options.agentId ?? (isRegisteredAgent(legacyType) ? legacyType : undefined);
-      const kind: "terminal" | "agent" = agentId ? "agent" : requestedKind;
-      const title = options.title || getDefaultTitle(legacyType, agentId);
+      // Narrow kind to terminal|agent for PTY handling
+      const kind: "terminal" | "agent" =
+        agentId || requestedKind === "agent" ? "agent" : "terminal";
+      const title = options.title || getDefaultTitle(kind, legacyType, agentId);
 
       // Auto-dock if grid is full and user requested grid location
       // Use dynamic capacity based on current viewport dimensions
@@ -341,12 +379,16 @@ export const createTerminalRegistrySlice =
     removeTerminal: (id) => {
       const currentTerminals = get().terminals;
       const removedIndex = currentTerminals.findIndex((t) => t.id === id);
+      const terminal = currentTerminals.find((t) => t.id === id);
 
-      terminalClient.kill(id).catch((error) => {
-        console.error("Failed to kill terminal:", error);
-      });
+      // Only call PTY operations for non-browser terminals
+      if (terminal?.kind !== "browser") {
+        terminalClient.kill(id).catch((error) => {
+          console.error("Failed to kill terminal:", error);
+        });
 
-      terminalInstanceService.destroy(id);
+        terminalInstanceService.destroy(id);
+      }
 
       set((state) => {
         const newTerminals = state.terminals.filter((t) => t.id !== id);
@@ -367,7 +409,8 @@ export const createTerminalRegistrySlice =
         const terminal = state.terminals.find((t) => t.id === id);
         if (!terminal) return state;
 
-        const effectiveTitle = newTitle.trim() || getDefaultTitle(terminal.type, terminal.agentId);
+        const effectiveTitle =
+          newTitle.trim() || getDefaultTitle(terminal.kind, terminal.type, terminal.agentId);
         const newTerminals = state.terminals.map((t) =>
           t.id === id ? { ...t, title: effectiveTitle } : t
         );
@@ -531,12 +574,17 @@ export const createTerminalRegistrySlice =
       const terminal = get().terminals.find((t) => t.id === id);
       if (!terminal) return;
 
+      const expiresAt = Date.now() + 120000;
+
       // Only 'dock' or 'grid' are valid original locations - treat undefined as 'grid'
       const originalLocation: "dock" | "grid" = terminal.location === "dock" ? "dock" : "grid";
 
-      terminalClient.trash(id).catch((error) => {
-        console.error("Failed to trash terminal:", error);
-      });
+      // Only call PTY operations for non-browser terminals
+      if (terminal.kind !== "browser") {
+        terminalClient.trash(id).catch((error) => {
+          console.error("Failed to trash terminal:", error);
+        });
+      }
 
       set((state) => {
         const newTerminals = state.terminals.map((t) =>
@@ -544,21 +592,45 @@ export const createTerminalRegistrySlice =
         );
         const newTrashed = new Map(state.trashedTerminals);
         // Use placeholder expiresAt - will be updated when IPC event arrives
-        newTrashed.set(id, { id, expiresAt: Date.now() + 120000, originalLocation });
+        newTrashed.set(id, { id, expiresAt, originalLocation });
         terminalPersistence.save(newTerminals);
         return { terminals: newTerminals, trashedTerminals: newTrashed };
       });
 
-      terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+      if (terminal.kind !== "browser") {
+        terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+        return;
+      }
+
+      // Browser panes never receive backend exit/TTL events, so enforce TTL locally.
+      window.setTimeout(
+        () => {
+          const state = get();
+          const currentTerminal = state.terminals.find((t) => t.id === id);
+          const currentTrashedInfo = state.trashedTerminals.get(id);
+          if (
+            currentTerminal?.kind === "browser" &&
+            currentTerminal.location === "trash" &&
+            currentTrashedInfo?.expiresAt === expiresAt
+          ) {
+            state.removeTerminal(id);
+          }
+        },
+        Math.max(0, expiresAt - Date.now())
+      );
     },
 
     restoreTerminal: (id, targetWorktreeId) => {
       const trashedInfo = get().trashedTerminals.get(id);
       const restoreLocation = trashedInfo?.originalLocation ?? "grid";
+      const terminal = get().terminals.find((t) => t.id === id);
 
-      terminalClient.restore(id).catch((error) => {
-        console.error("Failed to restore terminal:", error);
-      });
+      // Only call PTY operations for non-browser terminals
+      if (terminal?.kind !== "browser") {
+        terminalClient.restore(id).catch((error) => {
+          console.error("Failed to restore terminal:", error);
+        });
+      }
 
       set((state) => {
         const newTerminals = state.terminals.map((t) =>
@@ -576,10 +648,13 @@ export const createTerminalRegistrySlice =
         return { terminals: newTerminals, trashedTerminals: newTrashed };
       });
 
-      if (restoreLocation === "dock") {
-        optimizeForDock(id);
-      } else {
-        terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+      // Only apply renderer policies for non-browser terminals
+      if (terminal?.kind !== "browser") {
+        if (restoreLocation === "dock") {
+          optimizeForDock(id);
+        } else {
+          terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+        }
       }
     },
 
@@ -727,6 +802,12 @@ export const createTerminalRegistrySlice =
 
       if (!terminal) {
         console.warn(`[TerminalStore] Cannot restart: terminal ${id} not found`);
+        return;
+      }
+
+      // Browser panes don't have PTY processes to restart
+      if (terminal.kind === "browser") {
+        console.warn(`[TerminalStore] Cannot restart browser pane ${id}`);
         return;
       }
 
@@ -1123,7 +1204,7 @@ export const createTerminalRegistrySlice =
 
       const effectiveAgentId = newAgentId ?? (isRegisteredAgent(newType) ? newType : undefined);
       const newKind: "terminal" | "agent" = effectiveAgentId ? "agent" : "terminal";
-      const newTitle = getDefaultTitle(newType, effectiveAgentId);
+      const newTitle = getDefaultTitle(newKind, newType, effectiveAgentId);
 
       let commandToRun: string | undefined;
       if (effectiveAgentId) {
@@ -1239,5 +1320,19 @@ export const createTerminalRegistrySlice =
 
         console.error(`[TerminalStore] Failed to convert terminal ${id}:`, error);
       }
+    },
+
+    setBrowserUrl: (id, url) => {
+      set((state) => {
+        const terminal = state.terminals.find((t) => t.id === id);
+        if (!terminal || terminal.kind !== "browser") return state;
+
+        const newTerminals = state.terminals.map((t) =>
+          t.id === id ? { ...t, browserUrl: url } : t
+        );
+
+        terminalPersistence.save(newTerminals);
+        return { terminals: newTerminals };
+      });
     },
   });

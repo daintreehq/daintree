@@ -30,7 +30,13 @@ export type {
   TaskState,
   RunRecord,
   LegacyAgentType,
-  // Terminal types
+  // Panel types (new architecture)
+  BuiltInPanelKind,
+  PanelKind,
+  PanelLocation,
+  PanelInstance,
+  PanelSnapshot,
+  // Terminal types (deprecated aliases for backward compat)
   TerminalKind,
   TerminalType,
   TerminalLocation,
@@ -40,6 +46,9 @@ export type {
   PtySpawnOptions,
   TerminalDimensions,
 } from "./domain.js";
+
+// Panel type guards
+export { isBuiltInPanelKind, isPtyPanelKind } from "./domain.js";
 
 // Export enums separately (not as types)
 export { TerminalRefreshTier } from "./domain.js";

@@ -8,7 +8,7 @@ export interface UseMenuActionsOptions {
   onOpenSettingsTab?: (tab: string) => void;
   onToggleSidebar: () => void;
   onOpenAgentPalette: () => void;
-  onLaunchAgent: (agentId: "claude" | "gemini" | "codex" | "terminal") => void;
+  onLaunchAgent: (agentId: "claude" | "gemini" | "codex" | "terminal" | "browser") => void;
   defaultCwd: string;
   activeWorktreeId?: string;
 }
@@ -40,7 +40,7 @@ export function useMenuActions({
           return;
         }
 
-        onLaunchAgent(agentId as "claude" | "gemini" | "codex" | "terminal");
+        onLaunchAgent(agentId as "claude" | "gemini" | "codex" | "terminal" | "browser");
         return;
       }
 

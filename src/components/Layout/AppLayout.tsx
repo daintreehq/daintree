@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, type ReactNode } from "react";
 import { Toolbar } from "./Toolbar";
 import { Sidebar } from "./Sidebar";
-import { TerminalDock } from "./TerminalDock";
+import { ContentDock } from "./ContentDock";
 import { DiagnosticsDock } from "../Diagnostics";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { SidecarDock, SidecarVisibilityController } from "../Sidecar";
@@ -16,7 +16,7 @@ import { useLayoutState } from "@/hooks";
 interface AppLayoutProps {
   children?: ReactNode;
   sidebarContent?: ReactNode;
-  onLaunchAgent?: (type: "claude" | "gemini" | "codex" | "terminal") => void;
+  onLaunchAgent?: (type: "claude" | "gemini" | "codex" | "terminal" | "browser") => void;
   onSettings?: () => void;
   onOpenAgentSettings?: () => void;
   onRetry?: (id: string, action: RetryAction, args?: Record<string, unknown>) => void;
@@ -219,7 +219,7 @@ export function AppLayout({
   }, []);
 
   const handleLaunchAgent = useCallback(
-    (type: "claude" | "gemini" | "codex" | "terminal") => {
+    (type: "claude" | "gemini" | "codex" | "terminal" | "browser") => {
       onLaunchAgent?.(type);
     },
     [onLaunchAgent]
@@ -291,10 +291,10 @@ export function AppLayout({
               }}
             >
               <div className="flex-1 overflow-hidden min-h-0">{children}</div>
-              {/* Terminal Dock - appears at bottom only when terminals are docked */}
+              {/* Content Dock - appears at bottom only when panels are docked */}
               {isTerminalDockVisible && (
-                <ErrorBoundary variant="section" componentName="TerminalDock">
-                  <TerminalDock />
+                <ErrorBoundary variant="section" componentName="ContentDock">
+                  <ContentDock />
                 </ErrorBoundary>
               )}
               {/* Overlay mode - sidecar floats over content */}

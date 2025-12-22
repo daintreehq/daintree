@@ -1,11 +1,4 @@
-/**
- * @deprecated Use PanelHeader + TerminalHeaderContent instead.
- * This component is kept for backward compatibility but will be removed in a future version.
- * New code should use:
- * - PanelHeader from @/components/Panel for the generic header chrome
- * - TerminalHeaderContent for terminal-specific status indicators
- */
-import React from "react";
+import React, { type ReactNode } from "react";
 import {
   X,
   Maximize2,
@@ -14,37 +7,27 @@ import {
   RotateCcw,
   Grid2X2,
   Activity,
-  Pause,
-  Lock,
 } from "lucide-react";
-import type { TerminalType, TerminalKind, AgentState } from "@/types";
+import type { PanelKind, TerminalType } from "@/types";
 import { cn } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
-import { TerminalContextMenu } from "./TerminalContextMenu";
-import { TerminalIcon } from "./TerminalIcon";
-import { STATE_ICONS, STATE_COLORS } from "@/components/Worktree/terminalStateConfig";
-import type { ActivityState } from "./TerminalPane";
+import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
+import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
+import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { useTerminalStore } from "@/store";
 import { useShallow } from "zustand/react/shallow";
-import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 
-export interface TerminalHeaderProps {
+export interface PanelHeaderProps {
   id: string;
   title: string;
+  kind: PanelKind;
   type?: TerminalType;
-  kind?: TerminalKind;
   agentId?: string;
   isFocused: boolean;
-  isExited?: boolean;
-  exitCode?: number | null;
-  isWorking?: boolean;
-  agentState?: AgentState;
-  activity?: ActivityState | null;
-  lastCommand?: string;
-  queueCount?: number;
-  flowStatus?: "running" | "paused-backpressure" | "paused-user" | "suspended";
+  isMaximized?: boolean;
+  location?: "grid" | "dock";
 
-  // Title editing
+  // Title editing (provided by TitleEditingContext consumer)
   isEditingTitle: boolean;
   editingValue: string;
   titleInputRef: React.RefObject<HTMLInputElement | null>;
@@ -63,30 +46,23 @@ export interface TerminalHeaderProps {
   onRestore?: () => void;
   onRestart?: () => void;
 
-  isMaximized?: boolean;
-  location?: "grid" | "dock";
+  // Visual states
   isPinged?: boolean;
   wasJustSelected?: boolean;
 
-  // Slot for custom header content (kind-specific status indicators)
-  headerContent?: React.ReactNode;
+  // Slots for kind-specific content
+  headerContent?: ReactNode;
 }
 
-function TerminalHeaderComponent({
+function PanelHeaderComponent({
   id,
   title,
-  type,
   kind,
+  type,
   agentId,
   isFocused,
-  isExited = false,
-  exitCode = null,
-  isWorking: _isWorking = false,
-  agentState,
-  activity,
-  queueCount = 0,
-  lastCommand,
-  flowStatus,
+  isMaximized = false,
+  location = "grid",
   isEditingTitle,
   editingValue,
   titleInputRef,
@@ -102,27 +78,18 @@ function TerminalHeaderComponent({
   onMinimize,
   onRestore,
   onRestart,
-  isMaximized,
-  location = "grid",
   isPinged,
   wasJustSelected = false,
   headerContent,
-}: TerminalHeaderProps) {
+}: PanelHeaderProps) {
   const isBrowser = kind === "browser";
-  const showCommandPill =
-    !isBrowser && type === "terminal" && agentState === "running" && !!lastCommand;
-  const isInputLocked = useTerminalStore((state) =>
-    state.terminals.find((t) => t.id === id)
-  )?.isInputLocked;
   const dragHandle = useDragHandle();
   const dragListeners =
     (location === "grid" || location === "dock") && dragHandle?.listeners
       ? dragHandle.listeners
       : undefined;
 
-  // Get background activity stats for Zen Mode header (optimized single-pass)
-  // Only count grid terminals - docked terminals are visually separate
-  // Treat undefined location as grid for compatibility with persisted data
+  // Get background activity stats for Zen Mode header
   const { activeCount, workingCount } = useTerminalStore(
     useShallow((state) => {
       let active = 0;
@@ -145,49 +112,20 @@ function TerminalHeaderComponent({
     onToggleMaximize?.();
   };
 
-  const renderAgentStateChip = () => {
-    // Reduce grid noise: hide idle + completed in the header
-    if (!agentState || agentState === "idle" || agentState === "completed") {
-      return null;
-    }
+  const getAriaLabel = () => {
+    if (kind === "browser") return "Edit browser title";
+    if (!agentId && type === "terminal") return "Edit terminal title";
+    return "Edit agent title";
+  };
 
-    const StateIcon = STATE_ICONS[agentState];
-    if (!StateIcon) return null;
-
-    const chipStyle =
-      agentState === "working"
-        ? "bg-[color-mix(in_oklab,var(--color-state-working)_15%,transparent)] border-[var(--color-state-working)]/40"
-        : agentState === "waiting"
-          ? "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-[var(--color-state-waiting)]/40"
-          : agentState === "running"
-            ? "bg-[color-mix(in_oklab,var(--color-status-info)_15%,transparent)] border-[var(--color-status-info)]/40"
-            : "bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] border-[var(--color-status-error)]/40";
-
-    // Prefer richer context when available
-    const tooltip = activity?.headline ? activity.headline : `Agent ${agentState}`;
-
-    return (
-      <div
-        className={cn(
-          "inline-flex items-center justify-center w-5 h-5 rounded-full border shrink-0",
-          chipStyle,
-          STATE_COLORS[agentState]
-        )}
-        title={tooltip}
-        role="status"
-        aria-label={`Agent state: ${agentState}`}
-      >
-        <StateIcon
-          className={cn(
-            "w-3 h-3",
-            agentState === "working" && "animate-spin",
-            agentState === "waiting" && "animate-breathe",
-            "motion-reduce:animate-none"
-          )}
-          aria-hidden="true"
-        />
-      </div>
-    );
+  const getTitleAriaLabel = () => {
+    const prefix =
+      kind === "browser"
+        ? "Browser title"
+        : !agentId && type === "terminal"
+          ? "Terminal title"
+          : "Agent title";
+    return `${prefix}: ${title}. Press Enter or F2 to edit`;
   };
 
   return (
@@ -196,9 +134,7 @@ function TerminalHeaderComponent({
         {...dragListeners}
         className={cn(
           "flex items-center justify-between px-3 shrink-0 text-xs transition-colors relative overflow-hidden group",
-          // Base height and separator border
           "h-8 border-b border-divider",
-          // Maximized overrides: taller height, sidebar background, standard border color
           isMaximized
             ? "h-10 bg-canopy-sidebar border-canopy-border"
             : location === "dock"
@@ -231,17 +167,10 @@ function TerminalHeaderComponent({
               onKeyDown={onTitleInputKeyDown}
               onBlur={onTitleSave}
               className="text-sm font-medium bg-canopy-bg/60 border border-canopy-accent/50 px-1 h-5 min-w-32 text-canopy-text select-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
-              aria-label={
-                kind === "browser"
-                  ? "Edit browser title"
-                  : !agentId && type === "terminal"
-                    ? "Edit terminal title"
-                    : "Edit agent title"
-              }
+              aria-label={getAriaLabel()}
             />
           ) : (
             <div className="flex items-center gap-2 min-w-0">
-              {/* Title */}
               <span
                 className={cn(
                   "text-xs font-medium font-sans select-none transition-colors",
@@ -256,74 +185,10 @@ function TerminalHeaderComponent({
                 tabIndex={onTitleChange ? 0 : undefined}
                 role={onTitleChange ? "button" : undefined}
                 title={onTitleChange ? `${title} — Double-click to edit` : title}
-                aria-label={
-                  onTitleChange
-                    ? kind === "browser"
-                      ? `Browser title: ${title}. Press Enter or F2 to edit`
-                      : !agentId && type === "terminal"
-                        ? `Terminal title: ${title}. Press Enter or F2 to edit`
-                        : `Agent title: ${title}. Press Enter or F2 to edit`
-                    : undefined
-                }
+                aria-label={onTitleChange ? getTitleAriaLabel() : undefined}
               >
                 {title}
               </span>
-
-              {/* Command Pill - shows currently running command */}
-              {showCommandPill && (
-                <span
-                  className="px-3 py-1 rounded-full text-[11px] font-mono bg-white/[0.03] text-canopy-text/60 border border-divider truncate max-w-[20rem]"
-                  title={lastCommand}
-                >
-                  {lastCommand}
-                </span>
-              )}
-            </div>
-          )}
-
-          {!isBrowser && isExited && (
-            <span
-              className="text-xs font-mono text-[var(--color-status-error)] ml-1"
-              role="status"
-              aria-live="polite"
-            >
-              [exit {exitCode}]
-            </span>
-          )}
-
-          {!isBrowser && queueCount > 0 && (
-            <div
-              className="inline-flex items-center gap-1 text-xs font-sans bg-canopy-accent/15 text-canopy-text px-1.5 py-0.5 rounded ml-1"
-              role="status"
-              aria-live="polite"
-              title={`${queueCount} command${queueCount > 1 ? "s" : ""} queued`}
-            >
-              <span className="font-mono tabular-nums">{queueCount}</span>
-              <span>queued</span>
-            </div>
-          )}
-
-          {!isBrowser && flowStatus === "paused-backpressure" && (
-            <div
-              className="flex items-center gap-1 text-xs font-sans bg-[var(--color-status-warning)]/15 text-[var(--color-status-warning)] px-1.5 py-0.5 rounded ml-1"
-              role="status"
-              aria-live="polite"
-              title="Terminal paused due to buffer overflow (right-click for Force Resume)"
-            >
-              <Pause className="w-3 h-3" aria-hidden="true" />
-              Paused
-            </div>
-          )}
-
-          {!isBrowser && flowStatus === "suspended" && (
-            <div
-              className="flex items-center gap-1 text-xs font-sans bg-[var(--color-status-warning)]/15 text-[var(--color-status-warning)] px-1.5 py-0.5 rounded ml-1"
-              role="status"
-              aria-live="polite"
-              title="Terminal output streaming suspended due to a stall (auto-recovers on focus)"
-            >
-              <Pause className="w-3 h-3" aria-hidden="true" />
-              Suspended
             </div>
           )}
         </div>
@@ -352,7 +217,7 @@ function TerminalHeaderComponent({
         )}
 
         <div className="flex items-center gap-1.5">
-          {/* Hover-only window controls FIRST so the status chip sits at the far right edge */}
+          {/* Window controls - hover only */}
           <div className="flex items-center gap-1.5 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity motion-reduce:transition-none">
             {!isBrowser && onRestart && (
               <button
@@ -443,19 +308,7 @@ function TerminalHeaderComponent({
             </button>
           </div>
 
-          {!isBrowser && isInputLocked && (
-            <div
-              className="flex items-center text-canopy-text/50 shrink-0"
-              role="status"
-              title="Input locked (read-only monitor mode)"
-            >
-              <Lock className="w-3.5 h-3.5" aria-hidden="true" />
-            </div>
-          )}
-
-          {!isBrowser && renderAgentStateChip()}
-
-          {/* Custom header content slot for kind-specific indicators */}
+          {/* Kind-specific header content slot */}
           {headerContent}
         </div>
       </div>
@@ -463,4 +316,4 @@ function TerminalHeaderComponent({
   );
 }
 
-export const TerminalHeader = React.memo(TerminalHeaderComponent);
+export const PanelHeader = React.memo(PanelHeaderComponent);

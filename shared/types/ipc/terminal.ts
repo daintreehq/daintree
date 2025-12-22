@@ -56,6 +56,8 @@ export interface TerminalState {
   /** Last detected agent title (for restoration hints) */
   lastDetectedAgentTitle?: string;
   isInputLocked?: boolean;
+  /** Current URL for browser panes (kind === 'browser') */
+  browserUrl?: string;
 }
 
 /** Terminal data payload for IPC */

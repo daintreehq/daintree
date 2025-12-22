@@ -8,6 +8,7 @@ export interface SearchableTerminal {
   id: string;
   title: string;
   type: TerminalInstance["type"];
+  kind?: TerminalInstance["kind"];
   agentId?: TerminalInstance["agentId"];
   worktreeId?: string;
   worktreeName?: string;
@@ -79,6 +80,7 @@ export function useTerminalPalette(): UseTerminalPaletteReturn {
         id: t.id,
         title: t.title,
         type: t.type,
+        kind: t.kind,
         agentId: t.agentId,
         worktreeId: t.worktreeId,
         worktreeName: t.worktreeId ? worktreeMap.get(t.worktreeId)?.name : undefined,

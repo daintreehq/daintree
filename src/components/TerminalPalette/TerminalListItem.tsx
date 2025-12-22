@@ -1,12 +1,13 @@
 import { cn } from "@/lib/utils";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { getBrandColorHex } from "@/lib/colorUtils";
-import type { TerminalType } from "@/types";
+import type { TerminalType, TerminalKind } from "@/types";
 
 export interface TerminalListItemProps {
   id: string;
   title: string;
   type?: TerminalType;
+  kind?: TerminalKind;
   agentId?: string;
   worktreeName?: string;
   cwd: string;
@@ -27,6 +28,7 @@ export function TerminalListItem({
   id,
   title,
   type,
+  kind,
   agentId,
   worktreeName,
   cwd,
@@ -56,6 +58,7 @@ export function TerminalListItem({
       <span className="shrink-0 text-canopy-text/70" aria-hidden="true">
         <TerminalIcon
           type={type}
+          kind={kind}
           agentId={agentId}
           brandColor={getBrandColorHex(agentId ?? type)}
         />

@@ -10,7 +10,7 @@ import {
   usePreferencesStore,
   type TerminalInstance,
 } from "@/store";
-import { GridTerminalPane } from "./GridTerminalPane";
+import { GridPanel } from "./GridPanel";
 import { TerminalCountWarning } from "./TerminalCountWarning";
 import { GridFullOverlay } from "./GridFullOverlay";
 import {
@@ -20,7 +20,7 @@ import {
   GRID_PLACEHOLDER_ID,
   SortableGridPlaceholder,
 } from "@/components/DragDrop";
-import { Terminal, AlertTriangle } from "lucide-react";
+import { Terminal, AlertTriangle, Globe } from "lucide-react";
 import { CanopyIcon, CodexIcon, ClaudeIcon, GeminiIcon } from "@/components/icons";
 import { ProjectPulseCard } from "@/components/Pulse";
 import { Kbd } from "@/components/ui/Kbd";
@@ -33,10 +33,12 @@ import { useNativeContextMenu } from "@/hooks";
 import type { CliAvailability } from "@shared/types";
 import type { MenuItemOption } from "@/types";
 
-export interface TerminalGridProps {
+export interface ContentGridProps {
   className?: string;
   defaultCwd?: string;
-  onLaunchAgent?: (type: "claude" | "gemini" | "codex" | "terminal") => Promise<void> | void;
+  onLaunchAgent?: (
+    type: "claude" | "gemini" | "codex" | "terminal" | "browser"
+  ) => Promise<void> | void;
   agentAvailability?: CliAvailability;
   isCheckingAvailability?: boolean;
   onOpenSettings?: () => void;
@@ -114,7 +116,7 @@ function EmptyState({
   activeWorktreeId,
   showProjectPulse,
 }: {
-  onLaunchAgent: (type: "claude" | "gemini" | "codex" | "terminal") => void;
+  onLaunchAgent: (type: "claude" | "gemini" | "codex" | "terminal" | "browser") => void;
   hasActiveWorktree: boolean;
   agentAvailability?: CliAvailability;
   isCheckingAvailability?: boolean;
@@ -131,7 +133,7 @@ function EmptyState({
       });
   };
 
-  const handleAgentClick = (type: "claude" | "gemini" | "codex" | "terminal") => {
+  const handleAgentClick = (type: "claude" | "gemini" | "codex" | "terminal" | "browser") => {
     if (!hasActiveWorktree) {
       console.warn("Cannot launch agent: no active worktree");
       return;
@@ -203,6 +205,13 @@ function EmptyState({
             available={true}
             isLoading={false}
           />
+          <LauncherButton
+            title="Browser"
+            icon={<Globe className="h-10 w-10 text-blue-400" />}
+            onClick={() => handleAgentClick("browser")}
+            available={true}
+            isLoading={false}
+          />
         </div>
 
         {showProjectPulse && hasActiveWorktree && activeWorktreeId && (
@@ -237,14 +246,14 @@ function EmptyState({
   );
 }
 
-export function TerminalGrid({
+export function ContentGrid({
   className,
   defaultCwd,
   onLaunchAgent,
   agentAvailability,
   isCheckingAvailability,
   onOpenSettings,
-}: TerminalGridProps) {
+}: ContentGridProps) {
   const { showMenu } = useNativeContextMenu();
   const { terminals, focusedId, maximizedId } = useTerminalStore(
     useShallow((state) => ({
@@ -340,7 +349,7 @@ export function TerminalGrid({
   }, [gridItemCount, layoutConfig, gridWidth]);
 
   const handleLaunchAgent = useCallback(
-    async (type: "claude" | "gemini" | "codex" | "terminal") => {
+    async (type: "claude" | "gemini" | "codex" | "terminal" | "browser") => {
       if (onLaunchAgent) {
         try {
           await onLaunchAgent(type);
@@ -352,8 +361,12 @@ export function TerminalGrid({
 
       try {
         const cwd = defaultCwd || "";
-        const command = type !== "terminal" ? type : undefined;
-        await addTerminal({ type, cwd, command });
+        if (type === "browser") {
+          await addTerminal({ kind: "browser", cwd });
+        } else {
+          const command = type !== "terminal" ? type : undefined;
+          await addTerminal({ type, cwd, command });
+        }
       } catch (error) {
         console.error(`Failed to launch ${type}:`, error);
       }
@@ -375,6 +388,7 @@ export function TerminalGrid({
 
       const template: MenuItemOption[] = [
         { id: "new:terminal", label: "New Terminal" },
+        { id: "new:browser", label: "New Browser" },
         { type: "separator" },
         { id: "new:claude", label: "New Claude", enabled: canLaunch("claude") },
         { id: "new:gemini", label: "New Gemini", enabled: canLaunch("gemini") },
@@ -412,7 +426,12 @@ export function TerminalGrid({
       if (!actionId) return;
 
       if (actionId.startsWith("new:")) {
-        const agentId = actionId.slice("new:".length) as "claude" | "gemini" | "codex" | "terminal";
+        const agentId = actionId.slice("new:".length) as
+          | "claude"
+          | "gemini"
+          | "codex"
+          | "terminal"
+          | "browser";
         void handleLaunchAgent(agentId);
         return;
       }
@@ -487,11 +506,11 @@ export function TerminalGrid({
     if (terminal) {
       return (
         <div className={cn("h-full relative bg-canopy-bg", className)}>
-          <GridTerminalPane
+          <GridPanel
             terminal={terminal}
             isFocused={true}
             isMaximized={true}
-            gridTerminalCount={gridItemCount}
+            gridPanelCount={gridItemCount}
           />
         </div>
       );
@@ -563,10 +582,10 @@ export function TerminalGrid({
                       sourceIndex={index}
                       disabled={isTerminalInTrash}
                     >
-                      <GridTerminalPane
+                      <GridPanel
                         terminal={terminal}
                         isFocused={terminal.id === focusedId}
-                        gridTerminalCount={gridItemCount}
+                        gridPanelCount={gridItemCount}
                       />
                     </SortableTerminal>
                   );
@@ -589,4 +608,4 @@ export function TerminalGrid({
   );
 }
 
-export default TerminalGrid;
+export default ContentGrid;

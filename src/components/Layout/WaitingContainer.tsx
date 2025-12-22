@@ -83,6 +83,7 @@ export function WaitingContainer() {
                   <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
                     <TerminalIcon
                       type={terminal.type}
+                      kind={terminal.kind}
                       agentId={terminal.agentId}
                       className="h-3 w-3"
                     />

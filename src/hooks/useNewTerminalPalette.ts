@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { getLaunchOptions, type LaunchOption } from "@/components/TerminalPalette/launchOptions";
 import type { LaunchAgentOptions } from "./useAgentLauncher";
-import { useWorktreeSelectionStore } from "@/store";
+import { useWorktreeSelectionStore, useTerminalStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
 import type { WorktreeState } from "@/types";
 
@@ -55,6 +55,8 @@ export function useNewTerminalPalette({ launchAgent, worktreeMap }: UseNewTermin
     setSelectedIndex((prev) => (prev <= 0 ? filteredOptions.length - 1 : prev - 1));
   }, [filteredOptions.length]);
 
+  const addTerminal = useTerminalStore((state) => state.addTerminal);
+
   const handleSelect = useCallback(
     async (option: LaunchOption) => {
       const targetWorktreeId = activeWorktreeId;
@@ -62,6 +64,18 @@ export function useNewTerminalPalette({ launchAgent, worktreeMap }: UseNewTermin
       const cwd = targetWorktree?.path ?? currentProject?.path ?? "";
 
       try {
+        // Handle browser pane specially - it doesn't use the agent launcher
+        if (option.kind === "browser") {
+          await addTerminal({
+            kind: "browser",
+            cwd,
+            worktreeId: targetWorktreeId || undefined,
+            location: "grid",
+          });
+          close();
+          return;
+        }
+
         await launchAgent(option.type, {
           worktreeId: targetWorktreeId || undefined,
           cwd,
@@ -72,7 +86,7 @@ export function useNewTerminalPalette({ launchAgent, worktreeMap }: UseNewTermin
         console.error(`Failed to launch ${option.type} terminal:`, error);
       }
     },
-    [activeWorktreeId, worktreeMap, currentProject, launchAgent, close]
+    [activeWorktreeId, worktreeMap, currentProject, launchAgent, addTerminal, close]
   );
 
   const confirmSelection = useCallback(() => {

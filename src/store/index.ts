@@ -3,6 +3,11 @@ export type { TerminalInstance, AddTerminalOptions, QueuedCommand } from "./term
 export type { CrashType } from "@shared/types/pty-host";
 export { MAX_GRID_TERMINALS } from "./slices/terminalRegistrySlice";
 
+// Panel aliases for new code (gradual migration from terminal naming)
+export { useTerminalStore as usePanelStore } from "./terminalStore";
+export type { TerminalInstance as PanelInstance } from "./terminalStore";
+export type { AddTerminalOptions as AddPanelOptions } from "./terminalStore";
+
 export { useWorktreeSelectionStore } from "./worktreeStore";
 
 export { useWorktreeDataStore, cleanupWorktreeDataStore } from "./worktreeDataStore";
