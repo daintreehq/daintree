@@ -21,8 +21,13 @@ With Phase 2–3, the agent can do reliable one-shot commands. This phase makes 
 ## Data Model
 
 ### Agent run record
-Stored in `electron/services/ProjectStore.ts` state directory (`agent-history.json`):
-- `id`, `createdAt`, `projectId`, `userText`, `decision`, `result`.
+Constructed by projecting the **Event Stream** (stored in `agent-history.json` or derived from the main `EventBuffer` logs):
+- `id` (traceId)
+- `createdAt` (timestamp of `agent:run:started`)
+- `projectId`
+- `userText` (from `agent:run:started` payload)
+- `decision` (from `agent:decision` payload)
+- `result` (from `agent:run:completed` or `action:dispatched`)
 
 ### Notes
 `NoteRecord` (Stored as individual `.md` files in `.canopy/notes/` with YAML frontmatter):
@@ -35,7 +40,10 @@ Stored in `electron/services/ProjectStore.ts` state directory (`agent-history.js
 - `content`: markdown body
 
 ## Storage & Persistence
-- **History:** Stored in app data (`userData/projects/{projectId}/agent-history.json`).
+- **History:**
+  - **Source of Truth:** The unified **Event System**.
+  - **Persistence:** Events are batched and appended to `userData/projects/{projectId}/events.jsonl` (or similar log).
+  - **Projection:** The UI hydrates "Session History" by querying these persisted events (filtering for `agent:*` and `action:*` types).
 - **Notes:** Stored in the project repository at `.canopy/notes/*.md`.
   - This allows agents to access notes using standard file tools.
   - Allows users to optionally commit notes to the repo.

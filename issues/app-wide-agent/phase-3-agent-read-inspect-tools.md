@@ -58,7 +58,10 @@ Recommended initial set:
 - `worktrees.list` → `{ worktrees: Array<{ id, name, path, branch?, isCurrent, prNumber?, issueNumber?, mood? }> }`
 - `terminals.list` → `{ terminals: Array<{ id, title, kind, agentId?, worktreeId?, location, agentState?, lastActivityHeadline? }> }`
 - `terminal.getInfo` `{ terminalId }` → existing `terminal:get-info` payload (sanitized)
-- `events.query` `{ filters }` → recent events (sanitized, bounded)
+- `events.query` `{ filters }` → Query the main-process **`EventBuffer`**.
+  - Enables the agent to answer "what just happened?" or "did the last command fail?".
+  - Supports filtering by `type` (including `action:dispatched`, `sys:worktree:update`, `agent:output`), `time`, and `traceId`.
+  - Returns a sanitized, bounded list of `EventRecord`s.
 
 Note: `worktrees.list` and `terminals.list` can be computed in the renderer from stores, but providing them as query actions keeps the agent/tool contract uniform.
 

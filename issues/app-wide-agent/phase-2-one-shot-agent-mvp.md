@@ -106,7 +106,7 @@ The renderer executes only `dispatch` and only after:
 Phase 2 prompt payload should be small and deterministic:
 - User message
 - Current `ActionContext` (from Phase 1)
-- Filtered action manifest (only `agentAccessible` actions; exclude `restricted`)
+- **Tool Definitions:** A list of available actions presented as **MCP-compatible tool definitions** (name, description, inputSchema). This ensures the model "thinks" it is using standard functions/tools.
 
 Do **not** send raw terminal output or full settings snapshots yet (Phase 3).
 
@@ -132,12 +132,14 @@ Everything else remains non-agent-accessible until Phase 3+ hardens read tools a
 - **PII/secrets**: no terminal output ingestion in Phase 2; keep payloads minimal.
 
 ## Observability
-Record a local action trace for debugging:
-- user prompt (optional redacted)
-- resolved action ID + args
-- result or error
-
-Phase 2 can show this in the UI without persisting it (Phase 4 persists history).
+Leverage the **Event System** established in Phase 1 for full traceability:
+- **Action Tracking:** The dispatcher will automatically emit `action:dispatched` events to the main process `EventBuffer`.
+- **Agent Decisions:** The `AppAgentService` must emit specific agent lifecycle events:
+  - `agent:run:started` (user prompt, context summary)
+  - `agent:decision` (tool calls, reasoning)
+  - `agent:run:completed` (result)
+- **Traceability:** All events should include a `traceId` linking the user request to the agent execution and resulting action.
+- **Debug UI:** Phase 2 can simply query `EventBuffer` (via `events.query`) or subscribe to show the live trace in the command bar.
 
 ## Acceptance Criteria
 - One-shot command bar can:

@@ -7,6 +7,7 @@ This phase establishes a **single, typed Actions surface in the renderer** that:
 
 - Provides a central `dispatch(actionId, args?)` entrypoint for UI, keybindings, menus, and (later) the app-wide agent.
 - Exposes an introspectable **Action Manifest** (IDs, descriptions, args schema, enablement) suitable for LLM tool/function calling.
+  - **Design Note:** The schema export should be structured to align with **MCP (Model Context Protocol)** conventions (e.g., `name`, `description`, `inputSchema`). Even though we are not running a full MCP server, presenting tools in this familiar format leverages existing model training.
 - Migrates the existing menu actions to the new dispatcher as the first “thin slice” without refactoring the whole app.
 
 This is explicitly the “foundation” layer: it does not yet include a chat UI, long-running automations, or a workflow DSL.
@@ -141,9 +142,17 @@ Even before the agent exists, define the structure for safety:
 This is enough to build a future agent “capability filter” without refactoring every action later.
 
 ## Observability (Phase 1)
-Add action execution logging that can later surface in the Event Inspector:
-- Emit renderer-local logs (console) for now.
-- Define a follow-up to forward action records to main (new IPC channel like `actions:log` or `events:emit`) once the basic action surface proves stable.
+Integrate with the existing main-process **Event System** (`electron/services/events.ts` / `EventBuffer`) to ensure all actions are trackable by future agents.
+
+- **Action Emission:** The `ActionService` must emit an event whenever an action is executed.
+  - Create a new IPC channel `events:emit` (or `action:track`) to bridge renderer actions to the main process event bus.
+  - Emit a new event type `action:dispatched` (to be added to `CanopyEventMap`) containing:
+    - `actionId`
+    - `args` (sanitized/redacted if necessary)
+    - `context` (summary)
+    - `source` ("user", "keybinding", "menu", "agent")
+- **Event Inspector:** These events will automatically surface in the Event Inspector via the existing `EventBuffer`.
+- **Agent Visibility:** This ensures that in Phase 3/4, the agent can "see" what the user did by querying the event history.
 
 ## Deliverables (Phase 1)
 - New global actions folder/module in renderer (registry + dispatcher + manifest).
