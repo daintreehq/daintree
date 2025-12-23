@@ -1136,8 +1136,7 @@ export const createTerminalRegistrySlice =
             (t.location === "grid" || t.location === undefined)
         ).length;
 
-        const newLocation: TerminalLocation =
-          targetGridCount >= maxCapacity ? "dock" : "grid";
+        const newLocation: TerminalLocation = targetGridCount >= maxCapacity ? "dock" : "grid";
         movedToLocation = newLocation;
 
         const newTerminals = state.terminals.map((t) =>

@@ -1,7 +1,7 @@
 import { useEffect } from "react";
-import { useTerminalStore } from "@/store/terminalStore";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { isElectronAvailable } from "./useElectron";
+import { actionService } from "@/services/ActionService";
+import type { ActionId } from "@shared/types/actions";
 
 export interface UseMenuActionsOptions {
   onOpenSettings: () => void;
@@ -13,22 +13,13 @@ export interface UseMenuActionsOptions {
   activeWorktreeId?: string;
 }
 
-export function useMenuActions({
-  onOpenSettings,
-  onOpenSettingsTab,
-  onToggleSidebar,
-  onOpenAgentPalette,
-  onLaunchAgent,
-  defaultCwd,
-  activeWorktreeId,
-}: UseMenuActionsOptions): void {
-  const addTerminal = useTerminalStore((state) => state.addTerminal);
-  const openCreateWorktreeDialog = useWorktreeSelectionStore((state) => state.openCreateDialog);
+export function useMenuActions(options: UseMenuActionsOptions): void {
+  const { onOpenSettingsTab } = options;
 
   useEffect(() => {
     if (!isElectronAvailable()) return;
 
-    const unsubscribe = window.electron.app.onMenuAction((action) => {
+    const unsubscribe = window.electron.app.onMenuAction(async (action) => {
       const LAUNCH_AGENT_PREFIX = "launch-agent:";
       const OPEN_SETTINGS_PREFIX = "open-settings:";
 
@@ -40,63 +31,60 @@ export function useMenuActions({
           return;
         }
 
-        onLaunchAgent(agentId as "claude" | "gemini" | "codex" | "terminal" | "browser");
+        const result = await actionService.dispatch(
+          "agent.launch",
+          { agentId },
+          { source: "menu" }
+        );
+        if (!result.ok) {
+          console.error(`[Menu] Failed to launch agent "${agentId}":`, result.error);
+        }
         return;
       }
 
       if (action.startsWith(OPEN_SETTINGS_PREFIX)) {
         const tab = action.slice(OPEN_SETTINGS_PREFIX.length).trim();
         if (!tab) {
-          onOpenSettings();
+          const result = await actionService.dispatch("app.settings", undefined, {
+            source: "menu",
+          });
+          if (!result.ok) {
+            console.error("[Menu] Failed to open settings:", result.error);
+          }
           return;
         }
-        onOpenSettingsTab?.(tab);
+        if (onOpenSettingsTab) {
+          const result = await actionService.dispatch(
+            "app.settings.openTab",
+            { tab },
+            { source: "menu" }
+          );
+          if (!result.ok) {
+            console.error(`[Menu] Failed to open settings tab "${tab}":`, result.error);
+          }
+        }
         return;
       }
 
-      switch (action) {
-        case "new-terminal":
-          addTerminal({
-            type: "terminal",
-            cwd: defaultCwd,
-            location: "grid",
-            worktreeId: activeWorktreeId,
-          }).catch((error) => {
-            console.error("Failed to create terminal from menu:", error);
-          });
-          break;
+      const menuToActionMap: Record<string, ActionId> = {
+        "new-terminal": "terminal.new",
+        "new-worktree": "worktree.createDialog.open",
+        "open-settings": "app.settings",
+        "toggle-sidebar": "nav.toggleSidebar",
+        "open-agent-palette": "terminal.palette",
+      };
 
-        case "new-worktree":
-          openCreateWorktreeDialog();
-          break;
-
-        case "open-settings":
-          onOpenSettings();
-          break;
-
-        case "toggle-sidebar":
-          onToggleSidebar();
-          break;
-
-        case "open-agent-palette":
-          onOpenAgentPalette();
-          break;
-
-        default:
-          console.warn("[Menu] Unhandled action:", action);
+      const actionId = menuToActionMap[action];
+      if (actionId) {
+        const result = await actionService.dispatch(actionId, undefined, { source: "menu" });
+        if (!result.ok) {
+          console.error(`[Menu] Action "${actionId}" failed:`, result.error);
+        }
+      } else {
+        console.warn("[Menu] Unhandled action:", action);
       }
     });
 
     return () => unsubscribe();
-  }, [
-    addTerminal,
-    openCreateWorktreeDialog,
-    onOpenSettings,
-    onOpenSettingsTab,
-    onToggleSidebar,
-    onOpenAgentPalette,
-    onLaunchAgent,
-    defaultCwd,
-    activeWorktreeId,
-  ]);
+  }, [onOpenSettingsTab]);
 }

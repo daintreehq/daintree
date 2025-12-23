@@ -180,6 +180,9 @@ export interface ElectronAPI {
     unsubscribe(): void;
     onEvent(callback: (event: EventRecord) => void): () => void;
   };
+  events: {
+    emit(eventType: string, payload: unknown): Promise<void>;
+  };
   project: {
     getAll(): Promise<Project[]>;
     getCurrent(): Promise<Project | null>;

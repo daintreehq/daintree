@@ -203,10 +203,7 @@ export const createTerminalFocusSlice =
         const nextTerminal = waitingTerminals[nextIndex];
 
         const worktreeStore = useWorktreeSelectionStore.getState();
-        if (
-          nextTerminal.worktreeId &&
-          nextTerminal.worktreeId !== worktreeStore.activeWorktreeId
-        ) {
+        if (nextTerminal.worktreeId && nextTerminal.worktreeId !== worktreeStore.activeWorktreeId) {
           worktreeStore.trackTerminalFocus(nextTerminal.worktreeId, nextTerminal.id);
           worktreeStore.selectWorktree(nextTerminal.worktreeId);
         }

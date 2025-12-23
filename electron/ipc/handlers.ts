@@ -22,6 +22,8 @@ import { registerMenuHandlers } from "./handlers/menu.js";
 import { registerFilesHandlers } from "./handlers/files.js";
 import { registerSlashCommandHandlers } from "./handlers/slashCommands.js";
 import { registerGeminiHandlers } from "./handlers/gemini.js";
+import { registerEventsHandlers } from "./handlers/events.js";
+import { events } from "../services/events.js";
 import { typedHandle, typedSend, sendToRenderer } from "./utils.js";
 
 export { typedHandle, typedSend, sendToRenderer };
@@ -41,6 +43,7 @@ export function registerIpcHandlers(
     eventBuffer,
     cliAvailabilityService,
     sidecarManager,
+    events,
   };
 
   const cleanupFunctions = [
@@ -61,6 +64,7 @@ export function registerIpcHandlers(
     registerWorktreeConfigHandlers(deps),
     registerNotificationHandlers(deps),
     registerGeminiHandlers(),
+    registerEventsHandlers(deps),
   ];
 
   return () => {

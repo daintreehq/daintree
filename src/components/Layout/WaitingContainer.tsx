@@ -81,10 +81,7 @@ export function WaitingContainer() {
               <button
                 key={terminal.id}
                 onClick={() => {
-                  if (
-                    terminal.worktreeId &&
-                    terminal.worktreeId !== activeWorktreeId
-                  ) {
+                  if (terminal.worktreeId && terminal.worktreeId !== activeWorktreeId) {
                     trackTerminalFocus(terminal.worktreeId, terminal.id);
                     selectWorktree(terminal.worktreeId);
                   }

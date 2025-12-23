@@ -314,6 +314,11 @@ export interface IpcInvokeMap {
     result: void;
   };
 
+  "events:emit": {
+    args: [eventType: string, payload: unknown];
+    result: void;
+  };
+
   // Project channels
   "project:get-all": {
     args: [];

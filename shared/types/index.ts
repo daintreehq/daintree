@@ -296,3 +296,22 @@ export {
   GEMINI_BUILTIN_SLASH_COMMANDS,
   CODEX_BUILTIN_SLASH_COMMANDS,
 } from "./slashCommands.js";
+
+// Action system types - unified action dispatch and introspection
+export type {
+  ActionSource,
+  ActionKind,
+  ActionDanger,
+  ActionScope,
+  ActionId,
+  ActionContext,
+  ActionDefinition,
+  ActionManifestEntry,
+  ActionDispatchSuccess,
+  ActionDispatchError,
+  ActionDispatchResult,
+  ActionErrorCode,
+  ActionError,
+  ActionDispatchOptions,
+  ActionDispatchPayload,
+} from "./actions.js";

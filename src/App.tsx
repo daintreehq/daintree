@@ -17,6 +17,8 @@ import {
   useWorktreeActions,
   useMenuActions,
 } from "./hooks";
+import { useActionRegistry } from "./hooks/useActionRegistry";
+import { actionService } from "./services/ActionService";
 import {
   useAppHydration,
   useProjectSwitchRehydration,
@@ -658,6 +660,18 @@ function App() {
     window.dispatchEvent(new CustomEvent("canopy:toggle-focus-mode"));
   }, []);
 
+  useActionRegistry({
+    onOpenSettings: handleSettings,
+    onOpenSettingsTab: handleOpenSettingsTab,
+    onToggleSidebar: handleToggleSidebar,
+    onOpenAgentPalette: terminalPalette.open,
+    onLaunchAgent: async (agentId) => {
+      await handleLaunchAgent(agentId as Parameters<typeof handleLaunchAgent>[0]);
+    },
+    getDefaultCwd: () => defaultTerminalCwd,
+    getActiveWorktreeId: () => activeWorktree?.id,
+  });
+
   useMenuActions({
     onOpenSettings: handleSettings,
     onOpenSettingsTab: handleOpenSettingsTab,
@@ -668,15 +682,24 @@ function App() {
     activeWorktreeId: activeWorktree?.id,
   });
 
-  useKeybinding("terminal.palette", () => terminalPalette.open(), { enabled: electronAvailable });
-  useKeybinding("agent.palette", () => terminalPalette.open(), { enabled: electronAvailable });
+  useKeybinding(
+    "terminal.palette",
+    () => {
+      actionService.dispatch("terminal.palette", undefined, { source: "keybinding" });
+    },
+    { enabled: electronAvailable }
+  );
+  useKeybinding(
+    "agent.palette",
+    () => {
+      actionService.dispatch("terminal.palette", undefined, { source: "keybinding" });
+    },
+    { enabled: electronAvailable }
+  );
   useKeybinding(
     "terminal.new",
     () => {
-      const worktreeId = activeWorktree?.id;
-      addTerminal({ type: "terminal", cwd: defaultTerminalCwd, worktreeId }).catch((error) => {
-        console.error("Failed to create terminal:", error);
-      });
+      actionService.dispatch("terminal.new", undefined, { source: "keybinding" });
     },
     { enabled: electronAvailable }
   );

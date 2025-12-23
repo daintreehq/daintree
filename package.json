@@ -69,6 +69,7 @@
     "string-argv": "^0.3.2",
     "tailwind-merge": "^3.4.0",
     "zod": "^4.1.13",
+    "zod-to-json-schema": "^3.25.0",
     "zustand": "^5.0.8"
   },
   "overrides": {

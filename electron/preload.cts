@@ -241,6 +241,7 @@ const CHANNELS = {
   EVENT_INSPECTOR_EVENT: "event-inspector:event",
   EVENT_INSPECTOR_SUBSCRIBE: "event-inspector:subscribe",
   EVENT_INSPECTOR_UNSUBSCRIBE: "event-inspector:unsubscribe",
+  EVENTS_EMIT: "events:emit",
 
   // Project channels
   PROJECT_GET_ALL: "project:get-all",
@@ -621,6 +622,11 @@ const api: ElectronAPI = {
 
     onEvent: (callback: (event: EventRecord) => void) =>
       _typedOn(CHANNELS.EVENT_INSPECTOR_EVENT, callback),
+  },
+
+  events: {
+    emit: (eventType: string, payload: unknown) =>
+      _typedInvoke(CHANNELS.EVENTS_EMIT, eventType, payload),
   },
 
   // Project API

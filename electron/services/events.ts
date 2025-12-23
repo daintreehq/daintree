@@ -220,6 +220,14 @@ export const EVENT_META: Record<keyof CanopyEventMap, EventMetadata> = {
     description: "Code artifacts extracted from agent output",
   },
 
+  // Action events
+  "action:dispatched": {
+    category: "ui",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "Action dispatched by user, keybinding, menu, or agent",
+  },
+
   // Terminal events
   "terminal:trashed": {
     category: "agent",
@@ -543,6 +551,22 @@ export type CanopyEventMap = {
     }>;
   }>;
 
+  /**
+   * Emitted when an action is dispatched from the renderer.
+   * Tracks user actions, keybindings, menu actions, and agent-driven actions.
+   */
+  "action:dispatched": {
+    actionId: string;
+    args?: unknown;
+    source: "user" | "keybinding" | "menu" | "agent";
+    context: {
+      projectId?: string;
+      activeWorktreeId?: string;
+      focusedTerminalId?: string;
+    };
+    timestamp: number;
+  };
+
   // Terminal Trash Events
 
   /**
@@ -700,6 +724,7 @@ export const ALL_EVENT_TYPES: Array<keyof CanopyEventMap> = [
   "agent:failed",
   "agent:killed",
   "artifact:detected",
+  "action:dispatched",
   "terminal:trashed",
   "terminal:restored",
   "terminal:activity",
@@ -714,7 +739,7 @@ export const ALL_EVENT_TYPES: Array<keyof CanopyEventMap> = [
   "task:failed",
 ];
 
-class TypedEventBus {
+export class TypedEventBus {
   private bus = new EventEmitter();
 
   private debugEnabled = process.env.CANOPY_DEBUG_EVENTS === "1";

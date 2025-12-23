@@ -116,9 +116,7 @@ export const createTerminalBulkActionsSlice = (
     bulkMoveToDockByWorktree: (worktreeId) => {
       const terminals = getTerminals();
       const gridTerminals = terminals.filter(
-        (t) =>
-          t.worktreeId === worktreeId &&
-          (t.location === "grid" || t.location === undefined)
+        (t) => t.worktreeId === worktreeId && (t.location === "grid" || t.location === undefined)
       );
       gridTerminals.forEach((t) => moveTerminalToDock(t.id));
     },
@@ -132,8 +130,7 @@ export const createTerminalBulkActionsSlice = (
 
       const maxCapacity = useLayoutConfigStore.getState().getMaxGridCapacity();
       const gridCount = terminals.filter(
-        (t) =>
-          (t.location === "grid" || t.location === undefined) && t.worktreeId === worktreeId
+        (t) => (t.location === "grid" || t.location === undefined) && t.worktreeId === worktreeId
       ).length;
       const availableSlots = maxCapacity - gridCount;
       if (availableSlots <= 0) return;
@@ -217,8 +214,7 @@ export const createTerminalBulkActionsSlice = (
       const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
       const dockedTerminals = terminals.filter(
         (t) =>
-          t.location === "dock" &&
-          (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+          t.location === "dock" && (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
       );
       if (dockedTerminals.length === 0) return;
 
