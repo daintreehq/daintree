@@ -10,6 +10,7 @@ export interface GridPanelProps {
   isFocused: boolean;
   isMaximized?: boolean;
   gridPanelCount?: number;
+  gridCols?: number;
 }
 
 export function GridPanel({
@@ -17,6 +18,7 @@ export function GridPanel({
   isFocused,
   isMaximized = false,
   gridPanelCount,
+  gridCols,
 }: GridPanelProps) {
   const setFocused = useTerminalStore((state) => state.setFocused);
   const trashTerminal = useTerminalStore((state) => state.trashTerminal);
@@ -66,8 +68,8 @@ export function GridPanel({
   );
 
   const handleToggleMaximize = useCallback(() => {
-    toggleMaximize(terminal.id);
-  }, [toggleMaximize, terminal.id]);
+    toggleMaximize(terminal.id, gridCols, gridPanelCount);
+  }, [toggleMaximize, terminal.id, gridCols, gridPanelCount]);
 
   const handleTitleChange = useCallback(
     (newTitle: string) => {

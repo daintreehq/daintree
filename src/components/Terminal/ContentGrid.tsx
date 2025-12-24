@@ -255,13 +255,16 @@ export function ContentGrid({
   onOpenSettings,
 }: ContentGridProps) {
   const { showMenu } = useNativeContextMenu();
-  const { terminals, focusedId, maximizedId } = useTerminalStore(
-    useShallow((state) => ({
-      terminals: state.terminals,
-      focusedId: state.focusedId,
-      maximizedId: state.maximizedId,
-    }))
-  );
+  const { terminals, focusedId, maximizedId, preMaximizeLayout, clearPreMaximizeLayout } =
+    useTerminalStore(
+      useShallow((state) => ({
+        terminals: state.terminals,
+        focusedId: state.focusedId,
+        maximizedId: state.maximizedId,
+        preMaximizeLayout: state.preMaximizeLayout,
+        clearPreMaximizeLayout: state.clearPreMaximizeLayout,
+      }))
+    );
 
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const showProjectPulse = usePreferencesStore((state) => state.showProjectPulse);
@@ -342,10 +345,39 @@ export function ContentGrid({
   const showPlaceholder = placeholderInGrid && sourceContainer === "dock" && !isGridFull;
   const gridItemCount = gridTerminals.length + (showPlaceholder ? 1 : 0);
 
+  useEffect(() => {
+    if (preMaximizeLayout && preMaximizeLayout.worktreeId !== activeWorktreeId) {
+      clearPreMaximizeLayout();
+    }
+  }, [activeWorktreeId, preMaximizeLayout, clearPreMaximizeLayout]);
+
+  useEffect(() => {
+    if (preMaximizeLayout && preMaximizeLayout.gridItemCount !== gridItemCount) {
+      clearPreMaximizeLayout();
+    }
+  }, [gridItemCount, preMaximizeLayout, clearPreMaximizeLayout]);
+
+  useEffect(() => {
+    if (preMaximizeLayout) {
+      clearPreMaximizeLayout();
+    }
+  }, [layoutConfig, preMaximizeLayout, clearPreMaximizeLayout]);
+
   const gridCols = useMemo(() => {
+    if (
+      !maximizedId &&
+      preMaximizeLayout &&
+      preMaximizeLayout.worktreeId === activeWorktreeId &&
+      preMaximizeLayout.gridItemCount === gridItemCount
+    ) {
+      if (gridItemCount === 2 && preMaximizeLayout.gridCols !== 2) {
+        return 2;
+      }
+      return preMaximizeLayout.gridCols;
+    }
     const { strategy, value } = layoutConfig;
     return computeGridColumns(gridItemCount, gridWidth, strategy, value);
-  }, [gridItemCount, layoutConfig, gridWidth]);
+  }, [gridItemCount, layoutConfig, gridWidth, maximizedId, preMaximizeLayout, activeWorktreeId]);
 
   const handleLaunchAgent = useCallback(
     async (type: "claude" | "gemini" | "codex" | "terminal" | "browser") => {
@@ -597,6 +629,7 @@ export function ContentGrid({
                         terminal={terminal}
                         isFocused={terminal.id === focusedId}
                         gridPanelCount={gridItemCount}
+                        gridCols={gridCols}
                       />
                     </SortableTerminal>
                   );
