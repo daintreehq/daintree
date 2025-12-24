@@ -91,6 +91,8 @@ export const CHANNELS = {
   APP_SET_STATE: "app:set-state",
   APP_GET_VERSION: "app:get-version",
   APP_HYDRATE: "app:hydrate",
+  APP_QUIT: "app:quit",
+  APP_FORCE_QUIT: "app:force-quit",
   MENU_ACTION: "menu:action",
   MENU_SHOW_CONTEXT: "menu:show-context",
 
@@ -179,6 +181,13 @@ export const CHANNELS = {
 
   WINDOW_FULLSCREEN_CHANGE: "window:fullscreen-change",
   WINDOW_TOGGLE_FULLSCREEN: "window:toggle-fullscreen",
+  WINDOW_RELOAD: "window:reload",
+  WINDOW_FORCE_RELOAD: "window:force-reload",
+  WINDOW_TOGGLE_DEVTOOLS: "window:toggle-devtools",
+  WINDOW_ZOOM_IN: "window:zoom-in",
+  WINDOW_ZOOM_OUT: "window:zoom-out",
+  WINDOW_ZOOM_RESET: "window:zoom-reset",
+  WINDOW_CLOSE: "window:close",
 
   NOTIFICATION_UPDATE: "notification:update",
 

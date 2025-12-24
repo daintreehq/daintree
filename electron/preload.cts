@@ -216,6 +216,8 @@ const CHANNELS = {
   APP_SET_STATE: "app:set-state",
   APP_GET_VERSION: "app:get-version",
   APP_HYDRATE: "app:hydrate",
+  APP_QUIT: "app:quit",
+  APP_FORCE_QUIT: "app:force-quit",
   MENU_ACTION: "menu:action",
   MENU_SHOW_CONTEXT: "menu:show-context",
 
@@ -316,6 +318,13 @@ const CHANNELS = {
   // Window channels
   WINDOW_FULLSCREEN_CHANGE: "window:fullscreen-change",
   WINDOW_TOGGLE_FULLSCREEN: "window:toggle-fullscreen",
+  WINDOW_RELOAD: "window:reload",
+  WINDOW_FORCE_RELOAD: "window:force-reload",
+  WINDOW_TOGGLE_DEVTOOLS: "window:toggle-devtools",
+  WINDOW_ZOOM_IN: "window:zoom-in",
+  WINDOW_ZOOM_OUT: "window:zoom-out",
+  WINDOW_ZOOM_RESET: "window:zoom-reset",
+  WINDOW_CLOSE: "window:close",
 
   // Notification channels
   NOTIFICATION_UPDATE: "notification:update",
@@ -560,6 +569,10 @@ const api: ElectronAPI = {
     getVersion: () => _typedInvoke(CHANNELS.APP_GET_VERSION),
 
     hydrate: () => _typedInvoke(CHANNELS.APP_HYDRATE),
+
+    quit: () => _typedInvoke(CHANNELS.APP_QUIT),
+
+    forceQuit: () => _typedInvoke(CHANNELS.APP_FORCE_QUIT),
 
     onMenuAction: (callback: (action: string) => void) => _typedOn(CHANNELS.MENU_ACTION, callback),
   },
@@ -855,7 +868,14 @@ const api: ElectronAPI = {
       ipcRenderer.on(CHANNELS.WINDOW_FULLSCREEN_CHANGE, handler);
       return () => ipcRenderer.removeListener(CHANNELS.WINDOW_FULLSCREEN_CHANGE, handler);
     },
-    toggleFullscreen: (): Promise<boolean> => ipcRenderer.invoke(CHANNELS.WINDOW_TOGGLE_FULLSCREEN),
+    toggleFullscreen: (): Promise<boolean> => _typedInvoke(CHANNELS.WINDOW_TOGGLE_FULLSCREEN),
+    reload: (): Promise<void> => _typedInvoke(CHANNELS.WINDOW_RELOAD),
+    forceReload: (): Promise<void> => _typedInvoke(CHANNELS.WINDOW_FORCE_RELOAD),
+    toggleDevTools: (): Promise<void> => _typedInvoke(CHANNELS.WINDOW_TOGGLE_DEVTOOLS),
+    zoomIn: (): Promise<void> => _typedInvoke(CHANNELS.WINDOW_ZOOM_IN),
+    zoomOut: (): Promise<void> => _typedInvoke(CHANNELS.WINDOW_ZOOM_OUT),
+    zoomReset: (): Promise<void> => _typedInvoke(CHANNELS.WINDOW_ZOOM_RESET),
+    close: (): Promise<void> => _typedInvoke(CHANNELS.WINDOW_CLOSE),
   },
 
   // Notification API

@@ -160,5 +160,17 @@ export function registerAppStateHandlers(): () => void {
   ipcMain.handle(CHANNELS.APP_GET_VERSION, handleAppGetVersion);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_GET_VERSION));
 
+  const handleAppQuit = async () => {
+    app.quit();
+  };
+  ipcMain.handle(CHANNELS.APP_QUIT, handleAppQuit);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_QUIT));
+
+  const handleAppForceQuit = async () => {
+    app.exit(0);
+  };
+  ipcMain.handle(CHANNELS.APP_FORCE_QUIT, handleAppForceQuit);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_FORCE_QUIT));
+
   return () => handlers.forEach((cleanup) => cleanup());
 }

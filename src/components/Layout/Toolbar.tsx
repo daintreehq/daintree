@@ -33,7 +33,6 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { useRepositoryStats } from "@/hooks/useRepositoryStats";
 import { useNativeContextMenu } from "@/hooks";
-import { useNotificationStore } from "@/store/notificationStore";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -45,6 +44,7 @@ import {
 import type { CliAvailability, AgentSettings } from "@shared/types";
 import type { MenuItemOption } from "@/types";
 import { projectClient } from "@/clients";
+import { actionService } from "@/services/ActionService";
 
 interface ToolbarProps {
   onLaunchAgent: (type: "claude" | "gemini" | "codex" | "terminal" | "browser") => void;
@@ -72,43 +72,17 @@ export function Toolbar({
   const { showMenu } = useNativeContextMenu();
   const currentProject = useProjectStore((state) => state.currentProject);
   const projects = useProjectStore((state) => state.projects);
-  const switchProject = useProjectStore((state) => state.switchProject);
-  const addProject = useProjectStore((state) => state.addProject);
   const loadProjects = useProjectStore((state) => state.loadProjects);
   const getCurrentProject = useProjectStore((state) => state.getCurrentProject);
-  const { addNotification } = useNotificationStore();
   const { stats, error: statsError, refresh: refreshStats } = useRepositoryStats();
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const activeWorktree = useWorktreeDataStore((state) =>
     activeWorktreeId ? state.worktrees.get(activeWorktreeId) : null
   );
   const branchName = activeWorktree?.branch;
-  const switchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   const handleProjectSwitch = (projectId: string) => {
-    if (switchTimeoutRef.current) {
-      clearTimeout(switchTimeoutRef.current);
-    }
-
-    addNotification({
-      type: "info",
-      title: "Switching projects",
-      message: "Resetting state for clean project isolation",
-      duration: 1500,
-    });
-
-    switchTimeoutRef.current = setTimeout(() => {
-      switchProject(projectId);
-    }, 1500);
+    void actionService.dispatch("project.switch", { projectId }, { source: "user" });
   };
-
-  useEffect(() => {
-    return () => {
-      if (switchTimeoutRef.current) {
-        clearTimeout(switchTimeoutRef.current);
-      }
-    };
-  }, []);
 
   useEffect(() => {
     loadProjects();
@@ -198,7 +172,7 @@ export function Toolbar({
     if (!actionId) return;
 
     const tab = actionId.replace("settings:", "");
-    window.dispatchEvent(new CustomEvent("canopy:open-settings-tab", { detail: tab }));
+    void actionService.dispatch("app.settings.openTab", { tab }, { source: "context-menu" });
   };
 
   const headerRef = useRef<HTMLElement>(null);
@@ -234,21 +208,18 @@ export function Toolbar({
             type="claude"
             availability={agentAvailability?.claude}
             isEnabled={agentSettings?.agents?.claude?.enabled ?? true}
-            onLaunch={() => onLaunchAgent("claude")}
             onOpenSettings={openAgentSettings}
           />
           <AgentButton
             type="gemini"
             availability={agentAvailability?.gemini}
             isEnabled={agentSettings?.agents?.gemini?.enabled ?? true}
-            onLaunch={() => onLaunchAgent("gemini")}
             onOpenSettings={openAgentSettings}
           />
           <AgentButton
             type="codex"
             availability={agentAvailability?.codex}
             isEnabled={agentSettings?.agents?.codex?.enabled ?? true}
-            onLaunch={() => onLaunchAgent("codex")}
             onOpenSettings={openAgentSettings}
           />
           <Button
@@ -401,7 +372,9 @@ export function Toolbar({
             {currentProject && (
               <DropdownMenuItem
                 onClick={() => {
-                  window.dispatchEvent(new CustomEvent("canopy:open-project-settings"));
+                  void actionService.dispatch("project.settings.open", undefined, {
+                    source: "user",
+                  });
                 }}
                 className="gap-2 p-2 cursor-pointer"
               >
@@ -412,7 +385,12 @@ export function Toolbar({
               </DropdownMenuItem>
             )}
 
-            <DropdownMenuItem onClick={addProject} className="gap-2 p-2 cursor-pointer">
+            <DropdownMenuItem
+              onClick={() => {
+                void actionService.dispatch("project.add", undefined, { source: "user" });
+              }}
+              className="gap-2 p-2 cursor-pointer"
+            >
               <div className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-md)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
                 <Plus className="h-3.5 w-3.5" />
               </div>

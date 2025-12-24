@@ -1,6 +1,7 @@
 import type { Terminal, ILinkProvider, ILink, IBufferRange } from "@xterm/xterm";
 import { systemClient } from "@/clients";
 import * as path from "path-browserify";
+import { actionService } from "@/services/ActionService";
 
 interface ResolvedFilePath {
   absolutePath: string;
@@ -114,9 +115,15 @@ class FileLink implements ILink {
   ) {}
 
   activate(_event: MouseEvent, _text: string): void {
-    systemClient.openPath(this._absolutePath).catch((error) => {
-      console.error("[FileLinksAddon] Failed to open file:", this._absolutePath, error);
-    });
+    actionService
+      .dispatch("system.openPath", { path: this._absolutePath }, { source: "user" })
+      .then((result) => {
+        if (result.ok) return;
+        return systemClient.openPath(this._absolutePath);
+      })
+      .catch((error) => {
+        console.error("[FileLinksAddon] Failed to open file:", this._absolutePath, error);
+      });
   }
 
   hover?(_event: MouseEvent, _text: string): void {}

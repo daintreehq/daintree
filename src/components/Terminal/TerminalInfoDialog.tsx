@@ -3,6 +3,7 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { Info } from "lucide-react";
 import type { TerminalInfoPayload } from "@/types/electron";
+import { actionService } from "@/services/ActionService";
 
 interface TerminalInfoDialogProps {
   isOpen: boolean;
@@ -97,9 +98,16 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
       setLoading(true);
       setError(null);
       try {
-        const terminalInfo = await window.electron.terminal.getInfo(terminalId);
+        const result = await actionService.dispatch(
+          "terminal.info.get",
+          { terminalId },
+          { source: "user" }
+        );
+        if (!result.ok) {
+          throw new Error(result.error.message);
+        }
         if (isMounted) {
-          setInfo(terminalInfo);
+          setInfo(result.result as TerminalInfoPayload);
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unknown error";

@@ -15,19 +15,28 @@ const SENSITIVE_ARG_FIELDS = new Set(["token", "password", "secret", "key", "aut
 
 /** Max size for args in event payloads (prevents explosion) */
 const MAX_ARG_PAYLOAD_SIZE = 1024;
-import { isElectronAvailable } from "@/hooks/useElectron";
-import { useProjectStore } from "@/store/projectStore";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { useTerminalStore } from "@/store/terminalStore";
+
+function isElectronApiAvailable(): boolean {
+  return typeof window !== "undefined" && !!(window as any).electron;
+}
 
 export class ActionService {
   private registry = new Map<ActionId, ActionDefinition<unknown, unknown>>();
+  private contextProvider: (() => ActionContext) | null = null;
 
   register<Args = unknown, Result = unknown>(definition: ActionDefinition<Args, Result>): void {
     if (this.registry.has(definition.id)) {
       console.warn(`[ActionService] Action "${definition.id}" already registered. Overwriting.`);
     }
     this.registry.set(definition.id, definition as ActionDefinition<unknown, unknown>);
+  }
+
+  setContextProvider(provider: (() => ActionContext) | null): void {
+    this.contextProvider = provider;
+  }
+
+  getContext(): ActionContext {
+    return this.getActionContext();
   }
 
   async dispatch<Result = unknown>(
@@ -150,7 +159,15 @@ export class ActionService {
   }
 
   private getActionContext(): ActionContext {
-    return getActionContext();
+    if (this.contextProvider) {
+      try {
+        return this.contextProvider();
+      } catch (err) {
+        console.warn("[ActionService] Context provider threw an error:", err);
+        return {};
+      }
+    }
+    return {};
   }
 
   /**
@@ -197,7 +214,7 @@ export class ActionService {
     source: ActionSource;
     timestamp: number;
   }): Promise<void> {
-    if (!isElectronAvailable()) return;
+    if (!isElectronApiAvailable()) return;
 
     try {
       const electron = window.electron as typeof window.electron & {
@@ -219,22 +236,5 @@ export class ActionService {
 export const actionService = new ActionService();
 
 export function getActionContext(): ActionContext {
-  if (typeof window === "undefined") {
-    return {};
-  }
-
-  try {
-    const projectState = useProjectStore.getState();
-    const worktreeState = useWorktreeSelectionStore.getState();
-    const terminalState = useTerminalStore.getState();
-
-    return {
-      projectId: projectState.currentProject?.id,
-      activeWorktreeId: worktreeState.activeWorktreeId ?? undefined,
-      focusedTerminalId: terminalState.focusedId ?? undefined,
-    };
-  } catch (err) {
-    console.warn("[ActionService] Failed to get action context from stores:", err);
-    return {};
-  }
+  return actionService.getContext();
 }

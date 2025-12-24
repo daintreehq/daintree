@@ -26,10 +26,10 @@ import { ProjectPulseCard } from "@/components/Pulse";
 import { Kbd } from "@/components/ui/Kbd";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { systemClient } from "@/clients";
 import { computeGridColumns, MIN_TERMINAL_HEIGHT_PX } from "@/lib/terminalLayout";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useNativeContextMenu } from "@/hooks";
+import { actionService } from "@/services/ActionService";
 import type { CliAvailability } from "@shared/types";
 import type { MenuItemOption } from "@/types";
 
@@ -126,11 +126,11 @@ function EmptyState({
   showProjectPulse: boolean;
 }) {
   const handleOpenHelp = () => {
-    void systemClient
-      .openExternal("https://github.com/gregpriday/canopy-electron#readme")
-      .catch((err) => {
-        console.error("Failed to open documentation:", err);
-      });
+    void actionService.dispatch(
+      "system.openExternal",
+      { url: "https://github.com/gregpriday/canopy-electron#readme" },
+      { source: "user" }
+    );
   };
 
   const handleAgentClick = (type: "claude" | "gemini" | "codex" | "terminal" | "browser") => {
@@ -286,7 +286,6 @@ export function ContentGrid({
   );
 
   const layoutConfig = useLayoutConfigStore((state) => state.layoutConfig);
-  const setLayoutConfig = useLayoutConfigStore((state) => state.setLayoutConfig);
   const setGridDimensions = useLayoutConfigStore((state) => state.setGridDimensions);
   const getMaxGridCapacity = useLayoutConfigStore((state) => state.getMaxGridCapacity);
 
@@ -432,7 +431,11 @@ export function ContentGrid({
           | "codex"
           | "terminal"
           | "browser";
-        void handleLaunchAgent(agentId);
+        void actionService.dispatch(
+          "agent.launch",
+          { agentId, location: "grid", cwd: defaultCwd || undefined },
+          { source: "context-menu" }
+        );
         return;
       }
 
@@ -441,15 +444,23 @@ export function ContentGrid({
           | "automatic"
           | "fixed-columns"
           | "fixed-rows";
-        setLayoutConfig({ ...layoutConfig, strategy: nextStrategy });
+        void actionService.dispatch(
+          "terminal.gridLayout.setStrategy",
+          { strategy: nextStrategy },
+          { source: "context-menu" }
+        );
         return;
       }
 
       if (actionId === "settings:terminal") {
-        window.dispatchEvent(new CustomEvent("canopy:open-settings-tab", { detail: "terminal" }));
+        void actionService.dispatch(
+          "app.settings.openTab",
+          { tab: "terminal" },
+          { source: "context-menu" }
+        );
       }
     },
-    [agentAvailability, handleLaunchAgent, layoutConfig, setLayoutConfig, showMenu]
+    [agentAvailability, defaultCwd, layoutConfig, showMenu]
   );
 
   // Terminal IDs for SortableContext - Include placeholder if visible

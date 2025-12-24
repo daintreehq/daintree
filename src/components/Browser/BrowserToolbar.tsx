@@ -2,8 +2,10 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { ArrowLeft, ArrowRight, RotateCw, ExternalLink, Copy, Check, Globe } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { normalizeBrowserUrl, getDisplayUrl } from "./browserUtils";
+import { actionService } from "@/services/ActionService";
 
 interface BrowserToolbarProps {
+  terminalId?: string;
   url: string;
   canGoBack: boolean;
   canGoForward: boolean;
@@ -17,6 +19,7 @@ interface BrowserToolbarProps {
 }
 
 export function BrowserToolbar({
+  terminalId,
   url,
   canGoBack,
   canGoForward,
@@ -79,13 +82,20 @@ export function BrowserToolbar({
 
   const handleCopy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(url);
+      const result = await actionService.dispatch(
+        "browser.copyUrl",
+        { terminalId, url },
+        { source: "user" }
+      );
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
       console.error("Failed to copy URL:", err);
     }
-  }, [url]);
+  }, [terminalId, url]);
 
   const buttonClass =
     "p-1.5 rounded hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed transition-colors";

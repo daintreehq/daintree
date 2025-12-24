@@ -24,6 +24,7 @@ import {
 } from "@shared/types";
 import type { SidecarLayoutModePreference } from "@shared/types";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
+import { actionService } from "@/services/ActionService";
 
 function ServiceIcon({ name, size = 16 }: { name: string; size?: number }) {
   const className = size === 16 ? "w-4 h-4" : size === 32 ? "w-8 h-8" : "w-4 h-4";
@@ -93,16 +94,9 @@ const LAYOUT_MODE_OPTIONS: Array<{
 
 export function SidecarSettingsTab() {
   const links = useSidecarStore((s) => s.links);
-  const toggleLink = useSidecarStore((s) => s.toggleLink);
-  const addLink = useSidecarStore((s) => s.addLink);
-  const removeLink = useSidecarStore((s) => s.removeLink);
-  const updateLink = useSidecarStore((s) => s.updateLink);
   const layoutModePreference = useSidecarStore((s) => s.layoutModePreference);
-  const setLayoutModePreference = useSidecarStore((s) => s.setLayoutModePreference);
   const width = useSidecarStore((s) => s.width);
-  const setWidth = useSidecarStore((s) => s.setWidth);
   const defaultNewTabUrl = useSidecarStore((s) => s.defaultNewTabUrl);
-  const setDefaultNewTabUrl = useSidecarStore((s) => s.setDefaultNewTabUrl);
   const { rescan, isScanning } = useLinkDiscovery();
 
   const [newLinkName, setNewLinkName] = useState("");
@@ -143,13 +137,17 @@ export function SidecarSettingsTab() {
       return;
     }
 
-    addLink({
-      title: newLinkName,
-      url: newLinkUrl,
-      icon: "globe",
-      type: "user",
-      enabled: true,
-    });
+    void actionService.dispatch(
+      "sidecar.links.add",
+      {
+        title: newLinkName,
+        url: newLinkUrl,
+        icon: "globe",
+        type: "user",
+        enabled: true,
+      },
+      { source: "user" }
+    );
 
     setNewLinkName("");
     setNewLinkUrl("");
@@ -179,7 +177,11 @@ export function SidecarSettingsTab() {
       return;
     }
 
-    updateLink(editingLinkId, { title: editName, url: editUrl });
+    void actionService.dispatch(
+      "sidecar.links.update",
+      { id: editingLinkId, updates: { title: editName, url: editUrl } },
+      { source: "user" }
+    );
     setEditingLinkId(null);
     setEditName("");
     setEditUrl("");
@@ -204,7 +206,7 @@ export function SidecarSettingsTab() {
 
   const handleDefaultAgentChange = (value: string) => {
     if (value === "none") {
-      setDefaultNewTabUrl(null);
+      void actionService.dispatch("sidecar.setDefaultNewTab", { url: null }, { source: "user" });
       setShowCustomUrlInput(false);
       setCustomDefaultUrl("");
       setCustomUrlError("");
@@ -214,7 +216,7 @@ export function SidecarSettingsTab() {
         setCustomDefaultUrl(defaultNewTabUrl);
       }
     } else {
-      setDefaultNewTabUrl(value);
+      void actionService.dispatch("sidecar.setDefaultNewTab", { url: value }, { source: "user" });
       setShowCustomUrlInput(false);
       setCustomDefaultUrl("");
       setCustomUrlError("");
@@ -232,7 +234,11 @@ export function SidecarSettingsTab() {
         setCustomUrlError("URL must use http:// or https://");
         return;
       }
-      setDefaultNewTabUrl(customDefaultUrl);
+      void actionService.dispatch(
+        "sidecar.setDefaultNewTab",
+        { url: customDefaultUrl },
+        { source: "user" }
+      );
       setShowCustomUrlInput(false);
       setCustomDefaultUrl("");
       setCustomUrlError("");
@@ -419,7 +425,14 @@ export function SidecarSettingsTab() {
                         </button>
                       )}
                       <button
-                        onClick={() => link && toggleLink(link.id)}
+                        onClick={() =>
+                          link &&
+                          void actionService.dispatch(
+                            "sidecar.links.toggle",
+                            { id: link.id },
+                            { source: "user" }
+                          )
+                        }
                         disabled={!isDetected}
                         className={cn(
                           "w-10 h-5 rounded-full relative transition-colors",
@@ -502,7 +515,13 @@ export function SidecarSettingsTab() {
                       Edit
                     </button>
                     <button
-                      onClick={() => toggleLink(link.id)}
+                      onClick={() =>
+                        void actionService.dispatch(
+                          "sidecar.links.toggle",
+                          { id: link.id },
+                          { source: "user" }
+                        )
+                      }
                       disabled={link.alwaysEnabled}
                       className={cn(
                         "w-10 h-5 rounded-full relative transition-colors",
@@ -518,7 +537,13 @@ export function SidecarSettingsTab() {
                       />
                     </button>
                     <button
-                      onClick={() => removeLink(link.id)}
+                      onClick={() =>
+                        void actionService.dispatch(
+                          "sidecar.links.remove",
+                          { id: link.id },
+                          { source: "user" }
+                        )
+                      }
                       disabled={link.alwaysEnabled}
                       className={cn(
                         "p-1.5 rounded hover:bg-canopy-border text-zinc-500 hover:text-red-500",
@@ -583,7 +608,13 @@ export function SidecarSettingsTab() {
             <button
               key={id}
               type="button"
-              onClick={() => setLayoutModePreference(id)}
+              onClick={() =>
+                void actionService.dispatch(
+                  "sidecar.setLayoutMode",
+                  { mode: id },
+                  { source: "user" }
+                )
+              }
               role="radio"
               aria-checked={layoutModePreference === id}
               aria-label={`${label} - ${description}`}
@@ -646,11 +677,19 @@ export function SidecarSettingsTab() {
               }}
               onPointerUp={(e) => {
                 isAdjustingWidthRef.current = false;
-                setWidth(clampWidth(Number(e.currentTarget.value)));
+                void actionService.dispatch(
+                  "sidecar.width.set",
+                  { width: clampWidth(Number(e.currentTarget.value)) },
+                  { source: "user" }
+                );
               }}
               onBlur={(e) => {
                 isAdjustingWidthRef.current = false;
-                setWidth(clampWidth(Number(e.currentTarget.value)));
+                void actionService.dispatch(
+                  "sidecar.width.set",
+                  { width: clampWidth(Number(e.currentTarget.value)) },
+                  { source: "user" }
+                );
               }}
               className="flex-1 h-2 bg-canopy-border rounded-lg appearance-none cursor-pointer accent-canopy-accent"
               aria-label="Default sidecar width"
@@ -674,7 +713,7 @@ export function SidecarSettingsTab() {
             <button
               onClick={() => {
                 setLocalWidth(SIDECAR_DEFAULT_WIDTH);
-                setWidth(SIDECAR_DEFAULT_WIDTH);
+                void actionService.dispatch("sidecar.resetWidth", undefined, { source: "user" });
               }}
               className="hover:text-canopy-text/70 transition-colors"
             >

@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
-import { useErrors } from "@/hooks";
-import { useLogsStore, useSidecarStore } from "@/store";
+import { useSidecarStore } from "@/store";
 import {
   X,
   Bot,
@@ -56,8 +55,6 @@ export function SettingsDialog({
       setSidecarOpen(false);
     }
   }, [isOpen, setSidecarOpen]);
-  const { openLogs } = useErrors();
-  const clearLogs = useLogsStore((state) => state.clearLogs);
 
   const [appVersion, setAppVersion] = useState<string>("Loading...");
 
@@ -212,7 +209,7 @@ export function SettingsDialog({
             </div>
 
             <div className={activeTab === "troubleshooting" ? "" : "hidden"}>
-              <TroubleshootingTab openLogs={openLogs} clearLogs={clearLogs} />
+              <TroubleshootingTab />
             </div>
           </div>
         </div>

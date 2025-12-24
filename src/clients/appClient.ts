@@ -21,4 +21,12 @@ export const appClient = {
   hydrate: (): Promise<HydrateResult> => {
     return window.electron.app.hydrate();
   },
+
+  quit: (): Promise<void> => {
+    return window.electron.app.quit();
+  },
+
+  forceQuit: (): Promise<void> => {
+    return window.electron.app.forceQuit();
+  },
 } as const;

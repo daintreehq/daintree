@@ -1,13 +1,12 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import type React from "react";
 import { type MenuItemOption, type TerminalLocation, type TerminalType } from "@/types";
 import { useTerminalStore } from "@/store";
-import { terminalClient } from "@/clients";
-import { TerminalInfoDialog } from "./TerminalInfoDialog";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useNativeContextMenu } from "@/hooks";
 import { AGENT_IDS, getAgentConfig } from "@/config/agents";
 import { isValidBrowserUrl } from "@/components/Browser/browserUtils";
+import { actionService } from "@/services/ActionService";
 
 interface TerminalContextMenuProps {
   terminalId: string;
@@ -25,58 +24,9 @@ export function TerminalContextMenu({
   forceLocation,
 }: TerminalContextMenuProps) {
   const { showMenu } = useNativeContextMenu();
-  const [isInfoDialogOpen, setIsInfoDialogOpen] = useState(false);
   const terminal = useTerminalStore((state) => state.terminals.find((t) => t.id === terminalId));
-
-  const moveTerminalToDock = useTerminalStore((s) => s.moveTerminalToDock);
-  const moveTerminalToGrid = useTerminalStore((s) => s.moveTerminalToGrid);
-  const trashTerminal = useTerminalStore((s) => s.trashTerminal);
-  const removeTerminal = useTerminalStore((s) => s.removeTerminal);
-  const toggleMaximize = useTerminalStore((s) => s.toggleMaximize);
-  const restartTerminal = useTerminalStore((s) => s.restartTerminal);
-  const addTerminal = useTerminalStore((s) => s.addTerminal);
-  const moveTerminalToWorktree = useTerminalStore((s) => s.moveTerminalToWorktree);
-  const setFocused = useTerminalStore((s) => s.setFocused);
-  const toggleInputLocked = useTerminalStore((s) => s.toggleInputLocked);
-  const convertTerminalType = useTerminalStore((s) => s.convertTerminalType);
   const isMaximized = useTerminalStore((s) => s.maximizedId === terminalId);
   const { worktrees } = useWorktrees();
-
-  const handleDuplicate = useCallback(async () => {
-    if (!terminal) return;
-    try {
-      // Handle browser pane duplication specially
-      if (terminal.kind === "browser") {
-        await addTerminal({
-          kind: "browser",
-          cwd: terminal.cwd,
-          location: terminal.location === "trash" ? "grid" : terminal.location,
-          title: `${terminal.title} (copy)`,
-          worktreeId: terminal.worktreeId,
-          browserUrl: terminal.browserUrl,
-        });
-        return;
-      }
-
-      await addTerminal({
-        type: terminal.type,
-        cwd: terminal.cwd,
-        location: terminal.location === "trash" ? "grid" : terminal.location,
-        title: `${terminal.title} (copy)`,
-        worktreeId: terminal.worktreeId,
-        command: terminal.command,
-        isInputLocked: terminal.isInputLocked,
-      });
-    } catch (error) {
-      console.error("Failed to duplicate terminal:", error);
-    }
-  }, [addTerminal, terminal]);
-
-  const handleForceResume = useCallback(() => {
-    terminalClient.forceResume(terminalId).catch((error) => {
-      console.error("Failed to force resume terminal:", error);
-    });
-  }, [terminalId]);
 
   const isPaused = terminal?.flowStatus === "paused-backpressure";
 
@@ -244,17 +194,28 @@ export function TerminalContextMenu({
 
       if (actionId.startsWith("move-to-worktree:")) {
         const worktreeId = actionId.slice("move-to-worktree:".length);
-        setFocused(null);
-        moveTerminalToWorktree(terminalId, worktreeId);
+        const result = await actionService.dispatch(
+          "terminal.moveToWorktree",
+          { terminalId, worktreeId },
+          { source: "context-menu" }
+        );
+        if (!result.ok) {
+          console.error("Failed to move terminal to worktree:", result.error);
+        }
         return;
       }
 
       if (actionId.startsWith("convert-to:")) {
         const targetType = actionId.slice("convert-to:".length);
         if (targetType === "terminal" || AGENT_IDS.includes(targetType)) {
-          void convertTerminalType(terminalId, targetType as TerminalType).catch((error) => {
-            console.error("Failed to convert terminal type:", error);
-          });
+          const result = await actionService.dispatch(
+            "terminal.convertType",
+            { terminalId, type: targetType as TerminalType },
+            { source: "context-menu" }
+          );
+          if (!result.ok) {
+            console.error("Failed to convert terminal type:", result.error);
+          }
         }
         return;
       }
@@ -265,88 +226,104 @@ export function TerminalContextMenu({
 
       switch (actionId) {
         case "move-to-dock":
-          moveTerminalToDock(terminalId);
+          void actionService.dispatch(
+            "terminal.moveToDock",
+            { terminalId },
+            { source: "context-menu" }
+          );
           break;
         case "move-to-grid":
-          moveTerminalToGrid(terminalId);
+          void actionService.dispatch(
+            "terminal.moveToGrid",
+            { terminalId },
+            { source: "context-menu" }
+          );
           break;
         case "toggle-maximize":
-          toggleMaximize(terminalId);
+          void actionService.dispatch(
+            "terminal.toggleMaximize",
+            { terminalId },
+            { source: "context-menu" }
+          );
           break;
         case "restart":
-          void restartTerminal(terminalId);
+          void actionService.dispatch(
+            "terminal.restart",
+            { terminalId },
+            { source: "context-menu" }
+          );
           break;
         case "force-resume":
-          handleForceResume();
+          void actionService.dispatch(
+            "terminal.forceResume",
+            { terminalId },
+            { source: "context-menu" }
+          );
           break;
         case "toggle-input-lock":
-          toggleInputLocked(terminalId);
+          void actionService.dispatch(
+            "terminal.toggleInputLock",
+            { terminalId },
+            { source: "context-menu" }
+          );
           break;
         case "duplicate":
-          void handleDuplicate();
+          void actionService.dispatch(
+            "terminal.duplicate",
+            { terminalId },
+            { source: "context-menu" }
+          );
           break;
         case "rename":
-          window.dispatchEvent(
-            new CustomEvent("canopy:rename-terminal", { detail: { id: terminalId } })
+          void actionService.dispatch(
+            "terminal.rename",
+            { terminalId },
+            { source: "context-menu" }
           );
           break;
         case "view-info":
-          setIsInfoDialogOpen(true);
+          void actionService.dispatch(
+            "terminal.viewInfo",
+            { terminalId },
+            { source: "context-menu" }
+          );
           break;
         case "trash":
-          trashTerminal(terminalId);
+          void actionService.dispatch("terminal.trash", { terminalId }, { source: "context-menu" });
           break;
         case "kill":
-          removeTerminal(terminalId);
+          void actionService.dispatch("terminal.kill", { terminalId }, { source: "context-menu" });
           break;
         // Browser-specific actions
         case "reload-browser":
-          window.dispatchEvent(
-            new CustomEvent("canopy:reload-browser", { detail: { id: terminalId } })
-          );
+          void actionService.dispatch("browser.reload", { terminalId }, { source: "context-menu" });
           break;
         case "open-external":
           if (terminal.browserUrl && isValidBrowserUrl(terminal.browserUrl)) {
-            window.electron.system.openExternal(terminal.browserUrl);
+            void actionService.dispatch(
+              "browser.openExternal",
+              { url: terminal.browserUrl },
+              { source: "context-menu" }
+            );
           }
           break;
         case "copy-url":
           if (terminal.browserUrl && isValidBrowserUrl(terminal.browserUrl)) {
-            navigator.clipboard.writeText(terminal.browserUrl).catch((err) => {
-              console.error("Failed to copy URL:", err);
-            });
+            void actionService.dispatch(
+              "browser.copyUrl",
+              { url: terminal.browserUrl },
+              { source: "context-menu" }
+            );
           }
           break;
       }
     },
-    [
-      convertTerminalType,
-      handleDuplicate,
-      handleForceResume,
-      moveTerminalToDock,
-      moveTerminalToGrid,
-      moveTerminalToWorktree,
-      removeTerminal,
-      restartTerminal,
-      setFocused,
-      showMenu,
-      terminal,
-      template,
-      terminalId,
-      toggleInputLocked,
-      toggleMaximize,
-      trashTerminal,
-    ]
+    [showMenu, terminal, template, terminalId]
   );
 
   return (
     <div onContextMenu={handleContextMenu} className="contents">
       {children}
-      <TerminalInfoDialog
-        isOpen={isInfoDialogOpen}
-        onClose={() => setIsInfoDialogOpen(false)}
-        terminalId={terminalId}
-      />
     </div>
   );
 }

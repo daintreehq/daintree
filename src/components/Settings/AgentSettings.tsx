@@ -9,6 +9,7 @@ import {
   DEFAULT_DANGEROUS_ARGS,
 } from "@shared/types";
 import { RotateCcw, ExternalLink } from "lucide-react";
+import { actionService } from "@/services/ActionService";
 
 interface AgentSettingsProps {
   onSettingsChange?: () => void;
@@ -92,7 +93,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
           {loadError || "Failed to load settings"}
         </div>
         <button
-          onClick={() => window.location.reload()}
+          onClick={() => void actionService.dispatch("ui.refresh", undefined, { source: "user" })}
           className="text-xs px-3 py-1.5 bg-canopy-accent/10 hover:bg-canopy-accent/20 text-canopy-accent rounded transition-colors"
         >
           Reload Application
@@ -165,7 +166,14 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
                     const url = activeAgent.usageUrl?.trim();
                     if (!url) return;
                     try {
-                      await window.electron.system.openExternal(url);
+                      const result = await actionService.dispatch(
+                        "system.openExternal",
+                        { url },
+                        { source: "user" }
+                      );
+                      if (!result.ok) {
+                        throw new Error(result.error.message);
+                      }
                     } catch (error) {
                       console.error("Failed to open usage URL:", error);
                     }

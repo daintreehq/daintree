@@ -32,6 +32,7 @@ import { AppLayout } from "./components/Layout";
 import { ContentGrid } from "./components/Terminal";
 import { WorktreeCard, WorktreePalette, WorktreeFilterPopover } from "./components/Worktree";
 import { NewWorktreeDialog } from "./components/Worktree/NewWorktreeDialog";
+import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
 import { TerminalPalette, NewTerminalPalette } from "./components/TerminalPalette";
 import { RecipeEditor } from "./components/TerminalRecipe/RecipeEditor";
 import { SettingsDialog, type SettingsTab } from "./components/Settings";
@@ -237,6 +238,26 @@ function SidebarContent() {
     },
     []
   );
+
+  useEffect(() => {
+    const handleOpenRecipeEditorEvent = (event: Event) => {
+      if (!(event instanceof CustomEvent)) return;
+      const detail = event.detail as unknown;
+      if (!detail || typeof (detail as { worktreeId?: unknown }).worktreeId !== "string") return;
+      const worktreeId = (detail as { worktreeId: string }).worktreeId;
+      const initialTerminalsRaw = (detail as { initialTerminals?: unknown }).initialTerminals;
+      const initialTerminals = Array.isArray(initialTerminalsRaw)
+        ? (initialTerminalsRaw as RecipeTerminal[])
+        : undefined;
+      handleOpenRecipeEditor(worktreeId, initialTerminals);
+    };
+
+    const controller = new AbortController();
+    window.addEventListener("canopy:open-recipe-editor", handleOpenRecipeEditorEvent, {
+      signal: controller.signal,
+    });
+    return () => controller.abort();
+  }, [handleOpenRecipeEditor]);
 
   const worktreeActions = useWorktreeActions({
     onOpenRecipeEditor: handleOpenRecipeEditor,
@@ -617,6 +638,16 @@ function App() {
   const electronAvailable = isElectronAvailable();
   const { inject } = useContextInjection();
 
+  useEffect(() => {
+    actionService.setContextProvider(() => ({
+      projectId: useProjectStore.getState().currentProject?.id,
+      activeWorktreeId: useWorktreeSelectionStore.getState().activeWorktreeId ?? undefined,
+      focusedTerminalId: useTerminalStore.getState().focusedId ?? undefined,
+    }));
+
+    return () => actionService.setContextProvider(null);
+  }, []);
+
   const handleToggleSidebar = useCallback(() => {
     window.dispatchEvent(new CustomEvent("canopy:toggle-focus-mode"));
   }, []);
@@ -630,14 +661,10 @@ function App() {
     onOpenWorktreePalette: openWorktreePalette,
     onOpenNewTerminalPalette: newTerminalPalette.open,
     onOpenShortcuts: () => setIsShortcutsOpen(true),
-    onLaunchAgent: async (agentId) => {
-      await handleLaunchAgent(agentId as Parameters<typeof handleLaunchAgent>[0]);
+    onLaunchAgent: async (agentId, options) => {
+      await launchAgent(agentId, options);
     },
     onInject: inject,
-    onOpenTerminalInfo: () => {},
-    onRenameTerminal: (terminalId: string) => {
-      window.dispatchEvent(new CustomEvent("canopy:rename-terminal", { detail: { terminalId } }));
-    },
     getDefaultCwd: () => defaultTerminalCwd,
     getActiveWorktreeId: () => activeWorktree?.id,
     getWorktrees: () => worktrees.map((w) => ({ id: w.id, path: w.path })),
@@ -940,6 +967,8 @@ function App() {
       />
 
       <ShortcutReferenceDialog isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
+
+      <TerminalInfoDialogHost />
 
       <Toaster />
     </ErrorBoundary>

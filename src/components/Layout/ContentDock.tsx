@@ -14,10 +14,10 @@ import {
   SortableDockPlaceholder,
   DOCK_PLACEHOLDER_ID,
 } from "@/components/DragDrop";
-import { useAgentLauncher } from "@/hooks/useAgentLauncher";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useNativeContextMenu } from "@/hooks";
 import type { MenuItemOption } from "@/types";
+import { actionService } from "@/services/ActionService";
 
 const AGENT_OPTIONS = [
   { type: "claude" as const, label: "Claude" },
@@ -45,7 +45,6 @@ export function ContentDock() {
   const currentProject = useProjectStore((s) => s.currentProject);
 
   const { worktrees } = useWorktrees();
-  const { launchAgent } = useAgentLauncher();
 
   const activeWorktree = activeWorktreeId ? worktrees.find((w) => w.id === activeWorktreeId) : null;
   const cwd = activeWorktree?.path ?? currentProject?.path ?? "";
@@ -78,23 +77,20 @@ export function ContentDock() {
     }
   };
 
-  const addTerminal = useTerminalStore((state) => state.addTerminal);
-
   const handleAddTerminal = useCallback(
     (agentId: string) => {
-      // Handle browser pane specially
-      if (agentId === "browser") {
-        addTerminal({
-          kind: "browser",
+      void actionService.dispatch(
+        "agent.launch",
+        {
+          agentId: agentId as any,
+          location: "dock",
           cwd,
           worktreeId: activeWorktreeId || undefined,
-          location: "dock",
-        });
-        return;
-      }
-      launchAgent(agentId, { location: "dock", cwd });
+        },
+        { source: "context-menu" }
+      );
     },
-    [launchAgent, addTerminal, cwd, activeWorktreeId]
+    [activeWorktreeId, cwd]
   );
 
   const handleContextMenu = useCallback(

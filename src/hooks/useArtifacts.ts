@@ -1,7 +1,13 @@
 import { useState, useEffect, useCallback } from "react";
 import { isElectronAvailable } from "./useElectron";
-import type { Artifact, ArtifactDetectedPayload } from "@shared/types";
+import type {
+  Artifact,
+  ArtifactDetectedPayload,
+  ApplyPatchResult,
+  SaveArtifactResult,
+} from "@shared/types";
 import { artifactClient } from "@/clients";
+import { actionService } from "@/services/ActionService";
 
 const artifactStore = new Map<string, Artifact[]>();
 const listeners = new Set<(terminalId: string, artifacts: Artifact[]) => void>();
@@ -117,11 +123,15 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
           suggestedFilename = `artifact-${Date.now()}${ext}`;
         }
 
-        const result = await artifactClient.saveToFile({
-          content: artifact.content,
-          suggestedFilename,
-          cwd,
-        });
+        const actionResult = await actionService.dispatch<SaveArtifactResult | null>(
+          "artifact.saveToFile",
+          { content: artifact.content, suggestedFilename, cwd },
+          { source: "user" }
+        );
+        if (!actionResult.ok) {
+          throw new Error(actionResult.error.message);
+        }
+        const result = actionResult.result;
 
         return result;
       } catch (error) {
@@ -147,10 +157,15 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
       try {
         setActionInProgress(artifact.id);
 
-        const result = await artifactClient.applyPatch({
-          patchContent: artifact.content,
-          cwd,
-        });
+        const actionResult = await actionService.dispatch<ApplyPatchResult>(
+          "artifact.applyPatch",
+          { patchContent: artifact.content, cwd },
+          { source: "user" }
+        );
+        if (!actionResult.ok) {
+          throw new Error(actionResult.error.message);
+        }
+        const result = actionResult.result;
 
         return result;
       } catch (error) {
@@ -247,11 +262,15 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
             suggestedFilename = `artifact-${Date.now()}-${i}${ext}`;
           }
 
-          const saveResult = await artifactClient.saveToFile({
-            content: artifact.content,
-            suggestedFilename,
-            cwd,
-          });
+          const actionResult = await actionService.dispatch<SaveArtifactResult | null>(
+            "artifact.saveToFile",
+            { content: artifact.content, suggestedFilename, cwd },
+            { source: "user" }
+          );
+          if (!actionResult.ok) {
+            throw new Error(actionResult.error.message);
+          }
+          const saveResult = actionResult.result;
 
           if (saveResult?.success) {
             result.succeeded++;
@@ -298,10 +317,15 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
         setBulkProgress({ action: "apply", current: i + 1, total: sorted.length });
 
         try {
-          const applyResult = await artifactClient.applyPatch({
-            patchContent: artifact.content,
-            cwd,
-          });
+          const actionResult = await actionService.dispatch<ApplyPatchResult>(
+            "artifact.applyPatch",
+            { patchContent: artifact.content, cwd },
+            { source: "user" }
+          );
+          if (!actionResult.ok) {
+            throw new Error(actionResult.error.message);
+          }
+          const applyResult = actionResult.result;
 
           if (applyResult.success) {
             result.succeeded++;

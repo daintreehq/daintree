@@ -1,9 +1,9 @@
 import { useCallback } from "react";
 import type { WorktreeState, RecipeTerminal } from "@/types";
-import { copyTreeClient, githubClient, systemClient } from "@/clients";
 import { useErrorStore, type AppError } from "@/store";
 import { useRecipeStore } from "@/store/recipeStore";
 import { formatBytes } from "@/lib/formatBytes";
+import { actionService } from "@/services/ActionService";
 
 export interface UseWorktreeActionsOptions {
   onOpenRecipeEditor?: (worktreeId: string, initialTerminals?: RecipeTerminal[]) => void;
@@ -29,24 +29,26 @@ export function useWorktreeActions({
   const handleCopyTree = useCallback(
     async (worktree: WorktreeState): Promise<string | undefined> => {
       try {
-        const isAvailable = await copyTreeClient.isAvailable();
-        if (!isAvailable) {
-          throw new Error(
-            "CopyTree SDK not available. Please restart the application or check installation."
-          );
+        const result = await actionService.dispatch(
+          "worktree.copyTree",
+          { worktreeId: worktree.id, format: "xml" },
+          { source: "user" }
+        );
+        if (!result.ok) {
+          throw new Error(result.error.message);
         }
 
-        const result = await copyTreeClient.generateAndCopyFile(worktree.id, {
-          format: "xml",
-        });
-
-        if (result.error) {
-          throw new Error(result.error);
+        if (!result.result) {
+          return undefined;
         }
 
-        const sizeStr = result.stats?.totalSize ? formatBytes(result.stats.totalSize) : "";
-
-        return `Copied ${result.fileCount} files${sizeStr ? ` (${sizeStr})` : ""} to clipboard`;
+        const payload = result.result as {
+          fileCount: number;
+          stats?: { totalSize?: number } | null;
+        };
+        const stats = payload.stats ?? undefined;
+        const sizeStr = stats?.totalSize ? formatBytes(stats.totalSize) : "";
+        return `Copied ${payload.fileCount} files${sizeStr ? ` (${sizeStr})` : ""} to clipboard`;
       } catch (e) {
         const message = e instanceof Error ? e.message : "Failed to copy context to clipboard";
         const details = e instanceof Error ? e.stack : undefined;
@@ -81,18 +83,30 @@ export function useWorktreeActions({
   );
 
   const handleOpenEditor = useCallback((worktree: WorktreeState) => {
-    systemClient.openPath(worktree.path);
+    void actionService.dispatch(
+      "worktree.openEditor",
+      { worktreeId: worktree.id },
+      { source: "user" }
+    );
   }, []);
 
   const handleOpenIssue = useCallback((worktree: WorktreeState) => {
     if (worktree.issueNumber) {
-      githubClient.openIssue(worktree.path, worktree.issueNumber);
+      void actionService.dispatch(
+        "worktree.openIssue",
+        { worktreeId: worktree.id },
+        { source: "user" }
+      );
     }
   }, []);
 
   const handleOpenPR = useCallback((worktree: WorktreeState) => {
     if (worktree.prUrl) {
-      githubClient.openPR(worktree.prUrl);
+      void actionService.dispatch(
+        "worktree.openPR",
+        { worktreeId: worktree.id },
+        { source: "user" }
+      );
     }
   }, []);
 

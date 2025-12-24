@@ -3,6 +3,7 @@ import { Search, ExternalLink, RefreshCw, AlertCircle, Plus } from "lucide-react
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { githubClient } from "@/clients/githubClient";
+import { actionService } from "@/services/ActionService";
 import { GitHubListItem } from "./GitHubListItem";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
@@ -146,9 +147,9 @@ export function GitHubResourceList({
 
   const handleOpenInGitHub = () => {
     if (type === "issue") {
-      githubClient.openIssues(projectPath);
+      void actionService.dispatch("github.openIssues", { projectPath }, { source: "user" });
     } else {
-      githubClient.openPRs(projectPath);
+      void actionService.dispatch("github.openPRs", { projectPath }, { source: "user" });
     }
     onClose?.();
   };

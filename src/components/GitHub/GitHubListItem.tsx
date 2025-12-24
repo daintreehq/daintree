@@ -9,6 +9,7 @@ import {
   GitBranch,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { actionService } from "@/services/ActionService";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
 
 interface GitHubListItemProps {
@@ -66,7 +67,7 @@ export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemP
 
   const handleOpenExternal = (e: MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
-    window.electron.system.openExternal(item.url);
+    void actionService.dispatch("system.openExternal", { url: item.url }, { source: "user" });
   };
 
   const handleCopyNumber = async (e: MouseEvent<HTMLButtonElement>) => {

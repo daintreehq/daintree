@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { ProjectPulse, PulseRangeDays } from "@shared/types";
+import { actionService } from "@/services/ActionService";
 
 interface PulseState {
   pulses: Map<string, ProjectPulse>;
@@ -47,13 +48,21 @@ export const usePulseStore = create<PulseStore>()((set, get) => ({
     }));
 
     try {
-      const pulse = await window.electron.git.getProjectPulse({
-        worktreeId,
-        rangeDays: requestedRangeDays,
-        includeDelta: true,
-        includeRecentCommits: false,
-        forceRefresh,
-      });
+      const result = await actionService.dispatch(
+        "git.getProjectPulse",
+        {
+          worktreeId,
+          rangeDays: requestedRangeDays,
+          includeDelta: true,
+          includeRecentCommits: false,
+          forceRefresh,
+        },
+        { source: "user" }
+      );
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
+      const pulse = result.result as ProjectPulse;
 
       const currentState = get();
       if (

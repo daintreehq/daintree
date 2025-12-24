@@ -35,8 +35,6 @@ export function useActionRegistry(options: ActionCallbacks): void {
       onOpenShortcuts: () => callbacksRef.current.onOpenShortcuts(),
       onLaunchAgent: (agentId, opts) => callbacksRef.current.onLaunchAgent(agentId, opts),
       onInject: (worktreeId) => callbacksRef.current.onInject(worktreeId),
-      onOpenTerminalInfo: (terminalId) => callbacksRef.current.onOpenTerminalInfo(terminalId),
-      onRenameTerminal: (terminalId) => callbacksRef.current.onRenameTerminal(terminalId),
       getDefaultCwd: () => callbacksRef.current.getDefaultCwd(),
       getActiveWorktreeId: () => callbacksRef.current.getActiveWorktreeId(),
       getWorktrees: () => callbacksRef.current.getWorktrees(),

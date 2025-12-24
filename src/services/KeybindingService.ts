@@ -997,6 +997,10 @@ class KeybindingService {
     }
     return Array.from(categories).sort();
   }
+
+  getOverridesSnapshot(): Record<string, string[]> {
+    return Object.fromEntries(this.overrides.entries());
+  }
 }
 
 export const keybindingService = new KeybindingService();

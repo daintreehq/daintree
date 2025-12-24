@@ -22,6 +22,7 @@ import {
 import { useTerminalLogic } from "@/hooks/useTerminalLogic";
 import type { AgentState } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { actionService } from "@/services/ActionService";
 import { InputTracker } from "@/services/clearCommandDetection";
 import { getAgentConfig } from "@/config/agents";
 import { terminalClient } from "@/clients";
@@ -598,7 +599,9 @@ function TerminalPaneComponent({
                   )}
 
                   <button
-                    onClick={() => window.location.reload()}
+                    onClick={() =>
+                      void actionService.dispatch("ui.refresh", undefined, { source: "user" })
+                    }
                     className="px-4 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-lg border border-red-500/30 transition-colors"
                   >
                     Restart Application

@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { CommitListItem } from "./CommitListItem";
 import type { GitCommit, GitCommitListResponse } from "@shared/types/github";
+import { actionService } from "@/services/ActionService";
 
 interface CommitListProps {
   projectPath: string;
@@ -52,12 +53,20 @@ export function CommitList({ projectPath, onClose, initialCount }: CommitListPro
       }
 
       try {
-        const result: GitCommitListResponse = await window.electron.git.listCommits({
-          cwd: projectPath,
-          search: debouncedSearch || undefined,
-          skip: currentSkip,
-          limit: PAGE_SIZE,
-        });
+        const actionResult = await actionService.dispatch(
+          "git.listCommits",
+          {
+            cwd: projectPath,
+            search: debouncedSearch || undefined,
+            skip: currentSkip,
+            limit: PAGE_SIZE,
+          },
+          { source: "user" }
+        );
+        if (!actionResult.ok) {
+          throw new Error(actionResult.error.message);
+        }
+        const result = actionResult.result as GitCommitListResponse;
 
         if (abortSignal?.aborted) return;
 

@@ -1,6 +1,7 @@
 import React, { Component, type ReactNode } from "react";
 import { ErrorFallback, type ErrorFallbackProps } from "./ErrorFallback";
 import { useErrorStore } from "@/store/errorStore";
+import { actionService } from "@/services/ActionService";
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -110,7 +111,16 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     const issueUrl = `https://github.com/gregpriday/canopy-electron/issues/new?title=${encodeURIComponent(`Component Error: ${error?.message || "Unknown"}`)}&body=${issueBody}`;
 
     if (window.electron?.system?.openExternal) {
-      window.electron.system.openExternal(issueUrl);
+      actionService
+        .dispatch("system.openExternal", { url: issueUrl }, { source: "user" })
+        .then((result) => {
+          if (!result.ok) {
+            window.electron.system.openExternal(issueUrl);
+          }
+        })
+        .catch(() => {
+          window.electron.system.openExternal(issueUrl);
+        });
     }
   };
 

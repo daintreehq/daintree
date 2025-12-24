@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Search, RotateCcw, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { keybindingService, KeybindingConfig } from "@/services/KeybindingService";
+import { actionService } from "@/services/ActionService";
 
 interface ShortcutBinding extends KeybindingConfig {
   effectiveCombo: string;
@@ -335,22 +336,37 @@ export function KeyboardShortcutsTab() {
   }, [filteredBindings]);
 
   const handleSaveShortcut = async (actionId: string, combo: string) => {
-    if (combo === "") {
-      await keybindingService.setOverride(actionId, []);
-    } else {
-      await keybindingService.setOverride(actionId, [combo]);
+    const result = await actionService.dispatch(
+      "keybinding.setOverride",
+      { actionId, combo: combo === "" ? [] : [combo] },
+      { source: "user" }
+    );
+    if (!result.ok) {
+      console.error("Failed to save keybinding override:", result.error);
     }
     setEditingActionId(null);
     loadBindings();
   };
 
   const handleResetShortcut = async (actionId: string) => {
-    await keybindingService.removeOverride(actionId);
+    const result = await actionService.dispatch(
+      "keybinding.removeOverride",
+      { actionId },
+      { source: "user" }
+    );
+    if (!result.ok) {
+      console.error("Failed to reset keybinding override:", result.error);
+    }
     loadBindings();
   };
 
   const handleResetAll = async () => {
-    await keybindingService.resetAllOverrides();
+    const result = await actionService.dispatch("keybinding.resetAll", undefined, {
+      source: "user",
+    });
+    if (!result.ok) {
+      console.error("Failed to reset all keybinding overrides:", result.error);
+    }
     loadBindings();
   };
 

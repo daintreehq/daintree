@@ -4,7 +4,7 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import { AlertTriangle, Trash2 } from "lucide-react";
 import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
 import { useTerminalStore } from "@/store";
-import { worktreeClient } from "@/clients";
+import { actionService } from "@/services/ActionService";
 import type { WorktreeState } from "@/types";
 
 interface WorktreeDeleteDialogProps {
@@ -39,7 +39,14 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       if (closeTerminals && hasTerminals) {
         bulkCloseByWorktree(worktree.id);
       }
-      await worktreeClient.delete(worktree.id, force);
+      const result = await actionService.dispatch(
+        "worktree.delete",
+        { worktreeId: worktree.id, force },
+        { source: "user" }
+      );
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
       onClose();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

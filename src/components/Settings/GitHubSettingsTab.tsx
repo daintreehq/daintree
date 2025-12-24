@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Key, Check, AlertCircle, Loader2, FlaskConical, ExternalLink } from "lucide-react";
-import { githubClient } from "@/clients";
 import { useGitHubConfigStore } from "@/store";
+import { actionService } from "@/services/ActionService";
 
 type ValidationResult = "success" | "error" | "test-success" | "test-error" | null;
 
@@ -41,15 +41,29 @@ export function GitHubSettingsTab() {
     setErrorMessage(null);
 
     try {
-      const result = await githubClient.setToken(githubToken.trim());
-      if (result.valid) {
+      const result = await actionService.dispatch(
+        "github.setToken",
+        { token: githubToken.trim() },
+        { source: "user" }
+      );
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
+      const validation = result.result as { valid: boolean; error?: string };
+      if (validation.valid) {
         setGithubToken("");
         setValidationResult("success");
-        const config = await githubClient.getConfig();
+        const configResult = await actionService.dispatch("github.getConfig", undefined, {
+          source: "user",
+        });
+        if (!configResult.ok) {
+          throw new Error(configResult.error.message);
+        }
+        const config = configResult.result as any;
         updateConfig(config);
       } else {
         setValidationResult("error");
-        setErrorMessage(result.error || "Invalid token");
+        setErrorMessage(validation.error || "Invalid token");
       }
     } catch (error) {
       console.error("Failed to save GitHub token:", error);
@@ -62,9 +76,19 @@ export function GitHubSettingsTab() {
 
   const handleClearToken = useCallback(async () => {
     try {
-      await githubClient.clearToken();
-      const config = await githubClient.getConfig();
-      updateConfig(config);
+      const clearResult = await actionService.dispatch("github.clearToken", undefined, {
+        source: "user",
+      });
+      if (!clearResult.ok) {
+        throw new Error(clearResult.error.message);
+      }
+      const configResult = await actionService.dispatch("github.getConfig", undefined, {
+        source: "user",
+      });
+      if (!configResult.ok) {
+        throw new Error(configResult.error.message);
+      }
+      updateConfig(configResult.result as any);
       setValidationResult(null);
       setErrorMessage(null);
     } catch (error) {
@@ -82,10 +106,18 @@ export function GitHubSettingsTab() {
     setErrorMessage(null);
 
     try {
-      const result = await githubClient.validateToken(githubToken.trim());
-      setValidationResult(result.valid ? "test-success" : "test-error");
-      if (!result.valid) {
-        setErrorMessage(result.error || "Invalid token");
+      const result = await actionService.dispatch(
+        "github.validateToken",
+        { token: githubToken.trim() },
+        { source: "user" }
+      );
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
+      const validation = result.result as { valid: boolean; error?: string };
+      setValidationResult(validation.valid ? "test-success" : "test-error");
+      if (!validation.valid) {
+        setErrorMessage(validation.error || "Invalid token");
       }
     } catch (error) {
       console.error("Failed to test GitHub token:", error);
@@ -97,8 +129,12 @@ export function GitHubSettingsTab() {
   }, [githubToken]);
 
   const openGitHubTokenPage = useCallback(() => {
-    window.electron.system.openExternal(
-      "https://github.com/settings/tokens/new?scopes=repo,read:org&description=Canopy%20Command%20Center"
+    void actionService.dispatch(
+      "system.openExternal",
+      {
+        url: "https://github.com/settings/tokens/new?scopes=repo,read:org&description=Canopy%20Command%20Center",
+      },
+      { source: "user" }
     );
   }, []);
 
@@ -117,7 +153,7 @@ export function GitHubSettingsTab() {
           {loadError || "Failed to load GitHub settings"}
         </div>
         <button
-          onClick={() => window.location.reload()}
+          onClick={() => void actionService.dispatch("ui.refresh", undefined, { source: "user" })}
           className="text-xs px-3 py-1.5 bg-canopy-accent/10 hover:bg-canopy-accent/20 text-canopy-accent rounded transition-colors"
         >
           Reload Application
