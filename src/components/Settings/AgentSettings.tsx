@@ -10,6 +10,7 @@ import {
 } from "@shared/types";
 import { RotateCcw, ExternalLink } from "lucide-react";
 import { actionService } from "@/services/ActionService";
+import { AgentHelpOutput } from "./AgentHelpOutput";
 
 interface AgentSettingsProps {
   onSettingsChange?: () => void;
@@ -274,6 +275,13 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
             />
             <p className="text-xs text-canopy-text/40">Extra CLI flags appended when launching</p>
           </div>
+
+          {/* Help Output */}
+          <AgentHelpOutput
+            agentId={activeAgent.id}
+            agentName={activeAgent.name}
+            usageUrl={activeAgent.usageUrl}
+          />
         </div>
       )}
     </div>

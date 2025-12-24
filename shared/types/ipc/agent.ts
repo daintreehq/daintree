@@ -122,3 +122,16 @@ export interface ApplyPatchResult {
   /** Files that were modified */
   modifiedFiles?: string[];
 }
+
+export interface AgentHelpRequest {
+  agentId: string;
+  refresh?: boolean;
+}
+
+export interface AgentHelpResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  timedOut: boolean;
+  truncated?: boolean;
+}

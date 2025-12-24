@@ -25,6 +25,8 @@ import type {
   AgentDetectedPayload,
   AgentExitedPayload,
   ArtifactDetectedPayload,
+  AgentHelpRequest,
+  AgentHelpResult,
 } from "./agent.js";
 import type {
   CopyTreeResult,
@@ -204,6 +206,9 @@ export interface ElectronAPI {
     get(): Promise<AgentSettings>;
     set(agentId: AgentId, settings: Partial<AgentSettingsEntry>): Promise<AgentSettings>;
     reset(agentId?: AgentId): Promise<AgentSettings>;
+  };
+  agentHelp: {
+    get(request: AgentHelpRequest): Promise<AgentHelpResult>;
   };
   github: {
     getRepoStats(cwd: string, bypassCache?: boolean): Promise<RepositoryStats>;

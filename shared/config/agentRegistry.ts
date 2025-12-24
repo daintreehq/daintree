@@ -1,3 +1,8 @@
+export interface AgentHelpConfig {
+  args: string[];
+  title?: string;
+}
+
 export interface AgentConfig {
   id: string;
   name: string;
@@ -8,6 +13,7 @@ export interface AgentConfig {
   shortcut?: string | null;
   tooltip?: string;
   usageUrl?: string;
+  help?: AgentHelpConfig;
   capabilities?: {
     scrollback?: number;
     blockAltScreen?: boolean;

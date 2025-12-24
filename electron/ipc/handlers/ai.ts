@@ -3,9 +3,12 @@ import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import type { HandlerDependencies } from "../types.js";
 import { DEFAULT_AGENT_SETTINGS } from "../../../shared/types/index.js";
+import { AgentHelpService } from "../../services/AgentHelpService.js";
+import type { AgentHelpRequest, AgentHelpResult } from "../../../shared/types/ipc/agent.js";
 
 export function registerAiHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
+  const agentHelpService = new AgentHelpService();
 
   const handleAgentSettingsGet = async () => {
     return store.get("agentSettings");
@@ -67,6 +70,25 @@ export function registerAiHandlers(_deps: HandlerDependencies): () => void {
   };
   ipcMain.handle(CHANNELS.AGENT_SETTINGS_RESET, handleAgentSettingsReset);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.AGENT_SETTINGS_RESET));
+
+  const handleAgentHelpGet = async (
+    _event: Electron.IpcMainInvokeEvent,
+    request: AgentHelpRequest
+  ): Promise<AgentHelpResult> => {
+    if (!request || typeof request !== "object") {
+      throw new Error("Invalid request");
+    }
+    const { agentId, refresh = false } = request;
+    if (typeof agentId !== "string" || !agentId) {
+      throw new Error("Invalid agentId");
+    }
+    if (refresh !== undefined && typeof refresh !== "boolean") {
+      throw new Error("Invalid refresh parameter");
+    }
+    return agentHelpService.getHelp(agentId, refresh);
+  };
+  ipcMain.handle(CHANNELS.AGENT_HELP_GET, handleAgentHelpGet);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.AGENT_HELP_GET));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

@@ -684,6 +684,11 @@ const api: ElectronAPI = {
     reset: (agentType?: string) => _typedInvoke(CHANNELS.AGENT_SETTINGS_RESET, agentType),
   },
 
+  agentHelp: {
+    get: (request: import("../shared/types/ipc/agent.js").AgentHelpRequest) =>
+      _typedInvoke(CHANNELS.AGENT_HELP_GET, request),
+  },
+
   // GitHub API
   github: {
     getRepoStats: (cwd: string, bypassCache?: boolean) =>
