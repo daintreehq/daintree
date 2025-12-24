@@ -24,6 +24,7 @@ import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useTerminalInputStore } from "./terminalInputStore";
 import type { CrashType } from "@shared/types/pty-host";
+import { isAgentTerminal } from "@/utils/terminalType";
 
 export type { TerminalInstance, AddTerminalOptions, QueuedCommand, CrashType };
 export { isAgentReady };
@@ -425,7 +426,7 @@ export function setupTerminalStoreListeners() {
     useTerminalStore.setState({ focusedId: id });
   });
 
-  exitUnsubscribe = terminalClient.onExit((id) => {
+  exitUnsubscribe = terminalClient.onExit((id, exitCode) => {
     // Check synchronous restart guard FIRST - this handles the race condition where
     // the store's isRestarting flag hasn't propagated yet during bulk restarts
     if (isTerminalRestarting(id)) {
@@ -445,6 +446,13 @@ export function setupTerminalStoreListeners() {
     // If already trashed, this is TTL expiry cleanup - permanently remove
     if (terminal.location === "trash") {
       state.removeTerminal(id);
+      return;
+    }
+
+    // Preserve successfully completed agent terminals to enable reboot and output review
+    // Note: exitCode 0 includes signal-terminated processes (exitCode ?? 0), but these are
+    // rare for agents and the benefit of preserving output outweighs the edge case
+    if (isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId) && exitCode === 0) {
       return;
     }
 
