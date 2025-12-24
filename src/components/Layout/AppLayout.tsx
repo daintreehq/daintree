@@ -199,6 +199,12 @@ export function AppLayout({
   }, []);
 
   useEffect(() => {
+    const handleResetSidebarWidth = () => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
+    window.addEventListener("canopy:reset-sidebar-width", handleResetSidebarWidth);
+    return () => window.removeEventListener("canopy:reset-sidebar-width", handleResetSidebarWidth);
+  }, []);
+
+  useEffect(() => {
     const handleResize = () => {
       layout.updateSidecarLayoutMode(window.innerWidth, layout.isFocusMode ? 0 : sidebarWidth);
     };

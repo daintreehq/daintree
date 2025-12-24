@@ -4,6 +4,7 @@ import type { WorkspaceClient } from "../services/WorkspaceClient.js";
 import type { EventBuffer } from "../services/EventBuffer.js";
 import type { CliAvailabilityService } from "../services/CliAvailabilityService.js";
 import type { SidecarManager } from "../services/SidecarManager.js";
+import type { TypedEventBus } from "../services/events.js";
 
 export interface HandlerDependencies {
   mainWindow: BrowserWindow;
@@ -12,4 +13,5 @@ export interface HandlerDependencies {
   eventBuffer?: EventBuffer;
   cliAvailabilityService?: CliAvailabilityService;
   sidecarManager?: SidecarManager;
+  events?: TypedEventBus;
 }

@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { actionService } from "@/services/ActionService";
 
 export interface ErrorFallbackProps {
   error: Error;
@@ -48,9 +49,7 @@ export function ErrorFallback({
   const sizes = VARIANT_SIZES[variant];
 
   const handleOpenLogs = () => {
-    if (window.electron?.errors?.openLogs) {
-      window.electron.errors.openLogs();
-    }
+    void actionService.dispatch("logs.openFile", undefined, { source: "user" });
   };
 
   return (

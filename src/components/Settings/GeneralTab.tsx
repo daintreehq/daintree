@@ -10,12 +10,12 @@ import {
   Wrench,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { hibernationClient, cliAvailabilityClient, agentSettingsClient } from "@/clients";
 import { getAgentIds, getAgentConfig } from "@/config/agents";
 import { DEFAULT_AGENT_SETTINGS, getAgentSettingsEntry } from "@shared/types";
 import type { HibernationConfig, CliAvailability, AgentSettings } from "@shared/types";
 import { usePreferencesStore } from "@/store";
 import { keybindingService } from "@/services/KeybindingService";
+import { actionService } from "@/services/ActionService";
 
 interface GeneralTabProps {
   appVersion: string;
@@ -72,15 +72,16 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
   const [shortcuts, setShortcuts] = useState<ShortcutCategory[]>([]);
 
   const showProjectPulse = usePreferencesStore((s) => s.showProjectPulse);
-  const setShowProjectPulse = usePreferencesStore((s) => s.setShowProjectPulse);
   const showDeveloperTools = usePreferencesStore((s) => s.showDeveloperTools);
-  const setShowDeveloperTools = usePreferencesStore((s) => s.setShowDeveloperTools);
 
   useEffect(() => {
-    hibernationClient
-      .getConfig()
-      .then((config) => {
-        setHibernationConfig(config);
+    actionService
+      .dispatch("hibernation.getConfig", undefined, { source: "user" })
+      .then((result) => {
+        if (!result.ok) {
+          throw new Error(result.error.message);
+        }
+        setHibernationConfig(result.result as HibernationConfig);
         setConfigError(null);
       })
       .catch((error) => {
@@ -90,10 +91,19 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
   }, []);
 
   useEffect(() => {
-    Promise.all([cliAvailabilityClient.get(), agentSettingsClient.get()])
-      .then(([availability, settings]) => {
-        setCliAvailability(availability);
-        setAgentSettings(settings ?? DEFAULT_AGENT_SETTINGS);
+    Promise.all([
+      actionService.dispatch("cliAvailability.get", undefined, { source: "user" }),
+      actionService.dispatch("agentSettings.get", undefined, { source: "user" }),
+    ])
+      .then(([availabilityResult, settingsResult]) => {
+        if (!availabilityResult.ok) {
+          throw new Error(availabilityResult.error.message);
+        }
+        if (!settingsResult.ok) {
+          throw new Error(settingsResult.error.message);
+        }
+        setCliAvailability(availabilityResult.result as CliAvailability);
+        setAgentSettings((settingsResult.result as AgentSettings) ?? DEFAULT_AGENT_SETTINGS);
       })
       .catch((error) => {
         console.error("Failed to load agent availability:", error);
@@ -150,10 +160,15 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
     if (!hibernationConfig || isSaving) return;
     setIsSaving(true);
     try {
-      const updated = await hibernationClient.updateConfig({
-        enabled: !hibernationConfig.enabled,
-      });
-      setHibernationConfig(updated);
+      const result = await actionService.dispatch(
+        "hibernation.updateConfig",
+        { enabled: !hibernationConfig.enabled },
+        { source: "user" }
+      );
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
+      setHibernationConfig(result.result as HibernationConfig);
     } catch (error) {
       console.error("Failed to update hibernation config:", error);
     } finally {
@@ -165,10 +180,15 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
     if (!hibernationConfig || isSaving) return;
     setIsSaving(true);
     try {
-      const updated = await hibernationClient.updateConfig({
-        inactiveThresholdHours: value,
-      });
-      setHibernationConfig(updated);
+      const result = await actionService.dispatch(
+        "hibernation.updateConfig",
+        { inactiveThresholdHours: value },
+        { source: "user" }
+      );
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
+      setHibernationConfig(result.result as HibernationConfig);
     } catch (error) {
       console.error("Failed to update hibernation threshold:", error);
     } finally {
@@ -360,7 +380,13 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
           Display
         </h4>
         <button
-          onClick={() => setShowProjectPulse(!showProjectPulse)}
+          onClick={() =>
+            void actionService.dispatch(
+              "preferences.showProjectPulse.set",
+              { show: !showProjectPulse },
+              { source: "user" }
+            )
+          }
           role="switch"
           aria-checked={showProjectPulse}
           aria-label="Project Pulse Toggle"
@@ -401,7 +427,13 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
         </button>
 
         <button
-          onClick={() => setShowDeveloperTools(!showDeveloperTools)}
+          onClick={() =>
+            void actionService.dispatch(
+              "preferences.showDeveloperTools.set",
+              { show: !showDeveloperTools },
+              { source: "user" }
+            )
+          }
           role="switch"
           aria-checked={showDeveloperTools}
           aria-label="Developer Tools Toggle"

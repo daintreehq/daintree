@@ -17,14 +17,14 @@ import {
   useScrollbackStore,
   useTerminalInputStore,
 } from "@/store";
-import { appClient, terminalConfigClient } from "@/clients";
-import type { TerminalLayoutStrategy, TerminalGridConfig, TerminalType } from "@/types";
+import type { TerminalLayoutStrategy, TerminalType } from "@/types";
 import {
   getScrollbackForType,
   estimateMemoryUsage,
   formatBytes,
   PERFORMANCE_MODE_SCROLLBACK,
 } from "@/utils/scrollbackConfig";
+import { actionService } from "@/services/ActionService";
 
 const STRATEGIES: Array<{
   id: TerminalLayoutStrategy;
@@ -67,18 +67,13 @@ const TYPICAL_TERMINAL_COUNTS: Partial<Record<TerminalType, number>> = {
 
 export function TerminalSettingsTab() {
   const layoutConfig = useLayoutConfigStore((state) => state.layoutConfig);
-  const setLayoutConfig = useLayoutConfigStore((state) => state.setLayoutConfig);
 
   const performanceMode = usePerformanceModeStore((state) => state.performanceMode);
-  const setPerformanceMode = usePerformanceModeStore((state) => state.setPerformanceMode);
 
   const scrollbackLines = useScrollbackStore((state) => state.scrollbackLines);
-  const setScrollbackLines = useScrollbackStore((state) => state.setScrollbackLines);
 
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
-  const setHybridInputEnabled = useTerminalInputStore((state) => state.setHybridInputEnabled);
   const hybridInputAutoFocus = useTerminalInputStore((state) => state.hybridInputAutoFocus);
-  const setHybridInputAutoFocus = useTerminalInputStore((state) => state.setHybridInputAutoFocus);
 
   const [showMemoryDetails, setShowMemoryDetails] = useState(false);
 
@@ -102,63 +97,84 @@ export function TerminalSettingsTab() {
   }, [performanceMode, scrollbackLines]);
 
   const handleScrollbackChange = async (value: number) => {
-    const previousValue = scrollbackLines;
-    setScrollbackLines(value);
     try {
-      await terminalConfigClient.setScrollback(value);
+      const result = await actionService.dispatch(
+        "terminalConfig.setScrollback",
+        { scrollbackLines: value },
+        { source: "user" }
+      );
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
     } catch (error) {
       console.error("Failed to persist scrollback setting:", error);
-      // Revert on failure
-      setScrollbackLines(previousValue);
     }
   };
 
   const handleStrategyChange = (strategy: TerminalLayoutStrategy) => {
-    const newConfig: TerminalGridConfig = { ...layoutConfig, strategy };
-    setLayoutConfig(newConfig);
-    appClient.setState({ terminalGridConfig: newConfig });
+    void actionService.dispatch(
+      "terminal.gridLayout.setStrategy",
+      { strategy },
+      { source: "user" }
+    );
   };
 
   const handleValueChange = (val: string) => {
     const num = parseInt(val, 10);
     if (!isNaN(num) && num >= 1 && num <= 10) {
-      const newConfig: TerminalGridConfig = { ...layoutConfig, value: num };
-      setLayoutConfig(newConfig);
-      appClient.setState({ terminalGridConfig: newConfig });
+      void actionService.dispatch(
+        "terminal.gridLayout.setValue",
+        { value: num },
+        { source: "user" }
+      );
     }
   };
 
   const handlePerformanceModeToggle = async () => {
     const newValue = !performanceMode;
     try {
-      await terminalConfigClient.setPerformanceMode(newValue);
-      setPerformanceMode(newValue);
+      const result = await actionService.dispatch(
+        "terminalConfig.setPerformanceMode",
+        { performanceMode: newValue },
+        { source: "user" }
+      );
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
     } catch (error) {
       console.error("Failed to persist performance mode setting:", error);
     }
   };
 
   const handleHybridInputEnabledToggle = async () => {
-    const previousValue = hybridInputEnabled;
     const nextValue = !hybridInputEnabled;
-    setHybridInputEnabled(nextValue);
     try {
-      await terminalConfigClient.setHybridInputEnabled(nextValue);
+      const result = await actionService.dispatch(
+        "terminalConfig.setHybridInputEnabled",
+        { enabled: nextValue },
+        { source: "user" }
+      );
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
     } catch (error) {
       console.error("Failed to persist hybrid input setting:", error);
-      setHybridInputEnabled(previousValue);
     }
   };
 
   const handleHybridInputAutoFocusToggle = async () => {
-    const previousValue = hybridInputAutoFocus;
     const nextValue = !hybridInputAutoFocus;
-    setHybridInputAutoFocus(nextValue);
     try {
-      await terminalConfigClient.setHybridInputAutoFocus(nextValue);
+      const result = await actionService.dispatch(
+        "terminalConfig.setHybridInputAutoFocus",
+        { enabled: nextValue },
+        { source: "user" }
+      );
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
     } catch (error) {
       console.error("Failed to persist hybrid input focus setting:", error);
-      setHybridInputAutoFocus(previousValue);
     }
   };
 

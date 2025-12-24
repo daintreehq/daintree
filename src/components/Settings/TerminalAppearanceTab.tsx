@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useTerminalFontStore } from "@/store";
-import { terminalConfigClient } from "@/clients/terminalConfigClient";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
+import { actionService } from "@/services/ActionService";
 
 const MIN_FONT_SIZE = 8;
 const MAX_FONT_SIZE = 24;
@@ -25,8 +25,6 @@ const FONT_FAMILY_OPTIONS: Array<{ id: string; label: string; value: string }> =
 export function TerminalAppearanceTab() {
   const fontSize = useTerminalFontStore((state) => state.fontSize);
   const fontFamily = useTerminalFontStore((state) => state.fontFamily);
-  const setFontSize = useTerminalFontStore((state) => state.setFontSize);
-  const setFontFamily = useTerminalFontStore((state) => state.setFontFamily);
 
   const [fontSizeInput, setFontSizeInput] = useState<string>(String(fontSize));
   const [fontSizeError, setFontSizeError] = useState<string | null>(null);
@@ -61,14 +59,19 @@ export function TerminalAppearanceTab() {
     }
 
     const previous = fontSize;
-    setFontSize(parsed);
     setFontSizeError(null);
 
     try {
-      await terminalConfigClient.setFontSize(parsed);
+      const result = await actionService.dispatch(
+        "terminalConfig.setFontSize",
+        { fontSize: parsed },
+        { source: "user" }
+      );
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
     } catch (error) {
       console.error("Failed to persist terminal font size:", error);
-      setFontSize(previous);
       setFontSizeInput(String(previous));
       setFontSizeError("Failed to save font size.");
     }
@@ -81,14 +84,17 @@ export function TerminalAppearanceTab() {
     const nextFamily = option.value;
     if (nextFamily === fontFamily) return;
 
-    const previous = fontFamily;
-    setFontFamily(nextFamily);
-
     try {
-      await terminalConfigClient.setFontFamily(nextFamily);
+      const result = await actionService.dispatch(
+        "terminalConfig.setFontFamily",
+        { fontFamily: nextFamily },
+        { source: "user" }
+      );
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
     } catch (error) {
       console.error("Failed to persist terminal font family:", error);
-      setFontFamily(previous);
     }
   };
 

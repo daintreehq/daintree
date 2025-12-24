@@ -16,8 +16,8 @@ import {
 } from "../../store";
 import { useRecipeStore } from "../../store/recipeStore";
 import { useWorktreeSelectionStore } from "../../store/worktreeStore";
-import { systemClient, errorsClient } from "@/clients";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { errorsClient } from "@/clients";
+import { actionService } from "@/services/ActionService";
 import { cn } from "../../lib/utils";
 import {
   DropdownMenu,
@@ -171,14 +171,9 @@ export function WorktreeCard({
   const pingTerminal = useTerminalStore((state) => state.pingTerminal);
   const openDockTerminal = useTerminalStore((state) => state.openDockTerminal);
 
-  const bulkCloseByWorktree = useTerminalStore((state) => state.bulkCloseByWorktree);
-  const bulkTrashByWorktree = useTerminalStore((state) => state.bulkTrashByWorktree);
-  const bulkRestartByWorktree = useTerminalStore((state) => state.bulkRestartByWorktree);
   const bulkRestartPreflightCheckByWorktree = useTerminalStore(
     (state) => state.bulkRestartPreflightCheckByWorktree
   );
-  const bulkMoveToDockByWorktree = useTerminalStore((state) => state.bulkMoveToDockByWorktree);
-  const bulkMoveToGridByWorktree = useTerminalStore((state) => state.bulkMoveToGridByWorktree);
   const getCountByWorktree = useTerminalStore((state) => state.getCountByWorktree);
   const completedCount = terminalCounts.byState.completed;
   const failedCount = terminalCounts.byState.failed;
@@ -261,20 +256,20 @@ export function WorktreeCard({
   }, [worktree.aiNote, isMainWorktree, worktree.aiNoteTimestamp, now]);
 
   const handlePathClick = useCallback(() => {
-    systemClient.openPath(worktree.path);
+    void actionService.dispatch("system.openPath", { path: worktree.path }, { source: "user" });
   }, [worktree.path]);
 
   const handleOpenIssue = useCallback(() => {
-    if (worktree.issueNumber && onOpenIssue) {
-      onOpenIssue();
-    }
-  }, [worktree.issueNumber, onOpenIssue]);
+    void actionService.dispatch(
+      "worktree.openIssue",
+      { worktreeId: worktree.id },
+      { source: "user" }
+    );
+  }, [worktree.id]);
 
   const handleOpenPR = useCallback(() => {
-    if (worktree.prNumber && onOpenPR) {
-      onOpenPR();
-    }
-  }, [worktree.prNumber, onOpenPR]);
+    void actionService.dispatch("worktree.openPR", { worktreeId: worktree.id }, { source: "user" });
+  }, [worktree.id]);
 
   const handleRunRecipe = useCallback(
     async (recipeId: string) => {
@@ -301,26 +296,36 @@ export function WorktreeCard({
   const [isRestartValidating, setIsRestartValidating] = useState(false);
 
   const handleCloseCompleted = useCallback(() => {
-    bulkCloseByWorktree(worktree.id, "completed");
-  }, [bulkCloseByWorktree, worktree.id]);
+    void actionService.dispatch(
+      "worktree.sessions.closeCompleted",
+      { worktreeId: worktree.id },
+      { source: "user" }
+    );
+  }, [worktree.id]);
 
   const handleCloseFailed = useCallback(() => {
-    bulkCloseByWorktree(worktree.id, "failed");
-  }, [bulkCloseByWorktree, worktree.id]);
+    void actionService.dispatch(
+      "worktree.sessions.closeFailed",
+      { worktreeId: worktree.id },
+      { source: "user" }
+    );
+  }, [worktree.id]);
 
   const handleMinimizeAll = useCallback(() => {
-    bulkMoveToDockByWorktree(worktree.id);
-  }, [bulkMoveToDockByWorktree, worktree.id]);
+    void actionService.dispatch(
+      "worktree.sessions.minimizeAll",
+      { worktreeId: worktree.id },
+      { source: "user" }
+    );
+  }, [worktree.id]);
 
   const handleMaximizeAll = useCallback(() => {
-    bulkMoveToGridByWorktree(worktree.id);
-  }, [bulkMoveToGridByWorktree, worktree.id]);
-
-  const handleResetAllRenderers = useCallback(() => {
-    for (const terminal of worktreeTerminals) {
-      terminalInstanceService.resetRenderer(terminal.id);
-    }
-  }, [worktreeTerminals]);
+    void actionService.dispatch(
+      "worktree.sessions.maximizeAll",
+      { worktreeId: worktree.id },
+      { source: "user" }
+    );
+  }, [worktree.id]);
 
   const handleCloseAll = useCallback(() => {
     setConfirmDialog({
@@ -328,11 +333,15 @@ export function WorktreeCard({
       title: "Close All Sessions",
       description: `This will move ${totalTerminalCount} session${totalTerminalCount !== 1 ? "s" : ""} to trash for this worktree. They can be restored from the trash.`,
       onConfirm: () => {
-        bulkTrashByWorktree(worktree.id);
+        void actionService.dispatch(
+          "worktree.sessions.trashAll",
+          { worktreeId: worktree.id },
+          { source: "user", confirmed: true }
+        );
         closeConfirmDialog();
       },
     });
-  }, [totalTerminalCount, bulkTrashByWorktree, worktree.id, closeConfirmDialog]);
+  }, [totalTerminalCount, worktree.id, closeConfirmDialog]);
 
   const handleEndAll = useCallback(() => {
     setConfirmDialog({
@@ -340,11 +349,15 @@ export function WorktreeCard({
       title: "End All Sessions",
       description: `This will permanently end ${allTerminalCount} session${allTerminalCount !== 1 ? "s" : ""} and their processes for this worktree. This action cannot be undone.`,
       onConfirm: () => {
-        bulkCloseByWorktree(worktree.id);
+        void actionService.dispatch(
+          "worktree.sessions.endAll",
+          { worktreeId: worktree.id },
+          { source: "user", confirmed: true }
+        );
         closeConfirmDialog();
       },
     });
-  }, [allTerminalCount, bulkCloseByWorktree, worktree.id, closeConfirmDialog]);
+  }, [allTerminalCount, worktree.id, closeConfirmDialog]);
 
   const handleRestartAll = useCallback(async () => {
     if (isRestartValidating) return;
@@ -365,20 +378,18 @@ export function WorktreeCard({
         title: hasIssues ? "Restart Sessions (Some Issues Found)" : "Restart All Sessions",
         description,
         onConfirm: () => {
-          void bulkRestartByWorktree(worktree.id);
+          void actionService.dispatch(
+            "worktree.sessions.restartAll",
+            { worktreeId: worktree.id },
+            { source: "user", confirmed: true }
+          );
           closeConfirmDialog();
         },
       });
     } finally {
       setIsRestartValidating(false);
     }
-  }, [
-    isRestartValidating,
-    bulkRestartPreflightCheckByWorktree,
-    worktree.id,
-    bulkRestartByWorktree,
-    closeConfirmDialog,
-  ]);
+  }, [isRestartValidating, bulkRestartPreflightCheckByWorktree, worktree.id, closeConfirmDialog]);
 
   const handleLaunchAgent = useCallback(
     (agentId: string, e?: React.MouseEvent) => {
@@ -784,34 +795,63 @@ export function WorktreeCard({
       if (!actionId) return;
 
       if (actionId.startsWith("launch:")) {
-        handleLaunchAgent(actionId.slice("launch:".length));
+        const agentId = actionId.slice("launch:".length);
+        void actionService.dispatch(
+          "agent.launch",
+          { agentId, worktreeId: worktree.id, location: "grid" },
+          { source: "context-menu" }
+        );
         return;
       }
 
       if (actionId.startsWith("recipes:run:")) {
         const recipeId = actionId.slice("recipes:run:".length);
-        void handleRunRecipe(recipeId);
+        void actionService.dispatch(
+          "recipe.run",
+          { recipeId, worktreeId: worktree.id },
+          { source: "context-menu" }
+        );
         return;
       }
 
       switch (actionId) {
         case "sessions:minimize-all":
-          handleMinimizeAll();
+          void actionService.dispatch(
+            "worktree.sessions.minimizeAll",
+            { worktreeId: worktree.id },
+            { source: "context-menu" }
+          );
           break;
         case "sessions:maximize-all":
-          handleMaximizeAll();
+          void actionService.dispatch(
+            "worktree.sessions.maximizeAll",
+            { worktreeId: worktree.id },
+            { source: "context-menu" }
+          );
           break;
         case "sessions:restart-all":
           void handleRestartAll();
           break;
         case "sessions:reset-renderers":
-          handleResetAllRenderers();
+          void actionService.dispatch(
+            "worktree.sessions.resetRenderers",
+            { worktreeId: worktree.id },
+            { source: "context-menu" }
+          );
           break;
         case "sessions:close-completed":
-          handleCloseCompleted();
+          void actionService.dispatch(
+            "worktree.sessions.closeCompleted",
+            { worktreeId: worktree.id },
+            { source: "context-menu" }
+          );
           break;
         case "sessions:close-failed":
-          handleCloseFailed();
+          void actionService.dispatch(
+            "worktree.sessions.closeFailed",
+            { worktreeId: worktree.id },
+            { source: "context-menu" }
+          );
           break;
         case "sessions:close-all":
           handleCloseAll();
@@ -820,25 +860,53 @@ export function WorktreeCard({
           handleEndAll();
           break;
         case "worktree:copy-context":
-          void handleCopyTree();
+          void actionService.dispatch(
+            "worktree.copyTree",
+            { worktreeId: worktree.id },
+            { source: "context-menu" }
+          );
           break;
         case "worktree:open-editor":
-          onOpenEditor();
+          void actionService.dispatch(
+            "worktree.openEditor",
+            { worktreeId: worktree.id },
+            { source: "context-menu" }
+          );
           break;
         case "worktree:reveal":
-          handlePathClick();
+          void actionService.dispatch(
+            "worktree.reveal",
+            { worktreeId: worktree.id },
+            { source: "context-menu" }
+          );
           break;
         case "worktree:open-issue":
-          handleOpenIssue();
+          void actionService.dispatch(
+            "worktree.openIssue",
+            { worktreeId: worktree.id },
+            { source: "context-menu" }
+          );
           break;
         case "worktree:open-pr":
-          handleOpenPR();
+          void actionService.dispatch(
+            "worktree.openPR",
+            { worktreeId: worktree.id },
+            { source: "context-menu" }
+          );
           break;
         case "recipes:create":
-          onCreateRecipe?.();
+          void actionService.dispatch(
+            "recipe.editor.open",
+            { worktreeId: worktree.id },
+            { source: "context-menu" }
+          );
           break;
         case "recipes:save-layout":
-          onSaveLayout?.();
+          void actionService.dispatch(
+            "recipe.editor.openFromLayout",
+            { worktreeId: worktree.id },
+            { source: "context-menu" }
+          );
           break;
         case "worktree:delete":
           setShowDeleteDialog(true);
@@ -848,23 +916,15 @@ export function WorktreeCard({
     [
       contextMenuTemplate,
       handleCloseAll,
-      handleCloseCompleted,
-      handleCloseFailed,
       handleCopyTree,
       handleEndAll,
-      handleLaunchAgent,
-      handleMaximizeAll,
-      handleMinimizeAll,
-      handleOpenIssue,
-      handleOpenPR,
       handlePathClick,
-      handleResetAllRenderers,
       handleRestartAll,
-      handleRunRecipe,
       onCreateRecipe,
       onOpenEditor,
       onSaveLayout,
       showMenu,
+      worktree.id,
     ]
   );
 

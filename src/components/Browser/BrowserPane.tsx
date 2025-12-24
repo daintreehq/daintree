@@ -4,6 +4,7 @@ import { useTerminalStore, useBrowserStateStore } from "@/store";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { BrowserToolbar } from "./BrowserToolbar";
 import { normalizeBrowserUrl, extractHostPort, isValidBrowserUrl } from "./browserUtils";
+import { actionService } from "@/services/ActionService";
 
 interface BrowserHistory {
   past: string[];
@@ -166,7 +167,7 @@ export function BrowserPane({
     }
   }, []);
 
-  // Listen for reload events from context menu
+  // Listen for action-driven browser events
   useEffect(() => {
     const handleReloadEvent = (e: Event) => {
       if (!(e instanceof CustomEvent)) return;
@@ -177,18 +178,52 @@ export function BrowserPane({
       }
     };
 
+    const handleNavigateEvent = (e: Event) => {
+      if (!(e instanceof CustomEvent)) return;
+      const detail = e.detail as unknown;
+      if (!detail || typeof (detail as { id?: unknown }).id !== "string") return;
+      if (typeof (detail as { url?: unknown }).url !== "string") return;
+      if ((detail as { id: string }).id === id) {
+        handleNavigate((detail as { url: string }).url);
+      }
+    };
+
+    const handleBackEvent = (e: Event) => {
+      if (!(e instanceof CustomEvent)) return;
+      const detail = e.detail as unknown;
+      if (!detail || typeof (detail as { id?: unknown }).id !== "string") return;
+      if ((detail as { id: string }).id === id) {
+        handleBack();
+      }
+    };
+
+    const handleForwardEvent = (e: Event) => {
+      if (!(e instanceof CustomEvent)) return;
+      const detail = e.detail as unknown;
+      if (!detail || typeof (detail as { id?: unknown }).id !== "string") return;
+      if ((detail as { id: string }).id === id) {
+        handleForward();
+      }
+    };
+
     const controller = new AbortController();
     window.addEventListener("canopy:reload-browser", handleReloadEvent, {
       signal: controller.signal,
     });
+    window.addEventListener("canopy:browser-navigate", handleNavigateEvent, {
+      signal: controller.signal,
+    });
+    window.addEventListener("canopy:browser-back", handleBackEvent, { signal: controller.signal });
+    window.addEventListener("canopy:browser-forward", handleForwardEvent, {
+      signal: controller.signal,
+    });
     return () => controller.abort();
-  }, [id, handleReload]);
+  }, [id, handleReload, handleNavigate, handleBack, handleForward]);
 
   const handleOpenExternal = useCallback(() => {
-    if (hasValidUrl) {
-      window.electron.system.openExternal(currentUrl);
-    }
-  }, [currentUrl, hasValidUrl]);
+    if (!hasValidUrl) return;
+    void actionService.dispatch("browser.openExternal", { terminalId: id }, { source: "user" });
+  }, [hasValidUrl, id]);
 
   const handleIframeLoad = useCallback(() => {
     setIsLoading(false);
@@ -212,15 +247,24 @@ export function BrowserPane({
 
   const browserToolbar = (
     <BrowserToolbar
+      terminalId={id}
       url={currentUrl}
       canGoBack={canGoBack}
       canGoForward={canGoForward}
       isLoading={isLoading}
       urlMightBeStale={urlMightBeStale}
-      onNavigate={handleNavigate}
-      onBack={handleBack}
-      onForward={handleForward}
-      onReload={handleReload}
+      onNavigate={(url) =>
+        void actionService.dispatch("browser.navigate", { terminalId: id, url }, { source: "user" })
+      }
+      onBack={() =>
+        void actionService.dispatch("browser.back", { terminalId: id }, { source: "user" })
+      }
+      onForward={() =>
+        void actionService.dispatch("browser.forward", { terminalId: id }, { source: "user" })
+      }
+      onReload={() =>
+        void actionService.dispatch("browser.reload", { terminalId: id }, { source: "user" })
+      }
       onOpenExternal={handleOpenExternal}
     />
   );

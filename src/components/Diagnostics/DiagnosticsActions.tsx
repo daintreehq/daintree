@@ -1,15 +1,13 @@
 import { useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { useLogsStore, useErrorStore } from "@/store";
-import { useEventStore } from "@/store/eventStore";
-import { logsClient, eventInspectorClient, errorsClient } from "@/clients";
+import { actionService } from "@/services/ActionService";
 
 export function ProblemsActions() {
   const hasActiveErrors = useErrorStore((state) => state.errors.some((e) => !e.dismissed));
-  const clearAll = useErrorStore((state) => state.clearAll);
 
   const handleOpenLogs = useCallback(() => {
-    errorsClient.openLogs();
+    void actionService.dispatch("logs.openFile", undefined, { source: "user" });
   }, []);
 
   return (
@@ -20,7 +18,9 @@ export function ProblemsActions() {
       <Button
         variant="subtle"
         size="xs"
-        onClick={clearAll}
+        onClick={() =>
+          void actionService.dispatch("errors.clearAll", undefined, { source: "user" })
+        }
         disabled={!hasActiveErrors}
         title="Clear all errors"
       >
@@ -33,16 +33,14 @@ export function ProblemsActions() {
 export function LogsActions() {
   const autoScroll = useLogsStore((state) => state.autoScroll);
   const setAutoScroll = useLogsStore((state) => state.setAutoScroll);
-  const clearLogs = useLogsStore((state) => state.clearLogs);
 
   const handleOpenFile = useCallback(async () => {
-    await logsClient.openFile();
+    await actionService.dispatch("logs.openFile", undefined, { source: "user" });
   }, []);
 
   const handleClearLogs = useCallback(async () => {
-    clearLogs();
-    await logsClient.clear();
-  }, [clearLogs]);
+    await actionService.dispatch("logs.clear", undefined, { source: "user" });
+  }, []);
 
   return (
     <div className="flex items-center gap-2">
@@ -65,14 +63,9 @@ export function LogsActions() {
 }
 
 export function EventsActions() {
-  const clearEvents = useEventStore((state) => state.clearEvents);
-
   const handleClearEvents = async () => {
     if (window.confirm("Clear all events? This cannot be undone.")) {
-      // Clear local state
-      clearEvents();
-      // Clear main process buffer
-      await eventInspectorClient.clear();
+      await actionService.dispatch("eventInspector.clear", undefined, { source: "user" });
     }
   };
 

@@ -1,12 +1,12 @@
 import { useState, useEffect, useMemo } from "react";
 import { GitBranch, AlertCircle, Check, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { worktreeConfigClient } from "@/clients";
 import {
   validatePathPattern,
   previewPathPattern,
   DEFAULT_WORKTREE_PATH_PATTERN,
 } from "@shared/utils/pathPattern";
+import { actionService } from "@/services/ActionService";
 
 const PATTERN_PRESETS = [
   {
@@ -48,14 +48,18 @@ export function WorktreeSettingsTab() {
   }, [savedMessageTimeout]);
 
   useEffect(() => {
-    worktreeConfigClient
-      .get()
-      .then((config) => {
+    actionService
+      .dispatch("worktreeConfig.get", undefined, { source: "user" })
+      .then((result) => {
+        if (!result.ok) {
+          throw new Error(result.error.message);
+        }
+        const config = result.result as { pathPattern: string };
         setPattern(config.pathPattern);
         setOriginalPattern(config.pathPattern);
       })
       .catch((err) => {
-        setError(err.message || "Failed to load settings");
+        setError(err instanceof Error ? err.message : "Failed to load settings");
       })
       .finally(() => {
         setIsLoading(false);
@@ -81,9 +85,17 @@ export function WorktreeSettingsTab() {
     setError(null);
 
     try {
-      const result = await worktreeConfigClient.setPattern(pattern);
-      setOriginalPattern(result.pathPattern);
-      setPattern(result.pathPattern);
+      const result = await actionService.dispatch(
+        "worktreeConfig.setPattern",
+        { pattern },
+        { source: "user" }
+      );
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
+      const config = result.result as { pathPattern: string };
+      setOriginalPattern(config.pathPattern);
+      setPattern(config.pathPattern);
       setSavedMessage(true);
       if (savedMessageTimeout) {
         clearTimeout(savedMessageTimeout);

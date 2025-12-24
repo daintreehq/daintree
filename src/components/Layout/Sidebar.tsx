@@ -2,12 +2,10 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { cn } from "@/lib/utils";
 import { ProjectResourceBadge, QuickRun } from "@/components/Project";
 import { useProjectStore } from "@/store/projectStore";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { useWorktrees } from "@/hooks/useWorktrees";
 import { useNativeContextMenu } from "@/hooks";
 import type { MenuItemOption } from "@/types";
-import { systemClient } from "@/clients/systemClient";
 import { DEFAULT_SIDEBAR_WIDTH } from "./AppLayout";
+import { actionService } from "@/services/ActionService";
 
 interface SidebarProps {
   width: number;
@@ -23,8 +21,6 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
   const [isResizing, setIsResizing] = useState(false);
   const sidebarRef = useRef<HTMLElement>(null);
   const currentProject = useProjectStore((state) => state.currentProject);
-  const openCreateWorktreeDialog = useWorktreeSelectionStore((state) => state.openCreateDialog);
-  const { refresh: refreshWorktrees } = useWorktrees();
 
   const startResizing = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -74,28 +70,42 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
 
       switch (actionId) {
         case "worktree:new":
-          openCreateWorktreeDialog();
+          void actionService.dispatch("worktree.createDialog.open", undefined, {
+            source: "context-menu",
+          });
           break;
         case "worktree:refresh":
-          void refreshWorktrees();
+          void actionService.dispatch("worktree.refresh", undefined, { source: "context-menu" });
           break;
         case "project:reveal":
           if (currentProject) {
-            void systemClient.openPath(currentProject.path);
+            void actionService.dispatch(
+              "system.openPath",
+              { path: currentProject.path },
+              { source: "context-menu" }
+            );
           }
           break;
         case "project:settings":
-          window.dispatchEvent(new CustomEvent("canopy:open-project-settings"));
+          void actionService.dispatch("project.settings.open", undefined, {
+            source: "context-menu",
+          });
           break;
         case "sidebar:reset-width":
-          handleResetWidth();
+          void actionService.dispatch("ui.sidebar.resetWidth", undefined, {
+            source: "context-menu",
+          });
           break;
         case "settings:worktree":
-          window.dispatchEvent(new CustomEvent("canopy:open-settings-tab", { detail: "worktree" }));
+          void actionService.dispatch(
+            "app.settings.openTab",
+            { tab: "worktree" },
+            { source: "context-menu" }
+          );
           break;
       }
     },
-    [currentProject, handleResetWidth, openCreateWorktreeDialog, refreshWorktrees, showMenu]
+    [currentProject, showMenu]
   );
 
   const resize = useCallback(

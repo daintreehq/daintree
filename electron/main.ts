@@ -365,6 +365,39 @@ async function createWindow(): Promise<void> {
     return false;
   });
 
+  ipcMain.handle(CHANNELS.WINDOW_RELOAD, (event) => {
+    event.sender.reload();
+  });
+
+  ipcMain.handle(CHANNELS.WINDOW_FORCE_RELOAD, (event) => {
+    event.sender.reloadIgnoringCache();
+  });
+
+  ipcMain.handle(CHANNELS.WINDOW_TOGGLE_DEVTOOLS, (event) => {
+    event.sender.toggleDevTools();
+  });
+
+  const getZoomStep = () => 0.5;
+
+  ipcMain.handle(CHANNELS.WINDOW_ZOOM_IN, (event) => {
+    const current = event.sender.getZoomLevel();
+    event.sender.setZoomLevel(current + getZoomStep());
+  });
+
+  ipcMain.handle(CHANNELS.WINDOW_ZOOM_OUT, (event) => {
+    const current = event.sender.getZoomLevel();
+    event.sender.setZoomLevel(current - getZoomStep());
+  });
+
+  ipcMain.handle(CHANNELS.WINDOW_ZOOM_RESET, (event) => {
+    event.sender.setZoomLevel(0);
+  });
+
+  ipcMain.handle(CHANNELS.WINDOW_CLOSE, (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    win?.close();
+  });
+
   console.log("[MAIN] Creating application menu (initial, no agent availability yet)...");
   cliAvailabilityService = new CliAvailabilityService();
   createApplicationMenu(mainWindow, cliAvailabilityService);
@@ -566,6 +599,13 @@ async function createWindow(): Promise<void> {
 
     // Clean up window-specific IPC handlers
     ipcMain.removeHandler(CHANNELS.WINDOW_TOGGLE_FULLSCREEN);
+    ipcMain.removeHandler(CHANNELS.WINDOW_RELOAD);
+    ipcMain.removeHandler(CHANNELS.WINDOW_FORCE_RELOAD);
+    ipcMain.removeHandler(CHANNELS.WINDOW_TOGGLE_DEVTOOLS);
+    ipcMain.removeHandler(CHANNELS.WINDOW_ZOOM_IN);
+    ipcMain.removeHandler(CHANNELS.WINDOW_ZOOM_OUT);
+    ipcMain.removeHandler(CHANNELS.WINDOW_ZOOM_RESET);
+    ipcMain.removeHandler(CHANNELS.WINDOW_CLOSE);
 
     if (workspaceClient) workspaceClient.dispose();
     disposeWorkspaceClient();

@@ -152,6 +152,8 @@ export interface ElectronAPI {
     setState(partialState: Partial<AppState>): Promise<void>;
     getVersion(): Promise<string>;
     hydrate(): Promise<HydrateResult>;
+    quit(): Promise<void>;
+    forceQuit(): Promise<void>;
     onMenuAction(callback: (action: string) => void): () => void;
   };
   menu: {
@@ -179,6 +181,9 @@ export interface ElectronAPI {
     subscribe(): void;
     unsubscribe(): void;
     onEvent(callback: (event: EventRecord) => void): () => void;
+  };
+  events: {
+    emit(eventType: string, payload: unknown): Promise<void>;
   };
   project: {
     getAll(): Promise<Project[]>;
@@ -305,6 +310,20 @@ export interface ElectronAPI {
     onFullscreenChange(callback: (isFullscreen: boolean) => void): () => void;
     /** Toggle simple fullscreen mode (extends into notch area on MacBook) */
     toggleFullscreen(): Promise<boolean>;
+    /** Reload the window via Electron webContents */
+    reload(): Promise<void>;
+    /** Force reload ignoring cache */
+    forceReload(): Promise<void>;
+    /** Toggle DevTools */
+    toggleDevTools(): Promise<void>;
+    /** Zoom in */
+    zoomIn(): Promise<void>;
+    /** Zoom out */
+    zoomOut(): Promise<void>;
+    /** Reset zoom */
+    zoomReset(): Promise<void>;
+    /** Close window */
+    close(): Promise<void>;
   };
   notification: {
     /** Update window title and dock badge based on terminal attention state */

@@ -14,6 +14,7 @@ import {
 import type { BranchInfo, CreateWorktreeOptions } from "@/types/electron";
 import type { GitHubIssue } from "@shared/types/github";
 import { worktreeClient } from "@/clients";
+import { actionService } from "@/services/ActionService";
 import { IssueSelector } from "@/components/GitHub/IssueSelector";
 import { generateBranchSlug } from "@/utils/textParsing";
 import { BRANCH_TYPES } from "@shared/config/branchPrefixes";
@@ -270,7 +271,14 @@ export function NewWorktreeDialog({
         fromRemote,
       };
 
-      await worktreeClient.create(options, rootPath);
+      const result = await actionService.dispatch(
+        "worktree.create",
+        { rootPath, options },
+        { source: "user" }
+      );
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
 
       onWorktreeCreated?.();
       onClose();
@@ -469,9 +477,11 @@ export function NewWorktreeDialog({
                   size="sm"
                   onClick={async () => {
                     try {
-                      const selected = await window.electron.project.openDialog();
-                      if (selected) {
-                        setWorktreePath(selected);
+                      const result = await actionService.dispatch("project.openDialog", undefined, {
+                        source: "user",
+                      });
+                      if (result.ok && result.result) {
+                        setWorktreePath(result.result as string);
                         setError(null);
                       }
                     } catch (err: unknown) {

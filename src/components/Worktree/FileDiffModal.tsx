@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { DiffViewer } from "./DiffViewer";
 import type { ViewType } from "react-diff-view";
 import type { GitStatus } from "@shared/types";
+import { actionService } from "@/services/ActionService";
 
 export interface FileDiffModalProps {
   isOpen: boolean;
@@ -34,7 +35,15 @@ export function FileDiffModal({
     setError(null);
 
     try {
-      const diffResult = await window.electron.git.getFileDiff(worktreePath, filePath, status);
+      const result = await actionService.dispatch(
+        "git.getFileDiff",
+        { cwd: worktreePath, filePath, status },
+        { source: "user" }
+      );
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
+      const diffResult = result.result as string;
 
       if (!diffResult || !diffResult.trim()) {
         setDiff("NO_CHANGES");

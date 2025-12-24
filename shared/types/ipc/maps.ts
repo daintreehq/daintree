@@ -259,9 +259,51 @@ export interface IpcInvokeMap {
     args: [];
     result: HydrateResult;
   };
+  "app:quit": {
+    args: [];
+    result: void;
+  };
+  "app:force-quit": {
+    args: [];
+    result: void;
+  };
   "menu:show-context": {
     args: [payload: ShowContextMenuPayload];
     result: string | null;
+  };
+
+  // Window channels
+  "window:toggle-fullscreen": {
+    args: [];
+    result: boolean;
+  };
+  "window:reload": {
+    args: [];
+    result: void;
+  };
+  "window:force-reload": {
+    args: [];
+    result: void;
+  };
+  "window:toggle-devtools": {
+    args: [];
+    result: void;
+  };
+  "window:zoom-in": {
+    args: [];
+    result: void;
+  };
+  "window:zoom-out": {
+    args: [];
+    result: void;
+  };
+  "window:zoom-reset": {
+    args: [];
+    result: void;
+  };
+  "window:close": {
+    args: [];
+    result: void;
   };
 
   // Logs channels
@@ -311,6 +353,11 @@ export interface IpcInvokeMap {
   };
   "event-inspector:clear": {
     args: [];
+    result: void;
+  };
+
+  "events:emit": {
+    args: [eventType: string, payload: unknown];
     result: void;
   };
 

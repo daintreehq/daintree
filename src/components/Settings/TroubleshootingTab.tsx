@@ -2,15 +2,11 @@ import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { FileText, Trash2, Bug, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { appClient, logsClient } from "@/clients";
+import { appClient } from "@/clients";
 import type { AppState } from "@shared/types";
+import { actionService } from "@/services/ActionService";
 
-interface TroubleshootingTabProps {
-  openLogs: () => void;
-  clearLogs: () => void;
-}
-
-export function TroubleshootingTab({ openLogs, clearLogs }: TroubleshootingTabProps) {
+export function TroubleshootingTab() {
   const [developerMode, setDeveloperMode] = useState(false);
   const [autoOpenDiagnostics, setAutoOpenDiagnostics] = useState(false);
   const [focusEventsTab, setFocusEventsTab] = useState(false);
@@ -26,10 +22,12 @@ export function TroubleshootingTab({ openLogs, clearLogs }: TroubleshootingTabPr
       }
     });
 
-    logsClient
-      .getVerbose()
-      .then((enabled) => {
-        setVerboseLogging(enabled);
+    actionService
+      .dispatch("logs.getVerbose", undefined, { source: "user" })
+      .then((result) => {
+        if (result.ok) {
+          setVerboseLogging(result.result as boolean);
+        }
       })
       .catch((error) => {
         console.error("Failed to get verbose logging state:", error);
@@ -39,7 +37,18 @@ export function TroubleshootingTab({ openLogs, clearLogs }: TroubleshootingTabPr
   const saveDeveloperModeSettings = useCallback(
     async (settings: NonNullable<AppState["developerMode"]>) => {
       try {
-        await appClient.setState({ developerMode: settings });
+        const result = await actionService.dispatch(
+          "app.developerMode.set",
+          {
+            enabled: settings.enabled,
+            autoOpenDiagnostics: settings.autoOpenDiagnostics,
+            focusEventsTab: settings.focusEventsTab,
+          },
+          { source: "user" }
+        );
+        if (!result.ok) {
+          throw new Error(result.error.message);
+        }
       } catch (error) {
         console.error("Failed to save developer mode settings:", error);
       }
@@ -115,8 +124,13 @@ export function TroubleshootingTab({ openLogs, clearLogs }: TroubleshootingTabPr
     setVerboseLogging(newState);
 
     try {
-      const result = await logsClient.setVerbose(newState);
-      if (!result.success) {
+      const result = await actionService.dispatch(
+        "logs.setVerbose",
+        { enabled: newState },
+        { source: "user" }
+      );
+      const payload = result.ok ? (result.result as { success: boolean }) : null;
+      if (!result.ok || !payload?.success) {
         console.error("Backend rejected verbose logging toggle");
         setVerboseLogging(!newState);
       }
@@ -130,8 +144,12 @@ export function TroubleshootingTab({ openLogs, clearLogs }: TroubleshootingTabPr
 
   const handleClearLogs = async () => {
     try {
-      clearLogs();
-      await logsClient.clear();
+      const result = await actionService.dispatch("logs.clear", undefined, {
+        source: "user",
+      });
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
     } catch (error) {
       console.error("Failed to clear logs:", error);
     }
@@ -149,7 +167,9 @@ export function TroubleshootingTab({ openLogs, clearLogs }: TroubleshootingTabPr
             <Button
               variant="outline"
               size="sm"
-              onClick={() => openLogs()}
+              onClick={() =>
+                void actionService.dispatch("logs.openFile", undefined, { source: "user" })
+              }
               className="text-canopy-text border-canopy-border hover:bg-canopy-border hover:text-canopy-text"
             >
               <FileText className="w-4 h-4 mr-2" />

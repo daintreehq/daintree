@@ -4,9 +4,9 @@ import { getBrandColorHex } from "@/lib/colorUtils";
 import { getAgentConfig } from "@/config/agents";
 import type React from "react";
 import { useNativeContextMenu } from "@/hooks";
-import { useAgentLauncher } from "@/hooks/useAgentLauncher";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import type { MenuItemOption } from "@/types";
+import { actionService } from "@/services/ActionService";
 
 type AgentType = "claude" | "gemini" | "codex";
 
@@ -14,19 +14,11 @@ interface AgentButtonProps {
   type: AgentType;
   availability?: boolean;
   isEnabled: boolean;
-  onLaunch: () => void;
   onOpenSettings: () => void;
 }
 
-export function AgentButton({
-  type,
-  availability,
-  isEnabled,
-  onLaunch,
-  onOpenSettings,
-}: AgentButtonProps) {
+export function AgentButton({ type, availability, isEnabled, onOpenSettings }: AgentButtonProps) {
   const { showMenu } = useNativeContextMenu();
-  const { launchAgent } = useAgentLauncher();
   const { worktrees } = useWorktrees();
 
   if (!isEnabled) return null;
@@ -53,7 +45,7 @@ export function AgentButton({
 
   const handleClick = () => {
     if (isAvailable) {
-      onLaunch();
+      void actionService.dispatch("agent.launch", { agentId: type }, { source: "user" });
     } else {
       onOpenSettings();
     }
@@ -90,12 +82,16 @@ export function AgentButton({
     if (!actionId) return;
 
     if (actionId === "launch:current") {
-      onLaunch();
+      void actionService.dispatch("agent.launch", { agentId: type }, { source: "context-menu" });
       return;
     }
 
     if (actionId === "launch:current:dock") {
-      await launchAgent(type, { location: "dock" });
+      void actionService.dispatch(
+        "agent.launch",
+        { agentId: type, location: "dock" },
+        { source: "context-menu" }
+      );
       return;
     }
 
@@ -103,7 +99,11 @@ export function AgentButton({
       const parts = actionId.split(":");
       const worktreeId = parts[2];
       const location = parts[3] === "dock" ? "dock" : "grid";
-      await launchAgent(type, { worktreeId, location });
+      void actionService.dispatch(
+        "agent.launch",
+        { agentId: type, worktreeId, location },
+        { source: "context-menu" }
+      );
       return;
     }
 

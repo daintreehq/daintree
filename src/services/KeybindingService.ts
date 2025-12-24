@@ -794,6 +794,12 @@ class KeybindingService {
   }
 
   matchesEvent(event: KeyboardEvent, combo: string): boolean {
+    // Chord sequences (e.g., "Cmd+K Cmd+K") should not be matched here.
+    // They are handled by findMatchingAction's chord state machine.
+    if (combo.includes(" ")) {
+      return false;
+    }
+
     const parsed = parseCombo(combo);
 
     // Handle Cmd vs Ctrl based on platform
@@ -996,6 +1002,10 @@ class KeybindingService {
       }
     }
     return Array.from(categories).sort();
+  }
+
+  getOverridesSnapshot(): Record<string, string[]> {
+    return Object.fromEntries(this.overrides.entries());
   }
 }
 

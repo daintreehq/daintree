@@ -1,5 +1,6 @@
 import { Terminal } from "@xterm/xterm";
 import { terminalClient, systemClient } from "@/clients";
+import { actionService } from "@/services/ActionService";
 import { TerminalRefreshTier, TerminalType } from "@/types";
 import type { AgentState } from "@/types";
 import {
@@ -341,9 +342,15 @@ class TerminalInstanceService {
 
     const openLink = (url: string) => {
       const normalizedUrl = /^https?:\/\//i.test(url) ? url : `https://${url}`;
-      systemClient.openExternal(normalizedUrl).catch((error) => {
-        console.error("[TerminalInstanceService] Failed to open URL:", error);
-      });
+      actionService
+        .dispatch("system.openExternal", { url: normalizedUrl }, { source: "user" })
+        .then((result) => {
+          if (result.ok) return;
+          return systemClient.openExternal(normalizedUrl);
+        })
+        .catch((error) => {
+          console.error("[TerminalInstanceService] Failed to open URL:", error);
+        });
     };
 
     const terminalOptions = {

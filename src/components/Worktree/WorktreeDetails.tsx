@@ -6,9 +6,9 @@ import { FileChangeList } from "./FileChangeList";
 import { ActivityLight } from "./ActivityLight";
 import { LiveTimeAgo } from "./LiveTimeAgo";
 import { cn } from "../../lib/utils";
-import { systemClient } from "@/clients";
 import { GitCommit, Copy, Check, ExternalLink } from "lucide-react";
 import { parseNoteWithLinks, formatPath, type TextSegment } from "../../utils/textParsing";
+import { actionService } from "@/services/ActionService";
 
 export interface WorktreeDetailsProps {
   worktree: WorktreeState;
@@ -66,7 +66,7 @@ export function WorktreeDetails({
   const handleLinkClick = (e: React.MouseEvent, url: string) => {
     e.stopPropagation();
     e.preventDefault();
-    systemClient.openExternal(url);
+    void actionService.dispatch("system.openExternal", { url }, { source: "user" });
   };
 
   const handleCopyPath = async (e: React.MouseEvent) => {

@@ -1,5 +1,6 @@
 import { useEffect, useCallback, useState } from "react";
 import { useSidecarStore } from "@/store/sidecarStore";
+import { actionService } from "@/services/ActionService";
 
 export function useLinkDiscovery() {
   const discoveryComplete = useSidecarStore((s) => s.discoveryComplete);
@@ -9,11 +10,16 @@ export function useLinkDiscovery() {
 
   useEffect(() => {
     if (discoveryComplete) return;
-    if (typeof window === "undefined" || !window.electron) return;
 
     const runDiscovery = async () => {
       try {
-        const availability = await window.electron.system.getCliAvailability();
+        const result = await actionService.dispatch("cliAvailability.get", undefined, {
+          source: "user",
+        });
+        if (!result.ok) {
+          throw new Error(result.error.message);
+        }
+        const availability = result.result as any;
         setDiscoveredLinks(availability);
         markDiscoveryComplete();
       } catch (error) {
@@ -26,17 +32,20 @@ export function useLinkDiscovery() {
   }, [discoveryComplete, setDiscoveredLinks, markDiscoveryComplete]);
 
   const rescan = useCallback(async () => {
-    if (typeof window === "undefined" || !window.electron) return;
     setIsScanning(true);
     try {
-      const availability = await window.electron.system.refreshCliAvailability();
-      setDiscoveredLinks(availability);
+      const result = await actionService.dispatch("sidecar.links.rescan", undefined, {
+        source: "user",
+      });
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
     } catch (error) {
       console.error("Link rescan failed:", error);
     } finally {
       setIsScanning(false);
     }
-  }, [setDiscoveredLinks]);
+  }, []);
 
   return { rescan, isScanning };
 }
