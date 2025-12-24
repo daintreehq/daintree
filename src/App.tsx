@@ -447,7 +447,6 @@ function App() {
     useAgentLauncher();
   const loadRecipes = useRecipeStore((state) => state.loadRecipes);
   useTerminalConfig();
-  useLinkDiscovery();
   useWindowNotifications();
 
   // Grid navigation hook for directional terminal switching
@@ -671,6 +670,9 @@ function App() {
     getFocusedId: () => focusedId,
     getGridNavigation: () => ({ findNearest, findByIndex, findDockByIndex, getCurrentLocation }),
   });
+
+  // Must be after useActionRegistry so actions are registered before discovery runs
+  useLinkDiscovery();
 
   useMenuActions({
     onOpenSettings: handleSettings,
