@@ -51,7 +51,9 @@ import {
   AlertCircle,
   CheckCircle2,
   XCircle,
+  Folder,
 } from "lucide-react";
+import { formatPath } from "../../utils/textParsing";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { STATE_ICONS, STATE_COLORS, STATE_LABELS, STATE_PRIORITY } from "./terminalStateConfig";
@@ -153,6 +155,9 @@ export function WorktreeCard({
   const treeCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMountedRef = useRef(true);
 
+  const [pathCopied, setPathCopied] = useState(false);
+  const pathCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     isMountedRef.current = true;
     return () => {
@@ -160,6 +165,10 @@ export function WorktreeCard({
       if (treeCopyTimeoutRef.current) {
         clearTimeout(treeCopyTimeoutRef.current);
         treeCopyTimeoutRef.current = null;
+      }
+      if (pathCopyTimeoutRef.current) {
+        clearTimeout(pathCopyTimeoutRef.current);
+        pathCopyTimeoutRef.current = null;
       }
     };
   }, []);
@@ -258,6 +267,38 @@ export function WorktreeCard({
   const handlePathClick = useCallback(() => {
     void actionService.dispatch("system.openPath", { path: worktree.path }, { source: "user" });
   }, [worktree.path]);
+
+  const handleCopyPath = useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(worktree.path);
+        } else {
+          throw new Error("Clipboard API not available");
+        }
+
+        if (!isMountedRef.current) return;
+
+        setPathCopied(true);
+
+        if (pathCopyTimeoutRef.current) {
+          clearTimeout(pathCopyTimeoutRef.current);
+          pathCopyTimeoutRef.current = null;
+        }
+
+        pathCopyTimeoutRef.current = setTimeout(() => {
+          if (isMountedRef.current) {
+            setPathCopied(false);
+            pathCopyTimeoutRef.current = null;
+          }
+        }, 2000);
+      } catch (err) {
+        console.error("Failed to copy path:", err);
+      }
+    },
+    [worktree.path]
+  );
 
   const handleOpenIssue = useCallback(() => {
     void actionService.dispatch(
@@ -469,6 +510,7 @@ export function WorktreeCard({
 
   const branchLabel = worktree.branch ?? worktree.name;
   const hasChanges = (worktree.worktreeChanges?.changedFileCount ?? 0) > 0;
+  const displayPath = formatPath(worktree.path, homeDir);
   const rawLastCommitMessage = worktree.worktreeChanges?.lastCommitMessage;
   const firstLineLastCommitMessage = rawLastCommitMessage?.split("\n")[0].trim();
 
@@ -1446,6 +1488,52 @@ export function WorktreeCard({
             )}
           </div>
         )}
+
+        {/* Always-visible path footer */}
+        <div className="mt-3 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              handlePathClick();
+            }}
+            className={cn(
+              "flex items-center gap-1.5 text-xs text-canopy-text/40 hover:text-canopy-text/60 font-mono truncate min-w-0 flex-1 text-left rounded px-1 -mx-1",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+            )}
+            title={`Open folder: ${worktree.path}`}
+          >
+            <Folder className="w-3 h-3 shrink-0 opacity-60" />
+            <span className="truncate">{displayPath}</span>
+          </button>
+
+          <TooltipProvider>
+            <Tooltip open={pathCopied ? true : undefined} delayDuration={0}>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={handleCopyPath}
+                  className={cn(
+                    "shrink-0 p-1 rounded transition-colors",
+                    pathCopied
+                      ? "text-green-400 bg-green-400/10"
+                      : "text-canopy-text/40 hover:text-canopy-text/60 hover:bg-white/5",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                  )}
+                  title={pathCopied ? "Copied!" : "Copy full path"}
+                  aria-label={pathCopied ? "Path copied" : "Copy path to clipboard"}
+                >
+                  {pathCopied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="text-xs">
+                <span role="status" aria-live="polite">
+                  {pathCopied ? "Copied!" : "Copy path"}
+                </span>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
 
         <ConfirmDialog
           isOpen={confirmDialog.isOpen}

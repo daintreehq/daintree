@@ -106,45 +106,7 @@ export function WorktreeDetails({
     (showTime && lastActivityTimestamp);
 
   if (!hasContent) {
-    return (
-      <div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onPathClick();
-            }}
-            className={cn(
-              "text-xs text-canopy-text/40 hover:text-canopy-text/60 text-left font-mono truncate flex-1 min-w-0 flex items-center gap-1.5 rounded",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
-              isFocused && "text-canopy-text/60"
-            )}
-            title={`Open folder: ${worktree.path}`}
-          >
-            <ExternalLink className="w-3 h-3 shrink-0 opacity-60" />
-            <span className="truncate">{displayPath}</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleCopyPath}
-            className="shrink-0 p-1 text-canopy-text/40 hover:text-canopy-text/60 hover:bg-white/5 rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-            title={pathCopied ? "Copied!" : "Copy full path"}
-            aria-label={pathCopied ? "Path copied to clipboard" : "Copy path to clipboard"}
-          >
-            {pathCopied ? (
-              <Check className="w-3 h-3 text-green-400" />
-            ) : (
-              <Copy className="w-3 h-3" />
-            )}
-          </button>
-          <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-            {pathCopied ? "Path copied to clipboard" : ""}
-          </div>
-        </div>
-      </div>
-    );
+    return null;
   }
 
   return (
