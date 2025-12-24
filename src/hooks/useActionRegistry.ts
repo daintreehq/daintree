@@ -1,21 +1,13 @@
 import { useEffect, useRef } from "react";
 import { actionService } from "@/services/ActionService";
-import { createActionDefinitions } from "@/services/actions/actionDefinitions";
+import {
+  createActionDefinitions,
+  type ActionCallbacks,
+} from "@/services/actions/actionDefinitions";
 
-export interface UseActionRegistryOptions {
-  onOpenSettings: () => void;
-  onOpenSettingsTab: (tab: string) => void;
-  onToggleSidebar: () => void;
-  onOpenAgentPalette: () => void;
-  onLaunchAgent: (
-    agentId: string,
-    options?: { cwd?: string; worktreeId?: string }
-  ) => Promise<void>;
-  getDefaultCwd: () => string;
-  getActiveWorktreeId: () => string | undefined;
-}
+export type { ActionCallbacks };
 
-export function useActionRegistry(options: UseActionRegistryOptions): void {
+export function useActionRegistry(options: ActionCallbacks): void {
   const registeredRef = useRef(false);
 
   useEffect(() => {
@@ -33,9 +25,19 @@ export function useActionRegistry(options: UseActionRegistryOptions): void {
     options.onOpenSettings,
     options.onOpenSettingsTab,
     options.onToggleSidebar,
+    options.onToggleFocusMode,
     options.onOpenAgentPalette,
+    options.onOpenWorktreePalette,
+    options.onOpenNewTerminalPalette,
+    options.onOpenShortcuts,
     options.onLaunchAgent,
+    options.onInject,
+    options.onOpenTerminalInfo,
+    options.onRenameTerminal,
     options.getDefaultCwd,
     options.getActiveWorktreeId,
+    options.getWorktrees,
+    options.getFocusedId,
+    options.getGridNavigation,
   ]);
 }

@@ -1,7 +1,7 @@
 import type { KeyAction } from "./keymap.js";
 import type { z } from "zod";
 
-export type ActionSource = "user" | "keybinding" | "menu" | "agent";
+export type ActionSource = "user" | "keybinding" | "menu" | "agent" | "context-menu";
 
 export type ActionKind = "command" | "query";
 
@@ -11,11 +11,39 @@ export type ActionScope = "renderer";
 
 export type ActionId =
   | KeyAction
+  // Parameterized actions (not in KeyAction)
+  | "panel.focusIndex"
+  | "worktree.switchIndex"
   | "agent.launch"
   | "app.settings.openTab"
   | "worktree.createDialog.open"
+  | "worktree.select"
+  | "worktree.copyTree"
+  | "worktree.openEditor"
   | "actions.list"
-  | "actions.getContext";
+  | "actions.getContext"
+  | "terminal.moveToDock"
+  | "terminal.moveToGrid"
+  | "terminal.toggleMaximize"
+  | "terminal.restart"
+  | "terminal.forceResume"
+  | "terminal.toggleInputLock"
+  | "terminal.duplicate"
+  | "terminal.rename"
+  | "terminal.trash"
+  | "terminal.kill"
+  | "terminal.moveToWorktree"
+  | "terminal.convertType"
+  | "terminal.viewInfo"
+  | "browser.reload"
+  | "browser.openExternal"
+  | "browser.copyUrl"
+  | "nav.toggleFocusMode"
+  | "sidecar.toggle"
+  | "sidecar.closeTab"
+  | "sidecar.nextTab"
+  | "sidecar.prevTab"
+  | "sidecar.newTab";
 
 export interface ActionContext {
   projectId?: string;

@@ -403,47 +403,10 @@ function SidebarContent() {
 }
 
 function App() {
-  const {
-    focusNext,
-    focusPrevious,
-    focusDirection,
-    focusByIndex,
-    focusDockDirection,
-    focusNextWaiting,
-    toggleMaximize,
-    focusedId,
-    addTerminal,
-    reorderTerminals,
-    moveTerminalToDock,
-    moveTerminalToGrid,
-    trashTerminal,
-    bulkTrashAll,
-    bulkRestartAll,
-    bulkMoveToDock,
-    bulkMoveToGrid,
-    restoreLastTrashed,
-    isInTrash,
-  } = useTerminalStore(
+  const { focusedId, addTerminal } = useTerminalStore(
     useShallow((state) => ({
-      focusNext: state.focusNext,
-      focusPrevious: state.focusPrevious,
-      focusDirection: state.focusDirection,
-      focusByIndex: state.focusByIndex,
-      focusDockDirection: state.focusDockDirection,
-      focusNextWaiting: state.focusNextWaiting,
-      toggleMaximize: state.toggleMaximize,
       focusedId: state.focusedId,
       addTerminal: state.addTerminal,
-      reorderTerminals: state.reorderTerminals,
-      moveTerminalToDock: state.moveTerminalToDock,
-      moveTerminalToGrid: state.moveTerminalToGrid,
-      trashTerminal: state.trashTerminal,
-      bulkTrashAll: state.bulkTrashAll,
-      bulkRestartAll: state.bulkRestartAll,
-      bulkMoveToDock: state.bulkMoveToDock,
-      bulkMoveToGrid: state.bulkMoveToGrid,
-      restoreLastTrashed: state.restoreLastTrashed,
-      isInTrash: state.isInTrash,
     }))
   );
 
@@ -459,7 +422,6 @@ function App() {
       cleanupWorktreeDataStore();
     };
   }, []);
-  const terminals = useTerminalStore(useShallow((state) => state.terminals));
   const { launchAgent, availability, isCheckingAvailability, agentSettings, refreshSettings } =
     useAgentLauncher();
   const loadRecipes = useRecipeStore((state) => state.loadRecipes);
@@ -569,7 +531,6 @@ function App() {
   ]);
 
   const openDiagnosticsDock = useDiagnosticsStore((state) => state.openDock);
-  const toggleDiagnosticsDock = useDiagnosticsStore((state) => state.toggleDock);
   const removeError = useErrorStore((state) => state.removeError);
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -664,12 +625,24 @@ function App() {
     onOpenSettings: handleSettings,
     onOpenSettingsTab: handleOpenSettingsTab,
     onToggleSidebar: handleToggleSidebar,
+    onToggleFocusMode: handleToggleSidebar,
     onOpenAgentPalette: terminalPalette.open,
+    onOpenWorktreePalette: openWorktreePalette,
+    onOpenNewTerminalPalette: newTerminalPalette.open,
+    onOpenShortcuts: () => setIsShortcutsOpen(true),
     onLaunchAgent: async (agentId) => {
       await handleLaunchAgent(agentId as Parameters<typeof handleLaunchAgent>[0]);
     },
+    onInject: inject,
+    onOpenTerminalInfo: () => {},
+    onRenameTerminal: (terminalId: string) => {
+      window.dispatchEvent(new CustomEvent("canopy:rename-terminal", { detail: { terminalId } }));
+    },
     getDefaultCwd: () => defaultTerminalCwd,
     getActiveWorktreeId: () => activeWorktree?.id,
+    getWorktrees: () => worktrees.map((w) => ({ id: w.id, path: w.path })),
+    getFocusedId: () => focusedId,
+    getGridNavigation: () => ({ findNearest, findByIndex, findDockByIndex, getCurrentLocation }),
   });
 
   useMenuActions({
@@ -682,328 +655,202 @@ function App() {
     activeWorktreeId: activeWorktree?.id,
   });
 
-  useKeybinding(
-    "terminal.palette",
-    () => {
-      actionService.dispatch("terminal.palette", undefined, { source: "keybinding" });
-    },
-    { enabled: electronAvailable }
-  );
-  useKeybinding(
-    "agent.palette",
-    () => {
-      actionService.dispatch("terminal.palette", undefined, { source: "keybinding" });
-    },
-    { enabled: electronAvailable }
-  );
-  useKeybinding(
-    "terminal.new",
-    () => {
-      actionService.dispatch("terminal.new", undefined, { source: "keybinding" });
-    },
-    { enabled: electronAvailable }
-  );
-  useKeybinding("terminal.spawnPalette", () => newTerminalPalette.open(), {
+  // All keybindings dispatch through ActionService
+  const dispatch = (actionId: string, args?: unknown) => {
+    actionService.dispatch(actionId as Parameters<typeof actionService.dispatch>[0], args, {
+      source: "keybinding",
+    });
+  };
+
+  // Terminal palette and spawn
+  useKeybinding("terminal.palette", () => dispatch("terminal.palette"), {
+    enabled: electronAvailable,
+  });
+  useKeybinding("agent.palette", () => dispatch("agent.palette"), { enabled: electronAvailable });
+  useKeybinding("terminal.new", () => dispatch("terminal.new"), { enabled: electronAvailable });
+  useKeybinding("terminal.spawnPalette", () => dispatch("terminal.spawnPalette"), {
     enabled: electronAvailable,
   });
 
-  useKeybinding(
-    "terminal.close",
-    () => {
-      const targetId = focusedId ?? terminals.find((t) => t.location !== "trash")?.id ?? null;
-
-      if (!targetId) return;
-      useTerminalStore.getState().trashTerminal(targetId);
-    },
-    { enabled: electronAvailable }
-  );
-
-  useKeybinding(
-    "terminal.reopenLast",
-    () => {
-      restoreLastTrashed();
-    },
-    { enabled: electronAvailable }
-  );
-
-  useKeybinding("terminal.focusNext", () => focusNext(), { enabled: electronAvailable });
-  useKeybinding("terminal.focusPrevious", () => focusPrevious(), { enabled: electronAvailable });
-  useKeybinding(
-    "terminal.maximize",
-    () => {
-      if (focusedId) toggleMaximize(focusedId);
-    },
-    { enabled: electronAvailable && !!focusedId }
-  );
-
-  useKeybinding("agent.claude", () => handleLaunchAgent("claude"), { enabled: electronAvailable });
-  useKeybinding("agent.gemini", () => handleLaunchAgent("gemini"), { enabled: electronAvailable });
-  useKeybinding("agent.codex", () => handleLaunchAgent("codex"), { enabled: electronAvailable });
-  useKeybinding("agent.terminal", () => handleLaunchAgent("terminal"), {
-    enabled: electronAvailable,
-  });
-  useKeybinding("agent.focusNextWaiting", () => focusNextWaiting(isInTrash), {
+  // Terminal lifecycle
+  useKeybinding("terminal.close", () => dispatch("terminal.close"), { enabled: electronAvailable });
+  useKeybinding("terminal.reopenLast", () => dispatch("terminal.reopenLast"), {
     enabled: electronAvailable,
   });
 
-  useKeybinding(
-    "terminal.moveLeft",
-    () => {
-      if (!focusedId) return;
-      const gridTerminals = terminals.filter(
-        (t) =>
-          (t.location === "grid" || t.location === undefined) &&
-          (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
-      );
-      const currentIndex = gridTerminals.findIndex((t) => t.id === focusedId);
-      if (currentIndex > 0) {
-        reorderTerminals(currentIndex, currentIndex - 1, "grid", activeWorktreeId);
-      }
-    },
-    { enabled: electronAvailable && !!focusedId }
-  );
-  useKeybinding(
-    "terminal.moveRight",
-    () => {
-      if (!focusedId) return;
-      const gridTerminals = terminals.filter(
-        (t) =>
-          (t.location === "grid" || t.location === undefined) &&
-          (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
-      );
-      const currentIndex = gridTerminals.findIndex((t) => t.id === focusedId);
-      if (currentIndex >= 0 && currentIndex < gridTerminals.length - 1) {
-        reorderTerminals(currentIndex, currentIndex + 1, "grid", activeWorktreeId);
-      }
-    },
-    { enabled: electronAvailable && !!focusedId }
-  );
+  // Terminal focus
+  useKeybinding("terminal.focusNext", () => dispatch("terminal.focusNext"), {
+    enabled: electronAvailable,
+  });
+  useKeybinding("terminal.focusPrevious", () => dispatch("terminal.focusPrevious"), {
+    enabled: electronAvailable,
+  });
+  useKeybinding("terminal.maximize", () => dispatch("terminal.maximize"), {
+    enabled: electronAvailable && !!focusedId,
+  });
+
+  // Agent launching
+  useKeybinding("agent.claude", () => dispatch("agent.claude"), { enabled: electronAvailable });
+  useKeybinding("agent.gemini", () => dispatch("agent.gemini"), { enabled: electronAvailable });
+  useKeybinding("agent.codex", () => dispatch("agent.codex"), { enabled: electronAvailable });
+  useKeybinding("agent.terminal", () => dispatch("agent.terminal"), { enabled: electronAvailable });
+  useKeybinding("agent.focusNextWaiting", () => dispatch("agent.focusNextWaiting"), {
+    enabled: electronAvailable,
+  });
+
+  // Terminal reordering
+  useKeybinding("terminal.moveLeft", () => dispatch("terminal.moveLeft"), {
+    enabled: electronAvailable && !!focusedId,
+  });
+  useKeybinding("terminal.moveRight", () => dispatch("terminal.moveRight"), {
+    enabled: electronAvailable && !!focusedId,
+  });
 
   // Terminal dock operations
-  useKeybinding(
-    "terminal.minimize",
-    () => {
-      if (focusedId) moveTerminalToDock(focusedId);
-    },
-    { enabled: electronAvailable && !!focusedId }
-  );
-  useKeybinding(
-    "terminal.restore",
-    () => {
-      const dockTerminals = terminals.filter((t) => t.location === "dock");
-      if (dockTerminals.length > 0) {
-        moveTerminalToGrid(dockTerminals[0].id);
-      }
-    },
-    { enabled: electronAvailable }
-  );
+  useKeybinding("terminal.minimize", () => dispatch("terminal.minimize"), {
+    enabled: electronAvailable && !!focusedId,
+  });
+  useKeybinding("terminal.restore", () => dispatch("terminal.restore"), {
+    enabled: electronAvailable,
+  });
 
   // Terminal bulk operations
-  useKeybinding("terminal.closeAll", () => bulkTrashAll(), { enabled: electronAvailable });
-  useKeybinding(
-    "terminal.killAll",
-    () => {
-      terminals.forEach((t) => {
-        if (t.location !== "trash") trashTerminal(t.id);
-      });
-    },
-    { enabled: electronAvailable }
-  );
-  useKeybinding("terminal.restartAll", () => bulkRestartAll(), { enabled: electronAvailable });
-  useKeybinding("terminal.minimizeAll", () => bulkMoveToDock(), { enabled: electronAvailable });
-  useKeybinding("terminal.restoreAll", () => bulkMoveToGrid(), { enabled: electronAvailable });
+  useKeybinding("terminal.closeAll", () => dispatch("terminal.closeAll"), {
+    enabled: electronAvailable,
+  });
+  useKeybinding("terminal.killAll", () => dispatch("terminal.killAll"), {
+    enabled: electronAvailable,
+  });
+  useKeybinding("terminal.restartAll", () => dispatch("terminal.restartAll"), {
+    enabled: electronAvailable,
+  });
+  useKeybinding("terminal.minimizeAll", () => dispatch("terminal.minimizeAll"), {
+    enabled: electronAvailable,
+  });
+  useKeybinding("terminal.restoreAll", () => dispatch("terminal.restoreAll"), {
+    enabled: electronAvailable,
+  });
 
   // Panel management
-  useKeybinding("panel.diagnosticsLogs", () => openDiagnosticsDock("logs"), {
+  useKeybinding("panel.diagnosticsLogs", () => dispatch("panel.diagnosticsLogs"), {
     enabled: electronAvailable,
   });
-  useKeybinding("panel.diagnosticsEvents", () => openDiagnosticsDock("events"), {
+  useKeybinding("panel.diagnosticsEvents", () => dispatch("panel.diagnosticsEvents"), {
     enabled: electronAvailable,
   });
-  useKeybinding("panel.diagnosticsMessages", () => openDiagnosticsDock("problems"), {
+  useKeybinding("panel.diagnosticsMessages", () => dispatch("panel.diagnosticsMessages"), {
     enabled: electronAvailable,
   });
-  useKeybinding("panel.toggleDiagnostics", () => toggleDiagnosticsDock(), {
+  useKeybinding("panel.toggleDiagnostics", () => dispatch("panel.toggleDiagnostics"), {
     enabled: electronAvailable,
   });
-  useKeybinding(
-    "panel.toggleDock",
-    () => {
-      window.dispatchEvent(new CustomEvent("canopy:toggle-terminal-dock"));
-    },
-    { enabled: electronAvailable }
-  );
-  useKeybinding(
-    "panel.toggleDockAlt",
-    () => {
-      window.dispatchEvent(new CustomEvent("canopy:toggle-terminal-dock"));
-    },
-    { enabled: electronAvailable }
-  );
-  useKeybinding(
-    "panel.toggleSidecar",
-    () => {
-      window.dispatchEvent(new CustomEvent("canopy:toggle-sidecar"));
-    },
-    { enabled: electronAvailable }
-  );
+  useKeybinding("panel.toggleDock", () => dispatch("panel.toggleDock"), {
+    enabled: electronAvailable,
+  });
+  useKeybinding("panel.toggleDockAlt", () => dispatch("panel.toggleDockAlt"), {
+    enabled: electronAvailable,
+  });
+  useKeybinding("panel.toggleSidecar", () => dispatch("panel.toggleSidecar"), {
+    enabled: electronAvailable,
+  });
 
   // Navigation
-  useKeybinding(
-    "nav.toggleSidebar",
-    () => {
-      window.dispatchEvent(new CustomEvent("canopy:toggle-focus-mode"));
-    },
-    { enabled: electronAvailable }
-  );
+  useKeybinding("nav.toggleSidebar", () => dispatch("nav.toggleSidebar"), {
+    enabled: electronAvailable,
+  });
 
-  useKeybinding(
-    "terminal.inject",
-    () => {
-      if (activeWorktreeId) {
-        inject(activeWorktreeId);
-      }
-    },
-    { enabled: electronAvailable && !!activeWorktreeId }
-  );
+  // Context injection
+  useKeybinding("terminal.inject", () => dispatch("terminal.inject"), {
+    enabled: electronAvailable && !!activeWorktreeId,
+  });
 
-  useKeybinding("worktree.switch1", () => worktrees[0] && selectWorktree(worktrees[0].id), {
+  // Worktree switching (1-9)
+  useKeybinding("worktree.switch1", () => dispatch("worktree.switchIndex", { index: 1 }), {
     enabled: electronAvailable && worktrees.length >= 1,
   });
-  useKeybinding("worktree.switch2", () => worktrees[1] && selectWorktree(worktrees[1].id), {
+  useKeybinding("worktree.switch2", () => dispatch("worktree.switchIndex", { index: 2 }), {
     enabled: electronAvailable && worktrees.length >= 2,
   });
-  useKeybinding("worktree.switch3", () => worktrees[2] && selectWorktree(worktrees[2].id), {
+  useKeybinding("worktree.switch3", () => dispatch("worktree.switchIndex", { index: 3 }), {
     enabled: electronAvailable && worktrees.length >= 3,
   });
-  useKeybinding("worktree.switch4", () => worktrees[3] && selectWorktree(worktrees[3].id), {
+  useKeybinding("worktree.switch4", () => dispatch("worktree.switchIndex", { index: 4 }), {
     enabled: electronAvailable && worktrees.length >= 4,
   });
-  useKeybinding("worktree.switch5", () => worktrees[4] && selectWorktree(worktrees[4].id), {
+  useKeybinding("worktree.switch5", () => dispatch("worktree.switchIndex", { index: 5 }), {
     enabled: electronAvailable && worktrees.length >= 5,
   });
-  useKeybinding("worktree.switch6", () => worktrees[5] && selectWorktree(worktrees[5].id), {
+  useKeybinding("worktree.switch6", () => dispatch("worktree.switchIndex", { index: 6 }), {
     enabled: electronAvailable && worktrees.length >= 6,
   });
-  useKeybinding("worktree.switch7", () => worktrees[6] && selectWorktree(worktrees[6].id), {
+  useKeybinding("worktree.switch7", () => dispatch("worktree.switchIndex", { index: 7 }), {
     enabled: electronAvailable && worktrees.length >= 7,
   });
-  useKeybinding("worktree.switch8", () => worktrees[7] && selectWorktree(worktrees[7].id), {
+  useKeybinding("worktree.switch8", () => dispatch("worktree.switchIndex", { index: 8 }), {
     enabled: electronAvailable && worktrees.length >= 8,
   });
-  useKeybinding("worktree.switch9", () => worktrees[8] && selectWorktree(worktrees[8].id), {
+  useKeybinding("worktree.switch9", () => dispatch("worktree.switchIndex", { index: 9 }), {
     enabled: electronAvailable && worktrees.length >= 9,
   });
 
-  useKeybinding(
-    "worktree.next",
-    () => {
-      if (worktrees.length === 0) return;
-      const currentIndex = activeWorktreeId
-        ? worktrees.findIndex((w) => w.id === activeWorktreeId)
-        : -1;
-      const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % worktrees.length;
-      selectWorktree(worktrees[nextIndex].id);
-    },
-    { enabled: electronAvailable && worktrees.length > 1 }
-  );
-
-  useKeybinding(
-    "worktree.previous",
-    () => {
-      if (worktrees.length === 0) return;
-      const currentIndex = activeWorktreeId
-        ? worktrees.findIndex((w) => w.id === activeWorktreeId)
-        : -1;
-      const prevIndex =
-        currentIndex === -1 ? 0 : (currentIndex - 1 + worktrees.length) % worktrees.length;
-      selectWorktree(worktrees[prevIndex].id);
-    },
-    { enabled: electronAvailable && worktrees.length > 1 }
-  );
-  useKeybinding("worktree.openPalette", () => openWorktreePalette(), {
+  // Worktree navigation
+  useKeybinding("worktree.next", () => dispatch("worktree.next"), {
+    enabled: electronAvailable && worktrees.length > 1,
+  });
+  useKeybinding("worktree.previous", () => dispatch("worktree.previous"), {
+    enabled: electronAvailable && worktrees.length > 1,
+  });
+  useKeybinding("worktree.openPalette", () => dispatch("worktree.openPalette"), {
     enabled: electronAvailable,
   });
 
   // Help and settings
-  useKeybinding("help.shortcuts", () => setIsShortcutsOpen(true), { enabled: electronAvailable });
-  useKeybinding("help.shortcutsAlt", () => setIsShortcutsOpen(true), {
+  useKeybinding("help.shortcuts", () => dispatch("help.shortcuts"), { enabled: electronAvailable });
+  useKeybinding("help.shortcutsAlt", () => dispatch("help.shortcutsAlt"), {
     enabled: electronAvailable,
   });
-  useKeybinding("app.settings", () => handleSettings(), { enabled: electronAvailable });
+  useKeybinding("app.settings", () => dispatch("app.settings"), { enabled: electronAvailable });
 
-  // Directional terminal navigation (Ctrl+Alt+Arrow keys)
-  useKeybinding(
-    "terminal.focusUp",
-    () => {
-      const location = getCurrentLocation();
-      if (location === "grid") {
-        focusDirection("up", findNearest);
-      }
-    },
-    { enabled: electronAvailable && !!focusedId }
-  );
-  useKeybinding(
-    "terminal.focusDown",
-    () => {
-      const location = getCurrentLocation();
-      if (location === "grid") {
-        focusDirection("down", findNearest);
-      }
-    },
-    { enabled: electronAvailable && !!focusedId }
-  );
-  useKeybinding(
-    "terminal.focusLeft",
-    () => {
-      const location = getCurrentLocation();
-      if (location === "grid") {
-        focusDirection("left", findNearest);
-      } else if (location === "dock") {
-        focusDockDirection("left", findDockByIndex);
-      }
-    },
-    { enabled: electronAvailable && !!focusedId }
-  );
-  useKeybinding(
-    "terminal.focusRight",
-    () => {
-      const location = getCurrentLocation();
-      if (location === "grid") {
-        focusDirection("right", findNearest);
-      } else if (location === "dock") {
-        focusDockDirection("right", findDockByIndex);
-      }
-    },
-    { enabled: electronAvailable && !!focusedId }
-  );
+  // Directional terminal navigation
+  useKeybinding("terminal.focusUp", () => dispatch("terminal.focusUp"), {
+    enabled: electronAvailable && !!focusedId,
+  });
+  useKeybinding("terminal.focusDown", () => dispatch("terminal.focusDown"), {
+    enabled: electronAvailable && !!focusedId,
+  });
+  useKeybinding("terminal.focusLeft", () => dispatch("terminal.focusLeft"), {
+    enabled: electronAvailable && !!focusedId,
+  });
+  useKeybinding("terminal.focusRight", () => dispatch("terminal.focusRight"), {
+    enabled: electronAvailable && !!focusedId,
+  });
 
-  // Index-based terminal navigation (Cmd+1-9)
-  useKeybinding("terminal.focusIndex1", () => focusByIndex(1, findByIndex), {
+  // Index-based panel navigation (Cmd+1-9)
+  useKeybinding("terminal.focusIndex1", () => dispatch("panel.focusIndex", { index: 1 }), {
     enabled: electronAvailable,
   });
-  useKeybinding("terminal.focusIndex2", () => focusByIndex(2, findByIndex), {
+  useKeybinding("terminal.focusIndex2", () => dispatch("panel.focusIndex", { index: 2 }), {
     enabled: electronAvailable,
   });
-  useKeybinding("terminal.focusIndex3", () => focusByIndex(3, findByIndex), {
+  useKeybinding("terminal.focusIndex3", () => dispatch("panel.focusIndex", { index: 3 }), {
     enabled: electronAvailable,
   });
-  useKeybinding("terminal.focusIndex4", () => focusByIndex(4, findByIndex), {
+  useKeybinding("terminal.focusIndex4", () => dispatch("panel.focusIndex", { index: 4 }), {
     enabled: electronAvailable,
   });
-  useKeybinding("terminal.focusIndex5", () => focusByIndex(5, findByIndex), {
+  useKeybinding("terminal.focusIndex5", () => dispatch("panel.focusIndex", { index: 5 }), {
     enabled: electronAvailable,
   });
-  useKeybinding("terminal.focusIndex6", () => focusByIndex(6, findByIndex), {
+  useKeybinding("terminal.focusIndex6", () => dispatch("panel.focusIndex", { index: 6 }), {
     enabled: electronAvailable,
   });
-  useKeybinding("terminal.focusIndex7", () => focusByIndex(7, findByIndex), {
+  useKeybinding("terminal.focusIndex7", () => dispatch("panel.focusIndex", { index: 7 }), {
     enabled: electronAvailable,
   });
-  useKeybinding("terminal.focusIndex8", () => focusByIndex(8, findByIndex), {
+  useKeybinding("terminal.focusIndex8", () => dispatch("panel.focusIndex", { index: 8 }), {
     enabled: electronAvailable,
   });
-  useKeybinding("terminal.focusIndex9", () => focusByIndex(9, findByIndex), {
+  useKeybinding("terminal.focusIndex9", () => dispatch("panel.focusIndex", { index: 9 }), {
     enabled: electronAvailable,
   });
 
