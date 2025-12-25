@@ -102,7 +102,7 @@ export class NotesService {
       id,
       title,
       scope,
-      worktreeId,
+      ...(worktreeId !== undefined && { worktreeId }),
       createdAt,
     };
 
