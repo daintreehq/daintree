@@ -9,7 +9,7 @@ const { SerializeAddon } = serialize;
 import type { TerminalType } from "../../../shared/types/domain.js";
 import { ProcessDetector, type DetectionResult } from "../ProcessDetector.js";
 import type { ProcessTreeCache } from "../ProcessTreeCache.js";
-import { ActivityMonitor } from "../ActivityMonitor.js";
+import { ActivityMonitor, type ProcessStateValidator } from "../ActivityMonitor.js";
 import { AgentStateService } from "./AgentStateService.js";
 import { ActivityHeadlineGenerator } from "../ActivityHeadlineGenerator.js";
 import {
@@ -506,25 +506,6 @@ export class TerminalProcess {
 
     this.setupPtyHandlers(ptyProcess);
 
-    if (this.isAgentTerminal) {
-      this.activityMonitor = new ActivityMonitor(
-        id,
-        spawnedAt,
-        (_termId, cbSpawnedAt, state, metadata) => {
-          // Validate session token to prevent stale monitor callbacks
-          if (this.terminalInfo.spawnedAt !== cbSpawnedAt) {
-            console.warn(
-              `[TerminalProcess] Rejected stale activity state from old monitor ${_termId} ` +
-                `(session ${cbSpawnedAt} vs current ${this.terminalInfo.spawnedAt})`
-            );
-            return;
-          }
-          deps.agentStateService.handleActivityState(this.terminalInfo, state, metadata);
-        },
-        this.getActivityMonitorOptions()
-      );
-    }
-
     const ptyPid = ptyProcess.pid;
     if (ptyPid !== undefined && deps.processTreeCache) {
       this.processDetector = new ProcessDetector(
@@ -538,6 +519,25 @@ export class TerminalProcess {
       );
       this.terminalInfo.processDetector = this.processDetector;
       this.processDetector.start();
+    }
+
+    if (this.isAgentTerminal) {
+      const processStateValidator = this.createProcessStateValidator(ptyPid, deps.processTreeCache);
+      this.activityMonitor = new ActivityMonitor(
+        id,
+        spawnedAt,
+        (_termId, cbSpawnedAt, state, metadata) => {
+          if (this.terminalInfo.spawnedAt !== cbSpawnedAt) {
+            console.warn(
+              `[TerminalProcess] Rejected stale activity state from old monitor ${_termId} ` +
+                `(session ${cbSpawnedAt} vs current ${this.terminalInfo.spawnedAt})`
+            );
+            return;
+          }
+          deps.agentStateService.handleActivityState(this.terminalInfo, state, metadata);
+        },
+        { ...this.getActivityMonitorOptions(), processStateValidator }
+      );
     }
 
     if (this.isAgentTerminal && agentId) {
@@ -1079,11 +1079,15 @@ export class TerminalProcess {
    */
   startActivityMonitor(): void {
     if (this.isAgentTerminal && !this.activityMonitor) {
+      const ptyPid = this.terminalInfo.ptyProcess.pid;
+      const processStateValidator = this.createProcessStateValidator(
+        ptyPid,
+        this.deps.processTreeCache
+      );
       this.activityMonitor = new ActivityMonitor(
         this.id,
         this.terminalInfo.spawnedAt,
         (_termId, cbSpawnedAt, state, metadata) => {
-          // Validate session token to prevent stale monitor callbacks
           if (this.terminalInfo.spawnedAt !== cbSpawnedAt) {
             console.warn(
               `[TerminalProcess] Rejected stale activity state from old monitor ${_termId} ` +
@@ -1093,7 +1097,7 @@ export class TerminalProcess {
           }
           this.deps.agentStateService.handleActivityState(this.terminalInfo, state, metadata);
         },
-        this.getActivityMonitorOptions()
+        { ...this.getActivityMonitorOptions(), processStateValidator }
       );
     }
   }
@@ -1102,6 +1106,19 @@ export class TerminalProcess {
     const ignoredInputSequences =
       this.terminalInfo.type === "codex" ? ["\n", "\x1b\r"] : ["\x1b\r"];
     return { ignoredInputSequences };
+  }
+
+  private createProcessStateValidator(
+    ptyPid: number | undefined,
+    processTreeCache: ProcessTreeCache | null
+  ): ProcessStateValidator | undefined {
+    if (ptyPid === undefined || !processTreeCache) {
+      return undefined;
+    }
+
+    return {
+      hasActiveChildren: () => processTreeCache.hasChildren(ptyPid),
+    };
   }
 
   /**

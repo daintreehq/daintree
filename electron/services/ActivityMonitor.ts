@@ -1,3 +1,7 @@
+export interface ProcessStateValidator {
+  hasActiveChildren(): boolean;
+}
+
 export interface ActivityMonitorOptions {
   ignoredInputSequences?: string[];
   outputActivityDetection?: {
@@ -6,6 +10,7 @@ export interface ActivityMonitorOptions {
     minFrames?: number;
     minBytes?: number;
   };
+  processStateValidator?: ProcessStateValidator;
 }
 
 export interface ActivityStateMetadata {
@@ -29,6 +34,11 @@ export class ActivityMonitor {
   private outputWindowStart = 0;
   private outputFramesInWindow = 0;
   private outputBytesInWindow = 0;
+
+  private readonly processStateValidator?: ProcessStateValidator;
+  private lastActivityTimestamp = Date.now();
+  private readonly SLEEP_DETECTION_THRESHOLD_MS = 5000;
+  private pendingStateRevalidation = false;
 
   constructor(
     private terminalId: string,
@@ -54,6 +64,7 @@ export class ActivityMonitor {
     this.outputWindowMs = outputConfig.windowMs;
     this.outputMinFrames = outputConfig.minFrames;
     this.outputMinBytes = outputConfig.minBytes;
+    this.processStateValidator = options?.processStateValidator;
   }
 
   /**
@@ -118,8 +129,23 @@ export class ActivityMonitor {
    * Called on every data event from PTY (output received).
    * Extends the BUSY state if already active.
    * Can also trigger BUSY from IDLE if output volume is high enough.
+   * Detects system sleep/wake by checking timestamp gaps.
    */
   onData(data?: string): void {
+    const now = Date.now();
+    const timeSinceLastActivity = now - this.lastActivityTimestamp;
+
+    if (timeSinceLastActivity > this.SLEEP_DETECTION_THRESHOLD_MS) {
+      this.pendingStateRevalidation = true;
+    }
+
+    this.lastActivityTimestamp = now;
+
+    if (this.pendingStateRevalidation && this.state === "busy") {
+      this.pendingStateRevalidation = false;
+      this.revalidateStateAfterWake();
+    }
+
     if (this.state === "busy") {
       this.resetDebounceTimer();
       return;
@@ -129,7 +155,6 @@ export class ActivityMonitor {
       return;
     }
 
-    const now = Date.now();
     const dataLength = Buffer.byteLength(data, "utf8");
 
     if (this.outputWindowStart === 0 || now - this.outputWindowStart > this.outputWindowMs) {
@@ -148,6 +173,21 @@ export class ActivityMonitor {
     ) {
       this.becomeBusyFromOutput();
       this.resetOutputWindow();
+    }
+  }
+
+  private revalidateStateAfterWake(): void {
+    const actuallyBusy = this.hasActiveChildrenSafe();
+    if (actuallyBusy === null) {
+      return;
+    }
+    if (!actuallyBusy && this.state === "busy") {
+      if (this.debounceTimer) {
+        clearTimeout(this.debounceTimer);
+        this.debounceTimer = null;
+      }
+      this.state = "idle";
+      this.onStateChange(this.terminalId, this.spawnedAt, "idle");
     }
   }
 
@@ -183,10 +223,30 @@ export class ActivityMonitor {
     }
 
     this.debounceTimer = setTimeout(() => {
+      const actuallyBusy = this.hasActiveChildrenSafe();
+      if (actuallyBusy) {
+        this.resetDebounceTimer();
+        return;
+      }
+
       this.state = "idle";
       this.onStateChange(this.terminalId, this.spawnedAt, "idle");
       this.debounceTimer = null;
     }, this.DEBOUNCE_MS);
+  }
+
+  private hasActiveChildrenSafe(): boolean | null {
+    if (!this.processStateValidator) {
+      return null;
+    }
+    try {
+      return this.processStateValidator.hasActiveChildren();
+    } catch (error) {
+      if (process.env.CANOPY_VERBOSE) {
+        console.warn("[ActivityMonitor] Process state validation failed:", error);
+      }
+      return true;
+    }
   }
 
   dispose(): void {

@@ -359,4 +359,132 @@ describe("ActivityMonitor", () => {
       expect(monitor.getState()).toBe("idle");
     });
   });
+
+  describe("Process state validation", () => {
+    it("should extend busy state when process has active children", () => {
+      const onStateChange = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(true),
+      };
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        processStateValidator,
+      });
+
+      monitor.onInput("\r");
+      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", { trigger: "input" });
+
+      vi.advanceTimersByTime(1500);
+
+      expect(processStateValidator.hasActiveChildren).toHaveBeenCalled();
+      expect(monitor.getState()).toBe("busy");
+
+      processStateValidator.hasActiveChildren.mockReturnValue(false);
+      vi.advanceTimersByTime(1500);
+
+      expect(onStateChange).toHaveBeenNthCalledWith(2, "test-1", 1000, "idle");
+
+      monitor.dispose();
+    });
+
+    it("should transition to idle when no active children exist", () => {
+      const onStateChange = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(false),
+      };
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        processStateValidator,
+      });
+
+      monitor.onInput("\r");
+      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", { trigger: "input" });
+
+      vi.advanceTimersByTime(1500);
+
+      expect(processStateValidator.hasActiveChildren).toHaveBeenCalled();
+      expect(onStateChange).toHaveBeenNthCalledWith(2, "test-1", 1000, "idle");
+
+      monitor.dispose();
+    });
+
+    it("should work without processStateValidator (backwards compatible)", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange);
+
+      monitor.onInput("\r");
+      vi.advanceTimersByTime(1500);
+
+      expect(onStateChange).toHaveBeenCalledTimes(2);
+      expect(onStateChange).toHaveBeenNthCalledWith(2, "test-1", 1000, "idle");
+
+      monitor.dispose();
+    });
+  });
+
+  describe("System sleep/wake detection", () => {
+    it("should detect system wake and revalidate state", () => {
+      const onStateChange = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(false),
+      };
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        processStateValidator,
+      });
+
+      monitor.onInput("\r");
+      expect(monitor.getState()).toBe("busy");
+
+      vi.advanceTimersByTime(6000);
+
+      monitor.onData("wake output");
+
+      expect(processStateValidator.hasActiveChildren).toHaveBeenCalled();
+      expect(monitor.getState()).toBe("idle");
+      expect(onStateChange).toHaveBeenLastCalledWith("test-1", 1000, "idle");
+
+      monitor.dispose();
+    });
+
+    it("should keep busy state after wake if process still has children", () => {
+      const onStateChange = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(true),
+      };
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        processStateValidator,
+      });
+
+      monitor.onInput("\r");
+      expect(monitor.getState()).toBe("busy");
+
+      vi.advanceTimersByTime(6000);
+
+      monitor.onData("wake output");
+
+      expect(monitor.getState()).toBe("busy");
+      expect(onStateChange).toHaveBeenCalledTimes(1);
+
+      monitor.dispose();
+    });
+
+    it("should not trigger wake detection for short gaps", () => {
+      const onStateChange = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(false),
+      };
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        processStateValidator,
+      });
+
+      monitor.onInput("\r");
+      processStateValidator.hasActiveChildren.mockClear();
+
+      vi.advanceTimersByTime(1000);
+      monitor.onData("some output");
+
+      expect(processStateValidator.hasActiveChildren).not.toHaveBeenCalled();
+      expect(monitor.getState()).toBe("busy");
+
+      monitor.dispose();
+    });
+  });
 });
