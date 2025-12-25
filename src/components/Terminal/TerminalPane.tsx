@@ -4,6 +4,7 @@ import { AlertTriangle, Loader2 } from "lucide-react";
 import type { TerminalType, TerminalRestartError } from "@/types";
 import { cn } from "@/lib/utils";
 import { XtermAdapter } from "./XtermAdapter";
+import { HistoryOverlayTerminalView } from "./HistoryOverlayTerminalView";
 import { ArtifactOverlay } from "./ArtifactOverlay";
 import { TerminalSearchBar } from "./TerminalSearchBar";
 import { TerminalRestartBanner } from "./TerminalRestartBanner";
@@ -516,19 +517,31 @@ function TerminalPaneComponent({
             )}
             onPointerDownCapture={handleXtermPointerDownCapture}
           >
-            <XtermAdapter
-              key={`${id}-${restartKey}`}
-              terminalId={id}
-              terminalType={type}
-              agentId={agentId}
-              isInputLocked={isInputLocked}
-              onReady={handleReady}
-              onExit={handleExit}
-              onInput={handleInput}
-              className="absolute inset-0"
-              getRefreshTier={getRefreshTierCallback}
-              cwd={cwd}
-            />
+            {isAgentTerminal ? (
+              <HistoryOverlayTerminalView
+                key={`${id}-${restartKey}`}
+                terminalId={id}
+                type={type ?? "terminal"}
+                isFocused={isFocused}
+                isVisible={terminal?.isVisible ?? true}
+                isInputLocked={isInputLocked}
+                className="absolute inset-0"
+              />
+            ) : (
+              <XtermAdapter
+                key={`${id}-${restartKey}`}
+                terminalId={id}
+                terminalType={type}
+                agentId={agentId}
+                isInputLocked={isInputLocked}
+                onReady={handleReady}
+                onExit={handleExit}
+                onInput={handleInput}
+                className="absolute inset-0"
+                getRefreshTier={getRefreshTierCallback}
+                cwd={cwd}
+              />
+            )}
             <ArtifactOverlay terminalId={id} worktreeId={worktreeId} cwd={cwd} />
             {isSearchOpen && (
               <TerminalSearchBar
