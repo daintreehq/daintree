@@ -163,14 +163,16 @@ export function RecipeEditor({
         <div className="mb-4">
           <label className="flex items-center gap-2 cursor-pointer">
             <input
+              id="show-in-empty-state"
               type="checkbox"
               checked={showInEmptyState}
               onChange={(e) => setShowInEmptyState(e.target.checked)}
+              aria-describedby="show-in-empty-state-help"
               className="w-4 h-4 rounded border-canopy-border bg-canopy-bg checked:bg-canopy-accent checked:border-canopy-accent focus:ring-2 focus:ring-canopy-accent"
             />
             <span className="text-sm font-medium text-canopy-text">Show in Empty State</span>
           </label>
-          <p className="text-xs text-canopy-muted mt-1 ml-6">
+          <p id="show-in-empty-state-help" className="text-xs text-canopy-muted mt-1 ml-6">
             Display this recipe as a primary launcher when the worktree has no active terminals
           </p>
         </div>
