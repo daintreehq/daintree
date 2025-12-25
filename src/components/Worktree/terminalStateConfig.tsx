@@ -36,3 +36,12 @@ export const STATE_PRIORITY: AgentState[] = [
   "completed",
   "idle",
 ];
+
+export const STATE_SORT_PRIORITY: Record<AgentState, number> = {
+  working: 0,
+  waiting: 1,
+  running: 2,
+  idle: 3,
+  completed: 4,
+  failed: 5,
+};

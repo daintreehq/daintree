@@ -1,6 +1,5 @@
 import type * as React from "react";
 import type { WorktreeState } from "../../types";
-import { ClaudeIcon, GeminiIcon, CodexIcon } from "@/components/icons";
 import {
   Code,
   CircleDot,
@@ -20,6 +19,7 @@ import {
 } from "lucide-react";
 
 type MenuComponent = React.ElementType;
+type LaunchAgentIcon = React.ComponentType<{ className?: string }>;
 
 export interface WorktreeMenuComponents {
   Item: MenuComponent;
@@ -31,12 +31,18 @@ export interface WorktreeMenuComponents {
   SubContent: MenuComponent;
 }
 
+export interface WorktreeLaunchAgentItem {
+  id: string;
+  name: string;
+  isEnabled: boolean;
+  icon?: LaunchAgentIcon;
+  shortcut?: string | null;
+}
+
 export interface WorktreeMenuItemsProps {
   worktree: WorktreeState;
   components: WorktreeMenuComponents;
-  isClaudeEnabled: boolean;
-  isGeminiEnabled: boolean;
-  isCodexEnabled: boolean;
+  launchAgents: WorktreeLaunchAgentItem[];
   recipes: Array<{ id: string; name: string }>;
   runningRecipeId: string | null;
   isRestartValidating: boolean;
@@ -48,7 +54,7 @@ export interface WorktreeMenuItemsProps {
     failed: number;
     all: number;
   };
-  onLaunchAgent?: (agentId: "claude" | "gemini" | "codex" | "terminal" | "browser") => void;
+  onLaunchAgent?: (agentId: string) => void;
   onCopyContext: () => void;
   onOpenEditor: () => void;
   onRevealInFinder: () => void;
@@ -70,9 +76,7 @@ export interface WorktreeMenuItemsProps {
 export function WorktreeMenuItems({
   worktree,
   components: C,
-  isClaudeEnabled,
-  isGeminiEnabled,
-  isCodexEnabled,
+  launchAgents,
   recipes,
   runningRecipeId,
   isRestartValidating,
@@ -102,27 +106,23 @@ export function WorktreeMenuItems({
   return (
     <>
       <C.Label>Launch</C.Label>
-      <C.Item
-        onSelect={() => onLaunchAgent?.("claude")}
-        disabled={!onLaunchAgent || !isClaudeEnabled}
-      >
-        <ClaudeIcon className="w-3.5 h-3.5 mr-2" />
-        Claude
-      </C.Item>
-      <C.Item
-        onSelect={() => onLaunchAgent?.("gemini")}
-        disabled={!onLaunchAgent || !isGeminiEnabled}
-      >
-        <GeminiIcon className="w-3.5 h-3.5 mr-2" />
-        Gemini
-      </C.Item>
-      <C.Item
-        onSelect={() => onLaunchAgent?.("codex")}
-        disabled={!onLaunchAgent || !isCodexEnabled}
-      >
-        <CodexIcon className="w-3.5 h-3.5 mr-2" />
-        Codex
-      </C.Item>
+      {launchAgents.map((agent) => {
+        const Icon = agent.icon;
+        return (
+          <C.Item
+            key={agent.id}
+            onSelect={() => onLaunchAgent?.(agent.id)}
+            disabled={!onLaunchAgent || !agent.isEnabled}
+          >
+            {Icon ? (
+              <Icon className="w-3.5 h-3.5 mr-2" />
+            ) : (
+              <Terminal className="w-3.5 h-3.5 mr-2" />
+            )}
+            {agent.name}
+          </C.Item>
+        );
+      })}
       <C.Item onSelect={() => onLaunchAgent?.("terminal")} disabled={!onLaunchAgent}>
         <Terminal className="w-3.5 h-3.5 mr-2" />
         Open Terminal
