@@ -66,6 +66,8 @@ export interface StoreSchema {
         env?: Record<string, string>;
       }>;
       createdAt: number;
+      showInEmptyState?: boolean;
+      lastUsedAt?: number;
     }>;
     terminalGridConfig?: TerminalGridConfig;
     dockCollapsed?: boolean;

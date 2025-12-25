@@ -11,6 +11,7 @@ import {
   type TerminalInstance,
 } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
+import { useRecipeStore } from "@/store/recipeStore";
 import { GridPanel } from "./GridPanel";
 import { TerminalCountWarning } from "./TerminalCountWarning";
 import { GridFullOverlay } from "./GridFullOverlay";
@@ -21,7 +22,7 @@ import {
   GRID_PLACEHOLDER_ID,
   SortableGridPlaceholder,
 } from "@/components/DragDrop";
-import { Terminal, AlertTriangle, Globe, Settings } from "lucide-react";
+import { Terminal, AlertTriangle, Globe, Settings, Play } from "lucide-react";
 import { CanopyIcon, CodexIcon, ClaudeIcon, GeminiIcon } from "@/components/icons";
 import { ProjectPulseCard } from "@/components/Pulse";
 import { Kbd } from "@/components/ui/Kbd";
@@ -118,6 +119,7 @@ function EmptyState({
   activeWorktreeId,
   showProjectPulse,
   projectIconSvg,
+  defaultCwd,
 }: {
   onLaunchAgent: (type: "claude" | "gemini" | "codex" | "terminal" | "browser") => void;
   hasActiveWorktree: boolean;
@@ -128,7 +130,31 @@ function EmptyState({
   activeWorktreeId?: string | null;
   showProjectPulse: boolean;
   projectIconSvg?: string;
+  defaultCwd?: string;
 }) {
+  const recipes = useRecipeStore((state) =>
+    state.getRecipesForWorktree(activeWorktreeId ?? undefined)
+  );
+  const runRecipe = useRecipeStore((state) => state.runRecipe);
+  const dockedTerminals = useTerminalStore(
+    useShallow((state) =>
+      state.terminals.filter((t) => t.location === "dock" && t.worktreeId === activeWorktreeId)
+    )
+  );
+
+  const pinnedRecipes = useMemo(() => {
+    return recipes
+      .filter((r) => r.showInEmptyState)
+      .sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0));
+  }, [recipes]);
+
+  const lastUsedRecipe = useMemo(() => {
+    const sorted = recipes
+      .filter((r) => r.lastUsedAt)
+      .sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0));
+    return sorted[0];
+  }, [recipes]);
+
   const handleOpenHelp = () => {
     void actionService.dispatch(
       "system.openExternal",
@@ -153,6 +179,23 @@ function EmptyState({
 
   const handleOpenProjectSettings = () => {
     window.dispatchEvent(new CustomEvent("canopy:open-project-settings"));
+  };
+
+  const handleRunRecipe = async (recipeId: string) => {
+    if (!defaultCwd) return;
+    try {
+      await runRecipe(recipeId, defaultCwd, activeWorktreeId ?? undefined);
+    } catch (error) {
+      console.error("Failed to run recipe:", error);
+    }
+  };
+
+  const handleResumeSession = async () => {
+    await actionService.dispatch("worktree.sessions.maximizeAll", {}, { source: "user" });
+  };
+
+  const handleOpenPalette = async () => {
+    await actionService.dispatch("terminal.palette", {}, { source: "user" });
   };
 
   return (
@@ -194,53 +237,129 @@ function EmptyState({
           <div
             className="flex items-center gap-2 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded px-3 py-2 mb-6 max-w-md text-center"
             role="status"
-            aria-live="assertive"
+            aria-live="polite"
           >
             <AlertTriangle className="h-4 w-4 shrink-0" />
             <span>Select a worktree in the sidebar to set the working directory for agents</span>
           </div>
         )}
 
-        <div className="flex justify-center gap-3 mb-8">
-          <LauncherButton
-            title="Claude"
-            icon={<ClaudeIcon className="h-10 w-10" brandColor={getBrandColorHex("claude")} />}
-            onClick={() => handleAgentClick("claude")}
-            available={agentAvailability?.claude ?? false}
-            isLoading={isCheckingAvailability}
-            onUnavailableClick={handleUnavailableClick}
-          />
-          <LauncherButton
-            title="Codex"
-            icon={<CodexIcon className="h-10 w-10" brandColor={getBrandColorHex("codex")} />}
-            onClick={() => handleAgentClick("codex")}
-            available={agentAvailability?.codex ?? false}
-            isLoading={isCheckingAvailability}
-            onUnavailableClick={handleUnavailableClick}
-          />
-          <LauncherButton
-            title="Gemini"
-            icon={<GeminiIcon className="h-10 w-10" brandColor={getBrandColorHex("gemini")} />}
-            onClick={() => handleAgentClick("gemini")}
-            available={agentAvailability?.gemini ?? false}
-            isLoading={isCheckingAvailability}
-            onUnavailableClick={handleUnavailableClick}
-          />
-          <LauncherButton
-            title="Terminal"
-            icon={<Terminal className="h-10 w-10 text-canopy-text/70" />}
-            onClick={() => handleAgentClick("terminal")}
-            available={true}
-            isLoading={false}
-          />
-          <LauncherButton
-            title="Browser"
-            icon={<Globe className="h-10 w-10 text-blue-400" />}
-            onClick={() => handleAgentClick("browser")}
-            available={true}
-            isLoading={false}
-          />
-        </div>
+        {hasActiveWorktree && dockedTerminals.length > 0 && (
+          <button
+            type="button"
+            onClick={handleResumeSession}
+            className="mb-6 px-6 py-3 bg-canopy-accent hover:bg-canopy-accent/90 text-white rounded-[var(--radius-md)] font-medium text-sm transition-all flex items-center gap-2 shadow-lg hover:shadow-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-canopy-bg"
+          >
+            <Play className="h-4 w-4" />
+            Resume Last Session
+          </button>
+        )}
+
+        {hasActiveWorktree && (
+          <div className="mb-8 w-full max-w-2xl">
+            <h4 className="text-xs font-semibold text-canopy-text/50 uppercase tracking-wider mb-3 text-center">
+              Pinned Recipes
+            </h4>
+            {pinnedRecipes.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                {pinnedRecipes.map((recipe) => (
+                  <button
+                    key={recipe.id}
+                    type="button"
+                    onClick={() => handleRunRecipe(recipe.id)}
+                    className="p-4 bg-canopy-sidebar hover:bg-canopy-bg border border-canopy-border hover:border-canopy-accent/50 rounded-[var(--radius-md)] transition-all text-left group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <Play className="h-4 w-4 text-canopy-accent group-hover:text-canopy-accent/80" />
+                      <h5 className="font-medium text-sm text-canopy-text">{recipe.name}</h5>
+                    </div>
+                    <p className="text-xs text-canopy-muted">
+                      {recipe.terminals.length} terminal{recipe.terminals.length !== 1 ? "s" : ""}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-canopy-text/40 text-center">
+                No pinned recipes. Create a recipe and enable "Show in Empty State" to pin it here.
+              </p>
+            )}
+          </div>
+        )}
+
+        {hasActiveWorktree && lastUsedRecipe && !lastUsedRecipe.showInEmptyState && (
+          <div className="mb-6">
+            <button
+              type="button"
+              onClick={() => handleRunRecipe(lastUsedRecipe.id)}
+              className="px-5 py-2.5 bg-canopy-sidebar hover:bg-canopy-bg border border-canopy-border hover:border-canopy-accent/50 rounded-[var(--radius-md)] text-sm text-canopy-text transition-all flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
+            >
+              <Play className="h-3.5 w-3.5 text-canopy-accent" />
+              Rerun {lastUsedRecipe.name}
+            </button>
+          </div>
+        )}
+
+        {hasActiveWorktree && (
+          <div className="mb-6">
+            <button
+              type="button"
+              onClick={handleOpenPalette}
+              className="px-5 py-2.5 bg-canopy-accent/10 hover:bg-canopy-accent/20 border border-canopy-accent/30 hover:border-canopy-accent/50 rounded-[var(--radius-md)] text-sm text-canopy-accent font-medium transition-all flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
+            >
+              <Terminal className="h-3.5 w-3.5" />
+              Open Command Palette
+            </button>
+          </div>
+        )}
+
+        {hasActiveWorktree && (
+          <div className="mb-8 w-full max-w-2xl">
+            <h4 className="text-xs font-semibold text-canopy-text/50 uppercase tracking-wider mb-3 text-center">
+              Quick Actions
+            </h4>
+            <div className="flex justify-center gap-2 flex-wrap">
+              <LauncherButton
+                title="Claude"
+                icon={<ClaudeIcon className="h-8 w-8" brandColor={getBrandColorHex("claude")} />}
+                onClick={() => handleAgentClick("claude")}
+                available={agentAvailability?.claude ?? false}
+                isLoading={isCheckingAvailability}
+                onUnavailableClick={handleUnavailableClick}
+              />
+              <LauncherButton
+                title="Codex"
+                icon={<CodexIcon className="h-8 w-8" brandColor={getBrandColorHex("codex")} />}
+                onClick={() => handleAgentClick("codex")}
+                available={agentAvailability?.codex ?? false}
+                isLoading={isCheckingAvailability}
+                onUnavailableClick={handleUnavailableClick}
+              />
+              <LauncherButton
+                title="Gemini"
+                icon={<GeminiIcon className="h-8 w-8" brandColor={getBrandColorHex("gemini")} />}
+                onClick={() => handleAgentClick("gemini")}
+                available={agentAvailability?.gemini ?? false}
+                isLoading={isCheckingAvailability}
+                onUnavailableClick={handleUnavailableClick}
+              />
+              <LauncherButton
+                title="Terminal"
+                icon={<Terminal className="h-8 w-8 text-canopy-text/70" />}
+                onClick={() => handleAgentClick("terminal")}
+                available={true}
+                isLoading={false}
+              />
+              <LauncherButton
+                title="Browser"
+                icon={<Globe className="h-8 w-8 text-blue-400" />}
+                onClick={() => handleAgentClick("browser")}
+                available={true}
+                isLoading={false}
+              />
+            </div>
+          </div>
+        )}
 
         {showProjectPulse && hasActiveWorktree && activeWorktreeId && (
           <div className="flex justify-center mb-8">
@@ -249,10 +368,12 @@ function EmptyState({
         )}
 
         <div className="flex flex-col items-center gap-4 mt-4">
-          <p className="text-xs text-canopy-text/60 text-center">
-            Tip: Press <Kbd>⌘P</Kbd> to open the terminal palette or <Kbd>⌘T</Kbd> to start a new
-            terminal
-          </p>
+          {hasActiveWorktree && (
+            <p className="text-xs text-canopy-text/60 text-center">
+              Tip: Press <Kbd>⌘P</Kbd> to open the command palette or <Kbd>⌘T</Kbd> for a new
+              terminal
+            </p>
+          )}
 
           <button
             type="button"
@@ -300,7 +421,7 @@ export function ContentGrid({
   const { projectIconSvg } = useProjectBranding(currentProject?.id);
   const { worktreeMap } = useWorktrees();
   const activeWorktree = activeWorktreeId ? worktreeMap.get(activeWorktreeId) : null;
-  const hasActiveWorktree = activeWorktreeId !== null && activeWorktree !== undefined;
+  const hasActiveWorktree = activeWorktreeId != null && activeWorktree != null;
   const activeWorktreeName = activeWorktree
     ? activeWorktree.branch?.trim() || activeWorktree.name?.trim() || "Unknown Worktree"
     : null;
@@ -636,6 +757,7 @@ export function ContentGrid({
                   activeWorktreeId={activeWorktreeId}
                   showProjectPulse={showProjectPulse}
                   projectIconSvg={projectIconSvg}
+                  defaultCwd={defaultCwd}
                 />
               </div>
             ) : (

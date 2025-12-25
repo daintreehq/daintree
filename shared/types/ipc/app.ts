@@ -26,6 +26,10 @@ export interface SavedRecipe {
   terminals: SavedRecipeTerminal[];
   /** Creation timestamp */
   createdAt: number;
+  /** Whether this recipe should appear in the empty state as a primary launcher */
+  showInEmptyState?: boolean;
+  /** Timestamp of last run (milliseconds since epoch) */
+  lastUsedAt?: number;
 }
 
 /** Application state for persistence */

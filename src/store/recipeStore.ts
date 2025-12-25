@@ -20,7 +20,8 @@ interface RecipeState {
   createRecipe: (
     name: string,
     worktreeId: string | undefined,
-    terminals: RecipeTerminal[]
+    terminals: RecipeTerminal[],
+    showInEmptyState?: boolean
   ) => Promise<void>;
   updateRecipe: (
     id: string,
@@ -56,7 +57,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     }
   },
 
-  createRecipe: async (name, worktreeId, terminals) => {
+  createRecipe: async (name, worktreeId, terminals, showInEmptyState = false) => {
     if (terminals.length === 0) {
       throw new Error("Recipe must contain at least one terminal");
     }
@@ -70,6 +71,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       worktreeId,
       terminals,
       createdAt: Date.now(),
+      showInEmptyState,
     };
 
     const newRecipes = [...get().recipes, newRecipe];
@@ -83,6 +85,8 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           worktreeId: r.worktreeId,
           terminals: r.terminals,
           createdAt: r.createdAt,
+          showInEmptyState: r.showInEmptyState,
+          lastUsedAt: r.lastUsedAt,
         })),
       });
     } catch (error) {
@@ -121,6 +125,8 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           worktreeId: r.worktreeId,
           terminals: r.terminals,
           createdAt: r.createdAt,
+          showInEmptyState: r.showInEmptyState,
+          lastUsedAt: r.lastUsedAt,
         })),
       });
     } catch (error) {
@@ -141,6 +147,8 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           worktreeId: r.worktreeId,
           terminals: r.terminals,
           createdAt: r.createdAt,
+          showInEmptyState: r.showInEmptyState,
+          lastUsedAt: r.lastUsedAt,
         })),
       });
     } catch (error) {
@@ -163,6 +171,12 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     if (!recipe) {
       throw new Error(`Recipe ${recipeId} not found`);
     }
+
+    get()
+      .updateRecipe(recipeId, { lastUsedAt: Date.now() })
+      .catch((error) => {
+        console.warn("Failed to update lastUsedAt for recipe:", error);
+      });
 
     const terminalStore = useTerminalStore.getState();
 
@@ -249,6 +263,8 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       worktreeId: typeof recipe.worktreeId === "string" ? recipe.worktreeId : undefined,
       terminals: sanitizedTerminals,
       createdAt: Date.now(),
+      showInEmptyState:
+        typeof recipe.showInEmptyState === "boolean" ? recipe.showInEmptyState : false,
     };
 
     const newRecipes = [...get().recipes, importedRecipe];
@@ -262,6 +278,8 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           worktreeId: r.worktreeId,
           terminals: r.terminals,
           createdAt: r.createdAt,
+          showInEmptyState: r.showInEmptyState,
+          lastUsedAt: r.lastUsedAt,
         })),
       });
     } catch (_error) {

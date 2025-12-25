@@ -557,6 +557,10 @@ export interface TerminalRecipe {
   terminals: RecipeTerminal[];
   /** Timestamp when recipe was created (milliseconds since epoch) */
   createdAt: number;
+  /** Whether this recipe should appear in the empty state as a primary launcher */
+  showInEmptyState?: boolean;
+  /** Timestamp of last run (milliseconds since epoch) */
+  lastUsedAt?: number;
 }
 
 // Project Settings Types

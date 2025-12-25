@@ -37,6 +37,7 @@ export function RecipeEditor({
   const [terminals, setTerminals] = useState<RecipeTerminal[]>([
     { type: "terminal", title: "", command: "", env: {} },
   ]);
+  const [showInEmptyState, setShowInEmptyState] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const recipeNameInputRef = useRef<HTMLInputElement>(null);
@@ -45,12 +46,15 @@ export function RecipeEditor({
     if (recipe) {
       setRecipeName(recipe.name);
       setTerminals(recipe.terminals.map((t) => ({ ...t })));
+      setShowInEmptyState(recipe.showInEmptyState ?? false);
     } else if (initialTerminals && initialTerminals.length > 0) {
       setRecipeName("");
       setTerminals(initialTerminals.map((t) => ({ ...t })));
+      setShowInEmptyState(false);
     } else {
       setRecipeName("");
       setTerminals([{ type: "terminal", title: "", command: "", env: {} }]);
+      setShowInEmptyState(false);
     }
     setError(null);
   }, [recipe, initialTerminals, isOpen]);
@@ -107,9 +111,10 @@ export function RecipeEditor({
         await updateRecipe(recipe.id, {
           name: recipeName,
           terminals,
+          showInEmptyState,
         });
       } else {
-        await createRecipe(recipeName, worktreeId, terminals);
+        await createRecipe(recipeName, worktreeId, terminals, showInEmptyState);
       }
 
       if (onSave) {
@@ -153,6 +158,23 @@ export function RecipeEditor({
             placeholder="e.g., Full Stack Dev"
             className="w-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
           />
+        </div>
+
+        <div className="mb-4">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              id="show-in-empty-state"
+              type="checkbox"
+              checked={showInEmptyState}
+              onChange={(e) => setShowInEmptyState(e.target.checked)}
+              aria-describedby="show-in-empty-state-help"
+              className="w-4 h-4 rounded border-canopy-border bg-canopy-bg checked:bg-canopy-accent checked:border-canopy-accent focus:ring-2 focus:ring-canopy-accent"
+            />
+            <span className="text-sm font-medium text-canopy-text">Show in Empty State</span>
+          </label>
+          <p id="show-in-empty-state-help" className="text-xs text-canopy-muted mt-1 ml-6">
+            Display this recipe as a primary launcher when the worktree has no active terminals
+          </p>
         </div>
 
         <div className="mb-4">
