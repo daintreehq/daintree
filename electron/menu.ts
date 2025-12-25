@@ -2,7 +2,7 @@ import { Menu, dialog, BrowserWindow, shell, app } from "electron";
 import { projectStore } from "./services/ProjectStore.js";
 import { getWorkspaceClient } from "./services/WorkspaceClient.js";
 import { CHANNELS } from "./ipc/channels.js";
-import { AGENT_REGISTRY } from "../shared/config/agentRegistry.js";
+import { getEffectiveRegistry } from "../shared/config/agentRegistry.js";
 import type { CliAvailabilityService } from "./services/CliAvailabilityService.js";
 
 app.setAboutPanelOptions({
@@ -46,7 +46,7 @@ export function createApplicationMenu(
   const buildAgentMenuItems = (): Electron.MenuItemConstructorOptions[] => {
     const items: Electron.MenuItemConstructorOptions[] = [];
 
-    Object.values(AGENT_REGISTRY).forEach((agent) => {
+    Object.values(getEffectiveRegistry()).forEach((agent) => {
       const isAvailable = availability?.[agent.id] ?? false;
 
       if (isAvailable) {

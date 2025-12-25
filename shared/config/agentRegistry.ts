@@ -93,3 +93,37 @@ export function getAgentConfig(agentId: string): AgentConfig | undefined {
 export function isRegisteredAgent(agentId: string): boolean {
   return agentId in AGENT_REGISTRY;
 }
+
+let userRegistry: Record<string, AgentConfig> = {};
+
+export function setUserRegistry(registry: Record<string, AgentConfig>): void {
+  userRegistry = registry;
+}
+
+export function getUserRegistry(): Record<string, AgentConfig> {
+  return userRegistry;
+}
+
+export function getEffectiveRegistry(): Record<string, AgentConfig> {
+  return { ...userRegistry, ...AGENT_REGISTRY };
+}
+
+export function getEffectiveAgentIds(): string[] {
+  return Object.keys(getEffectiveRegistry());
+}
+
+export function getEffectiveAgentConfig(agentId: string): AgentConfig | undefined {
+  return getEffectiveRegistry()[agentId];
+}
+
+export function isEffectivelyRegisteredAgent(agentId: string): boolean {
+  return agentId in getEffectiveRegistry();
+}
+
+export function isBuiltInAgent(agentId: string): boolean {
+  return agentId in AGENT_REGISTRY;
+}
+
+export function isUserDefinedAgent(agentId: string): boolean {
+  return agentId in userRegistry && !(agentId in AGENT_REGISTRY);
+}

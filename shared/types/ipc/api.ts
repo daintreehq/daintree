@@ -207,6 +207,17 @@ export interface ElectronAPI {
     set(agentId: AgentId, settings: Partial<AgentSettingsEntry>): Promise<AgentSettings>;
     reset(agentId?: AgentId): Promise<AgentSettings>;
   };
+  userAgentRegistry: {
+    get(): Promise<import("../userAgentRegistry.js").UserAgentRegistry>;
+    add(
+      config: import("../userAgentRegistry.js").UserAgentConfig
+    ): Promise<{ success: boolean; error?: string }>;
+    update(
+      id: string,
+      config: import("../userAgentRegistry.js").UserAgentConfig
+    ): Promise<{ success: boolean; error?: string }>;
+    remove(id: string): Promise<{ success: boolean; error?: string }>;
+  };
   agentHelp: {
     get(request: AgentHelpRequest): Promise<AgentHelpResult>;
   };

@@ -3,9 +3,9 @@ import { ClaudeIcon, GeminiIcon, CodexIcon } from "@/components/icons";
 import {
   AGENT_REGISTRY as BASE_AGENT_REGISTRY,
   type AgentConfig as BaseAgentConfig,
-  getAgentConfig as getBaseAgentConfig,
-  getAgentIds as getBaseAgentIds,
-  isRegisteredAgent as isBaseRegisteredAgent,
+  getEffectiveAgentConfig,
+  getEffectiveAgentIds,
+  isEffectivelyRegisteredAgent,
 } from "../../shared/config/agentRegistry";
 
 export interface AgentIconProps {
@@ -33,16 +33,16 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = Object.fromEntries(
 export const AGENT_IDS = Object.keys(AGENT_REGISTRY) as string[];
 
 export function getAgentConfig(agentId: string): AgentConfig | undefined {
-  const config = getBaseAgentConfig(agentId);
+  const config = getEffectiveAgentConfig(agentId);
   if (!config) return undefined;
   const icon = ICON_MAP[config.iconId] ?? ClaudeIcon;
   return { ...config, icon };
 }
 
 export function isRegisteredAgent(agentId: string): boolean {
-  return isBaseRegisteredAgent(agentId);
+  return isEffectivelyRegisteredAgent(agentId);
 }
 
 export function getAgentIds(): string[] {
-  return getBaseAgentIds();
+  return getEffectiveAgentIds();
 }

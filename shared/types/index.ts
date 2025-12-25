@@ -204,6 +204,10 @@ export {
   generateAgentFlags,
 } from "./agentSettings.js";
 
+// User agent registry types - user-defined agent configuration
+export type { UserAgentConfig, UserAgentRegistry } from "./userAgentRegistry.js";
+export { UserAgentConfigSchema, UserAgentRegistrySchema } from "./userAgentRegistry.js";
+
 // Event types - event context for correlation
 export type { EventContext } from "./events.js";
 

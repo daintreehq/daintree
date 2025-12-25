@@ -1,5 +1,6 @@
 import type { WorktreeState, Project, ProjectSettings, RunCommand, AgentId } from "../domain.js";
 import type { AgentSettings } from "../agentSettings.js";
+import type { UserAgentRegistry, UserAgentConfig } from "../userAgentRegistry.js";
 import type { KeyAction } from "../keymap.js";
 
 import type {
@@ -488,6 +489,24 @@ export interface IpcInvokeMap {
   "agent-settings:reset": {
     args: [agentType?: AgentId];
     result: AgentSettings;
+  };
+
+  // User agent registry channels
+  "user-agent-registry:get": {
+    args: [];
+    result: UserAgentRegistry;
+  };
+  "user-agent-registry:add": {
+    args: [config: UserAgentConfig];
+    result: { success: boolean; error?: string };
+  };
+  "user-agent-registry:update": {
+    args: [payload: { id: string; config: UserAgentConfig }];
+    result: { success: boolean; error?: string };
+  };
+  "user-agent-registry:remove": {
+    args: [id: string];
+    result: { success: boolean; error?: string };
   };
 
   // Terminal config channels

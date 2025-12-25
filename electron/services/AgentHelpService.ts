@@ -1,6 +1,6 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { AGENT_REGISTRY } from "../../shared/config/agentRegistry.js";
+import { getEffectiveAgentConfig } from "../../shared/config/agentRegistry.js";
 import type { AgentHelpResult } from "../../shared/types/ipc/agent.js";
 
 const execFileAsync = promisify(execFile);
@@ -17,7 +17,7 @@ export class AgentHelpService {
   private readonly MAX_BUFFER = 256 * 1024;
 
   async getHelp(agentId: string, refresh = false): Promise<AgentHelpResult> {
-    const config = AGENT_REGISTRY[agentId];
+    const config = getEffectiveAgentConfig(agentId);
     if (!config) {
       throw new Error(`Unknown agent: ${agentId}`);
     }

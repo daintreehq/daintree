@@ -2,13 +2,15 @@ import { ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import type { HandlerDependencies } from "../types.js";
-import { DEFAULT_AGENT_SETTINGS } from "../../../shared/types/index.js";
+import { DEFAULT_AGENT_SETTINGS, type UserAgentConfig } from "../../../shared/types/index.js";
 import { AgentHelpService } from "../../services/AgentHelpService.js";
+import { UserAgentRegistryService } from "../../services/UserAgentRegistryService.js";
 import type { AgentHelpRequest, AgentHelpResult } from "../../../shared/types/ipc/agent.js";
 
 export function registerAiHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
   const agentHelpService = new AgentHelpService();
+  const userAgentRegistryService = new UserAgentRegistryService();
 
   const handleAgentSettingsGet = async () => {
     return store.get("agentSettings");
@@ -89,6 +91,52 @@ export function registerAiHandlers(_deps: HandlerDependencies): () => void {
   };
   ipcMain.handle(CHANNELS.AGENT_HELP_GET, handleAgentHelpGet);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.AGENT_HELP_GET));
+
+  const handleUserAgentRegistryGet = async () => {
+    return userAgentRegistryService.getRegistry();
+  };
+  ipcMain.handle(CHANNELS.USER_AGENT_REGISTRY_GET, handleUserAgentRegistryGet);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.USER_AGENT_REGISTRY_GET));
+
+  const handleUserAgentRegistryAdd = async (
+    _event: Electron.IpcMainInvokeEvent,
+    config: UserAgentConfig
+  ) => {
+    if (!config || typeof config !== "object") {
+      throw new Error("Invalid config");
+    }
+    return userAgentRegistryService.addAgent(config);
+  };
+  ipcMain.handle(CHANNELS.USER_AGENT_REGISTRY_ADD, handleUserAgentRegistryAdd);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.USER_AGENT_REGISTRY_ADD));
+
+  const handleUserAgentRegistryUpdate = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: { id: string; config: UserAgentConfig }
+  ) => {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid payload");
+    }
+    const { id, config } = payload;
+    if (!id || !config) {
+      throw new Error("Missing id or config");
+    }
+    return userAgentRegistryService.updateAgent(id, config);
+  };
+  ipcMain.handle(CHANNELS.USER_AGENT_REGISTRY_UPDATE, handleUserAgentRegistryUpdate);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.USER_AGENT_REGISTRY_UPDATE));
+
+  const handleUserAgentRegistryRemove = async (
+    _event: Electron.IpcMainInvokeEvent,
+    id: string
+  ) => {
+    if (!id || typeof id !== "string") {
+      throw new Error("Invalid id");
+    }
+    return userAgentRegistryService.removeAgent(id);
+  };
+  ipcMain.handle(CHANNELS.USER_AGENT_REGISTRY_REMOVE, handleUserAgentRegistryRemove);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.USER_AGENT_REGISTRY_REMOVE));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

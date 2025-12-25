@@ -267,6 +267,12 @@ const CHANNELS = {
 
   AGENT_HELP_GET: "agent-help:get",
 
+  // User agent registry channels
+  USER_AGENT_REGISTRY_GET: "user-agent-registry:get",
+  USER_AGENT_REGISTRY_ADD: "user-agent-registry:add",
+  USER_AGENT_REGISTRY_UPDATE: "user-agent-registry:update",
+  USER_AGENT_REGISTRY_REMOVE: "user-agent-registry:remove",
+
   // Terminal config channels
   TERMINAL_CONFIG_GET: "terminal-config:get",
   TERMINAL_CONFIG_SET_SCROLLBACK: "terminal-config:set-scrollback",
@@ -684,6 +690,18 @@ const api: ElectronAPI = {
       _typedInvoke(CHANNELS.AGENT_SETTINGS_SET, { agentType: agentId, settings }),
 
     reset: (agentType?: string) => _typedInvoke(CHANNELS.AGENT_SETTINGS_RESET, agentType),
+  },
+
+  userAgentRegistry: {
+    get: () => _typedInvoke(CHANNELS.USER_AGENT_REGISTRY_GET),
+
+    add: (config: import("../shared/types/index.js").UserAgentConfig) =>
+      _typedInvoke(CHANNELS.USER_AGENT_REGISTRY_ADD, config),
+
+    update: (id: string, config: import("../shared/types/index.js").UserAgentConfig) =>
+      _typedInvoke(CHANNELS.USER_AGENT_REGISTRY_UPDATE, { id, config }),
+
+    remove: (id: string) => _typedInvoke(CHANNELS.USER_AGENT_REGISTRY_REMOVE, id),
   },
 
   agentHelp: {

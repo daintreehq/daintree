@@ -138,6 +138,11 @@ export const CHANNELS = {
 
   AGENT_HELP_GET: "agent-help:get",
 
+  USER_AGENT_REGISTRY_GET: "user-agent-registry:get",
+  USER_AGENT_REGISTRY_ADD: "user-agent-registry:add",
+  USER_AGENT_REGISTRY_UPDATE: "user-agent-registry:update",
+  USER_AGENT_REGISTRY_REMOVE: "user-agent-registry:remove",
+
   TERMINAL_CONFIG_GET: "terminal-config:get",
   TERMINAL_CONFIG_SET_SCROLLBACK: "terminal-config:set-scrollback",
   TERMINAL_CONFIG_SET_PERFORMANCE_MODE: "terminal-config:set-performance-mode",

@@ -1,6 +1,10 @@
 import Store from "electron-store";
 import type { Project } from "./types/index.js";
-import type { AgentSettings, TerminalGridConfig } from "../shared/types/index.js";
+import type {
+  AgentSettings,
+  TerminalGridConfig,
+  UserAgentRegistry,
+} from "../shared/types/index.js";
 import { DEFAULT_AGENT_SETTINGS } from "../shared/types/index.js";
 
 export interface StoreSchema {
@@ -77,6 +81,7 @@ export interface StoreSchema {
     pathPattern: string;
   };
   agentSettings: AgentSettings;
+  userAgentRegistry: UserAgentRegistry;
   keybindingOverrides: {
     overrides: Record<string, string[]>;
   };
@@ -120,6 +125,7 @@ const storeOptions = {
       pathPattern: "{parent-dir}/{base-folder}-worktrees/{branch-slug}",
     },
     agentSettings: DEFAULT_AGENT_SETTINGS,
+    userAgentRegistry: {},
     keybindingOverrides: {
       overrides: {},
     },
