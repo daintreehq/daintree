@@ -39,7 +39,7 @@ export function extractSnapshot(
       const ansiLines: string[] = new Array(count);
       for (let i = 0; i < count; i++) {
         const lineIdx = start + i;
-         
+
         const serialized = serializeAddon.serialize({
           range: { start: lineIdx, end: lineIdx },
           excludeAltBuffer: true,

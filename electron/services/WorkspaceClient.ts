@@ -206,6 +206,28 @@ export class WorkspaceClient extends EventEmitter {
   }
 
   private handleHostEvent(event: WorkspaceHostEvent): void {
+    try {
+      this.processHostEvent(event);
+    } catch (error) {
+      const eventType = (event as { type?: string })?.type ?? "unknown";
+      console.error(`[WorkspaceClient] Error processing event "${eventType}":`, error);
+
+      // Try to reject any pending request associated with this event
+      const requestId = (event as { requestId?: string })?.requestId;
+      if (requestId) {
+        const pending = this.pendingRequests.get(requestId);
+        if (pending) {
+          clearTimeout(pending.timeout);
+          this.pendingRequests.delete(requestId);
+          pending.reject(
+            error instanceof Error ? error : new Error(`Event processing failed: ${eventType}`)
+          );
+        }
+      }
+    }
+  }
+
+  private processHostEvent(event: WorkspaceHostEvent): void {
     switch (event.type) {
       case "ready": {
         this.isInitialized = true;
@@ -236,6 +258,7 @@ export class WorkspaceClient extends EventEmitter {
         if (event.requestId) {
           const pending = this.pendingRequests.get(event.requestId);
           if (pending) {
+            clearTimeout(pending.timeout);
             this.pendingRequests.delete(event.requestId);
             pending.reject(new Error(event.error));
           }
@@ -257,30 +280,57 @@ export class WorkspaceClient extends EventEmitter {
         break;
 
       case "all-states":
-        this.handleRequestResult({ ...event, success: true });
+        // Avoid spread by assigning property directly
+        (event as unknown as { success: boolean }).success = true;
+        this.handleRequestResult(event as unknown as { requestId: string; success: boolean });
         break;
 
       case "monitor":
-        this.handleRequestResult({ ...event, success: true });
+        (event as unknown as { success: boolean }).success = true;
+        this.handleRequestResult(event as unknown as { requestId: string; success: boolean });
         break;
 
       case "list-branches-result":
-        this.handleRequestResult({ ...event, success: !event.error });
+        (event as unknown as { success: boolean }).success = !event.error;
+        this.handleRequestResult(event as unknown as { requestId: string; success: boolean });
         break;
 
       case "get-file-diff-result":
-        this.handleRequestResult({ ...event, success: !event.error });
+        (event as unknown as { success: boolean }).success = !event.error;
+        this.handleRequestResult(event as unknown as { requestId: string; success: boolean });
         break;
 
       // Handle spontaneous events (forward to renderer)
-      case "worktree-update":
-        this.sendToRenderer(CHANNELS.WORKTREE_UPDATE, event.worktree);
-        // Also emit to internal event bus
+      case "worktree-update": {
+        const worktree = event.worktree;
+        this.sendToRenderer(CHANNELS.WORKTREE_UPDATE, worktree);
+        // Emit to internal event bus with explicit object construction
         events.emit("sys:worktree:update", {
-          ...event.worktree,
-          lastActivityTimestamp: event.worktree.lastActivityTimestamp ?? null,
+          id: worktree.id,
+          path: worktree.path,
+          name: worktree.name,
+          branch: worktree.branch,
+          isCurrent: worktree.isCurrent,
+          isMainWorktree: worktree.isMainWorktree,
+          gitDir: worktree.gitDir,
+          summary: worktree.summary,
+          modifiedCount: worktree.modifiedCount,
+          changes: worktree.changes,
+          mood: worktree.mood,
+          lastActivityTimestamp: worktree.lastActivityTimestamp ?? null,
+          createdAt: worktree.createdAt,
+          aiNote: worktree.aiNote,
+          aiNoteTimestamp: worktree.aiNoteTimestamp,
+          issueNumber: worktree.issueNumber,
+          prNumber: worktree.prNumber,
+          prUrl: worktree.prUrl,
+          prState: worktree.prState,
+          worktreeChanges: worktree.worktreeChanges,
+          worktreeId: worktree.worktreeId,
+          timestamp: worktree.timestamp,
         } as any);
         break;
+      }
 
       case "worktree-removed":
         this.sendToRenderer(CHANNELS.WORKTREE_REMOVE, { worktreeId: event.worktreeId });
@@ -314,7 +364,8 @@ export class WorkspaceClient extends EventEmitter {
       }
 
       case "copytree:complete":
-        this.handleRequestResult({ ...event, success: true });
+        (event as unknown as { success: boolean }).success = true;
+        this.handleRequestResult(event as unknown as { requestId: string; success: boolean });
         break;
 
       case "copytree:error":
@@ -327,16 +378,19 @@ export class WorkspaceClient extends EventEmitter {
 
       // File tree events
       case "file-tree-result":
-        this.handleRequestResult({ ...event, success: !event.error });
+        (event as unknown as { success: boolean }).success = !event.error;
+        this.handleRequestResult(event as unknown as { requestId: string; success: boolean });
         break;
 
       // Project Pulse events
       case "git:project-pulse":
-        this.handleRequestResult({ ...event, success: true });
+        (event as unknown as { success: boolean }).success = true;
+        this.handleRequestResult(event as unknown as { requestId: string; success: boolean });
         break;
 
       case "git:project-pulse-error":
-        this.handleRequestResult({ ...event, success: false });
+        (event as unknown as { success: boolean }).success = false;
+        this.handleRequestResult(event as unknown as { requestId: string; success: boolean });
         break;
 
       default:
@@ -344,7 +398,11 @@ export class WorkspaceClient extends EventEmitter {
     }
   }
 
-  private handleRequestResult(event: any): void {
+  private handleRequestResult(event: {
+    requestId: string;
+    success?: boolean;
+    error?: string;
+  }): void {
     const requestId = event.requestId;
     const pending = this.pendingRequests.get(requestId);
     if (pending) {
