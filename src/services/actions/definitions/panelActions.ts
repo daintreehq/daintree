@@ -6,7 +6,20 @@ import { getAIAgentInfo } from "@/lib/aiAgentDetection";
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { useSidecarStore } from "@/store/sidecarStore";
 
-export function registerPanelActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
+export function registerPanelActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
+  actions.set("panel.palette", () => ({
+    id: "panel.palette",
+    title: "Panel Palette",
+    description: "Open panel palette to create non-PTY panels",
+    category: "panel",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      callbacks.onOpenPanelPalette();
+    },
+  }));
+
   const getSidecarBounds = (): { x: number; y: number; width: number; height: number } | null => {
     if (typeof document === "undefined") return null;
     const placeholder = document.getElementById("sidecar-placeholder");

@@ -293,6 +293,14 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Terminal",
   },
   {
+    actionId: "panel.palette",
+    combo: "Cmd+Shift+P",
+    scope: "global",
+    priority: 0,
+    description: "Open panel palette",
+    category: "Panels",
+  },
+  {
     actionId: "panel.diagnosticsLogs",
     combo: "Ctrl+Shift+L",
     scope: "global",

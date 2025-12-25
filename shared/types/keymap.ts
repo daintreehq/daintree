@@ -100,6 +100,7 @@ export type KeyAction =
   | "agent.focusNextWaiting"
 
   // Panel management
+  | "panel.palette"
   | "panel.toggleDock"
   | "panel.toggleDockAlt"
   | "panel.toggleDiagnostics"

@@ -7,6 +7,7 @@ import {
   useWorktrees,
   useTerminalPalette,
   useNewTerminalPalette,
+  usePanelPalette,
   useTerminalConfig,
   useKeybinding,
   useContextInjection,
@@ -34,6 +35,7 @@ import { WorktreeCard, WorktreePalette, WorktreeFilterPopover } from "./componen
 import { NewWorktreeDialog } from "./components/Worktree/NewWorktreeDialog";
 import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
 import { TerminalPalette, NewTerminalPalette } from "./components/TerminalPalette";
+import { PanelPalette } from "./components/PanelPalette/PanelPalette";
 import { RecipeEditor } from "./components/TerminalRecipe/RecipeEditor";
 import { SettingsDialog, type SettingsTab } from "./components/Settings";
 import { ShortcutReferenceDialog } from "./components/KeyboardShortcuts";
@@ -65,7 +67,7 @@ import {
   type DerivedWorktreeMeta,
   type FilterState,
 } from "./lib/worktreeFilters";
-import type { WorktreeState } from "./types";
+import type { WorktreeState, PanelKind } from "./types";
 
 function SidebarContent() {
   const { worktrees, isLoading, error, refresh } = useWorktrees();
@@ -455,6 +457,7 @@ function App() {
   const terminalPalette = useTerminalPalette();
   const { worktrees, worktreeMap } = useWorktrees();
   const newTerminalPalette = useNewTerminalPalette({ launchAgent, worktreeMap });
+  const panelPalette = usePanelPalette();
   const currentProject = useProjectStore((state) => state.currentProject);
   const { setActiveWorktree, selectWorktree, activeWorktreeId } = useWorktreeSelectionStore(
     useShallow((state) => ({
@@ -659,6 +662,7 @@ function App() {
     onOpenAgentPalette: terminalPalette.open,
     onOpenWorktreePalette: openWorktreePalette,
     onOpenNewTerminalPalette: newTerminalPalette.open,
+    onOpenPanelPalette: panelPalette.open,
     onOpenShortcuts: () => setIsShortcutsOpen(true),
     onLaunchAgent: async (agentId, options) => {
       await launchAgent(agentId, options);
@@ -702,6 +706,7 @@ function App() {
     enabled: electronAvailable,
   });
   useKeybinding("agent.palette", () => dispatch("agent.palette"), { enabled: electronAvailable });
+  useKeybinding("panel.palette", () => dispatch("panel.palette"), { enabled: electronAvailable });
   useKeybinding("terminal.new", () => dispatch("terminal.new"), { enabled: electronAvailable });
   useKeybinding("terminal.spawnPalette", () => dispatch("terminal.spawnPalette"), {
     enabled: electronAvailable,
@@ -965,6 +970,26 @@ function App() {
         onSelect={(worktree) => selectWorktreeFromPalette(worktree.id)}
         onConfirm={confirmWorktreePaletteSelection}
         onClose={closeWorktreePalette}
+      />
+      <PanelPalette
+        isOpen={panelPalette.isOpen}
+        kinds={panelPalette.availableKinds}
+        selectedIndex={panelPalette.selectedIndex}
+        onSelectPrevious={panelPalette.selectPrevious}
+        onSelectNext={panelPalette.selectNext}
+        onSelect={(kind) => panelPalette.selectKind(kind.id)}
+        onConfirm={() => {
+          const selected = panelPalette.confirmSelection();
+          if (selected) {
+            addTerminal({
+              kind: selected.id as PanelKind,
+              cwd: defaultTerminalCwd,
+              worktreeId: activeWorktreeId ?? undefined,
+              location: "grid",
+            });
+          }
+        }}
+        onClose={panelPalette.close}
       />
 
       <SettingsDialog

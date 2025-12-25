@@ -14,6 +14,8 @@ export { useErrors } from "./useErrors";
 export { useTerminalPalette } from "./useTerminalPalette";
 export type { SearchableTerminal, UseTerminalPaletteReturn } from "./useTerminalPalette";
 export { useNewTerminalPalette } from "./useNewTerminalPalette";
+export { usePanelPalette } from "./usePanelPalette";
+export type { PanelKindOption, UsePanelPaletteReturn } from "./usePanelPalette";
 export { useTerminalConfig } from "./useTerminalConfig";
 
 export { useWorktreeTerminals } from "./useWorktreeTerminals";

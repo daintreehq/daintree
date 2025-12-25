@@ -179,6 +179,11 @@ export function createApplicationMenu(
           accelerator: "CommandOrControl+P",
           click: () => sendAction("open-agent-palette"),
         },
+        {
+          label: "Panel Palette...",
+          accelerator: "CommandOrControl+Shift+P",
+          click: () => sendAction("open-panel-palette"),
+        },
       ],
     },
     {

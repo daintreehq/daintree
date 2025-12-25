@@ -2,6 +2,7 @@ import type { StateCreator } from "zustand";
 import type { TerminalInstance } from "./terminalRegistrySlice";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 
 export type NavigationDirection = "up" | "down" | "left" | "right";
 
@@ -68,9 +69,9 @@ export const createTerminalFocusSlice =
         if (id) {
           // Wake-on-focus: sync terminal state from backend when focused.
           // This is a safety net to recover from any missed data.
-          // Skip wake for browser panes - they don't have backend PTY processes.
+          // Skip wake for non-PTY panels - they don't have backend PTY processes.
           const terminal = getTerminals().find((t) => t.id === id);
-          if (terminal?.kind !== "browser") {
+          if (terminal?.kind && panelKindHasPty(terminal.kind)) {
             terminalInstanceService.wake(id);
           }
           if (shouldPing) {
@@ -193,9 +194,9 @@ export const createTerminalFocusSlice =
       },
 
       openDockTerminal: (id) => {
-        // Skip wake for browser panes - they don't have backend PTY processes.
+        // Skip wake for non-PTY panels - they don't have backend PTY processes.
         const terminal = getTerminals().find((t) => t.id === id);
-        if (terminal?.kind !== "browser") {
+        if (terminal?.kind && panelKindHasPty(terminal.kind)) {
           terminalInstanceService.wake(id);
         }
         set({ activeDockTerminalId: id, focusedId: id });
@@ -209,8 +210,8 @@ export const createTerminalFocusSlice =
         if (!terminal) return;
 
         // Wake-on-focus: sync terminal state from backend when activated.
-        // Skip wake for browser panes - they don't have backend PTY processes.
-        if (terminal.kind !== "browser") {
+        // Skip wake for non-PTY panels - they don't have backend PTY processes.
+        if (panelKindHasPty(terminal.kind ?? "terminal")) {
           terminalInstanceService.wake(id);
         }
 

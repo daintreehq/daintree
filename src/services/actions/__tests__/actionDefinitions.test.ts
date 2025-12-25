@@ -11,6 +11,7 @@ async function createRegistry() {
     onOpenAgentPalette: () => {},
     onOpenWorktreePalette: () => {},
     onOpenNewTerminalPalette: () => {},
+    onOpenPanelPalette: () => {},
     onOpenShortcuts: () => {},
     onLaunchAgent: async () => {},
     onInject: () => {},
