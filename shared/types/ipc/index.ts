@@ -14,5 +14,6 @@ export * from "./agent.js";
 export * from "./git.js";
 export * from "./files.js";
 export * from "./config.js";
+export * from "./devPreview.js";
 export * from "./maps.js";
 export * from "./api.js";

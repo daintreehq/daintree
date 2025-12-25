@@ -36,6 +36,8 @@ import type {
   ArtifactDetectedPayload,
   SaveArtifactOptions,
   ApplyPatchOptions,
+  DevPreviewStatusPayload,
+  DevPreviewUrlPayload,
 } from "../shared/types/ipc.js";
 import type { TerminalActivityPayload } from "../shared/types/terminal.js";
 import type { TerminalStatusPayload } from "../shared/types/pty-host.js";
@@ -217,6 +219,14 @@ const CHANNELS = {
   NOTES_WRITE: "notes:write",
   NOTES_LIST: "notes:list",
   NOTES_DELETE: "notes:delete",
+
+  // Dev Preview channels
+  DEV_PREVIEW_START: "dev-preview:start",
+  DEV_PREVIEW_STOP: "dev-preview:stop",
+  DEV_PREVIEW_RESTART: "dev-preview:restart",
+  DEV_PREVIEW_SET_URL: "dev-preview:set-url",
+  DEV_PREVIEW_STATUS: "dev-preview:status",
+  DEV_PREVIEW_URL: "dev-preview:url",
 
   // App state channels
   APP_GET_STATE: "app:get-state",
@@ -783,6 +793,25 @@ const api: ElectronAPI = {
     list: () => _typedInvoke(CHANNELS.NOTES_LIST),
 
     delete: (notePath: string) => _typedInvoke(CHANNELS.NOTES_DELETE, notePath),
+  },
+
+  // Dev Preview API
+  devPreview: {
+    start: (panelId: string, cwd: string, cols: number, rows: number) =>
+      _typedInvoke(CHANNELS.DEV_PREVIEW_START, panelId, cwd, cols, rows),
+
+    stop: (panelId: string) => _typedInvoke(CHANNELS.DEV_PREVIEW_STOP, panelId),
+
+    restart: (panelId: string) => _typedInvoke(CHANNELS.DEV_PREVIEW_RESTART, panelId),
+
+    setUrl: (panelId: string, url: string) =>
+      _typedInvoke(CHANNELS.DEV_PREVIEW_SET_URL, panelId, url),
+
+    onStatus: (callback: (payload: DevPreviewStatusPayload) => void) =>
+      _typedOn(CHANNELS.DEV_PREVIEW_STATUS, callback),
+
+    onUrl: (callback: (payload: DevPreviewUrlPayload) => void) =>
+      _typedOn(CHANNELS.DEV_PREVIEW_URL, callback),
   },
 
   // Git API

@@ -1,4 +1,4 @@
-import { Terminal, Globe, FileText, GitBranch, LucideIcon } from "lucide-react";
+import { Terminal, Globe, FileText, GitBranch, Monitor, LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const ICON_MAP: Record<string, LucideIcon> = {
@@ -6,6 +6,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   globe: Globe,
   "file-text": FileText,
   "git-branch": GitBranch,
+  monitor: Monitor,
 };
 
 export interface PanelKindIconProps {

@@ -64,6 +64,7 @@ import type { TerminalFlowStatus } from "../pty-host.js";
 import type { ShowContextMenuPayload } from "../menu.js";
 import type { FileSearchPayload, FileSearchResult } from "./files.js";
 import type { SlashCommand, SlashCommandListRequest } from "../slashCommands.js";
+import type { DevPreviewStatusPayload, DevPreviewUrlPayload } from "./devPreview.js";
 
 // IPC Contract Maps
 
@@ -698,6 +699,24 @@ export interface IpcInvokeMap {
     args: [notePath: string];
     result: void;
   };
+
+  // Dev Preview channels
+  "dev-preview:start": {
+    args: [panelId: string, cwd: string, cols: number, rows: number];
+    result: void;
+  };
+  "dev-preview:stop": {
+    args: [panelId: string];
+    result: void;
+  };
+  "dev-preview:restart": {
+    args: [panelId: string];
+    result: void;
+  };
+  "dev-preview:set-url": {
+    args: [panelId: string, url: string];
+    result: void;
+  };
 }
 
 /**
@@ -768,6 +787,10 @@ export interface IpcEventMap {
 
   // Menu events
   "menu:action": string;
+
+  // Dev Preview events
+  "dev-preview:status": DevPreviewStatusPayload;
+  "dev-preview:url": DevPreviewUrlPayload;
 }
 
 export type IpcInvokeArgs<K extends keyof IpcInvokeMap> = IpcInvokeMap[K]["args"];

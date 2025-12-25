@@ -68,6 +68,15 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     canRestart: false,
     canConvert: false,
   },
+  "dev-preview": {
+    id: "dev-preview",
+    name: "Dev Preview",
+    iconId: "monitor",
+    color: "#8b5cf6", // purple-500
+    hasPty: true,
+    canRestart: true,
+    canConvert: false,
+  },
 };
 
 /**
@@ -171,5 +180,5 @@ export function panelKindHasPty(kind: PanelKind): boolean {
  * Get all built-in panel kinds.
  */
 export function getBuiltInPanelKinds(): BuiltInPanelKind[] {
-  return ["terminal", "agent", "browser", "notes"];
+  return ["terminal", "agent", "browser", "notes", "dev-preview"];
 }

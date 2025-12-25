@@ -56,6 +56,7 @@ import type { TerminalStatusPayload, PtyHostActivityTier } from "../pty-host.js"
 import type { ShowContextMenuPayload } from "../menu.js";
 import type { FileSearchPayload, FileSearchResult } from "./files.js";
 import type { SlashCommand, SlashCommandListRequest } from "../slashCommands.js";
+import type { DevPreviewStatusPayload, DevPreviewUrlPayload } from "./devPreview.js";
 
 // ElectronAPI Type (exposed via preload)
 
@@ -297,6 +298,14 @@ export interface ElectronAPI {
       }>
     >;
     delete(notePath: string): Promise<void>;
+  };
+  devPreview: {
+    start(panelId: string, cwd: string, cols: number, rows: number): Promise<void>;
+    stop(panelId: string): Promise<void>;
+    restart(panelId: string): Promise<void>;
+    setUrl(panelId: string, url: string): Promise<void>;
+    onStatus(callback: (data: DevPreviewStatusPayload) => void): () => void;
+    onUrl(callback: (data: DevPreviewUrlPayload) => void): () => void;
   };
   git: {
     getFileDiff(cwd: string, filePath: string, status: GitStatus): Promise<string>;

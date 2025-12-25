@@ -210,6 +210,13 @@ export const CHANNELS = {
   NOTES_WRITE: "notes:write",
   NOTES_LIST: "notes:list",
   NOTES_DELETE: "notes:delete",
+
+  DEV_PREVIEW_START: "dev-preview:start",
+  DEV_PREVIEW_STOP: "dev-preview:stop",
+  DEV_PREVIEW_RESTART: "dev-preview:restart",
+  DEV_PREVIEW_SET_URL: "dev-preview:set-url",
+  DEV_PREVIEW_STATUS: "dev-preview:status",
+  DEV_PREVIEW_URL: "dev-preview:url",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

@@ -195,7 +195,7 @@ export type AgentId = string;
 export type LegacyAgentType = "claude" | "gemini" | "codex";
 
 /** Built-in panel kinds */
-export type BuiltInPanelKind = "terminal" | "agent" | "browser" | "notes";
+export type BuiltInPanelKind = "terminal" | "agent" | "browser" | "notes" | "dev-preview";
 
 /**
  * Panel kind: distinguishes between default terminals, agent-driven terminals, browser panels,
@@ -226,7 +226,13 @@ export type TerminalLocation = PanelLocation;
 
 /** Type guard to check if a panel kind is a built-in kind */
 export function isBuiltInPanelKind(kind: PanelKind): kind is BuiltInPanelKind {
-  return kind === "terminal" || kind === "agent" || kind === "browser" || kind === "notes";
+  return (
+    kind === "terminal" ||
+    kind === "agent" ||
+    kind === "browser" ||
+    kind === "notes" ||
+    kind === "dev-preview"
+  );
 }
 
 /**
@@ -236,7 +242,7 @@ export function isBuiltInPanelKind(kind: PanelKind): kind is BuiltInPanelKind {
  */
 export function isPtyPanelKind(kind: PanelKind): boolean {
   // Built-in kinds - for extension kinds, use panelKindHasPty() from registry
-  return kind === "terminal" || kind === "agent";
+  return kind === "terminal" || kind === "agent" || kind === "dev-preview";
 }
 
 /** Valid triggers for agent state changes */
@@ -293,7 +299,7 @@ interface BasePanelData {
 }
 
 interface PtyPanelData extends BasePanelData {
-  kind: "terminal" | "agent";
+  kind: "terminal" | "agent" | "dev-preview";
   /**
    * Legacy field retained for persistence; new code should prefer `kind`.
    * - "terminal" for default terminals
@@ -344,6 +350,8 @@ interface PtyPanelData extends BasePanelData {
   flowStatusTimestamp?: number;
   /** Whether user input is locked (read-only monitor mode) */
   isInputLocked?: boolean;
+  /** Current URL for dev-preview panels */
+  browserUrl?: string;
 }
 
 interface BrowserPanelData extends BasePanelData {
@@ -368,7 +376,7 @@ export type PanelInstance = PtyPanelData | BrowserPanelData | NotesPanelData;
 
 export function isPtyPanel(panel: PanelInstance | TerminalInstance): panel is PtyPanelData {
   const kind = panel.kind ?? "terminal";
-  return kind === "terminal" || kind === "agent";
+  return kind === "terminal" || kind === "agent" || kind === "dev-preview";
 }
 
 export function isBrowserPanel(panel: PanelInstance | TerminalInstance): panel is BrowserPanelData {
@@ -378,6 +386,11 @@ export function isBrowserPanel(panel: PanelInstance | TerminalInstance): panel i
 
 export function isNotesPanel(panel: PanelInstance): panel is NotesPanelData {
   return panel.kind === "notes";
+}
+
+export function isDevPreviewPanel(panel: PanelInstance | TerminalInstance): panel is PtyPanelData {
+  const kind = panel.kind ?? "terminal";
+  return kind === "dev-preview";
 }
 
 /**
