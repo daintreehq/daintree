@@ -328,6 +328,30 @@
     background: color-mix(in oklab, var(--color-state-idle) 85%, white);
   }
 
+  /* History overlay scrollbar - matches xterm viewport exactly for pixel-perfect mode switch */
+  .history-overlay {
+    scrollbar-width: thin;
+    scrollbar-gutter: stable;
+    overscroll-behavior-y: none;
+  }
+
+  .history-overlay::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .history-overlay::-webkit-scrollbar-track {
+    background: var(--color-canopy-bg);
+  }
+
+  .history-overlay::-webkit-scrollbar-thumb {
+    background: var(--color-state-idle);
+    border-radius: var(--radius-sm);
+  }
+
+  .history-overlay::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklab, var(--color-state-idle) 85%, white);
+  }
+
   /* Consistent monospace font stack */
   code,
   kbd,
