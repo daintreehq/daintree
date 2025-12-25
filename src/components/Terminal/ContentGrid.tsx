@@ -10,6 +10,7 @@ import {
   usePreferencesStore,
   type TerminalInstance,
 } from "@/store";
+import { useProjectStore } from "@/store/projectStore";
 import { GridPanel } from "./GridPanel";
 import { TerminalCountWarning } from "./TerminalCountWarning";
 import { GridFullOverlay } from "./GridFullOverlay";
@@ -20,15 +21,16 @@ import {
   GRID_PLACEHOLDER_ID,
   SortableGridPlaceholder,
 } from "@/components/DragDrop";
-import { Terminal, AlertTriangle, Globe } from "lucide-react";
+import { Terminal, AlertTriangle, Globe, Settings } from "lucide-react";
 import { CanopyIcon, CodexIcon, ClaudeIcon, GeminiIcon } from "@/components/icons";
 import { ProjectPulseCard } from "@/components/Pulse";
 import { Kbd } from "@/components/ui/Kbd";
 import { getBrandColorHex } from "@/lib/colorUtils";
+import { svgToDataUrl } from "@/lib/svg";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { computeGridColumns, MIN_TERMINAL_HEIGHT_PX } from "@/lib/terminalLayout";
 import { useWorktrees } from "@/hooks/useWorktrees";
-import { useNativeContextMenu } from "@/hooks";
+import { useNativeContextMenu, useProjectBranding } from "@/hooks";
 import { actionService } from "@/services/ActionService";
 import type { CliAvailability } from "@shared/types";
 import type { MenuItemOption } from "@/types";
@@ -115,6 +117,7 @@ function EmptyState({
   activeWorktreeName,
   activeWorktreeId,
   showProjectPulse,
+  projectIconSvg,
 }: {
   onLaunchAgent: (type: "claude" | "gemini" | "codex" | "terminal" | "browser") => void;
   hasActiveWorktree: boolean;
@@ -124,6 +127,7 @@ function EmptyState({
   activeWorktreeName?: string | null;
   activeWorktreeId?: string | null;
   showProjectPulse: boolean;
+  projectIconSvg?: string;
 }) {
   const handleOpenHelp = () => {
     void actionService.dispatch(
@@ -147,11 +151,35 @@ function EmptyState({
     }
   };
 
+  const handleOpenProjectSettings = () => {
+    window.dispatchEvent(new CustomEvent("canopy:open-project-settings"));
+  };
+
   return (
     <div className="flex flex-col items-center justify-center h-full w-full p-8 animate-in fade-in duration-500">
       <div className="max-w-3xl w-full flex flex-col items-center">
         <div className="mb-12 flex flex-col items-center text-center">
-          <CanopyIcon className="h-28 w-28 text-white/80 mb-8" />
+          {projectIconSvg ? (
+            <img
+              src={svgToDataUrl(projectIconSvg)}
+              alt="Project icon"
+              className="h-28 w-28 mb-8 object-contain"
+            />
+          ) : (
+            <>
+              <CanopyIcon className="h-28 w-28 text-white/80 mb-8" />
+              {hasActiveWorktree && (
+                <button
+                  type="button"
+                  onClick={handleOpenProjectSettings}
+                  className="flex items-center gap-1.5 text-xs text-canopy-text/50 hover:text-canopy-text/70 transition-colors mb-4 -mt-4"
+                >
+                  <Settings className="h-3.5 w-3.5" />
+                  <span>Add project icon</span>
+                </button>
+              )}
+            </>
+          )}
           <h3 className="text-2xl font-semibold text-canopy-text tracking-tight mb-3">
             {activeWorktreeName || "Canopy"}
           </h3>
@@ -268,6 +296,8 @@ export function ContentGrid({
 
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const showProjectPulse = usePreferencesStore((state) => state.showProjectPulse);
+  const currentProject = useProjectStore((state) => state.currentProject);
+  const { projectIconSvg } = useProjectBranding(currentProject?.id);
   const { worktreeMap } = useWorktrees();
   const activeWorktree = activeWorktreeId ? worktreeMap.get(activeWorktreeId) : null;
   const hasActiveWorktree = activeWorktreeId !== null && activeWorktree !== undefined;
@@ -605,6 +635,7 @@ export function ContentGrid({
                   activeWorktreeName={activeWorktreeName}
                   activeWorktreeId={activeWorktreeId}
                   showProjectPulse={showProjectPulse}
+                  projectIconSvg={projectIconSvg}
                 />
               </div>
             ) : (

@@ -511,4 +511,6 @@ export interface ProjectSettings {
   environmentVariables?: Record<string, string>;
   /** Paths to exclude from monitoring */
   excludedPaths?: string[];
+  /** Raw SVG text for project icon (max 250KB, validated/sanitized) */
+  projectIconSvg?: string;
 }

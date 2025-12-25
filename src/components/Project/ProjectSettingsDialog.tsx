@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Terminal,
   Key,
@@ -9,6 +9,9 @@ import {
   ChevronDown,
   Eye,
   EyeOff,
+  Image,
+  Upload,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -19,6 +22,7 @@ import { useProjectStore } from "@/store/projectStore";
 import type { RunCommand } from "@/types";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { cn } from "@/lib/utils";
+import { validateProjectSvg, svgToDataUrl } from "@/lib/svg";
 
 interface ProjectSettingsDialogProps {
   projectId: string;
@@ -50,6 +54,10 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   const [excludedPaths, setExcludedPaths] = useState<string[]>([]);
   const [isInitialized, setIsInitialized] = useState(false);
   const [visibleEnvVars, setVisibleEnvVars] = useState<Set<string>>(new Set());
+  const [projectIconSvg, setProjectIconSvg] = useState<string | undefined>(undefined);
+  const [iconError, setIconError] = useState<string | null>(null);
+  const [isDraggingIcon, setIsDraggingIcon] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const toggleEnvVarVisibility = (id: string) => {
     setVisibleEnvVars((prev) => {
@@ -61,6 +69,59 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       }
       return next;
     });
+  };
+
+  const handleIconFile = async (file: File) => {
+    setIconError(null);
+    if (!file.type.includes("svg")) {
+      setIconError("Please select an SVG file");
+      return;
+    }
+    try {
+      const text = await file.text();
+      const result = validateProjectSvg(text);
+      if (!result.ok) {
+        setIconError(result.error);
+        return;
+      }
+      setProjectIconSvg(result.svg);
+    } catch {
+      setIconError("Failed to read file");
+    }
+  };
+
+  const handleIconDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDraggingIcon(false);
+    const file = e.dataTransfer.files[0];
+    if (file) {
+      void handleIconFile(file);
+    }
+  };
+
+  const handleIconDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDraggingIcon(true);
+  };
+
+  const handleIconDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDraggingIcon(false);
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      void handleIconFile(file);
+    }
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
+
+  const handleRemoveIcon = () => {
+    setProjectIconSvg(undefined);
+    setIconError(null);
   };
 
   useEffect(() => {
@@ -75,12 +136,15 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         }))
       );
       setExcludedPaths(settings.excludedPaths || []);
+      setProjectIconSvg(settings.projectIconSvg);
       setIsInitialized(true);
     }
     if (!isOpen) {
       setIsInitialized(false);
       setVisibleEnvVars(new Set());
       setEnvironmentVariables([]);
+      setProjectIconSvg(undefined);
+      setIconError(null);
     }
   }, [settings, isOpen, isInitialized]);
 
@@ -144,6 +208,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         runCommands: sanitizedRunCommands,
         environmentVariables: Object.keys(envVarRecord).length > 0 ? envVarRecord : undefined,
         excludedPaths: sanitizedPaths.length > 0 ? sanitizedPaths : undefined,
+        projectIconSvg: projectIconSvg,
       });
       onClose();
     } catch (error) {
@@ -229,6 +294,81 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                 </div>
               </div>
             )}
+
+            <div className="mb-6 pb-6 border-b border-canopy-border">
+              <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+                <Image className="h-4 w-4" />
+                Project Icon (SVG)
+              </h3>
+              <p className="text-xs text-canopy-text/60 mb-4">
+                Shown in the grid empty state. SVG only, max 250KB.
+              </p>
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/svg+xml,.svg"
+                onChange={handleFileSelect}
+                className="hidden"
+                aria-label="Select SVG file"
+              />
+
+              {projectIconSvg ? (
+                <div className="flex items-center gap-4 p-3 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border">
+                  <div className="h-16 w-16 rounded-[var(--radius-md)] bg-canopy-sidebar flex items-center justify-center overflow-hidden">
+                    <img
+                      src={svgToDataUrl(projectIconSvg)}
+                      alt="Project icon preview"
+                      className="max-h-14 max-w-14 object-contain"
+                    />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-canopy-text mb-1">Custom icon configured</p>
+                    <p className="text-xs text-canopy-text/60">
+                      {Math.round(new Blob([projectIconSvg]).size / 1024)}KB
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      <Upload className="h-4 w-4 mr-1" />
+                      Replace
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={handleRemoveIcon}>
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div
+                  className={cn(
+                    "flex flex-col items-center justify-center p-8 rounded-[var(--radius-md)] border-2 border-dashed transition-colors cursor-pointer",
+                    isDraggingIcon
+                      ? "border-canopy-accent bg-canopy-accent/10"
+                      : "border-canopy-border hover:border-canopy-border/80 hover:bg-canopy-bg/50"
+                  )}
+                  onDrop={handleIconDrop}
+                  onDragOver={handleIconDragOver}
+                  onDragLeave={handleIconDragLeave}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <Upload className="h-8 w-8 text-canopy-text/40 mb-3" />
+                  <p className="text-sm text-canopy-text/60 text-center mb-1">
+                    Drag and drop an SVG file here
+                  </p>
+                  <p className="text-xs text-canopy-text/40">or click to browse</p>
+                </div>
+              )}
+
+              {iconError && (
+                <div className="mt-2 text-xs text-[var(--color-status-error)] bg-red-900/20 border border-red-900/30 rounded p-2">
+                  {iconError}
+                </div>
+              )}
+            </div>
 
             <div className="mb-6">
               <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
