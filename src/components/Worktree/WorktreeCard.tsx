@@ -1238,7 +1238,7 @@ export function WorktreeCard({
                   onClick={handleToggleExpand}
                   aria-expanded={true}
                   aria-controls={detailsPanelId}
-                  className="w-full px-3 py-2.5 flex items-center justify-between text-left border-b border-white/5 transition-colors hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px] rounded-t-[var(--radius-lg)]"
+                  className="w-full px-3 py-2.5 flex items-center justify-between text-left border-b border-white/5 transition-colors bg-white/[0.03] hover:bg-white/[0.05] focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px] rounded-t-[var(--radius-lg)]"
                   id={`${detailsId}-button`}
                 >
                   <span className="text-xs text-canopy-text/50 font-medium">Details</span>
@@ -1356,7 +1356,7 @@ export function WorktreeCard({
                   onClick={handleToggleTerminals}
                   aria-expanded={true}
                   aria-controls={terminalsPanelId}
-                  className="w-full px-3 py-1.5 flex items-center justify-between text-left border-b border-white/5 transition-colors hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px] rounded-t-[var(--radius-lg)]"
+                  className="w-full px-3 py-1.5 flex items-center justify-between text-left border-b border-white/5 transition-colors bg-white/[0.03] hover:bg-white/[0.05] focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px] rounded-t-[var(--radius-lg)]"
                   id={`${terminalsId}-button`}
                 >
                   <span className="flex items-center gap-1.5 text-[11px] text-canopy-text/50 font-medium">
