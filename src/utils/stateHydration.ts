@@ -31,6 +31,10 @@ export interface HydrationOptions {
     skipCommandExecution?: boolean; // Store command but don't execute on spawn
     isInputLocked?: boolean; // Restore input lock state
     browserUrl?: string; // URL for browser panes
+    notePath?: string; // Path to note file (kind === 'notes')
+    noteId?: string; // Note ID (kind === 'notes')
+    scope?: "worktree" | "project"; // Note scope (kind === 'notes')
+    createdAt?: number; // Note creation timestamp (kind === 'notes')
   }) => Promise<string>;
   setActiveWorktree: (id: string | null) => void;
   loadRecipes: () => Promise<void>;
@@ -112,15 +116,30 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
 
           // Handle non-PTY panels separately - they don't need backend PTY
           if (!panelKindHasPty(terminal.kind ?? "terminal")) {
-            await addTerminal({
-              kind: terminal.kind ?? "browser",
-              title: terminal.title,
-              cwd,
-              worktreeId: terminal.worktreeId,
-              location: terminal.location === "dock" ? "dock" : "grid",
-              requestedId: terminal.id,
-              browserUrl: terminal.browserUrl,
-            });
+            if (terminal.kind === "notes") {
+              await addTerminal({
+                kind: "notes",
+                title: terminal.title,
+                cwd,
+                worktreeId: terminal.worktreeId,
+                location: terminal.location === "dock" ? "dock" : "grid",
+                requestedId: terminal.id,
+                notePath: (terminal as any).notePath,
+                noteId: (terminal as any).noteId,
+                scope: (terminal as any).scope,
+                createdAt: (terminal as any).createdAt,
+              });
+            } else {
+              await addTerminal({
+                kind: terminal.kind ?? "browser",
+                title: terminal.title,
+                cwd,
+                worktreeId: terminal.worktreeId,
+                location: terminal.location === "dock" ? "dock" : "grid",
+                requestedId: terminal.id,
+                browserUrl: terminal.browserUrl,
+              });
+            }
             continue;
           }
 

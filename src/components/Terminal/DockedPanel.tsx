@@ -122,6 +122,12 @@ export function DockedPanel({ terminal, onPopoverClose }: DockedPanelProps) {
 
       // Browser-specific
       initialUrl: terminal.browserUrl || "http://localhost:3000",
+
+      // Notes-specific
+      notePath: (terminal as any).notePath,
+      noteId: (terminal as any).noteId,
+      scope: (terminal as any).scope,
+      createdAt: (terminal as any).createdAt,
     }),
     [
       terminal,

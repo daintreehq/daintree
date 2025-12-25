@@ -7,6 +7,7 @@ import { registerGitActions } from "./definitions/gitActions";
 import { registerIntrospectionActions } from "./definitions/introspectionActions";
 import { registerLogActions } from "./definitions/logActions";
 import { registerNavigationActions } from "./definitions/navigationActions";
+import { registerNotesActions } from "./definitions/notesActions";
 import { registerPanelActions } from "./definitions/panelActions";
 import { registerPreferencesActions } from "./definitions/preferencesActions";
 import { registerProjectActions } from "./definitions/projectActions";
@@ -36,6 +37,7 @@ export function createActionDefinitions(callbacks: ActionCallbacks): ActionRegis
   registerAppActions(actions, callbacks);
   registerPreferencesActions(actions, callbacks);
   registerBrowserActions(actions, callbacks);
+  registerNotesActions(actions, callbacks);
   registerIntrospectionActions(actions, callbacks);
 
   return actions;

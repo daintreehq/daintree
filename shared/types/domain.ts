@@ -195,7 +195,7 @@ export type AgentId = string;
 export type LegacyAgentType = "claude" | "gemini" | "codex";
 
 /** Built-in panel kinds */
-export type BuiltInPanelKind = "terminal" | "agent" | "browser";
+export type BuiltInPanelKind = "terminal" | "agent" | "browser" | "notes";
 
 /**
  * Panel kind: distinguishes between default terminals, agent-driven terminals, browser panels,
@@ -226,7 +226,7 @@ export type TerminalLocation = PanelLocation;
 
 /** Type guard to check if a panel kind is a built-in kind */
 export function isBuiltInPanelKind(kind: PanelKind): kind is BuiltInPanelKind {
-  return kind === "terminal" || kind === "agent" || kind === "browser";
+  return kind === "terminal" || kind === "agent" || kind === "browser" || kind === "notes";
 }
 
 /**
@@ -352,7 +352,19 @@ interface BrowserPanelData extends BasePanelData {
   browserUrl?: string;
 }
 
-export type PanelInstance = PtyPanelData | BrowserPanelData;
+interface NotesPanelData extends BasePanelData {
+  kind: "notes";
+  /** Path to the note file (relative to project root) */
+  notePath: string;
+  /** Unique identifier for the note (from frontmatter) */
+  noteId: string;
+  /** Note scope: worktree-specific or project-wide */
+  scope: "worktree" | "project";
+  /** Timestamp when note was created (milliseconds since epoch) */
+  createdAt: number;
+}
+
+export type PanelInstance = PtyPanelData | BrowserPanelData | NotesPanelData;
 
 export function isPtyPanel(panel: PanelInstance | TerminalInstance): panel is PtyPanelData {
   const kind = panel.kind ?? "terminal";
@@ -362,6 +374,10 @@ export function isPtyPanel(panel: PanelInstance | TerminalInstance): panel is Pt
 export function isBrowserPanel(panel: PanelInstance | TerminalInstance): panel is BrowserPanelData {
   const kind = panel.kind ?? "terminal";
   return kind === "browser";
+}
+
+export function isNotesPanel(panel: PanelInstance): panel is NotesPanelData {
+  return panel.kind === "notes";
 }
 
 /**
@@ -399,6 +415,10 @@ export interface TerminalInstance {
   flowStatusTimestamp?: number;
   isInputLocked?: boolean;
   browserUrl?: string;
+  notePath?: string;
+  noteId?: string;
+  scope?: "worktree" | "project";
+  createdAt?: number;
 }
 
 /** Options for spawning a new PTY process */
@@ -468,6 +488,14 @@ export interface TerminalSnapshot {
   command?: string;
   /** Current URL for browser panes (kind === 'browser') */
   browserUrl?: string;
+  /** Path to note file (kind === 'notes') */
+  notePath?: string;
+  /** Note ID (kind === 'notes') */
+  noteId?: string;
+  /** Note scope (kind === 'notes') */
+  scope?: "worktree" | "project";
+  /** Note creation timestamp (kind === 'notes') */
+  createdAt?: number;
 }
 
 /** Type alias for TerminalSnapshot. Use this in new code. */

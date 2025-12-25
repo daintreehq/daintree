@@ -1,4 +1,4 @@
-import { Terminal, Globe } from "lucide-react";
+import { Terminal, Globe, StickyNote } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { TerminalType, TerminalKind } from "@/types";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
@@ -20,6 +20,11 @@ export function TerminalIcon({ type, kind, agentId, className, brandColor }: Ter
   // Browser panes get a globe icon
   if (kind === "browser") {
     return <Globe {...finalProps} className={cn(finalProps.className, "text-blue-400")} />;
+  }
+
+  // Notes panes get a sticky note icon
+  if (kind === "notes") {
+    return <StickyNote {...finalProps} className={cn(finalProps.className, "text-amber-400")} />;
   }
 
   // Get effective agent ID - either from explicit agentId prop or from type (backward compat)

@@ -32,6 +32,14 @@ const DEFAULT_OPTIONS: Required<TerminalPersistenceOptions> = {
         command: t.command?.trim() || undefined,
         ...(t.isInputLocked && { isInputLocked: true }),
       };
+    } else if (t.kind === "notes") {
+      return {
+        ...base,
+        notePath: (t as any).notePath,
+        noteId: (t as any).noteId,
+        scope: (t as any).scope,
+        createdAt: (t as any).createdAt,
+      };
     } else {
       return {
         ...base,

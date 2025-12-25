@@ -247,6 +247,57 @@ export interface ElectronAPI {
     onPRDetected(callback: (data: PRDetectedPayload) => void): () => void;
     onPRCleared(callback: (data: PRClearedPayload) => void): () => void;
   };
+  notes: {
+    create(
+      title: string,
+      scope: "worktree" | "project",
+      worktreeId?: string
+    ): Promise<{
+      metadata: {
+        id: string;
+        title: string;
+        scope: "worktree" | "project";
+        worktreeId?: string;
+        createdAt: number;
+      };
+      content: string;
+      path: string;
+    }>;
+    read(notePath: string): Promise<{
+      metadata: {
+        id: string;
+        title: string;
+        scope: "worktree" | "project";
+        worktreeId?: string;
+        createdAt: number;
+      };
+      content: string;
+      path: string;
+    }>;
+    write(
+      notePath: string,
+      content: string,
+      metadata: {
+        id: string;
+        title: string;
+        scope: "worktree" | "project";
+        worktreeId?: string;
+        createdAt: number;
+      }
+    ): Promise<void>;
+    list(): Promise<
+      Array<{
+        id: string;
+        title: string;
+        path: string;
+        scope: "worktree" | "project";
+        worktreeId?: string;
+        createdAt: number;
+        modifiedAt: number;
+      }>
+    >;
+    delete(notePath: string): Promise<void>;
+  };
   git: {
     getFileDiff(cwd: string, filePath: string, status: GitStatus): Promise<string>;
     getProjectPulse(options: {

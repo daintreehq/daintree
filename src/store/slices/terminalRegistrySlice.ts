@@ -70,6 +70,14 @@ export interface AddTerminalOptions {
   isInputLocked?: boolean;
   /** Initial URL for browser panes (kind === 'browser') */
   browserUrl?: string;
+  /** Path to note file (kind === 'notes') */
+  notePath?: string;
+  /** Note ID (kind === 'notes') */
+  noteId?: string;
+  /** Note scope (kind === 'notes') */
+  scope?: "worktree" | "project";
+  /** Note creation timestamp (kind === 'notes') */
+  createdAt?: number;
 }
 
 function getDefaultTitle(kind?: PanelKind, type?: TerminalType, agentId?: string): string {
@@ -194,17 +202,52 @@ export const createTerminalRegistrySlice =
             ? "dock"
             : requestedLocation;
 
-        const terminal = {
-          id,
-          kind: requestedKind,
-          title,
-          worktreeId: options.worktreeId,
-          location,
-          isVisible: location === "grid",
-          ...(requestedKind === "browser"
-            ? { browserUrl: options.browserUrl || "http://localhost:3000" }
-            : { type: "terminal" as const, cwd: "", cols: 80, rows: 24 }),
-        } as TerminalInstance;
+        let terminal: TerminalInstance;
+        if (requestedKind === "browser") {
+          terminal = {
+            id,
+            kind: "browser",
+            title,
+            worktreeId: options.worktreeId,
+            location,
+            isVisible: location === "grid",
+            browserUrl: options.browserUrl || "http://localhost:3000",
+            type: "terminal" as const,
+            cwd: "",
+            cols: 80,
+            rows: 24,
+          };
+        } else if (requestedKind === "notes") {
+          terminal = {
+            id,
+            kind: "notes",
+            title,
+            worktreeId: options.worktreeId,
+            location,
+            isVisible: location === "grid",
+            notePath: (options as any).notePath || "",
+            noteId: (options as any).noteId || "",
+            scope: (options as any).scope || "project",
+            createdAt: (options as any).createdAt || Date.now(),
+            type: "terminal" as const,
+            cwd: "",
+            cols: 80,
+            rows: 24,
+          };
+        } else {
+          terminal = {
+            id,
+            kind: requestedKind,
+            title,
+            worktreeId: options.worktreeId,
+            location,
+            isVisible: location === "grid",
+            type: "terminal" as const,
+            cwd: "",
+            cols: 80,
+            rows: 24,
+          };
+        }
 
         set((state) => {
           const newTerminals = [...state.terminals, terminal];

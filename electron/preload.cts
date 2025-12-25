@@ -211,6 +211,13 @@ const CHANNELS = {
   GITHUB_LIST_ISSUES: "github:list-issues",
   GITHUB_LIST_PRS: "github:list-prs",
 
+  // Notes channels
+  NOTES_CREATE: "notes:create",
+  NOTES_READ: "notes:read",
+  NOTES_WRITE: "notes:write",
+  NOTES_LIST: "notes:list",
+  NOTES_DELETE: "notes:delete",
+
   // App state channels
   APP_GET_STATE: "app:get-state",
   APP_SET_STATE: "app:set-state",
@@ -752,6 +759,30 @@ const api: ElectronAPI = {
 
     onPRCleared: (callback: (data: PRClearedPayload) => void) =>
       _typedOn(CHANNELS.PR_CLEARED, callback),
+  },
+
+  // Notes API
+  notes: {
+    create: (title: string, scope: "worktree" | "project", worktreeId?: string) =>
+      _typedInvoke(CHANNELS.NOTES_CREATE, title, scope, worktreeId),
+
+    read: (notePath: string) => _typedInvoke(CHANNELS.NOTES_READ, notePath),
+
+    write: (
+      notePath: string,
+      content: string,
+      metadata: {
+        id: string;
+        title: string;
+        scope: "worktree" | "project";
+        worktreeId?: string;
+        createdAt: number;
+      }
+    ) => _typedInvoke(CHANNELS.NOTES_WRITE, notePath, content, metadata),
+
+    list: () => _typedInvoke(CHANNELS.NOTES_LIST),
+
+    delete: (notePath: string) => _typedInvoke(CHANNELS.NOTES_DELETE, notePath),
   },
 
   // Git API

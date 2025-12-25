@@ -638,6 +638,66 @@ export interface IpcInvokeMap {
     args: [];
     result: { success: boolean };
   };
+
+  // Notes channels
+  "notes:create": {
+    args: [title: string, scope: "worktree" | "project", worktreeId?: string];
+    result: {
+      metadata: {
+        id: string;
+        title: string;
+        scope: "worktree" | "project";
+        worktreeId?: string;
+        createdAt: number;
+      };
+      content: string;
+      path: string;
+    };
+  };
+  "notes:read": {
+    args: [notePath: string];
+    result: {
+      metadata: {
+        id: string;
+        title: string;
+        scope: "worktree" | "project";
+        worktreeId?: string;
+        createdAt: number;
+      };
+      content: string;
+      path: string;
+    };
+  };
+  "notes:write": {
+    args: [
+      notePath: string,
+      content: string,
+      metadata: {
+        id: string;
+        title: string;
+        scope: "worktree" | "project";
+        worktreeId?: string;
+        createdAt: number;
+      },
+    ];
+    result: void;
+  };
+  "notes:list": {
+    args: [];
+    result: {
+      id: string;
+      title: string;
+      path: string;
+      scope: "worktree" | "project";
+      worktreeId?: string;
+      createdAt: number;
+      modifiedAt: number;
+    }[];
+  };
+  "notes:delete": {
+    args: [notePath: string];
+    result: void;
+  };
 }
 
 /**

@@ -21,6 +21,7 @@ import {
   Settings2,
   Globe,
   Clock,
+  StickyNote,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
@@ -545,6 +546,16 @@ export function Toolbar({
         )}
 
         <div className="flex items-center gap-0.5">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => actionService.dispatch("notes.create", {}, { source: "user" })}
+            className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
+            title="Create New Note"
+            aria-label="Create new note"
+          >
+            <StickyNote />
+          </Button>
           <TooltipProvider>
             <Tooltip open={treeCopied} delayDuration={0}>
               <TooltipTrigger asChild>

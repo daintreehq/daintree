@@ -6,6 +6,7 @@ import { useFocusStore } from "./focusStore";
 import { useDiagnosticsStore } from "./diagnosticsStore";
 import { useErrorStore } from "./errorStore";
 import { useNotificationStore } from "./notificationStore";
+import { cleanupNotesStore } from "./notesStore";
 
 export async function resetAllStoresForProjectSwitch(): Promise<void> {
   // Use resetWithoutKilling instead of reset
@@ -19,4 +20,5 @@ export async function resetAllStoresForProjectSwitch(): Promise<void> {
   useDiagnosticsStore.getState().reset();
   useErrorStore.getState().reset();
   useNotificationStore.getState().reset();
+  cleanupNotesStore();
 }

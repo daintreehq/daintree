@@ -1,10 +1,11 @@
 /**
  * Built-in panel component registrations.
- * Called once at app startup to register terminal, agent, and browser panels.
+ * Called once at app startup to register terminal, agent, browser, and notes panels.
  */
 import { registerPanelComponent } from "./panelComponentRegistry";
 import { TerminalPane } from "@/components/Terminal/TerminalPane";
 import { BrowserPane } from "@/components/Browser/BrowserPane";
+import { NotesPane } from "@/components/Notes/NotesPane";
 
 // Registration flag to prevent double registration
 let registered = false;
@@ -31,5 +32,10 @@ export function registerBuiltInPanelComponents(): void {
   // Browser panel - localhost iframe browser
   registerPanelComponent("browser", {
     component: BrowserPane,
+  });
+
+  // Notes panel - Markdown note editor
+  registerPanelComponent("notes", {
+    component: NotesPane,
   });
 }

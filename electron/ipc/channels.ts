@@ -204,6 +204,12 @@ export const CHANNELS = {
 
   GEMINI_GET_STATUS: "gemini:get-status",
   GEMINI_ENABLE_ALTERNATE_BUFFER: "gemini:enable-alternate-buffer",
+
+  NOTES_CREATE: "notes:create",
+  NOTES_READ: "notes:read",
+  NOTES_WRITE: "notes:write",
+  NOTES_LIST: "notes:list",
+  NOTES_DELETE: "notes:delete",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];
