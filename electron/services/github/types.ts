@@ -6,6 +6,8 @@ export interface RepoContext {
 export interface RepoStats {
   issueCount: number;
   prCount: number;
+  stale?: boolean;
+  lastUpdated?: number;
 }
 
 export interface RepoStatsResult {

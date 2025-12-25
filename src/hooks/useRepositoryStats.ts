@@ -10,6 +10,8 @@ export interface UseRepositoryStatsReturn {
   stats: RepositoryStats | null;
   loading: boolean;
   error: string | null;
+  isStale: boolean;
+  lastUpdated: number | null;
   refresh: (options?: { force?: boolean }) => Promise<void>;
 }
 
@@ -36,6 +38,8 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   const [stats, setStats] = useState<RepositoryStats | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isStale, setIsStale] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<number | null>(null);
 
   const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isVisibleRef = useRef(!document.hidden);
@@ -56,22 +60,27 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
         if (mountedRef.current) {
           setStats(null);
           setError(null);
+          setIsStale(false);
+          setLastUpdated(null);
           lastErrorRef.current = null;
         }
         return;
       }
 
       setLoading(true);
-      setError(null);
 
       const repoStats = await githubClient.getRepoStats(project.path, force);
 
       if (mountedRef.current) {
         setStats(repoStats);
+        setIsStale(repoStats.stale ?? false);
+        setLastUpdated(repoStats.lastUpdated ?? null);
+
         if (repoStats.ghError) {
           setError(repoStats.ghError);
           lastErrorRef.current = repoStats.ghError;
         } else {
+          setError(null);
           lastErrorRef.current = null;
         }
       }
@@ -191,6 +200,8 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     stats,
     loading,
     error,
+    isStale,
+    lastUpdated,
     refresh,
   };
 }

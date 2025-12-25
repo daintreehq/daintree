@@ -1,6 +1,7 @@
 import type { GraphQlQueryResponseData } from "@octokit/graphql";
 import { GitService } from "./GitService.js";
 import { Cache } from "../utils/cache.js";
+import { GitHubStatsCache } from "./GitHubStatsCache.js";
 import type {
   GitHubIssue,
   GitHubPR,
@@ -93,17 +94,30 @@ export async function getRepoContext(cwd: string): Promise<RepoContext | null> {
 }
 
 export async function getRepoStats(cwd: string, bypassCache = false): Promise<RepoStatsResult> {
-  const client = GitHubAuth.createClient();
-  if (!client) {
-    return { stats: null, error: "GitHub token not configured" };
-  }
-
   const context = await getRepoContext(cwd);
   if (!context) {
     return { stats: null, error: "Not a GitHub repository" };
   }
 
   const cacheKey = `${context.owner}/${context.repo}`;
+  const persistentCache = GitHubStatsCache.getInstance();
+
+  const client = GitHubAuth.createClient();
+  if (!client) {
+    const diskCached = persistentCache.get(cacheKey);
+    if (diskCached) {
+      return {
+        stats: {
+          issueCount: diskCached.issueCount,
+          prCount: diskCached.prCount,
+          stale: true,
+          lastUpdated: diskCached.lastUpdated,
+        },
+        error: "GitHub token not configured",
+      };
+    }
+    return { stats: null, error: "GitHub token not configured" };
+  }
 
   if (!bypassCache) {
     const cached = repoStatsCache.get(cacheKey);
@@ -120,17 +134,44 @@ export async function getRepoStats(cwd: string, bypassCache = false): Promise<Re
 
     const repository = result?.repository;
     if (!repository) {
+      const diskCached = persistentCache.get(cacheKey);
+      if (diskCached) {
+        return {
+          stats: {
+            issueCount: diskCached.issueCount,
+            prCount: diskCached.prCount,
+            stale: true,
+            lastUpdated: diskCached.lastUpdated,
+          },
+          error: "Repository not found (showing cached data)",
+        };
+      }
       return { stats: null, error: "Repository not found" };
     }
 
     const stats: RepoStats = {
       issueCount: repository.issues?.totalCount ?? 0,
       prCount: repository.pullRequests?.totalCount ?? 0,
+      lastUpdated: Date.now(),
     };
 
     repoStatsCache.set(cacheKey, stats);
+    persistentCache.set(cacheKey, stats, cwd);
+
     return { stats };
   } catch (error) {
+    const diskCached = persistentCache.get(cacheKey);
+    if (diskCached) {
+      return {
+        stats: {
+          issueCount: diskCached.issueCount,
+          prCount: diskCached.prCount,
+          stale: true,
+          lastUpdated: diskCached.lastUpdated,
+        },
+        error: parseGitHubError(error),
+      };
+    }
     return { stats: null, error: parseGitHubError(error) };
   }
 }

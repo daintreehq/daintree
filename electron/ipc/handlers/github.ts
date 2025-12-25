@@ -49,6 +49,8 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
         prCount: statsResult.stats?.prCount ?? null,
         loading: false,
         ghError: statsResult.error,
+        stale: statsResult.stats?.stale,
+        lastUpdated: statsResult.stats?.lastUpdated,
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

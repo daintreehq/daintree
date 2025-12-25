@@ -20,6 +20,7 @@ import {
   Plus,
   Settings2,
   Globe,
+  Clock,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
@@ -74,7 +75,7 @@ export function Toolbar({
   const projects = useProjectStore((state) => state.projects);
   const loadProjects = useProjectStore((state) => state.loadProjects);
   const getCurrentProject = useProjectStore((state) => state.getCurrentProject);
-  const { stats, error: statsError, refresh: refreshStats } = useRepositoryStats();
+  const { stats, refresh: refreshStats, isStale, lastUpdated } = useRepositoryStats();
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const activeWorktree = useWorktreeDataStore((state) =>
     activeWorktreeId ? state.worktrees.get(activeWorktreeId) : null
@@ -115,6 +116,29 @@ export function Toolbar({
   const projectSelectorTriggerRef = useRef<HTMLButtonElement>(null);
 
   const { handleCopyTree } = useWorktreeActions();
+
+  const getTimeSinceUpdate = (timestamp: number | null): string => {
+    if (
+      timestamp == null ||
+      !Number.isFinite(timestamp) ||
+      timestamp <= 0
+    ) {
+      return "unknown";
+    }
+
+    const seconds = Math.floor((Date.now() - timestamp) / 1000);
+    if (seconds < 0) return "just now";
+    if (seconds < 60) return "just now";
+
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+  };
 
   useEffect(() => {
     return window.electron.window.onFullscreenChange(setIsFullscreen);
@@ -402,7 +426,7 @@ export function Toolbar({
 
       {/* RIGHT GROUP */}
       <div className="flex items-center gap-1.5 app-no-drag z-20">
-        {stats && currentProject && !statsError && (
+        {stats && currentProject && (
           <div className="flex items-center h-8 rounded-[var(--radius-md)] bg-white/[0.03] border border-divider divide-x divide-[var(--border-divider)] mr-2">
             <Button
               ref={issuesButtonRef}
@@ -419,13 +443,19 @@ export function Toolbar({
               className={cn(
                 "text-canopy-text hover:bg-white/[0.04] hover:text-canopy-accent h-full px-3 gap-2 rounded-none rounded-l-[var(--radius-md)]",
                 stats.issueCount === 0 && "opacity-50",
+                isStale && "opacity-60",
                 issuesOpen && "bg-white/[0.04] ring-1 ring-canopy-accent/20 text-canopy-accent"
               )}
-              title="Browse GitHub Issues"
-              aria-label={`${stats.issueCount ?? 0} open issues`}
+              title={
+                isStale
+                  ? `${stats.issueCount ?? "?"} open issues (last updated ${getTimeSinceUpdate(lastUpdated)} - offline)`
+                  : "Browse GitHub Issues"
+              }
+              aria-label={`${stats.issueCount ?? "?"} open issues${isStale ? " (cached)" : ""}`}
             >
               <AlertTriangle className="h-4 w-4" />
               <span className="text-xs font-medium tabular-nums">{stats.issueCount ?? "?"}</span>
+              {isStale && <Clock className="h-3 w-3" />}
             </Button>
             <FixedDropdown
               open={issuesOpen}
@@ -456,13 +486,19 @@ export function Toolbar({
               className={cn(
                 "text-canopy-text hover:bg-white/[0.04] hover:text-canopy-accent h-full px-3 gap-2 rounded-none",
                 stats.prCount === 0 && "opacity-50",
+                isStale && "opacity-60",
                 prsOpen && "bg-white/[0.04] ring-1 ring-canopy-accent/20 text-canopy-accent"
               )}
-              title="Browse GitHub Pull Requests"
-              aria-label={`${stats.prCount ?? 0} open pull requests`}
+              title={
+                isStale
+                  ? `${stats.prCount ?? "?"} open PRs (last updated ${getTimeSinceUpdate(lastUpdated)} - offline)`
+                  : "Browse GitHub Pull Requests"
+              }
+              aria-label={`${stats.prCount ?? "?"} open pull requests${isStale ? " (cached)" : ""}`}
             >
               <GitPullRequest className="h-4 w-4" />
               <span className="text-xs font-medium tabular-nums">{stats.prCount ?? "?"}</span>
+              {isStale && <Clock className="h-3 w-3" />}
             </Button>
             <FixedDropdown
               open={prsOpen}

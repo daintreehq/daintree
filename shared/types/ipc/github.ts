@@ -10,6 +10,10 @@ export interface RepositoryStats {
   loading: boolean;
   /** Error message if GitHub API failed */
   ghError?: string;
+  /** Whether the stats are from cache and may be outdated */
+  stale?: boolean;
+  /** Timestamp when stats were last successfully fetched from API */
+  lastUpdated?: number;
 }
 
 /** GitHub CLI availability check result */
