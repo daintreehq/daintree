@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { AgentHelpService } from "../AgentHelpService.js";
 import { execFile } from "child_process";
-import type { AgentHelpResult } from "../../../shared/types/ipc/agent.js";
 
 vi.mock("child_process", () => ({
   execFile: vi.fn(),
@@ -24,7 +23,7 @@ describe("AgentHelpService", () => {
 
   describe("getHelp", () => {
     it("returns help output for valid agent", async () => {
-      mockedExecFile.mockImplementation((cmd, args, opts, callback: any) => {
+      mockedExecFile.mockImplementation((_cmd, _args, _opts, callback: any) => {
         callback(null, { stdout: "Usage: claude [options]", stderr: "" });
         return {} as any;
       });
@@ -53,7 +52,7 @@ describe("AgentHelpService", () => {
     });
 
     it("uses custom help args from agent config", async () => {
-      mockedExecFile.mockImplementation((cmd, args, opts, callback: any) => {
+      mockedExecFile.mockImplementation((_cmd, _args, _opts, callback: any) => {
         callback(null, { stdout: "Help output", stderr: "" });
         return {} as any;
       });
@@ -89,7 +88,7 @@ describe("AgentHelpService", () => {
     });
 
     it("handles non-zero exit code", async () => {
-      mockedExecFile.mockImplementation((cmd, args, opts, callback: any) => {
+      mockedExecFile.mockImplementation((_cmd, _args, _opts, callback: any) => {
         const error: any = new Error("Command failed");
         error.code = 1;
         error.stdout = "Partial output";
@@ -110,7 +109,7 @@ describe("AgentHelpService", () => {
     });
 
     it("handles timeout", async () => {
-      mockedExecFile.mockImplementation((cmd, args, opts, callback: any) => {
+      mockedExecFile.mockImplementation((_cmd, _args, _opts, callback: any) => {
         const error: any = new Error("Timeout");
         error.killed = true;
         error.signal = "SIGTERM";
@@ -127,7 +126,7 @@ describe("AgentHelpService", () => {
     });
 
     it("handles buffer overflow", async () => {
-      mockedExecFile.mockImplementation((cmd, args, opts, callback: any) => {
+      mockedExecFile.mockImplementation((_cmd, _args, _opts, callback: any) => {
         const error: any = new Error("Buffer overflow");
         error.code = "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
         error.stdout = "x".repeat(256 * 1024);
@@ -143,7 +142,7 @@ describe("AgentHelpService", () => {
     });
 
     it("caches results", async () => {
-      mockedExecFile.mockImplementation((cmd, args, opts, callback: any) => {
+      mockedExecFile.mockImplementation((_cmd, _args, _opts, callback: any) => {
         callback(null, { stdout: "Cached output", stderr: "" });
         return {} as any;
       });
@@ -156,7 +155,7 @@ describe("AgentHelpService", () => {
     });
 
     it("bypasses cache when refresh is true", async () => {
-      mockedExecFile.mockImplementation((cmd, args, opts, callback: any) => {
+      mockedExecFile.mockImplementation((_cmd, _args, _opts, callback: any) => {
         callback(null, { stdout: "Fresh output", stderr: "" });
         return {} as any;
       });
@@ -169,7 +168,7 @@ describe("AgentHelpService", () => {
     });
 
     it("respects cache TTL", async () => {
-      mockedExecFile.mockImplementation((cmd, args, opts, callback: any) => {
+      mockedExecFile.mockImplementation((_cmd, _args, _opts, callback: any) => {
         callback(null, { stdout: "Output", stderr: "" });
         return {} as any;
       });
