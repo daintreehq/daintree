@@ -33,11 +33,13 @@ npm run rebuild      # Rebuild native modules
 The **Actions System** is the central orchestration layer for all UI operations. It provides a unified, typed API for menus, keybindings, context menus, and future agent automation.
 
 **Core Components:**
+
 - `ActionService` (`src/services/ActionService.ts`) - Registry and dispatcher singleton
 - Action definitions (`src/services/actions/definitions/`) - 17 domain-specific action files
 - Shared types (`shared/types/actions.ts`) - `ActionId`, `ActionDefinition`, `ActionManifestEntry`
 
 **Key Concepts:**
+
 - `dispatch(actionId, args?, options?)` - Execute any action by ID
 - `list()` / `get(id)` - Introspect available actions (MCP-compatible manifest)
 - `ActionSource` - Tracks origin: "user" | "keybinding" | "menu" | "agent" | "context-menu"
@@ -132,11 +134,13 @@ src/
 ## Common Tasks
 
 **Adding a new action:**
+
 1. Add action ID to `shared/types/actions.ts` (`ActionId` union)
 2. Create definition in appropriate `src/services/actions/definitions/*.ts` file
 3. Action is automatically registered via `useActionRegistry` hook
 
 **Adding IPC channel:**
+
 1. Define in `electron/ipc/channels.ts`
 2. Implement in `electron/ipc/handlers/` (domain-specific file)
 3. Expose in `electron/preload.cts`

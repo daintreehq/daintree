@@ -1,10 +1,12 @@
 import { useMemo } from "react";
 import type React from "react";
+import { useDraggable } from "@dnd-kit/core";
 import type { AgentState } from "@/types";
 import type { TerminalInstance } from "@/store/terminalStore";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { cn } from "@/lib/utils";
 import type { WorktreeTerminalCounts } from "@/hooks/useWorktreeTerminals";
+import type { DragData } from "@/components/DragDrop/DndProvider";
 import {
   STATE_COLORS,
   STATE_ICONS,
@@ -17,6 +19,7 @@ import {
   AlertCircle,
   CheckCircle2,
   ChevronRight,
+  GripVertical,
   LayoutGrid,
   Loader2,
   PanelBottom,
@@ -57,6 +60,137 @@ function StateIcon({ state, count }: StateIconProps) {
         {count} {label}
       </TooltipContent>
     </Tooltip>
+  );
+}
+
+function computeSourceIndexMaps(terminals: TerminalInstance[]) {
+  const gridTerminals = terminals.filter((t) => t.location === "grid" || t.location === undefined);
+  const dockTerminals = terminals.filter((t) => t.location === "dock");
+
+  const gridIndexMap = new Map<string, number>();
+  gridTerminals.forEach((term, idx) => gridIndexMap.set(term.id, idx));
+
+  const dockIndexMap = new Map<string, number>();
+  dockTerminals.forEach((term, idx) => dockIndexMap.set(term.id, idx));
+
+  return { gridIndexMap, dockIndexMap };
+}
+
+interface DraggableTerminalRowProps {
+  terminal: TerminalInstance;
+  sourceIndex: number;
+  onTerminalSelect: (terminal: TerminalInstance) => void;
+}
+
+function DraggableTerminalRow({
+  terminal,
+  sourceIndex,
+  onTerminalSelect,
+}: DraggableTerminalRowProps) {
+  const sourceLocation: "grid" | "dock" = terminal.location === "dock" ? "dock" : "grid";
+
+  const dragData: DragData = {
+    terminal,
+    sourceLocation,
+    sourceIndex,
+  };
+
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, isDragging } = useDraggable({
+    id: `worktree-list:${terminal.id}`,
+    data: dragData,
+  });
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={cn(
+        "flex items-center justify-between gap-2.5 px-3 py-2 group transition-colors hover:bg-white/5",
+        isDragging && "opacity-40"
+      )}
+    >
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onTerminalSelect(terminal);
+        }}
+        className="flex items-center gap-2 min-w-0 flex-1 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px] rounded"
+      >
+        <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
+          <TerminalIcon
+            type={terminal.type}
+            kind={terminal.kind}
+            agentId={terminal.agentId}
+            className="w-3 h-3"
+          />
+        </div>
+        <div className="flex flex-col min-w-0">
+          <span className="text-xs font-medium truncate text-canopy-text/70 group-hover:text-canopy-text transition-colors">
+            {terminal.title}
+          </span>
+          {terminal.type === "terminal" &&
+            terminal.agentState === "running" &&
+            terminal.lastCommand && (
+              <span
+                className="text-[11px] font-mono text-canopy-text/50 truncate"
+                title={terminal.lastCommand}
+              >
+                {terminal.lastCommand}
+              </span>
+            )}
+        </div>
+      </button>
+
+      <div className="flex items-center gap-2.5 shrink-0">
+        {terminal.agentState === "working" && (
+          <Loader2
+            className="w-3 h-3 animate-spin motion-reduce:animate-none text-[var(--color-state-working)]"
+            aria-label="Working"
+          />
+        )}
+
+        {terminal.agentState === "running" && (
+          <Play className="w-3 h-3 text-[var(--color-status-info)]" aria-label="Running" />
+        )}
+
+        {terminal.agentState === "waiting" && (
+          <AlertCircle className="w-3 h-3 text-amber-400" aria-label="Waiting for input" />
+        )}
+
+        {terminal.agentState === "failed" && (
+          <XCircle className="w-3 h-3 text-[var(--color-status-error)]" aria-label="Failed" />
+        )}
+
+        {terminal.agentState === "completed" && (
+          <CheckCircle2
+            className="w-3 h-3 text-[var(--color-status-success)]"
+            aria-label="Completed"
+          />
+        )}
+
+        <div
+          className="text-muted-foreground/40 group-hover:text-muted-foreground/60 transition-colors"
+          title={terminal.location === "dock" ? "Docked" : "On Grid"}
+        >
+          {terminal.location === "dock" ? (
+            <PanelBottom className="w-3 h-3" />
+          ) : (
+            <LayoutGrid className="w-3 h-3" />
+          )}
+        </div>
+
+        <button
+          ref={setActivatorNodeRef}
+          type="button"
+          className="cursor-grab active:cursor-grabbing text-canopy-text/30 hover:text-canopy-text/60 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1 rounded"
+          aria-label="Drag to move terminal"
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -119,6 +253,11 @@ export function WorktreeTerminalSection({
     });
   }, [terminals]);
 
+  const { gridIndexMap, dockIndexMap } = useMemo(
+    () => computeSourceIndexMaps(terminals),
+    [terminals]
+  );
+
   if (!showMetaFooter) {
     return null;
   }
@@ -149,90 +288,21 @@ export function WorktreeTerminalSection({
             aria-labelledby={`${terminalsId}-button`}
             className="max-h-[300px] overflow-y-auto"
           >
-            {orderedWorktreeTerminals.map((term) => (
-              <button
-                key={term.id}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onTerminalSelect(term);
-                }}
-                className="w-full flex items-center justify-between gap-2.5 px-3 py-2 cursor-pointer group transition-colors hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]"
-              >
-                <div className="flex items-center gap-2 min-w-0 flex-1">
-                  <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
-                    <TerminalIcon
-                      type={term.type}
-                      kind={term.kind}
-                      agentId={term.agentId}
-                      className="w-3 h-3"
-                    />
-                  </div>
-                  <div className="flex flex-col min-w-0 text-left">
-                    <span className="text-xs font-medium truncate text-canopy-text/70 group-hover:text-canopy-text transition-colors">
-                      {term.title}
-                    </span>
-                    {term.type === "terminal" &&
-                      term.agentState === "running" &&
-                      term.lastCommand && (
-                        <span
-                          className="text-[11px] font-mono text-canopy-text/50 truncate"
-                          title={term.lastCommand}
-                        >
-                          {term.lastCommand}
-                        </span>
-                      )}
-                  </div>
-                </div>
+            {orderedWorktreeTerminals.map((term) => {
+              const sourceIndex =
+                term.location === "dock"
+                  ? (dockIndexMap.get(term.id) ?? 0)
+                  : (gridIndexMap.get(term.id) ?? 0);
 
-                <div className="flex items-center gap-2.5 shrink-0">
-                  {term.agentState === "working" && (
-                    <Loader2
-                      className="w-3 h-3 animate-spin motion-reduce:animate-none text-[var(--color-state-working)]"
-                      aria-label="Working"
-                    />
-                  )}
-
-                  {term.agentState === "running" && (
-                    <Play
-                      className="w-3 h-3 text-[var(--color-status-info)]"
-                      aria-label="Running"
-                    />
-                  )}
-
-                  {term.agentState === "waiting" && (
-                    <AlertCircle
-                      className="w-3 h-3 text-amber-400"
-                      aria-label="Waiting for input"
-                    />
-                  )}
-
-                  {term.agentState === "failed" && (
-                    <XCircle
-                      className="w-3 h-3 text-[var(--color-status-error)]"
-                      aria-label="Failed"
-                    />
-                  )}
-
-                  {term.agentState === "completed" && (
-                    <CheckCircle2
-                      className="w-3 h-3 text-[var(--color-status-success)]"
-                      aria-label="Completed"
-                    />
-                  )}
-
-                  <div
-                    className="text-muted-foreground/40 group-hover:text-muted-foreground/60 transition-colors"
-                    title={term.location === "dock" ? "Docked" : "On Grid"}
-                  >
-                    {term.location === "dock" ? (
-                      <PanelBottom className="w-3 h-3" />
-                    ) : (
-                      <LayoutGrid className="w-3 h-3" />
-                    )}
-                  </div>
-                </div>
-              </button>
-            ))}
+              return (
+                <DraggableTerminalRow
+                  key={term.id}
+                  terminal={term}
+                  sourceIndex={sourceIndex}
+                  onTerminalSelect={onTerminalSelect}
+                />
+              );
+            })}
           </div>
         </>
       ) : (

@@ -175,16 +175,19 @@ export function DndProvider({ children }: DndProviderProps) {
   const getMaxGridCapacity = useLayoutConfigStore((state) => state.getMaxGridCapacity);
 
   const activeTerminal = useMemo(() => {
-    if (!activeId) return null;
+    if (!activeId && !activeData) return null;
+    if (activeData?.terminal) return activeData.terminal;
     return terminals.find((t) => t.id === activeId) ?? null;
-  }, [activeId, terminals]);
+  }, [activeId, activeData, terminals]);
 
   const handleDragStart = useCallback((event: DragStartEvent) => {
     const { active } = event;
-    setActiveId(active.id as string);
-    terminalInstanceService.lockResize(active.id as string, true);
-
     const data = active.data.current as DragData | undefined;
+    const terminalId = data?.terminal?.id ?? (active.id as string);
+
+    setActiveId(active.id as string);
+    terminalInstanceService.lockResize(terminalId, true);
+
     if (data) {
       setActiveData(data);
       setOverContainer(data.sourceLocation);
@@ -259,8 +262,9 @@ export function DndProvider({ children }: DndProviderProps) {
     (event: DragEndEvent) => {
       const { active, over } = event;
 
-      // Capture dragged ID immediately for guaranteed unlock
-      const draggedId = active?.id ? String(active.id) : null;
+      // Capture dragged terminal ID from data (works for both sortable and worktree list)
+      const data = active.data.current as DragData | undefined;
+      const draggedId = data?.terminal?.id ?? (active?.id ? String(active.id) : null);
       console.log(`[DND_DEBUG] handleDragEnd id=${draggedId} over=${over?.id}`);
 
       // Capture source location before clearing
@@ -521,15 +525,16 @@ export function DndProvider({ children }: DndProviderProps) {
   );
 
   const handleDragCancel = useCallback(() => {
-    if (activeId) {
-      terminalInstanceService.lockResize(activeId, false);
+    const terminalId = activeData?.terminal?.id ?? activeId;
+    if (terminalId) {
+      terminalInstanceService.lockResize(terminalId, false);
     }
     setActiveId(null);
     setActiveData(null);
     setOverContainer(null);
     setPlaceholderIndex(null);
     // No explicit refresh needed - terminals return to original state (no layout change)
-  }, [activeId]);
+  }, [activeId, activeData]);
 
   // Use rectIntersection as default (stable when cursor outside containers),
   // closestCenter only for dock (better for 1D horizontal reordering)

@@ -35,6 +35,7 @@ npm run fix              # Auto-fix lint/format
 ### Actions System
 
 Central dispatcher for all UI operations (`src/services/ActionService.ts`):
+
 - `dispatch(actionId, args?)` - Execute actions by ID
 - `list()` - Get MCP-compatible action manifest
 - Definitions in `src/services/actions/definitions/`
@@ -43,6 +44,7 @@ Central dispatcher for all UI operations (`src/services/ActionService.ts`):
 ### Panel Architecture
 
 Panels (terminal, agent, browser) use discriminated unions:
+
 - `PanelInstance = PtyPanelData | BrowserPanelData`
 - `panelKindHasPty(kind)` - Check if panel needs PTY
 - Registry: `shared/config/panelKindRegistry.ts`

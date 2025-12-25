@@ -39,6 +39,7 @@ Central orchestration layer for all UI operations. Provides unified API for menu
 ### Panel Architecture
 
 Panels are visual units in the grid/dock. Uses discriminated unions:
+
 - `PanelInstance = PtyPanelData | BrowserPanelData`
 - Kinds: `"terminal"` | `"agent"` | `"browser"`
 - `panelKindHasPty(kind)` - Check if panel needs PTY
