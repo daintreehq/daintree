@@ -539,7 +539,7 @@ export const createTerminalRegistrySlice =
       });
 
       // Only optimize PTY-backed panels
-      if (terminal?.kind && panelKindHasPty(terminal.kind)) {
+      if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
         optimizeForDock(id);
       }
     },
@@ -574,7 +574,7 @@ export const createTerminalRegistrySlice =
       });
 
       // Only apply renderer policy for PTY-backed panels if move succeeded
-      if (moveSucceeded && terminal?.kind && panelKindHasPty(terminal.kind)) {
+      if (moveSucceeded && terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
         terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
       }
 
@@ -703,7 +703,7 @@ export const createTerminalRegistrySlice =
       });
 
       // Only apply renderer policy for PTY-backed panels
-      if (terminal?.kind && panelKindHasPty(terminal.kind)) {
+      if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
         terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
       }
     },
@@ -729,7 +729,7 @@ export const createTerminalRegistrySlice =
       });
 
       // Only apply renderer policies for PTY-backed panels
-      if (terminal?.kind && panelKindHasPty(terminal.kind)) {
+      if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
         if (restoreLocation === "dock") {
           optimizeForDock(id);
         } else {
@@ -844,10 +844,13 @@ export const createTerminalRegistrySlice =
         return { terminals: newTerminals };
       });
 
-      if (location === "dock") {
-        optimizeForDock(id);
-      } else {
-        terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+      const terminal = get().terminals.find((t) => t.id === id);
+      if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
+        if (location === "dock") {
+          optimizeForDock(id);
+        } else {
+          terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+        }
       }
     },
 
@@ -1209,7 +1212,9 @@ export const createTerminalRegistrySlice =
         };
 
         terminalPersistence.save(updated.terminals);
-        terminalInstanceService.setInputLocked(id, locked);
+        if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
+          terminalInstanceService.setInputLocked(id, locked);
+        }
 
         return updated;
       });
@@ -1229,7 +1234,9 @@ export const createTerminalRegistrySlice =
         };
 
         terminalPersistence.save(updated.terminals);
-        terminalInstanceService.setInputLocked(id, locked);
+        if (panelKindHasPty(terminal.kind ?? "terminal")) {
+          terminalInstanceService.setInputLocked(id, locked);
+        }
 
         return updated;
       });

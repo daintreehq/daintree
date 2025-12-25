@@ -71,7 +71,7 @@ export const createTerminalFocusSlice =
           // This is a safety net to recover from any missed data.
           // Skip wake for non-PTY panels - they don't have backend PTY processes.
           const terminal = getTerminals().find((t) => t.id === id);
-          if (terminal?.kind && panelKindHasPty(terminal.kind)) {
+          if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
             terminalInstanceService.wake(id);
           }
           if (shouldPing) {
@@ -196,7 +196,7 @@ export const createTerminalFocusSlice =
       openDockTerminal: (id) => {
         // Skip wake for non-PTY panels - they don't have backend PTY processes.
         const terminal = getTerminals().find((t) => t.id === id);
-        if (terminal?.kind && panelKindHasPty(terminal.kind)) {
+        if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
           terminalInstanceService.wake(id);
         }
         set({ activeDockTerminalId: id, focusedId: id });

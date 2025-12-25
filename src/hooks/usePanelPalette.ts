@@ -69,6 +69,7 @@ export function usePanelPalette(): UsePanelPaletteReturn {
   }, [isOpen, open, close]);
 
   const selectPrevious = useCallback(() => {
+    if (availableKinds.length === 0) return;
     setSelectedIndex((prev) => {
       if (prev === 0) return availableKinds.length - 1;
       return prev - 1;
@@ -76,6 +77,7 @@ export function usePanelPalette(): UsePanelPaletteReturn {
   }, [availableKinds.length]);
 
   const selectNext = useCallback(() => {
+    if (availableKinds.length === 0) return;
     setSelectedIndex((prev) => {
       if (prev === availableKinds.length - 1) return 0;
       return prev + 1;
