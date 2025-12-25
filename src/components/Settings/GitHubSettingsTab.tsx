@@ -61,6 +61,9 @@ export function GitHubSettingsTab() {
         }
         const config = configResult.result as any;
         updateConfig(config);
+        void actionService.dispatch("worktree.refreshPullRequests", undefined, {
+          source: "user",
+        });
       } else {
         setValidationResult("error");
         setErrorMessage(validation.error || "Invalid token");
