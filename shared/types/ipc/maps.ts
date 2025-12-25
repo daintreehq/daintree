@@ -25,6 +25,8 @@ import type {
   AgentDetectedPayload,
   AgentExitedPayload,
   ArtifactDetectedPayload,
+  AgentHelpRequest,
+  AgentHelpResult,
 } from "./agent.js";
 import type {
   CopyTreeGeneratePayload,
@@ -174,6 +176,10 @@ export interface IpcInvokeMap {
   "agent:get-state": {
     args: [agentId: string];
     result: string | null;
+  };
+  "agent-help:get": {
+    args: [request: AgentHelpRequest];
+    result: AgentHelpResult;
   };
 
   // Artifact channels
