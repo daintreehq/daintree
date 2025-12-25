@@ -1,5 +1,4 @@
 import { graphql } from "@octokit/graphql";
-import { secureStorage } from "../SecureStorage.js";
 
 export interface GitHubTokenConfig {
   hasToken: boolean;
@@ -14,23 +13,54 @@ export interface GitHubTokenValidation {
   error?: string;
 }
 
+// Token storage interface - allows different implementations for main vs utility process
+interface TokenStorage {
+  get(): string | undefined;
+  set(token: string): void;
+  delete(): void;
+}
+
+// Default memory-only storage (safe for utility process)
+class MemoryTokenStorage implements TokenStorage {
+  private token: string | null = null;
+  get(): string | undefined {
+    return this.token ?? undefined;
+  }
+  set(token: string): void {
+    this.token = token;
+  }
+  delete(): void {
+    this.token = null;
+  }
+}
+
 export class GitHubAuth {
+  private static storage: TokenStorage = new MemoryTokenStorage();
   private static memoryToken: string | null = null;
-  private static useMemoryOnly: boolean = false;
+
+  /**
+   * Initialize with secure storage (call from main process only).
+   * Must be called before any token operations that need persistence.
+   */
+  static initializeStorage(storage: TokenStorage): void {
+    this.storage = storage;
+    // Sync memory token with storage on init
+    const storedToken = storage.get();
+    if (storedToken) {
+      this.memoryToken = storedToken;
+    }
+  }
 
   static getToken(): string | undefined {
-    if (this.useMemoryOnly) {
-      return this.memoryToken ?? undefined;
-    }
+    // Prefer memory token (set via IPC in utility process)
     if (this.memoryToken) {
       return this.memoryToken;
     }
-    return secureStorage.get("userConfig.githubToken");
+    return this.storage.get();
   }
 
   static setMemoryToken(token: string | null): void {
     this.memoryToken = token;
-    this.useMemoryOnly = true;
   }
 
   static hasToken(): boolean {
@@ -38,11 +68,13 @@ export class GitHubAuth {
   }
 
   static setToken(token: string): void {
-    secureStorage.set("userConfig.githubToken", token.trim());
+    this.memoryToken = token.trim();
+    this.storage.set(token.trim());
   }
 
   static clearToken(): void {
-    secureStorage.delete("userConfig.githubToken");
+    this.memoryToken = null;
+    this.storage.delete();
   }
 
   static getConfig(): GitHubTokenConfig {

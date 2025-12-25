@@ -1,6 +1,24 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import path from "path";
-import { app } from "electron";
+
+// Get userData path without importing electron (works in both main and utility process)
+function getUserDataPath(): string {
+  // Priority 1: Environment variable (set by main process for utility processes)
+  if (process.env.CANOPY_USER_DATA) {
+    return process.env.CANOPY_USER_DATA;
+  }
+
+  // Priority 2: Dynamic import electron only in main process
+  // This is a fallback - CANOPY_USER_DATA should always be set
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { app } = require("electron");
+    return app.getPath("userData");
+  } catch {
+    // Fallback for edge cases
+    return process.cwd();
+  }
+}
 
 interface CachedStats {
   issueCount: number;
@@ -29,7 +47,7 @@ export class GitHubStatsCache {
 
   static getInstance(): GitHubStatsCache {
     if (!instance) {
-      const userDataPath = app.getPath("userData");
+      const userDataPath = getUserDataPath();
       instance = new GitHubStatsCache(userDataPath);
     }
     return instance;

@@ -58,6 +58,8 @@ import { store } from "./store.js";
 import { MigrationRunner } from "./services/StoreMigrations.js";
 import { migrations } from "./services/migrations/index.js";
 import { initializeHibernationService } from "./services/HibernationService.js";
+import { GitHubAuth } from "./services/github/GitHubAuth.js";
+import { secureStorage } from "./services/SecureStorage.js";
 import {
   initializeSystemSleepService,
   getSystemSleepService,
@@ -283,6 +285,14 @@ async function createWindow(): Promise<void> {
     app.exit(1);
     return;
   }
+
+  // Initialize GitHubAuth with SecureStorage (must happen in main process, before workspace client starts)
+  GitHubAuth.initializeStorage({
+    get: () => secureStorage.get("userConfig.githubToken"),
+    set: (token) => secureStorage.set("userConfig.githubToken", token),
+    delete: () => secureStorage.delete("userConfig.githubToken"),
+  });
+  console.log("[MAIN] GitHubAuth initialized with SecureStorage");
 
   console.log("[MAIN] Creating window...");
   mainWindow = createWindowWithState({
