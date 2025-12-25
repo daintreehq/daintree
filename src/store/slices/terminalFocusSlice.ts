@@ -5,15 +5,23 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 export type NavigationDirection = "up" | "down" | "left" | "right";
 
+interface PreMaximizeLayoutSnapshot {
+  gridCols: number;
+  gridItemCount: number;
+  worktreeId: string | undefined;
+}
+
 export interface TerminalFocusSlice {
   focusedId: string | null;
   maximizedId: string | null;
   activeDockTerminalId: string | null;
   pingedId: string | null;
+  preMaximizeLayout: PreMaximizeLayoutSnapshot | null;
 
   setFocused: (id: string | null, shouldPing?: boolean) => void;
   pingTerminal: (id: string) => void;
-  toggleMaximize: (id: string) => void;
+  toggleMaximize: (id: string, currentGridCols?: number, currentGridItemCount?: number) => void;
+  clearPreMaximizeLayout: () => void;
   focusNext: () => void;
   focusPrevious: () => void;
   focusDirection: (
@@ -53,6 +61,7 @@ export const createTerminalFocusSlice =
       maximizedId: null,
       activeDockTerminalId: null,
       pingedId: null,
+      preMaximizeLayout: null,
 
       setFocused: (id, shouldPing = false) => {
         set({ focusedId: id });
@@ -81,10 +90,38 @@ export const createTerminalFocusSlice =
         }, 1600);
       },
 
-      toggleMaximize: (id) =>
-        set((state) => ({
-          maximizedId: state.maximizedId === id ? null : id,
-        })),
+      toggleMaximize: (id, currentGridCols, currentGridItemCount) =>
+        set((state) => {
+          const isMaximizing = state.maximizedId !== id;
+          const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
+
+          if (isMaximizing) {
+            if (currentGridCols !== undefined && currentGridItemCount !== undefined) {
+              return {
+                maximizedId: id,
+                preMaximizeLayout: {
+                  gridCols: currentGridCols,
+                  gridItemCount: currentGridItemCount,
+                  worktreeId: activeWorktreeId ?? undefined,
+                },
+              };
+            } else {
+              return {
+                maximizedId: id,
+                preMaximizeLayout: null,
+              };
+            }
+          } else {
+            return {
+              maximizedId: null,
+            };
+          }
+        }),
+
+      clearPreMaximizeLayout: () =>
+        set({
+          preMaximizeLayout: null,
+        }),
 
       focusNext: () => {
         const terminals = getTerminals();
@@ -253,6 +290,7 @@ export const createTerminalFocusSlice =
 
           if (state.maximizedId === removedId) {
             updates.maximizedId = null;
+            updates.preMaximizeLayout = null;
           }
 
           if (state.activeDockTerminalId === removedId) {
