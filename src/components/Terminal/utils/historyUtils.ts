@@ -5,6 +5,12 @@ import { convertAnsiLinesToHtml, escapeHtml } from "./htmlUtils";
 export const HISTORY_JUMP_BACK_PERSIST_MS = 100;
 export const HISTORY_JUMP_BACK_PERSIST_FRAMES = 2;
 
+/**
+ * This implementation uses ANSI serialization → Anser HTML conversion because xterm's DOM renderer
+ * only contains viewport rows (24-50 elements), not full scrollback (5000 lines needed here).
+ * See docs/investigations/dom-snapshot-history-viewer.md for full investigation details.
+ */
+
 export interface HistoryState {
   lines: string[];
   htmlLines: string[];
