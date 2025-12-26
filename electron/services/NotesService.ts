@@ -126,7 +126,7 @@ export class NotesService {
 
       return {
         metadata: data as NoteMetadata,
-        content,
+        content: content.replace(/^\n/, ""),
         path: notePath,
       };
     } catch (error) {
@@ -140,7 +140,12 @@ export class NotesService {
   async write(notePath: string, content: string, metadata: NoteMetadata): Promise<void> {
     const absolutePath = this.validatePath(notePath);
 
-    const fileContent = matter.stringify(content, metadata);
+    // Filter out undefined values to prevent YAML serialization errors
+    const cleanMetadata = Object.fromEntries(
+      Object.entries(metadata).filter(([, v]) => v !== undefined)
+    );
+
+    const fileContent = matter.stringify(content, cleanMetadata);
 
     await fs.writeFile(absolutePath, fileContent, "utf-8");
   }

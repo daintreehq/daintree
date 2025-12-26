@@ -34,6 +34,7 @@ export interface ContentPanelProps extends BasePanelProps {
 
   // Slots
   headerContent?: ReactNode;
+  headerActions?: ReactNode;
   toolbar?: ReactNode;
 
   // Container customization
@@ -78,6 +79,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     onRestore,
     children,
     headerContent,
+    headerActions,
     toolbar,
     className,
     onClick,
@@ -250,6 +252,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         isPinged={isPinged}
         wasJustSelected={wasJustSelected}
         headerContent={resolvedHeaderContent}
+        headerActions={headerActions}
       />
 
       {toolbar}

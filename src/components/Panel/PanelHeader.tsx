@@ -52,6 +52,7 @@ export interface PanelHeaderProps {
 
   // Slots for kind-specific content
   headerContent?: ReactNode;
+  headerActions?: ReactNode;
 }
 
 function PanelHeaderComponent({
@@ -81,6 +82,7 @@ function PanelHeaderComponent({
   isPinged,
   wasJustSelected = false,
   headerContent,
+  headerActions,
 }: PanelHeaderProps) {
   const isBrowser = kind === "browser";
   const dragHandle = useDragHandle();
@@ -219,6 +221,7 @@ function PanelHeaderComponent({
         <div className="flex items-center gap-1.5">
           {/* Window controls - hover only */}
           <div className="flex items-center gap-1.5 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity motion-reduce:transition-none">
+            {headerActions}
             {!isBrowser && onRestart && (
               <button
                 onClick={(e) => {

@@ -445,8 +445,7 @@ function App() {
       cleanupWorktreeDataStore();
     };
   }, []);
-  const { launchAgent, availability, isCheckingAvailability, agentSettings, refreshSettings } =
-    useAgentLauncher();
+  const { launchAgent, availability, agentSettings, refreshSettings } = useAgentLauncher();
   const loadRecipes = useRecipeStore((state) => state.loadRecipes);
   useTerminalConfig();
   useWindowNotifications();
@@ -925,13 +924,7 @@ function App() {
           agentAvailability={availability}
           agentSettings={agentSettings}
         >
-          <ContentGrid
-            className="h-full w-full"
-            onLaunchAgent={handleLaunchAgent}
-            agentAvailability={availability}
-            isCheckingAvailability={isCheckingAvailability}
-            onOpenSettings={handleOpenAgentSettings}
-          />
+          <ContentGrid className="h-full w-full" agentAvailability={availability} />
         </AppLayout>
       </DndProvider>
 

@@ -1,9 +1,12 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
-import { FileText, Copy, Check, AlertCircle } from "lucide-react";
-import MDEditor from "@uiw/react-md-editor";
-import rehypeSanitize from "rehype-sanitize";
+import { Copy, Check, AlertCircle } from "lucide-react";
+import CodeMirror from "@uiw/react-codemirror";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { languages } from "@codemirror/language-data";
+import { EditorView } from "@codemirror/view";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { notesClient, type NoteMetadata } from "@/clients/notesClient";
+import { canopyTheme } from "./editorTheme";
 
 export interface NotesPaneProps extends BasePanelProps {
   notePath: string;
@@ -35,9 +38,7 @@ export function NotesPane({
   const [metadata, setMetadata] = useState<NoteMetadata | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isSaving, setIsSaving] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
 
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastSavedContentRef = useRef<string>("");
@@ -84,27 +85,21 @@ export function NotesPane({
       if (!notePath || !metadata) return;
 
       try {
-        if (isMountedRef.current) setIsSaving(true);
         await notesClient.write(notePath, newContent, metadata);
         if (!isMountedRef.current) return;
         if (version === saveVersionRef.current) {
           lastSavedContentRef.current = newContent;
-          setHasUnsavedChanges(false);
         }
       } catch (e) {
         console.error("Failed to save note:", e);
-      } finally {
-        if (isMountedRef.current) setIsSaving(false);
       }
     },
     [notePath, metadata]
   );
 
   const handleContentChange = useCallback(
-    (newContent: string | undefined) => {
-      const value = newContent ?? "";
+    (value: string) => {
       setContent(value);
-      setHasUnsavedChanges(value !== lastSavedContentRef.current);
 
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
@@ -143,36 +138,23 @@ export function NotesPane({
     }
   }, [notePath]);
 
-  const headerContent = useMemo(
+  const headerActions = useMemo(
     () => (
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <FileText className="w-3.5 h-3.5" />
-        <span className="truncate max-w-[200px]">{notePath}</span>
-        {hasUnsavedChanges && <span className="text-amber-500">Unsaved</span>}
-        {isSaving && <span className="text-blue-500">Saving...</span>}
-      </div>
-    ),
-    [notePath, hasUnsavedChanges, isSaving]
-  );
-
-  const toolbar = useMemo(
-    () => (
-      <div className="flex items-center gap-1 px-2 py-1 border-b border-overlay bg-[var(--color-surface-alt)]">
-        <button
-          onClick={handleCopyPath}
-          className="flex items-center gap-1.5 px-2 py-1 text-xs rounded hover:bg-white/5 text-muted-foreground hover:text-foreground transition-colors"
-          title="Copy addressable path"
-        >
-          {copied ? (
-            <Check className="w-3.5 h-3.5 text-green-500" />
-          ) : (
-            <Copy className="w-3.5 h-3.5" />
-          )}
-          <span>Copy @path</span>
-        </button>
-      </div>
+      <button
+        onClick={handleCopyPath}
+        className="flex items-center gap-1.5 px-2 py-1 text-xs hover:bg-canopy-text/10 text-canopy-text/60 hover:text-canopy-text transition-colors"
+        title="Copy addressable path"
+      >
+        {copied ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
+        <span>Copy @path</span>
+      </button>
     ),
     [handleCopyPath, copied]
+  );
+
+  const extensions = useMemo(
+    () => [markdown({ base: markdownLanguage, codeLanguages: languages }), EditorView.lineWrapping],
+    []
   );
 
   return (
@@ -191,8 +173,7 @@ export function NotesPane({
       onTitleChange={onTitleChange}
       onMinimize={onMinimize}
       onRestore={onRestore}
-      headerContent={headerContent}
-      toolbar={toolbar}
+      headerActions={headerActions}
     >
       {isLoading ? (
         <div className="flex items-center justify-center h-full text-muted-foreground">
@@ -204,18 +185,21 @@ export function NotesPane({
           <span>{error}</span>
         </div>
       ) : (
-        <div className="h-full overflow-hidden" data-color-mode="dark">
-          <MDEditor
+        <div className="h-full overflow-hidden bg-canopy-bg text-[13px] font-mono [&_.cm-editor]:h-full [&_.cm-scroller]:p-2 [&_.cm-placeholder]:text-zinc-600 [&_.cm-placeholder]:italic">
+          <CodeMirror
             value={content}
-            onChange={handleContentChange}
             height="100%"
-            preview="live"
-            previewOptions={{
-              rehypePlugins: [[rehypeSanitize]],
+            theme={canopyTheme}
+            extensions={extensions}
+            onChange={handleContentChange}
+            basicSetup={{
+              lineNumbers: false,
+              foldGutter: false,
+              highlightActiveLine: false,
+              highlightActiveLineGutter: false,
             }}
-            textareaProps={{
-              placeholder: "Start writing your notes...",
-            }}
+            className="h-full"
+            placeholder="Start writing your notes..."
           />
         </div>
       )}

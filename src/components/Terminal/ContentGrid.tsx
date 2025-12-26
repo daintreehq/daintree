@@ -22,11 +22,10 @@ import {
   GRID_PLACEHOLDER_ID,
   SortableGridPlaceholder,
 } from "@/components/DragDrop";
-import { Terminal, AlertTriangle, Globe, Settings, Play } from "lucide-react";
-import { CanopyIcon, CodexIcon, ClaudeIcon, GeminiIcon } from "@/components/icons";
+import { AlertTriangle, Settings, Play } from "lucide-react";
+import { CanopyIcon } from "@/components/icons";
 import { ProjectPulseCard } from "@/components/Pulse";
 import { Kbd } from "@/components/ui/Kbd";
-import { getBrandColorHex } from "@/lib/colorUtils";
 import { svgToDataUrl } from "@/lib/svg";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { computeGridColumns, MIN_TERMINAL_HEIGHT_PX } from "@/lib/terminalLayout";
@@ -39,103 +38,31 @@ import type { MenuItemOption } from "@/types";
 export interface ContentGridProps {
   className?: string;
   defaultCwd?: string;
-  onLaunchAgent?: (
-    type: "claude" | "gemini" | "codex" | "terminal" | "browser"
-  ) => Promise<void> | void;
   agentAvailability?: CliAvailability;
-  isCheckingAvailability?: boolean;
-  onOpenSettings?: () => void;
-}
-
-interface LauncherButtonProps {
-  title: string;
-  icon: React.ReactNode;
-  onClick: () => void;
-  available?: boolean;
-  isLoading?: boolean;
-  onUnavailableClick?: () => void;
-}
-
-function LauncherButton({
-  title,
-  icon,
-  onClick,
-  available = true,
-  isLoading = false,
-  onUnavailableClick,
-}: LauncherButtonProps) {
-  const handleClick = () => {
-    if (isLoading) return;
-    if (!available) {
-      onUnavailableClick?.();
-      return;
-    }
-    onClick();
-  };
-
-  const tooltipText = isLoading
-    ? `Checking ${title} availability...`
-    : available
-      ? undefined
-      : `${title} not found. Click to install.`;
-
-  return (
-    <button
-      onClick={handleClick}
-      disabled={isLoading}
-      title={tooltipText}
-      className={cn(
-        "group relative flex flex-col items-center justify-center gap-2.5 p-4 rounded-xl border",
-        "transition-[background-color,border-color,box-shadow,transform] duration-200",
-        "w-28 h-28",
-        "bg-canopy-bg hover:bg-surface",
-        "border-canopy-border/20 hover:border-canopy-border/40",
-        "shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03),inset_0_-1px_0_0_rgba(0,0,0,0.2)]",
-        "hover:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05),inset_0_-1px_0_0_rgba(0,0,0,0.3),0_4px_12px_-4px_rgba(0,0,0,0.4)]",
-        "hover:-translate-y-0.5 active:-translate-y-[1px] active:scale-[0.98]",
-        "active:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04),inset_0_-1px_0_0_rgba(0,0,0,0.25),0_2px_6px_-2px_rgba(0,0,0,0.3)]",
-        "motion-reduce:transform-none",
-        !available && !isLoading && "opacity-60"
-      )}
-    >
-      {!available && !isLoading && (
-        <div className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-amber-500 rounded-full" />
-      )}
-      <div className="flex items-center justify-center">{icon}</div>
-      <span className="text-sm font-medium text-canopy-text/70 group-hover:text-canopy-text transition-colors">
-        {title}
-      </span>
-    </button>
-  );
 }
 
 function EmptyState({
-  onLaunchAgent,
   hasActiveWorktree,
-  agentAvailability,
-  isCheckingAvailability,
-  onOpenSettings,
   activeWorktreeName,
   activeWorktreeId,
   showProjectPulse,
   projectIconSvg,
   defaultCwd,
 }: {
-  onLaunchAgent: (type: "claude" | "gemini" | "codex" | "terminal" | "browser") => void;
   hasActiveWorktree: boolean;
-  agentAvailability?: CliAvailability;
-  isCheckingAvailability?: boolean;
-  onOpenSettings?: () => void;
   activeWorktreeName?: string | null;
   activeWorktreeId?: string | null;
   showProjectPulse: boolean;
   projectIconSvg?: string;
   defaultCwd?: string;
 }) {
-  const recipes = useRecipeStore((state) =>
-    state.getRecipesForWorktree(activeWorktreeId ?? undefined)
-  );
+  const allRecipes = useRecipeStore((state) => state.recipes);
   const runRecipe = useRecipeStore((state) => state.runRecipe);
+  const recipes = useMemo(() => {
+    return allRecipes.filter(
+      (r) => r.worktreeId === activeWorktreeId || r.worktreeId === undefined
+    );
+  }, [allRecipes, activeWorktreeId]);
   const dockedTerminals = useTerminalStore(
     useShallow((state) =>
       state.terminals.filter((t) => t.location === "dock" && t.worktreeId === activeWorktreeId)
@@ -163,20 +90,6 @@ function EmptyState({
     );
   };
 
-  const handleAgentClick = (type: "claude" | "gemini" | "codex" | "terminal" | "browser") => {
-    if (!hasActiveWorktree) {
-      console.warn("Cannot launch agent: no active worktree");
-      return;
-    }
-    onLaunchAgent(type);
-  };
-
-  const handleUnavailableClick = () => {
-    if (onOpenSettings) {
-      onOpenSettings();
-    }
-  };
-
   const handleOpenProjectSettings = () => {
     window.dispatchEvent(new CustomEvent("canopy:open-project-settings"));
   };
@@ -194,43 +107,39 @@ function EmptyState({
     await actionService.dispatch("worktree.sessions.maximizeAll", {}, { source: "user" });
   };
 
-  const handleOpenPalette = async () => {
-    await actionService.dispatch("terminal.palette", {}, { source: "user" });
-  };
-
   return (
     <div className="flex flex-col items-center justify-center h-full w-full p-8 animate-in fade-in duration-500">
       <div className="max-w-3xl w-full flex flex-col items-center">
         <div className="mb-12 flex flex-col items-center text-center">
-          {projectIconSvg ? (
-            <img
-              src={svgToDataUrl(projectIconSvg)}
-              alt="Project icon"
-              className="h-28 w-28 mb-8 object-contain"
-            />
-          ) : (
-            <>
-              <CanopyIcon className="h-28 w-28 text-white/80 mb-8" />
-              {hasActiveWorktree && (
-                <button
-                  type="button"
-                  onClick={handleOpenProjectSettings}
-                  className="flex items-center gap-1.5 text-xs text-canopy-text/50 hover:text-canopy-text/70 transition-colors mb-4 -mt-4"
-                >
-                  <Settings className="h-3.5 w-3.5" />
-                  <span>Add project icon</span>
-                </button>
-              )}
-            </>
-          )}
+          <div className="relative group mb-8">
+            {projectIconSvg ? (
+              <img
+                src={svgToDataUrl(projectIconSvg)}
+                alt="Project icon"
+                className="h-28 w-28 object-contain"
+              />
+            ) : (
+              <CanopyIcon className="h-28 w-28 text-white/80" />
+            )}
+            {hasActiveWorktree && (
+              <button
+                type="button"
+                onClick={handleOpenProjectSettings}
+                className="absolute -bottom-1 -right-1 p-1.5 bg-canopy-sidebar border border-canopy-border rounded-full opacity-0 group-hover:opacity-100 transition-opacity hover:bg-canopy-bg"
+                title="Change project icon"
+              >
+                <Settings className="h-3 w-3 text-canopy-text/70" />
+              </button>
+            )}
+          </div>
           <h3 className="text-2xl font-semibold text-canopy-text tracking-tight mb-3">
             {activeWorktreeName || "Canopy"}
           </h3>
-          <p className="text-sm text-canopy-text/60 max-w-md leading-relaxed font-medium">
-            {activeWorktreeName
-              ? "Workspace is empty. Launch an agent or terminal to begin."
-              : "A habitat for your AI agents."}
-          </p>
+          {!activeWorktreeName && (
+            <p className="text-sm text-canopy-text/60 max-w-md leading-relaxed font-medium">
+              A habitat for your AI agents.
+            </p>
+          )}
         </div>
 
         {!hasActiveWorktree && (
@@ -300,67 +209,6 @@ function EmptyState({
           </div>
         )}
 
-        {hasActiveWorktree && (
-          <div className="mb-6">
-            <button
-              type="button"
-              onClick={handleOpenPalette}
-              className="px-5 py-2.5 bg-canopy-accent/10 hover:bg-canopy-accent/20 border border-canopy-accent/30 hover:border-canopy-accent/50 rounded-[var(--radius-md)] text-sm text-canopy-accent font-medium transition-all flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
-            >
-              <Terminal className="h-3.5 w-3.5" />
-              Open Command Palette
-            </button>
-          </div>
-        )}
-
-        {hasActiveWorktree && (
-          <div className="mb-8 w-full max-w-2xl">
-            <h4 className="text-xs font-semibold text-canopy-text/50 uppercase tracking-wider mb-3 text-center">
-              Quick Actions
-            </h4>
-            <div className="flex justify-center gap-2 flex-wrap">
-              <LauncherButton
-                title="Claude"
-                icon={<ClaudeIcon className="h-8 w-8" brandColor={getBrandColorHex("claude")} />}
-                onClick={() => handleAgentClick("claude")}
-                available={agentAvailability?.claude ?? false}
-                isLoading={isCheckingAvailability}
-                onUnavailableClick={handleUnavailableClick}
-              />
-              <LauncherButton
-                title="Codex"
-                icon={<CodexIcon className="h-8 w-8" brandColor={getBrandColorHex("codex")} />}
-                onClick={() => handleAgentClick("codex")}
-                available={agentAvailability?.codex ?? false}
-                isLoading={isCheckingAvailability}
-                onUnavailableClick={handleUnavailableClick}
-              />
-              <LauncherButton
-                title="Gemini"
-                icon={<GeminiIcon className="h-8 w-8" brandColor={getBrandColorHex("gemini")} />}
-                onClick={() => handleAgentClick("gemini")}
-                available={agentAvailability?.gemini ?? false}
-                isLoading={isCheckingAvailability}
-                onUnavailableClick={handleUnavailableClick}
-              />
-              <LauncherButton
-                title="Terminal"
-                icon={<Terminal className="h-8 w-8 text-canopy-text/70" />}
-                onClick={() => handleAgentClick("terminal")}
-                available={true}
-                isLoading={false}
-              />
-              <LauncherButton
-                title="Browser"
-                icon={<Globe className="h-8 w-8 text-blue-400" />}
-                onClick={() => handleAgentClick("browser")}
-                available={true}
-                isLoading={false}
-              />
-            </div>
-          </div>
-        )}
-
         {showProjectPulse && hasActiveWorktree && activeWorktreeId && (
           <div className="flex justify-center mb-8">
             <ProjectPulseCard worktreeId={activeWorktreeId} />
@@ -395,14 +243,7 @@ function EmptyState({
   );
 }
 
-export function ContentGrid({
-  className,
-  defaultCwd,
-  onLaunchAgent,
-  agentAvailability,
-  isCheckingAvailability,
-  onOpenSettings,
-}: ContentGridProps) {
+export function ContentGrid({ className, defaultCwd, agentAvailability }: ContentGridProps) {
   const { showMenu } = useNativeContextMenu();
   const { terminals, focusedId, maximizedId, preMaximizeLayout, clearPreMaximizeLayout } =
     useTerminalStore(
@@ -426,7 +267,6 @@ export function ContentGrid({
     ? activeWorktree.branch?.trim() || activeWorktree.name?.trim() || "Unknown Worktree"
     : null;
 
-  const addTerminal = useTerminalStore((state) => state.addTerminal);
   const isInTrash = useTerminalStore((state) => state.isInTrash);
 
   const gridTerminals = useMemo(
@@ -529,32 +369,6 @@ export function ContentGrid({
     const { strategy, value } = layoutConfig;
     return computeGridColumns(gridItemCount, gridWidth, strategy, value);
   }, [gridItemCount, layoutConfig, gridWidth, maximizedId, preMaximizeLayout, activeWorktreeId]);
-
-  const handleLaunchAgent = useCallback(
-    async (type: "claude" | "gemini" | "codex" | "terminal" | "browser") => {
-      if (onLaunchAgent) {
-        try {
-          await onLaunchAgent(type);
-        } catch (error) {
-          console.error(`Failed to launch ${type}:`, error);
-        }
-        return;
-      }
-
-      try {
-        const cwd = defaultCwd || "";
-        if (type === "browser") {
-          await addTerminal({ kind: "browser", cwd });
-        } else {
-          const command = type !== "terminal" ? type : undefined;
-          await addTerminal({ type, cwd, command });
-        }
-      } catch (error) {
-        console.error(`Failed to launch ${type}:`, error);
-      }
-    },
-    [addTerminal, defaultCwd, onLaunchAgent]
-  );
 
   const handleGridContextMenu = useCallback(
     async (event: React.MouseEvent) => {
@@ -748,11 +562,7 @@ export function ContentGrid({
             {isEmpty && !showPlaceholder ? (
               <div className="col-span-full row-span-full">
                 <EmptyState
-                  onLaunchAgent={handleLaunchAgent}
                   hasActiveWorktree={hasActiveWorktree}
-                  agentAvailability={agentAvailability}
-                  isCheckingAvailability={isCheckingAvailability}
-                  onOpenSettings={onOpenSettings}
                   activeWorktreeName={activeWorktreeName}
                   activeWorktreeId={activeWorktreeId}
                   showProjectPulse={showProjectPulse}
