@@ -18,11 +18,13 @@ xterm buffer → SerializeAddon (ANSI) → Anser library → HTML spans → link
 ```
 
 **Files**:
+
 - `src/components/Terminal/HistoryOverlayTerminalView.tsx` - Main history viewer
 - `src/components/Terminal/utils/historyUtils.ts` - Snapshot extraction using SerializeAddon
 - `src/components/Terminal/utils/htmlUtils.ts` - ANSI→HTML conversion and URL linkification
 
 **Process**:
+
 1. Extract text from `term.buffer.active.getLine()` for up to 5000 lines
 2. Serialize with ANSI codes via `SerializeAddon`
 3. Convert ANSI → HTML using `Anser.ansiToHtml()`
@@ -36,6 +38,7 @@ xterm .xterm-rows → cloneNode(true) → attach click handlers → display
 ```
 
 **Hypothesized benefits** (to be validated):
+
 - Exact visual fidelity (same DOM as live terminal)
 - No dependency on Anser library
 - Links already rendered by WebLinksAddon/FileLinksAddon (hypothesis: invalidated, see findings below)
@@ -76,12 +79,14 @@ public renderRows(start: number, end: number): void {
 ```
 
 **What this means**:
+
 1. `.xterm-rows` contains exactly `terminal.rows` child divs (typically 24-50 elements)
 2. Each div represents one viewport row, not one buffer line
 3. As you scroll, these divs are reused to display different buffer lines
 4. The DOM is **viewport-relative**, not **buffer-absolute**
 
 **Example**: For a 24-row terminal with 5000 lines of scrollback:
+
 - `.xterm-rows` has 24 child divs (rows 0-23)
 - When scrolled to top: div[0] shows buffer line 0, div[23] shows buffer line 23
 - When scrolled to middle: div[0] shows buffer line 2488, div[23] shows buffer line 2511
@@ -92,6 +97,7 @@ public renderRows(start: number, end: number): void {
 Cloning `.xterm-rows` would only capture **24-50 visible lines**, not the **5000 lines** needed by history viewer.
 
 **Alternatives considered**:
+
 1. **Offscreen replay terminal**: Create hidden xterm, set rows=5000, feed buffer content, clone DOM
    - ❌ Massive overhead (rendering 5000 rows)
    - ❌ More complex than current approach
@@ -104,26 +110,28 @@ Cloning `.xterm-rows` would only capture **24-50 visible lines**, not the **5000
 
 ## Comparison Table
 
-| Metric | Current (ANSI→Anser) | DOM Clone |
-|--------|---------------------|-----------|
-| **Scrollback access** | ✅ Full 5000 lines via buffer.lines | ❌ Only ~24-50 viewport lines |
-| **Visual fidelity** | High (Anser output closely matches xterm rendering) | N/A (doesn't work) |
-| **Code complexity** | Medium (serialization + conversion) | N/A (not viable) |
-| **Dependencies** | Anser (8KB gzipped) | None |
-| **Maintenance risk** | Low (stable APIs) | N/A (DOM structure is viewport-only) |
-| **Performance** | Fast (direct buffer access) | N/A (cloning doesn't capture scrollback) |
+| Metric                | Current (ANSI→Anser)                                | DOM Clone                                |
+| --------------------- | --------------------------------------------------- | ---------------------------------------- |
+| **Scrollback access** | ✅ Full 5000 lines via buffer.lines                 | ❌ Only ~24-50 viewport lines            |
+| **Visual fidelity**   | High (Anser output closely matches xterm rendering) | N/A (doesn't work)                       |
+| **Code complexity**   | Medium (serialization + conversion)                 | N/A (not viable)                         |
+| **Dependencies**      | Anser (8KB gzipped)                                 | None                                     |
+| **Maintenance risk**  | Low (stable APIs)                                   | N/A (DOM structure is viewport-only)     |
+| **Performance**       | Fast (direct buffer access)                         | N/A (cloning doesn't capture scrollback) |
 
 ## Additional Findings
 
 ### WebLinksAddon Implementation
 
 Analyzed `node_modules/@xterm/addon-web-links/src/WebLinksAddon.ts`:
+
 - Uses `terminal.registerLinkProvider(new WebLinkProvider(...))` API
 - Link provider adds hover/click handlers directly via xterm's linkifier
 - Links are NOT marked in DOM with data attributes or classes
 - Link detection happens in the linkifier, not in DOM rendering
 
 This means even if DOM cloning worked, we'd need to:
+
 1. Re-run link detection on cloned content, OR
 2. Implement custom delegated click handling that duplicates linkifier logic
 
