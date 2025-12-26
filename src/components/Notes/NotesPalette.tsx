@@ -4,6 +4,7 @@ import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { useNotesStore } from "@/store/notesStore";
 import { useTerminalStore } from "@/store/terminalStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import type { NoteListItem } from "@/clients/notesClient";
 import { FileText, Plus, Trash2 } from "lucide-react";
@@ -22,6 +23,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
   const { notes, isLoading, initialize, createNote, deleteNote } = useNotesStore();
   const { addTerminal } = useTerminalStore();
   const { getWorktree } = useWorktreeDataStore();
+  const { activeWorktreeId } = useWorktreeSelectionStore();
 
   useEffect(() => {
     if (isOpen) {
@@ -71,7 +73,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
         kind: "notes",
         title: noteContent.metadata.title,
         cwd: "",
-        worktreeId: undefined,
+        worktreeId: activeWorktreeId ?? undefined,
         notePath: noteContent.path,
         noteId: noteContent.metadata.id,
         scope: noteContent.metadata.scope,
@@ -82,7 +84,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
     } catch (error) {
       console.error("Failed to create note:", error);
     }
-  }, [createNote, addTerminal, onClose]);
+  }, [createNote, addTerminal, activeWorktreeId, onClose]);
 
   const handleOpenNote = useCallback(
     async (note: NoteListItem) => {

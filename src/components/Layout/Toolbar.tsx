@@ -551,8 +551,8 @@ export function Toolbar({
             size="icon"
             onClick={() => actionService.dispatch("notes.create", {}, { source: "user" })}
             className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
-            title="Create New Note"
-            aria-label="Create new note"
+            title="Notes"
+            aria-label="Open notes palette"
           >
             <StickyNote />
           </Button>
