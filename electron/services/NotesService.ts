@@ -15,6 +15,7 @@ export interface NoteContent {
   metadata: NoteMetadata;
   content: string;
   path: string;
+  lastModified: number;
 }
 
 export interface NoteListItem {
@@ -25,6 +26,22 @@ export interface NoteListItem {
   worktreeId?: string;
   createdAt: number;
   modifiedAt: number;
+  preview: string;
+}
+
+export interface SearchResult {
+  notes: NoteListItem[];
+  query: string;
+}
+
+export class NoteConflictError extends Error {
+  constructor(
+    message: string,
+    public readonly currentLastModified: number
+  ) {
+    super(message);
+    this.name = "NoteConflictError";
+  }
 }
 
 export class NotesService {
@@ -80,6 +97,11 @@ export class NotesService {
     }
   }
 
+  private extractPreview(content: string, maxLength: number = 100): string {
+    const firstLine = content.split("\n").find((line) => line.trim()) || "";
+    return firstLine.slice(0, maxLength);
+  }
+
   async create(
     title: string,
     scope: "worktree" | "project",
@@ -110,10 +132,13 @@ export class NotesService {
 
     await fs.writeFile(absolutePath, frontmatter, "utf-8");
 
+    const stats = await fs.stat(absolutePath);
+
     return {
       metadata,
       content: "",
       path: relativePath,
+      lastModified: stats.mtimeMs,
     };
   }
 
@@ -121,13 +146,17 @@ export class NotesService {
     const absolutePath = this.validatePath(notePath);
 
     try {
-      const fileContent = await fs.readFile(absolutePath, "utf-8");
+      const [fileContent, stats] = await Promise.all([
+        fs.readFile(absolutePath, "utf-8"),
+        fs.stat(absolutePath),
+      ]);
       const { data, content } = matter(fileContent);
 
       return {
         metadata: data as NoteMetadata,
         content: content.replace(/^\n/, ""),
         path: notePath,
+        lastModified: stats.mtimeMs,
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -137,8 +166,29 @@ export class NotesService {
     }
   }
 
-  async write(notePath: string, content: string, metadata: NoteMetadata): Promise<void> {
+  async write(
+    notePath: string,
+    content: string,
+    metadata: NoteMetadata,
+    expectedLastModified?: number
+  ): Promise<{ lastModified: number }> {
     const absolutePath = this.validatePath(notePath);
+
+    // Check for conflicts if expectedLastModified is provided
+    if (expectedLastModified !== undefined) {
+      try {
+        const currentStats = await fs.stat(absolutePath);
+        // Allow 1 second tolerance for filesystem timestamp precision
+        if (Math.abs(currentStats.mtimeMs - expectedLastModified) > 1000) {
+          throw new NoteConflictError("Note has been modified externally", currentStats.mtimeMs);
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
+        // File doesn't exist, that's fine for new notes
+      }
+    }
 
     // Filter out undefined values to prevent YAML serialization errors
     const cleanMetadata = Object.fromEntries(
@@ -148,6 +198,9 @@ export class NotesService {
     const fileContent = matter.stringify(content, cleanMetadata);
 
     await fs.writeFile(absolutePath, fileContent, "utf-8");
+
+    const stats = await fs.stat(absolutePath);
+    return { lastModified: stats.mtimeMs };
   }
 
   async list(): Promise<NoteListItem[]> {
@@ -166,11 +219,12 @@ export class NotesService {
         const relativePath = file;
 
         try {
-          const fileContent = await fs.readFile(filePath, "utf-8");
-          const { data } = matter(fileContent);
+          const [fileContent, stats] = await Promise.all([
+            fs.readFile(filePath, "utf-8"),
+            fs.stat(filePath),
+          ]);
+          const { data, content } = matter(fileContent);
           const metadata = data as NoteMetadata;
-
-          const stats = await fs.stat(filePath);
 
           notes.push({
             id: metadata.id,
@@ -180,6 +234,7 @@ export class NotesService {
             worktreeId: metadata.worktreeId,
             createdAt: metadata.createdAt,
             modifiedAt: stats.mtimeMs,
+            preview: this.extractPreview(content),
           });
         } catch (error) {
           console.error(`[NotesService] Failed to read note ${file}:`, error);
@@ -190,6 +245,67 @@ export class NotesService {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return [];
+      }
+      throw error;
+    }
+  }
+
+  async search(query: string): Promise<SearchResult> {
+    if (!query.trim()) {
+      return { notes: await this.list(), query };
+    }
+
+    const notesDir = this.getNotesDir();
+    const lowerQuery = query.toLowerCase();
+
+    try {
+      await this.ensureNotesDir();
+      const files = await fs.readdir(notesDir);
+
+      const matchingNotes: NoteListItem[] = [];
+
+      for (const file of files) {
+        if (!file.endsWith(".md")) continue;
+
+        const filePath = path.join(notesDir, file);
+        const relativePath = file;
+
+        try {
+          const [fileContent, stats] = await Promise.all([
+            fs.readFile(filePath, "utf-8"),
+            fs.stat(filePath),
+          ]);
+          const { data, content } = matter(fileContent);
+          const metadata = data as NoteMetadata;
+
+          // Search in title and content
+          const titleMatch = metadata.title.toLowerCase().includes(lowerQuery);
+          const contentMatch = content.toLowerCase().includes(lowerQuery);
+
+          if (titleMatch || contentMatch) {
+            matchingNotes.push({
+              id: metadata.id,
+              title: metadata.title,
+              path: relativePath,
+              scope: metadata.scope,
+              worktreeId: metadata.worktreeId,
+              createdAt: metadata.createdAt,
+              modifiedAt: stats.mtimeMs,
+              preview: this.extractPreview(content),
+            });
+          }
+        } catch (error) {
+          console.error(`[NotesService] Failed to search note ${file}:`, error);
+        }
+      }
+
+      return {
+        notes: matchingNotes.sort((a, b) => b.modifiedAt - a.modifiedAt),
+        query,
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return { notes: [], query };
       }
       throw error;
     }

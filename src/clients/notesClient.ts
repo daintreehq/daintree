@@ -10,6 +10,7 @@ export interface NoteContent {
   metadata: NoteMetadata;
   content: string;
   path: string;
+  lastModified: number;
 }
 
 export interface NoteListItem {
@@ -20,6 +21,25 @@ export interface NoteListItem {
   worktreeId?: string;
   createdAt: number;
   modifiedAt: number;
+  preview: string;
+}
+
+export interface SearchResult {
+  notes: NoteListItem[];
+  query: string;
+}
+
+export interface NoteUpdatedPayload {
+  notePath: string;
+  title: string;
+  action: "created" | "updated" | "deleted";
+}
+
+export interface WriteResult {
+  lastModified?: number;
+  error?: "conflict";
+  message?: string;
+  currentLastModified?: number;
 }
 
 export const notesClient = {
@@ -35,8 +55,13 @@ export const notesClient = {
     return window.electron.notes.read(notePath);
   },
 
-  write: (notePath: string, content: string, metadata: NoteMetadata): Promise<void> => {
-    return window.electron.notes.write(notePath, content, metadata);
+  write: (
+    notePath: string,
+    content: string,
+    metadata: NoteMetadata,
+    expectedLastModified?: number
+  ): Promise<WriteResult> => {
+    return window.electron.notes.write(notePath, content, metadata, expectedLastModified);
   },
 
   list: (): Promise<NoteListItem[]> => {
@@ -45,5 +70,13 @@ export const notesClient = {
 
   delete: (notePath: string): Promise<void> => {
     return window.electron.notes.delete(notePath);
+  },
+
+  search: (query: string): Promise<SearchResult> => {
+    return window.electron.notes.search(query);
+  },
+
+  onUpdated: (callback: (payload: NoteUpdatedPayload) => void): (() => void) => {
+    return window.electron.notes.onUpdated(callback);
   },
 } as const;

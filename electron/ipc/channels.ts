@@ -210,6 +210,8 @@ export const CHANNELS = {
   NOTES_WRITE: "notes:write",
   NOTES_LIST: "notes:list",
   NOTES_DELETE: "notes:delete",
+  NOTES_SEARCH: "notes:search",
+  NOTES_UPDATED: "notes:updated",
 
   DEV_PREVIEW_START: "dev-preview:start",
   DEV_PREVIEW_STOP: "dev-preview:stop",

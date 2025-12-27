@@ -219,6 +219,8 @@ const CHANNELS = {
   NOTES_WRITE: "notes:write",
   NOTES_LIST: "notes:list",
   NOTES_DELETE: "notes:delete",
+  NOTES_SEARCH: "notes:search",
+  NOTES_UPDATED: "notes:updated",
 
   // Dev Preview channels
   DEV_PREVIEW_START: "dev-preview:start",
@@ -787,12 +789,23 @@ const api: ElectronAPI = {
         scope: "worktree" | "project";
         worktreeId?: string;
         createdAt: number;
-      }
-    ) => _typedInvoke(CHANNELS.NOTES_WRITE, notePath, content, metadata),
+      },
+      expectedLastModified?: number
+    ) => _typedInvoke(CHANNELS.NOTES_WRITE, notePath, content, metadata, expectedLastModified),
 
     list: () => _typedInvoke(CHANNELS.NOTES_LIST),
 
     delete: (notePath: string) => _typedInvoke(CHANNELS.NOTES_DELETE, notePath),
+
+    search: (query: string) => _typedInvoke(CHANNELS.NOTES_SEARCH, query),
+
+    onUpdated: (
+      callback: (data: {
+        notePath: string;
+        title: string;
+        action: "created" | "updated" | "deleted";
+      }) => void
+    ) => _typedOn(CHANNELS.NOTES_UPDATED, callback),
   },
 
   // Dev Preview API

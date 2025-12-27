@@ -1,8 +1,14 @@
 import { ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
-import { NotesService, type NoteMetadata } from "../../services/NotesService.js";
+import { NotesService, NoteConflictError, type NoteMetadata } from "../../services/NotesService.js";
 import { projectStore } from "../../services/ProjectStore.js";
+
+export interface NoteUpdatedPayload {
+  notePath: string;
+  title: string;
+  action: "created" | "updated" | "deleted";
+}
 
 function validateNoteMetadata(metadata: unknown): NoteMetadata {
   if (typeof metadata !== "object" || metadata === null) {
@@ -51,8 +57,12 @@ function getNotesService(): NotesService {
   return notesService;
 }
 
-export function registerNotesHandlers(_deps: HandlerDependencies): () => void {
+export function registerNotesHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
+
+  const broadcastUpdate = (payload: NoteUpdatedPayload) => {
+    deps.mainWindow.webContents.send(CHANNELS.NOTES_UPDATED, payload);
+  };
 
   const handleNotesCreate = async (
     _event: Electron.IpcMainInvokeEvent,
@@ -61,7 +71,9 @@ export function registerNotesHandlers(_deps: HandlerDependencies): () => void {
     worktreeId?: string
   ) => {
     const service = getNotesService();
-    return await service.create(title, scope, worktreeId);
+    const result = await service.create(title, scope, worktreeId);
+    broadcastUpdate({ notePath: result.path, title, action: "created" });
+    return result;
   };
   ipcMain.handle(CHANNELS.NOTES_CREATE, handleNotesCreate);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.NOTES_CREATE));
@@ -77,11 +89,30 @@ export function registerNotesHandlers(_deps: HandlerDependencies): () => void {
     _event: Electron.IpcMainInvokeEvent,
     notePath: string,
     content: string,
-    metadata: unknown
+    metadata: unknown,
+    expectedLastModified?: number
   ) => {
     const service = getNotesService();
     const validatedMetadata = validateNoteMetadata(metadata);
-    return await service.write(notePath, content, validatedMetadata);
+    try {
+      const result = await service.write(
+        notePath,
+        content,
+        validatedMetadata,
+        expectedLastModified
+      );
+      broadcastUpdate({ notePath, title: validatedMetadata.title, action: "updated" });
+      return result;
+    } catch (error) {
+      if (error instanceof NoteConflictError) {
+        return {
+          error: "conflict",
+          message: error.message,
+          currentLastModified: error.currentLastModified,
+        };
+      }
+      throw error;
+    }
   };
   ipcMain.handle(CHANNELS.NOTES_WRITE, handleNotesWrite);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.NOTES_WRITE));
@@ -95,10 +126,18 @@ export function registerNotesHandlers(_deps: HandlerDependencies): () => void {
 
   const handleNotesDelete = async (_event: Electron.IpcMainInvokeEvent, notePath: string) => {
     const service = getNotesService();
-    return await service.delete(notePath);
+    await service.delete(notePath);
+    broadcastUpdate({ notePath, title: "", action: "deleted" });
   };
   ipcMain.handle(CHANNELS.NOTES_DELETE, handleNotesDelete);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.NOTES_DELETE));
+
+  const handleNotesSearch = async (_event: Electron.IpcMainInvokeEvent, query: string) => {
+    const service = getNotesService();
+    return await service.search(query);
+  };
+  ipcMain.handle(CHANNELS.NOTES_SEARCH, handleNotesSearch);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.NOTES_SEARCH));
 
   return () => {
     handlers.forEach((dispose) => dispose());

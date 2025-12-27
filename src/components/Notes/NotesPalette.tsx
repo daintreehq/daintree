@@ -11,11 +11,18 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { EditorView } from "@codemirror/view";
 import { canopyTheme } from "./editorTheme";
-import { FileText, Plus, Trash2, ExternalLink, X } from "lucide-react";
+import { FileText, Plus, Trash2, ExternalLink, X, AlertTriangle } from "lucide-react";
 
 interface NotesPaletteProps {
   isOpen: boolean;
   onClose: () => void;
+}
+
+// Pattern to match default note titles like "Note 12/27/2024" or "Note 12/27/2024 (2)"
+const DEFAULT_TITLE_PATTERN = /^Note \d{1,2}\/\d{1,2}\/\d{4}( \(\d+\))?$/;
+
+function isDefaultTitle(title: string): boolean {
+  return DEFAULT_TITLE_PATTERN.test(title);
 }
 
 export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
@@ -24,12 +31,15 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
   const [query, setQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<NoteListItem[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [selectedNote, setSelectedNote] = useState<NoteListItem | null>(null);
   const [noteContent, setNoteContent] = useState<string>("");
   const [noteMetadata, setNoteMetadata] = useState<NoteMetadata | null>(null);
+  const [noteLastModified, setNoteLastModified] = useState<number | null>(null);
   const [isLoadingContent, setIsLoadingContent] = useState(false);
-  const [contentPreviews, setContentPreviews] = useState<Map<string, string>>(new Map());
+  const [hasConflict, setHasConflict] = useState(false);
 
   // Inline editing state
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
@@ -40,6 +50,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const headerTitleInputRef = useRef<HTMLInputElement>(null);
 
@@ -58,7 +69,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
     }
   }, [isOpen]);
 
-  // Initialize notes and fetch content previews
+  // Initialize notes
   useEffect(() => {
     if (isOpen) {
       initialize();
@@ -67,10 +78,61 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
       setSelectedNote(null);
       setNoteContent("");
       setNoteMetadata(null);
+      setNoteLastModified(null);
       setEditingNoteId(null);
       setIsEditingHeaderTitle(false);
+      setHasConflict(false);
     }
   }, [isOpen, initialize]);
+
+  // Listen for note updates from other components (e.g., NotesPane)
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const unsubscribe = notesClient.onUpdated((payload) => {
+      // Refresh the notes list when any note is updated
+      refresh();
+
+      // If the updated note is the currently selected note, reload its content
+      if (selectedNote && payload.notePath === selectedNote.path && payload.action === "updated") {
+        // The search results will be updated via the refresh, and the useEffect
+        // that watches selectedNote will reload the content if needed
+      }
+    });
+
+    return unsubscribe;
+  }, [isOpen, refresh, selectedNote]);
+
+  // Update search results when notes change or query changes
+  useEffect(() => {
+    if (!isOpen) return;
+
+    // Clear any pending search
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+
+    // Debounce search
+    searchTimeoutRef.current = setTimeout(async () => {
+      setIsSearching(true);
+      try {
+        const result = await notesClient.search(query);
+        setSearchResults(result.notes);
+      } catch (e) {
+        console.error("Search failed:", e);
+        // Fallback to local filtering
+        setSearchResults(notes);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 150);
+
+    return () => {
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
+      }
+    };
+  }, [isOpen, query, notes]);
 
   // Focus title input when editing starts
   useEffect(() => {
@@ -88,65 +150,32 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
     }
   }, [isEditingHeaderTitle]);
 
-  // Fetch content previews for all notes
   useEffect(() => {
-    if (!isOpen || notes.length === 0) return;
-
-    const fetchPreviews = async () => {
-      const previews = new Map<string, string>();
-      await Promise.all(
-        notes.map(async (note) => {
-          try {
-            const content = await notesClient.read(note.path);
-            const firstLine = content.content.split("\n").find((line) => line.trim()) || "";
-            previews.set(note.id, firstLine.slice(0, 100));
-          } catch {
-            previews.set(note.id, "");
-          }
-        })
-      );
-      setContentPreviews(previews);
-    };
-
-    fetchPreviews();
-  }, [isOpen, notes]);
-
-  const filteredNotes = useMemo(() => {
-    const sorted = [...notes].sort((a, b) => b.modifiedAt - a.modifiedAt);
-    if (!query.trim()) {
-      return sorted;
+    if (selectedIndex >= searchResults.length) {
+      setSelectedIndex(Math.max(0, searchResults.length - 1));
     }
-    const lowerQuery = query.toLowerCase();
-    return sorted.filter(
-      (note) =>
-        note.title.toLowerCase().includes(lowerQuery) ||
-        (contentPreviews.get(note.id) || "").toLowerCase().includes(lowerQuery)
-    );
-  }, [notes, query, contentPreviews]);
+  }, [searchResults.length, selectedIndex]);
 
   useEffect(() => {
-    if (selectedIndex >= filteredNotes.length) {
-      setSelectedIndex(Math.max(0, filteredNotes.length - 1));
-    }
-  }, [filteredNotes.length, selectedIndex]);
-
-  useEffect(() => {
-    if (listRef.current && selectedIndex >= 0 && filteredNotes.length > 0) {
+    if (listRef.current && selectedIndex >= 0 && searchResults.length > 0) {
       const selectedItem = listRef.current.children[selectedIndex] as HTMLElement;
       selectedItem?.scrollIntoView({ block: "nearest" });
     }
-  }, [selectedIndex, filteredNotes.length]);
+  }, [selectedIndex, searchResults.length]);
 
   // Load note content when selected
   useEffect(() => {
     if (!selectedNote) {
       setNoteContent("");
       setNoteMetadata(null);
+      setNoteLastModified(null);
+      setHasConflict(false);
       return;
     }
 
     let cancelled = false;
     setIsLoadingContent(true);
+    setHasConflict(false);
 
     notesClient
       .read(selectedNote.path)
@@ -154,6 +183,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
         if (cancelled) return;
         setNoteContent(content.content);
         setNoteMetadata(content.metadata);
+        setNoteLastModified(content.lastModified);
         setIsLoadingContent(false);
       })
       .catch((e) => {
@@ -167,39 +197,59 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
     };
   }, [selectedNote]);
 
-  // Check if current note is empty and delete it
-  const deleteIfEmpty = useCallback(
+  // Check if note should be auto-deleted (empty content AND default title)
+  const shouldAutoDelete = useCallback((note: NoteListItem | null, content: string): boolean => {
+    if (!note) return false;
+    // Only auto-delete if content is empty AND title is still the default
+    return !content.trim() && isDefaultTitle(note.title);
+  }, []);
+
+  // Delete note if it should be auto-deleted
+  const deleteIfAutoDeleteable = useCallback(
     async (note: NoteListItem | null, content: string) => {
-      if (!note) return;
-      // Delete if content is empty or only whitespace
-      if (!content.trim()) {
-        try {
-          await deleteNote(note.path);
-        } catch (e) {
-          console.error("Failed to delete empty note:", e);
-        }
+      if (!shouldAutoDelete(note, content)) return;
+      try {
+        await deleteNote(note!.path);
+      } catch (e) {
+        console.error("Failed to delete empty note:", e);
       }
     },
-    [deleteNote]
+    [deleteNote, shouldAutoDelete]
   );
 
   const handleSelectNote = useCallback(
     async (note: NoteListItem, index: number) => {
-      // If switching from another note, check if it was empty
+      // If switching from another note, check if it should be auto-deleted
       if (selectedNote && selectedNote.id !== note.id) {
-        await deleteIfEmpty(selectedNote, noteContent);
+        await deleteIfAutoDeleteable(selectedNote, noteContent);
       }
       setSelectedNote(note);
       setSelectedIndex(index);
     },
-    [selectedNote, noteContent, deleteIfEmpty]
+    [selectedNote, noteContent, deleteIfAutoDeleteable]
   );
+
+  const handleReloadNote = useCallback(async () => {
+    if (!selectedNote) return;
+    setHasConflict(false);
+    setIsLoadingContent(true);
+    try {
+      const content = await notesClient.read(selectedNote.path);
+      setNoteContent(content.content);
+      setNoteMetadata(content.metadata);
+      setNoteLastModified(content.lastModified);
+    } catch (e) {
+      console.error("Failed to reload note:", e);
+    } finally {
+      setIsLoadingContent(false);
+    }
+  }, [selectedNote]);
 
   const handleContentChange = useCallback(
     (value: string) => {
       setNoteContent(value);
 
-      if (!selectedNote || !noteMetadata) return;
+      if (!selectedNote || !noteMetadata || hasConflict) return;
 
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
@@ -207,20 +257,24 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
 
       saveTimeoutRef.current = setTimeout(async () => {
         try {
-          await notesClient.write(selectedNote.path, value, noteMetadata);
-          // Update preview
-          const firstLine = value.split("\n").find((line) => line.trim()) || "";
-          setContentPreviews((prev) => {
-            const next = new Map(prev);
-            next.set(selectedNote.id, firstLine.slice(0, 100));
-            return next;
-          });
+          const result = await notesClient.write(
+            selectedNote.path,
+            value,
+            noteMetadata,
+            noteLastModified ?? undefined
+          );
+
+          if (result.error === "conflict") {
+            setHasConflict(true);
+          } else if (result.lastModified) {
+            setNoteLastModified(result.lastModified);
+          }
         } catch (e) {
           console.error("Failed to save note:", e);
         }
       }, 500);
     },
-    [selectedNote, noteMetadata]
+    [selectedNote, noteMetadata, noteLastModified, hasConflict]
   );
 
   // Handle renaming a note in the list
@@ -248,7 +302,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
 
         // Update selected note if this is the one being renamed
         if (selectedNote?.id === note.id) {
-          setSelectedNote({ ...selectedNote, title: trimmedTitle });
+          setSelectedNote({ ...selectedNote, title: trimmedTitle, preview: note.preview });
           setNoteMetadata(updatedMetadata);
         }
       } catch (e) {
@@ -301,9 +355,12 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
 
     try {
       const updatedMetadata = { ...noteMetadata, title: trimmedTitle };
-      await notesClient.write(selectedNote.path, noteContent, updatedMetadata);
+      const result = await notesClient.write(selectedNote.path, noteContent, updatedMetadata);
       await refresh();
 
+      if (result.lastModified) {
+        setNoteLastModified(result.lastModified);
+      }
       setSelectedNote({ ...selectedNote, title: trimmedTitle });
       setNoteMetadata(updatedMetadata);
     } catch (e) {
@@ -351,9 +408,11 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
         worktreeId: content.metadata.worktreeId,
         createdAt: content.metadata.createdAt,
         modifiedAt: Date.now(),
+        preview: "",
       });
       setNoteContent(content.content);
       setNoteMetadata(content.metadata);
+      setNoteLastModified(content.lastModified);
     } catch (error) {
       console.error("Failed to create note:", error);
     }
@@ -408,17 +467,17 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
         case "ArrowUp":
           e.preventDefault();
           setSelectedIndex((prev) => Math.max(0, prev - 1));
-          if (filteredNotes.length > 0) {
+          if (searchResults.length > 0) {
             const newIndex = Math.max(0, selectedIndex - 1);
-            setSelectedNote(filteredNotes[newIndex]);
+            setSelectedNote(searchResults[newIndex]);
           }
           break;
         case "ArrowDown":
           e.preventDefault();
-          setSelectedIndex((prev) => Math.min(filteredNotes.length - 1, prev + 1));
-          if (filteredNotes.length > 0) {
-            const newIndex = Math.min(filteredNotes.length - 1, selectedIndex + 1);
-            setSelectedNote(filteredNotes[newIndex]);
+          setSelectedIndex((prev) => Math.min(searchResults.length - 1, prev + 1));
+          if (searchResults.length > 0) {
+            const newIndex = Math.min(searchResults.length - 1, selectedIndex + 1);
+            setSelectedNote(searchResults[newIndex]);
           }
           break;
         case "Enter":
@@ -427,8 +486,8 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
             handleCreateNote();
           } else if (e.shiftKey && selectedNote) {
             handleOpenAsPanel();
-          } else if (filteredNotes.length > 0 && !selectedNote) {
-            setSelectedNote(filteredNotes[selectedIndex]);
+          } else if (searchResults.length > 0 && !selectedNote) {
+            setSelectedNote(searchResults[selectedIndex]);
           }
           break;
         case "n":
@@ -441,8 +500,8 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
           if (selectedNote) {
             e.preventDefault();
             e.stopPropagation();
-            // Delete empty note before deselecting
-            deleteIfEmpty(selectedNote, noteContent).then(() => {
+            // Check for auto-delete before deselecting
+            deleteIfAutoDeleteable(selectedNote, noteContent).then(() => {
               setSelectedNote(null);
             });
           }
@@ -452,13 +511,13 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
     [
       editingNoteId,
       isEditingHeaderTitle,
-      filteredNotes,
+      searchResults,
       selectedIndex,
       selectedNote,
       noteContent,
       handleCreateNote,
       handleOpenAsPanel,
-      deleteIfEmpty,
+      deleteIfAutoDeleteable,
     ]
   );
 
@@ -475,12 +534,12 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
   }, [isOpen, onClose, selectedNote, editingNoteId, isEditingHeaderTitle]);
 
   const handleClose = useCallback(async () => {
-    // Delete empty note before closing
+    // Check for auto-delete before closing
     if (selectedNote) {
-      await deleteIfEmpty(selectedNote, noteContent);
+      await deleteIfAutoDeleteable(selectedNote, noteContent);
     }
     onClose();
-  }, [selectedNote, noteContent, deleteIfEmpty, onClose]);
+  }, [selectedNote, noteContent, deleteIfAutoDeleteable, onClose]);
 
   const handleBackdropClick = useCallback(
     (e: React.MouseEvent) => {
@@ -562,14 +621,14 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
 
             {/* List */}
             <div ref={listRef} className="flex-1 overflow-y-auto p-1.5 space-y-0.5">
-              {isLoading ? (
+              {isLoading || isSearching ? (
                 <div className="px-2 py-6 text-center text-canopy-text/50 text-xs">Loading...</div>
-              ) : filteredNotes.length === 0 ? (
+              ) : searchResults.length === 0 ? (
                 <div className="px-2 py-6 text-center text-canopy-text/50 text-xs">
                   {query.trim() ? `No notes match "${query}"` : "No notes yet"}
                 </div>
               ) : (
-                filteredNotes.map((note, index) => (
+                searchResults.map((note, index) => (
                   <div
                     key={note.id}
                     className={cn(
@@ -605,7 +664,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                         </div>
                       )}
                       <div className="text-[10px] text-canopy-text/40 truncate mt-0.5">
-                        {contentPreviews.get(note.id) || "Empty note"}
+                        {note.preview || "Empty note"}
                       </div>
                     </div>
                     <button
@@ -658,6 +717,23 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                   </button>
                 </div>
 
+                {/* Conflict warning */}
+                {hasConflict && (
+                  <div className="px-3 py-2 bg-amber-500/10 border-b border-amber-500/20 flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-amber-500 text-xs">
+                      <AlertTriangle size={14} />
+                      <span>Note modified externally</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleReloadNote}
+                      className="px-2 py-1 rounded text-xs bg-amber-500/20 hover:bg-amber-500/30 text-amber-500 transition-colors"
+                    >
+                      Reload
+                    </button>
+                  </div>
+                )}
+
                 {/* Editor */}
                 <div className="flex-1 overflow-hidden">
                   {isLoadingContent ? (
@@ -672,6 +748,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                         theme={canopyTheme}
                         extensions={extensions}
                         onChange={handleContentChange}
+                        readOnly={hasConflict}
                         basicSetup={{
                           lineNumbers: false,
                           foldGutter: false,

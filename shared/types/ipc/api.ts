@@ -263,6 +263,7 @@ export interface ElectronAPI {
       };
       content: string;
       path: string;
+      lastModified: number;
     }>;
     read(notePath: string): Promise<{
       metadata: {
@@ -274,6 +275,7 @@ export interface ElectronAPI {
       };
       content: string;
       path: string;
+      lastModified: number;
     }>;
     write(
       notePath: string,
@@ -284,8 +286,14 @@ export interface ElectronAPI {
         scope: "worktree" | "project";
         worktreeId?: string;
         createdAt: number;
-      }
-    ): Promise<void>;
+      },
+      expectedLastModified?: number
+    ): Promise<{
+      lastModified?: number;
+      error?: "conflict";
+      message?: string;
+      currentLastModified?: number;
+    }>;
     list(): Promise<
       Array<{
         id: string;
@@ -295,9 +303,30 @@ export interface ElectronAPI {
         worktreeId?: string;
         createdAt: number;
         modifiedAt: number;
+        preview: string;
       }>
     >;
     delete(notePath: string): Promise<void>;
+    search(query: string): Promise<{
+      notes: Array<{
+        id: string;
+        title: string;
+        path: string;
+        scope: "worktree" | "project";
+        worktreeId?: string;
+        createdAt: number;
+        modifiedAt: number;
+        preview: string;
+      }>;
+      query: string;
+    }>;
+    onUpdated(
+      callback: (data: {
+        notePath: string;
+        title: string;
+        action: "created" | "updated" | "deleted";
+      }) => void
+    ): () => void;
   };
   devPreview: {
     start(panelId: string, cwd: string, cols: number, rows: number): Promise<void>;

@@ -653,6 +653,7 @@ export interface IpcInvokeMap {
       };
       content: string;
       path: string;
+      lastModified: number;
     };
   };
   "notes:read": {
@@ -667,6 +668,7 @@ export interface IpcInvokeMap {
       };
       content: string;
       path: string;
+      lastModified: number;
     };
   };
   "notes:write": {
@@ -680,8 +682,14 @@ export interface IpcInvokeMap {
         worktreeId?: string;
         createdAt: number;
       },
+      expectedLastModified?: number,
     ];
-    result: void;
+    result: {
+      lastModified?: number;
+      error?: "conflict";
+      message?: string;
+      currentLastModified?: number;
+    };
   };
   "notes:list": {
     args: [];
@@ -693,11 +701,28 @@ export interface IpcInvokeMap {
       worktreeId?: string;
       createdAt: number;
       modifiedAt: number;
+      preview: string;
     }[];
   };
   "notes:delete": {
     args: [notePath: string];
     result: void;
+  };
+  "notes:search": {
+    args: [query: string];
+    result: {
+      notes: {
+        id: string;
+        title: string;
+        path: string;
+        scope: "worktree" | "project";
+        worktreeId?: string;
+        createdAt: number;
+        modifiedAt: number;
+        preview: string;
+      }[];
+      query: string;
+    };
   };
 
   // Dev Preview channels
@@ -791,6 +816,13 @@ export interface IpcEventMap {
   // Dev Preview events
   "dev-preview:status": DevPreviewStatusPayload;
   "dev-preview:url": DevPreviewUrlPayload;
+
+  // Notes events
+  "notes:updated": {
+    notePath: string;
+    title: string;
+    action: "created" | "updated" | "deleted";
+  };
 }
 
 export type IpcInvokeArgs<K extends keyof IpcInvokeMap> = IpcInvokeMap[K]["args"];
