@@ -478,9 +478,8 @@ export class WorkspaceService {
       this.emitUpdate(monitor);
     } catch (error) {
       if (error instanceof WorktreeRemovedError) {
-        monitor.mood = "error";
-        monitor.summary = "⚠️ Directory not accessible";
-        this.emitUpdate(monitor);
+        // Worktree was deleted externally - trigger cleanup instead of showing error state
+        this.handleExternalWorktreeRemoval(monitor);
         return;
       }
 
@@ -560,6 +559,40 @@ export class WorkspaceService {
     const snapshot = this.createSnapshot(monitor);
     this.sendEvent({ type: "worktree-update", worktree: snapshot });
     events.emit("sys:worktree:update", snapshot as any);
+  }
+
+  private handleExternalWorktreeRemoval(monitor: MonitorState): void {
+    // Safeguard: Never remove main worktree
+    if (monitor.isMainWorktree) {
+      console.warn("[WorkspaceHost] Blocked removal of main worktree monitor");
+      monitor.mood = "error";
+      monitor.summary = "⚠️ Directory not accessible";
+      this.emitUpdate(monitor);
+      return;
+    }
+
+    const worktreeId = monitor.id;
+
+    // Guard against duplicate removal (race with syncMonitors or deleteWorktree)
+    if (!this.monitors.has(worktreeId)) {
+      return;
+    }
+
+    // Stop the monitor and remove from map
+    this.stopMonitor(monitor);
+    this.monitors.delete(worktreeId);
+
+    // Clear git caches to prevent stale data if path is reused
+    clearGitDirCache(monitor.path);
+    invalidateGitStatusCache(monitor.path);
+
+    // Emit removal events for frontend cleanup
+    this.sendEvent({ type: "worktree-removed", worktreeId });
+    events.emit("sys:worktree:remove", { worktreeId, timestamp: Date.now() });
+
+    console.log(
+      `[WorkspaceHost] Worktree deleted externally, removed monitor: ${monitor.name} (${worktreeId})`
+    );
   }
 
   getAllStates(requestId: string): void {
