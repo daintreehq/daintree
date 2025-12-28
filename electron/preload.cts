@@ -375,7 +375,7 @@ const api: ElectronAPI = {
 
     setActive: (worktreeId: string) => _typedInvoke(CHANNELS.WORKTREE_SET_ACTIVE, { worktreeId }),
 
-    create: (options: CreateWorktreeOptions, rootPath: string) =>
+    create: (options: CreateWorktreeOptions, rootPath: string): Promise<string> =>
       _typedInvoke(CHANNELS.WORKTREE_CREATE, { rootPath, options }),
 
     listBranches: (rootPath: string) => _typedInvoke(CHANNELS.WORKTREE_LIST_BRANCHES, { rootPath }),

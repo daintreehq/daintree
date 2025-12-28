@@ -26,7 +26,7 @@ export const worktreeClient = {
     return window.electron.worktree.setActive(worktreeId);
   },
 
-  create: (options: CreateWorktreeOptions, rootPath: string): Promise<void> => {
+  create: (options: CreateWorktreeOptions, rootPath: string): Promise<string> => {
     return window.electron.worktree.create(options, rootPath);
   },
 

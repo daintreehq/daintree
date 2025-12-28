@@ -89,7 +89,7 @@ export interface IpcInvokeMap {
   };
   "worktree:create": {
     args: [payload: { rootPath: string; options: CreateWorktreeOptions }];
-    result: void;
+    result: string;
   };
   "worktree:list-branches": {
     args: [payload: { rootPath: string }];

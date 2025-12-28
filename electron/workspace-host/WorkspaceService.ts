@@ -674,7 +674,16 @@ export class WorkspaceService {
 
       await this.syncMonitors(worktreeList, this.activeWorktreeId, this.mainBranch);
 
-      this.sendEvent({ type: "create-worktree-result", requestId, success: true });
+      // Find the created worktree in the updated list to get the canonical ID
+      const createdWorktree = worktreeList.find((wt) => wt.branch === newBranch);
+      const canonicalWorktreeId = createdWorktree?.id || path;
+
+      this.sendEvent({
+        type: "create-worktree-result",
+        requestId,
+        success: true,
+        worktreeId: canonicalWorktreeId,
+      });
     } catch (error) {
       this.sendEvent({
         type: "create-worktree-result",
