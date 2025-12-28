@@ -38,6 +38,7 @@ import { getTerminalThemeFromCSS } from "@/utils/terminalTheme";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
 import { useIsDragging } from "@/components/DragDrop";
 import type { TerminalType } from "@/types";
+import { getSoftNewlineSequence } from "../../../shared/utils/terminalInputProtocol.js";
 import {
   readXtermVisualMetrics,
   wheelDeltaToPx,
@@ -532,11 +533,29 @@ export const HistoryOverlayTerminalView = forwardRef<
     fitAddonRef.current = fit;
     serializeAddonRef.current = serialize;
 
-    // Custom key handler to detect Enter (submit) without Shift.
+    // Custom key handler for Enter key behavior.
     // We attach this to the persistent terminal instance.
     // Note: This replaces any handler from XtermAdapter if we switched views.
     term.attachCustomKeyEventHandler((event) => {
-      // Only handle keydown, not keyup
+      // Handle Shift+Enter to send soft newline (line break without submit)
+      if (
+        event.key === "Enter" &&
+        event.shiftKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        !event.metaKey
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.type === "keydown" && !isInputLockedRef.current) {
+          const softNewline = getSoftNewlineSequence(type);
+          terminalClient.write(terminalId, softNewline);
+          terminalInstanceService.notifyUserInput(terminalId);
+        }
+        return false;
+      }
+
+      // Only handle keydown for other logic, not keyup
       if (event.type !== "keydown") return true;
 
       // Detect Enter without Shift (a submit)
@@ -553,7 +572,7 @@ export const HistoryOverlayTerminalView = forwardRef<
         }
       }
 
-      // Always return true to let xterm process the key normally
+      // Let xterm process the key normally
       return true;
     });
 
