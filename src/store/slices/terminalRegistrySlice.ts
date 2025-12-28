@@ -182,8 +182,9 @@ export const createTerminalRegistrySlice =
       const requestedKind = options.kind ?? (options.agentId ? "agent" : "terminal");
       const legacyType = options.type || "terminal";
 
-      // Handle non-PTY panels (browser, extensions) separately
-      if (!panelKindHasPty(requestedKind)) {
+      // Handle non-terminal panels (browser, notes, dev-preview, extensions) separately
+      // dev-preview has hasPty=true but needs its own UI component, not terminal UI
+      if (!panelKindHasPty(requestedKind) || requestedKind === "dev-preview") {
         const id =
           options.requestedId ||
           `${requestedKind}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -231,6 +232,19 @@ export const createTerminalRegistrySlice =
             createdAt: (options as any).createdAt || Date.now(),
             type: "terminal" as const,
             cwd: "",
+            cols: 80,
+            rows: 24,
+          };
+        } else if (requestedKind === "dev-preview") {
+          terminal = {
+            id,
+            kind: "dev-preview",
+            title,
+            worktreeId: options.worktreeId,
+            location,
+            isVisible: location === "grid",
+            type: "terminal" as const,
+            cwd: options.cwd || "",
             cols: 80,
             rows: 24,
           };

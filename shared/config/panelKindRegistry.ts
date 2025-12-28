@@ -20,6 +20,8 @@ export interface PanelKindConfig {
   canRestart: boolean;
   /** Whether this panel kind can convert to/from other types */
   canConvert: boolean;
+  /** Whether this panel kind should appear in the panel palette (⌘⇧P). Set to false for panels with dedicated spawn actions (terminal, agent). Defaults to true for extension panels if not specified. */
+  showInPalette?: boolean;
   /** Extension ID if this is an extension-provided panel kind */
   extensionId?: string;
   /** Keyboard shortcut (optional) */
@@ -40,6 +42,7 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     hasPty: true,
     canRestart: true,
     canConvert: true,
+    showInPalette: false, // Has dedicated spawn action
   },
   agent: {
     id: "agent",
@@ -49,6 +52,7 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     hasPty: true,
     canRestart: true,
     canConvert: true,
+    showInPalette: false, // Has dedicated spawn action
   },
   browser: {
     id: "browser",
@@ -58,6 +62,7 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     hasPty: false,
     canRestart: false,
     canConvert: false,
+    showInPalette: true,
   },
   notes: {
     id: "notes",
@@ -67,6 +72,7 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     hasPty: false,
     canRestart: false,
     canConvert: false,
+    showInPalette: true,
   },
   "dev-preview": {
     id: "dev-preview",
@@ -76,6 +82,7 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     hasPty: true,
     canRestart: true,
     canConvert: false,
+    showInPalette: true,
   },
 };
 

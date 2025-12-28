@@ -34,7 +34,7 @@ export function usePanelPalette(): UsePanelPaletteReturn {
       .filter((kindId) => {
         const config = getPanelKindConfig(kindId);
         if (!config) return false;
-        if (config.hasPty) return false;
+        if (config.showInPalette === false) return false;
         if (!hasPanelComponent(kindId)) return false;
         return true;
       })
