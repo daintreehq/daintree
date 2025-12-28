@@ -85,6 +85,8 @@ export class GitHubAuth {
     this.storage.delete();
   }
 
+  private static pendingValidation: Promise<void> | null = null;
+
   static getConfig(): GitHubTokenConfig {
     return {
       hasToken: GitHubAuth.hasToken(),
@@ -92,6 +94,38 @@ export class GitHubAuth {
       avatarUrl: this.cachedAvatarUrl ?? undefined,
       scopes: this.cachedScopes.length > 0 ? this.cachedScopes : undefined,
     };
+  }
+
+  /**
+   * Get config, ensuring user info is fetched if token exists but info is missing.
+   * Use this instead of getConfig() when you need guaranteed user info.
+   */
+  static async getConfigAsync(): Promise<GitHubTokenConfig> {
+    // If we have a token but no cached username, validate to get user info
+    if (this.hasToken() && !this.cachedUsername) {
+      // Reuse pending validation to avoid duplicate requests
+      if (!this.pendingValidation) {
+        const token = this.getToken();
+        if (token) {
+          this.pendingValidation = this.validate(token)
+            .then((validation) => {
+              if (validation.valid && validation.username) {
+                this.setValidatedUserInfo(validation.username, validation.avatarUrl, validation.scopes);
+              }
+            })
+            .catch(() => {
+              // Ignore validation errors - user info will remain undefined
+            })
+            .finally(() => {
+              this.pendingValidation = null;
+            });
+        }
+      }
+      if (this.pendingValidation) {
+        await this.pendingValidation;
+      }
+    }
+    return this.getConfig();
   }
 
   static setValidatedUserInfo(username: string, avatarUrl: string | undefined, scopes: string[]): void {

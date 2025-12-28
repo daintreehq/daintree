@@ -145,8 +145,8 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_CHECK_CLI));
 
   const handleGitHubGetConfig = async (): Promise<GitHubTokenConfig> => {
-    const { getGitHubConfig } = await import("../../services/GitHubService.js");
-    return getGitHubConfig();
+    const { getGitHubConfigAsync } = await import("../../services/GitHubService.js");
+    return getGitHubConfigAsync();
   };
   ipcMain.handle(CHANNELS.GITHUB_GET_CONFIG, handleGitHubGetConfig);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_GET_CONFIG));

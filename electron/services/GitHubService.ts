@@ -67,6 +67,10 @@ export function getGitHubConfig() {
   return GitHubAuth.getConfig();
 }
 
+export async function getGitHubConfigAsync() {
+  return GitHubAuth.getConfigAsync();
+}
+
 export async function validateGitHubToken(token: string) {
   return GitHubAuth.validate(token);
 }

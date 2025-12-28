@@ -145,11 +145,29 @@ export function IssueSelector({
                 )}
               >
                 <CircleDot className="w-3 h-3 text-green-400 shrink-0" />
-                <span className="truncate">
+                <span className="truncate flex-1">
                   #{issue.number} {issue.title}
                 </span>
+                {issue.assignees.length > 0 && (
+                  <div className="flex -space-x-1.5 shrink-0">
+                    {issue.assignees.slice(0, 3).map((assignee) => (
+                      <img
+                        key={assignee.login}
+                        src={`${assignee.avatarUrl}${assignee.avatarUrl.includes("?") ? "&" : "?"}s=32`}
+                        alt={assignee.login}
+                        title={assignee.login}
+                        className="w-5 h-5 rounded-full ring-1 ring-canopy-bg"
+                      />
+                    ))}
+                    {issue.assignees.length > 3 && (
+                      <div className="w-5 h-5 rounded-full bg-canopy-border ring-1 ring-canopy-bg flex items-center justify-center text-[10px] text-canopy-text/70">
+                        +{issue.assignees.length - 3}
+                      </div>
+                    )}
+                  </div>
+                )}
                 {selectedIssue?.number === issue.number && (
-                  <Check className="ml-auto h-4 w-4 shrink-0" />
+                  <Check className="h-4 w-4 shrink-0" />
                 )}
               </div>
             ))
