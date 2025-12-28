@@ -1,22 +1,58 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import path from "path";
+import os from "os";
 
 // Get userData path without importing electron (works in both main and utility process)
 function getUserDataPath(): string {
   // Priority 1: Environment variable (set by main process for utility processes)
+  // Validate that it's an absolute path to prevent project root pollution
   if (process.env.CANOPY_USER_DATA) {
-    return process.env.CANOPY_USER_DATA;
+    const userDataPath = process.env.CANOPY_USER_DATA;
+    if (path.isAbsolute(userDataPath)) {
+      return userDataPath;
+    }
+    console.warn(
+      `[GitHubStatsCache] CANOPY_USER_DATA is not absolute: ${userDataPath}, falling back`
+    );
   }
 
   // Priority 2: Dynamic import electron only in main process
-  // This is a fallback - CANOPY_USER_DATA should always be set
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { app } = require("electron");
     return app.getPath("userData");
   } catch {
-    // Fallback for edge cases
-    return process.cwd();
+    // Priority 3: Platform-specific fallback to standard application data directory
+    // This handles edge cases where Electron is unavailable but we still want caching
+    const appName = "Canopy";
+    const homedir = os.homedir();
+
+    // Validate homedir is available (can fail in constrained environments)
+    if (!homedir || homedir === "" || homedir === "/") {
+      throw new Error(
+        "[GitHubStatsCache] Unable to determine user data path: os.homedir() unavailable"
+      );
+    }
+
+    switch (process.platform) {
+      case "darwin":
+        return path.join(homedir, "Library", "Application Support", appName);
+      case "win32": {
+        const appData = process.env.APPDATA;
+        // Validate APPDATA if provided
+        if (appData && path.isAbsolute(appData)) {
+          return path.join(appData, appName);
+        }
+        return path.join(homedir, "AppData", "Roaming", appName);
+      }
+      default:
+        // Linux and other Unix-like systems follow XDG Base Directory spec
+        const xdgConfig = process.env.XDG_CONFIG_HOME;
+        if (xdgConfig && path.isAbsolute(xdgConfig)) {
+          return path.join(xdgConfig, appName);
+        }
+        return path.join(homedir, ".config", appName);
+    }
   }
 }
 
