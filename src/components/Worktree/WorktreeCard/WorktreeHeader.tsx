@@ -277,9 +277,7 @@ export function WorktreeHeader({
                   <span className="font-mono">#{worktree.issueNumber}</span>
                 </button>
               </TooltipTrigger>
-              <TooltipContent>
-                {worktree.issueTitle || "Open Issue on GitHub"}
-              </TooltipContent>
+              <TooltipContent>{worktree.issueTitle || "Open Issue on GitHub"}</TooltipContent>
             </Tooltip>
           )}
           {worktree.prNumber && (
