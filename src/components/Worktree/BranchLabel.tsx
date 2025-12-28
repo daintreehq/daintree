@@ -39,7 +39,10 @@ export function BranchLabel({ label, isActive, isMainWorktree, className }: Bran
   }, [label]);
 
   return (
-    <span className={cn("flex items-center gap-1.5 min-w-0 cursor-pointer", className)} title={label}>
+    <span
+      className={cn("flex items-center gap-1.5 min-w-0 cursor-pointer", className)}
+      title={label}
+    >
       {displayName && colors && (
         <span
           className={cn(
