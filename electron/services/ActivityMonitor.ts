@@ -210,6 +210,16 @@ export class ActivityMonitor {
     this.resetDebounceTimer();
 
     if (this.state !== "busy") {
+      // Validate CPU activity before entering busy state from output detection.
+      // This prevents character echoes during typing from triggering active state.
+      // null = no validator available, allow transition (fail open for compatibility)
+      // true = CPU activity detected, allow transition
+      // false = no CPU activity, user is typing, deny transition
+      const actuallyBusy = this.hasActiveChildrenSafe();
+      if (actuallyBusy === false) {
+        return;
+      }
+
       this.state = "busy";
       this.onStateChange(this.terminalId, this.spawnedAt, "busy", {
         trigger: "output-heuristic",

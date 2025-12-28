@@ -197,6 +197,83 @@ describe("ActivityMonitor", () => {
 
       expect(onStateChange).not.toHaveBeenCalled();
     });
+
+    it("should not trigger busy from output when no CPU activity (user typing)", () => {
+      const onStateChange = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(false),
+      };
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        outputActivityDetection: {
+          enabled: true,
+          windowMs: 500,
+          minFrames: 2,
+          minBytes: 32,
+        },
+        processStateValidator,
+      });
+
+      // Simulate character echoes that meet the output threshold
+      monitor.onData("x".repeat(20));
+      monitor.onData("x".repeat(20));
+
+      // CPU check should have been called and returned false, blocking transition
+      expect(processStateValidator.hasActiveChildren).toHaveBeenCalled();
+      expect(onStateChange).not.toHaveBeenCalled();
+      expect(monitor.getState()).toBe("idle");
+    });
+
+    it("should trigger busy from output when CPU activity detected", () => {
+      const onStateChange = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(true),
+      };
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        outputActivityDetection: {
+          enabled: true,
+          windowMs: 500,
+          minFrames: 2,
+          minBytes: 32,
+        },
+        processStateValidator,
+      });
+
+      // Simulate agent output that meets the threshold
+      monitor.onData("x".repeat(20));
+      monitor.onData("x".repeat(20));
+
+      // CPU check should have been called and returned true, allowing transition
+      expect(processStateValidator.hasActiveChildren).toHaveBeenCalled();
+      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", {
+        trigger: "output-heuristic",
+      });
+      expect(monitor.getState()).toBe("busy");
+
+      monitor.dispose();
+    });
+
+    it("should allow busy from output when no validator present (fail-open)", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        outputActivityDetection: {
+          enabled: true,
+          windowMs: 500,
+          minFrames: 2,
+          minBytes: 32,
+        },
+      });
+
+      // No validator, so should use fail-open behavior
+      monitor.onData("x".repeat(20));
+      monitor.onData("x".repeat(20));
+
+      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", {
+        trigger: "output-heuristic",
+      });
+      expect(monitor.getState()).toBe("busy");
+
+      monitor.dispose();
+    });
   });
 
   describe("Debounce timer (idle transition)", () => {
@@ -415,6 +492,23 @@ describe("ActivityMonitor", () => {
 
       expect(onStateChange).toHaveBeenCalledTimes(2);
       expect(onStateChange).toHaveBeenNthCalledWith(2, "test-1", 1000, "idle");
+
+      monitor.dispose();
+    });
+
+    it("should trigger busy from Enter key even when no CPU activity", () => {
+      const onStateChange = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(false),
+      };
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        processStateValidator,
+      });
+
+      monitor.onInput("\r");
+
+      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", { trigger: "input" });
+      expect(monitor.getState()).toBe("busy");
 
       monitor.dispose();
     });
