@@ -1106,19 +1106,7 @@ export class TerminalProcess {
     const ignoredInputSequences =
       this.terminalInfo.type === "codex" ? ["\n", "\x1b\r"] : ["\x1b\r"];
 
-    // Enable output-based activity detection for agent terminals.
-    // AI agents often have low CPU while waiting for API responses (network I/O),
-    // causing CPU-based detection to incorrectly mark them as idle. Output detection
-    // allows the terminal to transition back to busy when the agent produces output
-    // (spinner updates, code changes, etc.) even after an idle transition.
-    const outputActivityDetection = {
-      enabled: true,
-      windowMs: 1000,
-      minFrames: 2,
-      minBytes: 32, // Low threshold to catch spinner animations
-    };
-
-    return { ignoredInputSequences, outputActivityDetection };
+    return { ignoredInputSequences };
   }
 
   private createProcessStateValidator(

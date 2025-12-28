@@ -4,17 +4,11 @@ export interface ProcessStateValidator {
 
 export interface ActivityMonitorOptions {
   ignoredInputSequences?: string[];
-  outputActivityDetection?: {
-    enabled?: boolean;
-    windowMs?: number;
-    minFrames?: number;
-    minBytes?: number;
-  };
   processStateValidator?: ProcessStateValidator;
 }
 
 export interface ActivityStateMetadata {
-  trigger: "input" | "output-heuristic";
+  trigger: "input" | "output";
 }
 
 export class ActivityMonitor {
@@ -26,14 +20,6 @@ export class ActivityMonitor {
   private pasteStartTime = 0;
   private readonly PASTE_TIMEOUT_MS = 5000;
   private readonly ignoredInputSequences: Set<string>;
-
-  private readonly outputDetectionEnabled: boolean;
-  private readonly outputWindowMs: number;
-  private readonly outputMinFrames: number;
-  private readonly outputMinBytes: number;
-  private outputWindowStart = 0;
-  private outputFramesInWindow = 0;
-  private outputBytesInWindow = 0;
 
   private readonly processStateValidator?: ProcessStateValidator;
   private lastActivityTimestamp = Date.now();
@@ -52,18 +38,6 @@ export class ActivityMonitor {
     options?: ActivityMonitorOptions
   ) {
     this.ignoredInputSequences = new Set(options?.ignoredInputSequences ?? ["\x1b\r"]);
-
-    const outputDefaults = {
-      enabled: false,
-      windowMs: 500,
-      minFrames: 3,
-      minBytes: 2048,
-    };
-    const outputConfig = { ...outputDefaults, ...options?.outputActivityDetection };
-    this.outputDetectionEnabled = outputConfig.enabled;
-    this.outputWindowMs = outputConfig.windowMs;
-    this.outputMinFrames = outputConfig.minFrames;
-    this.outputMinBytes = outputConfig.minBytes;
     this.processStateValidator = options?.processStateValidator;
   }
 
@@ -92,13 +66,6 @@ export class ActivityMonitor {
     this.partialEscape = "";
 
     for (let i = 0; i < fullData.length; i++) {
-      // Check for potential escape sequence start near end of buffer
-      if (i >= fullData.length - 5 && fullData[i] === "\x1b") {
-        // Save remaining characters as partial escape for next call
-        this.partialEscape = fullData.substring(i);
-        break;
-      }
-
       // Check for Bracketed Paste Start: \x1b[200~
       if (fullData[i] === "\x1b" && fullData.substring(i, i + 6) === "\x1b[200~") {
         this.inBracketedPaste = true;
@@ -122,14 +89,24 @@ export class ActivityMonitor {
         // Once busy is triggered, we don't need to keep checking this chunk
         break;
       }
+
+      // Check for potential escape sequence start near end of buffer
+      // Only buffer if we haven't found Enter yet (avoid blocking Enter detection)
+      if (i >= fullData.length - 5 && fullData[i] === "\x1b") {
+        // Save remaining characters as partial escape for next call
+        this.partialEscape = fullData.substring(i);
+        break;
+      }
     }
   }
 
   /**
    * Called on every data event from PTY (output received).
-   * Extends the BUSY state if already active.
-   * Can also trigger BUSY from IDLE if output volume is high enough.
-   * Detects system sleep/wake by checking timestamp gaps.
+   *
+   * Key behaviors:
+   * 1. If already busy, any output resets the debounce timer (keeps us busy)
+   * 2. If idle, output with CPU activity transitions to busy (agent resumed)
+   * 3. System sleep/wake detection prevents stale state after laptop sleep
    */
   onData(data?: string): void {
     const now = Date.now();
@@ -146,34 +123,16 @@ export class ActivityMonitor {
       this.revalidateStateAfterWake();
     }
 
+    if (!data) {
+      return;
+    }
+
     if (this.state === "busy") {
       this.resetDebounceTimer();
       return;
     }
 
-    if (!this.outputDetectionEnabled || !data) {
-      return;
-    }
-
-    const dataLength = Buffer.byteLength(data, "utf8");
-
-    if (this.outputWindowStart === 0 || now - this.outputWindowStart > this.outputWindowMs) {
-      this.outputWindowStart = now;
-      this.outputFramesInWindow = 1;
-      this.outputBytesInWindow = dataLength;
-    } else {
-      this.outputFramesInWindow++;
-      this.outputBytesInWindow += dataLength;
-    }
-
-    if (
-      (this.outputFramesInWindow >= this.outputMinFrames &&
-        this.outputBytesInWindow >= this.outputMinBytes) ||
-      this.outputBytesInWindow >= this.outputMinBytes
-    ) {
-      this.becomeBusyFromOutput();
-      this.resetOutputWindow();
-    }
+    this.becomeBusyFromOutput();
   }
 
   private revalidateStateAfterWake(): void {
@@ -191,12 +150,6 @@ export class ActivityMonitor {
     }
   }
 
-  private resetOutputWindow(): void {
-    this.outputWindowStart = 0;
-    this.outputFramesInWindow = 0;
-    this.outputBytesInWindow = 0;
-  }
-
   private becomeBusy(): void {
     this.resetDebounceTimer();
 
@@ -207,8 +160,6 @@ export class ActivityMonitor {
   }
 
   private becomeBusyFromOutput(): void {
-    this.resetDebounceTimer();
-
     if (this.state !== "busy") {
       // Validate CPU activity before entering busy state from output detection.
       // This prevents character echoes during typing from triggering active state.
@@ -222,9 +173,11 @@ export class ActivityMonitor {
 
       this.state = "busy";
       this.onStateChange(this.terminalId, this.spawnedAt, "busy", {
-        trigger: "output-heuristic",
+        trigger: "output",
       });
     }
+
+    this.resetDebounceTimer();
   }
 
   private resetDebounceTimer(): void {
@@ -267,7 +220,6 @@ export class ActivityMonitor {
     this.inBracketedPaste = false;
     this.partialEscape = "";
     this.pasteStartTime = 0;
-    this.resetOutputWindow();
   }
 
   getState(): "busy" | "idle" {

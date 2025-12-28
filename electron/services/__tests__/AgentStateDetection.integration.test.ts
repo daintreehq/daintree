@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { PtyManager } from "../PtyManager.js";
+import { events, type CanopyEventMap } from "../events.js";
+
+// Type for agent:state-changed event handler
+type AgentStateChangedHandler = (payload: CanopyEventMap["agent:state-changed"]) => void;
 
 let PtyManagerClass: any;
 let testUtils: any;
@@ -26,11 +30,19 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
   });
 
   describe("Manual State Transitions", () => {
-    it("should transition agent state manually", async () => {
+    it("should transition agent state manually from waiting to working", async () => {
       const id = await spawnShellTerminal(manager, { type: "claude" });
       await sleep(500);
 
-      const statePromise = waitForAgentStateChange(manager, id, 2000);
+      // First, ensure terminal reaches waiting state
+      // Transition to working, then to waiting
+      manager.transitionState(id, { type: "busy" }, "activity", 1.0);
+      await sleep(100);
+      manager.transitionState(id, { type: "prompt" }, "activity", 1.0);
+      await sleep(100);
+
+      // Now test waiting → working transition
+      const statePromise = waitForAgentStateChange(manager, id, 2000, "working");
       manager.transitionState(id, { type: "busy" }, "activity", 1.0);
 
       const stateChange = await statePromise;
@@ -56,19 +68,19 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
       await sleep(500);
 
       let eventEmitted = false;
-      const handler = (data: { id: string; state: string }) => {
-        if (data.id === id) {
+      const handler: AgentStateChangedHandler = (data) => {
+        if (data.terminalId === id) {
           eventEmitted = true;
         }
       };
 
-      manager.on("agent:state-changed", handler);
+      events.on("agent:state-changed", handler);
 
       manager.transitionState(id, { type: "prompt" }, "activity", 1.0);
       await sleep(500);
 
       expect(eventEmitted).toBe(true);
-      manager.off("agent:state-changed", handler);
+      events.off("agent:state-changed", handler);
     }, 10000);
 
     it("should track multiple state transitions", async () => {
@@ -76,13 +88,13 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
       await sleep(500);
 
       const states: string[] = [];
-      const handler = (data: { id: string; state: string }) => {
-        if (data.id === id) {
+      const handler: AgentStateChangedHandler = (data) => {
+        if (data.terminalId === id) {
           states.push(data.state);
         }
       };
 
-      manager.on("agent:state-changed", handler);
+      events.on("agent:state-changed", handler);
 
       manager.transitionState(id, { type: "busy" }, "activity", 1.0);
       await sleep(200);
@@ -92,7 +104,7 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
       await sleep(200);
 
       expect(states.length).toBeGreaterThanOrEqual(1);
-      manager.off("agent:state-changed", handler);
+      events.off("agent:state-changed", handler);
     }, 10000);
   });
 
@@ -101,8 +113,15 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
       const id = await spawnShellTerminal(manager, { type: "claude" });
       await sleep(500);
 
+      // First get to waiting state
+      manager.transitionState(id, { type: "busy" }, "activity", 1.0);
+      await sleep(100);
+      manager.transitionState(id, { type: "prompt" }, "activity", 1.0);
+      await sleep(100);
+
       const before = Date.now();
-      const statePromise = waitForAgentStateChange(manager, id, 2000);
+      // Now test waiting → working transition
+      const statePromise = waitForAgentStateChange(manager, id, 2000, "working");
       manager.transitionState(id, { type: "busy" }, "activity", 1.0);
       const stateChange = await statePromise;
       const after = Date.now();
@@ -115,9 +134,17 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
       const id = await spawnShellTerminal(manager, { type: "claude" });
       await sleep(500);
 
+      // First get to waiting state
+      manager.transitionState(id, { type: "busy" }, "activity", 1.0);
+      await sleep(100);
+      manager.transitionState(id, { type: "prompt" }, "activity", 1.0);
+      await sleep(100);
+
+      // Now test waiting → working transition
+      const statePromise = waitForAgentStateChange(manager, id, 2000, "working");
       const before = Date.now();
       manager.transitionState(id, { type: "busy" }, "activity", 1.0);
-      await sleep(200);
+      await statePromise;
 
       const terminal = manager.getTerminal(id);
       expect(terminal).toBeDefined();
@@ -154,22 +181,36 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
       const id = await spawnShellTerminal(manager, { type: "claude" });
       await sleep(500);
 
-      const statePromise = waitForAgentStateChange(manager, id, 2000);
+      // First transition to working, then to completed (exit from idle doesn't work)
+      manager.transitionState(id, { type: "busy" }, "activity", 1.0);
+      await sleep(100);
+
+      const statePromise = waitForAgentStateChange(manager, id, 2000, "completed");
       manager.transitionState(id, { type: "exit", code: 0 }, "activity", 1.0);
 
       const stateChange = await statePromise;
       expect(stateChange.state).toBe("completed");
     }, 10000);
 
-    it("should handle state transitions for shell terminals", async () => {
-      const id = await spawnShellTerminal(manager, { type: "terminal" });
+    it("should handle state transitions for different agent types", async () => {
+      // Note: type="terminal" (shell terminals) don't have agentId and don't emit
+      // agent:state-changed events. Use actual agent types for state transition tests.
+      const id = await spawnShellTerminal(manager, { type: "gemini" });
       await sleep(500);
 
-      const statePromise = waitForAgentStateChange(manager, id, 2000);
+      // First get to waiting state
+      manager.transitionState(id, { type: "busy" }, "activity", 1.0);
+      await sleep(100);
+      manager.transitionState(id, { type: "prompt" }, "activity", 1.0);
+      await sleep(100);
+
+      // Now test waiting → working transition
+      const statePromise = waitForAgentStateChange(manager, id, 2000, "working");
       manager.transitionState(id, { type: "busy" }, "activity", 1.0);
 
       const stateChange = await statePromise;
       expect(stateChange.id).toBe(id);
+      expect(stateChange.state).toBe("working");
     }, 10000);
   });
 
@@ -270,116 +311,101 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
     }, 10000);
   });
 
-  describe("Output-Based Activity Detection", () => {
-    it("should detect high-volume output and maintain working state", async () => {
-      const id = await spawnShellTerminal(manager, { type: "claude" });
-      await sleep(500);
+  describe("Input-Based Activity Detection", () => {
+    // Note: These tests verify the full PTY → ActivityMonitor → AgentStateMachine pipeline.
+    // They need to wait for ActivityMonitor's natural state transitions (via its debounce timer).
 
+    it("should transition waiting → working when Enter key is pressed after natural idle (core issue #1326)", async () => {
+      const id = await spawnShellTerminal(manager, { type: "claude" });
+
+      // Wait for shell startup activity to settle and ActivityMonitor to reach idle state
+      // ActivityMonitor debounce is 1500ms, so wait longer for natural state transition
+      await sleep(2500);
+
+      // At this point, ActivityMonitor should be in "idle" state naturally
+      // and agent state should have transitioned through working → waiting
+
+      // Track state changes for the next Enter key press
       const states: Array<{ state: string; trigger: string }> = [];
-      const handler = (data: { id: string; state: string; trigger: string }) => {
-        if (data.id === id) {
+      const handler: AgentStateChangedHandler = (data) => {
+        if (data.terminalId === id) {
           states.push({ state: data.state, trigger: data.trigger });
         }
       };
 
-      manager.on("agent:state-changed", handler);
+      events.on("agent:state-changed", handler);
 
-      manager.write(id, "echo start\n");
-      await sleep(200);
+      // Send Enter key - should trigger idle → busy in ActivityMonitor
+      // which maps to waiting → working in agent state
+      manager.write(id, "\n");
+      await sleep(500);
 
-      for (let i = 0; i < 20; i++) {
-        manager.write(id, `echo line ${i}\n`);
-        await sleep(50);
-      }
+      events.off("agent:state-changed", handler);
 
-      await sleep(1000);
-
+      // Verify we got a working state transition
       const workingStates = states.filter((s) => s.state === "working");
       expect(workingStates.length).toBeGreaterThan(0);
+    }, 10000);
 
-      manager.off("agent:state-changed", handler);
-    }, 15000);
-
-    it("should recover from accidental idle state when output resumes", async () => {
+    it("should use input trigger for Enter-key driven state changes", async () => {
       const id = await spawnShellTerminal(manager, { type: "claude" });
-      await sleep(500);
 
+      // Wait for shell startup to settle
+      await sleep(2500);
+
+      // Track state changes
       const states: Array<{ state: string; trigger: string }> = [];
-      const handler = (data: { id: string; state: string; trigger: string }) => {
-        if (data.id === id) {
+      const handler: AgentStateChangedHandler = (data) => {
+        if (data.terminalId === id) {
           states.push({ state: data.state, trigger: data.trigger });
         }
       };
 
-      manager.on("agent:state-changed", handler);
+      events.on("agent:state-changed", handler);
 
-      manager.write(id, "echo first command\n");
-      await sleep(200);
+      // Send Enter key
+      manager.write(id, "\r");
+      await sleep(500);
 
+      events.off("agent:state-changed", handler);
+
+      // Verify we got a working state with input trigger
+      const inputTriggeredWorking = states.find(
+        (s) => s.state === "working" && s.trigger === "input"
+      );
+      expect(inputTriggeredWorking).toBeDefined();
+    }, 10000);
+
+    it("should maintain working → waiting cycle during normal operation", async () => {
+      const id = await spawnShellTerminal(manager, { type: "claude" });
+
+      // Wait for initial shell startup to settle
+      await sleep(2500);
+
+      // Track all state changes
+      const states: Array<{ state: string; trigger: string }> = [];
+      const handler: AgentStateChangedHandler = (data) => {
+        if (data.terminalId === id) {
+          states.push({ state: data.state, trigger: data.trigger });
+        }
+      };
+
+      events.on("agent:state-changed", handler);
+
+      // Send multiple commands to trigger working → waiting cycles
+      for (let i = 0; i < 3; i++) {
+        manager.write(id, "echo test\n");
+        await sleep(500);
+      }
+
+      // Wait for final idle transition
       await sleep(2000);
 
-      const beforeResumeStates = states.filter((s) => s.state === "waiting").length;
+      events.off("agent:state-changed", handler);
 
-      for (let i = 0; i < 10; i++) {
-        manager.write(id, `echo resume ${i}\n`);
-        await sleep(50);
-      }
-
-      await sleep(500);
-
-      const afterResumeStates = states.filter((s) => s.state === "working");
-      expect(afterResumeStates.length).toBeGreaterThan(beforeResumeStates);
-
-      manager.off("agent:state-changed", handler);
-    }, 20000);
-
-    it("should use heuristic trigger for output-driven state changes", async () => {
-      const id = await spawnShellTerminal(manager, { type: "claude" });
-      await sleep(500);
-
-      let heuristicTriggered = false;
-      const handler = (data: { id: string; state: string; trigger: string }) => {
-        if (data.id === id && data.trigger === "heuristic" && data.state === "working") {
-          heuristicTriggered = true;
-        }
-      };
-
-      manager.on("agent:state-changed", handler);
-
-      for (let i = 0; i < 15; i++) {
-        manager.write(id, `echo output ${i}\n`);
-        await sleep(50);
-      }
-
-      await sleep(1000);
-
-      expect(heuristicTriggered).toBe(true);
-
-      manager.off("agent:state-changed", handler);
+      // Should see working states from Enter keys and waiting states from idle timeouts
+      const workingStates = states.filter((s) => s.state === "working");
+      expect(workingStates.length).toBeGreaterThanOrEqual(1);
     }, 15000);
-
-    it("should not trigger on low-volume background output", async () => {
-      const id = await spawnShellTerminal(manager, { type: "claude" });
-      await sleep(500);
-
-      const states: Array<{ state: string; trigger: string }> = [];
-      const handler = (data: { id: string; state: string; trigger: string }) => {
-        if (data.id === id) {
-          states.push({ state: data.state, trigger: data.trigger });
-        }
-      };
-
-      manager.on("agent:state-changed", handler);
-
-      manager.write(id, "echo small\n");
-      await sleep(300);
-      manager.write(id, "echo output\n");
-      await sleep(300);
-
-      const heuristicStates = states.filter((s) => s.trigger === "heuristic");
-      expect(heuristicStates.length).toBe(0);
-
-      manager.off("agent:state-changed", handler);
-    }, 10000);
   });
 });
