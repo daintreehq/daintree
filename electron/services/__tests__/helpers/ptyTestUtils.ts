@@ -102,7 +102,9 @@ export async function waitForAgentStateChange(
     const timer = setTimeout(() => {
       cleanup();
       const stateMsg = targetState ? ` to state '${targetState}'` : "";
-      reject(new Error(`Timeout waiting for agent state change${stateMsg} on terminal ${terminalId}`));
+      reject(
+        new Error(`Timeout waiting for agent state change${stateMsg} on terminal ${terminalId}`)
+      );
     }, timeout);
 
     // Note: agent:state-changed events use terminalId, not id
@@ -114,7 +116,12 @@ export async function waitForAgentStateChange(
         }
         cleanup();
         // Return with 'id' for backwards compatibility with existing tests
-        resolve({ id: data.terminalId ?? "", state: data.state, trigger: data.trigger, timestamp: data.timestamp });
+        resolve({
+          id: data.terminalId ?? "",
+          state: data.state,
+          trigger: data.trigger,
+          timestamp: data.timestamp,
+        });
       }
     };
 

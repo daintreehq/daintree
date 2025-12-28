@@ -301,7 +301,11 @@ async function createWindow(): Promise<void> {
       GitHubAuth.validate(token)
         .then((validation) => {
           if (validation.valid && validation.username) {
-            GitHubAuth.setValidatedUserInfo(validation.username, validation.avatarUrl, validation.scopes);
+            GitHubAuth.setValidatedUserInfo(
+              validation.username,
+              validation.avatarUrl,
+              validation.scopes
+            );
             console.log("[MAIN] GitHubAuth user info cached for:", validation.username);
           }
         })

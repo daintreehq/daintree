@@ -166,9 +166,7 @@ export function IssueSelector({
                     )}
                   </div>
                 )}
-                {selectedIssue?.number === issue.number && (
-                  <Check className="h-4 w-4 shrink-0" />
-                )}
+                {selectedIssue?.number === issue.number && <Check className="h-4 w-4 shrink-0" />}
               </div>
             ))
           )}

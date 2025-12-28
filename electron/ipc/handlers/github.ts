@@ -168,7 +168,11 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
       setGitHubToken(token.trim());
 
       if (validation.username) {
-        GitHubAuth.setValidatedUserInfo(validation.username, validation.avatarUrl, validation.scopes);
+        GitHubAuth.setValidatedUserInfo(
+          validation.username,
+          validation.avatarUrl,
+          validation.scopes
+        );
       }
 
       try {

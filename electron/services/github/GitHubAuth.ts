@@ -110,7 +110,11 @@ export class GitHubAuth {
           this.pendingValidation = this.validate(token)
             .then((validation) => {
               if (validation.valid && validation.username) {
-                this.setValidatedUserInfo(validation.username, validation.avatarUrl, validation.scopes);
+                this.setValidatedUserInfo(
+                  validation.username,
+                  validation.avatarUrl,
+                  validation.scopes
+                );
               }
             })
             .catch(() => {
@@ -128,7 +132,11 @@ export class GitHubAuth {
     return this.getConfig();
   }
 
-  static setValidatedUserInfo(username: string, avatarUrl: string | undefined, scopes: string[]): void {
+  static setValidatedUserInfo(
+    username: string,
+    avatarUrl: string | undefined,
+    scopes: string[]
+  ): void {
     this.cachedUsername = username;
     this.cachedAvatarUrl = avatarUrl ?? null;
     this.cachedScopes = scopes;
