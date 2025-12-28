@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { getAgentIds, getAgentConfig } from "@/config/agents";
 import { useAgentSettingsStore } from "@/store";
-import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { Button } from "@/components/ui/button";
 import {
   DEFAULT_AGENT_SETTINGS,
@@ -14,7 +13,6 @@ import { actionService } from "@/services/ActionService";
 import { AgentHelpOutput } from "./AgentHelpOutput";
 import { cliAvailabilityClient } from "@/clients";
 import { getInstallBlocksForCurrentOS } from "@/lib/agentInstall";
-import { AgentRegistrySettings } from "./AgentRegistrySettings";
 
 interface AgentSettingsProps {
   onSettingsChange?: () => void;
@@ -29,7 +27,6 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
     updateAgent,
     reset,
   } = useAgentSettingsStore();
-  const { registry: userRegistry } = useUserAgentRegistryStore();
   const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
   const [cliAvailability, setCliAvailability] = useState<Record<string, boolean>>({});
   const [isRefreshingCli, setIsRefreshingCli] = useState(false);
@@ -106,7 +103,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
     }
   }, []);
 
-  const agentIds = useMemo(() => getAgentIds(), [userRegistry]);
+  const agentIds = useMemo(() => getAgentIds(), []);
   const effectiveSettings = settings ?? DEFAULT_AGENT_SETTINGS;
 
   useEffect(() => {
@@ -180,11 +177,6 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
 
   return (
     <div className="space-y-6">
-      {/* User Agent Registry Section */}
-      <div className="border-b border-canopy-border pb-6">
-        <AgentRegistrySettings />
-      </div>
-
       {/* Agent Runtime Settings Section */}
       <div className="space-y-4">
         <div>

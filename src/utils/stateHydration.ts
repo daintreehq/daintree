@@ -6,6 +6,7 @@ import {
   usePerformanceModeStore,
   useTerminalInputStore,
 } from "@/store";
+import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import type { TerminalType, TerminalState, AgentState, TerminalKind } from "@/types";
 import { generateAgentFlags, type AgentSettings } from "@shared/types";
 import { keybindingService } from "@/services/KeybindingService";
@@ -46,6 +47,10 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
 
   try {
     await keybindingService.loadOverrides();
+
+    // Initialize user agent registry for existing user-defined agents
+    // (no UI exposure, but allows existing agents to function)
+    await useUserAgentRegistryStore.getState().initialize();
 
     // Batch fetch initial state
     const {
