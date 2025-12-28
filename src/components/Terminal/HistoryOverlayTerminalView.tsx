@@ -222,11 +222,20 @@ export const HistoryOverlayTerminalView = forwardRef<
   );
 
   // Get the row style for each history line based on xterm metrics
+  // The CSS properties here are carefully chosen to eliminate gaps:
+  // - height/lineHeight match xterm's cell height exactly
+  // - boxSizing ensures padding/border don't add to height
+  // - margin/padding reset prevents browser defaults from adding space
+  // - cellH is rounded to avoid fractional pixel issues on non-integer zoom levels
   const rowStyle = useMemo<React.CSSProperties | undefined>(() => {
     if (!metrics) return undefined;
+    const cellH = Math.round(metrics.cellH);
     return {
-      height: `${metrics.cellH}px`,
-      lineHeight: `${metrics.cellH}px`,
+      height: `${cellH}px`,
+      lineHeight: `${cellH}px`,
+      boxSizing: "border-box",
+      margin: 0,
+      padding: 0,
     };
   }, [metrics]);
 
@@ -807,11 +816,32 @@ export const HistoryOverlayTerminalView = forwardRef<
               scrollBehavior: "auto",
             }}
           >
-            {/* Link hover styles */}
+            {/* History overlay styles for pixel-perfect alignment with xterm
+                - Row styling ensures exact cell height matching
+                - Span styling fills full line height for background colors
+                - Prevents CSS inheritance from creating gaps */}
             <style>{`
               .history-overlay a:hover {
                 color: #79c0ff !important;
                 text-decoration-color: #79c0ff;
+              }
+              .history-overlay .history-row {
+                display: block;
+                box-sizing: border-box;
+                margin: 0;
+                padding: 0;
+              }
+              .history-overlay .history-row span {
+                display: inline-block;
+                height: 100%;
+                vertical-align: top;
+                line-height: inherit;
+              }
+              .history-overlay .history-row a {
+                display: inline-block;
+                height: 100%;
+                vertical-align: top;
+                line-height: inherit;
               }
             `}</style>
 
@@ -827,13 +857,13 @@ export const HistoryOverlayTerminalView = forwardRef<
             <div
               ref={overlayContentRef}
               className="flex flex-col"
-              style={metrics ? { width: `${metrics.screenW}px` } : undefined}
+              style={metrics ? { width: `${metrics.screenW}px`, gap: 0 } : { gap: 0 }}
             >
               {historyHtmlLines.map((htmlLine, idx) => (
                 <div
                   key={idx}
                   data-idx={idx}
-                  className="whitespace-pre overflow-hidden select-text"
+                  className="history-row whitespace-pre overflow-hidden select-text"
                   style={rowStyle}
                   dangerouslySetInnerHTML={{ __html: htmlLine }}
                 />
