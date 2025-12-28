@@ -67,7 +67,7 @@ export interface ElectronAPI {
     refresh(): Promise<void>;
     refreshPullRequests(): Promise<void>;
     setActive(worktreeId: string): Promise<void>;
-    create(options: CreateWorktreeOptions, rootPath: string): Promise<void>;
+    create(options: CreateWorktreeOptions, rootPath: string): Promise<string>;
     listBranches(rootPath: string): Promise<BranchInfo[]>;
     getDefaultPath(rootPath: string, branchName: string): Promise<string>;
     delete(worktreeId: string, force?: boolean): Promise<void>;

@@ -190,7 +190,13 @@ export type WorkspaceHostEvent =
   | { type: "refresh-prs-result"; requestId: string; success: boolean; error?: string }
   | { type: "get-pr-status-result"; requestId: string; status: PRServiceStatus | null }
   | { type: "reset-pr-state-result"; requestId: string; success: boolean }
-  | { type: "create-worktree-result"; requestId: string; success: boolean; error?: string }
+  | {
+      type: "create-worktree-result";
+      requestId: string;
+      success: boolean;
+      worktreeId?: string;
+      error?: string;
+    }
   | { type: "delete-worktree-result"; requestId: string; success: boolean; error?: string }
   // Branch operation responses
   | { type: "list-branches-result"; requestId: string; branches: BranchInfo[]; error?: string }

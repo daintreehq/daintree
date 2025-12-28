@@ -60,11 +60,11 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
       rootPath: string;
       options: { baseBranch: string; newBranch: string; path: string; fromRemote?: boolean };
     }
-  ) => {
+  ): Promise<string> => {
     if (!workspaceClient) {
       throw new Error("Workspace client not initialized");
     }
-    await workspaceClient.createWorktree(payload.rootPath, payload.options);
+    return await workspaceClient.createWorktree(payload.rootPath, payload.options);
   };
   ipcMain.handle(CHANNELS.WORKTREE_CREATE, handleWorktreeCreate);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_CREATE));

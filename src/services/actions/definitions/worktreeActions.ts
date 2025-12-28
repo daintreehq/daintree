@@ -74,7 +74,14 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     }),
     run: async (args: unknown) => {
       const { rootPath, options } = args as { rootPath: string; options: unknown };
-      await worktreeClient.create(options as any, rootPath);
+      const worktreeId = await worktreeClient.create(options as any, rootPath);
+      if (worktreeId) {
+        useWorktreeSelectionStore.getState().selectWorktree(worktreeId);
+      } else {
+        console.warn(
+          "[worktree.create] No worktreeId returned from creation - skipping auto-selection"
+        );
+      }
     },
   }));
 

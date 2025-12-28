@@ -592,15 +592,17 @@ export class WorkspaceClient extends EventEmitter {
     return result.branches;
   }
 
-  async createWorktree(rootPath: string, options: CreateWorktreeOptions): Promise<void> {
+  async createWorktree(rootPath: string, options: CreateWorktreeOptions): Promise<string> {
     const requestId = this.generateRequestId();
 
-    await this.sendWithResponse({
+    const result = await this.sendWithResponse<{ worktreeId?: string }>({
       type: "create-worktree",
       requestId,
       rootPath,
       options,
     });
+
+    return result.worktreeId ?? options.path;
   }
 
   async deleteWorktree(worktreeId: string, force: boolean = false): Promise<void> {
