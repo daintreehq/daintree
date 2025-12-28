@@ -124,6 +124,12 @@ export interface Worktree {
   /** Pull request state: open, merged, or closed */
   prState?: "open" | "merged" | "closed";
 
+  /** Pull request title */
+  prTitle?: string;
+
+  /** GitHub issue title */
+  issueTitle?: string;
+
   /** Worktree changes snapshot */
   worktreeChanges?: WorktreeChanges | null;
 }

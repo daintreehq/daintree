@@ -20,6 +20,7 @@ export interface LinkedPR {
   url: string;
   state: "open" | "merged" | "closed";
   isDraft: boolean;
+  title: string;
 }
 
 export interface PRCheckResult {

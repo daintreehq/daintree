@@ -82,6 +82,7 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
                   prNumber: state.prNumber ?? existing.prNumber,
                   prUrl: state.prUrl ?? existing.prUrl,
                   prState: state.prState ?? existing.prState,
+                  prTitle: state.prTitle ?? existing.prTitle,
                 });
               } else {
                 next.set(state.id, state);
@@ -147,6 +148,7 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
                 prNumber: data.prNumber,
                 prUrl: data.prUrl,
                 prState: data.prState,
+                prTitle: data.prTitle,
               });
               return { worktrees: next };
             });
@@ -163,6 +165,7 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
                 prNumber: undefined,
                 prUrl: undefined,
                 prState: undefined,
+                prTitle: undefined,
               });
               return { worktrees: next };
             });

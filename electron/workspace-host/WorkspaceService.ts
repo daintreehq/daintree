@@ -548,6 +548,8 @@ export class WorkspaceService {
       prNumber: monitor.prNumber,
       prUrl: monitor.prUrl,
       prState: monitor.prState,
+      prTitle: monitor.prTitle,
+      issueTitle: monitor.issueTitle,
       worktreeChanges: monitor.worktreeChanges,
       worktreeId: monitor.worktreeId,
       timestamp: Date.now(),
@@ -944,6 +946,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
           monitor.prNumber = data.prNumber;
           monitor.prUrl = data.prUrl;
           monitor.prState = data.prState;
+          monitor.prTitle = data.prTitle;
           this.emitUpdate(monitor);
         }
 
@@ -953,6 +956,8 @@ ${lines.map((l) => "+" + l).join("\n")}`;
           prNumber: data.prNumber,
           prUrl: data.prUrl,
           prState: data.prState,
+          prTitle: data.prTitle,
+          issueNumber: data.issueNumber,
         });
       })
     );
@@ -964,6 +969,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
           monitor.prNumber = undefined;
           monitor.prUrl = undefined;
           monitor.prState = undefined;
+          monitor.prTitle = undefined;
           this.emitUpdate(monitor);
         }
 

@@ -160,6 +160,7 @@ export function buildBatchPRQuery(
                   source {
                     ... on PullRequest {
                       number
+                      title
                       url
                       state
                       isDraft
@@ -181,6 +182,7 @@ export function buildBatchPRQuery(
           pullRequests(first: 1, states: [OPEN, MERGED, CLOSED], headRefName: "${escapedBranch}", orderBy: {field: UPDATED_AT, direction: DESC}) {
             nodes {
               number
+              title
               url
               state
               isDraft

@@ -293,6 +293,7 @@ class PullRequestService {
             prNumber: checkResult.pr.number,
             prUrl: checkResult.pr.url,
             prState: checkResult.pr.state,
+            prTitle: checkResult.pr.title,
             issueNumber:
               checkResult.issueNumber ?? this.candidates.get(worktreeId)?.issueNumber ?? undefined,
             timestamp: Date.now(),

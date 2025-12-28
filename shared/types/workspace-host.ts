@@ -67,6 +67,8 @@ export interface WorktreeSnapshot {
   prNumber?: number;
   prUrl?: string;
   prState?: "open" | "merged" | "closed";
+  prTitle?: string;
+  issueTitle?: string;
   worktreeChanges?: WorktreeChanges | null;
   worktreeId: string;
   timestamp?: number;
@@ -204,6 +206,8 @@ export type WorkspaceHostEvent =
       prNumber: number;
       prUrl: string;
       prState: "open" | "merged" | "closed";
+      prTitle?: string;
+      issueNumber?: number;
     }
   | { type: "pr-cleared"; worktreeId: string }
   // CopyTree events
