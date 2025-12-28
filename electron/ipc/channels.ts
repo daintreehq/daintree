@@ -87,6 +87,7 @@ export const CHANNELS = {
   GITHUB_VALIDATE_TOKEN: "github:validate-token",
   GITHUB_LIST_ISSUES: "github:list-issues",
   GITHUB_LIST_PRS: "github:list-prs",
+  GITHUB_ASSIGN_ISSUE: "github:assign-issue",
 
   APP_GET_STATE: "app:get-state",
   APP_SET_STATE: "app:set-state",

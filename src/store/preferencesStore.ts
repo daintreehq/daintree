@@ -26,6 +26,8 @@ interface PreferencesState {
   setShowProjectPulse: (show: boolean) => void;
   showDeveloperTools: boolean;
   setShowDeveloperTools: (show: boolean) => void;
+  assignWorktreeToSelf: boolean;
+  setAssignWorktreeToSelf: (value: boolean) => void;
 }
 
 export const usePreferencesStore = create<PreferencesState>()(
@@ -35,6 +37,8 @@ export const usePreferencesStore = create<PreferencesState>()(
       setShowProjectPulse: (show) => set({ showProjectPulse: show }),
       showDeveloperTools: false,
       setShowDeveloperTools: (show) => set({ showDeveloperTools: show }),
+      assignWorktreeToSelf: false,
+      setAssignWorktreeToSelf: (value) => set({ assignWorktreeToSelf: value }),
     }),
     {
       name: "canopy-preferences",

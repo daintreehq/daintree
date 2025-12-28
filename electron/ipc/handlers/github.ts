@@ -240,5 +240,33 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   ipcMain.handle(CHANNELS.GITHUB_LIST_PRS, handleGitHubListPRs);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_LIST_PRS));
 
+  const handleGitHubAssignIssue = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: { cwd: string; issueNumber: number; username: string }
+  ): Promise<void> => {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid payload");
+    }
+    if (typeof payload.cwd !== "string" || !payload.cwd.trim()) {
+      throw new Error("Invalid working directory");
+    }
+    if (
+      typeof payload.issueNumber !== "number" ||
+      !Number.isInteger(payload.issueNumber) ||
+      payload.issueNumber <= 0
+    ) {
+      throw new Error("Invalid issue number");
+    }
+    const trimmedUsername = payload.username?.trim();
+    if (typeof payload.username !== "string" || !trimmedUsername) {
+      throw new Error("Invalid username");
+    }
+
+    const { assignIssue } = await import("../../services/GitHubService.js");
+    await assignIssue(payload.cwd.trim(), payload.issueNumber, trimmedUsername);
+  };
+  ipcMain.handle(CHANNELS.GITHUB_ASSIGN_ISSUE, handleGitHubAssignIssue);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_ASSIGN_ISSUE));
+
   return () => handlers.forEach((cleanup) => cleanup());
 }

@@ -213,6 +213,7 @@ const CHANNELS = {
   GITHUB_VALIDATE_TOKEN: "github:validate-token",
   GITHUB_LIST_ISSUES: "github:list-issues",
   GITHUB_LIST_PRS: "github:list-prs",
+  GITHUB_ASSIGN_ISSUE: "github:assign-issue",
 
   // Notes channels
   NOTES_CREATE: "notes:create",
@@ -766,6 +767,9 @@ const api: ElectronAPI = {
       state?: "open" | "closed" | "merged" | "all";
       cursor?: string;
     }) => ipcRenderer.invoke(CHANNELS.GITHUB_LIST_PRS, options),
+
+    assignIssue: (cwd: string, issueNumber: number, username: string): Promise<void> =>
+      ipcRenderer.invoke(CHANNELS.GITHUB_ASSIGN_ISSUE, { cwd, issueNumber, username }),
 
     onPRDetected: (callback: (data: PRDetectedPayload) => void) =>
       _typedOn(CHANNELS.PR_DETECTED, callback),

@@ -10,10 +10,11 @@ import {
   ChevronDown,
   ChevronsUpDown,
   Search,
+  UserPlus,
 } from "lucide-react";
 import type { BranchInfo, CreateWorktreeOptions } from "@/types/electron";
 import type { GitHubIssue } from "@shared/types/github";
-import { worktreeClient } from "@/clients";
+import { worktreeClient, githubClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { IssueSelector } from "@/components/GitHub/IssueSelector";
 import { generateBranchSlug } from "@/utils/textParsing";
@@ -21,6 +22,9 @@ import { BRANCH_TYPES } from "@shared/config/branchPrefixes";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { toBranchOption, filterBranches, type BranchOption } from "./branchPickerUtils";
+import { usePreferencesStore } from "@/store/preferencesStore";
+import { useGitHubConfigStore } from "@/store/githubConfigStore";
+import { useNotificationStore } from "@/store/notificationStore";
 
 interface NewWorktreeDialogProps {
   isOpen: boolean;
@@ -52,6 +56,14 @@ export function NewWorktreeDialog({
   const [branchPickerOpen, setBranchPickerOpen] = useState(false);
   const [branchQuery, setBranchQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
+
+  const assignWorktreeToSelf = usePreferencesStore((s) => s.assignWorktreeToSelf);
+  const setAssignWorktreeToSelf = usePreferencesStore((s) => s.setAssignWorktreeToSelf);
+  const githubConfig = useGitHubConfigStore((s) => s.config);
+  const addNotification = useNotificationStore((s) => s.addNotification);
+
+  const currentUser = githubConfig?.username;
+  const canAssignIssue = Boolean(currentUser && selectedIssue);
 
   const newBranchInputRef = useRef<HTMLInputElement>(null);
   const branchInputRef = useRef<HTMLInputElement>(null);
@@ -280,6 +292,25 @@ export function NewWorktreeDialog({
         throw new Error(result.error.message);
       }
 
+      // Assign issue to current user if enabled
+      if (selectedIssue && assignWorktreeToSelf && currentUser) {
+        try {
+          await githubClient.assignIssue(rootPath, selectedIssue.number, currentUser);
+          addNotification({
+            type: "success",
+            title: "Issue Assigned",
+            message: `Issue #${selectedIssue.number} assigned to @${currentUser}`,
+          });
+        } catch (assignErr) {
+          const message = assignErr instanceof Error ? assignErr.message : "Failed to assign issue";
+          addNotification({
+            type: "warning",
+            title: "Could not assign issue",
+            message: `${message} — you can assign it manually on GitHub`,
+          });
+        }
+      }
+
       onWorktreeCreated?.();
       onClose();
 
@@ -326,6 +357,44 @@ export function NewWorktreeDialog({
                 Select an issue to auto-generate a branch name
               </p>
             </div>
+
+            {/* Assignment control - only show when issue is selected and GitHub auth available */}
+            {canAssignIssue && (
+              <div className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border bg-canopy-bg/50 border-canopy-border transition-colors">
+                <div className="flex items-center justify-center w-8 h-8 rounded-full shrink-0 bg-canopy-accent/10 text-canopy-accent">
+                  <UserPlus className="w-4 h-4" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-canopy-text">Assign to me</span>
+                    <span className="text-xs text-canopy-text/50 font-mono">@{currentUser}</span>
+                  </div>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={assignWorktreeToSelf}
+                    onChange={(e) => setAssignWorktreeToSelf(e.target.checked)}
+                    disabled={creating}
+                    className="sr-only peer"
+                    aria-label="Assign issue to me when creating worktree"
+                  />
+                  <div
+                    className={cn(
+                      "w-9 h-5 rounded-full transition-colors",
+                      "peer-focus-visible:ring-2 peer-focus-visible:ring-canopy-accent",
+                      "after:content-[''] after:absolute after:top-0.5 after:left-0.5",
+                      "after:bg-white after:rounded-full after:h-4 after:w-4",
+                      "after:transition-transform after:duration-200",
+                      assignWorktreeToSelf
+                        ? "bg-canopy-accent after:translate-x-4"
+                        : "bg-canopy-border after:translate-x-0",
+                      creating && "opacity-50 cursor-not-allowed"
+                    )}
+                  />
+                </label>
+              </div>
+            )}
 
             <div className="space-y-2">
               <label htmlFor="base-branch" className="block text-sm font-medium text-canopy-text">

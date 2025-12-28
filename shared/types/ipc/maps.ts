@@ -467,6 +467,10 @@ export interface IpcInvokeMap {
     ];
     result: import("../github.js").GitHubListResponse<import("../github.js").GitHubIssue>;
   };
+  "github:assign-issue": {
+    args: [payload: { cwd: string; issueNumber: number; username: string }];
+    result: void;
+  };
   "github:list-prs": {
     args: [
       options: {

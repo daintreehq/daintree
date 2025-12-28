@@ -312,6 +312,55 @@ export async function getIssueUrl(cwd: string, issueNumber: number): Promise<str
   return `${repoUrl}/issues/${issueNumber}`;
 }
 
+export async function assignIssue(
+  cwd: string,
+  issueNumber: number,
+  username: string
+): Promise<void> {
+  const token = getGitHubToken();
+  if (!token) {
+    throw new Error("GitHub token not configured");
+  }
+
+  const context = await getRepoContext(cwd);
+  if (!context) {
+    throw new Error("Not a GitHub repository");
+  }
+
+  const url = `https://api.github.com/repos/${context.owner}/${context.repo}/issues/${issueNumber}/assignees`;
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ assignees: [username] }),
+    });
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        throw new Error("Invalid GitHub token. Please update in Settings.");
+      }
+      if (response.status === 403) {
+        throw new Error("Token lacks required permissions. Required scopes: repo, read:org");
+      }
+      if (response.status === 404) {
+        throw new Error("Issue not found or you don't have access to this repository");
+      }
+      if (response.status === 422) {
+        throw new Error(`Cannot assign user "${username}" - they may not be a collaborator`);
+      }
+      throw new Error(`GitHub API error: ${response.statusText}`);
+    }
+  } catch (error) {
+    throw new Error(parseGitHubError(error));
+  }
+}
+
 function parseGitHubError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
 

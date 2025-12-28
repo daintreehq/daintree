@@ -246,6 +246,7 @@ export interface ElectronAPI {
       state?: "open" | "closed" | "merged" | "all";
       cursor?: string;
     }): Promise<import("../github.js").GitHubListResponse<import("../github.js").GitHubPR>>;
+    assignIssue(cwd: string, issueNumber: number, username: string): Promise<void>;
     onPRDetected(callback: (data: PRDetectedPayload) => void): () => void;
     onPRCleared(callback: (data: PRClearedPayload) => void): () => void;
     onIssueDetected(callback: (data: IssueDetectedPayload) => void): () => void;
