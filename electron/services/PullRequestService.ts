@@ -279,8 +279,7 @@ class PullRequestService {
 
       for (const [worktreeId, checkResult] of result.results) {
         // Emit issue metadata if we have a title (regardless of PR)
-        const issueNumber =
-          checkResult.issueNumber ?? this.candidates.get(worktreeId)?.issueNumber;
+        const issueNumber = checkResult.issueNumber ?? this.candidates.get(worktreeId)?.issueNumber;
         if (issueNumber && checkResult.issueTitle) {
           events.emit("sys:issue:detected", {
             worktreeId,

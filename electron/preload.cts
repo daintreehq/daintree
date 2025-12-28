@@ -199,6 +199,7 @@ const CHANNELS = {
   // PR detection channels
   PR_DETECTED: "pr:detected",
   PR_CLEARED: "pr:cleared",
+  ISSUE_DETECTED: "issue:detected",
 
   // GitHub channels
   GITHUB_GET_REPO_STATS: "github:get-repo-stats",

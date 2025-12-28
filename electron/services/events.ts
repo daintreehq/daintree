@@ -448,6 +448,7 @@ export type CanopyEventMap = {
     prState: "open" | "merged" | "closed";
     prTitle?: string;
     issueNumber?: number;
+    issueTitle?: string;
     timestamp: number;
   };
   "sys:pr:cleared": {

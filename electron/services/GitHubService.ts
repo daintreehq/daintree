@@ -190,12 +190,12 @@ function parseBatchPRResponse(
     const candidate = candidates[i];
     const alias = `wt_${i}`;
     let foundPR: LinkedPR | null = null;
-    let issueTitle: string | undefined;
-
     const issueResponse = (
-      data?.[`${alias}_issue`] as { issue?: { title?: string; timelineItems?: { nodes?: unknown[] } } }
+      data?.[`${alias}_issue`] as {
+        issue?: { title?: string; timelineItems?: { nodes?: unknown[] } };
+      }
     )?.issue;
-    issueTitle = issueResponse?.title;
+    const issueTitle = issueResponse?.title;
     const issueData = issueResponse?.timelineItems?.nodes;
     if (issueData && Array.isArray(issueData)) {
       const prs: LinkedPR[] = [];
