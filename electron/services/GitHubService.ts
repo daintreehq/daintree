@@ -199,6 +199,7 @@ function parseBatchPRResponse(
       for (const node of issueData as Array<{
         source?: {
           number?: number;
+          title?: string;
           url?: string;
           state?: string;
           isDraft?: boolean;
@@ -209,6 +210,7 @@ function parseBatchPRResponse(
         if (source?.number && source?.url) {
           prs.push({
             number: source.number,
+            title: source.title || "",
             url: source.url,
             state: source.merged
               ? "merged"
@@ -237,6 +239,7 @@ function parseBatchPRResponse(
       if (branchData && Array.isArray(branchData) && branchData.length > 0) {
         const pr = branchData[0] as {
           number?: number;
+          title?: string;
           url?: string;
           state?: string;
           isDraft?: boolean;
@@ -245,6 +248,7 @@ function parseBatchPRResponse(
         if (pr?.number && pr?.url) {
           foundPR = {
             number: pr.number,
+            title: pr.title || "",
             url: pr.url,
             state: pr.merged ? "merged" : (pr.state?.toLowerCase() as "open" | "closed") || "open",
             isDraft: pr.isDraft ?? false,

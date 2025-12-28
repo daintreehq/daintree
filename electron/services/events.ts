@@ -440,6 +440,7 @@ export type CanopyEventMap = {
     prNumber: number;
     prUrl: string;
     prState: "open" | "merged" | "closed";
+    prTitle?: string;
     issueNumber?: number;
     timestamp: number;
   };

@@ -82,6 +82,7 @@ function createMockWorktree(id: string, prNumber?: number): WorktreeState {
     prNumber,
     prUrl: prNumber ? `https://github.com/test/repo/pull/${prNumber}` : undefined,
     prState: prNumber ? "open" : undefined,
+    prTitle: prNumber ? `Test PR ${prNumber}` : undefined,
   };
 }
 
@@ -107,12 +108,14 @@ describe("worktreeDataStore PR events", () => {
       prNumber: 123,
       prUrl: "https://github.com/test/repo/pull/123",
       prState: "open",
+      prTitle: "Add new feature",
     });
 
     const updated = store.getState().worktrees.get("wt-1");
     expect(updated?.prNumber).toBe(123);
     expect(updated?.prUrl).toBe("https://github.com/test/repo/pull/123");
     expect(updated?.prState).toBe("open");
+    expect(updated?.prTitle).toBe("Add new feature");
     expect(updated?.name).toBe("worktree-wt-1");
   });
 
@@ -152,6 +155,7 @@ describe("worktreeDataStore PR events", () => {
     expect(updated?.prNumber).toBeUndefined();
     expect(updated?.prUrl).toBeUndefined();
     expect(updated?.prState).toBeUndefined();
+    expect(updated?.prTitle).toBeUndefined();
     expect(updated?.name).toBe("worktree-wt-2");
   });
 
@@ -198,11 +202,13 @@ describe("worktreeDataStore PR events", () => {
       prNumber: 999,
       prUrl: "https://github.com/test/repo/pull/999",
       prState: "merged",
+      prTitle: "Merged feature",
     });
 
     const updated = store.getState().worktrees.get("wt-3");
     expect(updated?.prNumber).toBe(999);
     expect(updated?.prState).toBe("merged");
+    expect(updated?.prTitle).toBe("Merged feature");
   });
 
   it("handles closed PR state", async () => {
@@ -218,11 +224,13 @@ describe("worktreeDataStore PR events", () => {
       prNumber: 888,
       prUrl: "https://github.com/test/repo/pull/888",
       prState: "closed",
+      prTitle: "Closed PR",
     });
 
     const updated = store.getState().worktrees.get("wt-4");
     expect(updated?.prNumber).toBe(888);
     expect(updated?.prState).toBe("closed");
+    expect(updated?.prTitle).toBe("Closed PR");
   });
 
   it("overwrites existing PR with new PR", async () => {
@@ -240,11 +248,13 @@ describe("worktreeDataStore PR events", () => {
       prNumber: 200,
       prUrl: "https://github.com/test/repo/pull/200",
       prState: "open",
+      prTitle: "Updated PR",
     });
 
     const updated = store.getState().worktrees.get("wt-5");
     expect(updated?.prNumber).toBe(200);
     expect(updated?.prUrl).toBe("https://github.com/test/repo/pull/200");
     expect(updated?.prState).toBe("open");
+    expect(updated?.prTitle).toBe("Updated PR");
   });
 });

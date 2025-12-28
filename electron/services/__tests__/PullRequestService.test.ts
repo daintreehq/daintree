@@ -37,6 +37,7 @@ describe("PullRequestService", () => {
             branchName: candidates[0].branchName,
             pr: {
               number: 42,
+              title: "Add new feature",
               url: "https://github.com/o/r/pull/42",
               state: "open",
               isDraft: false,
@@ -74,6 +75,7 @@ describe("PullRequestService", () => {
       prNumber: 42,
       prUrl: "https://github.com/o/r/pull/42",
       prState: "open",
+      prTitle: "Add new feature",
     });
     expect(detected[0].issueNumber).toBeUndefined();
 
@@ -114,7 +116,13 @@ describe("PullRequestService", () => {
           {
             issueNumber: c.issueNumber,
             branchName: c.branchName,
-            pr: { number: 7, url: "https://github.com/o/r/pull/7", state: "open", isDraft: false },
+            pr: {
+              number: 7,
+              title: "Fix bug",
+              url: "https://github.com/o/r/pull/7",
+              state: "open",
+              isDraft: false,
+            },
           },
         ])
       ),

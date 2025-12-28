@@ -261,41 +261,53 @@ export function WorktreeHeader({
         </div>
       </div>
 
-      {worktree.issueNumber && (
+      {(worktree.issueNumber || worktree.prNumber) && (
         <div className="flex items-center gap-2">
           {worktree.issueNumber && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                badges.onOpenIssue?.();
-              }}
-              className="flex items-center gap-1 text-xs text-emerald-400/80 hover:text-emerald-400 hover:underline transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-              title="Open Issue on GitHub"
-            >
-              <CircleDot className="w-2.5 h-2.5" />
-              <span className="font-mono">#{worktree.issueNumber}</span>
-            </button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    badges.onOpenIssue?.();
+                  }}
+                  className="flex items-center gap-1 text-xs text-emerald-400/80 hover:text-emerald-400 hover:underline transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                >
+                  <CircleDot className="w-2.5 h-2.5" />
+                  <span className="font-mono">#{worktree.issueNumber}</span>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {worktree.issueTitle || "Open Issue on GitHub"}
+              </TooltipContent>
+            </Tooltip>
           )}
           {worktree.prNumber && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                badges.onOpenPR?.();
-              }}
-              className={cn(
-                "flex items-center gap-1 text-xs hover:underline transition-colors",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
-                worktree.prState === "merged"
-                  ? "text-violet-400/80 hover:text-violet-400"
-                  : worktree.prState === "closed"
-                    ? "text-red-400/80 hover:text-red-400"
-                    : "text-sky-400/80 hover:text-sky-400"
-              )}
-              title={`PR #${worktree.prNumber} · ${worktree.prState ?? "open"}`}
-            >
-              <GitPullRequest className="w-2.5 h-2.5" />
-              <span className="font-mono">#{worktree.prNumber}</span>
-            </button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    badges.onOpenPR?.();
+                  }}
+                  className={cn(
+                    "flex items-center gap-1 text-xs hover:underline transition-colors",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
+                    worktree.prState === "merged"
+                      ? "text-violet-400/80 hover:text-violet-400"
+                      : worktree.prState === "closed"
+                        ? "text-red-400/80 hover:text-red-400"
+                        : "text-sky-400/80 hover:text-sky-400"
+                  )}
+                >
+                  <GitPullRequest className="w-2.5 h-2.5" />
+                  <span className="font-mono">#{worktree.prNumber}</span>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {worktree.prTitle || `PR #${worktree.prNumber} · ${worktree.prState ?? "open"}`}
+              </TooltipContent>
+            </Tooltip>
           )}
         </div>
       )}
