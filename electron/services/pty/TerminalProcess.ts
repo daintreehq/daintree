@@ -1177,11 +1177,7 @@ export class TerminalProcess {
       return undefined;
     }
 
-    const primaryPatterns = this.compilePatterns(
-      detection.primaryPatterns,
-      agentId,
-      "primary"
-    );
+    const primaryPatterns = this.compilePatterns(detection.primaryPatterns, agentId, "primary");
     if (primaryPatterns.length === 0) {
       return undefined;
     }
@@ -1207,16 +1203,16 @@ export class TerminalProcess {
       return undefined;
     }
 
-    const bootPatterns = this.compilePatterns(
-      detection.bootCompletePatterns,
-      agentId,
-      "boot"
-    );
+    const bootPatterns = this.compilePatterns(detection.bootCompletePatterns, agentId, "boot");
 
     return bootPatterns.length ? bootPatterns : undefined;
   }
 
-  private compilePatterns(patterns: string[], agentId: string | undefined, label: string): RegExp[] {
+  private compilePatterns(
+    patterns: string[],
+    agentId: string | undefined,
+    label: string
+  ): RegExp[] {
     const compiled: RegExp[] = [];
     for (const pattern of patterns) {
       try {
