@@ -838,10 +838,9 @@ export const HistoryOverlayTerminalView = forwardRef<
             }}
           >
             {/* History overlay styles for pixel-perfect alignment with xterm
+                - Uses xterm's serializeAsHTML which outputs inline styles matching xterm's theme
                 - Row styling ensures exact cell height matching
-                - Span styling preserves inline flow for proper text rendering
-                - Prevents CSS inheritance from creating gaps
-                - Maps Anser classes to xterm styling for visual parity */}
+                - Span styling preserves inline flow for proper text rendering */}
             <style>{`
               .history-overlay a:hover {
                 color: #79c0ff !important;
@@ -861,55 +860,6 @@ export const HistoryOverlayTerminalView = forwardRef<
                 display: inline;
                 line-height: inherit;
               }
-              /* Map Anser classes to xterm styling for text decorations */
-              .history-overlay .ansi-dim {
-                opacity: 0.5;
-              }
-              .history-overlay .ansi-bold {
-                font-weight: 700;
-              }
-              .history-overlay .ansi-italic {
-                font-style: italic;
-              }
-              .history-overlay .ansi-underline {
-                text-decoration: underline;
-              }
-              .history-overlay .ansi-strikethrough {
-                text-decoration: line-through;
-              }
-              /* Anser color classes mapped to xterm theme (using CSS variables) */
-              .history-overlay .ansi-black-fg { color: var(--color-canopy-bg, #18181b); }
-              .history-overlay .ansi-red-fg { color: var(--color-status-error, #f87171); }
-              .history-overlay .ansi-green-fg { color: var(--color-canopy-accent, #10b981); }
-              .history-overlay .ansi-yellow-fg { color: var(--color-status-warning, #fbbf24); }
-              .history-overlay .ansi-blue-fg { color: var(--color-status-info, #38bdf8); }
-              .history-overlay .ansi-magenta-fg { color: #a855f7; }
-              .history-overlay .ansi-cyan-fg { color: #22d3ee; }
-              .history-overlay .ansi-white-fg { color: var(--color-canopy-text, #e4e4e7); }
-              .history-overlay .ansi-bright-black-fg { color: var(--color-state-idle, #52525b); }
-              .history-overlay .ansi-bright-red-fg { color: #fca5a5; }
-              .history-overlay .ansi-bright-green-fg { color: var(--color-canopy-success, #34d399); }
-              .history-overlay .ansi-bright-yellow-fg { color: #fcd34d; }
-              .history-overlay .ansi-bright-blue-fg { color: #7dd3fc; }
-              .history-overlay .ansi-bright-magenta-fg { color: #c084fc; }
-              .history-overlay .ansi-bright-cyan-fg { color: #67e8f9; }
-              .history-overlay .ansi-bright-white-fg { color: #fafafa; }
-              .history-overlay .ansi-black-bg { background-color: var(--color-canopy-bg, #18181b); }
-              .history-overlay .ansi-red-bg { background-color: var(--color-status-error, #f87171); }
-              .history-overlay .ansi-green-bg { background-color: var(--color-canopy-accent, #10b981); }
-              .history-overlay .ansi-yellow-bg { background-color: var(--color-status-warning, #fbbf24); }
-              .history-overlay .ansi-blue-bg { background-color: var(--color-status-info, #38bdf8); }
-              .history-overlay .ansi-magenta-bg { background-color: #a855f7; }
-              .history-overlay .ansi-cyan-bg { background-color: #22d3ee; }
-              .history-overlay .ansi-white-bg { background-color: var(--color-canopy-text, #e4e4e7); }
-              .history-overlay .ansi-bright-black-bg { background-color: var(--color-state-idle, #52525b); }
-              .history-overlay .ansi-bright-red-bg { background-color: #fca5a5; }
-              .history-overlay .ansi-bright-green-bg { background-color: var(--color-canopy-success, #34d399); }
-              .history-overlay .ansi-bright-yellow-bg { background-color: #fcd34d; }
-              .history-overlay .ansi-bright-blue-bg { background-color: #7dd3fc; }
-              .history-overlay .ansi-bright-magenta-bg { background-color: #c084fc; }
-              .history-overlay .ansi-bright-cyan-bg { background-color: #67e8f9; }
-              .history-overlay .ansi-bright-white-bg { background-color: #fafafa; }
             `}</style>
 
             {/* Truncation banner */}
