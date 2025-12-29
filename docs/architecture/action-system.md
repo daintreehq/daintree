@@ -19,19 +19,20 @@ The Action System is designed so AI agents can drive the IDE using the exact sam
 ### MCP Compatibility
 
 Actions expose themselves as an MCP-compatible manifest via `actionService.list()`. Each action includes:
+
 - `name`: MCP-friendly identifier
 - `inputSchema`: JSON Schema derived from Zod
 - `danger`: Safety classification for agent guardrails
 
 ## Key Files
 
-| File | Purpose |
-|------|---------|
-| `shared/types/actions.ts` | Type definitions: `ActionId`, `ActionDefinition`, `ActionSource`, `ActionDanger` |
-| `src/services/ActionService.ts` | Singleton registry and dispatcher |
-| `src/services/actions/definitions/*.ts` | 17 domain-specific action definition files |
-| `src/services/actions/actionDefinitions.ts` | Registration aggregator |
-| `src/hooks/useActionRegistry.ts` | React hook that wires UI callbacks to the service |
+| File                                        | Purpose                                                                          |
+| ------------------------------------------- | -------------------------------------------------------------------------------- |
+| `shared/types/actions.ts`                   | Type definitions: `ActionId`, `ActionDefinition`, `ActionSource`, `ActionDanger` |
+| `src/services/ActionService.ts`             | Singleton registry and dispatcher                                                |
+| `src/services/actions/definitions/*.ts`     | 17 domain-specific action definition files                                       |
+| `src/services/actions/actionDefinitions.ts` | Registration aggregator                                                          |
+| `src/hooks/useActionRegistry.ts`            | React hook that wires UI callbacks to the service                                |
 
 ## Action Definition Anatomy
 
@@ -39,15 +40,15 @@ Every action implements the `ActionDefinition` interface:
 
 ```typescript
 interface ActionDefinition<Args, Result> {
-  id: ActionId;              // Typed union: "terminal.new", "worktree.delete", etc.
-  title: string;             // Human-readable name
-  description: string;       // What this action does
-  category: string;          // Grouping: "terminal", "worktree", "git", etc.
+  id: ActionId; // Typed union: "terminal.new", "worktree.delete", etc.
+  title: string; // Human-readable name
+  description: string; // What this action does
+  category: string; // Grouping: "terminal", "worktree", "git", etc.
   kind: "command" | "query"; // Mutates state vs. reads state
-  danger: ActionDanger;      // Safety level (see below)
-  scope: "renderer";         // Where this runs
-  argsSchema?: z.ZodType;    // Runtime validation schema
-  resultSchema?: z.ZodType;  // Optional result schema
+  danger: ActionDanger; // Safety level (see below)
+  scope: "renderer"; // Where this runs
+  argsSchema?: z.ZodType; // Runtime validation schema
+  resultSchema?: z.ZodType; // Optional result schema
   isEnabled?: (ctx) => bool; // Dynamic enable/disable
   run: (args, ctx) => Promise<Result>;
 }
@@ -57,13 +58,14 @@ interface ActionDefinition<Args, Result> {
 
 This is crucial for AI safety:
 
-| Level | Meaning | Agent Behavior |
-|-------|---------|----------------|
-| `safe` | Read-only or easily reversible | Executes immediately |
-| `confirm` | Destructive or hard to undo | Requires `{ confirmed: true }` from agent |
-| `restricted` | System-only, never agent-callable | Returns `RESTRICTED` error |
+| Level        | Meaning                           | Agent Behavior                            |
+| ------------ | --------------------------------- | ----------------------------------------- |
+| `safe`       | Read-only or easily reversible    | Executes immediately                      |
+| `confirm`    | Destructive or hard to undo       | Requires `{ confirmed: true }` from agent |
+| `restricted` | System-only, never agent-callable | Returns `RESTRICTED` error                |
 
 Examples:
+
 - `safe`: `terminal.focusNext`, `worktree.refresh`
 - `confirm`: `worktree.delete`, `terminal.killAll`
 - `restricted`: Reserved for future system-only operations
@@ -87,12 +89,10 @@ When `actionService.dispatch(actionId, args, options)` is called:
 ### Result Types
 
 ```typescript
-type ActionDispatchResult<T> =
-  | { ok: true; result: T }
-  | { ok: false; error: ActionError };
+type ActionDispatchResult<T> = { ok: true; result: T } | { ok: false; error: ActionError };
 
 interface ActionError {
-  code: ActionErrorCode;  // NOT_FOUND, VALIDATION_ERROR, DISABLED, etc.
+  code: ActionErrorCode; // NOT_FOUND, VALIDATION_ERROR, DISABLED, etc.
   message: string;
   details?: unknown;
 }
@@ -147,7 +147,7 @@ const handleClick = async () => {
 await actionService.dispatch(
   "worktree.delete",
   { worktreeId: "abc123" },
-  { source: "agent", confirmed: true }  // Must confirm destructive actions
+  { source: "agent", confirmed: true } // Must confirm destructive actions
 );
 ```
 
@@ -161,7 +161,7 @@ In `shared/types/actions.ts`, add to the `ActionId` union:
 export type ActionId =
   | KeyAction
   // ... existing IDs ...
-  | "myFeature.doThing";  // Add your new ID
+  | "myFeature.doThing"; // Add your new ID
 ```
 
 ### Step 2: Create the Definition
@@ -239,21 +239,21 @@ Use the Event Inspector (Developer Tools) to view action history in real-time.
 
 ## Action Categories
 
-| Category | Description | Example Actions |
-|----------|-------------|-----------------|
-| `terminal` | Terminal/panel operations | `terminal.new`, `terminal.kill`, `terminal.focusNext` |
-| `agent` | AI agent spawning | `agent.launch` |
-| `worktree` | Git worktree management | `worktree.create`, `worktree.delete`, `worktree.refresh` |
-| `project` | Project switching/config | `project.switch`, `project.add` |
-| `github` | GitHub integration | `github.openIssues`, `github.listPullRequests` |
-| `git` | Git operations | `git.getProjectPulse`, `git.listCommits` |
-| `navigation` | UI navigation | `nav.toggleFocusMode` |
-| `app` | Application settings | `app.settings.openTab` |
-| `preferences` | User preferences | `preferences.showProjectPulse.set` |
-| `browser` | Browser panel control | `browser.reload`, `browser.navigate` |
-| `system` | System operations | `system.openExternal`, `system.checkCommand` |
-| `logs` | Log management | `logs.openFile`, `logs.clear` |
-| `sidecar` | Sidecar browser | `sidecar.toggle`, `sidecar.openUrl` |
+| Category      | Description               | Example Actions                                          |
+| ------------- | ------------------------- | -------------------------------------------------------- |
+| `terminal`    | Terminal/panel operations | `terminal.new`, `terminal.kill`, `terminal.focusNext`    |
+| `agent`       | AI agent spawning         | `agent.launch`                                           |
+| `worktree`    | Git worktree management   | `worktree.create`, `worktree.delete`, `worktree.refresh` |
+| `project`     | Project switching/config  | `project.switch`, `project.add`                          |
+| `github`      | GitHub integration        | `github.openIssues`, `github.listPullRequests`           |
+| `git`         | Git operations            | `git.getProjectPulse`, `git.listCommits`                 |
+| `navigation`  | UI navigation             | `nav.toggleFocusMode`                                    |
+| `app`         | Application settings      | `app.settings.openTab`                                   |
+| `preferences` | User preferences          | `preferences.showProjectPulse.set`                       |
+| `browser`     | Browser panel control     | `browser.reload`, `browser.navigate`                     |
+| `system`      | System operations         | `system.openExternal`, `system.checkCommand`             |
+| `logs`        | Log management            | `logs.openFile`, `logs.clear`                            |
+| `sidecar`     | Sidecar browser           | `sidecar.toggle`, `sidecar.openUrl`                      |
 
 ## FAQ
 
@@ -266,10 +266,14 @@ Actions with `danger: "confirm"` require explicit confirmation. When `source ===
 await actionService.dispatch("worktree.delete", { worktreeId: "abc" }, { source: "agent" });
 
 // Agent must explicitly confirm
-await actionService.dispatch("worktree.delete", { worktreeId: "abc" }, {
-  source: "agent",
-  confirmed: true
-});
+await actionService.dispatch(
+  "worktree.delete",
+  { worktreeId: "abc" },
+  {
+    source: "agent",
+    confirmed: true,
+  }
+);
 ```
 
 The confirmation requirement forces the agent (or its orchestration layer) to explicitly acknowledge destructive actions.

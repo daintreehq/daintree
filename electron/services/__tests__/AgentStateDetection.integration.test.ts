@@ -67,6 +67,10 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
       const id = await spawnShellTerminal(manager, { type: "gemini" });
       await sleep(500);
 
+      // First transition to working state
+      manager.transitionState(id, { type: "busy" }, "activity", 1.0);
+      await sleep(100);
+
       let eventEmitted = false;
       const handler: AgentStateChangedHandler = (data) => {
         if (data.terminalId === id) {
@@ -76,6 +80,7 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
 
       events.on("agent:state-changed", handler);
 
+      // Now transition to waiting state - this should trigger an event
       manager.transitionState(id, { type: "prompt" }, "activity", 1.0);
       await sleep(500);
 

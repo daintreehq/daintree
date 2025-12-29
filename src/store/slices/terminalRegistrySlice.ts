@@ -392,7 +392,8 @@ export const createTerminalRegistrySlice =
 
         const isAgent = kind === "agent";
 
-        const agentState = options.agentState ?? (isAgent ? "idle" : undefined);
+        // Start with "working" in UI to show spinner immediately during boot
+        const agentState = options.agentState ?? (isAgent ? "working" : undefined);
         const lastStateChange =
           options.lastStateChange ?? (agentState !== undefined ? Date.now() : undefined);
 
@@ -1079,7 +1080,7 @@ export const createTerminalRegistrySlice =
                   ...t,
                   location: targetLocation,
                   restartKey: (t.restartKey ?? 0) + 1,
-                  agentState: isAgent ? ("idle" as const) : undefined,
+                  agentState: isAgent ? ("working" as const) : undefined,
                   lastStateChange: isAgent ? Date.now() : undefined,
                   stateChangeTrigger: undefined,
                   stateChangeConfidence: undefined,
@@ -1373,7 +1374,7 @@ export const createTerminalRegistrySlice =
                   agentId: effectiveAgentId,
                   title: newTitle,
                   restartKey: (t.restartKey ?? 0) + 1,
-                  agentState: isAgent ? ("idle" as const) : undefined,
+                  agentState: isAgent ? ("working" as const) : undefined,
                   lastStateChange: isAgent ? Date.now() : undefined,
                   stateChangeTrigger: undefined,
                   stateChangeConfidence: undefined,
