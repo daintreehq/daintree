@@ -37,6 +37,12 @@ export interface AgentDetectionConfig {
   fallbackPatterns?: string[];
 
   /**
+   * Patterns that indicate the agent has completed boot and is ready.
+   * Use strings that will be converted to RegExp with case-insensitive flag.
+   */
+  bootCompletePatterns?: string[];
+
+  /**
    * Number of lines from end of output to scan (default: 10).
    */
   scanLineCount?: number;
@@ -137,6 +143,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       fallbackPatterns: [
         "[✽✻✼✾⟡◇◆●○]\\s+(thinking|deliberating|working|reading|writing|searching|executing)",
       ],
+      bootCompletePatterns: ["claude\\s+code\\s+v?\\d"],
       scanLineCount: 10,
       primaryConfidence: 0.95,
       fallbackConfidence: 0.75,
@@ -190,6 +197,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     detection: {
       primaryPatterns: ["[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+.+\\s+\\(esc to cancel", "esc to cancel"],
       fallbackPatterns: ["[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+\\w"],
+      bootCompletePatterns: ["type\\s+your\\s+message"],
       scanLineCount: 10,
       primaryConfidence: 0.95,
       fallbackConfidence: 0.7,
@@ -244,6 +252,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     detection: {
       primaryPatterns: ["[•·]\\s+Working\\s+\\([^)]*esc to interrupt", "esc to interrupt"],
       fallbackPatterns: ["[•·]\\s+Working"],
+      bootCompletePatterns: ["openai[-\\s]+codex", "codex\\s+v"],
       scanLineCount: 10,
       primaryConfidence: 0.95,
       fallbackConfidence: 0.75,

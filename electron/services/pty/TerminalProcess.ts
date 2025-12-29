@@ -7,6 +7,10 @@ const { Terminal: HeadlessTerminal } = headless;
 import serialize, { type SerializeAddon as SerializeAddonType } from "@xterm/addon-serialize";
 const { SerializeAddon } = serialize;
 import type { TerminalType } from "../../../shared/types/domain.js";
+import {
+  getEffectiveAgentConfig,
+  type AgentDetectionConfig,
+} from "../../../shared/config/agentRegistry.js";
 import { ProcessDetector, type DetectionResult } from "../ProcessDetector.js";
 import type { ProcessTreeCache } from "../ProcessTreeCache.js";
 import { ActivityMonitor, type ProcessStateValidator } from "../ActivityMonitor.js";
@@ -35,6 +39,7 @@ import { decideTerminalExitForensics } from "./terminalForensics.js";
 import { installHeadlessResponder } from "./headlessResponder.js";
 import { TerminalSyncBuffer } from "./TerminalSyncBuffer.js";
 import { styleUrls } from "./UrlStyler.js";
+import type { PatternDetectionConfig } from "./AgentPatternDetector.js";
 import {
   BRACKETED_PASTE_START,
   BRACKETED_PASTE_END,
@@ -1135,6 +1140,9 @@ export class TerminalProcess {
     // Enable pattern-based detection for agent terminals
     // The agentId here refers to the agent type (claude, gemini, codex)
     const agentId = this.terminalInfo.type !== "terminal" ? this.terminalInfo.type : undefined;
+    const detection = agentId ? getEffectiveAgentConfig(agentId)?.detection : undefined;
+    const patternConfig = this.buildPatternConfig(detection, agentId);
+    const bootCompletePatterns = this.buildBootCompletePatterns(detection, agentId);
 
     // Enable output-based activity detection for agent terminals.
     // AI agents often have low CPU while waiting for API responses (network I/O),
@@ -1151,7 +1159,76 @@ export class TerminalProcess {
     // Provide callback to get visible lines from xterm for pattern detection
     const getVisibleLines = agentId ? (n: number) => this.getLastNLines(n) : undefined;
 
-    return { ignoredInputSequences, agentId, outputActivityDetection, getVisibleLines };
+    return {
+      ignoredInputSequences,
+      agentId,
+      outputActivityDetection,
+      getVisibleLines,
+      patternConfig,
+      bootCompletePatterns,
+    };
+  }
+
+  private buildPatternConfig(
+    detection: AgentDetectionConfig | undefined,
+    agentId: string | undefined
+  ): PatternDetectionConfig | undefined {
+    if (!detection) {
+      return undefined;
+    }
+
+    const primaryPatterns = this.compilePatterns(
+      detection.primaryPatterns,
+      agentId,
+      "primary"
+    );
+    if (primaryPatterns.length === 0) {
+      return undefined;
+    }
+
+    const fallbackPatterns = detection.fallbackPatterns
+      ? this.compilePatterns(detection.fallbackPatterns, agentId, "fallback")
+      : undefined;
+
+    return {
+      primaryPatterns,
+      fallbackPatterns: fallbackPatterns?.length ? fallbackPatterns : undefined,
+      scanLineCount: detection.scanLineCount,
+      primaryConfidence: detection.primaryConfidence,
+      fallbackConfidence: detection.fallbackConfidence,
+    };
+  }
+
+  private buildBootCompletePatterns(
+    detection: AgentDetectionConfig | undefined,
+    agentId: string | undefined
+  ): RegExp[] | undefined {
+    if (!detection?.bootCompletePatterns || detection.bootCompletePatterns.length === 0) {
+      return undefined;
+    }
+
+    const bootPatterns = this.compilePatterns(
+      detection.bootCompletePatterns,
+      agentId,
+      "boot"
+    );
+
+    return bootPatterns.length ? bootPatterns : undefined;
+  }
+
+  private compilePatterns(patterns: string[], agentId: string | undefined, label: string): RegExp[] {
+    const compiled: RegExp[] = [];
+    for (const pattern of patterns) {
+      try {
+        compiled.push(new RegExp(pattern, "i"));
+      } catch (error) {
+        if (process.env.CANOPY_VERBOSE) {
+          const prefix = agentId ? `${agentId} ${label}` : label;
+          console.warn(`[TerminalProcess] Invalid ${prefix} pattern: ${pattern}`, error);
+        }
+      }
+    }
+    return compiled;
   }
 
   private createProcessStateValidator(
@@ -1348,6 +1425,20 @@ export class TerminalProcess {
 
       terminal.lastOutputTime = Date.now();
 
+      // CRITICAL: Pattern detection runs FIRST for instant state updates
+      // This must happen before expensive operations like headlessTerminal.write()
+      if (this.isAgentTerminal && this.activityMonitor) {
+        const inResizeCooldown =
+          this.resizeTimestamp > 0 &&
+          Date.now() - this.resizeTimestamp < TerminalProcess.RESIZE_COOLDOWN_MS;
+
+        if (inResizeCooldown) {
+          this.activityMonitor.onData();
+        } else {
+          this.activityMonitor.onData(data);
+        }
+      }
+
       // Some TUIs (including Codex) request terminal responses (e.g. cursor position report via CSI 6 n).
       // Agent terminals always have a headless responder installed, but shell terminals may not.
       // If we see a request, ensure a headless terminal + responder so the TUI can proceed.
@@ -1366,18 +1457,6 @@ export class TerminalProcess {
         terminal.outputBuffer += data;
         if (terminal.outputBuffer.length > OUTPUT_BUFFER_SIZE) {
           terminal.outputBuffer = terminal.outputBuffer.slice(-OUTPUT_BUFFER_SIZE);
-        }
-
-        if (this.activityMonitor) {
-          const inResizeCooldown =
-            this.resizeTimestamp > 0 &&
-            Date.now() - this.resizeTimestamp < TerminalProcess.RESIZE_COOLDOWN_MS;
-
-          if (inResizeCooldown) {
-            this.activityMonitor.onData();
-          } else {
-            this.activityMonitor.onData(data);
-          }
         }
 
         if (terminal.agentId) {

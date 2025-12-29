@@ -1,5 +1,6 @@
 import {
   AgentPatternDetector,
+  stripAnsi,
   type PatternDetectionConfig,
   type PatternDetectionResult,
 } from "./pty/AgentPatternDetector.js";
@@ -35,6 +36,11 @@ export interface ActivityMonitorOptions {
    * Overrides built-in patterns when provided.
    */
   patternConfig?: PatternDetectionConfig;
+  /**
+   * Boot-complete patterns (agent-ready indicators).
+   * Overrides built-in patterns when provided.
+   */
+  bootCompletePatterns?: RegExp[];
   /**
    * Size of the output buffer to retain for pattern detection (default: 2000 chars).
    */
@@ -87,10 +93,22 @@ export class ActivityMonitor {
   private pollingInterval?: ReturnType<typeof setInterval>;
 
   // Polling debounce state
-  private pollingStartTime = 0;
-  private readonly POLLING_BOOT_DELAY_MS = 4000; // Wait 4s before allowing idle during boot
+  private readonly POLLING_MAX_BOOT_MS = 15000; // Max 15s boot time before forcing boot complete
   private readonly POLLING_IDLE_DEBOUNCE_MS = 1000; // Wait 1s before transitioning to idle
+  private readonly POLLING_BOOT_IDLE_DEBOUNCE_MS = 250; // Quick idle after boot completes
   private patternLostTime = 0; // When the pattern was last lost
+  private pollingStartTime = 0; // When polling started
+  private hasExitedBootState = false; // Whether we've completed initial boot
+  private hasSeenWorkingPattern = false; // Whether we've ever detected a working pattern
+
+  // Boot detection patterns - when these appear, the agent is ready
+  private static readonly BOOT_COMPLETE_PATTERNS = [
+    /claude\s+code\s+v?\d/i, // Claude Code vX.X.X or Claude Code X.X.X
+    /openai[-\s]+codex/i, // OpenAI Codex / OpenAI-Codex
+    /codex\s+v/i, // Codex vX.X.X variant
+    /type\s+your\s+message/i, // Gemini CLI ready prompt
+  ];
+  private readonly bootCompletePatterns: RegExp[];
 
   constructor(
     private terminalId: string,
@@ -125,6 +143,10 @@ export class ActivityMonitor {
       this.patternDetector = new AgentPatternDetector(options.agentId, options.patternConfig);
     }
     this.getVisibleLines = options?.getVisibleLines;
+    this.bootCompletePatterns =
+      options?.bootCompletePatterns?.length && options.bootCompletePatterns.length > 0
+        ? options.bootCompletePatterns
+        : ActivityMonitor.BOOT_COMPLETE_PATTERNS;
   }
 
   /**
@@ -210,6 +232,45 @@ export class ActivityMonitor {
       this.revalidateStateAfterWake();
     }
 
+    // For polling-enabled terminals: check raw stream for patterns FIRST
+    // This runs BEFORE the busy-state early return to ensure instant detection
+    if (data && this.getVisibleLines) {
+      // Use rolling buffer to catch patterns split across PTY chunks
+      this.updatePatternBuffer(data);
+      const bufferText = stripAnsi(this.patternBuffer);
+      const lowerBuffer = bufferText.toLowerCase();
+
+      // Check for boot-complete patterns in the rolling buffer
+      if (!this.hasExitedBootState) {
+        if (this.isBootComplete(bufferText)) {
+          this.hasExitedBootState = true;
+        }
+      }
+
+      // Check for working patterns in the rolling buffer
+      const patternResult = this.patternDetector
+        ? this.patternDetector.detect(bufferText)
+        : undefined;
+      if (patternResult) {
+        this.lastPatternResult = patternResult;
+      }
+      const isWorking = patternResult
+        ? patternResult.isWorking
+        : lowerBuffer.includes("esc to interrupt") || lowerBuffer.includes("esc to cancel");
+      if (isWorking) {
+        this.hasSeenWorkingPattern = true;
+        this.patternLostTime = 0;
+        if (this.state !== "busy") {
+          this.state = "busy";
+          this.onStateChange(this.terminalId, this.spawnedAt, "busy", {
+            trigger: "pattern",
+            patternConfidence: patternResult?.confidence ?? 0.9,
+          });
+        }
+      }
+    }
+
+    // Now handle busy state - reset debounce timer
     if (this.state === "busy") {
       this.resetDebounceTimer();
       return;
@@ -219,7 +280,7 @@ export class ActivityMonitor {
       return;
     }
 
-    // Skip old pattern detection if polling is enabled - polling is the sole source of truth
+    // Polling terminals already handled above
     if (this.getVisibleLines) {
       return;
     }
@@ -397,8 +458,10 @@ export class ActivityMonitor {
     this.resetOutputWindow();
     this.patternBuffer = "";
     this.lastPatternResult = undefined;
-    this.pollingStartTime = 0;
     this.patternLostTime = 0;
+    this.pollingStartTime = 0;
+    this.hasExitedBootState = false;
+    this.hasSeenWorkingPattern = false;
   }
 
   /**
@@ -413,54 +476,92 @@ export class ActivityMonitor {
   }
 
   /**
+   * Check if any boot-complete pattern is present in the text.
+   */
+  private isBootComplete(text: string): boolean {
+    return this.bootCompletePatterns.some((pattern) => pattern.test(text));
+  }
+
+  /**
    * Start polling for patterns in xterm visible lines.
-   * - Pattern found → immediately transition to busy
-   * - Pattern lost → debounce 1s before transitioning to idle
-   * - Boot period → wait 4s before allowing any idle transition
+   * - Starts in busy state during boot (indicator spinning)
+   * - Boot completes when agent-ready pattern detected OR 15s timeout
+   * - After boot: idle shortly after ready when no working pattern is present
+   * - After first working pattern: busy while working, idle after 1s without pattern
+   * This ensures the activity indicator never hides prematurely.
    */
   startPolling(): void {
     if (!this.getVisibleLines || this.pollingInterval) return;
 
-    this.pollingStartTime = Date.now();
     this.patternLostTime = 0;
+    this.pollingStartTime = Date.now();
+    this.hasExitedBootState = false;
+    this.hasSeenWorkingPattern = false;
+
+    // Always start in busy state and emit to sync UI
+    this.state = "busy";
+    this.onStateChange(this.terminalId, this.spawnedAt, "busy", { trigger: "pattern" });
 
     this.pollingInterval = setInterval(() => {
       const now = Date.now();
 
       // Scan bottom 15 lines - status/spinner can appear anywhere in visible area
       const lines = this.getVisibleLines!(15);
-      const text = lines.join(" ").toLowerCase();
-      const isWorking = text.includes("esc to interrupt") || text.includes("esc to cancel");
+      const text = stripAnsi(lines.join(" ")).toLowerCase();
+      const patternResult = this.patternDetector
+        ? this.patternDetector.detectFromLines(lines)
+        : undefined;
+      if (patternResult) {
+        this.lastPatternResult = patternResult;
+      }
+      const isWorking = patternResult
+        ? patternResult.isWorking
+        : text.includes("esc to interrupt") || text.includes("esc to cancel");
+
+      // Check for boot completion (agent-specific ready patterns)
+      if (!this.hasExitedBootState) {
+        const timeSinceBoot = now - this.pollingStartTime;
+        if (this.isBootComplete(text) || timeSinceBoot >= this.POLLING_MAX_BOOT_MS) {
+          this.hasExitedBootState = true;
+          // Note: We allow idle after debounce if no working pattern appears
+          // This stops the indicator promptly once boot completes
+        } else {
+          return; // Still booting, stay busy
+        }
+      }
 
       if (isWorking) {
-        // Pattern found - reset lost timer and transition to busy immediately
+        // Pattern found - mark that we've seen work and reset lost timer
+        this.hasSeenWorkingPattern = true;
         this.patternLostTime = 0;
 
         if (this.state !== "busy") {
           this.state = "busy";
-          this.onStateChange(this.terminalId, this.spawnedAt, "busy", { trigger: "pattern" });
+          this.onStateChange(this.terminalId, this.spawnedAt, "busy", {
+            trigger: "pattern",
+            patternConfidence: patternResult?.confidence ?? 0.9,
+          });
         }
-      } else if (this.state === "busy") {
-        // Pattern lost - start or continue debounce
+      } else if (this.state === "busy" && (this.hasSeenWorkingPattern || this.hasExitedBootState)) {
+        // Allow idle transition after boot completes OR after we've seen a working pattern
+        // This ensures: (1) indicator stays spinning during boot, (2) transitions to idle after boot
         if (this.patternLostTime === 0) {
           this.patternLostTime = now;
         }
 
-        // Check boot period - don't transition to idle during boot
-        const timeSinceBoot = now - this.pollingStartTime;
-        if (timeSinceBoot < this.POLLING_BOOT_DELAY_MS) {
-          return; // Still booting, stay busy
-        }
-
         // Check idle debounce - wait before transitioning
         const timeSinceLost = now - this.patternLostTime;
-        if (timeSinceLost >= this.POLLING_IDLE_DEBOUNCE_MS) {
+        const idleDebounceMs = this.hasSeenWorkingPattern
+          ? this.POLLING_IDLE_DEBOUNCE_MS
+          : this.POLLING_BOOT_IDLE_DEBOUNCE_MS;
+        if (timeSinceLost >= idleDebounceMs) {
           this.state = "idle";
           this.onStateChange(this.terminalId, this.spawnedAt, "idle");
           this.patternLostTime = 0;
         }
       }
-    }, 100);
+      // If busy but haven't seen working pattern yet, stay busy (keep indicator spinning)
+    }, 50); // Poll at 50ms for responsive state detection
   }
 
   stopPolling(): void {
