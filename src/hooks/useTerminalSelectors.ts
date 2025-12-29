@@ -71,3 +71,28 @@ export function useWaitingTerminals(): TerminalInstance[] {
 export function useWaitingTerminalIds(): string[] {
   return useWaitingTerminals().map((t) => t.id);
 }
+
+/**
+ * Get background panel stats for Zen Mode header display.
+ * Returns count of active (grid) panels excluding the current one, and how many are working.
+ * @param excludeId - The ID of the current panel to exclude from counts
+ */
+export function useBackgroundPanelStats(excludeId: string): {
+  activeCount: number;
+  workingCount: number;
+} {
+  return useTerminalStore(
+    useShallow((state) => {
+      let active = 0;
+      let working = 0;
+      for (const t of state.terminals) {
+        // Only count grid panels (exclude dock and trash), and exclude the current panel
+        if (t.id !== excludeId && (t.location === "grid" || t.location === undefined)) {
+          active++;
+          if (t.agentState === "working") working++;
+        }
+      }
+      return { activeCount: active, workingCount: working };
+    })
+  );
+}

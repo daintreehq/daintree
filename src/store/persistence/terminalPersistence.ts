@@ -35,10 +35,10 @@ const DEFAULT_OPTIONS: Required<TerminalPersistenceOptions> = {
     } else if (t.kind === "notes") {
       return {
         ...base,
-        notePath: (t as any).notePath,
-        noteId: (t as any).noteId,
-        scope: (t as any).scope,
-        createdAt: (t as any).createdAt,
+        notePath: t.notePath,
+        noteId: t.noteId,
+        scope: t.scope,
+        createdAt: t.createdAt,
       };
     } else {
       return {

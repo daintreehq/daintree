@@ -280,24 +280,19 @@ export class WorkspaceClient extends EventEmitter {
         break;
 
       case "all-states":
-        // Avoid spread by assigning property directly
-        (event as unknown as { success: boolean }).success = true;
-        this.handleRequestResult(event as unknown as { requestId: string; success: boolean });
+        this.handleRequestResult(this.toResult(event, true));
         break;
 
       case "monitor":
-        (event as unknown as { success: boolean }).success = true;
-        this.handleRequestResult(event as unknown as { requestId: string; success: boolean });
+        this.handleRequestResult(this.toResult(event, true));
         break;
 
       case "list-branches-result":
-        (event as unknown as { success: boolean }).success = !event.error;
-        this.handleRequestResult(event as unknown as { requestId: string; success: boolean });
+        this.handleRequestResult(this.toResult(event));
         break;
 
       case "get-file-diff-result":
-        (event as unknown as { success: boolean }).success = !event.error;
-        this.handleRequestResult(event as unknown as { requestId: string; success: boolean });
+        this.handleRequestResult(this.toResult(event));
         break;
 
       // Handle spontaneous events (forward to renderer)
@@ -375,8 +370,7 @@ export class WorkspaceClient extends EventEmitter {
       }
 
       case "copytree:complete":
-        (event as unknown as { success: boolean }).success = true;
-        this.handleRequestResult(event as unknown as { requestId: string; success: boolean });
+        this.handleRequestResult(this.toResult(event, true));
         break;
 
       case "copytree:error":
@@ -389,19 +383,16 @@ export class WorkspaceClient extends EventEmitter {
 
       // File tree events
       case "file-tree-result":
-        (event as unknown as { success: boolean }).success = !event.error;
-        this.handleRequestResult(event as unknown as { requestId: string; success: boolean });
+        this.handleRequestResult(this.toResult(event));
         break;
 
       // Project Pulse events
       case "git:project-pulse":
-        (event as unknown as { success: boolean }).success = true;
-        this.handleRequestResult(event as unknown as { requestId: string; success: boolean });
+        this.handleRequestResult(this.toResult(event, true));
         break;
 
       case "git:project-pulse-error":
-        (event as unknown as { success: boolean }).success = false;
-        this.handleRequestResult(event as unknown as { requestId: string; success: boolean });
+        this.handleRequestResult(this.toResult(event, false));
         break;
 
       default:
@@ -425,6 +416,21 @@ export class WorkspaceClient extends EventEmitter {
         pending.resolve(event);
       }
     }
+  }
+
+  /**
+   * Convert an event to a result format expected by handleRequestResult.
+   * This helper avoids repetitive type casting throughout processHostEvent.
+   */
+  private toResult(
+    event: { requestId: string; error?: string },
+    success?: boolean
+  ): { requestId: string; success: boolean; error?: string } {
+    return {
+      requestId: event.requestId,
+      success: success ?? !event.error,
+      error: event.error,
+    };
   }
 
   private send(request: WorkspaceHostRequest): void {

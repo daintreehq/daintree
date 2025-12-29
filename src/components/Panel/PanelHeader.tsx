@@ -14,8 +14,7 @@ import { getBrandColorHex } from "@/lib/colorUtils";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
-import { useTerminalStore } from "@/store";
-import { useShallow } from "zustand/react/shallow";
+import { useBackgroundPanelStats } from "@/hooks";
 
 export interface PanelHeaderProps {
   id: string;
@@ -92,19 +91,7 @@ function PanelHeaderComponent({
       : undefined;
 
   // Get background activity stats for Zen Mode header
-  const { activeCount, workingCount } = useTerminalStore(
-    useShallow((state) => {
-      let active = 0;
-      let working = 0;
-      for (const t of state.terminals) {
-        if (t.id !== id && (t.location === "grid" || t.location === undefined)) {
-          active++;
-          if (t.agentState === "working") working++;
-        }
-      }
-      return { activeCount: active, workingCount: working };
-    })
-  );
+  const { activeCount, workingCount } = useBackgroundPanelStats(id);
 
   const handleHeaderDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;

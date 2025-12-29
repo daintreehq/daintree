@@ -29,7 +29,7 @@ export type { KeyScope, KeybindingConfig } from "../services/KeybindingService";
 export { useProjectSettings } from "./useProjectSettings";
 export { useProjectBranding } from "./useProjectBranding";
 
-export { useWaitingTerminalIds } from "./useTerminalSelectors";
+export { useWaitingTerminalIds, useBackgroundPanelStats } from "./useTerminalSelectors";
 
 export { useLinkDiscovery } from "./useLinkDiscovery";
 
