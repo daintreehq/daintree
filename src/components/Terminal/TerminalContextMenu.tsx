@@ -79,6 +79,7 @@ export function TerminalContextMenu({
     if (!terminal) return [];
 
     const isBrowser = terminal.kind === "browser";
+    const isNotes = terminal.kind === "notes";
 
     // Layout section: worktree navigation first (most common workflow), then positioning
     const layoutItems: MenuItemOption[] = [];
@@ -130,6 +131,29 @@ export function TerminalContextMenu({
         ...browserActions,
         { type: "separator" },
         ...browserManagementItems,
+        { type: "separator" },
+        ...destructiveItems,
+      ];
+    }
+
+    // Notes-specific actions
+    if (isNotes) {
+      const hasNotePath = Boolean(terminal.notePath);
+
+      const notesManagementItems: MenuItemOption[] = [
+        { id: "rename", label: "Rename Note", enabled: hasNotePath },
+        { id: "reveal-in-palette", label: "Reveal in Notes Palette", enabled: hasNotePath },
+      ];
+
+      const destructiveItems: MenuItemOption[] = [
+        { id: "delete-note", label: "Delete Note", enabled: hasNotePath },
+        { id: "trash", label: "Close Note" },
+      ];
+
+      return [
+        ...layoutItems,
+        { type: "separator" },
+        ...notesManagementItems,
         { type: "separator" },
         ...destructiveItems,
       ];
@@ -320,6 +344,29 @@ export function TerminalContextMenu({
             void actionService.dispatch(
               "browser.copyUrl",
               { url: terminal.browserUrl },
+              { source: "context-menu" }
+            );
+          }
+          break;
+        // Notes-specific actions
+        case "delete-note":
+          if (terminal.notePath) {
+            void actionService.dispatch(
+              "notes.delete",
+              {
+                notePath: terminal.notePath,
+                panelId: terminalId,
+                noteTitle: terminal.title,
+              },
+              { source: "context-menu" }
+            );
+          }
+          break;
+        case "reveal-in-palette":
+          if (terminal.notePath) {
+            void actionService.dispatch(
+              "notes.reveal",
+              { notePath: terminal.notePath },
               { source: "context-menu" }
             );
           }

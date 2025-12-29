@@ -188,7 +188,9 @@ export type ActionId =
   | "terminal.gridLayout.setStrategy"
   | "terminal.gridLayout.setValue"
   | "notes.openPalette"
-  | "notes.create";
+  | "notes.create"
+  | "notes.delete"
+  | "notes.reveal";
 
 export interface ActionContext {
   projectId?: string;
