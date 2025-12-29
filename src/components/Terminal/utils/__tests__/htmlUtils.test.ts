@@ -71,14 +71,14 @@ describe("convertAnsiLinesToHtml", () => {
   it("preserves ANSI color codes as styled spans", () => {
     // Red text ANSI: \x1b[31m
     const result = convertAnsiLinesToHtml(["\x1b[31mRed text\x1b[0m"]);
-    expect(result[0]).toContain("color:rgb(187, 0, 0)");
+    expect(result[0]).toContain("ansi-red-fg");
     expect(result[0]).toContain("Red text");
   });
 
   it("escapes HTML inside colored ANSI text", () => {
     const result = convertAnsiLinesToHtml(["\x1b[31m<div>test</div>\x1b[0m"]);
     expect(result[0]).toContain("&lt;div&gt;test&lt;/div&gt;");
-    expect(result[0]).toContain("color:rgb(187, 0, 0)");
+    expect(result[0]).toContain("ansi-red-fg");
   });
 
   it("linkifies URLs in output", () => {
@@ -106,7 +106,7 @@ describe("convertAnsiLinesToHtml", () => {
     ]);
     expect(result[0]).toContain("&lt;div&gt;");
     expect(result[1]).toBe("Normal line");
-    expect(result[2]).toContain("color:rgb(0, 187, 0)");
+    expect(result[2]).toContain("ansi-green-fg");
   });
 
   it("escapes literal HTML entities from terminal output", () => {
@@ -130,7 +130,7 @@ describe("convertAnsiLinesToHtml", () => {
     expect(result[0]).toContain("&lt;div&gt;");
     expect(result[0]).toContain("&lt;/div&gt;");
     // ANSI color should create span
-    expect(result[0]).toContain("color:rgb(187, 0, 0)");
+    expect(result[0]).toContain("ansi-red-fg");
     // URL should be linkified with escaped ampersand
     expect(result[0]).toContain('<a href="https://example.com?a=1&amp;b=2"');
   });
