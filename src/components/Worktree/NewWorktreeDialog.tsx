@@ -52,6 +52,7 @@ export function NewWorktreeDialog({
   const [fromRemote, setFromRemote] = useState(false);
   const [selectedIssue, setSelectedIssue] = useState<GitHubIssue | null>(null);
   const [selectedPrefix, setSelectedPrefix] = useState(BRANCH_TYPES[0].prefix);
+  const [branchExistsError, setBranchExistsError] = useState(false);
 
   const [branchPickerOpen, setBranchPickerOpen] = useState(false);
   const [branchQuery, setBranchQuery] = useState("");
@@ -153,6 +154,7 @@ export function NewWorktreeDialog({
 
     setLoading(true);
     setError(null);
+    setBranchExistsError(false);
     setBranches([]);
     setBaseBranch("");
     setFromRemote(false);
@@ -249,8 +251,8 @@ export function NewWorktreeDialog({
     return () => abortController.abort();
   }, [newBranch, selectedPrefix, rootPath]);
 
-  const handleCreate = async () => {
-    if (!baseBranch) {
+  const handleCreate = async (useExistingBranch = false) => {
+    if (!useExistingBranch && !baseBranch) {
       setError("Please select a base branch");
       return;
     }
@@ -280,6 +282,7 @@ export function NewWorktreeDialog({
 
     setCreating(true);
     setError(null);
+    setBranchExistsError(false);
 
     try {
       const options: CreateWorktreeOptions = {
@@ -287,6 +290,7 @@ export function NewWorktreeDialog({
         newBranch: fullBranchName,
         path: worktreePath.trim(),
         fromRemote,
+        useExistingBranch,
       };
 
       const result = await actionService.dispatch(
@@ -326,7 +330,9 @@ export function NewWorktreeDialog({
       setSelectedPrefix(BRANCH_TYPES[0].prefix);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Failed to create worktree";
-      setError(message);
+      const isBranchExists = /branch named .* already exists/.test(message);
+      setBranchExistsError(isBranchExists);
+      setError(isBranchExists ? `Branch "${fullBranchName}" already exists` : message);
     } finally {
       setCreating(false);
     }
@@ -600,7 +606,21 @@ export function NewWorktreeDialog({
             {error && (
               <div className="flex items-start gap-2 p-3 bg-red-500/10 border border-red-500/20 rounded-[var(--radius-md)]">
                 <AlertCircle className="w-4 h-4 text-[var(--color-status-error)] mt-0.5 flex-shrink-0" />
-                <p className="text-sm text-[var(--color-status-error)]">{error}</p>
+                <div className="flex-1">
+                  <p className="text-sm text-[var(--color-status-error)]">{error}</p>
+                  {branchExistsError && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-2"
+                      onClick={() => handleCreate(true)}
+                      disabled={creating}
+                    >
+                      <GitBranch className="w-3.5 h-3.5 mr-1.5" />
+                      Use existing branch
+                    </Button>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -611,7 +631,11 @@ export function NewWorktreeDialog({
         <Button variant="ghost" onClick={onClose} disabled={creating}>
           Cancel
         </Button>
-        <Button onClick={handleCreate} disabled={creating || loading} className="min-w-[100px]">
+        <Button
+          onClick={() => handleCreate()}
+          disabled={creating || loading}
+          className="min-w-[100px]"
+        >
           {creating ? (
             <>
               <Loader2 className="w-4 h-4 mr-2 animate-spin" />

@@ -670,9 +670,17 @@ export class WorkspaceService {
   ): Promise<void> {
     try {
       const git = simpleGit(rootPath);
-      const { baseBranch, newBranch, path, fromRemote = false } = options;
+      const {
+        baseBranch,
+        newBranch,
+        path,
+        fromRemote = false,
+        useExistingBranch = false,
+      } = options;
 
-      if (fromRemote) {
+      if (useExistingBranch) {
+        await git.raw(["worktree", "add", path, newBranch]);
+      } else if (fromRemote) {
         await git.raw(["worktree", "add", "-b", newBranch, "--track", path, baseBranch]);
       } else {
         await git.raw(["worktree", "add", "-b", newBranch, path, baseBranch]);

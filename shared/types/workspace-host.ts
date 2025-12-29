@@ -21,6 +21,7 @@ export interface CreateWorktreeOptions {
   newBranch: string;
   path: string;
   fromRemote?: boolean;
+  useExistingBranch?: boolean;
 }
 
 /** Branch information from git */
