@@ -217,6 +217,8 @@ export const HistoryOverlayTerminalView = forwardRef<
       fontVariantLigatures: "none",
       fontFeatureSettings: '"liga" 0, "calt" 0',
       fontKerning: "none",
+      fontWeight: "normal",
+      fontStyle: "normal",
       tabSize: 8,
     }),
     [effectiveFontFamily, fontSize]
@@ -836,9 +838,9 @@ export const HistoryOverlayTerminalView = forwardRef<
             }}
           >
             {/* History overlay styles for pixel-perfect alignment with xterm
+                - Uses xterm's serializeAsHTML which outputs inline styles matching xterm's theme
                 - Row styling ensures exact cell height matching
-                - Span styling fills full line height for background colors
-                - Prevents CSS inheritance from creating gaps */}
+                - Span styling preserves inline flow for proper text rendering */}
             <style>{`
               .history-overlay a:hover {
                 color: #79c0ff !important;
@@ -851,15 +853,11 @@ export const HistoryOverlayTerminalView = forwardRef<
                 padding: 0;
               }
               .history-overlay .history-row span {
-                display: inline-block;
-                height: 100%;
-                vertical-align: top;
+                display: inline;
                 line-height: inherit;
               }
               .history-overlay .history-row a {
-                display: inline-block;
-                height: 100%;
-                vertical-align: top;
+                display: inline;
                 line-height: inherit;
               }
             `}</style>

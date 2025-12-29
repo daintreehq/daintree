@@ -1,15 +1,9 @@
 import { Terminal } from "@xterm/xterm";
 import { SerializeAddon } from "@xterm/addon-serialize";
-import { convertAnsiLinesToHtml, escapeHtml } from "./htmlUtils";
+import { escapeHtml, linkifyHtml } from "./htmlUtils";
 
 export const HISTORY_JUMP_BACK_PERSIST_MS = 100;
 export const HISTORY_JUMP_BACK_PERSIST_FRAMES = 2;
-
-/**
- * This implementation uses ANSI serialization → Anser HTML conversion because xterm's DOM renderer
- * only contains viewport rows (24-50 elements), not full scrollback (5000 lines needed here).
- * See docs/investigations/dom-snapshot-history-viewer.md for full investigation details.
- */
 
 export interface HistoryState {
   lines: string[];
@@ -17,6 +11,26 @@ export interface HistoryState {
   windowStart: number;
   windowEnd: number;
   takenAt: number;
+}
+
+/**
+ * Parse xterm's serializeAsHTML output to extract individual row HTML.
+ * The output format is:
+ * <html><body><!--StartFragment--><pre>
+ * <div style='...'>
+ *   <div><span>row content</span><span>more content</span>...</div>
+ *   ...
+ * </div>
+ * </pre><!--EndFragment--></body></html>
+ *
+ * Uses DOMParser for robust HTML parsing - the previous regex approach
+ * only captured the first <span> per row, truncating multi-styled rows.
+ */
+function parseXtermHtmlRows(html: string): string[] {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  // Rows are nested: pre > div (container) > div (each row)
+  const rowDivs = doc.querySelectorAll("pre > div > div");
+  return Array.from(rowDivs, (div) => linkifyHtml(div.innerHTML) || " ");
 }
 
 export function extractSnapshot(
@@ -33,6 +47,7 @@ export function extractSnapshot(
   const count = Math.min(maxLines, effectiveEnd);
   const start = Math.max(0, effectiveEnd - count);
 
+  // Extract plain text lines for diff comparison
   const lines: string[] = new Array(count);
   for (let i = 0; i < count; i++) {
     const line = buffer.getLine(start + i);
@@ -42,18 +57,30 @@ export function extractSnapshot(
   let htmlLines: string[];
   if (serializeAddon) {
     try {
-      const ansiLines: string[] = new Array(count);
-      for (let i = 0; i < count; i++) {
-        const lineIdx = start + i;
+      // Use serializeAsHTML for pixel-perfect xterm rendering
+      // This uses xterm's internal theme colors and cell-by-cell rendering
+      const fullHtml = serializeAddon.serializeAsHTML({
+        scrollback: count,
+        onlySelection: false,
+        includeGlobalBackground: false,
+      });
 
-        const serialized = serializeAddon.serialize({
-          range: { start: lineIdx, end: lineIdx },
-          excludeAltBuffer: true,
-          excludeModes: true,
-        } as any);
-        ansiLines[i] = serialized.replace(/\n$/, "");
+      htmlLines = parseXtermHtmlRows(fullHtml);
+
+      // Handle skipBottomLines by removing rows from the end
+      if (skipBottomLines > 0 && htmlLines.length > skipBottomLines) {
+        htmlLines = htmlLines.slice(0, -skipBottomLines);
       }
-      htmlLines = convertAnsiLinesToHtml(ansiLines);
+
+      // Ensure we have the right number of rows, pad with empty if needed
+      while (htmlLines.length < count) {
+        htmlLines.push(" ");
+      }
+
+      // Trim to maxLines if we got more
+      if (htmlLines.length > count) {
+        htmlLines = htmlLines.slice(htmlLines.length - count);
+      }
     } catch {
       htmlLines = lines.map((l) => escapeHtml(l) || " ");
     }

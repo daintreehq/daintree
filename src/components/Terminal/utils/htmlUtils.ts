@@ -37,7 +37,8 @@ export function convertAnsiLinesToHtml(ansiLines: string[]): string[] {
     // HTML-like text in terminal output displays as literal text.
     // Anser.escapeForHtml preserves ANSI escape sequences while escaping <, >, &
     const escaped = Anser.escapeForHtml(line);
-    let html = Anser.ansiToHtml(escaped, { use_classes: false });
+    // Use class-based output so xterm CSS classes (.xterm-underline-*, etc.) apply
+    let html = Anser.ansiToHtml(escaped, { use_classes: true });
     html = linkifyHtml(html);
     return html || " ";
   });
