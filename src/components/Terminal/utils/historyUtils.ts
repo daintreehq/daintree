@@ -18,31 +18,19 @@ export interface HistoryState {
  * The output format is:
  * <html><body><!--StartFragment--><pre>
  * <div style='...'>
- *   <div><span>row content</span></div>
+ *   <div><span>row content</span><span>more content</span>...</div>
  *   ...
  * </div>
  * </pre><!--EndFragment--></body></html>
+ *
+ * Uses DOMParser for robust HTML parsing - the previous regex approach
+ * only captured the first <span> per row, truncating multi-styled rows.
  */
 function parseXtermHtmlRows(html: string): string[] {
-  // Extract the inner content div (contains all rows)
-  const contentMatch = html.match(/<div style='[^']*'>([\s\S]*?)<\/div>\s*<\/pre>/);
-  if (!contentMatch) return [];
-
-  const innerHtml = contentMatch[1];
-
-  // Extract each row's inner HTML (everything inside each <div>...</div>)
-  const rowRegex = /<div>(<span[\s\S]*?<\/span>)<\/div>/g;
-  const rows: string[] = [];
-  let match;
-
-  while ((match = rowRegex.exec(innerHtml)) !== null) {
-    // Get the span content and apply linkification
-    let rowHtml = match[1];
-    rowHtml = linkifyHtml(rowHtml);
-    rows.push(rowHtml || " ");
-  }
-
-  return rows;
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  // Rows are nested: pre > div (container) > div (each row)
+  const rowDivs = doc.querySelectorAll("pre > div > div");
+  return Array.from(rowDivs, (div) => linkifyHtml(div.innerHTML) || " ");
 }
 
 export function extractSnapshot(
