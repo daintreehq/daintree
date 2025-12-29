@@ -74,6 +74,7 @@ describe("ActivityMonitor", () => {
       };
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
         processStateValidator,
+        outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
       });
 
       monitor.onData("some output");
@@ -91,6 +92,7 @@ describe("ActivityMonitor", () => {
       };
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
         processStateValidator,
+        outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
       });
 
       monitor.onData("character echo");
@@ -102,7 +104,9 @@ describe("ActivityMonitor", () => {
 
     it("should allow busy from output when no validator present (fail-open)", () => {
       const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange);
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
+      });
 
       monitor.onData("output");
 
@@ -178,7 +182,9 @@ describe("ActivityMonitor", () => {
 
     it("should not fire duplicate busy from output", () => {
       const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange);
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
+      });
 
       monitor.onData("output1");
       monitor.onData("output2");
@@ -219,7 +225,9 @@ describe("ActivityMonitor", () => {
 
     it("should re-enter busy from idle via output after accidental exit", () => {
       const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange);
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
+      });
 
       monitor.onInput("\r");
       expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", { trigger: "input" });
@@ -253,7 +261,9 @@ describe("ActivityMonitor", () => {
 
     it("should preserve state on dispose", () => {
       const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange);
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
+      });
 
       monitor.onData("some output");
       expect(monitor.getState()).toBe("busy");

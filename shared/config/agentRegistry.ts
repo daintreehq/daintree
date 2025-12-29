@@ -18,6 +18,46 @@ export interface AgentInstallHelp {
   troubleshooting?: string[];
 }
 
+/**
+ * Configuration for pattern-based working state detection.
+ * Patterns are matched against terminal output to detect when an agent is actively working.
+ */
+export interface AgentDetectionConfig {
+  /**
+   * Primary patterns that indicate working state (high confidence).
+   * Patterns are matched against the last N lines of terminal output.
+   * Use strings that will be converted to RegExp with case-insensitive flag.
+   */
+  primaryPatterns: string[];
+
+  /**
+   * Fallback patterns for early-stage output (medium confidence).
+   * Checked when primary patterns don't match.
+   */
+  fallbackPatterns?: string[];
+
+  /**
+   * Number of lines from end of output to scan (default: 10).
+   */
+  scanLineCount?: number;
+
+  /**
+   * Activity debounce period in ms (default: 1500).
+   * Time to wait after last activity before transitioning to idle.
+   */
+  debounceMs?: number;
+
+  /**
+   * Confidence level when primary pattern matches (default: 0.95).
+   */
+  primaryConfidence?: number;
+
+  /**
+   * Confidence level when fallback pattern matches (default: 0.75).
+   */
+  fallbackConfidence?: number;
+}
+
 export interface AgentConfig {
   id: string;
   name: string;
@@ -38,6 +78,11 @@ export interface AgentConfig {
     blockClearScreen?: boolean;
     blockCursorToTop?: boolean;
   };
+  /**
+   * Configuration for pattern-based working state detection.
+   * If not specified, built-in patterns for the agent ID are used.
+   */
+  detection?: AgentDetectionConfig;
 }
 
 export const AGENT_REGISTRY: Record<string, AgentConfig> = {
@@ -87,6 +132,15 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       blockClearScreen: false,
       blockCursorToTop: false,
     },
+    detection: {
+      primaryPatterns: ["[✽✻✼✾⟡◇◆●○]\\s+\\w+…?\\s+\\(esc to interrupt", "esc to interrupt"],
+      fallbackPatterns: [
+        "[✽✻✼✾⟡◇◆●○]\\s+(thinking|deliberating|working|reading|writing|searching|executing)",
+      ],
+      scanLineCount: 10,
+      primaryConfidence: 0.95,
+      fallbackConfidence: 0.75,
+    },
   },
   gemini: {
     id: "gemini",
@@ -132,6 +186,13 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       blockScrollRegion: false,
       blockClearScreen: false,
       blockCursorToTop: false,
+    },
+    detection: {
+      primaryPatterns: ["[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+.+\\s+\\(esc to cancel", "esc to cancel"],
+      fallbackPatterns: ["[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+\\w"],
+      scanLineCount: 10,
+      primaryConfidence: 0.95,
+      fallbackConfidence: 0.7,
     },
   },
   codex: {
@@ -179,6 +240,13 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       blockScrollRegion: false,
       blockClearScreen: false,
       blockCursorToTop: false,
+    },
+    detection: {
+      primaryPatterns: ["[•·]\\s+Working\\s+\\([^)]*esc to interrupt", "esc to interrupt"],
+      fallbackPatterns: ["[•·]\\s+Working"],
+      scanLineCount: 10,
+      primaryConfidence: 0.95,
+      fallbackConfidence: 0.75,
     },
   },
 };

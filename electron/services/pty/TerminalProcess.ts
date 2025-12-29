@@ -538,6 +538,7 @@ export class TerminalProcess {
         },
         { ...this.getActivityMonitorOptions(), processStateValidator }
       );
+      this.activityMonitor.startPolling();
     }
 
     if (this.isAgentTerminal && agentId) {
@@ -971,6 +972,23 @@ export class TerminalProcess {
   }
 
   /**
+   * Get the last N lines from the xterm buffer.
+   * xterm already handles ANSI codes and carriage returns.
+   */
+  getLastNLines(n: number): string[] {
+    const buffer = this.terminalInfo.headlessTerminal?.buffer.active;
+    if (!buffer) return [];
+
+    const lines: string[] = [];
+    const start = Math.max(0, buffer.length - n);
+    for (let i = start; i < buffer.length; i++) {
+      const line = buffer.getLine(i);
+      if (line) lines.push(line.translateToString(true));
+    }
+    return lines;
+  }
+
+  /**
    * Get serialized terminal state for fast restoration (synchronous).
    * Use getSerializedStateAsync() for large terminals to avoid blocking.
    * Creates headless terminal on-demand for non-agent terminals.
@@ -1099,6 +1117,7 @@ export class TerminalProcess {
         },
         { ...this.getActivityMonitorOptions(), processStateValidator }
       );
+      this.activityMonitor.startPolling();
     }
   }
 
@@ -1106,7 +1125,26 @@ export class TerminalProcess {
     const ignoredInputSequences =
       this.terminalInfo.type === "codex" ? ["\n", "\x1b\r"] : ["\x1b\r"];
 
-    return { ignoredInputSequences };
+    // Enable pattern-based detection for agent terminals
+    // The agentId here refers to the agent type (claude, gemini, codex)
+    const agentId = this.terminalInfo.type !== "terminal" ? this.terminalInfo.type : undefined;
+
+    // Enable output-based activity detection for agent terminals.
+    // AI agents often have low CPU while waiting for API responses (network I/O),
+    // causing CPU-based detection to incorrectly mark them as idle. Output detection
+    // allows the terminal to transition back to busy when the agent produces output
+    // (spinner updates, code changes, etc.) even after an idle transition.
+    const outputActivityDetection = {
+      enabled: true,
+      windowMs: 1000,
+      minFrames: 2,
+      minBytes: 32, // Low threshold to catch spinner animations
+    };
+
+    // Provide callback to get visible lines from xterm for pattern detection
+    const getVisibleLines = agentId ? (n: number) => this.getLastNLines(n) : undefined;
+
+    return { ignoredInputSequences, agentId, outputActivityDetection, getVisibleLines };
   }
 
   private createProcessStateValidator(
