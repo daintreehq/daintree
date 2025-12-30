@@ -22,6 +22,7 @@ import {
   Globe,
   Clock,
   StickyNote,
+  Rocket,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
@@ -29,6 +30,7 @@ import { GitHubResourceList, CommitList } from "@/components/GitHub";
 import { AgentButton } from "./AgentButton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useWorktreeActions } from "@/hooks/useWorktreeActions";
+import { useProjectSettings } from "@/hooks";
 import { useProjectStore } from "@/store/projectStore";
 import { useSidecarStore, usePreferencesStore } from "@/store";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -76,6 +78,8 @@ export function Toolbar({
   const projects = useProjectStore((state) => state.projects);
   const loadProjects = useProjectStore((state) => state.loadProjects);
   const getCurrentProject = useProjectStore((state) => state.getCurrentProject);
+  const { settings: projectSettings } = useProjectSettings();
+  const devServerCommand = projectSettings?.devServerCommand?.trim();
   const { stats, refresh: refreshStats, isStale, lastUpdated } = useRepositoryStats();
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const activeWorktree = useWorktreeDataStore((state) =>
@@ -263,6 +267,20 @@ export function Toolbar({
           >
             <Globe />
           </Button>
+          {devServerCommand && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => {
+                void actionService.dispatch("devServer.start", undefined, { source: "user" });
+              }}
+              className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-purple-400 focus-visible:text-purple-400"
+              title="Start Dev Server"
+              aria-label="Start Dev Server"
+            >
+              <Rocket />
+            </Button>
+          )}
         </div>
       </div>
 

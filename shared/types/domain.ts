@@ -610,4 +610,6 @@ export interface ProjectSettings {
   projectIconSvg?: string;
   /** ID of the default recipe to run when creating new worktrees */
   defaultWorktreeRecipeId?: string;
+  /** Dev server command (e.g., "npm run dev") for the toolbar button */
+  devServerCommand?: string;
 }

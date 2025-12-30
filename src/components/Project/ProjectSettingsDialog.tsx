@@ -18,6 +18,7 @@ import {
   FileDown,
   Play,
   AlertTriangle,
+  Rocket,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -71,6 +72,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   const [defaultWorktreeRecipeId, setDefaultWorktreeRecipeId] = useState<string | undefined>(
     undefined
   );
+  const [devServerCommand, setDevServerCommand] = useState<string>("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const {
@@ -172,6 +174,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       setExcludedPaths(settings.excludedPaths || []);
       setProjectIconSvg(settings.projectIconSvg);
       setDefaultWorktreeRecipeId(settings.defaultWorktreeRecipeId);
+      setDevServerCommand(settings.devServerCommand || "");
       setIsInitialized(true);
     }
     if (!isOpen) {
@@ -181,6 +184,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       setProjectIconSvg(undefined);
       setIconError(null);
       setDefaultWorktreeRecipeId(undefined);
+      setDevServerCommand("");
+      setSaveError(null);
     }
   }, [settings, isOpen, isInitialized]);
 
@@ -262,6 +267,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         excludedPaths: sanitizedPaths.length > 0 ? sanitizedPaths : undefined,
         projectIconSvg: projectIconSvg,
         defaultWorktreeRecipeId: defaultWorktreeRecipeId,
+        devServerCommand: devServerCommand.trim() || undefined,
       });
       onClose();
     } catch (error) {
@@ -421,6 +427,30 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                   </div>
                 </div>
               )}
+
+              <div className="mb-6 pb-6 border-b border-canopy-border">
+                <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+                  <Rocket className="h-4 w-4" />
+                  Dev Server Command
+                </h3>
+                <p className="text-xs text-canopy-text/60 mb-4">
+                  Command to start the development server (e.g., npm run dev). When configured, a
+                  button will appear in the toolbar to start the dev server.
+                </p>
+
+                <input
+                  id="dev-server-command"
+                  type="text"
+                  value={devServerCommand}
+                  onChange={(e) => setDevServerCommand(e.target.value)}
+                  className="w-full bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition-all placeholder:text-canopy-text/40"
+                  placeholder="npm run dev"
+                  spellCheck={false}
+                  autoCapitalize="off"
+                  autoComplete="off"
+                  aria-label="Dev server command"
+                />
+              </div>
 
               <div className="mb-6 pb-6 border-b border-canopy-border">
                 <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">

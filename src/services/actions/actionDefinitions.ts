@@ -2,6 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "./actionTypes";
 import { registerAgentActions } from "./definitions/agentActions";
 import { registerAppActions } from "./definitions/appActions";
 import { registerBrowserActions } from "./definitions/browserActions";
+import { registerDevServerActions } from "./definitions/devServerActions";
 import { registerGithubActions } from "./definitions/githubActions";
 import { registerGitActions } from "./definitions/gitActions";
 import { registerIntrospectionActions } from "./definitions/introspectionActions";
@@ -39,6 +40,7 @@ export function createActionDefinitions(callbacks: ActionCallbacks): ActionRegis
   registerBrowserActions(actions, callbacks);
   registerNotesActions(actions, callbacks);
   registerIntrospectionActions(actions, callbacks);
+  registerDevServerActions(actions, callbacks);
 
   return actions;
 }

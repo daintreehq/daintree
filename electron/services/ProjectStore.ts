@@ -257,6 +257,8 @@ export class ProjectStore {
           typeof parsed.defaultWorktreeRecipeId === "string"
             ? parsed.defaultWorktreeRecipeId
             : undefined,
+        devServerCommand:
+          typeof parsed.devServerCommand === "string" ? parsed.devServerCommand : undefined,
       };
 
       return settings;
