@@ -190,7 +190,8 @@ export type ActionId =
   | "notes.openPalette"
   | "notes.create"
   | "notes.delete"
-  | "notes.reveal";
+  | "notes.reveal"
+  | "devServer.start";
 
 export interface ActionContext {
   projectId?: string;
