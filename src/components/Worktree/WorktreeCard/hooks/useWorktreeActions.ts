@@ -19,7 +19,6 @@ export interface UseWorktreeActionsResult {
   treeCopied: boolean;
   isCopyingTree: boolean;
   copyFeedback: string;
-  pathCopied: boolean;
 
   confirmDialog: ConfirmDialogState;
   showDeleteDialog: boolean;
@@ -28,7 +27,6 @@ export interface UseWorktreeActionsResult {
   closeConfirmDialog: () => void;
 
   handlePathClick: () => void;
-  handleCopyPath: (e: React.MouseEvent) => Promise<void>;
   handleCopyTree: () => Promise<void>;
   handleCopyTreeClick: (e: React.MouseEvent<HTMLButtonElement>) => Promise<void>;
 
@@ -67,10 +65,6 @@ export function useWorktreeActions({
   const treeCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const copyTreeRequestIdRef = useRef(0);
 
-  const [pathCopied, setPathCopied] = useState(false);
-  const pathCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const copyPathRequestIdRef = useRef(0);
-
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>({
     isOpen: false,
     title: "",
@@ -84,14 +78,9 @@ export function useWorktreeActions({
   useEffect(() => {
     return () => {
       copyTreeRequestIdRef.current = -1;
-      copyPathRequestIdRef.current = -1;
       if (treeCopyTimeoutRef.current) {
         clearTimeout(treeCopyTimeoutRef.current);
         treeCopyTimeoutRef.current = null;
-      }
-      if (pathCopyTimeoutRef.current) {
-        clearTimeout(pathCopyTimeoutRef.current);
-        pathCopyTimeoutRef.current = null;
       }
     };
   }, []);
@@ -103,38 +92,6 @@ export function useWorktreeActions({
   const handlePathClick = useCallback(() => {
     void actionService.dispatch("system.openPath", { path: worktree.path }, { source: "user" });
   }, [worktree.path]);
-
-  const handleCopyPath = useCallback(
-    async (e: React.MouseEvent) => {
-      e.stopPropagation();
-      const requestId = ++copyPathRequestIdRef.current;
-      try {
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          await navigator.clipboard.writeText(worktree.path);
-        } else {
-          throw new Error("Clipboard API not available");
-        }
-
-        if (copyPathRequestIdRef.current !== requestId) return;
-
-        setPathCopied(true);
-
-        if (pathCopyTimeoutRef.current) {
-          clearTimeout(pathCopyTimeoutRef.current);
-          pathCopyTimeoutRef.current = null;
-        }
-
-        pathCopyTimeoutRef.current = setTimeout(() => {
-          if (copyPathRequestIdRef.current !== requestId) return;
-          setPathCopied(false);
-          pathCopyTimeoutRef.current = null;
-        }, 2000);
-      } catch (err) {
-        console.error("Failed to copy path:", err);
-      }
-    },
-    [worktree.path]
-  );
 
   const handleRunRecipe = useCallback(
     async (recipeId: string) => {
@@ -298,13 +255,11 @@ export function useWorktreeActions({
     treeCopied,
     isCopyingTree,
     copyFeedback,
-    pathCopied,
     confirmDialog,
     showDeleteDialog,
     setShowDeleteDialog,
     closeConfirmDialog,
     handlePathClick,
-    handleCopyPath,
     handleCopyTree,
     handleCopyTreeClick,
     handleRunRecipe,
