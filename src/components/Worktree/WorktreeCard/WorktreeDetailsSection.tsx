@@ -14,7 +14,6 @@ export interface WorktreeDetailsSectionProps {
   worktree: WorktreeState;
   homeDir?: string;
   isExpanded: boolean;
-  hasExpandableContent: boolean;
   hasChanges: boolean;
   computedSubtitle: ComputedSubtitle;
   effectiveNote?: string;
@@ -32,7 +31,6 @@ export function WorktreeDetailsSection({
   worktree,
   homeDir,
   isExpanded,
-  hasExpandableContent,
   hasChanges,
   computedSubtitle,
   effectiveNote,
@@ -47,10 +45,6 @@ export function WorktreeDetailsSection({
 }: WorktreeDetailsSectionProps) {
   const detailsId = useMemo(() => `worktree-${worktree.id}-details`, [worktree.id]);
   const detailsPanelId = useMemo(() => `worktree-${worktree.id}-details-panel`, [worktree.id]);
-
-  if (!hasExpandableContent) {
-    return null;
-  }
 
   return (
     <div

@@ -15,13 +15,11 @@ import { useWorktreeSelectionStore } from "../../store/worktreeStore";
 import { errorsClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { cn } from "../../lib/utils";
-import { formatPath } from "../../utils/textParsing";
 import { getAgentConfig, getAgentIds } from "@/config/agents";
 import { getAgentSettingsEntry } from "@/types";
 import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { WorktreeDetailsSection } from "./WorktreeCard/WorktreeDetailsSection";
 import { WorktreeDialogs } from "./WorktreeCard/WorktreeDialogs";
-import { WorktreeFooter } from "./WorktreeCard/WorktreeFooter";
 import { WorktreeHeader } from "./WorktreeCard/WorktreeHeader";
 import { WorktreeStatusSpine } from "./WorktreeCard/WorktreeStatusSpine";
 import { WorktreeTerminalSection } from "./WorktreeCard/WorktreeTerminalSection";
@@ -122,21 +120,17 @@ export function WorktreeCard({
   const { branchLabel, hasChanges, effectiveNote, effectiveSummary, computedSubtitle, spineState } =
     useWorktreeStatus({ worktree, worktreeErrorCount: worktreeErrors.length });
 
-  const displayPath = formatPath(worktree.path, homeDir);
-
   const {
     runningRecipeId,
     isRestartValidating,
     treeCopied,
     isCopyingTree,
     copyFeedback,
-    pathCopied,
     confirmDialog,
     showDeleteDialog,
     setShowDeleteDialog,
     closeConfirmDialog,
     handlePathClick,
-    handleCopyPath,
     handleCopyTree,
     handleCopyTreeClick,
     handleRunRecipe,
@@ -367,7 +361,6 @@ export function WorktreeCard({
           worktree={worktree}
           homeDir={homeDir}
           isExpanded={isExpanded}
-          hasExpandableContent={hasExpandableContent}
           hasChanges={hasChanges}
           computedSubtitle={computedSubtitle}
           effectiveNote={effectiveNote}
@@ -388,14 +381,6 @@ export function WorktreeCard({
           terminals={worktreeTerminals}
           onToggle={handleToggleTerminals}
           onTerminalSelect={handleTerminalSelect}
-        />
-
-        <WorktreeFooter
-          worktreePath={worktree.path}
-          displayPath={displayPath}
-          pathCopied={pathCopied}
-          onCopyPath={handleCopyPath}
-          onOpenPath={handlePathClick}
         />
 
         <WorktreeDialogs

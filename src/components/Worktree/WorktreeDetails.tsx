@@ -97,7 +97,7 @@ export function WorktreeDetails({
     }
   };
 
-  const hasContent =
+  const hasDetailsContent =
     worktreeErrors.length > 0 ||
     effectiveNote ||
     effectiveSummary ||
@@ -105,14 +105,12 @@ export function WorktreeDetails({
     (hasChanges && worktree.worktreeChanges) ||
     (showTime && lastActivityTimestamp);
 
-  if (!hasContent) {
-    return null;
-  }
-
   return (
     <div className="space-y-4">
-      {/* Time Display for Expanded View */}
-      {showTime && lastActivityTimestamp && (
+      {hasDetailsContent && (
+        <>
+          {/* Time Display for Expanded View */}
+          {showTime && lastActivityTimestamp && (
         <div className="flex items-center gap-2 pb-2 border-b border-white/5">
           <div className="flex items-center gap-1.5 text-xs text-canopy-text/50">
             <span className="text-xs font-medium">Last active:</span>
@@ -195,6 +193,8 @@ export function WorktreeDetails({
             groupByFolder={worktree.worktreeChanges.changedFileCount > 5}
           />
         </div>
+      )}
+        </>
       )}
 
       {/* System path footer */}
