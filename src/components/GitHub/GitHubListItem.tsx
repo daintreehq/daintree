@@ -11,6 +11,7 @@ import {
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
+import { Avatar } from "@/components/ui/Avatar";
 
 interface GitHubListItemProps {
   item: GitHubIssue | GitHubPR;
@@ -183,12 +184,12 @@ export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemP
           {type === "issue" && "assignees" in item && item.assignees.length > 0 && (
             <div className="flex -space-x-1.5">
               {item.assignees.slice(0, 3).map((assignee) => (
-                <img
+                <Avatar
                   key={assignee.login}
                   src={assignee.avatarUrl}
                   alt={assignee.login}
                   title={assignee.login}
-                  className="w-5 h-5 rounded-full border-2 border-canopy-sidebar"
+                  className="w-5 h-5 border-2 border-canopy-sidebar"
                 />
               ))}
               {item.assignees.length > 3 && (
