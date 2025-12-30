@@ -92,8 +92,8 @@ export const LIST_PRS_QUERY = `
 `;
 
 export const SEARCH_QUERY = `
-  query SearchItems($query: String!, $type: SearchType!, $cursor: String, $limit: Int = 20) {
-    search(query: $query, type: $type, first: $limit, after: $cursor) {
+  query SearchItems($searchQuery: String!, $type: SearchType!, $cursor: String, $limit: Int = 20) {
+    search(query: $searchQuery, type: $type, first: $limit, after: $cursor) {
       issueCount
       pageInfo {
         hasNextPage

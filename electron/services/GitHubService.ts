@@ -667,7 +667,7 @@ export async function listIssues(
         `repo:${context.owner}/${context.repo} is:issue ${stateFilter} sort:updated-desc ${options.search}`.trim();
 
       const response = (await client(SEARCH_QUERY, {
-        query: searchQuery,
+        searchQuery,
         type: "ISSUE",
         cursor: options.cursor,
         limit: 20,
@@ -754,7 +754,7 @@ export async function listPullRequests(
         `repo:${context.owner}/${context.repo} is:pr ${stateFilter} sort:updated-desc ${options.search}`.trim();
 
       const response = (await client(SEARCH_QUERY, {
-        query: searchQuery,
+        searchQuery,
         type: "ISSUE",
         cursor: options.cursor,
         limit: 20,
