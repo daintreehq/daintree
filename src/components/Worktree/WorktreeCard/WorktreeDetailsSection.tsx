@@ -20,7 +20,6 @@ export interface WorktreeDetailsSectionProps {
   effectiveSummary?: string | null;
   worktreeErrors: AppError[];
   isFocused: boolean;
-  showTimeInHeader: boolean;
   onToggleExpand: (e: React.MouseEvent) => void;
   onPathClick: () => void;
   onDismissError: (id: string) => void;
@@ -37,7 +36,6 @@ export function WorktreeDetailsSection({
   effectiveSummary,
   worktreeErrors,
   isFocused,
-  showTimeInHeader,
   onToggleExpand,
   onPathClick,
   onDismissError,
@@ -82,7 +80,7 @@ export function WorktreeDetailsSection({
               onRetryError={onRetryError}
               showLastCommit={true}
               lastActivityTimestamp={worktree.lastActivityTimestamp}
-              showTime={!showTimeInHeader}
+              showTime={true}
             />
           </div>
         </div>
@@ -136,22 +134,20 @@ export function WorktreeDetailsSection({
               )}
             </span>
 
-            {!showTimeInHeader && (
-              <div
-                className="flex items-center gap-1.5 text-xs text-canopy-text/40 shrink-0 ml-3"
-                title={
-                  worktree.lastActivityTimestamp
-                    ? `Last activity: ${new Date(worktree.lastActivityTimestamp).toLocaleString()}`
-                    : "No recent activity recorded"
-                }
-              >
-                <ActivityLight
-                  lastActivityTimestamp={worktree.lastActivityTimestamp}
-                  className="w-1.5 h-1.5"
-                />
-                <LiveTimeAgo timestamp={worktree.lastActivityTimestamp} />
-              </div>
-            )}
+            <div
+              className="flex items-center gap-1.5 text-xs text-canopy-text/40 shrink-0 ml-3"
+              title={
+                worktree.lastActivityTimestamp
+                  ? `Last activity: ${new Date(worktree.lastActivityTimestamp).toLocaleString()}`
+                  : "No recent activity recorded"
+              }
+            >
+              <ActivityLight
+                lastActivityTimestamp={worktree.lastActivityTimestamp}
+                className="w-1.5 h-1.5"
+              />
+              <LiveTimeAgo timestamp={worktree.lastActivityTimestamp} />
+            </div>
           </button>
         </div>
       )}

@@ -191,15 +191,6 @@ export function WorktreeCard({
     [toggleWorktreeExpanded, worktree.id]
   );
 
-  const hasExpandableContent =
-    hasChanges ||
-    Boolean(effectiveNote) ||
-    !!effectiveSummary ||
-    worktreeErrors.length > 0 ||
-    terminalCounts.total > 0;
-
-  const showTimeInHeader = !hasExpandableContent;
-
   const handleToggleTerminals = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
@@ -311,7 +302,6 @@ export function WorktreeCard({
           isActive={isActive}
           isMainWorktree={isMainWorktree}
           branchLabel={branchLabel}
-          showTimeInHeader={showTimeInHeader}
           worktreeErrorCount={worktreeErrors.length}
           copy={{
             treeCopied,
@@ -367,7 +357,6 @@ export function WorktreeCard({
           effectiveSummary={effectiveSummary}
           worktreeErrors={worktreeErrors}
           isFocused={isFocused}
-          showTimeInHeader={showTimeInHeader}
           onToggleExpand={handleToggleExpand}
           onPathClick={handlePathClick}
           onDismissError={dismissError}

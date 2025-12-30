@@ -2,9 +2,7 @@ import { useCallback, useMemo } from "react";
 import type React from "react";
 import type { TerminalRecipe, WorktreeState } from "@/types";
 import { cn } from "@/lib/utils";
-import { ActivityLight } from "../ActivityLight";
 import { BranchLabel } from "../BranchLabel";
-import { LiveTimeAgo } from "../LiveTimeAgo";
 import {
   WorktreeMenuItems,
   type WorktreeLaunchAgentItem,
@@ -50,7 +48,6 @@ export interface WorktreeHeaderProps {
   isActive: boolean;
   isMainWorktree: boolean;
   branchLabel: string;
-  showTimeInHeader: boolean;
   worktreeErrorCount: number;
 
   copy: {
@@ -103,7 +100,6 @@ export function WorktreeHeader({
   isActive,
   isMainWorktree,
   branchLabel,
-  showTimeInHeader,
   worktreeErrorCount,
   copy,
   badges,
@@ -152,25 +148,6 @@ export function WorktreeHeader({
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
-        )}
-
-        {showTimeInHeader && (
-          <div
-            className={cn(
-              "flex items-center gap-1.5 shrink-0 text-xs px-2 py-0.5 rounded-full",
-              worktree.lastActivityTimestamp
-                ? "bg-white/[0.03] text-canopy-text/60"
-                : "bg-transparent text-canopy-text/40"
-            )}
-            title={
-              worktree.lastActivityTimestamp
-                ? `Last activity: ${new Date(worktree.lastActivityTimestamp).toLocaleString()}`
-                : "No recent activity recorded"
-            }
-          >
-            <ActivityLight lastActivityTimestamp={worktree.lastActivityTimestamp} />
-            <LiveTimeAgo timestamp={worktree.lastActivityTimestamp} className="font-medium" />
-          </div>
         )}
 
         <div
