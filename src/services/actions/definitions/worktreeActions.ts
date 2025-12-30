@@ -72,16 +72,15 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       rootPath: z.string(),
       options: z.any(),
     }),
+    resultSchema: z.string(),
     run: async (args: unknown) => {
       const { rootPath, options } = args as { rootPath: string; options: unknown };
       const worktreeId = await worktreeClient.create(options as any, rootPath);
-      if (worktreeId) {
-        useWorktreeSelectionStore.getState().selectWorktree(worktreeId);
-      } else {
-        console.warn(
-          "[worktree.create] No worktreeId returned from creation - skipping auto-selection"
-        );
+      if (!worktreeId) {
+        throw new Error("Failed to create worktree: no worktreeId returned from backend");
       }
+      useWorktreeSelectionStore.getState().selectWorktree(worktreeId);
+      return worktreeId;
     },
   }));
 
