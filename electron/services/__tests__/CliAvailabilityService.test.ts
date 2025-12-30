@@ -265,17 +265,18 @@ describe("CliAvailabilityService", () => {
       expect(mockedExecFileSync).toHaveBeenCalledTimes(3);
     });
 
-    it("deduplicates concurrent refresh calls", async () => {
+    it("concurrent refresh calls each trigger a new check", async () => {
       mockedExecFileSync.mockImplementation(() => Buffer.from(""));
 
       // Start multiple refresh calls concurrently
       const [result1, result2] = await Promise.all([service.refresh(), service.refresh()]);
 
-      // Both should return the same result
+      // Both should return the same result (mocked)
       expect(result1).toEqual(result2);
 
-      // Should only have called execFileSync 3 times total (not 6)
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(3);
+      // Should call execFileSync 6 times total (3 for each refresh)
+      // Refresh intentionally breaks deduplication to ensure freshness
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(6);
     });
 
     it("allows sequential checks after first completes", async () => {
