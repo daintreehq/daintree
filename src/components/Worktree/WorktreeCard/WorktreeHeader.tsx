@@ -237,53 +237,72 @@ export function WorktreeHeader({
       </div>
 
       {(worktree.issueNumber || worktree.prNumber) && (
-        <div className="flex items-center gap-2">
-          <TooltipProvider>
-            {worktree.issueNumber && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      badges.onOpenIssue?.();
-                    }}
-                    className="flex items-center gap-1 text-xs text-emerald-400/80 hover:text-emerald-400 hover:underline transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-                  >
-                    <CircleDot className="w-2.5 h-2.5" />
-                    <span className="font-mono">#{worktree.issueNumber}</span>
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent>{worktree.issueTitle || "Open Issue on GitHub"}</TooltipContent>
-              </Tooltip>
-            )}
-            {worktree.prNumber && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      badges.onOpenPR?.();
-                    }}
+        <div className="flex flex-col gap-0.5">
+          {worktree.issueNumber && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                badges.onOpenIssue?.();
+              }}
+              className="flex items-center gap-1.5 text-xs text-left hover:underline transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent min-w-0"
+              aria-label={
+                worktree.issueTitle
+                  ? `Open issue #${worktree.issueNumber}: ${worktree.issueTitle}`
+                  : `Open issue #${worktree.issueNumber} on GitHub`
+              }
+            >
+              <CircleDot className="w-3 h-3 text-emerald-400 shrink-0" aria-hidden="true" />
+              <span className="truncate text-canopy-text/90 flex-1 min-w-0">
+                {worktree.issueTitle || (
+                  <span className="text-emerald-400 font-mono">#{worktree.issueNumber}</span>
+                )}
+              </span>
+            </button>
+          )}
+          {worktree.prNumber && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                badges.onOpenPR?.();
+              }}
+              className="flex items-center gap-1.5 text-xs text-left hover:underline transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent min-w-0"
+              aria-label={
+                worktree.prTitle
+                  ? `Open pull request #${worktree.prNumber}: ${worktree.prTitle}`
+                  : `Open pull request #${worktree.prNumber} on GitHub`
+              }
+            >
+              <GitPullRequest
+                className={cn(
+                  "w-3 h-3 shrink-0",
+                  worktree.prState === "merged"
+                    ? "text-violet-400"
+                    : worktree.prState === "closed"
+                      ? "text-red-400"
+                      : "text-sky-400"
+                )}
+                aria-hidden="true"
+              />
+              <span className="truncate text-canopy-text/90 flex-1 min-w-0">
+                {worktree.prTitle || (
+                  <span
                     className={cn(
-                      "flex items-center gap-1 text-xs hover:underline transition-colors",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
+                      "font-mono",
                       worktree.prState === "merged"
-                        ? "text-violet-400/80 hover:text-violet-400"
+                        ? "text-violet-400"
                         : worktree.prState === "closed"
-                          ? "text-red-400/80 hover:text-red-400"
-                          : "text-sky-400/80 hover:text-sky-400"
+                          ? "text-red-400"
+                          : "text-sky-400"
                     )}
                   >
-                    <GitPullRequest className="w-2.5 h-2.5" />
-                    <span className="font-mono">#{worktree.prNumber}</span>
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  {worktree.prTitle || `PR #${worktree.prNumber} · ${worktree.prState ?? "open"}`}
-                </TooltipContent>
-              </Tooltip>
-            )}
-          </TooltipProvider>
+                    #{worktree.prNumber}
+                  </span>
+                )}
+              </span>
+            </button>
+          )}
         </div>
       )}
     </div>
