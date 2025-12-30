@@ -136,20 +136,22 @@ export function WorktreeDetailsSection({
               )}
             </span>
 
-            <div
-              className="flex items-center gap-1.5 text-xs text-canopy-text/40 shrink-0 ml-3"
-              title={
-                worktree.lastActivityTimestamp
-                  ? `Last activity: ${new Date(worktree.lastActivityTimestamp).toLocaleString()}`
-                  : "No recent activity recorded"
-              }
-            >
-              <ActivityLight
-                lastActivityTimestamp={worktree.lastActivityTimestamp}
-                className="w-1.5 h-1.5"
-              />
-              <LiveTimeAgo timestamp={worktree.lastActivityTimestamp} />
-            </div>
+            {!showTimeInHeader && (
+              <div
+                className="flex items-center gap-1.5 text-xs text-canopy-text/40 shrink-0 ml-3"
+                title={
+                  worktree.lastActivityTimestamp
+                    ? `Last activity: ${new Date(worktree.lastActivityTimestamp).toLocaleString()}`
+                    : "No recent activity recorded"
+                }
+              >
+                <ActivityLight
+                  lastActivityTimestamp={worktree.lastActivityTimestamp}
+                  className="w-1.5 h-1.5"
+                />
+                <LiveTimeAgo timestamp={worktree.lastActivityTimestamp} />
+              </div>
+            )}
           </button>
         </div>
       )}
