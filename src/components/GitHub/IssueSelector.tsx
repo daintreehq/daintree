@@ -5,6 +5,7 @@ import { githubClient } from "@/clients/githubClient";
 import type { GitHubIssue } from "@shared/types/github";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Avatar } from "@/components/ui/Avatar";
 
 function useDebounce<T>(value: T, delay: number): T {
   const [debouncedValue, setDebouncedValue] = useState(value);
@@ -151,12 +152,12 @@ export function IssueSelector({
                 {issue.assignees.length > 0 && (
                   <div className="flex -space-x-1.5 shrink-0">
                     {issue.assignees.slice(0, 3).map((assignee) => (
-                      <img
+                      <Avatar
                         key={assignee.login}
                         src={`${assignee.avatarUrl}${assignee.avatarUrl.includes("?") ? "&" : "?"}s=32`}
                         alt={assignee.login}
                         title={assignee.login}
-                        className="w-5 h-5 rounded-full ring-1 ring-canopy-bg"
+                        className="w-5 h-5 ring-1 ring-canopy-bg"
                       />
                     ))}
                     {issue.assignees.length > 3 && (
