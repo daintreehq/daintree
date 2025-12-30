@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { escapeHtml, linkifyHtml, convertAnsiLinesToHtml } from "../htmlUtils";
+import { escapeHtml, escapeHtmlAttribute, linkifyHtml, convertAnsiLinesToHtml } from "../htmlUtils";
 
 describe("escapeHtml", () => {
   it("escapes < and > characters", () => {
@@ -23,6 +23,88 @@ describe("escapeHtml", () => {
   });
 });
 
+describe("escapeHtmlAttribute", () => {
+  it("escapes double quotes", () => {
+    expect(escapeHtmlAttribute('value with "quotes"')).toBe("value with &quot;quotes&quot;");
+  });
+
+  it("escapes single quotes", () => {
+    expect(escapeHtmlAttribute("value with 'quotes'")).toBe("value with &#39;quotes&#39;");
+  });
+
+  it("escapes angle brackets", () => {
+    expect(escapeHtmlAttribute("<script>")).toBe("&lt;script&gt;");
+  });
+
+  it("escapes ampersands", () => {
+    expect(escapeHtmlAttribute("foo & bar")).toBe("foo &amp; bar");
+  });
+
+  it("escapes all special characters together", () => {
+    expect(escapeHtmlAttribute('a="b" & <c>')).toBe("a=&quot;b&quot; &amp; &lt;c&gt;");
+  });
+
+  it("preserves normal text", () => {
+    expect(escapeHtmlAttribute("normal text")).toBe("normal text");
+  });
+
+  it("handles empty string", () => {
+    expect(escapeHtmlAttribute("")).toBe("");
+  });
+});
+
+describe("linkifyHtml XSS prevention", () => {
+  it("excludes quotes from URLs - regex-level protection", () => {
+    // The URL regex excludes " and ' so they won't be part of the matched URL
+    const input = 'Visit https://example.com" onclick="alert(1)';
+    const output = linkifyHtml(input);
+    // The quote ends the URL match, so onclick is outside the link
+    expect(output).toContain('<a href="https://example.com"');
+    expect(output).toContain('</a>" onclick=');
+  });
+
+  it("excludes angle brackets from URLs - regex-level protection", () => {
+    // The URL regex excludes < and > so they won't be part of the matched URL
+    const input = "URL: https://example.com<script>alert(1)</script>";
+    const output = linkifyHtml(input);
+    // The < ends the URL match, so script tag is outside the link
+    expect(output).toContain('<a href="https://example.com"');
+    expect(output).toContain("</a><script>");
+  });
+
+  it("excludes single quotes from URLs - regex-level protection", () => {
+    const input = "Visit https://example.com' onclick='alert(1)";
+    const output = linkifyHtml(input);
+    // The ' ends the URL match, so onclick is outside the link
+    expect(output).toContain('<a href="https://example.com"');
+    expect(output).toContain("</a>' onclick=");
+  });
+
+  it("handles URLs with event handler injection attempts", () => {
+    const input = 'https://evil.com" onmouseover="alert(document.cookie)';
+    const output = linkifyHtml(input);
+    // The " ends the URL match, so onmouseover is outside the link
+    expect(output).toContain('<a href="https://evil.com"');
+    expect(output).toContain('</a>" onmouseover=');
+  });
+
+  it("decodes then re-escapes ampersands for proper URL rendering", () => {
+    // When URL contains &amp; (from escaped HTML), it gets decoded to &, then re-escaped to &amp;
+    // This prevents double-escaping and ensures URLs work correctly
+    const input = "Visit https://example.com/path?a=1&amp;b=2";
+    const output = linkifyHtml(input);
+    // The &amp; gets decoded to & then escaped back to &amp; (proper handling)
+    expect(output).toContain('href="https://example.com/path?a=1&amp;b=2"');
+  });
+
+  it("escapes display text as well as href", () => {
+    // URL with &amp; gets decoded to & then re-escaped for display
+    const input = "Visit https://example.com/path?a=1&amp;b=2";
+    const output = linkifyHtml(input);
+    expect(output).toContain(">https://example.com/path?a=1&amp;b=2</a>");
+  });
+});
+
 describe("linkifyHtml", () => {
   it("converts http URLs to anchor tags", () => {
     const result = linkifyHtml("Visit https://example.com for info");
@@ -33,8 +115,9 @@ describe("linkifyHtml", () => {
   it("handles URLs with escaped ampersands", () => {
     const result = linkifyHtml("Visit https://example.com/path?a=1&amp;b=2 for info");
     // The full URL including &amp; should be captured in the link
+    // The &amp; gets decoded to & then re-escaped back to &amp; (normalized)
     expect(result).toContain('<a href="https://example.com/path?a=1&amp;b=2"');
-    // The URL text should not be broken at the ampersand
+    // The display text also normalizes to &amp;
     expect(result).toContain(">https://example.com/path?a=1&amp;b=2</a>");
   });
 
@@ -88,7 +171,8 @@ describe("convertAnsiLinesToHtml", () => {
 
   it("handles URLs with query parameters containing &", () => {
     const result = convertAnsiLinesToHtml(["Visit https://example.com?a=1&b=2"]);
-    // The & should be escaped to &amp; but URL should still be fully linkified
+    // The & gets escaped to &amp; in the input (escapeHtml),
+    // then decoded and re-escaped to &amp; in linkifyHtml (normalized)
     expect(result[0]).toContain('<a href="https://example.com?a=1&amp;b=2"');
     expect(result[0]).toContain("https://example.com?a=1&amp;b=2</a>");
   });
@@ -131,7 +215,7 @@ describe("convertAnsiLinesToHtml", () => {
     expect(result[0]).toContain("&lt;/div&gt;");
     // ANSI color should create span
     expect(result[0]).toContain("ansi-red-fg");
-    // URL should be linkified with escaped ampersand
+    // URL should be linkified with normalized ampersand (& -> &amp; via escape, decoded & re-escaped in linkify)
     expect(result[0]).toContain('<a href="https://example.com?a=1&amp;b=2"');
   });
 

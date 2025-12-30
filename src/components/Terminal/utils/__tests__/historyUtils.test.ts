@@ -63,7 +63,7 @@ describe("parseXtermHtmlRows", () => {
     const rows = parseXtermHtmlRows(xtermHtml);
 
     expect(rows).toHaveLength(1);
-    // URL should preserve &amp; entity
+    // URL's &amp; gets decoded then re-escaped to &amp; (normalized)
     expect(rows[0]).toContain("https://example.com/page?a=1&amp;b=2");
   });
 
