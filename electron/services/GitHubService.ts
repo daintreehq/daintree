@@ -8,6 +8,7 @@ import type {
   GitHubUser,
   GitHubListOptions,
   GitHubListResponse,
+  LinkedPRInfo,
 } from "../../shared/types/github.js";
 
 import {
@@ -529,11 +530,56 @@ function mapPRStates(state?: string): string[] {
   return ["OPEN"];
 }
 
+function extractLinkedPR(
+  timelineItems:
+    | {
+        nodes?: Array<{
+          source?: { number?: number; state?: string; merged?: boolean; url?: string };
+        }>;
+      }
+    | undefined
+): LinkedPRInfo | undefined {
+  if (!timelineItems?.nodes) return undefined;
+
+  const prs: Array<{ number: number; state: "OPEN" | "CLOSED" | "MERGED"; url: string }> = [];
+
+  for (const node of timelineItems.nodes) {
+    const source = node?.source;
+    if (source?.number && source?.url) {
+      const state: "OPEN" | "CLOSED" | "MERGED" = source.merged
+        ? "MERGED"
+        : (source.state?.toUpperCase() as "OPEN" | "CLOSED") || "OPEN";
+      prs.push({ number: source.number, state, url: source.url });
+    }
+  }
+
+  if (prs.length === 0) return undefined;
+
+  const openPRs = prs.filter((pr) => pr.state === "OPEN");
+  const mergedPRs = prs.filter((pr) => pr.state === "MERGED");
+  const closedPRs = prs.filter((pr) => pr.state === "CLOSED");
+
+  if (openPRs.length > 0) return openPRs[openPRs.length - 1];
+  if (mergedPRs.length > 0) return mergedPRs[mergedPRs.length - 1];
+  if (closedPRs.length > 0) return closedPRs[closedPRs.length - 1];
+
+  return undefined;
+}
+
 function parseIssueNode(node: Record<string, unknown>): GitHubIssue {
   const author = node.author as { login?: string; avatarUrl?: string } | null;
   const assigneesData = node.assignees as { nodes?: Array<{ login?: string; avatarUrl?: string }> };
   const commentsData = node.comments as { totalCount?: number };
   const labelsData = node.labels as { nodes?: Array<{ name?: string; color?: string }> };
+  const timelineItems = node.timelineItems as
+    | {
+        nodes?: Array<{
+          source?: { number?: number; state?: string; merged?: boolean; url?: string };
+        }>;
+      }
+    | undefined;
+
+  const linkedPR = extractLinkedPR(timelineItems);
 
   return {
     number: node.number as number,
@@ -554,6 +600,7 @@ function parseIssueNode(node: Record<string, unknown>): GitHubIssue {
       name: l.name ?? "",
       color: l.color ?? "",
     })),
+    linkedPR,
   };
 }
 

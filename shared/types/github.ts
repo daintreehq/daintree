@@ -16,6 +16,16 @@ export interface GitHubLabel {
   color: string;
 }
 
+/** Linked PR information for an issue */
+export interface LinkedPRInfo {
+  /** PR number */
+  number: number;
+  /** PR state */
+  state: "OPEN" | "CLOSED" | "MERGED";
+  /** PR URL */
+  url: string;
+}
+
 /** GitHub issue representation */
 export interface GitHubIssue {
   /** Issue number */
@@ -36,6 +46,8 @@ export interface GitHubIssue {
   commentCount: number;
   /** Issue labels */
   labels?: GitHubLabel[];
+  /** Associated PR information (if any) */
+  linkedPR?: LinkedPRInfo;
 }
 
 /** GitHub pull request representation */

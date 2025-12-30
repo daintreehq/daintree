@@ -42,6 +42,20 @@ export const LIST_ISSUES_QUERY = `
               color
             }
           }
+          timelineItems(itemTypes: [CROSS_REFERENCED_EVENT], last: 10) {
+            nodes {
+              ... on CrossReferencedEvent {
+                source {
+                  ... on PullRequest {
+                    number
+                    state
+                    merged
+                    url
+                  }
+                }
+              }
+            }
+          }
         }
       }
     }

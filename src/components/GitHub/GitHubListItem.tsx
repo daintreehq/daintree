@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
-import type { GitHubIssue, GitHubPR } from "@shared/types/github";
+import type { GitHubIssue, GitHubPR, LinkedPRInfo } from "@shared/types/github";
 import { Avatar } from "@/components/ui/Avatar";
 
 interface GitHubListItemProps {
@@ -48,6 +48,32 @@ function formatTimeAgo(dateString: string): string {
 
 function isPR(item: GitHubIssue | GitHubPR): item is GitHubPR {
   return "isDraft" in item;
+}
+
+function getPRBadgeInfo(linkedPR: LinkedPRInfo): {
+  icon: typeof GitMerge;
+  color: string;
+  bgColor: string;
+} {
+  if (linkedPR.state === "MERGED") {
+    return {
+      icon: GitMerge,
+      color: "text-[var(--color-status-success)]",
+      bgColor: "bg-[var(--color-status-success)]/10",
+    };
+  }
+  if (linkedPR.state === "OPEN") {
+    return {
+      icon: GitPullRequest,
+      color: "text-[var(--color-status-info)]",
+      bgColor: "bg-[var(--color-status-info)]/10",
+    };
+  }
+  return {
+    icon: GitPullRequestClosed,
+    color: "text-muted-foreground",
+    bgColor: "bg-muted",
+  };
 }
 
 export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemProps) {
@@ -109,7 +135,20 @@ export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemP
     }
   };
 
+  const handleOpenLinkedPR = (e: MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    if (!isItemPR && "linkedPR" in item && item.linkedPR) {
+      void actionService.dispatch(
+        "system.openExternal",
+        { url: item.linkedPR.url },
+        { source: "user" }
+      );
+    }
+  };
+
   const status = getButtonStatus();
+  const linkedPR = !isItemPR && "linkedPR" in item ? item.linkedPR : undefined;
+  const prBadgeInfo = linkedPR ? getPRBadgeInfo(linkedPR) : null;
 
   return (
     <div className="p-3 hover:bg-muted/50 transition-colors group cursor-default">
@@ -129,6 +168,22 @@ export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemP
             >
               {item.title}
             </button>
+            {prBadgeInfo && linkedPR && (
+              <button
+                type="button"
+                onClick={handleOpenLinkedPR}
+                className={cn(
+                  "shrink-0 text-[11px] px-1.5 py-0.5 rounded font-medium flex items-center gap-1 hover:opacity-80 transition-opacity cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                  prBadgeInfo.color,
+                  prBadgeInfo.bgColor
+                )}
+                title={`Open PR #${linkedPR.number} (${linkedPR.state.toLowerCase()})`}
+                aria-label={`Open linked pull request #${linkedPR.number} (${linkedPR.state.toLowerCase()})`}
+              >
+                <prBadgeInfo.icon className="w-3 h-3" />
+                <span>#{linkedPR.number}</span>
+              </button>
+            )}
             {isItemPR && item.isDraft && (
               <span className="shrink-0 text-[11px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-medium">
                 Draft
