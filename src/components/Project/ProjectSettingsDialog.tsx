@@ -94,6 +94,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportFeedback, setExportFeedback] = useState<string | null>(null);
   const exportTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const hasLoadedRecipes = useRef(false);
 
   const toggleEnvVarVisibility = (id: string) => {
     setVisibleEnvVars((prev) => {
@@ -186,6 +187,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       setDefaultWorktreeRecipeId(undefined);
       setDevServerCommand("");
       setSaveError(null);
+      hasLoadedRecipes.current = false;
     }
   }, [settings, isOpen, isInitialized]);
 
@@ -203,12 +205,13 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   }, [isOpen]);
 
   useEffect(() => {
-    if (isOpen && recipes.length === 0 && !recipesLoading) {
+    if (isOpen && !hasLoadedRecipes.current && !recipesLoading) {
+      hasLoadedRecipes.current = true;
       loadRecipes().catch((err) => {
         console.error("Failed to load recipes:", err);
       });
     }
-  }, [isOpen, recipes.length, recipesLoading, loadRecipes]);
+  }, [isOpen, recipesLoading, loadRecipes]);
 
   useEffect(() => {
     return () => {
@@ -868,11 +871,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
 
                   return (
                     <div className="space-y-3">
-                      {recipesLoading ? (
-                        <div className="text-sm text-canopy-text/60 text-center py-4">
-                          Loading recipes...
-                        </div>
-                      ) : globalRecipes.length === 0 ? (
+                      {globalRecipes.length === 0 ? (
                         <div className="text-sm text-canopy-text/60 text-center py-4 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
                           No global recipes available. Create a recipe first.
                         </div>
@@ -943,11 +942,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                 </p>
 
                 <div className="space-y-3">
-                  {recipesLoading ? (
-                    <div className="text-sm text-canopy-text/60 text-center py-8">
-                      Loading recipes...
-                    </div>
-                  ) : recipes.length === 0 ? (
+                  {recipes.length === 0 ? (
                     <div className="text-sm text-canopy-text/60 text-center py-8 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
                       No recipes configured yet
                     </div>
