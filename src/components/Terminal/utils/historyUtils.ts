@@ -53,19 +53,25 @@ function serializeXtermNode(node: ChildNode): string {
   const element = node as Element;
   const tagName = element.tagName.toLowerCase();
 
-  // Whitelist only tags that xterm's serializeAsHTML can produce
-  // This prevents XSS if terminal escape sequences somehow inject elements
-  const allowedTags = new Set(["span", "div", "a"]);
-  if (!allowedTags.has(tagName)) {
-    // Fallback to text content for unknown tags
+  // STRICT whitelist: only span tags are allowed from xterm's serializeAsHTML
+  // xterm produces: <pre><div><div><span style="...">content</span></div></div></pre>
+  // The outer divs are row containers (processed by querySelectorAll), content is in spans.
+  // We don't allow div/a here because:
+  // - div: should never appear as content inside a row; if present, it's likely unescaped HTML
+  // - a: links are created by linkifyHtml later, not by xterm
+  // Any other tags (script, img, etc.) are escaped to prevent XSS
+  if (tagName !== "span") {
     return escapeHtmlText(element.textContent ?? "");
   }
 
-  const attrs = Array.from(element.attributes)
-    .map((attr) => ` ${attr.name}="${escapeHtmlText(attr.value)}"`)
-    .join("");
+  // STRICT attribute whitelist: only style attribute is allowed
+  // xterm's serializeAsHTML only produces style attributes for coloring
+  // We escape both attribute names and values to prevent attribute injection
+  const styleAttr = element.getAttribute("style");
+  const attrs = styleAttr ? ` style="${escapeHtmlText(styleAttr)}"` : "";
+
   const children = Array.from(element.childNodes, serializeXtermNode).join("");
-  return `<${tagName}${attrs}>${children}</${tagName}>`;
+  return `<span${attrs}>${children}</span>`;
 }
 
 export function parseXtermHtmlRows(html: string): string[] {
