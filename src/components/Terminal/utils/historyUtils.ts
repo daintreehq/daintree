@@ -26,11 +26,56 @@ export interface HistoryState {
  * Uses DOMParser for robust HTML parsing - the previous regex approach
  * only captured the first <span> per row, truncating multi-styled rows.
  */
-function parseXtermHtmlRows(html: string): string[] {
+const HTML_ENTITY_MAP = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&#39;",
+} as const;
+
+const HTML_ENTITY_REGEX = /[&<>"']/g;
+
+function escapeHtmlText(value: string): string {
+  return value.replace(
+    HTML_ENTITY_REGEX,
+    (char) => HTML_ENTITY_MAP[char as keyof typeof HTML_ENTITY_MAP]
+  );
+}
+
+function serializeXtermNode(node: ChildNode): string {
+  if (node.nodeType === 3) {
+    return escapeHtmlText(node.textContent ?? "");
+  }
+
+  if (node.nodeType !== 1) return "";
+
+  const element = node as Element;
+  const tagName = element.tagName.toLowerCase();
+
+  // Whitelist only tags that xterm's serializeAsHTML can produce
+  // This prevents XSS if terminal escape sequences somehow inject elements
+  const allowedTags = new Set(["span", "div", "a"]);
+  if (!allowedTags.has(tagName)) {
+    // Fallback to text content for unknown tags
+    return escapeHtmlText(element.textContent ?? "");
+  }
+
+  const attrs = Array.from(element.attributes)
+    .map((attr) => ` ${attr.name}="${escapeHtmlText(attr.value)}"`)
+    .join("");
+  const children = Array.from(element.childNodes, serializeXtermNode).join("");
+  return `<${tagName}${attrs}>${children}</${tagName}>`;
+}
+
+export function parseXtermHtmlRows(html: string): string[] {
   const doc = new DOMParser().parseFromString(html, "text/html");
   // Rows are nested: pre > div (container) > div (each row)
   const rowDivs = doc.querySelectorAll("pre > div > div");
-  return Array.from(rowDivs, (div) => linkifyHtml(div.innerHTML) || " ");
+  return Array.from(rowDivs, (div) => {
+    const rowHtml = Array.from(div.childNodes, serializeXtermNode).join("");
+    return linkifyHtml(rowHtml) || " ";
+  });
 }
 
 export function extractSnapshot(

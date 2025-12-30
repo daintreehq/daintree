@@ -16,7 +16,10 @@ export function linkifyHtml(html: string): string {
 
       return part.replace(URL_REGEX, (url) => {
         let cleanUrl = url;
-        const trailingPunct = /[.,;:!?)>\\\\]+$/;
+        // Strip trailing punctuation, but be careful not to break HTML entities
+        // Match trailing punctuation that's NOT part of an HTML entity (e.g., not &gt; or &#60;)
+        // Only strip . , ! ? ) that appear after the URL ends
+        const trailingPunct = /[.,!?)]+$/;
         const match = cleanUrl.match(trailingPunct);
         let suffix = "";
         if (match) {
