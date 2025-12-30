@@ -14,7 +14,6 @@ export function useWorktreeMenu({
   onLaunchAgent,
   onOpenIssue,
   onOpenPR,
-  onCreateRecipe,
   onSaveLayout,
   onRestartAll,
   onCloseAll,
@@ -37,7 +36,6 @@ export function useWorktreeMenu({
   onLaunchAgent?: (agentId: string) => void;
   onOpenIssue?: () => void;
   onOpenPR?: () => void;
-  onCreateRecipe?: () => void;
   onSaveLayout?: () => void;
   onRestartAll: () => void;
   onCloseAll: () => void;
@@ -133,8 +131,7 @@ export function useWorktreeMenu({
       }
     }
 
-    const hasRecipeSection =
-      recipes.length > 0 || !!onCreateRecipe || (onSaveLayout && counts.active > 0);
+    const hasRecipeSection = recipes.length > 0 || (onSaveLayout && counts.active > 0);
     if (hasRecipeSection) {
       template.push({ type: "separator" });
       template.push({ id: "label:recipes", label: "Recipes", enabled: false });
@@ -149,10 +146,6 @@ export function useWorktreeMenu({
             enabled: runningRecipeId === null,
           })),
         });
-      }
-
-      if (onCreateRecipe) {
-        template.push({ id: "recipes:create", label: "Create Recipe..." });
       }
 
       if (onSaveLayout && counts.active > 0) {
@@ -179,7 +172,6 @@ export function useWorktreeMenu({
     isMainWorktree,
     isRestartValidating,
     launchAgents,
-    onCreateRecipe,
     onLaunchAgent,
     onOpenIssue,
     onOpenPR,
@@ -291,13 +283,6 @@ export function useWorktreeMenu({
         case "worktree:open-pr":
           void actionService.dispatch(
             "worktree.openPR",
-            { worktreeId: worktree.id },
-            { source: "context-menu" }
-          );
-          break;
-        case "recipes:create":
-          void actionService.dispatch(
-            "recipe.editor.open",
             { worktreeId: worktree.id },
             { source: "context-menu" }
           );

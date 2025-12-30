@@ -36,7 +36,6 @@ export interface WorktreeCardProps {
   onOpenEditor: () => void;
   onOpenIssue?: () => void;
   onOpenPR?: () => void;
-  onCreateRecipe?: () => void;
   onSaveLayout?: () => void;
   onLaunchAgent?: (agentId: string) => void;
   agentAvailability?: UseAgentLauncherReturn["availability"];
@@ -53,7 +52,6 @@ export function WorktreeCard({
   onOpenEditor,
   onOpenIssue,
   onOpenPR,
-  onCreateRecipe,
   onSaveLayout,
   onLaunchAgent,
   agentAvailability,
@@ -257,7 +255,6 @@ export function WorktreeCard({
     onLaunchAgent,
     onOpenIssue,
     onOpenPR,
-    onCreateRecipe,
     onSaveLayout,
     onRestartAll: () => void handleRestartAll(),
     onCloseAll: handleCloseAll,
@@ -333,7 +330,6 @@ export function WorktreeCard({
             onOpenPR:
               worktree.issueNumber && worktree.prNumber && onOpenPR ? handleOpenPR : undefined,
             onRunRecipe: (recipeId) => void handleRunRecipe(recipeId),
-            onCreateRecipe,
             onSaveLayout,
             onLaunchAgent,
             onMinimizeAll: handleMinimizeAll,

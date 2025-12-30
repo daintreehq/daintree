@@ -81,7 +81,6 @@ export interface WorktreeHeaderProps {
     onOpenIssue?: () => void;
     onOpenPR?: () => void;
     onRunRecipe: (recipeId: string) => void;
-    onCreateRecipe?: () => void;
     onSaveLayout?: () => void;
     onLaunchAgent?: (agentId: string) => void;
     onMinimizeAll: () => void;
@@ -222,7 +221,6 @@ export function WorktreeHeader({
                 onOpenIssue={menu.onOpenIssue}
                 onOpenPR={menu.onOpenPR}
                 onRunRecipe={menu.onRunRecipe}
-                onCreateRecipe={menu.onCreateRecipe}
                 onSaveLayout={menu.onSaveLayout}
                 onMinimizeAll={menu.onMinimizeAll}
                 onMaximizeAll={menu.onMaximizeAll}

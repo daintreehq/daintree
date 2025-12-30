@@ -15,7 +15,6 @@ export interface WorktreeActions {
   handleOpenEditor: (worktree: WorktreeState) => void;
   handleOpenIssue: (worktree: WorktreeState) => void;
   handleOpenPR: (worktree: WorktreeState) => void;
-  handleCreateRecipe: (worktreeId: string) => void;
   handleSaveLayout: (worktree: WorktreeState) => void;
   handleLaunchAgent: (worktreeId: string, agentId: string) => void;
 }
@@ -110,13 +109,6 @@ export function useWorktreeActions({
     }
   }, []);
 
-  const handleCreateRecipe = useCallback(
-    (worktreeId: string) => {
-      onOpenRecipeEditor?.(worktreeId, undefined);
-    },
-    [onOpenRecipeEditor]
-  );
-
   const handleSaveLayout = useCallback(
     (worktree: WorktreeState) => {
       const terminals = useRecipeStore.getState().generateRecipeFromActiveTerminals(worktree.id);
@@ -148,7 +140,6 @@ export function useWorktreeActions({
     handleOpenEditor,
     handleOpenIssue,
     handleOpenPR,
-    handleCreateRecipe,
     handleSaveLayout,
     handleLaunchAgent,
   };

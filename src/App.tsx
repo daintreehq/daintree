@@ -351,7 +351,6 @@ function SidebarContent() {
         worktree.issueNumber ? () => worktreeActions.handleOpenIssue(worktree) : undefined
       }
       onOpenPR={worktree.prUrl ? () => worktreeActions.handleOpenPR(worktree) : undefined}
-      onCreateRecipe={() => worktreeActions.handleCreateRecipe(worktree.id)}
       onSaveLayout={() => worktreeActions.handleSaveLayout(worktree)}
       onLaunchAgent={(type) => worktreeActions.handleLaunchAgent(worktree.id, type)}
       agentAvailability={availability}

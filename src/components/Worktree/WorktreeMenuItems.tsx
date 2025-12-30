@@ -10,7 +10,6 @@ import {
   Maximize2,
   Minimize2,
   Play,
-  Plus,
   RotateCcw,
   Save,
   Terminal,
@@ -61,7 +60,6 @@ export interface WorktreeMenuItemsProps {
   onOpenIssue?: () => void;
   onOpenPR?: () => void;
   onRunRecipe: (recipeId: string) => void;
-  onCreateRecipe?: () => void;
   onSaveLayout?: () => void;
   onMinimizeAll: () => void;
   onMaximizeAll: () => void;
@@ -88,7 +86,6 @@ export function WorktreeMenuItems({
   onOpenIssue,
   onOpenPR,
   onRunRecipe,
-  onCreateRecipe,
   onSaveLayout,
   onMinimizeAll,
   onMaximizeAll,
@@ -101,6 +98,7 @@ export function WorktreeMenuItems({
 }: WorktreeMenuItemsProps) {
   const hasIssueOrPr = Boolean(worktree.issueNumber || worktree.prNumber);
   const hasRecipes = recipes.length > 0;
+  const hasRecipeSection = hasRecipes || (onSaveLayout && counts.active > 0);
   const hasSessions = counts.all > 0;
 
   return (
@@ -209,9 +207,9 @@ export function WorktreeMenuItems({
         </C.Item>
       )}
 
-      {(hasRecipes || onCreateRecipe || onSaveLayout) && <C.Separator />}
+      {hasRecipeSection && <C.Separator />}
 
-      {(hasRecipes || onCreateRecipe || onSaveLayout) && (
+      {hasRecipeSection && (
         <>
           <C.Label>Recipes</C.Label>
           {hasRecipes && (
@@ -232,12 +230,6 @@ export function WorktreeMenuItems({
                 ))}
               </C.SubContent>
             </C.Sub>
-          )}
-          {onCreateRecipe && (
-            <C.Item onSelect={onCreateRecipe}>
-              <Plus className="w-3.5 h-3.5 mr-2" />
-              Create Recipe...
-            </C.Item>
           )}
           {onSaveLayout && counts.active > 0 && (
             <C.Item onSelect={onSaveLayout}>
