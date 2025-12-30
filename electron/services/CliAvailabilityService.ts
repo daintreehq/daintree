@@ -5,11 +5,14 @@ import { getEffectiveRegistry } from "../../shared/config/agentRegistry.js";
 export class CliAvailabilityService {
   private availability: CliAvailability | null = null;
   private inFlightCheck: Promise<CliAvailability> | null = null;
+  private checkId = 0;
 
   async checkAvailability(): Promise<CliAvailability> {
     if (this.inFlightCheck) {
       return this.inFlightCheck;
     }
+
+    const currentCheckId = this.checkId;
 
     this.inFlightCheck = (async () => {
       try {
@@ -20,11 +23,15 @@ export class CliAvailabilityService {
 
         const result: CliAvailability = Object.fromEntries(availabilityEntries);
 
-        this.availability = result;
+        if (this.checkId === currentCheckId) {
+          this.availability = result;
+        }
 
         return result;
       } finally {
-        this.inFlightCheck = null;
+        if (this.checkId === currentCheckId) {
+          this.inFlightCheck = null;
+        }
       }
     })();
 
@@ -36,6 +43,8 @@ export class CliAvailabilityService {
   }
 
   async refresh(): Promise<CliAvailability> {
+    this.checkId++;
+    this.inFlightCheck = null;
     return this.checkAvailability();
   }
 
