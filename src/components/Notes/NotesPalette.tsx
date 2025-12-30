@@ -56,7 +56,16 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
   const titleInputRef = useRef<HTMLInputElement>(null);
   const headerTitleInputRef = useRef<HTMLInputElement>(null);
 
-  const { notes, isLoading, initialize, createNote, deleteNote, refresh } = useNotesStore();
+  const {
+    notes,
+    isLoading,
+    initialize,
+    createNote,
+    deleteNote,
+    refresh,
+    lastSelectedNoteId,
+    setLastSelectedNoteId,
+  } = useNotesStore();
   const { addTerminal } = useTerminalStore();
   const { activeWorktreeId } = useWorktreeSelectionStore();
 
@@ -75,9 +84,13 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
     }
   }, [isOpen]);
 
+  // Track whether we've restored the last note on this open cycle
+  const hasRestoredRef = useRef(false);
+
   // Initialize notes
   useEffect(() => {
     if (isOpen) {
+      hasRestoredRef.current = false; // Reset on open
       initialize();
       setQuery("");
       setSelectedIndex(0);
@@ -90,6 +103,32 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
       setHasConflict(false);
     }
   }, [isOpen, initialize]);
+
+  // Restore last selected note after notes are loaded and search results are ready
+  useEffect(() => {
+    if (!isOpen || !lastSelectedNoteId || isLoading || isSearching || hasRestoredRef.current) return;
+
+    // Find the note in search results (not just notes list) for correct index
+    const noteToRestore = searchResults.find((n) => n.id === lastSelectedNoteId);
+    if (noteToRestore) {
+      // Check if it's an auto-deleteable empty note (shouldn't restore these)
+      if (isDefaultTitle(noteToRestore.title) && !noteToRestore.preview) {
+        // Clear the lastSelectedNoteId since this note would be auto-deleted anyway
+        setLastSelectedNoteId(null);
+        hasRestoredRef.current = true;
+      } else {
+        const index = searchResults.indexOf(noteToRestore);
+        setSelectedNote(noteToRestore);
+        setSelectedIndex(index >= 0 ? index : 0);
+        hasRestoredRef.current = true;
+      }
+    } else if (searchResults.length > 0) {
+      // Note not found in search results - clear the stale ID
+      setLastSelectedNoteId(null);
+      hasRestoredRef.current = true;
+    }
+    // Don't mark as restored if search results are empty - wait for them to load
+  }, [isOpen, lastSelectedNoteId, searchResults, isLoading, isSearching, setLastSelectedNoteId]);
 
   // Listen for note updates from other components (e.g., NotesPane)
   useEffect(() => {
@@ -216,11 +255,15 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
       if (!shouldAutoDelete(note, content)) return;
       try {
         await deleteNote(note!.path);
+        // Clear lastSelectedNoteId if the auto-deleted note was the last selected
+        if (lastSelectedNoteId === note!.id) {
+          setLastSelectedNoteId(null);
+        }
       } catch (e) {
         console.error("Failed to delete empty note:", e);
       }
     },
-    [deleteNote, shouldAutoDelete]
+    [deleteNote, shouldAutoDelete, lastSelectedNoteId, setLastSelectedNoteId]
   );
 
   const handleSelectNote = useCallback(
@@ -231,8 +274,13 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
       }
       setSelectedNote(note);
       setSelectedIndex(index);
+      // Persist last selected note (only if it's not an auto-deleteable empty note)
+      // We check if the note has content by looking at the preview - empty notes won't be persisted
+      if (!isDefaultTitle(note.title) || note.preview) {
+        setLastSelectedNoteId(note.id);
+      }
     },
-    [selectedNote, noteContent, deleteIfAutoDeleteable]
+    [selectedNote, noteContent, deleteIfAutoDeleteable, setLastSelectedNoteId]
   );
 
   const handleReloadNote = useCallback(async () => {
@@ -274,13 +322,18 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
             setHasConflict(true);
           } else if (result.lastModified) {
             setNoteLastModified(result.lastModified);
+            // Once the note has content, persist it as last selected (even if it has a default title)
+            // This allows newly created notes to be restored after the user starts writing
+            if (value.trim()) {
+              setLastSelectedNoteId(selectedNote.id);
+            }
           }
         } catch (e) {
           console.error("Failed to save note:", e);
         }
       }, 500);
     },
-    [selectedNote, noteMetadata, noteLastModified, hasConflict]
+    [selectedNote, noteMetadata, noteLastModified, hasConflict, setLastSelectedNoteId]
   );
 
   // Handle renaming a note in the list
@@ -416,7 +469,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
         setQuery("");
         await refresh();
         // Select the new note
-        setSelectedNote({
+        const newNote = {
           id: content.metadata.id,
           title: content.metadata.title,
           path: content.path,
@@ -425,10 +478,16 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
           createdAt: content.metadata.createdAt,
           modifiedAt: Date.now(),
           preview: "",
-        });
+        };
+        setSelectedNote(newNote);
         setNoteContent(content.content);
         setNoteMetadata(content.metadata);
         setNoteLastModified(content.lastModified);
+        // Don't persist newly created notes as "last selected" until they have content or a custom title
+        // This prevents auto-created default-titled notes from being restored
+        if (customTitle) {
+          setLastSelectedNoteId(newNote.id);
+        }
         // Auto-start editing the title so user can immediately rename
         setIsEditingHeaderTitle(true);
         setHeaderTitleEdit(content.metadata.title);
@@ -439,7 +498,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
         console.error("Failed to create note:", error);
       }
     },
-    [notes, createNote, refresh]
+    [notes, createNote, refresh, setLastSelectedNoteId]
   );
 
   const handleOpenAsPanel = useCallback(async () => {
@@ -474,12 +533,16 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
       if (selectedNote?.id === deleteConfirmNote.id) {
         setSelectedNote(null);
       }
+      // Clear lastSelectedNoteId if the deleted note was the last selected
+      if (lastSelectedNoteId === deleteConfirmNote.id) {
+        setLastSelectedNoteId(null);
+      }
     } catch (error) {
       console.error("Failed to delete note:", error);
     } finally {
       setDeleteConfirmNote(null);
     }
-  }, [deleteNote, selectedNote, deleteConfirmNote]);
+  }, [deleteNote, selectedNote, deleteConfirmNote, lastSelectedNoteId, setLastSelectedNoteId]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {

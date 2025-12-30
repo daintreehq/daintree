@@ -6,6 +6,7 @@ interface NotesState {
   isLoading: boolean;
   error: string | null;
   isInitialized: boolean;
+  lastSelectedNoteId: string | null;
 }
 
 interface NotesActions {
@@ -17,6 +18,7 @@ interface NotesActions {
     worktreeId?: string
   ) => Promise<NoteContent>;
   deleteNote: (notePath: string) => Promise<void>;
+  setLastSelectedNoteId: (noteId: string | null) => void;
 }
 
 type NotesStore = NotesState & NotesActions;
@@ -28,6 +30,7 @@ export const useNotesStore = create<NotesStore>()((set, get) => ({
   isLoading: true,
   error: null,
   isInitialized: false,
+  lastSelectedNoteId: null,
 
   initialize: () => {
     if (get().isInitialized) return Promise.resolve();
@@ -81,6 +84,10 @@ export const useNotesStore = create<NotesStore>()((set, get) => ({
       throw e;
     }
   },
+
+  setLastSelectedNoteId: (noteId: string | null) => {
+    set({ lastSelectedNoteId: noteId });
+  },
 }));
 
 export function cleanupNotesStore() {
@@ -90,5 +97,6 @@ export function cleanupNotesStore() {
     isLoading: true,
     error: null,
     isInitialized: false,
+    // Intentionally do NOT reset lastSelectedNoteId so it persists across project switches
   });
 }
