@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { cn } from "@/lib/utils";
 import { useTerminalStore } from "@/store";
 import type { DevPreviewStatus } from "@shared/types/ipc/devPreview";
+import { DevPreviewToolbar } from "./DevPreviewToolbar";
 
 const STATUS_STYLES: Record<DevPreviewStatus, { label: string; dot: string; text: string }> = {
   installing: {
@@ -56,6 +57,8 @@ export function DevPreviewPane({
   const [message, setMessage] = useState("Starting dev server...");
   const [error, setError] = useState<string | undefined>(undefined);
   const [url, setUrl] = useState<string | null>(null);
+  const [isRestarting, setIsRestarting] = useState(false);
+  const restartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const offStatus = window.electron.devPreview.onStatus((payload) => {
@@ -63,6 +66,18 @@ export function DevPreviewPane({
       setStatus(payload.status);
       setMessage(payload.message);
       setError(payload.status === "error" ? (payload.error ?? payload.message) : undefined);
+      // Clear restarting state when we receive a terminal status (server responded)
+      if (
+        payload.status === "running" ||
+        payload.status === "error" ||
+        payload.status === "stopped"
+      ) {
+        setIsRestarting(false);
+        if (restartTimeoutRef.current) {
+          clearTimeout(restartTimeoutRef.current);
+          restartTimeoutRef.current = null;
+        }
+      }
     });
 
     const offUrl = window.electron.devPreview.onUrl((payload) => {
@@ -73,6 +88,9 @@ export function DevPreviewPane({
     return () => {
       offStatus();
       offUrl();
+      if (restartTimeoutRef.current) {
+        clearTimeout(restartTimeoutRef.current);
+      }
     };
   }, [id]);
 
@@ -81,6 +99,11 @@ export function DevPreviewPane({
     setError(undefined);
     setStatus("starting");
     setMessage("Starting dev server...");
+    setIsRestarting(false);
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current);
+      restartTimeoutRef.current = null;
+    }
 
     const terminal = useTerminalStore.getState().getTerminal(id);
     const cols = terminal?.cols ?? 80;
@@ -98,10 +121,27 @@ export function DevPreviewPane({
     setError(undefined);
     setStatus("starting");
     setMessage("Restarting dev server...");
+    setIsRestarting(true);
+    // Clear restarting after 10 seconds as a fallback
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current);
+    }
+    restartTimeoutRef.current = setTimeout(() => {
+      setIsRestarting(false);
+    }, 10000);
     void window.electron.devPreview.restart(id);
   }, [id]);
 
   const statusStyle = STATUS_STYLES[status];
+
+  const devPreviewToolbar = (
+    <DevPreviewToolbar
+      status={status}
+      url={url}
+      isRestarting={isRestarting}
+      onRestart={handleRestart}
+    />
+  );
 
   return (
     <ContentPanel
@@ -120,6 +160,7 @@ export function DevPreviewPane({
       onMinimize={onMinimize}
       onRestore={onRestore}
       onRestart={handleRestart}
+      toolbar={devPreviewToolbar}
     >
       <div className="flex flex-1 min-h-0 flex-col">
         <div className="relative flex-1 min-h-0 bg-white">
