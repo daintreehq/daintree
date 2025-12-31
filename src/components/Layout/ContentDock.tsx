@@ -9,6 +9,7 @@ import { useTerminalStore, useProjectStore, useWorktreeSelectionStore } from "@/
 import { DockedTerminalItem } from "./DockedTerminalItem";
 import { TrashContainer } from "./TrashContainer";
 import { WaitingContainer } from "./WaitingContainer";
+import { FailedContainer } from "./FailedContainer";
 import {
   SortableDockItem,
   SortableDockPlaceholder,
@@ -207,9 +208,10 @@ export function ContentDock() {
         <div className="w-px h-5 bg-[var(--dock-border)] mx-1 shrink-0" />
       )}
 
-      {/* Action containers: Waiting + Trash */}
+      {/* Action containers: Waiting + Failed + Trash */}
       <div className="shrink-0 pl-1 flex items-center gap-2">
         <WaitingContainer />
+        <FailedContainer />
         <TrashContainer trashedTerminals={trashedItems} />
       </div>
     </div>

@@ -111,4 +111,18 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       state.focusNextWaiting(state.isInTrash);
     },
   }));
+
+  actions.set("agent.focusNextFailed", () => ({
+    id: "agent.focusNextFailed",
+    title: "Focus Next Failed Agent",
+    description: "Focus the next agent in failed state",
+    category: "agent",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const state = useTerminalStore.getState();
+      state.focusNextFailed(state.isInTrash);
+    },
+  }));
 }

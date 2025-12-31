@@ -98,6 +98,7 @@ export type KeyAction =
   | "agent.codex"
   | "agent.terminal"
   | "agent.focusNextWaiting"
+  | "agent.focusNextFailed"
 
   // Panel management
   | "panel.palette"

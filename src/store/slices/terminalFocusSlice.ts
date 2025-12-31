@@ -2,9 +2,27 @@ import type { StateCreator } from "zustand";
 import type { TerminalInstance } from "./terminalRegistrySlice";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 
 export type NavigationDirection = "up" | "down" | "left" | "right";
+
+function isTerminalOrphaned(terminal: TerminalInstance, worktreeIds: Set<string>): boolean {
+  const worktreeId = typeof terminal.worktreeId === "string" ? terminal.worktreeId.trim() : "";
+  if (!worktreeId) return false;
+  return !worktreeIds.has(worktreeId);
+}
+
+function isTerminalVisible(
+  terminal: TerminalInstance,
+  isInTrash: (id: string) => boolean,
+  worktreeIds: Set<string>
+): boolean {
+  if (isInTrash(terminal.id)) return false;
+  if (terminal.location === "trash") return false;
+  if (isTerminalOrphaned(terminal, worktreeIds)) return false;
+  return true;
+}
 
 interface PreMaximizeLayoutSnapshot {
   gridCols: number;
@@ -42,6 +60,9 @@ export interface TerminalFocusSlice {
 
   // Waiting agent navigation
   focusNextWaiting: (isInTrash: (id: string) => boolean) => void;
+
+  // Failed agent navigation
+  focusNextFailed: (isInTrash: (id: string) => boolean) => void;
 
   handleTerminalRemoved: (
     removedId: string,
@@ -226,9 +247,16 @@ export const createTerminalFocusSlice =
         const terminals = getTerminals();
         const { focusedId, activateTerminal, pingTerminal } = get();
 
-        // Find all waiting terminals excluding trash
+        const worktreeDataState = useWorktreeDataStore.getState();
+        const worktreeIds = new Set<string>();
+        for (const [id, wt] of worktreeDataState.worktrees) {
+          worktreeIds.add(id);
+          if (wt.worktreeId) worktreeIds.add(wt.worktreeId);
+        }
+
+        // Find all waiting terminals excluding trash and orphaned
         const waitingTerminals = terminals.filter(
-          (t) => t.agentState === "waiting" && !isInTrash(t.id)
+          (t) => t.agentState === "waiting" && isTerminalVisible(t, isInTrash, worktreeIds)
         );
 
         if (waitingTerminals.length === 0) return;
@@ -239,6 +267,42 @@ export const createTerminalFocusSlice =
         // Calculate next index with wrap-around
         const nextIndex = (currentIndex + 1) % waitingTerminals.length;
         const nextTerminal = waitingTerminals[nextIndex];
+
+        const worktreeStore = useWorktreeSelectionStore.getState();
+        if (nextTerminal.worktreeId && nextTerminal.worktreeId !== worktreeStore.activeWorktreeId) {
+          worktreeStore.trackTerminalFocus(nextTerminal.worktreeId, nextTerminal.id);
+          worktreeStore.selectWorktree(nextTerminal.worktreeId);
+        }
+
+        // Activate and ping the terminal for visual feedback
+        activateTerminal(nextTerminal.id);
+        pingTerminal(nextTerminal.id);
+      },
+
+      focusNextFailed: (isInTrash) => {
+        const terminals = getTerminals();
+        const { focusedId, activateTerminal, pingTerminal } = get();
+
+        const worktreeDataState = useWorktreeDataStore.getState();
+        const worktreeIds = new Set<string>();
+        for (const [id, wt] of worktreeDataState.worktrees) {
+          worktreeIds.add(id);
+          if (wt.worktreeId) worktreeIds.add(wt.worktreeId);
+        }
+
+        // Find all failed terminals excluding trash and orphaned
+        const failedTerminals = terminals.filter(
+          (t) => t.agentState === "failed" && isTerminalVisible(t, isInTrash, worktreeIds)
+        );
+
+        if (failedTerminals.length === 0) return;
+
+        // Find current index in failed list
+        const currentIndex = failedTerminals.findIndex((t) => t.id === focusedId);
+
+        // Calculate next index with wrap-around
+        const nextIndex = (currentIndex + 1) % failedTerminals.length;
+        const nextTerminal = failedTerminals[nextIndex];
 
         const worktreeStore = useWorktreeSelectionStore.getState();
         if (nextTerminal.worktreeId && nextTerminal.worktreeId !== worktreeStore.activeWorktreeId) {

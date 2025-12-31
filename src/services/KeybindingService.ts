@@ -179,6 +179,14 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Agents",
   },
   {
+    actionId: "agent.focusNextFailed",
+    combo: "Cmd+Alt+Shift+/",
+    scope: "global",
+    priority: 0,
+    description: "Jump to next failed agent",
+    category: "Agents",
+  },
+  {
     actionId: "terminal.inject",
     combo: "Cmd+Shift+I",
     scope: "global",

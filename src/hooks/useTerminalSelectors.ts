@@ -72,6 +72,31 @@ export function useWaitingTerminalIds(): string[] {
   return useWaitingTerminals().map((t) => t.id);
 }
 
+export function useFailedTerminals(): TerminalInstance[] {
+  const worktreeIds = useWorktreeDataStore(
+    useShallow((state) => {
+      const ids = new Set<string>();
+      for (const [id, wt] of state.worktrees) {
+        ids.add(id);
+        if (wt.worktreeId) ids.add(wt.worktreeId);
+      }
+      return ids;
+    })
+  );
+
+  return useTerminalStore(
+    useShallow((state) =>
+      state.terminals.filter(
+        (t) => t.agentState === "failed" && isTerminalVisible(t, state.isInTrash, worktreeIds)
+      )
+    )
+  );
+}
+
+export function useFailedTerminalIds(): string[] {
+  return useFailedTerminals().map((t) => t.id);
+}
+
 /**
  * Get background panel stats for Zen Mode header display.
  * Returns count of active (grid) panels excluding the current one, and how many are working.
