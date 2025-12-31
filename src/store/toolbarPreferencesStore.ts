@@ -53,7 +53,12 @@ const DEFAULT_PREFERENCES: ToolbarPreferences = {
 interface ToolbarPreferencesState extends ToolbarPreferences {
   setLeftButtons: (buttons: ToolbarButtonId[]) => void;
   setRightButtons: (buttons: ToolbarButtonId[]) => void;
-  moveButton: (buttonId: ToolbarButtonId, from: "left" | "right", to: "left" | "right", toIndex: number) => void;
+  moveButton: (
+    buttonId: ToolbarButtonId,
+    from: "left" | "right",
+    to: "left" | "right",
+    toIndex: number
+  ) => void;
   toggleButtonVisibility: (buttonId: ToolbarButtonId, side: "left" | "right") => void;
   setAlwaysShowDevServer: (value: boolean) => void;
   setDefaultSelection: (selection: ToolbarPreferences["launcher"]["defaultSelection"]) => void;

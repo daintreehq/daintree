@@ -247,7 +247,8 @@ export function ToolbarSettingsTab() {
       <div>
         <h2 className="text-lg font-semibold text-canopy-text mb-1">Toolbar Customization</h2>
         <p className="text-sm text-muted-foreground">
-          Configure which buttons appear in the toolbar and their order. Drag to reorder, uncheck to hide.
+          Configure which buttons appear in the toolbar and their order. Drag to reorder, uncheck to
+          hide.
         </p>
       </div>
 
@@ -342,7 +343,9 @@ export function ToolbarSettingsTab() {
                 value={launcher.defaultSelection ?? ""}
                 onChange={(e) =>
                   setDefaultSelection(
-                    e.target.value ? (e.target.value as typeof launcher.defaultSelection) : undefined
+                    e.target.value
+                      ? (e.target.value as typeof launcher.defaultSelection)
+                      : undefined
                   )
                 }
                 className="w-full px-3 py-2 text-sm rounded-lg border border-divider bg-canopy-sidebar/30 text-canopy-text"

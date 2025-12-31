@@ -204,7 +204,9 @@ export function Toolbar({
 
   const headerRef = useRef<HTMLElement>(null);
 
-  const buttonRegistry = useMemo<Record<ToolbarButtonId, { render: () => React.ReactNode; isAvailable: boolean }>>(
+  const buttonRegistry = useMemo<
+    Record<ToolbarButtonId, { render: () => React.ReactNode; isAvailable: boolean }>
+  >(
     () => ({
       "sidebar-toggle": {
         render: () => (
@@ -608,9 +610,7 @@ export function Toolbar({
 
         <div className="w-px h-5 bg-white/[0.08] mx-1" />
 
-        <div className="flex items-center gap-0.5">
-          {renderButtons(toolbarLayout.leftButtons)}
-        </div>
+        <div className="flex items-center gap-0.5">{renderButtons(toolbarLayout.leftButtons)}</div>
       </div>
 
       {/* CENTER GROUP - Absolutely positioned dead center */}
@@ -770,9 +770,7 @@ export function Toolbar({
 
       {/* RIGHT GROUP */}
       <div className="flex items-center gap-1.5 app-no-drag z-20">
-        <div className="flex items-center gap-0.5">
-          {renderButtons(toolbarLayout.rightButtons)}
-        </div>
+        <div className="flex items-center gap-0.5">{renderButtons(toolbarLayout.rightButtons)}</div>
 
         <div className="w-px h-5 bg-white/[0.08] mx-1" />
 
