@@ -1,10 +1,11 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { TerminalTypeSchema } from "./schemas";
 import { z } from "zod";
-import type { ActionId } from "@shared/types/actions";
+import type { ActionId, ActionContext } from "@shared/types/actions";
 import { appClient, terminalClient } from "@/clients";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { useTerminalStore } from "@/store/terminalStore";
+import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 
 export function registerTerminalActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("terminal.new", () => ({
@@ -761,6 +762,138 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
       } catch (error) {
         state.setLayoutConfig(previous);
         throw error;
+      }
+    },
+  }));
+
+  // Helper to get terminal and its worktree for the open worktree actions
+  const getTerminalWorktree = (ctx: ActionContext) => {
+    const { focusedTerminalId } = ctx;
+    if (!focusedTerminalId) return null;
+
+    const terminal = useTerminalStore.getState().terminals.find((t) => t.id === focusedTerminalId);
+    if (!terminal?.worktreeId) return null;
+
+    const worktree = useWorktreeDataStore.getState().worktrees.get(terminal.worktreeId);
+    if (!worktree) return null;
+
+    return { terminal, worktree };
+  };
+
+  actions.set("terminal.openWorktreeEditor", () => ({
+    id: "terminal.openWorktreeEditor",
+    title: "Open Focused Terminal's Worktree Folder",
+    description: "Open the folder for the focused terminal's worktree in your editor",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    isEnabled: (ctx: ActionContext) => {
+      return getTerminalWorktree(ctx) !== null;
+    },
+    disabledReason: (ctx: ActionContext) => {
+      if (!ctx.focusedTerminalId) return "No focused terminal";
+      const terminal = useTerminalStore
+        .getState()
+        .terminals.find((t) => t.id === ctx.focusedTerminalId);
+      if (!terminal) return "Focused terminal no longer exists";
+      if (!terminal.worktreeId) return "Terminal has no associated worktree";
+      const worktree = useWorktreeDataStore.getState().worktrees.get(terminal.worktreeId);
+      if (!worktree) return "Worktree no longer exists";
+      return undefined;
+    },
+    run: async (_args: unknown, ctx: ActionContext) => {
+      const data = getTerminalWorktree(ctx);
+      if (!data) return;
+
+      const { actionService } = await import("@/services/ActionService");
+      const result = await actionService.dispatch(
+        "worktree.openEditor",
+        { worktreeId: data.worktree.id },
+        { source: "user" }
+      );
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
+    },
+  }));
+
+  actions.set("terminal.openWorktreeIssue", () => ({
+    id: "terminal.openWorktreeIssue",
+    title: "Open Focused Terminal's Worktree Issue",
+    description: "Open the GitHub issue for the focused terminal's worktree",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    isEnabled: (ctx: ActionContext) => {
+      const data = getTerminalWorktree(ctx);
+      return data !== null && !!data.worktree.issueNumber;
+    },
+    disabledReason: (ctx: ActionContext) => {
+      if (!ctx.focusedTerminalId) return "No focused terminal";
+      const terminal = useTerminalStore
+        .getState()
+        .terminals.find((t) => t.id === ctx.focusedTerminalId);
+      if (!terminal) return "Focused terminal no longer exists";
+      if (!terminal.worktreeId) return "Terminal has no associated worktree";
+      const worktree = useWorktreeDataStore.getState().worktrees.get(terminal.worktreeId);
+      if (!worktree) return "Worktree no longer exists";
+      if (!worktree.issueNumber) return "Worktree has no associated issue";
+      return undefined;
+    },
+    run: async (_args: unknown, ctx: ActionContext) => {
+      const data = getTerminalWorktree(ctx);
+      if (!data || !data.worktree.issueNumber) return;
+
+      const { actionService } = await import("@/services/ActionService");
+      const result = await actionService.dispatch(
+        "worktree.openIssue",
+        { worktreeId: data.worktree.id },
+        { source: "user" }
+      );
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
+    },
+  }));
+
+  actions.set("terminal.openWorktreePR", () => ({
+    id: "terminal.openWorktreePR",
+    title: "Open Focused Terminal's Worktree Pull Request",
+    description: "Open the GitHub pull request for the focused terminal's worktree",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    isEnabled: (ctx: ActionContext) => {
+      const data = getTerminalWorktree(ctx);
+      return data !== null && !!data.worktree.prUrl;
+    },
+    disabledReason: (ctx: ActionContext) => {
+      if (!ctx.focusedTerminalId) return "No focused terminal";
+      const terminal = useTerminalStore
+        .getState()
+        .terminals.find((t) => t.id === ctx.focusedTerminalId);
+      if (!terminal) return "Focused terminal no longer exists";
+      if (!terminal.worktreeId) return "Terminal has no associated worktree";
+      const worktree = useWorktreeDataStore.getState().worktrees.get(terminal.worktreeId);
+      if (!worktree) return "Worktree no longer exists";
+      if (!worktree.prUrl) return "Worktree has no associated pull request";
+      return undefined;
+    },
+    run: async (_args: unknown, ctx: ActionContext) => {
+      const data = getTerminalWorktree(ctx);
+      if (!data || !data.worktree.prUrl) return;
+
+      const { actionService } = await import("@/services/ActionService");
+      const result = await actionService.dispatch(
+        "worktree.openPR",
+        { worktreeId: data.worktree.id },
+        { source: "user" }
+      );
+      if (!result.ok) {
+        throw new Error(result.error.message);
       }
     },
   }));
