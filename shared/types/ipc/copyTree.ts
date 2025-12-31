@@ -11,8 +11,9 @@ export interface CopyTreeOptions {
   /** Explicit file/folder paths to include (used by file picker modal) */
   includePaths?: string[];
 
-  /** Git filtering */
+  /** Git filtering - only include files modified in working directory (staged + unstaged changes, excludes untracked files) */
   modified?: boolean;
+  /** Git filtering - only include files changed since specified commit/branch */
   changed?: string;
 
   /** Size limits */
