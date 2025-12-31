@@ -30,6 +30,7 @@ import {
   GitPullRequest,
   Loader2,
   MoreHorizontal,
+  Pin,
   Shield,
 } from "lucide-react";
 
@@ -47,6 +48,7 @@ export interface WorktreeHeaderProps {
   worktree: WorktreeState;
   isActive: boolean;
   isMainWorktree: boolean;
+  isPinned: boolean;
   branchLabel: string;
   worktreeErrorCount: number;
 
@@ -82,6 +84,7 @@ export interface WorktreeHeaderProps {
     onOpenPR?: () => void;
     onRunRecipe: (recipeId: string) => void;
     onSaveLayout?: () => void;
+    onTogglePin?: () => void;
     onLaunchAgent?: (agentId: string) => void;
     onMinimizeAll: () => void;
     onMaximizeAll: () => void;
@@ -98,6 +101,7 @@ export function WorktreeHeader({
   worktree,
   isActive,
   isMainWorktree,
+  isPinned,
   branchLabel,
   worktreeErrorCount,
   copy,
@@ -121,6 +125,9 @@ export function WorktreeHeader({
       <div className="flex items-center gap-2 min-h-[22px]">
         <div className="flex items-center gap-2 min-w-0 flex-1">
           {isMainWorktree && <Shield className="w-3.5 h-3.5 text-canopy-text/30 shrink-0" />}
+          {isPinned && !isMainWorktree && (
+            <Pin className="w-3 h-3 text-canopy-text/40 shrink-0" aria-label="Pinned" />
+          )}
           <BranchLabel label={branchLabel} isActive={isActive} isMainWorktree={isMainWorktree} />
           {worktree.isDetached && (
             <span className="text-amber-500 text-xs font-medium shrink-0">(detached)</span>
@@ -207,6 +214,7 @@ export function WorktreeHeader({
                 recipes={recipeOptions}
                 runningRecipeId={menu.runningRecipeId}
                 isRestartValidating={menu.isRestartValidating}
+                isPinned={isPinned}
                 counts={menu.counts}
                 onLaunchAgent={menu.onLaunchAgent ? handleLaunchAgent : undefined}
                 onCopyContext={menu.onCopyContext}
@@ -216,6 +224,7 @@ export function WorktreeHeader({
                 onOpenPR={menu.onOpenPR}
                 onRunRecipe={menu.onRunRecipe}
                 onSaveLayout={menu.onSaveLayout}
+                onTogglePin={menu.onTogglePin}
                 onMinimizeAll={menu.onMinimizeAll}
                 onMaximizeAll={menu.onMaximizeAll}
                 onRestartAll={menu.onRestartAll}

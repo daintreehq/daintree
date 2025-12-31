@@ -12,6 +12,7 @@ import {
 } from "../../store";
 import { useRecipeStore } from "../../store/recipeStore";
 import { useWorktreeSelectionStore } from "../../store/worktreeStore";
+import { useWorktreeFilterStore } from "../../store/worktreeFilterStore";
 import { errorsClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { cn } from "../../lib/utils";
@@ -73,6 +74,20 @@ export function WorktreeCard({
 
   const getRecipesForWorktree = useRecipeStore((state) => state.getRecipesForWorktree);
   const recipes = getRecipesForWorktree(worktree.id);
+
+  const isPinned = useWorktreeFilterStore(
+    useCallback((state) => state.pinnedWorktrees.includes(worktree.id), [worktree.id])
+  );
+  const pinWorktree = useWorktreeFilterStore((state) => state.pinWorktree);
+  const unpinWorktree = useWorktreeFilterStore((state) => state.unpinWorktree);
+
+  const handleTogglePin = useCallback(() => {
+    if (isPinned) {
+      unpinWorktree(worktree.id);
+    } else {
+      pinWorktree(worktree.id);
+    }
+  }, [isPinned, pinWorktree, unpinWorktree, worktree.id]);
 
   const { counts: terminalCounts, terminals: worktreeTerminals } = useWorktreeTerminals(
     worktree.id
@@ -298,6 +313,7 @@ export function WorktreeCard({
           worktree={worktree}
           isActive={isActive}
           isMainWorktree={isMainWorktree}
+          isPinned={isPinned}
           branchLabel={branchLabel}
           worktreeErrorCount={worktreeErrors.length}
           copy={{
@@ -327,10 +343,10 @@ export function WorktreeCard({
             onOpenEditor,
             onRevealInFinder: handlePathClick,
             onOpenIssue: worktree.issueNumber && onOpenIssue ? handleOpenIssue : undefined,
-            onOpenPR:
-              worktree.issueNumber && worktree.prNumber && onOpenPR ? handleOpenPR : undefined,
+            onOpenPR: worktree.prNumber && onOpenPR ? handleOpenPR : undefined,
             onRunRecipe: (recipeId) => void handleRunRecipe(recipeId),
             onSaveLayout,
+            onTogglePin: handleTogglePin,
             onLaunchAgent,
             onMinimizeAll: handleMinimizeAll,
             onMaximizeAll: handleMaximizeAll,

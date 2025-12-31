@@ -9,6 +9,8 @@ import {
   Globe,
   Maximize2,
   Minimize2,
+  Pin,
+  PinOff,
   Play,
   RotateCcw,
   Save,
@@ -45,6 +47,7 @@ export interface WorktreeMenuItemsProps {
   recipes: Array<{ id: string; name: string }>;
   runningRecipeId: string | null;
   isRestartValidating: boolean;
+  isPinned?: boolean;
   counts: {
     grid: number;
     dock: number;
@@ -61,6 +64,7 @@ export interface WorktreeMenuItemsProps {
   onOpenPR?: () => void;
   onRunRecipe: (recipeId: string) => void;
   onSaveLayout?: () => void;
+  onTogglePin?: () => void;
   onMinimizeAll: () => void;
   onMaximizeAll: () => void;
   onRestartAll: () => void;
@@ -78,6 +82,7 @@ export function WorktreeMenuItems({
   recipes,
   runningRecipeId,
   isRestartValidating,
+  isPinned,
   counts,
   onLaunchAgent,
   onCopyContext,
@@ -87,6 +92,7 @@ export function WorktreeMenuItems({
   onOpenPR,
   onRunRecipe,
   onSaveLayout,
+  onTogglePin,
   onMinimizeAll,
   onMaximizeAll,
   onRestartAll,
@@ -180,6 +186,21 @@ export function WorktreeMenuItems({
       <C.Separator />
 
       <C.Label>Worktree</C.Label>
+      {onTogglePin && !worktree.isMainWorktree && (
+        <C.Item onSelect={onTogglePin}>
+          {isPinned ? (
+            <>
+              <PinOff className="w-3.5 h-3.5 mr-2" />
+              Unpin
+            </>
+          ) : (
+            <>
+              <Pin className="w-3.5 h-3.5 mr-2" />
+              Pin to Top
+            </>
+          )}
+        </C.Item>
+      )}
       <C.Item onSelect={onCopyContext}>
         <Copy className="w-3.5 h-3.5 mr-2" />
         Copy Context
