@@ -15,6 +15,7 @@ export interface ComputedSubtitle {
 export interface UseWorktreeStatusResult {
   branchLabel: string;
   hasChanges: boolean;
+  isComplete: boolean;
   effectiveNote?: string;
   effectiveSummary?: string | null;
   computedSubtitle: ComputedSubtitle;
@@ -113,9 +114,16 @@ export function useWorktreeStatus({
     return "idle";
   }, [worktreeErrorCount, worktree.mood, hasChanges, worktree.isCurrent]);
 
+  const isComplete =
+    !!worktree.issueNumber &&
+    !!worktree.prNumber &&
+    !hasChanges &&
+    worktree.worktreeChanges !== null;
+
   return {
     branchLabel,
     hasChanges,
+    isComplete,
     effectiveNote,
     effectiveSummary,
     computedSubtitle,

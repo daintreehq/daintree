@@ -21,7 +21,6 @@ import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { WorktreeDetailsSection } from "./WorktreeCard/WorktreeDetailsSection";
 import { WorktreeDialogs } from "./WorktreeCard/WorktreeDialogs";
 import { WorktreeHeader } from "./WorktreeCard/WorktreeHeader";
-import { WorktreeStatusSpine } from "./WorktreeCard/WorktreeStatusSpine";
 import { WorktreeTerminalSection } from "./WorktreeCard/WorktreeTerminalSection";
 import { useWorktreeActions } from "./WorktreeCard/hooks/useWorktreeActions";
 import { useWorktreeMenu } from "./WorktreeCard/hooks/useWorktreeMenu";
@@ -115,8 +114,15 @@ export function WorktreeCard({
   );
 
   const isMainWorktree = Boolean(worktree.isMainWorktree);
-  const { branchLabel, hasChanges, effectiveNote, effectiveSummary, computedSubtitle, spineState } =
-    useWorktreeStatus({ worktree, worktreeErrorCount: worktreeErrors.length });
+  const {
+    branchLabel,
+    hasChanges,
+    isComplete,
+    effectiveNote,
+    effectiveSummary,
+    computedSubtitle,
+    spineState,
+  } = useWorktreeStatus({ worktree, worktreeErrorCount: worktreeErrors.length });
 
   const {
     runningRecipeId,
@@ -292,7 +298,14 @@ export function WorktreeCard({
       {isOver && !isActive && (
         <div className="absolute inset-0 z-50 bg-canopy-accent/20 border-2 border-canopy-accent pointer-events-none animate-in fade-in duration-150" />
       )}
-      <WorktreeStatusSpine spineState={spineState} />
+      {isComplete && (
+        <div
+          className="absolute top-0 left-0 w-3 h-3 bg-[var(--color-status-success)]/60 pointer-events-none z-10"
+          style={{ clipPath: "polygon(0 0, 100% 0, 0 100%)" }}
+          role="img"
+          aria-label="Completed: Issue linked, PR opened, all changes committed"
+        />
+      )}
       <div className="px-4 py-5">
         <WorktreeHeader
           worktree={worktree}
