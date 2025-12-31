@@ -69,17 +69,26 @@ function EmptyState({
     )
   );
 
-  const pinnedRecipes = useMemo(() => {
-    return recipes
+  // Combine pinned and recently-used recipes into a unified display
+  // Pinned recipes first (sorted by lastUsedAt), then recent non-pinned
+  const displayRecipes = useMemo(() => {
+    const MAX_RECIPES = 6;
+
+    // Get pinned recipes sorted by lastUsedAt
+    const pinned = recipes
       .filter((r) => r.showInEmptyState)
       .sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0));
-  }, [recipes]);
 
-  const lastUsedRecipe = useMemo(() => {
-    const sorted = recipes
-      .filter((r) => r.lastUsedAt)
-      .sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0));
-    return sorted[0];
+    // Get recently-used non-pinned recipes to backfill remaining slots
+    const pinnedIds = new Set(pinned.map((r) => r.id));
+    const remainingSlots = Math.max(0, MAX_RECIPES - pinned.length);
+    const recent = recipes
+      .filter((r) => !r.showInEmptyState && r.lastUsedAt != null && !pinnedIds.has(r.id))
+      .sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0))
+      .slice(0, remainingSlots);
+
+    // Combine: pinned first, then recent, up to MAX_RECIPES total
+    return [...pinned, ...recent].slice(0, MAX_RECIPES);
   }, [recipes]);
 
   const handleOpenHelp = () => {
@@ -125,8 +134,8 @@ function EmptyState({
               <button
                 type="button"
                 onClick={handleOpenProjectSettings}
-                className="absolute -bottom-1 -right-1 p-1.5 bg-canopy-sidebar border border-canopy-border rounded-full opacity-0 group-hover:opacity-100 transition-opacity hover:bg-canopy-bg"
-                title="Change project icon"
+                className="absolute -bottom-1 -right-1 p-1.5 bg-canopy-sidebar border border-canopy-border rounded-full opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity hover:bg-canopy-bg focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
+                aria-label="Change project icon"
               >
                 <Settings className="h-3 w-3 text-canopy-text/70" />
               </button>
@@ -164,48 +173,29 @@ function EmptyState({
           </button>
         )}
 
-        {hasActiveWorktree && (
+        {hasActiveWorktree && displayRecipes.length > 0 && (
           <div className="mb-8 w-full max-w-2xl">
             <h4 className="text-xs font-semibold text-canopy-text/50 uppercase tracking-wider mb-3 text-center">
-              Pinned Recipes
+              Recipes
             </h4>
-            {pinnedRecipes.length > 0 ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                {pinnedRecipes.map((recipe) => (
-                  <button
-                    key={recipe.id}
-                    type="button"
-                    onClick={() => handleRunRecipe(recipe.id)}
-                    className="p-4 bg-canopy-sidebar hover:bg-canopy-bg border border-canopy-border hover:border-canopy-accent/50 rounded-[var(--radius-md)] transition-all text-left group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
-                  >
-                    <div className="flex items-center gap-2 mb-1">
-                      <Play className="h-4 w-4 text-canopy-accent group-hover:text-canopy-accent/80" />
-                      <h5 className="font-medium text-sm text-canopy-text">{recipe.name}</h5>
-                    </div>
-                    <p className="text-xs text-canopy-muted">
-                      {recipe.terminals.length} terminal{recipe.terminals.length !== 1 ? "s" : ""}
-                    </p>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <p className="text-xs text-canopy-text/40 text-center">
-                No pinned recipes. Create a recipe and enable "Show in Empty State" to pin it here.
-              </p>
-            )}
-          </div>
-        )}
-
-        {hasActiveWorktree && lastUsedRecipe && !lastUsedRecipe.showInEmptyState && (
-          <div className="mb-6">
-            <button
-              type="button"
-              onClick={() => handleRunRecipe(lastUsedRecipe.id)}
-              className="px-5 py-2.5 bg-canopy-sidebar hover:bg-canopy-bg border border-canopy-border hover:border-canopy-accent/50 rounded-[var(--radius-md)] text-sm text-canopy-text transition-all flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
-            >
-              <Play className="h-3.5 w-3.5 text-canopy-accent" />
-              Rerun {lastUsedRecipe.name}
-            </button>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+              {displayRecipes.map((recipe) => (
+                <button
+                  key={recipe.id}
+                  type="button"
+                  onClick={() => handleRunRecipe(recipe.id)}
+                  className="p-4 bg-canopy-sidebar hover:bg-canopy-bg border border-canopy-border hover:border-canopy-accent/50 rounded-[var(--radius-md)] transition-all text-left group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
+                >
+                  <div className="flex items-center gap-2 mb-1 min-w-0">
+                    <Play className="h-4 w-4 text-canopy-accent group-hover:text-canopy-accent/80 shrink-0" />
+                    <h5 className="font-medium text-sm text-canopy-text truncate">{recipe.name}</h5>
+                  </div>
+                  <p className="text-xs text-canopy-muted">
+                    {recipe.terminals.length} terminal{recipe.terminals.length !== 1 ? "s" : ""}
+                  </p>
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
