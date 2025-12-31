@@ -108,7 +108,14 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     scope: "renderer",
     run: async () => {
       const state = useTerminalStore.getState();
-      state.focusNextWaiting(state.isInTrash);
+      const { useWorktreeDataStore } = await import("@/store/worktreeDataStore");
+      const worktreeData = useWorktreeDataStore.getState();
+      const validWorktreeIds = new Set<string>();
+      for (const [id, wt] of worktreeData.worktrees) {
+        validWorktreeIds.add(id);
+        if (wt.worktreeId) validWorktreeIds.add(wt.worktreeId);
+      }
+      state.focusNextWaiting(state.isInTrash, validWorktreeIds);
     },
   }));
 
@@ -122,7 +129,14 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     scope: "renderer",
     run: async () => {
       const state = useTerminalStore.getState();
-      state.focusNextFailed(state.isInTrash);
+      const { useWorktreeDataStore } = await import("@/store/worktreeDataStore");
+      const worktreeData = useWorktreeDataStore.getState();
+      const validWorktreeIds = new Set<string>();
+      for (const [id, wt] of worktreeData.worktrees) {
+        validWorktreeIds.add(id);
+        if (wt.worktreeId) validWorktreeIds.add(wt.worktreeId);
+      }
+      state.focusNextFailed(state.isInTrash, validWorktreeIds);
     },
   }));
 }

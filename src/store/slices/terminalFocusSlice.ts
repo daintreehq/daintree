@@ -2,7 +2,6 @@ import type { StateCreator } from "zustand";
 import type { TerminalInstance } from "./terminalRegistrySlice";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 
 export type NavigationDirection = "up" | "down" | "left" | "right";
@@ -59,10 +58,10 @@ export interface TerminalFocusSlice {
   activateTerminal: (id: string) => void;
 
   // Waiting agent navigation
-  focusNextWaiting: (isInTrash: (id: string) => boolean) => void;
+  focusNextWaiting: (isInTrash: (id: string) => boolean, validWorktreeIds: Set<string>) => void;
 
   // Failed agent navigation
-  focusNextFailed: (isInTrash: (id: string) => boolean) => void;
+  focusNextFailed: (isInTrash: (id: string) => boolean, validWorktreeIds: Set<string>) => void;
 
   handleTerminalRemoved: (
     removedId: string,
@@ -243,20 +242,13 @@ export const createTerminalFocusSlice =
         }
       },
 
-      focusNextWaiting: (isInTrash) => {
+      focusNextWaiting: (isInTrash, validWorktreeIds) => {
         const terminals = getTerminals();
         const { focusedId, activateTerminal, pingTerminal } = get();
 
-        const worktreeDataState = useWorktreeDataStore.getState();
-        const worktreeIds = new Set<string>();
-        for (const [id, wt] of worktreeDataState.worktrees) {
-          worktreeIds.add(id);
-          if (wt.worktreeId) worktreeIds.add(wt.worktreeId);
-        }
-
         // Find all waiting terminals excluding trash and orphaned
         const waitingTerminals = terminals.filter(
-          (t) => t.agentState === "waiting" && isTerminalVisible(t, isInTrash, worktreeIds)
+          (t) => t.agentState === "waiting" && isTerminalVisible(t, isInTrash, validWorktreeIds)
         );
 
         if (waitingTerminals.length === 0) return;
@@ -279,20 +271,13 @@ export const createTerminalFocusSlice =
         pingTerminal(nextTerminal.id);
       },
 
-      focusNextFailed: (isInTrash) => {
+      focusNextFailed: (isInTrash, validWorktreeIds) => {
         const terminals = getTerminals();
         const { focusedId, activateTerminal, pingTerminal } = get();
 
-        const worktreeDataState = useWorktreeDataStore.getState();
-        const worktreeIds = new Set<string>();
-        for (const [id, wt] of worktreeDataState.worktrees) {
-          worktreeIds.add(id);
-          if (wt.worktreeId) worktreeIds.add(wt.worktreeId);
-        }
-
         // Find all failed terminals excluding trash and orphaned
         const failedTerminals = terminals.filter(
-          (t) => t.agentState === "failed" && isTerminalVisible(t, isInTrash, worktreeIds)
+          (t) => t.agentState === "failed" && isTerminalVisible(t, isInTrash, validWorktreeIds)
         );
 
         if (failedTerminals.length === 0) return;
