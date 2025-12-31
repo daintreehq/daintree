@@ -110,6 +110,15 @@ export type KeyAction =
   | "panel.diagnosticsEvents"
   | "panel.diagnosticsMessages"
 
+  // Sidecar actions
+  | "sidecar.newTab"
+  | "sidecar.closeTab"
+  | "sidecar.nextTab"
+  | "sidecar.prevTab"
+
+  // Notes actions
+  | "notes.openPalette"
+
   // Help/Settings
   | "help.shortcuts"
   | "help.shortcutsAlt"

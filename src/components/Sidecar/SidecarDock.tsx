@@ -6,7 +6,7 @@ import { SidecarToolbar } from "./SidecarToolbar";
 import { SidecarLaunchpad } from "./SidecarLaunchpad";
 import { SIDECAR_MIN_WIDTH, SIDECAR_MAX_WIDTH } from "@shared/types";
 import { getAIAgentInfo } from "@/lib/aiAgentDetection";
-import { useKeybinding, useKeybindingScope } from "@/hooks/useKeybinding";
+import { useKeybindingScope } from "@/hooks/useKeybinding";
 import { useNativeContextMenu } from "@/hooks";
 import type { MenuItemOption } from "@/types";
 import { actionService } from "@/services/ActionService";
@@ -293,28 +293,8 @@ export function SidecarDock() {
     void actionService.dispatch("sidecar.newTab", undefined, { source: "user" });
   }, [isSwitching]);
 
-  const handleCloseTabShortcut = useCallback(() => {
-    if (tabs.length > 0) {
-      void actionService.dispatch("sidecar.closeTab", undefined, { source: "keybinding" });
-    }
-  }, [tabs.length]);
-
-  const handleNextTabShortcut = useCallback(() => {
-    void actionService.dispatch("sidecar.nextTab", undefined, { source: "keybinding" });
-  }, []);
-
-  const handlePrevTabShortcut = useCallback(() => {
-    void actionService.dispatch("sidecar.prevTab", undefined, { source: "keybinding" });
-  }, []);
-
-  const handleNewTabShortcut = useCallback(() => {
-    void actionService.dispatch("sidecar.newTab", undefined, { source: "keybinding" });
-  }, []);
-
-  useKeybinding("sidecar.closeTab", handleCloseTabShortcut, { enabled: isFocused });
-  useKeybinding("sidecar.nextTab", handleNextTabShortcut, { enabled: isFocused });
-  useKeybinding("sidecar.prevTab", handlePrevTabShortcut, { enabled: isFocused });
-  useKeybinding("sidecar.newTab", handleNewTabShortcut, { enabled: isFocused });
+  // Keybindings for sidecar scope are handled by the global keybinding handler
+  // useKeybindingScope above tells the service when sidecar is focused
 
   const handleClose = useCallback(async () => {
     await actionService.dispatch("sidecar.closeAllTabs", undefined, { source: "user" });

@@ -1,7 +1,11 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Search, RotateCcw, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { keybindingService, KeybindingConfig } from "@/services/KeybindingService";
+import {
+  keybindingService,
+  KeybindingConfig,
+  normalizeKeyForBinding,
+} from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 
 interface ShortcutBinding extends KeybindingConfig {
@@ -65,7 +69,9 @@ function KeyRecorder({ onCapture, onCancel, excludeActionId }: KeyRecorderProps)
       if (e.shiftKey) parts.push("Shift");
       if (e.altKey) parts.push("Alt");
 
-      const key = normalizeKey(e.key);
+      // Use normalizeKeyForBinding to handle physical key codes correctly
+      // This fixes issues where Option+/ records as ÷ instead of /
+      const key = normalizeKeyForBinding(e);
       if (!["Meta", "Control", "Alt", "Shift"].includes(key)) {
         parts.push(key);
         const combo = parts.join("+");
@@ -191,27 +197,6 @@ function KeyRecorder({ onCapture, onCancel, excludeActionId }: KeyRecorderProps)
       </div>
     </div>
   );
-}
-
-function normalizeKey(key: string): string {
-  const keyMap: Record<string, string> = {
-    " ": "Space",
-    arrowup: "ArrowUp",
-    arrowdown: "ArrowDown",
-    arrowleft: "ArrowLeft",
-    arrowright: "ArrowRight",
-    escape: "Escape",
-    enter: "Enter",
-    return: "Enter",
-    tab: "Tab",
-    home: "Home",
-    end: "End",
-    pageup: "PageUp",
-    pagedown: "PageDown",
-    backspace: "Backspace",
-    delete: "Delete",
-  };
-  return keyMap[key.toLowerCase()] || key;
 }
 
 interface ShortcutRowProps {

@@ -614,7 +614,7 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
   },
   {
     actionId: "worktree.selectSpace",
-    combo: " ",
+    combo: "Space",
     scope: "worktreeList",
     priority: 5,
     description: "Select worktree (space)",
@@ -640,7 +640,7 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
 
 // Map physical key codes to standard characters
 // Fixes issues where Option/Alt changes the character (e.g., Option+/ becomes ÷ on Mac)
-const CODE_TO_KEY: Record<string, string> = {
+export const CODE_TO_KEY: Record<string, string> = {
   Slash: "/",
   Backslash: "\\",
   Comma: ",",
@@ -655,7 +655,7 @@ const CODE_TO_KEY: Record<string, string> = {
   IntlBackslash: "\\",
 };
 
-function normalizeKey(key: string): string {
+export function normalizeKey(key: string): string {
   const keyMap: Record<string, string> = {
     " ": "Space",
     arrowup: "ArrowUp",
@@ -674,6 +674,21 @@ function normalizeKey(key: string): string {
     delete: "Delete",
   };
   return keyMap[key.toLowerCase()] || key;
+}
+
+/**
+ * Normalize a keyboard event to get the correct key for keybinding matching.
+ * This handles Option/Alt modifiers on macOS that change characters (e.g., Option+/ becomes ÷).
+ * Use this function in both the keybinding matcher and the shortcut recorder to ensure consistency.
+ */
+export function normalizeKeyForBinding(event: KeyboardEvent): string {
+  // Prefer physical key code for punctuation (handles Option/Alt modifiers)
+  if (event.code && CODE_TO_KEY[event.code]) {
+    return CODE_TO_KEY[event.code];
+  }
+
+  // Fallback to character-based normalization
+  return normalizeKey(event.key);
 }
 
 function parseCombo(combo: string): {

@@ -23,6 +23,7 @@ export type { WorktreeTerminalCounts, UseWorktreeTerminalsResult } from "./useWo
 
 export { useKeybinding, useKeybindingScope, useKeybindingDisplay } from "./useKeybinding";
 export type { UseKeybindingOptions } from "./useKeybinding";
+export { useGlobalKeybindings, usePendingChord } from "./useGlobalKeybindings";
 export { keybindingService } from "../services/KeybindingService";
 export type { KeyScope, KeybindingConfig } from "../services/KeybindingService";
 
