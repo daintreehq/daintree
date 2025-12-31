@@ -22,7 +22,7 @@ import {
   GRID_PLACEHOLDER_ID,
   SortableGridPlaceholder,
 } from "@/components/DragDrop";
-import { AlertTriangle, Settings, Play } from "lucide-react";
+import { AlertTriangle, Settings, Play, Pin } from "lucide-react";
 import { CanopyIcon } from "@/components/icons";
 import { ProjectPulseCard } from "@/components/Pulse";
 import { Kbd } from "@/components/ui/Kbd";
@@ -34,6 +34,7 @@ import { useNativeContextMenu, useProjectBranding } from "@/hooks";
 import { actionService } from "@/services/ActionService";
 import type { CliAvailability } from "@shared/types";
 import type { MenuItemOption } from "@/types";
+import { getRecipeGridClasses, getRecipeTerminalSummary } from "./utils/recipeUtils";
 
 export interface ContentGridProps {
   className?: string;
@@ -178,23 +179,40 @@ function EmptyState({
             <h4 className="text-xs font-semibold text-canopy-text/50 uppercase tracking-wider mb-3 text-center">
               Recipes
             </h4>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-              {displayRecipes.map((recipe) => (
-                <button
-                  key={recipe.id}
-                  type="button"
-                  onClick={() => handleRunRecipe(recipe.id)}
-                  className="p-4 bg-canopy-sidebar hover:bg-canopy-bg border border-canopy-border hover:border-canopy-accent/50 rounded-[var(--radius-md)] transition-all text-left group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
-                >
-                  <div className="flex items-center gap-2 mb-1 min-w-0">
-                    <Play className="h-4 w-4 text-canopy-accent group-hover:text-canopy-accent/80 shrink-0" />
-                    <h5 className="font-medium text-sm text-canopy-text truncate">{recipe.name}</h5>
-                  </div>
-                  <p className="text-xs text-canopy-muted">
-                    {recipe.terminals.length} terminal{recipe.terminals.length !== 1 ? "s" : ""}
-                  </p>
-                </button>
-              ))}
+            <div className={getRecipeGridClasses(displayRecipes.length)}>
+              {displayRecipes.map((recipe) => {
+                const isPinned = recipe.showInEmptyState === true;
+                return (
+                  <button
+                    key={recipe.id}
+                    type="button"
+                    onClick={() => handleRunRecipe(recipe.id)}
+                    disabled={!defaultCwd}
+                    className={cn(
+                      "p-4 bg-canopy-sidebar hover:bg-canopy-bg border rounded-[var(--radius-md)] transition-all text-left group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent disabled:opacity-50 disabled:cursor-not-allowed",
+                      isPinned
+                        ? "border-canopy-accent/30 hover:border-canopy-accent/50 bg-canopy-accent/5"
+                        : "border-canopy-border hover:border-canopy-accent/50"
+                    )}
+                  >
+                    <div className="flex items-center gap-2 mb-2 min-w-0">
+                      <Play className="h-4 w-4 text-canopy-accent group-hover:text-canopy-accent/80 shrink-0" />
+                      <h5 className="font-medium text-sm text-canopy-text truncate flex-1">
+                        {recipe.name}
+                      </h5>
+                      {isPinned && (
+                        <>
+                          <span className="sr-only">Pinned</span>
+                          <Pin className="h-3.5 w-3.5 text-canopy-accent/60 shrink-0" aria-hidden="true" />
+                        </>
+                      )}
+                    </div>
+                    <p className="text-xs text-canopy-muted leading-relaxed">
+                      {getRecipeTerminalSummary(recipe.terminals)}
+                    </p>
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}

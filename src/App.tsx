@@ -963,7 +963,7 @@ function App() {
           agentAvailability={availability}
           agentSettings={agentSettings}
         >
-          <ContentGrid className="h-full w-full" agentAvailability={availability} />
+          <ContentGrid className="h-full w-full" agentAvailability={availability} defaultCwd={defaultTerminalCwd} />
         </AppLayout>
       </DndProvider>
 
