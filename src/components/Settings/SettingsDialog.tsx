@@ -9,6 +9,7 @@ import {
   Keyboard,
   GitBranch,
   Terminal,
+  Settings as SettingsIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { appClient } from "@/clients";
@@ -22,6 +23,7 @@ import { TroubleshootingTab } from "./TroubleshootingTab";
 import { SidecarSettingsTab } from "./SidecarSettingsTab";
 import { KeyboardShortcutsTab } from "./KeyboardShortcutsTab";
 import { WorktreeSettingsTab } from "./WorktreeSettingsTab";
+import { ToolbarSettingsTab } from "./ToolbarSettingsTab";
 
 interface SettingsDialogProps {
   isOpen: boolean;
@@ -39,6 +41,7 @@ export type SettingsTab =
   | "agents"
   | "github"
   | "sidecar"
+  | "toolbar"
   | "troubleshooting";
 
 export function SettingsDialog({
@@ -86,6 +89,7 @@ export function SettingsDialog({
     agents: "Agent Settings",
     github: "GitHub Integration",
     sidecar: "Sidecar Links",
+    toolbar: "Toolbar Customization",
     troubleshooting: "Troubleshooting",
   };
 
@@ -153,6 +157,13 @@ export function SettingsDialog({
             Sidecar
           </NavButton>
           <NavButton
+            active={activeTab === "toolbar"}
+            onClick={() => setActiveTab("toolbar")}
+            icon={<SettingsIcon className="w-4 h-4" />}
+          >
+            Toolbar
+          </NavButton>
+          <NavButton
             active={activeTab === "troubleshooting"}
             onClick={() => setActiveTab("troubleshooting")}
           >
@@ -206,6 +217,10 @@ export function SettingsDialog({
 
             <div className={activeTab === "sidecar" ? "" : "hidden"}>
               <SidecarSettingsTab />
+            </div>
+
+            <div className={activeTab === "toolbar" ? "" : "hidden"}>
+              <ToolbarSettingsTab />
             </div>
 
             <div className={activeTab === "troubleshooting" ? "" : "hidden"}>

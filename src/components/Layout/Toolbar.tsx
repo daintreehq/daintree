@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect } from "react";
+import { useRef, useState, useEffect, useMemo } from "react";
 import type React from "react";
 import { Button } from "@/components/ui/button";
 import { FixedDropdown } from "@/components/ui/fixed-dropdown";
@@ -32,7 +32,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { useWorktreeActions } from "@/hooks/useWorktreeActions";
 import { useProjectSettings } from "@/hooks";
 import { useProjectStore } from "@/store/projectStore";
-import { useSidecarStore, usePreferencesStore } from "@/store";
+import { useSidecarStore, usePreferencesStore, useToolbarPreferencesStore } from "@/store";
+import type { ToolbarButtonId } from "@/../../shared/types/domain";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { useRepositoryStats } from "@/hooks/useRepositoryStats";
@@ -105,6 +106,7 @@ export function Toolbar({
   const sidecarOpen = useSidecarStore((state) => state.isOpen);
   const toggleSidecar = useSidecarStore((state) => state.toggle);
   const showDeveloperTools = usePreferencesStore((state) => state.showDeveloperTools);
+  const toolbarLayout = useToolbarPreferencesStore((state) => state.layout);
 
   const [issuesOpen, setIssuesOpen] = useState(false);
   const [prsOpen, setPrsOpen] = useState(false);
@@ -202,6 +204,394 @@ export function Toolbar({
 
   const headerRef = useRef<HTMLElement>(null);
 
+  const buttonRegistry = useMemo<Record<ToolbarButtonId, { render: () => React.ReactNode; isAvailable: boolean }>>(
+    () => ({
+      "sidebar-toggle": {
+        render: () => (
+          <Button
+            key="sidebar-toggle"
+            variant="ghost"
+            size="icon"
+            onClick={onToggleFocusMode}
+            className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
+            title={isFocusMode ? "Show Sidebar (Cmd+B)" : "Hide Sidebar (Cmd+B)"}
+            aria-label="Toggle Sidebar"
+            aria-pressed={!isFocusMode}
+          >
+            {isFocusMode ? <PanelLeft /> : <PanelLeftClose />}
+          </Button>
+        ),
+        isAvailable: true,
+      },
+      claude: {
+        render: () => (
+          <AgentButton
+            key="claude"
+            type="claude"
+            availability={agentAvailability?.claude}
+            isEnabled={agentSettings?.agents?.claude?.enabled ?? true}
+            onOpenSettings={openAgentSettings}
+          />
+        ),
+        isAvailable: true,
+      },
+      gemini: {
+        render: () => (
+          <AgentButton
+            key="gemini"
+            type="gemini"
+            availability={agentAvailability?.gemini}
+            isEnabled={agentSettings?.agents?.gemini?.enabled ?? true}
+            onOpenSettings={openAgentSettings}
+          />
+        ),
+        isAvailable: true,
+      },
+      codex: {
+        render: () => (
+          <AgentButton
+            key="codex"
+            type="codex"
+            availability={agentAvailability?.codex}
+            isEnabled={agentSettings?.agents?.codex?.enabled ?? true}
+            onOpenSettings={openAgentSettings}
+          />
+        ),
+        isAvailable: true,
+      },
+      terminal: {
+        render: () => (
+          <Button
+            key="terminal"
+            variant="ghost"
+            size="icon"
+            onClick={() => onLaunchAgent("terminal")}
+            className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
+            title="Open Terminal (⌘T for palette)"
+            aria-label="Open Terminal"
+          >
+            <Terminal />
+          </Button>
+        ),
+        isAvailable: true,
+      },
+      browser: {
+        render: () => (
+          <Button
+            key="browser"
+            variant="ghost"
+            size="icon"
+            onClick={() => onLaunchAgent("browser")}
+            className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-blue-400 focus-visible:text-blue-400"
+            title="Open Browser"
+            aria-label="Open Browser"
+          >
+            <Globe />
+          </Button>
+        ),
+        isAvailable: true,
+      },
+      "dev-server": {
+        render: () => (
+          <Button
+            key="dev-server"
+            variant="ghost"
+            size="icon"
+            onClick={() => {
+              void actionService.dispatch("devServer.start", undefined, { source: "user" });
+            }}
+            className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-purple-400 focus-visible:text-purple-400"
+            title="Start Dev Server"
+            aria-label="Start Dev Server"
+          >
+            <Rocket />
+          </Button>
+        ),
+        isAvailable: !!devServerCommand,
+      },
+      "github-stats": {
+        render: () =>
+          stats && currentProject ? (
+            <div
+              key="github-stats"
+              className="flex items-center h-8 rounded-[var(--radius-md)] bg-white/[0.03] border border-divider divide-x divide-[var(--border-divider)] mr-2"
+            >
+              <Button
+                ref={issuesButtonRef}
+                variant="ghost"
+                onClick={() => {
+                  setPrsOpen(false);
+                  setCommitsOpen(false);
+                  const willOpen = !issuesOpen;
+                  setIssuesOpen(willOpen);
+                  if (willOpen) {
+                    refreshStats({ force: true });
+                  }
+                }}
+                className={cn(
+                  "text-canopy-text hover:bg-white/[0.04] hover:text-canopy-accent h-full px-3 gap-2 rounded-none rounded-l-[var(--radius-md)]",
+                  stats.issueCount === 0 && "opacity-50",
+                  isStale && "opacity-60",
+                  issuesOpen && "bg-white/[0.04] ring-1 ring-canopy-accent/20 text-canopy-accent"
+                )}
+                title={
+                  isStale
+                    ? `${stats.issueCount ?? "?"} open issues (last updated ${getTimeSinceUpdate(lastUpdated)} - offline)`
+                    : "Browse GitHub Issues"
+                }
+                aria-label={`${stats.issueCount ?? "?"} open issues${isStale ? " (cached)" : ""}`}
+              >
+                <AlertTriangle className="h-4 w-4" />
+                <span className="text-xs font-medium tabular-nums">{stats.issueCount ?? "?"}</span>
+                {isStale && <Clock className="h-3 w-3" />}
+              </Button>
+              <FixedDropdown
+                open={issuesOpen}
+                onOpenChange={setIssuesOpen}
+                anchorRef={issuesButtonRef}
+                className="p-0 w-[450px]"
+              >
+                <GitHubResourceList
+                  type="issue"
+                  projectPath={currentProject.path}
+                  onClose={() => setIssuesOpen(false)}
+                  initialCount={stats.issueCount}
+                />
+              </FixedDropdown>
+              <Button
+                ref={prsButtonRef}
+                variant="ghost"
+                onClick={() => {
+                  setIssuesOpen(false);
+                  setCommitsOpen(false);
+                  const willOpen = !prsOpen;
+                  setPrsOpen(willOpen);
+                  if (willOpen) {
+                    refreshStats({ force: true });
+                  }
+                }}
+                className={cn(
+                  "text-canopy-text hover:bg-white/[0.04] hover:text-canopy-accent h-full px-3 gap-2 rounded-none",
+                  stats.prCount === 0 && "opacity-50",
+                  isStale && "opacity-60",
+                  prsOpen && "bg-white/[0.04] ring-1 ring-canopy-accent/20 text-canopy-accent"
+                )}
+                title={
+                  isStale
+                    ? `${stats.prCount ?? "?"} open PRs (last updated ${getTimeSinceUpdate(lastUpdated)} - offline)`
+                    : "Browse GitHub Pull Requests"
+                }
+                aria-label={`${stats.prCount ?? "?"} open pull requests${isStale ? " (cached)" : ""}`}
+              >
+                <GitPullRequest className="h-4 w-4" />
+                <span className="text-xs font-medium tabular-nums">{stats.prCount ?? "?"}</span>
+                {isStale && <Clock className="h-3 w-3" />}
+              </Button>
+              <FixedDropdown
+                open={prsOpen}
+                onOpenChange={setPrsOpen}
+                anchorRef={prsButtonRef}
+                className="p-0 w-[450px]"
+              >
+                <GitHubResourceList
+                  type="pr"
+                  projectPath={currentProject.path}
+                  onClose={() => setPrsOpen(false)}
+                  initialCount={stats.prCount}
+                />
+              </FixedDropdown>
+              <Button
+                ref={commitsButtonRef}
+                variant="ghost"
+                onClick={() => {
+                  setIssuesOpen(false);
+                  setPrsOpen(false);
+                  setCommitsOpen(!commitsOpen);
+                }}
+                className={cn(
+                  "text-canopy-text hover:bg-white/[0.04] hover:text-canopy-accent h-full px-3 gap-2 rounded-none rounded-r-[var(--radius-md)]",
+                  stats.commitCount === 0 && "opacity-50",
+                  commitsOpen && "bg-white/[0.04] ring-1 ring-canopy-accent/20 text-canopy-accent"
+                )}
+                title="Browse Git Commits"
+                aria-label={`${stats.commitCount} commits`}
+              >
+                <GitCommit className="h-4 w-4" />
+                <span className="text-xs font-medium tabular-nums">{stats.commitCount}</span>
+              </Button>
+              <FixedDropdown
+                open={commitsOpen}
+                onOpenChange={setCommitsOpen}
+                anchorRef={commitsButtonRef}
+                className="p-0 w-[450px]"
+              >
+                <CommitList
+                  projectPath={currentProject.path}
+                  onClose={() => setCommitsOpen(false)}
+                  initialCount={stats.commitCount}
+                />
+              </FixedDropdown>
+            </div>
+          ) : null,
+        isAvailable: !!(stats && currentProject),
+      },
+      notes: {
+        render: () => (
+          <Button
+            key="notes"
+            variant="ghost"
+            size="icon"
+            onClick={() => actionService.dispatch("notes.create", {}, { source: "user" })}
+            className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
+            title="Notes"
+            aria-label="Open notes palette"
+          >
+            <StickyNote />
+          </Button>
+        ),
+        isAvailable: true,
+      },
+      "copy-tree": {
+        render: () => (
+          <TooltipProvider key="copy-tree">
+            <Tooltip open={treeCopied} delayDuration={0}>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleCopyTreeClick}
+                  disabled={isCopyingTree || !activeWorktree}
+                  className={cn(
+                    "transition-colors",
+                    treeCopied
+                      ? "text-[var(--color-status-success)] bg-[var(--color-status-success)]/10"
+                      : "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent",
+                    isCopyingTree && "cursor-wait opacity-70",
+                    !activeWorktree && "opacity-50"
+                  )}
+                  title={activeWorktree ? "Copy Context" : "No active worktree"}
+                  aria-label={treeCopied ? "Context Copied" : "Copy Context"}
+                >
+                  {isCopyingTree ? (
+                    <Loader2 className="animate-spin motion-reduce:animate-none" />
+                  ) : treeCopied ? (
+                    <Check />
+                  ) : (
+                    <Copy />
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="font-medium">
+                <span role="status" aria-live="polite">
+                  {copyFeedback}
+                </span>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        ),
+        isAvailable: true,
+      },
+      settings: {
+        render: () => (
+          <Button
+            key="settings"
+            variant="ghost"
+            size="icon"
+            onClick={onSettings}
+            onContextMenu={handleSettingsContextMenu}
+            className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
+            title="Open Settings"
+            aria-label="Open settings"
+          >
+            <Settings />
+          </Button>
+        ),
+        isAvailable: true,
+      },
+      problems: {
+        render: () => (
+          <Button
+            key="problems"
+            variant="ghost"
+            size="icon"
+            onClick={onToggleProblems}
+            className={cn(
+              "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent relative transition-colors",
+              errorCount > 0 && "text-[var(--color-status-error)]"
+            )}
+            title="Show Problems Panel (Ctrl+Shift+M)"
+            aria-label={`Problems: ${errorCount} error${errorCount !== 1 ? "s" : ""}`}
+          >
+            <AlertCircle />
+            {errorCount > 0 && (
+              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-[var(--color-status-error)] rounded-full" />
+            )}
+          </Button>
+        ),
+        isAvailable: showDeveloperTools,
+      },
+      "sidecar-toggle": {
+        render: () => (
+          <Button
+            key="sidecar-toggle"
+            variant="ghost"
+            size="icon"
+            onClick={toggleSidecar}
+            className={cn(
+              "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
+            )}
+            title={sidecarOpen ? "Close Context Sidecar" : "Open Context Sidecar"}
+            aria-label={sidecarOpen ? "Close context sidecar" : "Open context sidecar"}
+            aria-pressed={sidecarOpen}
+          >
+            {sidecarOpen ? (
+              <PanelRightClose aria-hidden="true" />
+            ) : (
+              <PanelRightOpen aria-hidden="true" />
+            )}
+          </Button>
+        ),
+        isAvailable: true,
+      },
+    }),
+    [
+      isFocusMode,
+      onToggleFocusMode,
+      agentAvailability,
+      agentSettings,
+      openAgentSettings,
+      onLaunchAgent,
+      devServerCommand,
+      stats,
+      currentProject,
+      issuesOpen,
+      prsOpen,
+      commitsOpen,
+      isStale,
+      lastUpdated,
+      refreshStats,
+      handleCopyTreeClick,
+      isCopyingTree,
+      activeWorktree,
+      treeCopied,
+      copyFeedback,
+      onSettings,
+      handleSettingsContextMenu,
+      onToggleProblems,
+      errorCount,
+      showDeveloperTools,
+      toggleSidecar,
+      sidecarOpen,
+      getTimeSinceUpdate,
+    ]
+  );
+
+  const renderButtons = (buttonIds: ToolbarButtonId[]) => {
+    return buttonIds
+      .filter((id) => buttonRegistry[id]?.isAvailable)
+      .map((id) => buttonRegistry[id].render());
+  };
+
   return (
     <header
       ref={headerRef}
@@ -214,73 +604,12 @@ export function Toolbar({
         <div
           className={cn("shrink-0 transition-[width] duration-200", isFullscreen ? "w-0" : "w-16")}
         />
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onToggleFocusMode}
-          className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
-          title={isFocusMode ? "Show Sidebar (Cmd+B)" : "Hide Sidebar (Cmd+B)"}
-          aria-label="Toggle Sidebar"
-          aria-pressed={!isFocusMode}
-        >
-          {isFocusMode ? <PanelLeft /> : <PanelLeftClose />}
-        </Button>
+        {buttonRegistry["sidebar-toggle"].render()}
 
         <div className="w-px h-5 bg-white/[0.08] mx-1" />
 
         <div className="flex items-center gap-0.5">
-          <AgentButton
-            type="claude"
-            availability={agentAvailability?.claude}
-            isEnabled={agentSettings?.agents?.claude?.enabled ?? true}
-            onOpenSettings={openAgentSettings}
-          />
-          <AgentButton
-            type="gemini"
-            availability={agentAvailability?.gemini}
-            isEnabled={agentSettings?.agents?.gemini?.enabled ?? true}
-            onOpenSettings={openAgentSettings}
-          />
-          <AgentButton
-            type="codex"
-            availability={agentAvailability?.codex}
-            isEnabled={agentSettings?.agents?.codex?.enabled ?? true}
-            onOpenSettings={openAgentSettings}
-          />
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => onLaunchAgent("terminal")}
-            className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
-            title="Open Terminal (⌘T for palette)"
-            aria-label="Open Terminal"
-          >
-            <Terminal />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => onLaunchAgent("browser")}
-            className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-blue-400 focus-visible:text-blue-400"
-            title="Open Browser"
-            aria-label="Open Browser"
-          >
-            <Globe />
-          </Button>
-          {devServerCommand && (
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => {
-                void actionService.dispatch("devServer.start", undefined, { source: "user" });
-              }}
-              className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-purple-400 focus-visible:text-purple-400"
-              title="Start Dev Server"
-              aria-label="Start Dev Server"
-            >
-              <Rocket />
-            </Button>
-          )}
+          {renderButtons(toolbarLayout.leftButtons)}
         </div>
       </div>
 
@@ -441,224 +770,13 @@ export function Toolbar({
 
       {/* RIGHT GROUP */}
       <div className="flex items-center gap-1.5 app-no-drag z-20">
-        {stats && currentProject && (
-          <div className="flex items-center h-8 rounded-[var(--radius-md)] bg-white/[0.03] border border-divider divide-x divide-[var(--border-divider)] mr-2">
-            <Button
-              ref={issuesButtonRef}
-              variant="ghost"
-              onClick={() => {
-                setPrsOpen(false);
-                setCommitsOpen(false);
-                const willOpen = !issuesOpen;
-                setIssuesOpen(willOpen);
-                if (willOpen) {
-                  refreshStats({ force: true });
-                }
-              }}
-              className={cn(
-                "text-canopy-text hover:bg-white/[0.04] hover:text-canopy-accent h-full px-3 gap-2 rounded-none rounded-l-[var(--radius-md)]",
-                stats.issueCount === 0 && "opacity-50",
-                isStale && "opacity-60",
-                issuesOpen && "bg-white/[0.04] ring-1 ring-canopy-accent/20 text-canopy-accent"
-              )}
-              title={
-                isStale
-                  ? `${stats.issueCount ?? "?"} open issues (last updated ${getTimeSinceUpdate(lastUpdated)} - offline)`
-                  : "Browse GitHub Issues"
-              }
-              aria-label={`${stats.issueCount ?? "?"} open issues${isStale ? " (cached)" : ""}`}
-            >
-              <AlertTriangle className="h-4 w-4" />
-              <span className="text-xs font-medium tabular-nums">{stats.issueCount ?? "?"}</span>
-              {isStale && <Clock className="h-3 w-3" />}
-            </Button>
-            <FixedDropdown
-              open={issuesOpen}
-              onOpenChange={setIssuesOpen}
-              anchorRef={issuesButtonRef}
-              className="p-0 w-[450px]"
-            >
-              <GitHubResourceList
-                type="issue"
-                projectPath={currentProject.path}
-                onClose={() => setIssuesOpen(false)}
-                initialCount={stats.issueCount}
-              />
-            </FixedDropdown>
-
-            <Button
-              ref={prsButtonRef}
-              variant="ghost"
-              onClick={() => {
-                setIssuesOpen(false);
-                setCommitsOpen(false);
-                const willOpen = !prsOpen;
-                setPrsOpen(willOpen);
-                if (willOpen) {
-                  refreshStats({ force: true });
-                }
-              }}
-              className={cn(
-                "text-canopy-text hover:bg-white/[0.04] hover:text-canopy-accent h-full px-3 gap-2 rounded-none",
-                stats.prCount === 0 && "opacity-50",
-                isStale && "opacity-60",
-                prsOpen && "bg-white/[0.04] ring-1 ring-canopy-accent/20 text-canopy-accent"
-              )}
-              title={
-                isStale
-                  ? `${stats.prCount ?? "?"} open PRs (last updated ${getTimeSinceUpdate(lastUpdated)} - offline)`
-                  : "Browse GitHub Pull Requests"
-              }
-              aria-label={`${stats.prCount ?? "?"} open pull requests${isStale ? " (cached)" : ""}`}
-            >
-              <GitPullRequest className="h-4 w-4" />
-              <span className="text-xs font-medium tabular-nums">{stats.prCount ?? "?"}</span>
-              {isStale && <Clock className="h-3 w-3" />}
-            </Button>
-            <FixedDropdown
-              open={prsOpen}
-              onOpenChange={setPrsOpen}
-              anchorRef={prsButtonRef}
-              className="p-0 w-[450px]"
-            >
-              <GitHubResourceList
-                type="pr"
-                projectPath={currentProject.path}
-                onClose={() => setPrsOpen(false)}
-                initialCount={stats.prCount}
-              />
-            </FixedDropdown>
-
-            <Button
-              ref={commitsButtonRef}
-              variant="ghost"
-              onClick={() => {
-                setIssuesOpen(false);
-                setPrsOpen(false);
-                setCommitsOpen(!commitsOpen);
-              }}
-              className={cn(
-                "text-canopy-text hover:bg-white/[0.04] hover:text-canopy-accent h-full px-3 gap-2 rounded-none rounded-r-[var(--radius-md)]",
-                stats.commitCount === 0 && "opacity-50",
-                commitsOpen && "bg-white/[0.04] ring-1 ring-canopy-accent/20 text-canopy-accent"
-              )}
-              title="Browse Git Commits"
-              aria-label={`${stats.commitCount} commits`}
-            >
-              <GitCommit className="h-4 w-4" />
-              <span className="text-xs font-medium tabular-nums">{stats.commitCount}</span>
-            </Button>
-            <FixedDropdown
-              open={commitsOpen}
-              onOpenChange={setCommitsOpen}
-              anchorRef={commitsButtonRef}
-              className="p-0 w-[450px]"
-            >
-              <CommitList
-                projectPath={currentProject.path}
-                onClose={() => setCommitsOpen(false)}
-                initialCount={stats.commitCount}
-              />
-            </FixedDropdown>
-          </div>
-        )}
-
         <div className="flex items-center gap-0.5">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => actionService.dispatch("notes.create", {}, { source: "user" })}
-            className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
-            title="Notes"
-            aria-label="Open notes palette"
-          >
-            <StickyNote />
-          </Button>
-          <TooltipProvider>
-            <Tooltip open={treeCopied} delayDuration={0}>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={handleCopyTreeClick}
-                  disabled={isCopyingTree || !activeWorktree}
-                  className={cn(
-                    "transition-colors",
-                    treeCopied
-                      ? "text-[var(--color-status-success)] bg-[var(--color-status-success)]/10"
-                      : "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent",
-                    isCopyingTree && "cursor-wait opacity-70",
-                    !activeWorktree && "opacity-50"
-                  )}
-                  title={activeWorktree ? "Copy Context" : "No active worktree"}
-                  aria-label={treeCopied ? "Context Copied" : "Copy Context"}
-                >
-                  {isCopyingTree ? (
-                    <Loader2 className="animate-spin motion-reduce:animate-none" />
-                  ) : treeCopied ? (
-                    <Check />
-                  ) : (
-                    <Copy />
-                  )}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="font-medium">
-                <span role="status" aria-live="polite">
-                  {copyFeedback}
-                </span>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onSettings}
-            onContextMenu={handleSettingsContextMenu}
-            className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
-            title="Open Settings"
-            aria-label="Open settings"
-          >
-            <Settings />
-          </Button>
-          {showDeveloperTools && (
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={onToggleProblems}
-              className={cn(
-                "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent relative transition-colors",
-                errorCount > 0 && "text-[var(--color-status-error)]"
-              )}
-              title="Show Problems Panel (Ctrl+Shift+M)"
-              aria-label={`Problems: ${errorCount} error${errorCount !== 1 ? "s" : ""}`}
-            >
-              <AlertCircle />
-              {errorCount > 0 && (
-                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-[var(--color-status-error)] rounded-full" />
-              )}
-            </Button>
-          )}
+          {renderButtons(toolbarLayout.rightButtons)}
         </div>
 
         <div className="w-px h-5 bg-white/[0.08] mx-1" />
 
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={toggleSidecar}
-          className={cn(
-            "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
-          )}
-          title={sidecarOpen ? "Close Context Sidecar" : "Open Context Sidecar"}
-          aria-label={sidecarOpen ? "Close context sidecar" : "Open context sidecar"}
-          aria-pressed={sidecarOpen}
-        >
-          {sidecarOpen ? (
-            <PanelRightClose aria-hidden="true" />
-          ) : (
-            <PanelRightOpen aria-hidden="true" />
-          )}
-        </Button>
+        {buttonRegistry["sidecar-toggle"].render()}
       </div>
     </header>
   );

@@ -603,6 +603,7 @@ function App() {
       "agents",
       "github",
       "sidecar",
+      "toolbar",
       "troubleshooting",
     ];
     if (!allowedTabs.includes(tab as SettingsTab)) {

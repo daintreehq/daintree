@@ -615,3 +615,45 @@ export interface ProjectSettings {
   /** Dev server command (e.g., "npm run dev") for the toolbar button */
   devServerCommand?: string;
 }
+
+// Toolbar Customization Types
+
+/** Unique identifier for toolbar buttons */
+export type ToolbarButtonId =
+  | "sidebar-toggle"
+  | "claude"
+  | "gemini"
+  | "codex"
+  | "terminal"
+  | "browser"
+  | "dev-server"
+  | "github-stats"
+  | "notes"
+  | "copy-tree"
+  | "settings"
+  | "problems"
+  | "sidecar-toggle";
+
+/** Configuration for which toolbar buttons are visible and their order */
+export interface ToolbarLayout {
+  /** Ordered list of button IDs to show on the left side (excluding sidebar-toggle which is always first) */
+  leftButtons: ToolbarButtonId[];
+  /** Ordered list of button IDs to show on the right side (excluding sidecar-toggle which is always last) */
+  rightButtons: ToolbarButtonId[];
+}
+
+/** Launcher palette default behaviors */
+export interface LauncherDefaults {
+  /** Always show dev server option in palette, even if devServerCommand not configured */
+  alwaysShowDevServer: boolean;
+  /** Default panel type to highlight when palette opens */
+  defaultSelection?: "terminal" | "claude" | "gemini" | "codex" | "browser" | "dev-server";
+}
+
+/** Complete toolbar preferences configuration */
+export interface ToolbarPreferences {
+  /** Layout configuration (button visibility and ordering) */
+  layout: ToolbarLayout;
+  /** Launcher palette defaults */
+  launcher: LauncherDefaults;
+}

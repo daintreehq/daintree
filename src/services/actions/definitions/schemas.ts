@@ -13,6 +13,7 @@ export const SettingsTabSchema = z.enum([
   "agents",
   "github",
   "sidecar",
+  "toolbar",
   "troubleshooting",
 ]);
 
