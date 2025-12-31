@@ -40,8 +40,27 @@ describe("escapeHtmlAttribute", () => {
     expect(escapeHtmlAttribute("foo & bar")).toBe("foo &amp; bar");
   });
 
-  it("escapes all special characters together", () => {
+  it("preserves newlines (allowed in HTML attributes)", () => {
+    // Newlines are valid in HTML attribute values per spec
+    expect(escapeHtmlAttribute("value\nwith\nnewlines")).toBe("value\nwith\nnewlines");
+  });
+
+  it("preserves equals signs (needed for URLs)", () => {
+    // = doesn't break out of quoted attributes
+    expect(escapeHtmlAttribute("onclick=alert(1)")).toBe("onclick=alert(1)");
+  });
+
+  it("escapes all quote/angle characters together", () => {
     expect(escapeHtmlAttribute('a="b" & <c>')).toBe("a=&quot;b&quot; &amp; &lt;c&gt;");
+  });
+
+  it("handles complex attribute injection attempt via quotes", () => {
+    // Attacker tries to break out of style and inject onclick using quotes
+    // The quotes are escaped, so the injection fails
+    const malicious = 'color:red" onclick="alert(1)" data="';
+    const escaped = escapeHtmlAttribute(malicious);
+    expect(escaped).toBe("color:red&quot; onclick=&quot;alert(1)&quot; data=&quot;");
+    // The escaped string is safe - all quotes are escaped so no attribute breakout
   });
 
   it("preserves normal text", () => {
@@ -50,6 +69,20 @@ describe("escapeHtmlAttribute", () => {
 
   it("handles empty string", () => {
     expect(escapeHtmlAttribute("")).toBe("");
+  });
+
+  it("handles CSS style values correctly", () => {
+    // Normal CSS should work fine
+    expect(escapeHtmlAttribute("color:#fff; background:rgba(0,0,0,0.5)")).toBe(
+      "color:#fff; background:rgba(0,0,0,0.5)"
+    );
+  });
+
+  it("handles URL query parameters correctly", () => {
+    // URLs with = in query params should work
+    expect(escapeHtmlAttribute("https://example.com?a=1&b=2")).toBe(
+      "https://example.com?a=1&amp;b=2"
+    );
   });
 });
 
