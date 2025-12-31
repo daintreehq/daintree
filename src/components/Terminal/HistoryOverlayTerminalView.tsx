@@ -825,8 +825,9 @@ export const HistoryOverlayTerminalView = forwardRef<
 
       {/* History overlay layer - DOM-based, scrollable */}
       {/* Outer wrapper matches xterm container positioning so scrollbar aligns */}
+      {/* pb-12 (48px) ensures "Back to live" bar (~32px) doesn't overlap scroll content */}
       {viewMode === "history" && (
-        <div className="absolute inset-0 pl-3 pt-3 pb-3 pr-4 z-10">
+        <div className="absolute inset-0 pl-3 pt-3 pb-12 pr-4 z-10">
           <div
             ref={overlayScrollRef}
             tabIndex={-1}

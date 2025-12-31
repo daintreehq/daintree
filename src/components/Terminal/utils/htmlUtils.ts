@@ -6,6 +6,11 @@ export const escapeHtml = Anser.escapeForHtml;
 /**
  * Escapes a string for safe use in HTML attribute values.
  * Encodes characters that could break out of quoted attributes.
+ *
+ * Note: This does NOT escape = or newlines because:
+ * - = is valid in URLs and doesn't break quoted attributes
+ * - Newlines in attribute values are allowed by HTML spec
+ * The critical characters are quotes and angle brackets.
  */
 export function escapeHtmlAttribute(value: string): string {
   return value
