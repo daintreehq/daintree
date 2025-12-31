@@ -13,13 +13,20 @@ interface RecipeEditorProps {
   onSave?: (recipe: TerminalRecipe) => void;
 }
 
-const TERMINAL_TYPES: RecipeTerminalType[] = ["terminal", "claude", "gemini", "codex"];
+const TERMINAL_TYPES: RecipeTerminalType[] = [
+  "terminal",
+  "claude",
+  "gemini",
+  "codex",
+  "dev-preview",
+];
 
 const TYPE_LABELS: Record<RecipeTerminalType, string> = {
   terminal: "Terminal",
   claude: "Claude",
   gemini: "Gemini",
   codex: "Codex",
+  "dev-preview": "Dev Server",
 };
 
 export function RecipeEditor({
@@ -206,11 +213,22 @@ export function RecipeEditor({
                       value={terminal.type}
                       onChange={(e) => {
                         const newType = e.target.value as RecipeTerminalType;
-                        handleTerminalChange(index, "type", newType);
-                        // Clear initialPrompt when switching to terminal type
-                        if (newType === "terminal" && terminal.initialPrompt) {
-                          handleTerminalChange(index, "initialPrompt", "");
-                        }
+                        // Consolidate all state updates to avoid race conditions
+                        setTerminals((prev) => {
+                          const updated = [...prev];
+                          updated[index] = {
+                            ...updated[index],
+                            type: newType,
+                            // Clear initialPrompt when switching to terminal or dev-preview
+                            initialPrompt:
+                              newType === "terminal" || newType === "dev-preview"
+                                ? ""
+                                : updated[index].initialPrompt,
+                            // Clear devCommand when switching away from dev-preview
+                            devCommand: newType !== "dev-preview" ? "" : updated[index].devCommand,
+                          };
+                          return updated;
+                        });
                       }}
                       className="w-full px-2 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
                     >
@@ -270,7 +288,7 @@ export function RecipeEditor({
                   </div>
                 )}
 
-                {terminal.type !== "terminal" && (
+                {terminal.type !== "terminal" && terminal.type !== "dev-preview" && (
                   <div className="mt-2">
                     <label
                       htmlFor={`terminal-initial-prompt-${index}`}
@@ -292,6 +310,32 @@ export function RecipeEditor({
                       className="text-xs text-canopy-muted mt-1"
                     >
                       This prompt will be sent to the agent when it starts
+                    </p>
+                  </div>
+                )}
+
+                {terminal.type === "dev-preview" && (
+                  <div className="mt-2">
+                    <label
+                      htmlFor={`terminal-dev-command-${index}`}
+                      className="block text-xs font-medium text-canopy-text mb-1"
+                    >
+                      Dev Command (optional)
+                    </label>
+                    <input
+                      id={`terminal-dev-command-${index}`}
+                      type="text"
+                      value={terminal.devCommand || ""}
+                      onChange={(e) => handleTerminalChange(index, "devCommand", e.target.value)}
+                      placeholder="e.g., npm run dev"
+                      aria-describedby={`terminal-dev-command-help-${index}`}
+                      className="w-full px-2 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
+                    />
+                    <p
+                      id={`terminal-dev-command-help-${index}`}
+                      className="text-xs text-canopy-muted mt-1"
+                    >
+                      Leave empty to use project default or auto-detect from package.json
                     </p>
                   </div>
                 )}

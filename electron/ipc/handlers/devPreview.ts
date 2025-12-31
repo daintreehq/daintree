@@ -25,10 +25,14 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
     panelId: string,
     cwd: string,
     cols: number,
-    rows: number
+    rows: number,
+    devCommand?: string
   ) => {
     if (!devPreviewService) throw new Error("DevPreviewService not initialized");
-    await devPreviewService.start({ panelId, cwd, cols, rows });
+    // Validate devCommand if provided
+    const validatedDevCommand =
+      devCommand !== undefined && typeof devCommand === "string" ? devCommand : undefined;
+    await devPreviewService.start({ panelId, cwd, cols, rows, devCommand: validatedDevCommand });
   };
   ipcMain.handle(CHANNELS.DEV_PREVIEW_START, handleStart);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.DEV_PREVIEW_START));

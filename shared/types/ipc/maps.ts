@@ -732,7 +732,7 @@ export interface IpcInvokeMap {
 
   // Dev Preview channels
   "dev-preview:start": {
-    args: [panelId: string, cwd: string, cols: number, rows: number];
+    args: [panelId: string, cwd: string, cols: number, rows: number, devCommand?: string];
     result: void;
   };
   "dev-preview:stop": {

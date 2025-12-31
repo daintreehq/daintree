@@ -332,7 +332,13 @@ export interface ElectronAPI {
     ): () => void;
   };
   devPreview: {
-    start(panelId: string, cwd: string, cols: number, rows: number): Promise<void>;
+    start(
+      panelId: string,
+      cwd: string,
+      cols: number,
+      rows: number,
+      devCommand?: string
+    ): Promise<void>;
     stop(panelId: string): Promise<void>;
     restart(panelId: string): Promise<void>;
     setUrl(panelId: string, url: string): Promise<void>;

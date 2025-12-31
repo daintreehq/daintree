@@ -78,6 +78,8 @@ export interface AddTerminalOptions {
   scope?: "worktree" | "project";
   /** Note creation timestamp (kind === 'notes') */
   createdAt?: number;
+  /** Dev server command override for dev-preview panels (kind === 'dev-preview') */
+  devCommand?: string;
 }
 
 function getDefaultTitle(kind?: PanelKind, type?: TerminalType, agentId?: string): string {
@@ -247,6 +249,7 @@ export const createTerminalRegistrySlice =
             cwd: options.cwd || "",
             cols: 80,
             rows: 24,
+            devCommand: options.devCommand,
           };
         } else {
           terminal = {

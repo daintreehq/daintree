@@ -819,8 +819,8 @@ const api: ElectronAPI = {
 
   // Dev Preview API
   devPreview: {
-    start: (panelId: string, cwd: string, cols: number, rows: number) =>
-      _typedInvoke(CHANNELS.DEV_PREVIEW_START, panelId, cwd, cols, rows),
+    start: (panelId: string, cwd: string, cols: number, rows: number, devCommand?: string) =>
+      _typedInvoke(CHANNELS.DEV_PREVIEW_START, panelId, cwd, cols, rows, devCommand),
 
     stop: (panelId: string) => _typedInvoke(CHANNELS.DEV_PREVIEW_STOP, panelId),
 

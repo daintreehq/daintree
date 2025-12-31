@@ -29,6 +29,8 @@ export interface DevPreviewStartOptions {
   cwd: string;
   cols: number;
   rows: number;
+  /** Optional command override. Falls back to auto-detection if not provided. */
+  devCommand?: string;
 }
 
 export class DevPreviewService extends EventEmitter {
@@ -39,29 +41,59 @@ export class DevPreviewService extends EventEmitter {
   }
 
   async start(options: DevPreviewStartOptions): Promise<void> {
-    const { panelId, cwd, cols, rows } = options;
+    const { panelId, cwd, cols, rows, devCommand: providedCommand } = options;
 
-    const packageManager = await this.detectPackageManager(cwd);
-    if (!packageManager) {
-      this.emitStatus(panelId, "error", "No package.json found", null);
-      return;
+    // Fallback chain: provided command → auto-detect → browser-only mode
+    let finalCommand = providedCommand?.trim() || undefined;
+    let packageManager: string | null = null;
+    let installCommand: string | null = null;
+    let needsInstall = false;
+
+    if (!finalCommand) {
+      // Try auto-detection from package.json
+      packageManager = await this.detectPackageManager(cwd);
+      if (packageManager) {
+        finalCommand = (await this.detectDevCommand(cwd, packageManager)) ?? undefined;
+      }
     }
 
-    const devCommand = await this.detectDevCommand(cwd, packageManager);
-    if (!devCommand) {
-      this.emitStatus(panelId, "error", "No dev script found in package.json", null);
-      return;
+    // If we have a command, check if we need to install dependencies
+    if (finalCommand && !providedCommand) {
+      // Only auto-install for auto-detected commands, not user-provided ones
+      packageManager = packageManager ?? (await this.detectPackageManager(cwd));
+      if (packageManager) {
+        needsInstall = await this.needsDependencyInstall(cwd);
+        installCommand = needsInstall ? this.getInstallCommand(packageManager) : null;
+      }
     }
 
-    const needsInstall = await this.needsDependencyInstall(cwd);
-    const installCommand = needsInstall ? this.getInstallCommand(packageManager) : null;
+    // Browser-only mode: no command available
+    if (!finalCommand) {
+      const session: DevPreviewSession = {
+        panelId,
+        ptyId: "", // No PTY in browser-only mode
+        projectRoot: cwd,
+        cols,
+        rows,
+        status: "running",
+        statusMessage: "Browser-only mode (no dev command)",
+        url: null,
+        packageManager: null,
+        devCommand: null,
+        installCommand: null,
+        timestamp: Date.now(),
+      };
+      this.sessions.set(panelId, session);
+      this.emitStatus(panelId, "running", "Browser-only mode (no dev command)", null);
+      return;
+    }
 
     let fullCommand: string;
     if (installCommand) {
-      fullCommand = `${installCommand} && ${devCommand}`;
+      fullCommand = `${installCommand} && ${finalCommand}`;
       this.emitStatus(panelId, "installing", "Installing dependencies...", null);
     } else {
-      fullCommand = devCommand;
+      fullCommand = finalCommand;
       this.emitStatus(panelId, "starting", "Starting dev server...", null);
     }
 
@@ -87,7 +119,7 @@ export class DevPreviewService extends EventEmitter {
       statusMessage: needsInstall ? "Installing dependencies..." : "Starting dev server...",
       url: null,
       packageManager,
-      devCommand,
+      devCommand: finalCommand,
       installCommand,
       timestamp: Date.now(),
     };
@@ -120,7 +152,7 @@ export class DevPreviewService extends EventEmitter {
     const session = this.sessions.get(panelId);
     if (!session) return;
 
-    const { projectRoot, cols, rows } = session;
+    const { projectRoot, cols, rows, devCommand } = session;
 
     await this.stop(panelId);
 
@@ -129,6 +161,7 @@ export class DevPreviewService extends EventEmitter {
       cwd: projectRoot,
       cols: cols || 80,
       rows: rows || 24,
+      devCommand: devCommand ?? undefined,
     });
   }
 

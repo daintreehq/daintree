@@ -6,10 +6,17 @@ import { getAgentConfig } from "@/config/agents";
 import { generateAgentCommand } from "@shared/types";
 
 function terminalToRecipeTerminal(terminal: TerminalInstance): RecipeTerminal {
+  // Map kind to RecipeTerminalType
+  const type: RecipeTerminalType =
+    terminal.kind === "dev-preview"
+      ? "dev-preview"
+      : (terminal.agentId ?? terminal.type ?? "terminal");
+
   return {
-    type: terminal.agentId ?? terminal.type ?? "terminal",
+    type,
     title: terminal.title || undefined,
     command: terminal.command || undefined,
+    devCommand: terminal.kind === "dev-preview" ? terminal.devCommand : undefined,
     env: {},
   };
 }
@@ -184,7 +191,9 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     // Pre-fetch agent settings once for all agent terminals
     let agentSettings: Awaited<ReturnType<typeof agentSettingsClient.get>> | null = null;
-    const hasAgent = recipe.terminals.some((t) => t.type !== "terminal");
+    const hasAgent = recipe.terminals.some(
+      (t) => t.type !== "terminal" && t.type !== "dev-preview"
+    );
     if (hasAgent) {
       try {
         agentSettings = await agentSettingsClient.get();
@@ -195,6 +204,18 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     for (const terminal of recipe.terminals) {
       try {
+        // Handle dev-preview terminals
+        if (terminal.type === "dev-preview") {
+          await terminalStore.addTerminal({
+            kind: "dev-preview",
+            title: terminal.title || "Dev Server",
+            cwd: worktreePath,
+            worktreeId: worktreeId,
+            devCommand: terminal.devCommand?.trim() || undefined,
+          });
+          continue;
+        }
+
         const isAgent = terminal.type !== "terminal";
         let command = terminal.command;
 
@@ -260,7 +281,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       throw new Error(`Recipe cannot exceed ${MAX_TERMINALS_PER_RECIPE} terminals`);
     }
 
-    const ALLOWED_TYPES = ["terminal", "claude", "gemini", "codex"];
+    const ALLOWED_TYPES = ["terminal", "claude", "gemini", "codex", "dev-preview"];
     const sanitizedTerminals = recipe.terminals
       .filter((terminal) => {
         if (!ALLOWED_TYPES.includes(terminal.type)) return false;
@@ -274,6 +295,11 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           // Allow newlines (\r\n) but reject other control chars
           // eslint-disable-next-line no-control-regex
           if (/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/.test(terminal.initialPrompt)) return false;
+        }
+        if (terminal.devCommand !== undefined) {
+          if (typeof terminal.devCommand !== "string") return false;
+          // eslint-disable-next-line no-control-regex
+          if (/[\r\n\x00-\x1F]/.test(terminal.devCommand)) return false;
         }
         if (terminal.env !== undefined) {
           if (
@@ -297,6 +323,8 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           typeof terminal.initialPrompt === "string"
             ? terminal.initialPrompt.replace(/\r\n/g, "\n").trimEnd()
             : undefined,
+        devCommand:
+          typeof terminal.devCommand === "string" ? terminal.devCommand.trim() : undefined,
       }));
 
     if (sanitizedTerminals.length === 0) {

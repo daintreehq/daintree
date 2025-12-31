@@ -358,6 +358,8 @@ interface PtyPanelData extends BasePanelData {
   isInputLocked?: boolean;
   /** Current URL for dev-preview panels */
   browserUrl?: string;
+  /** Dev command override for dev-preview panels */
+  devCommand?: string;
 }
 
 interface BrowserPanelData extends BasePanelData {
@@ -438,6 +440,8 @@ export interface TerminalInstance {
   noteId?: string;
   scope?: "worktree" | "project";
   createdAt?: number;
+  /** Dev command override for dev-preview panels */
+  devCommand?: string;
 }
 
 /** Options for spawning a new PTY process */
@@ -550,7 +554,7 @@ export interface ProjectState {
 // Terminal Recipe Types
 
 /** Recipe terminal type */
-export type RecipeTerminalType = AgentId | "terminal";
+export type RecipeTerminalType = AgentId | "terminal" | "dev-preview";
 
 /** A single terminal definition within a recipe */
 export interface RecipeTerminal {
@@ -564,6 +568,8 @@ export interface RecipeTerminal {
   env?: Record<string, string>;
   /** Initial prompt to send to agent terminals after boot (optional) */
   initialPrompt?: string;
+  /** Dev server command for dev-preview terminals (optional). Falls back to project devServerCommand if not set. */
+  devCommand?: string;
 }
 
 /** A saved terminal recipe */

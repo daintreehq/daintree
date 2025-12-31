@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { useTerminalStore } from "@/store";
 import type { DevPreviewStatus } from "@shared/types/ipc/devPreview";
 import { DevPreviewToolbar } from "./DevPreviewToolbar";
+import { Button } from "@/components/ui/button";
 
 const STATUS_STYLES: Record<DevPreviewStatus, { label: string; dot: string; text: string }> = {
   installing: {
@@ -59,6 +60,8 @@ export function DevPreviewPane({
   const [url, setUrl] = useState<string | null>(null);
   const [isRestarting, setIsRestarting] = useState(false);
   const restartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [isBrowserOnly, setIsBrowserOnly] = useState(false);
+  const [manualUrl, setManualUrl] = useState("");
 
   useEffect(() => {
     const offStatus = window.electron.devPreview.onStatus((payload) => {
@@ -66,6 +69,8 @@ export function DevPreviewPane({
       setStatus(payload.status);
       setMessage(payload.message);
       setError(payload.status === "error" ? (payload.error ?? payload.message) : undefined);
+      // Derive browser-only mode from the status message (non-sticky)
+      setIsBrowserOnly(payload.message.includes("Browser-only mode"));
       // Clear restarting state when we receive a terminal status (server responded)
       if (
         payload.status === "running" ||
@@ -100,6 +105,8 @@ export function DevPreviewPane({
     setStatus("starting");
     setMessage("Starting dev server...");
     setIsRestarting(false);
+    setIsBrowserOnly(false);
+    setManualUrl("");
     if (restartTimeoutRef.current) {
       clearTimeout(restartTimeoutRef.current);
       restartTimeoutRef.current = null;
@@ -108,8 +115,9 @@ export function DevPreviewPane({
     const terminal = useTerminalStore.getState().getTerminal(id);
     const cols = terminal?.cols ?? 80;
     const rows = terminal?.rows ?? 24;
+    const devCommand = terminal?.devCommand;
 
-    void window.electron.devPreview.start(id, cwd, cols, rows);
+    void window.electron.devPreview.start(id, cwd, cols, rows, devCommand);
 
     return () => {
       void window.electron.devPreview.stop(id);
@@ -131,6 +139,25 @@ export function DevPreviewPane({
     }, 10000);
     void window.electron.devPreview.restart(id);
   }, [id]);
+
+  const handleManualUrlSubmit = useCallback(() => {
+    const trimmedUrl = manualUrl.trim();
+    if (!trimmedUrl) return;
+    // Ensure URL has a protocol and validate
+    let normalizedUrl = trimmedUrl;
+    if (!trimmedUrl.startsWith("http://") && !trimmedUrl.startsWith("https://")) {
+      normalizedUrl = `http://${trimmedUrl}`;
+    }
+    // Validate URL structure
+    try {
+      new URL(normalizedUrl);
+    } catch {
+      return; // Invalid URL, silently reject
+    }
+    setUrl(normalizedUrl);
+    // Also notify the backend in case it needs to track the URL
+    void window.electron.devPreview.setUrl(id, normalizedUrl);
+  }, [id, manualUrl]);
 
   const statusStyle = STATUS_STYLES[status];
 
@@ -171,6 +198,31 @@ export function DevPreviewPane({
               className="w-full h-full border-0"
               sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox"
             />
+          ) : isBrowserOnly ? (
+            <div className="absolute inset-0 flex items-center justify-center bg-canopy-bg">
+              <div className="text-center max-w-md space-y-4 px-4">
+                <div className="space-y-1">
+                  <div className="text-sm font-medium text-canopy-text">Browser-Only Mode</div>
+                  <div className="text-xs text-canopy-text/60">
+                    No dev command configured. Enter a URL to preview.
+                  </div>
+                  {error && <div className="text-xs text-[var(--color-status-error)]">{error}</div>}
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="url"
+                    value={manualUrl}
+                    onChange={(e) => setManualUrl(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleManualUrlSubmit()}
+                    placeholder="http://localhost:3000"
+                    className="flex-1 px-3 py-2 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
+                  />
+                  <Button onClick={handleManualUrlSubmit} disabled={!manualUrl.trim()}>
+                    Go
+                  </Button>
+                </div>
+              </div>
+            </div>
           ) : (
             <div className="absolute inset-0 flex items-center justify-center bg-canopy-bg">
               <div className="text-center max-w-md space-y-1 px-4">
