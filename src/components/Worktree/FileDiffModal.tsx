@@ -6,6 +6,8 @@ import { DiffViewer } from "./DiffViewer";
 import type { ViewType } from "react-diff-view";
 import type { GitStatus } from "@shared/types";
 import { actionService } from "@/services/ActionService";
+import { Copy, Check } from "lucide-react";
+import { useNotificationStore } from "@/store/notificationStore";
 
 export interface FileDiffModalProps {
   isOpen: boolean;
@@ -28,7 +30,11 @@ export function FileDiffModal({
   const [loadingState, setLoadingState] = useState<LoadingState>("loading");
   const [error, setError] = useState<string | null>(null);
   const [viewType, setViewType] = useState<ViewType>("split");
+  const [diffCopied, setDiffCopied] = useState(false);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isMountedRef = useRef(true);
+  const addNotification = useNotificationStore((state) => state.addNotification);
 
   const fetchDiff = useCallback(async () => {
     setLoadingState("loading");
@@ -62,7 +68,18 @@ export function FileDiffModal({
       setDiff(null);
       setLoadingState("loading");
       setError(null);
+      setDiffCopied(false);
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current);
+        copyTimeoutRef.current = null;
+      }
       return;
+    }
+
+    setDiffCopied(false);
+    if (copyTimeoutRef.current) {
+      clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = null;
     }
 
     let cancelled = false;
@@ -84,6 +101,59 @@ export function FileDiffModal({
     const timeoutId = setTimeout(() => closeButtonRef.current?.focus(), 100);
     return () => clearTimeout(timeoutId);
   }, [isOpen]);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current);
+        copyTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
+  const isValidDiffContent =
+    diff !== null &&
+    diff !== "NO_CHANGES" &&
+    diff !== "BINARY_FILE" &&
+    diff !== "FILE_TOO_LARGE" &&
+    diff.trim() !== "";
+
+  const handleCopyDiff = async () => {
+    if (!isValidDiffContent || !diff) return;
+
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(diff);
+      } else {
+        throw new Error("Clipboard API not available");
+      }
+
+      if (!isMountedRef.current) return;
+
+      setDiffCopied(true);
+
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current);
+      }
+
+      copyTimeoutRef.current = setTimeout(() => {
+        if (isMountedRef.current) {
+          setDiffCopied(false);
+          copyTimeoutRef.current = null;
+        }
+      }, 2000);
+    } catch (err) {
+      console.error("Failed to copy diff:", err);
+      addNotification({
+        type: "error",
+        title: "Copy Failed",
+        message: err instanceof Error ? err.message : "Failed to copy diff to clipboard",
+        duration: 5000,
+      });
+    }
+  };
 
   const fileName = filePath.split("/").pop() || filePath;
   const statusInfo = getStatusInfo(status);
@@ -135,6 +205,25 @@ export function FileDiffModal({
               Unified
             </button>
           </div>
+
+          <button
+            type="button"
+            onClick={handleCopyDiff}
+            disabled={loadingState !== "loaded" || !isValidDiffContent}
+            aria-label={diffCopied ? "Copied!" : "Copy diff to clipboard"}
+            title={diffCopied ? "Copied!" : "Copy diff to clipboard"}
+            className={cn(
+              "p-1.5 rounded transition-colors",
+              loadingState !== "loaded" || !isValidDiffContent
+                ? "text-muted-foreground/50 cursor-not-allowed"
+                : "text-muted-foreground hover:text-canopy-text hover:bg-canopy-border"
+            )}
+          >
+            {diffCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+            <span className="sr-only" role="status" aria-live="polite">
+              {diffCopied ? "Copied to clipboard" : ""}
+            </span>
+          </button>
 
           <AppDialog.CloseButton />
         </div>
