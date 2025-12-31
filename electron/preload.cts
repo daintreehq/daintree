@@ -215,6 +215,8 @@ const CHANNELS = {
   GITHUB_LIST_ISSUES: "github:list-issues",
   GITHUB_LIST_PRS: "github:list-prs",
   GITHUB_ASSIGN_ISSUE: "github:assign-issue",
+  GITHUB_GET_ISSUE_TOOLTIP: "github:get-issue-tooltip",
+  GITHUB_GET_PR_TOOLTIP: "github:get-pr-tooltip",
 
   // Notes channels
   NOTES_CREATE: "notes:create",
@@ -771,6 +773,12 @@ const api: ElectronAPI = {
 
     assignIssue: (cwd: string, issueNumber: number, username: string): Promise<void> =>
       ipcRenderer.invoke(CHANNELS.GITHUB_ASSIGN_ISSUE, { cwd, issueNumber, username }),
+
+    getIssueTooltip: (cwd: string, issueNumber: number) =>
+      ipcRenderer.invoke(CHANNELS.GITHUB_GET_ISSUE_TOOLTIP, { cwd, issueNumber }),
+
+    getPRTooltip: (cwd: string, prNumber: number) =>
+      ipcRenderer.invoke(CHANNELS.GITHUB_GET_PR_TOOLTIP, { cwd, prNumber }),
 
     onPRDetected: (callback: (data: PRDetectedPayload) => void) =>
       _typedOn(CHANNELS.PR_DETECTED, callback),

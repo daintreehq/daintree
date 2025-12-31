@@ -247,6 +247,14 @@ export interface ElectronAPI {
       cursor?: string;
     }): Promise<import("../github.js").GitHubListResponse<import("../github.js").GitHubPR>>;
     assignIssue(cwd: string, issueNumber: number, username: string): Promise<void>;
+    getIssueTooltip(
+      cwd: string,
+      issueNumber: number
+    ): Promise<import("../github.js").IssueTooltipData | null>;
+    getPRTooltip(
+      cwd: string,
+      prNumber: number
+    ): Promise<import("../github.js").PRTooltipData | null>;
     onPRDetected(callback: (data: PRDetectedPayload) => void): () => void;
     onPRCleared(callback: (data: PRClearedPayload) => void): () => void;
     onIssueDetected(callback: (data: IssueDetectedPayload) => void): () => void;

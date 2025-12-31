@@ -147,6 +147,72 @@ export const SEARCH_QUERY = `
   }
 `;
 
+export const GET_ISSUE_QUERY = `
+  query GetIssue($owner: String!, $repo: String!, $number: Int!) {
+    repository(owner: $owner, name: $repo) {
+      issue(number: $number) {
+        number
+        title
+        bodyText
+        url
+        state
+        createdAt
+        updatedAt
+        author {
+          login
+          avatarUrl
+        }
+        assignees(first: 5) {
+          nodes {
+            login
+            avatarUrl
+          }
+        }
+        labels(first: 10) {
+          nodes {
+            name
+            color
+          }
+        }
+      }
+    }
+  }
+`;
+
+export const GET_PR_QUERY = `
+  query GetPR($owner: String!, $repo: String!, $number: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        number
+        title
+        bodyText
+        url
+        state
+        isDraft
+        merged
+        createdAt
+        updatedAt
+        author {
+          login
+          avatarUrl
+        }
+        assignees(first: 5) {
+          nodes {
+            login
+            avatarUrl
+          }
+        }
+        labels(first: 10) {
+          nodes {
+            name
+            color
+          }
+        }
+      }
+    }
+  }
+`;
+
 export function buildBatchPRQuery(
   owner: string,
   repo: string,

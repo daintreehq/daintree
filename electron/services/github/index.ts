@@ -6,6 +6,8 @@ export {
   LIST_ISSUES_QUERY,
   LIST_PRS_QUERY,
   SEARCH_QUERY,
+  GET_ISSUE_QUERY,
+  GET_PR_QUERY,
   buildBatchPRQuery,
 } from "./GitHubQueries.js";
 

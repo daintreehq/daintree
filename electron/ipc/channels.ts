@@ -88,6 +88,8 @@ export const CHANNELS = {
   GITHUB_LIST_ISSUES: "github:list-issues",
   GITHUB_LIST_PRS: "github:list-prs",
   GITHUB_ASSIGN_ISSUE: "github:assign-issue",
+  GITHUB_GET_ISSUE_TOOLTIP: "github:get-issue-tooltip",
+  GITHUB_GET_PR_TOOLTIP: "github:get-pr-tooltip",
 
   APP_GET_STATE: "app:get-state",
   APP_SET_STATE: "app:set-state",

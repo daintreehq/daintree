@@ -70,6 +70,48 @@ export interface GitHubPR {
   reviewCount?: number;
 }
 
+/** Issue tooltip data (subset of full issue for hover display) */
+export interface IssueTooltipData {
+  /** Issue number */
+  number: number;
+  /** Issue title */
+  title: string;
+  /** Issue body (truncated) */
+  bodyExcerpt: string;
+  /** Issue state */
+  state: "OPEN" | "CLOSED";
+  /** Creation date */
+  createdAt: string;
+  /** Issue author */
+  author: GitHubUser;
+  /** Assigned users */
+  assignees: GitHubUser[];
+  /** Issue labels */
+  labels: GitHubLabel[];
+}
+
+/** PR tooltip data (subset of full PR for hover display) */
+export interface PRTooltipData {
+  /** PR number */
+  number: number;
+  /** PR title */
+  title: string;
+  /** PR body (truncated) */
+  bodyExcerpt: string;
+  /** PR state */
+  state: "OPEN" | "CLOSED" | "MERGED";
+  /** Whether this is a draft PR */
+  isDraft: boolean;
+  /** Creation date */
+  createdAt: string;
+  /** PR author */
+  author: GitHubUser;
+  /** Assigned users */
+  assignees: GitHubUser[];
+  /** PR labels */
+  labels: GitHubLabel[];
+}
+
 // Git Commit Types
 
 /** Git commit author */

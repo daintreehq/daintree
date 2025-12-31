@@ -9,6 +9,8 @@ import type {
   GitHubListOptions,
   GitHubListResponse,
   LinkedPRInfo,
+  IssueTooltipData,
+  PRTooltipData,
 } from "../../shared/types/github.js";
 
 import {
@@ -17,6 +19,8 @@ import {
   LIST_ISSUES_QUERY,
   LIST_PRS_QUERY,
   SEARCH_QUERY,
+  GET_ISSUE_QUERY,
+  GET_PR_QUERY,
   buildBatchPRQuery,
 } from "./github/index.js";
 
@@ -46,6 +50,8 @@ const repoContextCache = new Cache<string, RepoContext>({ defaultTTL: 300000 });
 const repoStatsCache = new Cache<string, RepoStats>({ defaultTTL: 60000 });
 const issueListCache = new Cache<string, GitHubListResponse<GitHubIssue>>({ defaultTTL: 60000 });
 const prListCache = new Cache<string, GitHubListResponse<GitHubPR>>({ defaultTTL: 60000 });
+const issueTooltipCache = new Cache<string, IssueTooltipData>({ defaultTTL: 300000 }); // 5 min TTL
+const prTooltipCache = new Cache<string, PRTooltipData>({ defaultTTL: 300000 }); // 5 min TTL
 
 export function getGitHubToken(): string | undefined {
   return GitHubAuth.getToken();
@@ -502,6 +508,8 @@ export function clearGitHubCaches(): void {
   repoStatsCache.clear();
   issueListCache.clear();
   prListCache.clear();
+  issueTooltipCache.clear();
+  prTooltipCache.clear();
 }
 
 function buildListCacheKey(
@@ -798,5 +806,147 @@ export async function listPullRequests(
     return result;
   } catch (error) {
     throw new Error(parseGitHubError(error));
+  }
+}
+
+function truncateBody(body: string | null | undefined, maxLength = 150): string {
+  if (!body) return "";
+  const cleaned = body.replace(/\r?\n/g, " ").trim();
+  if (cleaned.length <= maxLength) return cleaned;
+  return cleaned.slice(0, maxLength).trim() + "…";
+}
+
+export async function getIssueTooltip(
+  cwd: string,
+  issueNumber: number
+): Promise<IssueTooltipData | null> {
+  const client = GitHubAuth.createClient();
+  if (!client) {
+    return null;
+  }
+
+  const context = await getRepoContext(cwd);
+  if (!context) {
+    return null;
+  }
+
+  const cacheKey = `${context.owner}/${context.repo}:${issueNumber}`;
+  const cached = issueTooltipCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  try {
+    const response = (await client(GET_ISSUE_QUERY, {
+      owner: context.owner,
+      repo: context.repo,
+      number: issueNumber,
+    })) as GraphQlQueryResponseData;
+
+    const issue = response?.repository?.issue;
+    if (!issue) {
+      return null;
+    }
+
+    const author = issue.author as { login?: string; avatarUrl?: string } | null;
+    const assigneesData = issue.assignees as {
+      nodes?: Array<{ login?: string; avatarUrl?: string }>;
+    };
+    const labelsData = issue.labels as { nodes?: Array<{ name?: string; color?: string }> };
+
+    const tooltipData: IssueTooltipData = {
+      number: issue.number as number,
+      title: issue.title as string,
+      bodyExcerpt: truncateBody(issue.bodyText as string | null),
+      state: issue.state as "OPEN" | "CLOSED",
+      createdAt: issue.createdAt as string,
+      author: {
+        login: author?.login ?? "unknown",
+        avatarUrl: author?.avatarUrl ?? "",
+      },
+      assignees: (assigneesData?.nodes ?? []).filter(Boolean).map((a) => ({
+        login: a.login ?? "unknown",
+        avatarUrl: a.avatarUrl ?? "",
+      })),
+      labels: (labelsData?.nodes ?? []).filter(Boolean).map((l) => ({
+        name: l.name ?? "",
+        color: l.color ?? "",
+      })),
+    };
+
+    issueTooltipCache.set(cacheKey, tooltipData);
+    return tooltipData;
+  } catch {
+    return null;
+  }
+}
+
+export async function getPRTooltip(cwd: string, prNumber: number): Promise<PRTooltipData | null> {
+  const client = GitHubAuth.createClient();
+  if (!client) {
+    return null;
+  }
+
+  const context = await getRepoContext(cwd);
+  if (!context) {
+    return null;
+  }
+
+  const cacheKey = `${context.owner}/${context.repo}:${prNumber}`;
+  const cached = prTooltipCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  try {
+    const response = (await client(GET_PR_QUERY, {
+      owner: context.owner,
+      repo: context.repo,
+      number: prNumber,
+    })) as GraphQlQueryResponseData;
+
+    const pr = response?.repository?.pullRequest;
+    if (!pr) {
+      return null;
+    }
+
+    const author = pr.author as { login?: string; avatarUrl?: string } | null;
+    const assigneesData = pr.assignees as {
+      nodes?: Array<{ login?: string; avatarUrl?: string }>;
+    };
+    const labelsData = pr.labels as { nodes?: Array<{ name?: string; color?: string }> };
+    const merged = pr.merged as boolean;
+    const rawState = pr.state as string;
+
+    let state: "OPEN" | "CLOSED" | "MERGED" = rawState as "OPEN" | "CLOSED" | "MERGED";
+    if (merged) {
+      state = "MERGED";
+    }
+
+    const tooltipData: PRTooltipData = {
+      number: pr.number as number,
+      title: pr.title as string,
+      bodyExcerpt: truncateBody(pr.bodyText as string | null),
+      state,
+      isDraft: (pr.isDraft as boolean) ?? false,
+      createdAt: pr.createdAt as string,
+      author: {
+        login: author?.login ?? "unknown",
+        avatarUrl: author?.avatarUrl ?? "",
+      },
+      assignees: (assigneesData?.nodes ?? []).filter(Boolean).map((a) => ({
+        login: a.login ?? "unknown",
+        avatarUrl: a.avatarUrl ?? "",
+      })),
+      labels: (labelsData?.nodes ?? []).filter(Boolean).map((l) => ({
+        name: l.name ?? "",
+        color: l.color ?? "",
+      })),
+    };
+
+    prTooltipCache.set(cacheKey, tooltipData);
+    return tooltipData;
+  } catch {
+    return null;
   }
 }
