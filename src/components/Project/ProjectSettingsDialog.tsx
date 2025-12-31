@@ -20,6 +20,9 @@ import {
   AlertTriangle,
   Rocket,
   Check,
+  Settings,
+  FileCode,
+  Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -49,6 +52,8 @@ interface EnvVar {
   value: string;
 }
 
+type ProjectSettingsTab = "general" | "context" | "automation";
+
 const SENSITIVE_ENV_KEY_RE = /\b(key|secret|token|password)\b/i;
 
 export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSettingsDialogProps) {
@@ -56,6 +61,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   const { projects, updateProject } = useProjectStore();
   const currentProject = projects.find((p) => p.id === projectId);
 
+  const [activeTab, setActiveTab] = useState<ProjectSettingsTab>("general");
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [name, setName] = useState(currentProject?.name || "");
@@ -189,6 +195,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       setDevServerCommand("");
       setSaveError(null);
       hasLoadedRecipes.current = false;
+      setActiveTab("general");
     }
   }, [settings, isOpen, isInitialized]);
 
@@ -242,10 +249,12 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         setSaveError(
           `Invalid environment variable key: "${trimmedKey}". Use only letters, numbers, and underscores.`
         );
+        setActiveTab("context");
         return;
       }
       if (seenKeys.has(trimmedKey)) {
         setSaveError(`Duplicate environment variable key: "${trimmedKey}"`);
+        setActiveTab("context");
         return;
       }
       seenKeys.add(trimmedKey);
@@ -353,719 +362,787 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
     return `Worktree: ${recipe.worktreeId}`;
   };
 
+  const tabTitles: Record<ProjectSettingsTab, string> = {
+    general: "General",
+    context: "Context",
+    automation: "Automation",
+  };
+
   return (
     <>
-      <AppDialog isOpen={isOpen} onClose={onClose} size="md">
-        <AppDialog.Header>
-          <AppDialog.Title>Project Settings</AppDialog.Title>
-          <AppDialog.CloseButton />
-        </AppDialog.Header>
+      <AppDialog
+        isOpen={isOpen}
+        onClose={onClose}
+        size="4xl"
+        maxHeight="h-[75vh]"
+        className="max-h-[800px]"
+      >
+        <div className="flex h-full overflow-hidden">
+          <div className="w-48 border-r border-canopy-border bg-canopy-bg/50 p-4 flex flex-col gap-2 shrink-0">
+            <h2 className="text-sm font-semibold text-canopy-text mb-4 px-2">Project Settings</h2>
+            <NavButton
+              active={activeTab === "general"}
+              onClick={() => setActiveTab("general")}
+              icon={<Settings className="w-4 h-4" />}
+            >
+              General
+            </NavButton>
+            <NavButton
+              active={activeTab === "context"}
+              onClick={() => setActiveTab("context")}
+              icon={<FileCode className="w-4 h-4" />}
+            >
+              Context
+            </NavButton>
+            <NavButton
+              active={activeTab === "automation"}
+              onClick={() => setActiveTab("automation")}
+              icon={<Zap className="w-4 h-4" />}
+            >
+              Automation
+            </NavButton>
+          </div>
 
-        <AppDialog.Body>
-          {isLoading && (
-            <div className="text-sm text-canopy-text/60 text-center py-8">Loading settings...</div>
-          )}
-          {error && (
-            <div className="text-sm text-[var(--color-status-error)] bg-red-900/20 border border-red-900/30 rounded p-3 mb-4">
-              Failed to load settings: {error}
+          <div className="flex-1 flex flex-col min-w-0">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-canopy-border bg-canopy-sidebar/50 shrink-0">
+              <h3 className="text-lg font-medium text-canopy-text">{tabTitles[activeTab]}</h3>
+              <button
+                onClick={onClose}
+                className="text-canopy-text/60 hover:text-canopy-text transition-colors p-1 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
+                aria-label="Close settings"
+              >
+                <X className="h-5 w-5" />
+              </button>
             </div>
-          )}
-          {saveError && (
-            <div className="text-sm text-[var(--color-status-error)] bg-red-900/20 border border-red-900/30 rounded p-3 mb-4">
-              {saveError}
-            </div>
-          )}
-          {!isLoading && !error && (
-            <>
-              {currentProject && (
-                <div className="mb-6 pb-6 border-b border-canopy-border">
-                  <h3 className="text-sm font-semibold text-canopy-text/80 mb-2">
-                    Project Identity
-                  </h3>
-                  <p className="text-xs text-canopy-text/60 mb-4">
-                    Customize how your project appears in the sidebar and dashboard.
-                  </p>
 
-                  <div className="flex items-start gap-3 p-3 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border">
-                    <Popover open={isEmojiPickerOpen} onOpenChange={setIsEmojiPickerOpen}>
-                      <PopoverTrigger asChild>
-                        <button
-                          type="button"
-                          aria-label="Change project emoji"
-                          className="flex h-14 w-14 items-center justify-center rounded-[var(--radius-xl)] shadow-inner shrink-0 bg-white/5 hover:bg-white/10 transition-colors border border-transparent hover:border-canopy-border cursor-pointer group"
-                          style={{
-                            background: getProjectGradient(currentProject.color),
-                          }}
-                        >
-                          <span className="text-3xl select-none filter drop-shadow-sm group-hover:scale-110 transition-transform">
-                            {emoji}
-                          </span>
-                        </button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0">
-                        <EmojiPicker
-                          onEmojiSelect={({ emoji }) => {
-                            setEmoji(emoji);
-                            setIsEmojiPickerOpen(false);
-                          }}
-                        />
-                      </PopoverContent>
-                    </Popover>
-
-                    <div className="flex-1 min-w-0 flex flex-col justify-center h-14">
-                      <label
-                        htmlFor="project-name-input"
-                        className="text-xs font-medium text-canopy-text/60 mb-1.5 ml-1"
-                      >
-                        Project Name
-                      </label>
-                      <input
-                        id="project-name-input"
-                        type="text"
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        className="w-full bg-transparent border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition-all placeholder:text-canopy-text/40"
-                        placeholder="My Awesome Project"
-                      />
-                    </div>
-                  </div>
+            <div className="p-6 overflow-y-auto flex-1">
+              {isLoading && (
+                <div className="text-sm text-canopy-text/60 text-center py-8">
+                  Loading settings...
                 </div>
               )}
+              {error && (
+                <div
+                  className="text-sm text-[var(--color-status-error)] bg-red-900/20 border border-red-900/30 rounded p-3 mb-4"
+                  role="alert"
+                >
+                  Failed to load settings: {error}
+                </div>
+              )}
+              {saveError && (
+                <div
+                  className="text-sm text-[var(--color-status-error)] bg-red-900/20 border border-red-900/30 rounded p-3 mb-4"
+                  role="alert"
+                >
+                  {saveError}
+                </div>
+              )}
+              {!isLoading && !error && (
+                <>
+                  {/* General Tab */}
+                  <div className={activeTab === "general" ? "" : "hidden"}>
+                    {currentProject && (
+                      <div className="mb-6 pb-6 border-b border-canopy-border">
+                        <h3 className="text-sm font-semibold text-canopy-text/80 mb-2">
+                          Project Identity
+                        </h3>
+                        <p className="text-xs text-canopy-text/60 mb-4">
+                          Customize how your project appears in the sidebar and dashboard.
+                        </p>
 
-              <div className="mb-6 pb-6 border-b border-canopy-border">
-                <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
-                  <Rocket className="h-4 w-4" />
-                  Dev Server Command
-                </h3>
-                <p className="text-xs text-canopy-text/60 mb-4">
-                  Command to start the development server (e.g., npm run dev). When configured, a
-                  button will appear in the toolbar to start the dev server.
-                </p>
+                        <div className="flex items-start gap-3 p-3 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border">
+                          <Popover open={isEmojiPickerOpen} onOpenChange={setIsEmojiPickerOpen}>
+                            <PopoverTrigger asChild>
+                              <button
+                                type="button"
+                                aria-label="Change project emoji"
+                                className="flex h-14 w-14 items-center justify-center rounded-[var(--radius-xl)] shadow-inner shrink-0 bg-white/5 hover:bg-white/10 transition-colors border border-transparent hover:border-canopy-border cursor-pointer group"
+                                style={{
+                                  background: getProjectGradient(currentProject.color),
+                                }}
+                              >
+                                <span className="text-3xl select-none filter drop-shadow-sm group-hover:scale-110 transition-transform">
+                                  {emoji}
+                                </span>
+                              </button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-auto p-0">
+                              <EmojiPicker
+                                onEmojiSelect={({ emoji }) => {
+                                  setEmoji(emoji);
+                                  setIsEmojiPickerOpen(false);
+                                }}
+                              />
+                            </PopoverContent>
+                          </Popover>
 
-                <input
-                  id="dev-server-command"
-                  type="text"
-                  value={devServerCommand}
-                  onChange={(e) => setDevServerCommand(e.target.value)}
-                  className="w-full bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition-all placeholder:text-canopy-text/40"
-                  placeholder="npm run dev"
-                  spellCheck={false}
-                  autoCapitalize="off"
-                  autoComplete="off"
-                  aria-label="Dev server command"
-                />
-              </div>
+                          <div className="flex-1 min-w-0 flex flex-col justify-center h-14">
+                            <label
+                              htmlFor="project-name-input"
+                              className="text-xs font-medium text-canopy-text/60 mb-1.5 ml-1"
+                            >
+                              Project Name
+                            </label>
+                            <input
+                              id="project-name-input"
+                              type="text"
+                              value={name}
+                              onChange={(e) => setName(e.target.value)}
+                              className="w-full bg-transparent border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition-all placeholder:text-canopy-text/40"
+                              placeholder="My Awesome Project"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
 
-              <div className="mb-6 pb-6 border-b border-canopy-border">
-                <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
-                  <Image className="h-4 w-4" />
-                  Project Icon (SVG)
-                </h3>
-                <p className="text-xs text-canopy-text/60 mb-4">
-                  Shown in the grid empty state. SVG only, max 250KB.
-                </p>
+                    <div className="mb-6 pb-6 border-b border-canopy-border">
+                      <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+                        <Rocket className="h-4 w-4" />
+                        Dev Server Command
+                      </h3>
+                      <p className="text-xs text-canopy-text/60 mb-4">
+                        Command to start the development server (e.g., npm run dev). When
+                        configured, a button will appear in the toolbar to start the dev server.
+                      </p>
 
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/svg+xml,.svg"
-                  onChange={handleFileSelect}
-                  className="hidden"
-                  aria-label="Select SVG file"
-                />
-
-                {projectIconSvg ? (
-                  <div className="flex items-center gap-4 p-3 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border">
-                    <div className="h-16 w-16 rounded-[var(--radius-md)] bg-canopy-sidebar flex items-center justify-center overflow-hidden">
-                      <img
-                        src={svgToDataUrl(projectIconSvg)}
-                        alt="Project icon preview"
-                        className="max-h-14 max-w-14 object-contain"
+                      <input
+                        id="dev-server-command"
+                        type="text"
+                        value={devServerCommand}
+                        onChange={(e) => setDevServerCommand(e.target.value)}
+                        className="w-full bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition-all placeholder:text-canopy-text/40"
+                        placeholder="npm run dev"
+                        spellCheck={false}
+                        autoCapitalize="off"
+                        autoComplete="off"
+                        aria-label="Dev server command"
                       />
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm text-canopy-text mb-1">Custom icon configured</p>
-                      <p className="text-xs text-canopy-text/60">
-                        {Math.round(new Blob([projectIconSvg]).size / 1024)}KB
+
+                    <div className="mb-6">
+                      <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+                        <Image className="h-4 w-4" />
+                        Project Icon (SVG)
+                      </h3>
+                      <p className="text-xs text-canopy-text/60 mb-4">
+                        Shown in the grid empty state. SVG only, max 250KB.
                       </p>
-                    </div>
-                    <div className="flex gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => fileInputRef.current?.click()}
-                      >
-                        <Upload className="h-4 w-4 mr-1" />
-                        Replace
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={handleRemoveIcon}>
-                        <X className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </div>
-                ) : (
-                  <div
-                    className={cn(
-                      "flex flex-col items-center justify-center p-8 rounded-[var(--radius-md)] border-2 border-dashed transition-colors cursor-pointer",
-                      isDraggingIcon
-                        ? "border-canopy-accent bg-canopy-accent/10"
-                        : "border-canopy-border hover:border-canopy-border/80 hover:bg-canopy-bg/50"
-                    )}
-                    onDrop={handleIconDrop}
-                    onDragOver={handleIconDragOver}
-                    onDragLeave={handleIconDragLeave}
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    <Upload className="h-8 w-8 text-canopy-text/40 mb-3" />
-                    <p className="text-sm text-canopy-text/60 text-center mb-1">
-                      Drag and drop an SVG file here
-                    </p>
-                    <p className="text-xs text-canopy-text/40">or click to browse</p>
-                  </div>
-                )}
 
-                {iconError && (
-                  <div className="mt-2 text-xs text-[var(--color-status-error)] bg-red-900/20 border border-red-900/30 rounded p-2">
-                    {iconError}
-                  </div>
-                )}
-              </div>
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/svg+xml,.svg"
+                        onChange={handleFileSelect}
+                        className="hidden"
+                        aria-label="Select SVG file"
+                      />
 
-              <div className="mb-6">
-                <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
-                  <Terminal className="h-4 w-4" />
-                  Run Commands
-                </h3>
-                <p className="text-xs text-canopy-text/60 mb-4">
-                  Quick access to common project tasks (build, test, deploy).
-                </p>
-
-                <div className="space-y-3">
-                  {runCommands.length === 0 ? (
-                    <div className="text-sm text-canopy-text/60 text-center py-8 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
-                      No run commands configured yet
-                    </div>
-                  ) : (
-                    runCommands.map((cmd, index) => (
-                      <div
-                        key={cmd.id}
-                        className="p-3 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border"
-                      >
-                        <div className="flex items-start gap-3">
+                      {projectIconSvg ? (
+                        <div className="flex items-center gap-4 p-3 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border">
+                          <div className="h-16 w-16 rounded-[var(--radius-md)] bg-canopy-sidebar flex items-center justify-center overflow-hidden">
+                            <img
+                              src={svgToDataUrl(projectIconSvg)}
+                              alt="Project icon preview"
+                              className="max-h-14 max-w-14 object-contain"
+                            />
+                          </div>
                           <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 mb-1">
+                            <p className="text-sm text-canopy-text mb-1">Custom icon configured</p>
+                            <p className="text-xs text-canopy-text/60">
+                              {Math.round(new Blob([projectIconSvg]).size / 1024)}KB
+                            </p>
+                          </div>
+                          <div className="flex gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => fileInputRef.current?.click()}
+                            >
+                              <Upload className="h-4 w-4 mr-1" />
+                              Replace
+                            </Button>
+                            <Button variant="ghost" size="sm" onClick={handleRemoveIcon}>
+                              <X className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div
+                          className={cn(
+                            "flex flex-col items-center justify-center p-8 rounded-[var(--radius-md)] border-2 border-dashed transition-colors cursor-pointer",
+                            isDraggingIcon
+                              ? "border-canopy-accent bg-canopy-accent/10"
+                              : "border-canopy-border hover:border-canopy-border/80 hover:bg-canopy-bg/50"
+                          )}
+                          onDrop={handleIconDrop}
+                          onDragOver={handleIconDragOver}
+                          onDragLeave={handleIconDragLeave}
+                          onClick={() => fileInputRef.current?.click()}
+                        >
+                          <Upload className="h-8 w-8 text-canopy-text/40 mb-3" />
+                          <p className="text-sm text-canopy-text/60 text-center mb-1">
+                            Drag and drop an SVG file here
+                          </p>
+                          <p className="text-xs text-canopy-text/40">or click to browse</p>
+                        </div>
+                      )}
+
+                      {iconError && (
+                        <div className="mt-2 text-xs text-[var(--color-status-error)] bg-red-900/20 border border-red-900/30 rounded p-2">
+                          {iconError}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Context Tab */}
+                  <div className={activeTab === "context" ? "" : "hidden"}>
+                    <div className="mb-6 pb-6 border-b border-canopy-border">
+                      <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+                        <FolderX className="h-4 w-4" />
+                        Excluded Paths
+                      </h3>
+                      <p className="text-xs text-canopy-text/60 mb-4">
+                        Glob patterns to exclude from monitoring and context injection (e.g.,
+                        node_modules/**, dist/**, .git/**).
+                      </p>
+
+                      <div className="space-y-2">
+                        {excludedPaths.length === 0 ? (
+                          <div className="text-sm text-canopy-text/60 text-center py-8 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
+                            No excluded paths configured yet
+                          </div>
+                        ) : (
+                          excludedPaths.map((path, index) => (
+                            <div
+                              key={index}
+                              className="flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border"
+                            >
                               <input
                                 type="text"
-                                value={cmd.name}
+                                value={path}
                                 onChange={(e) => {
-                                  setRunCommands((prev) => {
+                                  setExcludedPaths((prev) => {
                                     const updated = [...prev];
-                                    updated[index] = { ...cmd, name: e.target.value };
+                                    updated[index] = e.target.value;
                                     return updated;
                                   });
                                 }}
-                                className="flex-1 bg-transparent border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
-                                placeholder="Command name"
-                                aria-label="Run command name"
+                                className="flex-1 bg-transparent border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
+                                placeholder="node_modules/**"
+                                aria-label="Excluded path glob pattern"
                               />
-                              {cmd.icon && <span className="text-lg">{cmd.icon}</span>}
-                            </div>
-                            <input
-                              type="text"
-                              value={cmd.command}
-                              onChange={(e) => {
-                                setRunCommands((prev) => {
-                                  const updated = [...prev];
-                                  updated[index] = { ...cmd, command: e.target.value };
-                                  return updated;
-                                });
-                              }}
-                              className="w-full bg-canopy-sidebar border border-canopy-border rounded px-2 py-1 text-xs text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
-                              placeholder="npm run build"
-                              aria-label="Run command"
-                            />
-                            {cmd.description && (
-                              <p className="text-xs text-canopy-text/60 mt-1">{cmd.description}</p>
-                            )}
-                          </div>
-                          <div className="flex flex-col gap-1">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (index > 0) {
-                                  setRunCommands((prev) => {
-                                    const updated = [...prev];
-                                    [updated[index - 1], updated[index]] = [
-                                      updated[index],
-                                      updated[index - 1],
-                                    ];
-                                    return updated;
-                                  });
-                                }
-                              }}
-                              disabled={index === 0}
-                              className="p-1 rounded hover:bg-canopy-border/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                              aria-label="Move run command up"
-                            >
-                              <ChevronUp className="h-4 w-4" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (index < runCommands.length - 1) {
-                                  setRunCommands((prev) => {
-                                    const updated = [...prev];
-                                    [updated[index], updated[index + 1]] = [
-                                      updated[index + 1],
-                                      updated[index],
-                                    ];
-                                    return updated;
-                                  });
-                                }
-                              }}
-                              disabled={index === runCommands.length - 1}
-                              className="p-1 rounded hover:bg-canopy-border/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                              aria-label="Move run command down"
-                            >
-                              <ChevronDown className="h-4 w-4" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setRunCommands((prev) => prev.filter((_, i) => i !== index));
-                              }}
-                              className="p-1 rounded hover:bg-red-900/30 transition-colors"
-                              aria-label="Delete run command"
-                            >
-                              <Trash2 className="h-4 w-4 text-[var(--color-status-error)]" />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      setRunCommands((prev) => [
-                        ...prev,
-                        {
-                          id: `cmd-${Date.now()}`,
-                          name: "",
-                          command: "",
-                        },
-                      ]);
-                    }}
-                    className="w-full"
-                  >
-                    <Plus className="h-4 w-4 mr-2" />
-                    Add Command
-                  </Button>
-                </div>
-              </div>
-
-              <div className="mb-6">
-                <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
-                  <Key className="h-4 w-4" />
-                  Environment Variables
-                </h3>
-                <p className="text-xs text-canopy-text/60 mb-4">
-                  Project-specific environment variables. Variable names containing KEY, SECRET,
-                  TOKEN, or PASSWORD will have their values masked.
-                </p>
-
-                <div className="space-y-2">
-                  {environmentVariables.length === 0 ? (
-                    <div className="text-sm text-canopy-text/60 text-center py-8 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
-                      No environment variables configured yet
-                    </div>
-                  ) : (
-                    environmentVariables.map((envVar, index) => {
-                      const isSensitive = SENSITIVE_ENV_KEY_RE.test(envVar.key);
-                      const isVisible = visibleEnvVars.has(envVar.id);
-                      const shouldMask = isSensitive && !isVisible;
-                      return (
-                        <div
-                          key={envVar.id}
-                          className="flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border"
-                        >
-                          <input
-                            type="text"
-                            value={envVar.key}
-                            onChange={(e) => {
-                              const nextKey = e.target.value;
-                              const wasSensitive = SENSITIVE_ENV_KEY_RE.test(envVar.key);
-                              const nowSensitive = SENSITIVE_ENV_KEY_RE.test(nextKey);
-                              setEnvironmentVariables((prev) => {
-                                const updated = [...prev];
-                                updated[index] = { ...envVar, key: nextKey };
-                                return updated;
-                              });
-                              if (!wasSensitive && nowSensitive) {
-                                setVisibleEnvVars((prev) => {
-                                  const next = new Set(prev);
-                                  next.delete(envVar.id);
-                                  return next;
-                                });
-                              }
-                            }}
-                            spellCheck={false}
-                            autoCapitalize="none"
-                            className="flex-1 bg-transparent border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
-                            placeholder="VARIABLE_NAME"
-                            aria-label="Environment variable name"
-                          />
-                          <span className="text-canopy-text/60">=</span>
-                          <div className="flex-1 relative">
-                            <input
-                              type={shouldMask ? "password" : "text"}
-                              value={envVar.value}
-                              onChange={(e) => {
-                                setEnvironmentVariables((prev) => {
-                                  const updated = [...prev];
-                                  updated[index] = { ...envVar, value: e.target.value };
-                                  return updated;
-                                });
-                              }}
-                              spellCheck={false}
-                              autoCapitalize="none"
-                              autoComplete={isSensitive ? "new-password" : "off"}
-                              className={cn(
-                                "w-full bg-canopy-sidebar border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30",
-                                isSensitive && "pr-8"
-                              )}
-                              placeholder="value"
-                              aria-label="Environment variable value"
-                            />
-                            {isSensitive && (
                               <button
                                 type="button"
-                                onClick={() => toggleEnvVarVisibility(envVar.id)}
-                                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-canopy-border/50 transition-colors"
-                                aria-pressed={isVisible}
-                                aria-label={`${isVisible ? "Hide" : "Show"} value${envVar.key ? ` for ${envVar.key}` : ""}`}
+                                onClick={() => {
+                                  setExcludedPaths((prev) => prev.filter((_, i) => i !== index));
+                                }}
+                                className="p-1 rounded hover:bg-red-900/30 transition-colors"
+                                aria-label="Delete excluded path"
                               >
-                                {isVisible ? (
-                                  <EyeOff className="h-4 w-4 text-canopy-text/60" />
-                                ) : (
-                                  <Eye className="h-4 w-4 text-canopy-text/60" />
-                                )}
+                                <Trash2 className="h-4 w-4 text-[var(--color-status-error)]" />
                               </button>
+                            </div>
+                          ))
+                        )}
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setExcludedPaths((prev) => [...prev, ""]);
+                          }}
+                          className="w-full"
+                        >
+                          <Plus className="h-4 w-4 mr-2" />
+                          Add Path Pattern
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="mb-6">
+                      <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+                        <Key className="h-4 w-4" />
+                        Environment Variables
+                      </h3>
+                      <p className="text-xs text-canopy-text/60 mb-4">
+                        Project-specific environment variables. Variable names containing KEY,
+                        SECRET, TOKEN, or PASSWORD will have their values masked.
+                      </p>
+
+                      <div className="space-y-2">
+                        {environmentVariables.length === 0 ? (
+                          <div className="text-sm text-canopy-text/60 text-center py-8 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
+                            No environment variables configured yet
+                          </div>
+                        ) : (
+                          environmentVariables.map((envVar, index) => {
+                            const isSensitive = SENSITIVE_ENV_KEY_RE.test(envVar.key);
+                            const isVisible = visibleEnvVars.has(envVar.id);
+                            const shouldMask = isSensitive && !isVisible;
+                            return (
+                              <div
+                                key={envVar.id}
+                                className="flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border"
+                              >
+                                <input
+                                  type="text"
+                                  value={envVar.key}
+                                  onChange={(e) => {
+                                    const nextKey = e.target.value;
+                                    const wasSensitive = SENSITIVE_ENV_KEY_RE.test(envVar.key);
+                                    const nowSensitive = SENSITIVE_ENV_KEY_RE.test(nextKey);
+                                    setEnvironmentVariables((prev) => {
+                                      const updated = [...prev];
+                                      updated[index] = { ...envVar, key: nextKey };
+                                      return updated;
+                                    });
+                                    if (!wasSensitive && nowSensitive) {
+                                      setVisibleEnvVars((prev) => {
+                                        const next = new Set(prev);
+                                        next.delete(envVar.id);
+                                        return next;
+                                      });
+                                    }
+                                  }}
+                                  spellCheck={false}
+                                  autoCapitalize="none"
+                                  className="flex-1 bg-transparent border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
+                                  placeholder="VARIABLE_NAME"
+                                  aria-label="Environment variable name"
+                                />
+                                <span className="text-canopy-text/60">=</span>
+                                <div className="flex-1 relative">
+                                  <input
+                                    type={shouldMask ? "password" : "text"}
+                                    value={envVar.value}
+                                    onChange={(e) => {
+                                      setEnvironmentVariables((prev) => {
+                                        const updated = [...prev];
+                                        updated[index] = { ...envVar, value: e.target.value };
+                                        return updated;
+                                      });
+                                    }}
+                                    spellCheck={false}
+                                    autoCapitalize="none"
+                                    autoComplete={isSensitive ? "new-password" : "off"}
+                                    className={cn(
+                                      "w-full bg-canopy-sidebar border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30",
+                                      isSensitive && "pr-8"
+                                    )}
+                                    placeholder="value"
+                                    aria-label="Environment variable value"
+                                  />
+                                  {isSensitive && (
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleEnvVarVisibility(envVar.id)}
+                                      className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-canopy-border/50 transition-colors"
+                                      aria-pressed={isVisible}
+                                      aria-label={`${isVisible ? "Hide" : "Show"} value${envVar.key ? ` for ${envVar.key}` : ""}`}
+                                    >
+                                      {isVisible ? (
+                                        <EyeOff className="h-4 w-4 text-canopy-text/60" />
+                                      ) : (
+                                        <Eye className="h-4 w-4 text-canopy-text/60" />
+                                      )}
+                                    </button>
+                                  )}
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEnvironmentVariables((prev) =>
+                                      prev.filter((_, i) => i !== index)
+                                    );
+                                    setVisibleEnvVars((prev) => {
+                                      const next = new Set(prev);
+                                      next.delete(envVar.id);
+                                      return next;
+                                    });
+                                  }}
+                                  className="p-1 rounded hover:bg-red-900/30 transition-colors"
+                                  aria-label="Delete environment variable"
+                                >
+                                  <Trash2 className="h-4 w-4 text-[var(--color-status-error)]" />
+                                </button>
+                              </div>
+                            );
+                          })
+                        )}
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setEnvironmentVariables((prev) => [
+                              ...prev,
+                              {
+                                id: `env-${Date.now()}-${Math.random()}`,
+                                key: "",
+                                value: "",
+                              },
+                            ]);
+                          }}
+                          className="w-full"
+                        >
+                          <Plus className="h-4 w-4 mr-2" />
+                          Add Variable
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Automation Tab */}
+                  <div className={activeTab === "automation" ? "" : "hidden"}>
+                    <div className="mb-6 pb-6 border-b border-canopy-border">
+                      <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+                        <Terminal className="h-4 w-4" />
+                        Run Commands
+                      </h3>
+                      <p className="text-xs text-canopy-text/60 mb-4">
+                        Quick access to common project tasks (build, test, deploy).
+                      </p>
+
+                      <div className="space-y-3">
+                        {runCommands.length === 0 ? (
+                          <div className="text-sm text-canopy-text/60 text-center py-8 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
+                            No run commands configured yet
+                          </div>
+                        ) : (
+                          runCommands.map((cmd, index) => (
+                            <div
+                              key={cmd.id}
+                              className="p-3 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border"
+                            >
+                              <div className="flex items-start gap-3">
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2 mb-1">
+                                    <input
+                                      type="text"
+                                      value={cmd.name}
+                                      onChange={(e) => {
+                                        setRunCommands((prev) => {
+                                          const updated = [...prev];
+                                          updated[index] = { ...cmd, name: e.target.value };
+                                          return updated;
+                                        });
+                                      }}
+                                      className="flex-1 bg-transparent border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
+                                      placeholder="Command name"
+                                      aria-label="Run command name"
+                                    />
+                                    {cmd.icon && <span className="text-lg">{cmd.icon}</span>}
+                                  </div>
+                                  <input
+                                    type="text"
+                                    value={cmd.command}
+                                    onChange={(e) => {
+                                      setRunCommands((prev) => {
+                                        const updated = [...prev];
+                                        updated[index] = { ...cmd, command: e.target.value };
+                                        return updated;
+                                      });
+                                    }}
+                                    className="w-full bg-canopy-sidebar border border-canopy-border rounded px-2 py-1 text-xs text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
+                                    placeholder="npm run build"
+                                    aria-label="Run command"
+                                  />
+                                  {cmd.description && (
+                                    <p className="text-xs text-canopy-text/60 mt-1">
+                                      {cmd.description}
+                                    </p>
+                                  )}
+                                </div>
+                                <div className="flex flex-col gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (index > 0) {
+                                        setRunCommands((prev) => {
+                                          const updated = [...prev];
+                                          [updated[index - 1], updated[index]] = [
+                                            updated[index],
+                                            updated[index - 1],
+                                          ];
+                                          return updated;
+                                        });
+                                      }
+                                    }}
+                                    disabled={index === 0}
+                                    className="p-1 rounded hover:bg-canopy-border/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                                    aria-label="Move run command up"
+                                  >
+                                    <ChevronUp className="h-4 w-4" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (index < runCommands.length - 1) {
+                                        setRunCommands((prev) => {
+                                          const updated = [...prev];
+                                          [updated[index], updated[index + 1]] = [
+                                            updated[index + 1],
+                                            updated[index],
+                                          ];
+                                          return updated;
+                                        });
+                                      }
+                                    }}
+                                    disabled={index === runCommands.length - 1}
+                                    className="p-1 rounded hover:bg-canopy-border/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                                    aria-label="Move run command down"
+                                  >
+                                    <ChevronDown className="h-4 w-4" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setRunCommands((prev) => prev.filter((_, i) => i !== index));
+                                    }}
+                                    className="p-1 rounded hover:bg-red-900/30 transition-colors"
+                                    aria-label="Delete run command"
+                                  >
+                                    <Trash2 className="h-4 w-4 text-[var(--color-status-error)]" />
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setRunCommands((prev) => [
+                              ...prev,
+                              {
+                                id: `cmd-${Date.now()}`,
+                                name: "",
+                                command: "",
+                              },
+                            ]);
+                          }}
+                          className="w-full"
+                        >
+                          <Plus className="h-4 w-4 mr-2" />
+                          Add Command
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="mb-6 pb-6 border-b border-canopy-border">
+                      <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+                        <Play className="h-4 w-4" />
+                        Default Worktree Recipe
+                      </h3>
+                      <p className="text-xs text-canopy-text/60 mb-4">
+                        Automatically run a recipe when creating new worktrees.
+                      </p>
+
+                      {(() => {
+                        const globalRecipes = recipes.filter((r) => !r.worktreeId);
+                        const selectedRecipe = globalRecipes.find(
+                          (r) => r.id === defaultWorktreeRecipeId
+                        );
+                        const recipeNotFound =
+                          defaultWorktreeRecipeId && !selectedRecipe && !recipesLoading;
+
+                        return (
+                          <div className="space-y-3">
+                            {globalRecipes.length === 0 ? (
+                              <div className="text-sm text-canopy-text/60 text-center py-4 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
+                                No global recipes available. Create a recipe first.
+                              </div>
+                            ) : (
+                              <>
+                                <select
+                                  value={defaultWorktreeRecipeId || ""}
+                                  onChange={(e) =>
+                                    setDefaultWorktreeRecipeId(e.target.value || undefined)
+                                  }
+                                  className="w-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-sm text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
+                                >
+                                  <option value="">No default recipe</option>
+                                  {globalRecipes.map((recipe) => (
+                                    <option key={recipe.id} value={recipe.id}>
+                                      {recipe.name} ({recipe.terminals.length} terminal
+                                      {recipe.terminals.length !== 1 ? "s" : ""})
+                                    </option>
+                                  ))}
+                                </select>
+
+                                {selectedRecipe && (
+                                  <div className="p-3 rounded-[var(--radius-md)] bg-canopy-bg/50 border border-canopy-border">
+                                    <div className="flex items-center gap-2 mb-1">
+                                      <span className="text-sm font-medium text-canopy-text">
+                                        {selectedRecipe.name}
+                                      </span>
+                                      <span className="text-xs text-canopy-text/60 bg-canopy-sidebar px-2 py-0.5 rounded">
+                                        {selectedRecipe.terminals.length} terminal
+                                        {selectedRecipe.terminals.length !== 1 ? "s" : ""}
+                                      </span>
+                                    </div>
+                                    <p className="text-xs text-canopy-text/60">
+                                      Will run automatically when creating new worktrees
+                                    </p>
+                                  </div>
+                                )}
+
+                                {recipeNotFound && (
+                                  <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-yellow-500/10 border border-yellow-500/20">
+                                    <AlertTriangle className="h-4 w-4 text-yellow-500 mt-0.5 shrink-0" />
+                                    <div>
+                                      <p className="text-sm text-yellow-500">
+                                        Selected recipe no longer exists
+                                      </p>
+                                      <p className="text-xs text-canopy-text/60 mt-1">
+                                        The previously selected recipe was deleted. Please select a
+                                        new default or clear the selection.
+                                      </p>
+                                    </div>
+                                  </div>
+                                )}
+                              </>
                             )}
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEnvironmentVariables((prev) => prev.filter((_, i) => i !== index));
-                              setVisibleEnvVars((prev) => {
-                                const next = new Set(prev);
-                                next.delete(envVar.id);
-                                return next;
-                              });
-                            }}
-                            className="p-1 rounded hover:bg-red-900/30 transition-colors"
-                            aria-label="Delete environment variable"
-                          >
-                            <Trash2 className="h-4 w-4 text-[var(--color-status-error)]" />
-                          </button>
-                        </div>
-                      );
-                    })
-                  )}
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      setEnvironmentVariables((prev) => [
-                        ...prev,
-                        {
-                          id: `env-${Date.now()}-${Math.random()}`,
-                          key: "",
-                          value: "",
-                        },
-                      ]);
-                    }}
-                    className="w-full"
-                  >
-                    <Plus className="h-4 w-4 mr-2" />
-                    Add Variable
-                  </Button>
-                </div>
-              </div>
-
-              <div className="mb-6">
-                <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
-                  <FolderX className="h-4 w-4" />
-                  Excluded Paths
-                </h3>
-                <p className="text-xs text-canopy-text/60 mb-4">
-                  Glob patterns to exclude from monitoring and context injection (e.g.,
-                  node_modules/**, dist/**, .git/**).
-                </p>
-
-                <div className="space-y-2">
-                  {excludedPaths.length === 0 ? (
-                    <div className="text-sm text-canopy-text/60 text-center py-8 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
-                      No excluded paths configured yet
-                    </div>
-                  ) : (
-                    excludedPaths.map((path, index) => (
-                      <div
-                        key={index}
-                        className="flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border"
-                      >
-                        <input
-                          type="text"
-                          value={path}
-                          onChange={(e) => {
-                            setExcludedPaths((prev) => {
-                              const updated = [...prev];
-                              updated[index] = e.target.value;
-                              return updated;
-                            });
-                          }}
-                          className="flex-1 bg-transparent border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
-                          placeholder="node_modules/**"
-                          aria-label="Excluded path glob pattern"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setExcludedPaths((prev) => prev.filter((_, i) => i !== index));
-                          }}
-                          className="p-1 rounded hover:bg-red-900/30 transition-colors"
-                          aria-label="Delete excluded path"
-                        >
-                          <Trash2 className="h-4 w-4 text-[var(--color-status-error)]" />
-                        </button>
-                      </div>
-                    ))
-                  )}
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      setExcludedPaths((prev) => [...prev, ""]);
-                    }}
-                    className="w-full"
-                  >
-                    <Plus className="h-4 w-4 mr-2" />
-                    Add Path Pattern
-                  </Button>
-                </div>
-              </div>
-
-              <div className="mb-6 pb-6 border-b border-canopy-border">
-                <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
-                  <Play className="h-4 w-4" />
-                  Default Worktree Recipe
-                </h3>
-                <p className="text-xs text-canopy-text/60 mb-4">
-                  Automatically run a recipe when creating new worktrees.
-                </p>
-
-                {(() => {
-                  const globalRecipes = recipes.filter((r) => !r.worktreeId);
-                  const selectedRecipe = globalRecipes.find(
-                    (r) => r.id === defaultWorktreeRecipeId
-                  );
-                  const recipeNotFound =
-                    defaultWorktreeRecipeId && !selectedRecipe && !recipesLoading;
-
-                  return (
-                    <div className="space-y-3">
-                      {globalRecipes.length === 0 ? (
-                        <div className="text-sm text-canopy-text/60 text-center py-4 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
-                          No global recipes available. Create a recipe first.
-                        </div>
-                      ) : (
-                        <>
-                          <select
-                            value={defaultWorktreeRecipeId || ""}
-                            onChange={(e) =>
-                              setDefaultWorktreeRecipeId(e.target.value || undefined)
-                            }
-                            className="w-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-sm text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
-                          >
-                            <option value="">No default recipe</option>
-                            {globalRecipes.map((recipe) => (
-                              <option key={recipe.id} value={recipe.id}>
-                                {recipe.name} ({recipe.terminals.length} terminal
-                                {recipe.terminals.length !== 1 ? "s" : ""})
-                              </option>
-                            ))}
-                          </select>
-
-                          {selectedRecipe && (
-                            <div className="p-3 rounded-[var(--radius-md)] bg-canopy-bg/50 border border-canopy-border">
-                              <div className="flex items-center gap-2 mb-1">
-                                <span className="text-sm font-medium text-canopy-text">
-                                  {selectedRecipe.name}
-                                </span>
-                                <span className="text-xs text-canopy-text/60 bg-canopy-sidebar px-2 py-0.5 rounded">
-                                  {selectedRecipe.terminals.length} terminal
-                                  {selectedRecipe.terminals.length !== 1 ? "s" : ""}
-                                </span>
-                              </div>
-                              <p className="text-xs text-canopy-text/60">
-                                Will run automatically when creating new worktrees
-                              </p>
-                            </div>
-                          )}
-
-                          {recipeNotFound && (
-                            <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-yellow-500/10 border border-yellow-500/20">
-                              <AlertTriangle className="h-4 w-4 text-yellow-500 mt-0.5 shrink-0" />
-                              <div>
-                                <p className="text-sm text-yellow-500">
-                                  Selected recipe no longer exists
-                                </p>
-                                <p className="text-xs text-canopy-text/60 mt-1">
-                                  The previously selected recipe was deleted. Please select a new
-                                  default or clear the selection.
-                                </p>
-                              </div>
-                            </div>
-                          )}
-                        </>
-                      )}
-                    </div>
-                  );
-                })()}
-              </div>
-
-              <div className="mb-6">
-                <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
-                  <BookOpen className="h-4 w-4" />
-                  Terminal Recipes
-                </h3>
-                <p className="text-xs text-canopy-text/60 mb-4">
-                  Manage saved terminal configurations. Recipes can spawn multiple terminals with
-                  predefined commands and settings.
-                </p>
-
-                <div className="space-y-2">
-                  {recipes.length === 0 ? (
-                    <div className="text-sm text-canopy-text/60 text-center py-8 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
-                      No recipes configured yet
-                    </div>
-                  ) : (
-                    <div className="border border-canopy-border rounded-[var(--radius-md)] divide-y divide-canopy-border">
-                      {recipes.map((recipe) => {
-                        const exported = exportFeedback === recipe.id;
-                        return (
-                          <div
-                            key={recipe.id}
-                            className="p-3 hover:bg-muted/50 transition-colors group cursor-default"
-                          >
-                            <div className="flex items-start gap-3">
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-2">
-                                  <span
-                                    className="text-sm font-medium text-foreground truncate"
-                                    title={recipe.name}
-                                  >
-                                    {recipe.name}
-                                  </span>
-                                  <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
-                                    {getRecipeScope(recipe)}
-                                  </span>
-                                  <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
-                                    {recipe.terminals.length} terminal
-                                    {recipe.terminals.length !== 1 ? "s" : ""}
-                                  </span>
-                                  {recipe.showInEmptyState && (
-                                    <span className="text-[11px] text-[var(--color-status-info)] bg-[var(--color-status-info)]/10 px-1.5 py-0.5 rounded font-medium shrink-0">
-                                      Empty State
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="text-xs text-muted-foreground mt-1">
-                                  {recipe.lastUsedAt ? (
-                                    <span>
-                                      Last used <LiveTimeAgo timestamp={recipe.lastUsedAt} />
-                                    </span>
-                                  ) : (
-                                    <span>Never used</span>
-                                  )}
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleEditRecipe(recipe)}
-                                  className="h-7 px-2"
-                                  title="Edit recipe"
-                                  aria-label={`Edit recipe ${recipe.name}`}
-                                >
-                                  <Edit3 className="h-3.5 w-3.5" />
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleExportRecipe(recipe.id)}
-                                  className="h-7 px-2"
-                                  title={exported ? "Exported" : "Export recipe to clipboard"}
-                                  aria-label={
-                                    exported
-                                      ? `Recipe ${recipe.name} exported to clipboard`
-                                      : `Export recipe ${recipe.name} to clipboard`
-                                  }
-                                >
-                                  {exported ? (
-                                    <Check className="h-3.5 w-3.5 text-[var(--color-status-success)]" />
-                                  ) : (
-                                    <Download className="h-3.5 w-3.5" />
-                                  )}
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => setRecipeToDelete(recipe.id)}
-                                  className="h-7 px-2"
-                                  title="Delete recipe"
-                                  aria-label={`Delete recipe ${recipe.name}`}
-                                >
-                                  <Trash2 className="h-3.5 w-3.5 text-[var(--color-status-error)]" />
-                                </Button>
-                              </div>
-                            </div>
-                          </div>
                         );
-                      })}
+                      })()}
                     </div>
-                  )}
-                  {exportError && (
-                    <div
-                      className="text-sm text-[var(--color-status-error)] bg-red-900/20 border border-red-900/30 rounded p-3"
-                      role="alert"
-                    >
-                      {exportError}
-                    </div>
-                  )}
-                  <div className="flex gap-2">
-                    <Button variant="outline" onClick={handleAddRecipe} className="flex-1">
-                      <Plus className="h-4 w-4 mr-2" />
-                      Add Recipe
-                    </Button>
-                    <Button variant="outline" onClick={() => setShowImportDialog(true)}>
-                      <FileDown className="h-4 w-4 mr-2" />
-                      Import Recipe
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            </>
-          )}
-        </AppDialog.Body>
 
-        <AppDialog.Footer>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button onClick={handleSave} disabled={isSaving || isLoading || !!error}>
-            {isSaving ? "Saving..." : "Save Changes"}
-          </Button>
-        </AppDialog.Footer>
+                    <div className="mb-6">
+                      <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+                        <BookOpen className="h-4 w-4" />
+                        Terminal Recipes
+                      </h3>
+                      <p className="text-xs text-canopy-text/60 mb-4">
+                        Manage saved terminal configurations. Recipes can spawn multiple terminals
+                        with predefined commands and settings.
+                      </p>
+
+                      <div className="space-y-2">
+                        {recipes.length === 0 ? (
+                          <div className="text-sm text-canopy-text/60 text-center py-8 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
+                            No recipes configured yet
+                          </div>
+                        ) : (
+                          <div className="border border-canopy-border rounded-[var(--radius-md)] divide-y divide-canopy-border">
+                            {recipes.map((recipe) => {
+                              const exported = exportFeedback === recipe.id;
+                              return (
+                                <div
+                                  key={recipe.id}
+                                  className="p-3 hover:bg-muted/50 transition-colors group cursor-default"
+                                >
+                                  <div className="flex items-start gap-3">
+                                    <div className="flex-1 min-w-0">
+                                      <div className="flex items-center gap-2">
+                                        <span
+                                          className="text-sm font-medium text-foreground truncate"
+                                          title={recipe.name}
+                                        >
+                                          {recipe.name}
+                                        </span>
+                                        <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
+                                          {getRecipeScope(recipe)}
+                                        </span>
+                                        <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
+                                          {recipe.terminals.length} terminal
+                                          {recipe.terminals.length !== 1 ? "s" : ""}
+                                        </span>
+                                        {recipe.showInEmptyState && (
+                                          <span className="text-[11px] text-[var(--color-status-info)] bg-[var(--color-status-info)]/10 px-1.5 py-0.5 rounded font-medium shrink-0">
+                                            Empty State
+                                          </span>
+                                        )}
+                                      </div>
+                                      <div className="text-xs text-muted-foreground mt-1">
+                                        {recipe.lastUsedAt ? (
+                                          <span>
+                                            Last used <LiveTimeAgo timestamp={recipe.lastUsedAt} />
+                                          </span>
+                                        ) : (
+                                          <span>Never used</span>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => handleEditRecipe(recipe)}
+                                        className="h-7 px-2"
+                                        title="Edit recipe"
+                                        aria-label={`Edit recipe ${recipe.name}`}
+                                      >
+                                        <Edit3 className="h-3.5 w-3.5" />
+                                      </Button>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => handleExportRecipe(recipe.id)}
+                                        className="h-7 px-2"
+                                        title={exported ? "Exported" : "Export recipe to clipboard"}
+                                        aria-label={
+                                          exported
+                                            ? `Recipe ${recipe.name} exported to clipboard`
+                                            : `Export recipe ${recipe.name} to clipboard`
+                                        }
+                                      >
+                                        {exported ? (
+                                          <Check className="h-3.5 w-3.5 text-[var(--color-status-success)]" />
+                                        ) : (
+                                          <Download className="h-3.5 w-3.5" />
+                                        )}
+                                      </Button>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => setRecipeToDelete(recipe.id)}
+                                        className="h-7 px-2"
+                                        title="Delete recipe"
+                                        aria-label={`Delete recipe ${recipe.name}`}
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5 text-[var(--color-status-error)]" />
+                                      </Button>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                        {exportError && (
+                          <div
+                            className="text-sm text-[var(--color-status-error)] bg-red-900/20 border border-red-900/30 rounded p-3"
+                            role="alert"
+                          >
+                            {exportError}
+                          </div>
+                        )}
+                        <div className="flex gap-2">
+                          <Button variant="outline" onClick={handleAddRecipe} className="flex-1">
+                            <Plus className="h-4 w-4 mr-2" />
+                            Add Recipe
+                          </Button>
+                          <Button variant="outline" onClick={() => setShowImportDialog(true)}>
+                            <FileDown className="h-4 w-4 mr-2" />
+                            Import Recipe
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 px-6 py-4 border-t border-canopy-border bg-canopy-sidebar/50 shrink-0">
+              <Button variant="ghost" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button onClick={handleSave} disabled={isSaving || isLoading || !!error}>
+                {isSaving ? "Saving..." : "Save Changes"}
+              </Button>
+            </div>
+          </div>
+        </div>
       </AppDialog>
 
       <RecipeEditor
@@ -1144,5 +1221,30 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         </AppDialog.Footer>
       </AppDialog>
     </>
+  );
+}
+
+interface NavButtonProps {
+  active: boolean;
+  onClick: () => void;
+  icon?: React.ReactNode;
+  children: React.ReactNode;
+}
+
+function NavButton({ active, onClick, icon, children }: NavButtonProps) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "relative text-left px-3 py-2 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
+        active
+          ? "bg-white/[0.03] text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+          : "text-canopy-text/60 hover:bg-white/[0.03] hover:text-canopy-text"
+      )}
+    >
+      {icon}
+      {children}
+    </button>
   );
 }
