@@ -139,7 +139,12 @@ export function NewWorktreeDialog({
       // No previous selection - use project default
       setSelectedRecipeId(defaultRecipeId);
     }
-  }, [globalRecipes, lastSelectedWorktreeRecipeId, defaultRecipeId, setLastSelectedWorktreeRecipeId]);
+  }, [
+    globalRecipes,
+    lastSelectedWorktreeRecipeId,
+    defaultRecipeId,
+    setLastSelectedWorktreeRecipeId,
+  ]);
 
   useEffect(() => {
     if (!selectedRecipeId) return;
