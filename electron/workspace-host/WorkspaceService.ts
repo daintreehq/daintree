@@ -101,9 +101,11 @@ export class WorkspaceService {
       });
 
       await this.syncMonitors(worktrees, this.activeWorktreeId, this.mainBranch);
-      await this.refreshAll();
 
+      // Start PR service early so GitHub API call runs in parallel with git status refresh
       this.initializePRService();
+
+      await this.refreshAll();
 
       this.sendEvent({ type: "load-project-result", requestId, success: true });
     } catch (error) {
