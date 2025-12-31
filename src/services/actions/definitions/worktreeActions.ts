@@ -371,20 +371,26 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     argsSchema: z.object({
       worktreeId: z.string().optional(),
       format: z.enum(["xml", "json", "markdown", "tree", "ndjson"]).optional(),
+      modified: z.boolean().optional(),
     }),
     run: async (args: unknown, ctx: ActionContext) => {
-      const { worktreeId, format } = args as {
+      const { worktreeId, format, modified } = args as {
         worktreeId?: string;
         format?: "xml" | "json" | "markdown" | "tree" | "ndjson";
+        modified?: boolean;
       };
       const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return null;
 
       const result = await copyTreeClient.generateAndCopyFile(targetWorktreeId, {
         format: format ?? "xml",
+        modified,
       });
 
       if (result.error) {
+        if (modified && result.error.includes("No valid files")) {
+          throw new Error("No modified files to copy. Make some changes first.");
+        }
         throw new Error(result.error);
       }
 
@@ -407,6 +413,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     argsSchema: z.object({
       worktreeId: z.string().optional(),
       format: z.enum(["xml", "json", "markdown", "tree", "ndjson"]).optional(),
+      modified: z.boolean().optional(),
     }),
     run: async (args: unknown) => {
       const { actionService } = await import("@/services/ActionService");

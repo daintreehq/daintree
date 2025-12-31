@@ -108,7 +108,14 @@ export function useWorktreeMenu({
       { type: "separator" },
 
       { id: "label:worktree", label: "Worktree", enabled: false },
-      { id: "worktree:copy-context", label: "Copy Context" },
+      {
+        id: "worktree:copy-context",
+        label: "Copy Context",
+        submenu: [
+          { id: "worktree:copy-context:full", label: "Full Context" },
+          { id: "worktree:copy-context:modified", label: "Modified Files Only" },
+        ],
+      },
       { id: "worktree:open-editor", label: "Open in Editor" },
       { id: "worktree:reveal", label: "Reveal in Finder" },
     ];
@@ -252,10 +259,17 @@ export function useWorktreeMenu({
         case "sessions:end-all":
           onEndAll();
           break;
-        case "worktree:copy-context":
+        case "worktree:copy-context:full":
           void actionService.dispatch(
             "worktree.copyTree",
             { worktreeId: worktree.id },
+            { source: "context-menu" }
+          );
+          break;
+        case "worktree:copy-context:modified":
+          void actionService.dispatch(
+            "worktree.copyTree",
+            { worktreeId: worktree.id, modified: true },
             { source: "context-menu" }
           );
           break;
