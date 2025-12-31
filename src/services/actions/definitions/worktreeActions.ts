@@ -418,6 +418,42 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     },
   }));
 
+  actions.set("worktree.inject", () => ({
+    id: "worktree.inject",
+    title: "Inject Worktree Context into Focused Terminal",
+    description: "Inject this worktree's context into the currently focused terminal",
+    category: "worktree",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({
+      worktreeId: z.string().optional(),
+    }),
+    isEnabled: (ctx: ActionContext) => {
+      const hasFocusedTerminal = Boolean(ctx.focusedTerminalId);
+      return hasFocusedTerminal;
+    },
+    disabledReason: (ctx: ActionContext) => {
+      const hasFocusedTerminal = Boolean(ctx.focusedTerminalId);
+      if (!hasFocusedTerminal) {
+        return "No focused terminal to inject into";
+      }
+      return undefined;
+    },
+    run: async (args: unknown, ctx: ActionContext) => {
+      const hasFocusedTerminal = Boolean(ctx.focusedTerminalId);
+      if (!hasFocusedTerminal) {
+        throw new Error("No focused terminal to inject into");
+      }
+      const { worktreeId } = args as { worktreeId?: string };
+      const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
+      if (!targetWorktreeId) {
+        throw new Error("No worktree selected");
+      }
+      callbacks.onInject(targetWorktreeId);
+    },
+  }));
+
   actions.set("worktree.openEditor", () => ({
     id: "worktree.openEditor",
     title: "Open in Editor",

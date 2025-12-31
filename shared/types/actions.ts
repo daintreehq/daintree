@@ -110,6 +110,7 @@ export type ActionId =
   | "worktree.openIssue"
   | "worktree.openPR"
   | "worktree.copyContext"
+  | "worktree.inject"
   | "worktree.sessions.minimizeAll"
   | "worktree.sessions.maximizeAll"
   | "worktree.sessions.restartAll"

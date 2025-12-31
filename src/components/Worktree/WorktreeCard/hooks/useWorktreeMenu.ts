@@ -2,6 +2,7 @@ import { useCallback, useMemo } from "react";
 import type React from "react";
 import { actionService } from "@/services/ActionService";
 import { useNativeContextMenu } from "@/hooks";
+import { useTerminalStore } from "@/store/terminalStore";
 import type { MenuItemOption, TerminalRecipe, WorktreeState } from "@/types";
 
 export function useWorktreeMenu({
@@ -47,6 +48,7 @@ export function useWorktreeMenu({
 } {
   const { showMenu } = useNativeContextMenu();
   const isMainWorktree = worktree.isMainWorktree;
+  const focusedTerminalId = useTerminalStore((state) => state.focusedId);
 
   const contextMenuTemplate = useMemo((): MenuItemOption[] => {
     const template: MenuItemOption[] = [
@@ -109,6 +111,11 @@ export function useWorktreeMenu({
 
       { id: "label:worktree", label: "Worktree", enabled: false },
       { id: "worktree:copy-context", label: "Copy Context" },
+      {
+        id: "worktree:inject-context",
+        label: "Inject Context into Focused Terminal",
+        enabled: focusedTerminalId !== null,
+      },
       { id: "worktree:open-editor", label: "Open in Editor" },
       { id: "worktree:reveal", label: "Reveal in Finder" },
     ];
@@ -169,6 +176,7 @@ export function useWorktreeMenu({
     counts.dock,
     counts.failed,
     counts.grid,
+    focusedTerminalId,
     isMainWorktree,
     isRestartValidating,
     launchAgents,
@@ -255,6 +263,13 @@ export function useWorktreeMenu({
         case "worktree:copy-context":
           void actionService.dispatch(
             "worktree.copyTree",
+            { worktreeId: worktree.id },
+            { source: "context-menu" }
+          );
+          break;
+        case "worktree:inject-context":
+          void actionService.dispatch(
+            "worktree.inject",
             { worktreeId: worktree.id },
             { source: "context-menu" }
           );
