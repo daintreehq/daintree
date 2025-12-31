@@ -174,13 +174,30 @@ export function matchesFilters(
 
 export function sortWorktrees<T extends Worktree | WorktreeState>(
   worktrees: T[],
-  orderBy: OrderBy
+  orderBy: OrderBy,
+  pinnedWorktrees: string[] = []
 ): T[] {
+  const pinnedSet = new Set(pinnedWorktrees);
+
   return [...worktrees].sort((a, b) => {
     // Main worktree always first
     if (a.isMainWorktree && !b.isMainWorktree) return -1;
     if (!a.isMainWorktree && b.isMainWorktree) return 1;
 
+    // Pinned worktrees come before unpinned (after main)
+    const aPinned = pinnedSet.has(a.id);
+    const bPinned = pinnedSet.has(b.id);
+    if (aPinned && !bPinned) return -1;
+    if (!aPinned && bPinned) return 1;
+
+    // If both are pinned, maintain pin order
+    if (aPinned && bPinned) {
+      const aIndex = pinnedWorktrees.indexOf(a.id);
+      const bIndex = pinnedWorktrees.indexOf(b.id);
+      return aIndex - bIndex;
+    }
+
+    // Apply normal sorting to unpinned worktrees
     switch (orderBy) {
       case "recent": {
         const timeA = a.lastActivityTimestamp ?? 0;
@@ -246,7 +263,8 @@ const TYPE_DISPLAY_NAMES: Record<WorktreeTypeId, string> = {
 
 export function groupByType<T extends Worktree | WorktreeState>(
   worktrees: T[],
-  orderBy: OrderBy
+  orderBy: OrderBy,
+  pinnedWorktrees: string[] = []
 ): GroupedSection<T>[] {
   const groups = new Map<WorktreeTypeId, T[]>();
 
@@ -259,7 +277,7 @@ export function groupByType<T extends Worktree | WorktreeState>(
 
   // Sort within each group according to orderBy
   for (const [type, items] of groups) {
-    groups.set(type, sortWorktrees(items, orderBy));
+    groups.set(type, sortWorktrees(items, orderBy, pinnedWorktrees));
   }
 
   // Build sections in predefined order

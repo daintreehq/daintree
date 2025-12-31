@@ -464,6 +464,81 @@ describe("sortWorktrees", () => {
     sortWorktrees(worktrees, "alpha");
     expect(worktrees).toEqual(original);
   });
+
+  describe("pinned worktrees", () => {
+    it("places pinned worktrees first in pin order", () => {
+      const worktrees = [
+        createMockWorktree({ id: "1", name: "a" }),
+        createMockWorktree({ id: "2", name: "b" }),
+        createMockWorktree({ id: "3", name: "c" }),
+      ];
+      const sorted = sortWorktrees(worktrees, "alpha", ["3", "1"]);
+      expect(sorted.map((w) => w.id)).toEqual(["3", "1", "2"]);
+    });
+
+    it("keeps main worktree first even when other worktrees are pinned", () => {
+      const worktrees = [
+        createMockWorktree({ id: "1", name: "feature", isMainWorktree: false }),
+        createMockWorktree({ id: "2", name: "main", isMainWorktree: true }),
+        createMockWorktree({ id: "3", name: "bugfix", isMainWorktree: false }),
+      ];
+      const sorted = sortWorktrees(worktrees, "alpha", ["1", "3"]);
+      expect(sorted[0].id).toBe("2"); // main first
+      expect(sorted[1].id).toBe("1"); // first pinned
+      expect(sorted[2].id).toBe("3"); // second pinned
+    });
+
+    it("applies normal sorting to unpinned worktrees", () => {
+      const worktrees = [
+        createMockWorktree({ id: "1", name: "z-feature", createdAt: 1000 }),
+        createMockWorktree({ id: "2", name: "a-feature", createdAt: 3000 }),
+        createMockWorktree({ id: "3", name: "m-feature", createdAt: 2000 }),
+        createMockWorktree({ id: "4", name: "pinned", createdAt: 500 }),
+      ];
+      const sorted = sortWorktrees(worktrees, "created", ["4"]);
+      expect(sorted.map((w) => w.id)).toEqual(["4", "2", "3", "1"]);
+    });
+
+    it("handles pinnedWorktrees containing deleted worktree IDs", () => {
+      const worktrees = [
+        createMockWorktree({ id: "1", name: "a" }),
+        createMockWorktree({ id: "2", name: "b" }),
+      ];
+      // "99" doesn't exist in worktrees
+      const sorted = sortWorktrees(worktrees, "alpha", ["99", "2"]);
+      expect(sorted.map((w) => w.id)).toEqual(["2", "1"]);
+    });
+
+    it("maintains pin order across different sort modes", () => {
+      const worktrees = [
+        createMockWorktree({ id: "1", name: "z", createdAt: 3000, lastActivityTimestamp: 1000 }),
+        createMockWorktree({ id: "2", name: "a", createdAt: 1000, lastActivityTimestamp: 3000 }),
+        createMockWorktree({ id: "3", name: "m", createdAt: 2000, lastActivityTimestamp: 2000 }),
+      ];
+      const pinnedOrder = ["1", "3"];
+
+      const sortedByAlpha = sortWorktrees(worktrees, "alpha", pinnedOrder);
+      expect(sortedByAlpha[0].id).toBe("1");
+      expect(sortedByAlpha[1].id).toBe("3");
+
+      const sortedByCreated = sortWorktrees(worktrees, "created", pinnedOrder);
+      expect(sortedByCreated[0].id).toBe("1");
+      expect(sortedByCreated[1].id).toBe("3");
+
+      const sortedByRecent = sortWorktrees(worktrees, "recent", pinnedOrder);
+      expect(sortedByRecent[0].id).toBe("1");
+      expect(sortedByRecent[1].id).toBe("3");
+    });
+
+    it("returns unchanged order with empty pinnedWorktrees array", () => {
+      const worktrees = [
+        createMockWorktree({ id: "1", name: "b" }),
+        createMockWorktree({ id: "2", name: "a" }),
+      ];
+      const sorted = sortWorktrees(worktrees, "alpha", []);
+      expect(sorted.map((w) => w.name)).toEqual(["a", "b"]);
+    });
+  });
 });
 
 describe("groupByType", () => {

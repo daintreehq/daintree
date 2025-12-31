@@ -105,6 +105,7 @@ function SidebarContent() {
     sessionFilters,
     activityFilters,
     alwaysShowActive,
+    pinnedWorktrees,
   } = useWorktreeFilterStore(
     useShallow((state) => ({
       query: state.query,
@@ -116,10 +117,12 @@ function SidebarContent() {
       sessionFilters: state.sessionFilters,
       activityFilters: state.activityFilters,
       alwaysShowActive: state.alwaysShowActive,
+      pinnedWorktrees: state.pinnedWorktrees,
     }))
   );
   const clearAllFilters = useWorktreeFilterStore((state) => state.clearAll);
   const hasActiveFilters = useWorktreeFilterStore((state) => state.hasActiveFilters);
+  const unpinWorktree = useWorktreeFilterStore((state) => state.unpinWorktree);
 
   // Terminal store for derived metadata
   const terminals = useTerminalStore(useShallow((state) => state.terminals));
@@ -152,6 +155,13 @@ function SidebarContent() {
       }
     }
   }, [worktrees, activeWorktreeId, setActiveWorktree]);
+
+  // Clean up stale pinned worktrees
+  useEffect(() => {
+    const existingIds = new Set(worktrees.map((w) => w.id));
+    const stalePins = pinnedWorktrees.filter((id) => !existingIds.has(id));
+    stalePins.forEach((id) => unpinWorktree(id));
+  }, [worktrees, pinnedWorktrees, unpinWorktree]);
 
   // Compute derived metadata for each worktree
   const derivedMetaMap = useMemo(() => {
@@ -206,14 +216,18 @@ function SidebarContent() {
       return matchesFilters(worktree, filters, derived, isActive);
     });
 
+    // Filter out pinned worktrees that no longer exist
+    const existingWorktreeIds = new Set(worktrees.map((w) => w.id));
+    const validPinnedWorktrees = pinnedWorktrees.filter((id) => existingWorktreeIds.has(id));
+
     // Sort worktrees
-    const sorted = sortWorktrees(filtered, orderBy);
+    const sorted = sortWorktrees(filtered, orderBy, validPinnedWorktrees);
 
     // Group if enabled
     if (isGroupedByType) {
       return {
         filteredWorktrees: sorted,
-        groupedSections: groupByType(sorted, orderBy),
+        groupedSections: groupByType(sorted, orderBy, validPinnedWorktrees),
       };
     }
 
@@ -229,6 +243,7 @@ function SidebarContent() {
     sessionFilters,
     activityFilters,
     alwaysShowActive,
+    pinnedWorktrees,
     derivedMetaMap,
     activeWorktreeId,
   ]);

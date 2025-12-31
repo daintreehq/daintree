@@ -60,6 +60,7 @@ interface WorktreeFilterState {
   sessionFilters: Set<SessionFilter>;
   activityFilters: Set<ActivityFilter>;
   alwaysShowActive: boolean;
+  pinnedWorktrees: string[];
 }
 
 interface WorktreeFilterActions {
@@ -72,6 +73,9 @@ interface WorktreeFilterActions {
   toggleSessionFilter: (filter: SessionFilter) => void;
   toggleActivityFilter: (filter: ActivityFilter) => void;
   setAlwaysShowActive: (enabled: boolean) => void;
+  pinWorktree: (id: string) => void;
+  unpinWorktree: (id: string) => void;
+  isWorktreePinned: (id: string) => boolean;
   clearAll: () => void;
   getActiveFilterCount: () => number;
   hasActiveFilters: () => boolean;
@@ -89,13 +93,14 @@ interface PersistedState {
   sessionFilters: SessionFilter[];
   activityFilters: ActivityFilter[];
   alwaysShowActive: boolean;
+  pinnedWorktrees: string[];
 }
 
 export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
   persist(
     (set, get) => ({
       query: "",
-      orderBy: "recent",
+      orderBy: "created",
       groupByType: false,
       statusFilters: new Set<StatusFilter>(),
       typeFilters: new Set<TypeFilter>(),
@@ -103,6 +108,7 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
       sessionFilters: new Set<SessionFilter>(),
       activityFilters: new Set<ActivityFilter>(),
       alwaysShowActive: true,
+      pinnedWorktrees: [],
 
       setQuery: (query) => set({ query }),
       setOrderBy: (orderBy) => set({ orderBy }),
@@ -165,6 +171,21 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
 
       setAlwaysShowActive: (enabled) => set({ alwaysShowActive: enabled }),
 
+      pinWorktree: (id) =>
+        set((state) => {
+          if (state.pinnedWorktrees.includes(id)) {
+            return state;
+          }
+          return { pinnedWorktrees: [...state.pinnedWorktrees, id] };
+        }),
+
+      unpinWorktree: (id) =>
+        set((state) => ({
+          pinnedWorktrees: state.pinnedWorktrees.filter((wId) => wId !== id),
+        })),
+
+      isWorktreePinned: (id) => get().pinnedWorktrees.includes(id),
+
       clearAll: () =>
         set({
           query: "",
@@ -212,13 +233,14 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
         sessionFilters: Array.from(state.sessionFilters),
         activityFilters: Array.from(state.activityFilters),
         alwaysShowActive: state.alwaysShowActive,
+        pinnedWorktrees: state.pinnedWorktrees,
       }),
       merge: (persisted, current) => {
         const p = persisted as PersistedState | undefined;
         return {
           ...current,
           query: p?.query ?? "",
-          orderBy: p?.orderBy ?? "recent",
+          orderBy: p?.orderBy ?? "created",
           groupByType: p?.groupByType ?? false,
           statusFilters: new Set(p?.statusFilters ?? []),
           typeFilters: new Set(p?.typeFilters ?? []),
@@ -226,6 +248,7 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
           sessionFilters: new Set(p?.sessionFilters ?? []),
           activityFilters: new Set(p?.activityFilters ?? []),
           alwaysShowActive: p?.alwaysShowActive ?? true,
+          pinnedWorktrees: p?.pinnedWorktrees ?? [],
         };
       },
     }

@@ -121,8 +121,8 @@ const ACTIVITY_OPTIONS: { value: ActivityFilter; label: string }[] = [
 ];
 
 const ORDER_OPTIONS: { value: OrderBy; label: string }[] = [
-  { value: "recent", label: "Recently updated" },
   { value: "created", label: "Date created" },
+  { value: "recent", label: "Recently updated" },
   { value: "alpha", label: "Alphabetical" },
 ];
 
