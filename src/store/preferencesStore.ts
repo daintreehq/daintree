@@ -28,6 +28,8 @@ interface PreferencesState {
   setShowDeveloperTools: (show: boolean) => void;
   assignWorktreeToSelf: boolean;
   setAssignWorktreeToSelf: (value: boolean) => void;
+  lastSelectedWorktreeRecipeId: string | null | undefined;
+  setLastSelectedWorktreeRecipeId: (id: string | null | undefined) => void;
 }
 
 export const usePreferencesStore = create<PreferencesState>()(
@@ -39,6 +41,8 @@ export const usePreferencesStore = create<PreferencesState>()(
       setShowDeveloperTools: (show) => set({ showDeveloperTools: show }),
       assignWorktreeToSelf: false,
       setAssignWorktreeToSelf: (value) => set({ assignWorktreeToSelf: value }),
+      lastSelectedWorktreeRecipeId: undefined,
+      setLastSelectedWorktreeRecipeId: (id) => set({ lastSelectedWorktreeRecipeId: id }),
     }),
     {
       name: "canopy-preferences",

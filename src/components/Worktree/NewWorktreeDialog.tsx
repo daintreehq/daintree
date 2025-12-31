@@ -71,6 +71,10 @@ export function NewWorktreeDialog({
 
   const assignWorktreeToSelf = usePreferencesStore((s) => s.assignWorktreeToSelf);
   const setAssignWorktreeToSelf = usePreferencesStore((s) => s.setAssignWorktreeToSelf);
+  const lastSelectedWorktreeRecipeId = usePreferencesStore((s) => s.lastSelectedWorktreeRecipeId);
+  const setLastSelectedWorktreeRecipeId = usePreferencesStore(
+    (s) => s.setLastSelectedWorktreeRecipeId
+  );
   const githubConfig = useGitHubConfigStore((s) => s.config);
   const initializeGitHubConfig = useGitHubConfigStore((s) => s.initialize);
   const addNotification = useNotificationStore((s) => s.addNotification);
@@ -112,18 +116,38 @@ export function NewWorktreeDialog({
   }, [isOpen, currentProject, recipes.length, loadRecipes]);
 
   useEffect(() => {
-    if (!projectSettings || globalRecipes.length === 0) return;
+    if (globalRecipes.length === 0) return;
     if (recipeSelectionTouchedRef.current) return;
-    if (defaultRecipeId && globalRecipes.some((r) => r.id === defaultRecipeId)) {
+
+    // Priority: 1) Last selected recipe (including explicit "no recipe"), 2) Project default, 3) null
+    // undefined = never set, null = explicit "no recipe", string = recipe ID
+    if (lastSelectedWorktreeRecipeId !== undefined) {
+      // User has made a previous selection (either null for "no recipe" or a recipe ID)
+      if (
+        lastSelectedWorktreeRecipeId === null ||
+        globalRecipes.some((r) => r.id === lastSelectedWorktreeRecipeId)
+      ) {
+        setSelectedRecipeId(lastSelectedWorktreeRecipeId);
+      } else {
+        // Previously selected recipe no longer exists - clear it and fall back to default
+        setLastSelectedWorktreeRecipeId(undefined);
+        if (defaultRecipeId && globalRecipes.some((r) => r.id === defaultRecipeId)) {
+          setSelectedRecipeId(defaultRecipeId);
+        }
+      }
+    } else if (defaultRecipeId && globalRecipes.some((r) => r.id === defaultRecipeId)) {
+      // No previous selection - use project default
       setSelectedRecipeId(defaultRecipeId);
     }
-  }, [projectSettings, globalRecipes, defaultRecipeId]);
+  }, [globalRecipes, lastSelectedWorktreeRecipeId, defaultRecipeId, setLastSelectedWorktreeRecipeId]);
 
   useEffect(() => {
     if (!selectedRecipeId) return;
     if (globalRecipes.some((recipe) => recipe.id === selectedRecipeId)) return;
+    // Selected recipe no longer exists - clear both local and persisted state
     setSelectedRecipeId(null);
-  }, [globalRecipes, selectedRecipeId]);
+    setLastSelectedWorktreeRecipeId(undefined);
+  }, [globalRecipes, selectedRecipeId, setLastSelectedWorktreeRecipeId]);
 
   const newBranchInputRef = useRef<HTMLInputElement>(null);
   const branchInputRef = useRef<HTMLInputElement>(null);
@@ -759,12 +783,14 @@ export function NewWorktreeDialog({
                             event.preventDefault();
                             recipeSelectionTouchedRef.current = true;
                             setSelectedRecipeId(null);
+                            setLastSelectedWorktreeRecipeId(null);
                             setRecipePickerOpen(false);
                           }
                         }}
                         onClick={() => {
                           recipeSelectionTouchedRef.current = true;
                           setSelectedRecipeId(null);
+                          setLastSelectedWorktreeRecipeId(null);
                           setRecipePickerOpen(false);
                         }}
                         className={cn(
@@ -788,12 +814,14 @@ export function NewWorktreeDialog({
                               event.preventDefault();
                               recipeSelectionTouchedRef.current = true;
                               setSelectedRecipeId(recipe.id);
+                              setLastSelectedWorktreeRecipeId(recipe.id);
                               setRecipePickerOpen(false);
                             }
                           }}
                           onClick={() => {
                             recipeSelectionTouchedRef.current = true;
                             setSelectedRecipeId(recipe.id);
+                            setLastSelectedWorktreeRecipeId(recipe.id);
                             setRecipePickerOpen(false);
                           }}
                           className={cn(
