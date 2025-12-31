@@ -116,6 +116,7 @@ export function NewWorktreeDialog({
   }, [isOpen, currentProject, recipes.length, loadRecipes]);
 
   useEffect(() => {
+    if (!isOpen) return;
     if (globalRecipes.length === 0) return;
     if (recipeSelectionTouchedRef.current) return;
 
@@ -140,6 +141,7 @@ export function NewWorktreeDialog({
       setSelectedRecipeId(defaultRecipeId);
     }
   }, [
+    isOpen,
     globalRecipes,
     lastSelectedWorktreeRecipeId,
     defaultRecipeId,
@@ -246,7 +248,6 @@ export function NewWorktreeDialog({
     setWorktreePath("");
     setSelectedPrefix(BRANCH_TYPES[0].prefix);
     setProjectSettings(null);
-    setSelectedRecipeId(null);
     recipeSelectionTouchedRef.current = false;
 
     let isCurrent = true;
