@@ -482,6 +482,10 @@ export interface IpcInvokeMap {
     ];
     result: import("../github.js").GitHubListResponse<import("../github.js").GitHubPR>;
   };
+  "github:get-issue-url": {
+    args: [payload: { cwd: string; issueNumber: number }];
+    result: string | null;
+  };
 
   // Agent settings channels
   "agent-settings:get": {

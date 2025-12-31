@@ -109,6 +109,8 @@ export type ActionId =
   | "worktree.reveal"
   | "worktree.openIssue"
   | "worktree.openPR"
+  | "worktree.openIssueInSidecar"
+  | "worktree.openPRInSidecar"
   | "worktree.copyContext"
   | "worktree.inject"
   | "worktree.sessions.minimizeAll"

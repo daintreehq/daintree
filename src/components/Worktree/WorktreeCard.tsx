@@ -35,8 +35,6 @@ export interface WorktreeCardProps {
   onSelect: () => void;
   onCopyTree: () => Promise<string | undefined> | void;
   onOpenEditor: () => void;
-  onOpenIssue?: () => void;
-  onOpenPR?: () => void;
   onSaveLayout?: () => void;
   onLaunchAgent?: (agentId: string) => void;
   agentAvailability?: UseAgentLauncherReturn["availability"];
@@ -52,8 +50,6 @@ export function WorktreeCard({
   onSelect,
   onCopyTree,
   onOpenEditor,
-  onOpenIssue,
-  onOpenPR,
   onSaveLayout,
   onLaunchAgent,
   agentAvailability,
@@ -171,14 +167,18 @@ export function WorktreeCard({
 
   const handleOpenIssue = useCallback(() => {
     void actionService.dispatch(
-      "worktree.openIssue",
+      "worktree.openIssueInSidecar",
       { worktreeId: worktree.id },
       { source: "user" }
     );
   }, [worktree.id]);
 
   const handleOpenPR = useCallback(() => {
-    void actionService.dispatch("worktree.openPR", { worktreeId: worktree.id }, { source: "user" });
+    void actionService.dispatch(
+      "worktree.openPRInSidecar",
+      { worktreeId: worktree.id },
+      { source: "user" }
+    );
   }, [worktree.id]);
 
   const handleTerminalSelect = useCallback(
@@ -276,8 +276,6 @@ export function WorktreeCard({
     },
     launchAgents: launchAgentsForContextMenu,
     onLaunchAgent,
-    onOpenIssue,
-    onOpenPR,
     onSaveLayout,
     onRestartAll: () => void handleRestartAll(),
     onCloseAll: handleCloseAll,
@@ -341,8 +339,8 @@ export function WorktreeCard({
             onCopyTreeClick: handleCopyTreeClick,
           }}
           badges={{
-            onOpenIssue: onOpenIssue,
-            onOpenPR: onOpenPR,
+            onOpenIssue: worktree.issueNumber ? handleOpenIssue : undefined,
+            onOpenPR: worktree.prNumber ? handleOpenPR : undefined,
           }}
           menu={{
             launchAgents,
@@ -360,8 +358,8 @@ export function WorktreeCard({
             onCopyContext: () => void handleCopyTree(),
             onOpenEditor,
             onRevealInFinder: handlePathClick,
-            onOpenIssue: worktree.issueNumber && onOpenIssue ? handleOpenIssue : undefined,
-            onOpenPR: worktree.prNumber && onOpenPR ? handleOpenPR : undefined,
+            onOpenIssue: worktree.issueNumber ? handleOpenIssue : undefined,
+            onOpenPR: worktree.prNumber ? handleOpenPR : undefined,
             onRunRecipe: (recipeId) => void handleRunRecipe(recipeId),
             onSaveLayout,
             onTogglePin: handleTogglePin,

@@ -82,4 +82,8 @@ export const githubClient = {
   onIssueDetected: (callback: (data: IssueDetectedPayload) => void): (() => void) => {
     return window.electron.github.onIssueDetected(callback);
   },
+
+  getIssueUrl: (cwd: string, issueNumber: number): Promise<string | null> => {
+    return window.electron.github.getIssueUrl(cwd, issueNumber);
+  },
 } as const;

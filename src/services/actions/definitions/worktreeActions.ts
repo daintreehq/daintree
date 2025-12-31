@@ -550,4 +550,90 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       await githubClient.openPR(worktree.prUrl);
     },
   }));
+
+  actions.set("worktree.openPRInSidecar", () => ({
+    id: "worktree.openPRInSidecar",
+    title: "Open Worktree PR in Sidecar",
+    description: "Open the worktree's GitHub pull request in the integrated browser",
+    category: "worktree",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ worktreeId: z.string().optional() }),
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { worktreeId } = args as { worktreeId?: string };
+      const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
+      if (!targetWorktreeId) return;
+
+      const worktree = useWorktreeDataStore.getState().worktrees.get(targetWorktreeId);
+      if (!worktree?.prUrl) return;
+
+      try {
+        const url = new URL(worktree.prUrl);
+        if (!["https:", "http:"].includes(url.protocol)) {
+          console.error(`Invalid PR URL protocol: ${url.protocol}`);
+          return;
+        }
+      } catch (error) {
+        console.error(`Invalid PR URL: ${worktree.prUrl}`, error);
+        return;
+      }
+
+      const { actionService } = await import("@/services/ActionService");
+      await actionService.dispatch(
+        "sidecar.openUrl",
+        {
+          url: worktree.prUrl,
+          title: worktree.prTitle || `PR #${worktree.prNumber}`,
+          background: false,
+        },
+        { source: "user" }
+      );
+    },
+    isEnabled: (ctx: ActionContext) => {
+      const worktreeId = ctx.activeWorktreeId;
+      if (!worktreeId) return false;
+      const worktree = useWorktreeDataStore.getState().worktrees.get(worktreeId);
+      return typeof worktree?.prUrl === "string" && worktree.prUrl.trim().length > 0;
+    },
+  }));
+
+  actions.set("worktree.openIssueInSidecar", () => ({
+    id: "worktree.openIssueInSidecar",
+    title: "Open Worktree Issue in Sidecar",
+    description: "Open the worktree's GitHub issue in the integrated browser",
+    category: "worktree",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ worktreeId: z.string().optional() }),
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { worktreeId } = args as { worktreeId?: string };
+      const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
+      if (!targetWorktreeId) return;
+
+      const worktree = useWorktreeDataStore.getState().worktrees.get(targetWorktreeId);
+      if (!worktree?.issueNumber) return;
+
+      const issueUrl = await githubClient.getIssueUrl(worktree.path, worktree.issueNumber);
+      if (!issueUrl) return;
+
+      const { actionService } = await import("@/services/ActionService");
+      await actionService.dispatch(
+        "sidecar.openUrl",
+        {
+          url: issueUrl,
+          title: worktree.issueTitle || `Issue #${worktree.issueNumber}`,
+          background: false,
+        },
+        { source: "user" }
+      );
+    },
+    isEnabled: (ctx: ActionContext) => {
+      const worktreeId = ctx.activeWorktreeId;
+      if (!worktreeId) return false;
+      const worktree = useWorktreeDataStore.getState().worktrees.get(worktreeId);
+      return typeof worktree?.issueNumber === "number" && worktree.issueNumber > 0;
+    },
+  }));
 }

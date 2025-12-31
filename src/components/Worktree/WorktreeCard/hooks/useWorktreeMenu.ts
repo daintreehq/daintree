@@ -13,8 +13,6 @@ export function useWorktreeMenu({
   counts,
   launchAgents,
   onLaunchAgent,
-  onOpenIssue,
-  onOpenPR,
   onSaveLayout,
   onRestartAll,
   onCloseAll,
@@ -35,8 +33,6 @@ export function useWorktreeMenu({
   };
   launchAgents: Array<{ id: string; label: string; isEnabled: boolean }>;
   onLaunchAgent?: (agentId: string) => void;
-  onOpenIssue?: () => void;
-  onOpenPR?: () => void;
   onSaveLayout?: () => void;
   onRestartAll: () => void;
   onCloseAll: () => void;
@@ -127,20 +123,30 @@ export function useWorktreeMenu({
       { id: "worktree:reveal", label: "Reveal in Finder" },
     ];
 
-    const hasIssueItem = Boolean(worktree.issueNumber && onOpenIssue);
-    const hasPrItem = Boolean(worktree.issueNumber && worktree.prNumber && onOpenPR);
+    const hasIssueItem = Boolean(worktree.issueNumber);
+    const hasPrItem = Boolean(worktree.prUrl);
     if (hasIssueItem || hasPrItem) {
       template.push({ type: "separator" });
       if (hasIssueItem) {
         template.push({
           id: "worktree:open-issue",
           label: `Open Issue #${worktree.issueNumber}`,
+          enabled: false,
+          submenu: [
+            { id: "worktree:open-issue-sidecar", label: "In Sidecar" },
+            { id: "worktree:open-issue-external", label: "In External Browser" },
+          ],
         });
       }
       if (hasPrItem) {
         template.push({
           id: "worktree:open-pr",
           label: `Open PR #${worktree.prNumber}`,
+          enabled: false,
+          submenu: [
+            { id: "worktree:open-pr-sidecar", label: "In Sidecar" },
+            { id: "worktree:open-pr-external", label: "In External Browser" },
+          ],
         });
       }
     }
@@ -188,8 +194,6 @@ export function useWorktreeMenu({
     isRestartValidating,
     launchAgents,
     onLaunchAgent,
-    onOpenIssue,
-    onOpenPR,
     onSaveLayout,
     recipes,
     runningRecipeId,
@@ -302,14 +306,28 @@ export function useWorktreeMenu({
             { source: "context-menu" }
           );
           break;
-        case "worktree:open-issue":
+        case "worktree:open-issue-sidecar":
+          void actionService.dispatch(
+            "worktree.openIssueInSidecar",
+            { worktreeId: worktree.id },
+            { source: "context-menu" }
+          );
+          break;
+        case "worktree:open-issue-external":
           void actionService.dispatch(
             "worktree.openIssue",
             { worktreeId: worktree.id },
             { source: "context-menu" }
           );
           break;
-        case "worktree:open-pr":
+        case "worktree:open-pr-sidecar":
+          void actionService.dispatch(
+            "worktree.openPRInSidecar",
+            { worktreeId: worktree.id },
+            { source: "context-menu" }
+          );
+          break;
+        case "worktree:open-pr-external":
           void actionService.dispatch(
             "worktree.openPR",
             { worktreeId: worktree.id },

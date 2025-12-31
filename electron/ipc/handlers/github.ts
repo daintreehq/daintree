@@ -325,5 +325,29 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   ipcMain.handle(CHANNELS.GITHUB_GET_PR_TOOLTIP, handleGitHubGetPRTooltip);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_GET_PR_TOOLTIP));
 
+  const handleGitHubGetIssueUrl = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: { cwd: string; issueNumber: number }
+  ): Promise<string | null> => {
+    if (!payload || typeof payload !== "object") {
+      return null;
+    }
+    if (typeof payload.cwd !== "string" || !payload.cwd.trim()) {
+      return null;
+    }
+    if (
+      typeof payload.issueNumber !== "number" ||
+      !Number.isInteger(payload.issueNumber) ||
+      payload.issueNumber <= 0
+    ) {
+      return null;
+    }
+
+    const { getIssueUrl } = await import("../../services/GitHubService.js");
+    return getIssueUrl(payload.cwd.trim(), payload.issueNumber);
+  };
+  ipcMain.handle(CHANNELS.GITHUB_GET_ISSUE_URL, handleGitHubGetIssueUrl);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_GET_ISSUE_URL));
+
   return () => handlers.forEach((cleanup) => cleanup());
 }

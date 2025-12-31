@@ -255,6 +255,7 @@ export interface ElectronAPI {
       cwd: string,
       prNumber: number
     ): Promise<import("../github.js").PRTooltipData | null>;
+    getIssueUrl(cwd: string, issueNumber: number): Promise<string | null>;
     onPRDetected(callback: (data: PRDetectedPayload) => void): () => void;
     onPRCleared(callback: (data: PRClearedPayload) => void): () => void;
     onIssueDetected(callback: (data: IssueDetectedPayload) => void): () => void;

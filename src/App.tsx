@@ -363,10 +363,6 @@ function SidebarContent() {
       onSelect={() => selectWorktree(worktree.id)}
       onCopyTree={() => worktreeActions.handleCopyTree(worktree)}
       onOpenEditor={() => worktreeActions.handleOpenEditor(worktree)}
-      onOpenIssue={
-        worktree.issueNumber ? () => worktreeActions.handleOpenIssue(worktree) : undefined
-      }
-      onOpenPR={worktree.prUrl ? () => worktreeActions.handleOpenPR(worktree) : undefined}
       onSaveLayout={() => worktreeActions.handleSaveLayout(worktree)}
       onLaunchAgent={(type) => worktreeActions.handleLaunchAgent(worktree.id, type)}
       agentAvailability={availability}
