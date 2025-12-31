@@ -4,6 +4,8 @@ import type { ActionContext, ActionId } from "@shared/types/actions";
 import { copyTreeClient, githubClient, systemClient, worktreeClient } from "@/clients";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useTerminalStore } from "@/store/terminalStore";
+import { getFormatForTerminal } from "@/lib/copyTreeFormat";
 
 export function registerWorktreeActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("worktree.refresh", () => ({
@@ -374,7 +376,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       modified: z.boolean().optional(),
     }),
     run: async (args: unknown, ctx: ActionContext) => {
-      const { worktreeId, format, modified } = args as {
+      const { worktreeId, format: explicitFormat, modified } = args as {
         worktreeId?: string;
         format?: "xml" | "json" | "markdown" | "tree" | "ndjson";
         modified?: boolean;
@@ -382,8 +384,13 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return null;
 
+      const terminal = ctx.focusedTerminalId
+        ? useTerminalStore.getState().terminals.find((t) => t.id === ctx.focusedTerminalId)
+        : undefined;
+      const format = explicitFormat ?? getFormatForTerminal(terminal);
+
       const result = await copyTreeClient.generateAndCopyFile(targetWorktreeId, {
-        format: format ?? "xml",
+        format,
         modified,
       });
 
@@ -398,6 +405,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
         worktreeId: targetWorktreeId,
         fileCount: result.fileCount,
         stats: result.stats ?? null,
+        format,
       };
     },
   }));

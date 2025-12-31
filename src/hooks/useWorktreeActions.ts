@@ -30,7 +30,7 @@ export function useWorktreeActions({
       try {
         const result = await actionService.dispatch(
           "worktree.copyTree",
-          { worktreeId: worktree.id, format: "xml" },
+          { worktreeId: worktree.id },
           { source: "user" }
         );
         if (!result.ok) {
@@ -44,10 +44,12 @@ export function useWorktreeActions({
         const payload = result.result as {
           fileCount: number;
           stats?: { totalSize?: number } | null;
+          format?: string;
         };
         const stats = payload.stats ?? undefined;
         const sizeStr = stats?.totalSize ? formatBytes(stats.totalSize) : "";
-        return `Copied ${payload.fileCount} files${sizeStr ? ` (${sizeStr})` : ""} to clipboard`;
+        const formatStr = payload.format ? ` as ${payload.format.toUpperCase()}` : "";
+        return `Copied ${payload.fileCount} files${sizeStr ? ` (${sizeStr})` : ""}${formatStr} to clipboard`;
       } catch (e) {
         const message = e instanceof Error ? e.message : "Failed to copy context to clipboard";
         const details = e instanceof Error ? e.stack : undefined;

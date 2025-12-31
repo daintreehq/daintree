@@ -4,26 +4,7 @@ import { useTerminalStore, type TerminalInstance } from "@/store/terminalStore";
 import { useErrorStore } from "@/store/errorStore";
 import type { AgentState } from "@/types";
 import { copyTreeClient } from "@/clients";
-
-type CopyTreeFormat = "xml" | "json" | "markdown" | "tree" | "ndjson";
-
-// Different AI agents have different preferences for context format
-const AGENT_FORMAT_MAP: Record<string, CopyTreeFormat> = {
-  claude: "xml",
-  gemini: "markdown",
-  codex: "xml",
-  terminal: "xml",
-};
-
-function getOptimalFormat(agentIdOrType?: string): CopyTreeFormat {
-  if (!agentIdOrType) return "xml";
-  const format = AGENT_FORMAT_MAP[agentIdOrType];
-  if (!format) {
-    console.warn(`Unknown agent/terminal type "${agentIdOrType}", defaulting to XML format`);
-    return "xml";
-  }
-  return format;
-}
+import { getFormatForTerminal } from "@/lib/copyTreeFormat";
 
 export interface CopyTreeProgress {
   stage: string;
@@ -178,7 +159,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
           );
         }
 
-        const format = getOptimalFormat(terminal.agentId ?? terminal.type);
+        const format = getFormatForTerminal(terminal);
 
         const options = {
           format,
