@@ -27,6 +27,7 @@ import {
   CheckCircle2,
   CircleDot,
   Copy,
+  CornerDownRight,
   GitPullRequest,
   Loader2,
   MoreHorizontal,
@@ -260,49 +261,46 @@ export function WorktreeHeader({
               </span>
             </button>
           )}
-          {worktree.prNumber && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                badges.onOpenPR?.();
-              }}
-              className="flex items-center gap-1.5 text-xs text-left hover:underline transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent min-w-0"
-              aria-label={
-                worktree.prTitle
-                  ? `Open pull request #${worktree.prNumber}: ${worktree.prTitle}`
-                  : `Open pull request #${worktree.prNumber} on GitHub`
-              }
-            >
-              <GitPullRequest
-                className={cn(
-                  "w-3 h-3 shrink-0",
-                  worktree.prState === "merged"
-                    ? "text-violet-400"
-                    : worktree.prState === "closed"
-                      ? "text-red-400"
-                      : "text-sky-400"
-                )}
-                aria-hidden="true"
-              />
-              <span className="truncate text-canopy-text/90 flex-1 min-w-0">
-                {worktree.prTitle || (
-                  <span
-                    className={cn(
-                      "font-mono",
-                      worktree.prState === "merged"
-                        ? "text-violet-400"
-                        : worktree.prState === "closed"
-                          ? "text-red-400"
-                          : "text-sky-400"
-                    )}
-                  >
-                    #{worktree.prNumber}
-                  </span>
-                )}
-              </span>
-            </button>
-          )}
+          {worktree.prNumber &&
+            (() => {
+              const prStateColor =
+                worktree.prState === "merged"
+                  ? "text-violet-400"
+                  : worktree.prState === "closed"
+                    ? "text-red-400"
+                    : "text-sky-400";
+              const prStateLabel =
+                worktree.prState === "merged"
+                  ? "merged"
+                  : worktree.prState === "closed"
+                    ? "closed"
+                    : "open";
+              const isSubordinate = !!worktree.issueNumber;
+
+              return (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    badges.onOpenPR?.();
+                  }}
+                  className="flex items-center gap-1 text-xs text-left hover:underline transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                  aria-label={`Open ${prStateLabel} pull request #${worktree.prNumber} on GitHub`}
+                >
+                  {isSubordinate && (
+                    <CornerDownRight
+                      className="w-3 h-3 text-canopy-text/30 shrink-0"
+                      aria-hidden="true"
+                    />
+                  )}
+                  <GitPullRequest
+                    className={cn("w-3 h-3 shrink-0", prStateColor)}
+                    aria-hidden="true"
+                  />
+                  <span className={cn("font-mono", prStateColor)}>#{worktree.prNumber}</span>
+                </button>
+              );
+            })()}
         </div>
       )}
     </div>
