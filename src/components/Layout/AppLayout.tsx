@@ -211,7 +211,7 @@ export function AppLayout({
     window.addEventListener("resize", handleResize);
     handleResize();
     return () => window.removeEventListener("resize", handleResize);
-  }, [sidebarWidth, layout.updateSidecarLayoutMode, layout.isFocusMode]);
+  }, [sidebarWidth, layout.updateSidecarLayoutMode, layout.isFocusMode, layout.sidecarWidth]);
 
   useEffect(() => {
     if (!layout.sidecarOpen) {
