@@ -888,7 +888,13 @@ export const HistoryOverlayTerminalView = forwardRef<
             >
               {historyHtmlLines.map((htmlLine, idx) => {
                 const bg = historyRowBackgrounds[idx];
-                const mergedStyle = bg ? { ...rowStyle, backgroundColor: bg } : rowStyle;
+                // When a row has a dominant background (e.g., diff additions/deletions),
+                // use width:fit-content so the background hugs the content instead of
+                // extending to full terminal width. This prevents jarring visual jumps
+                // between content-width and full-width rows.
+                const mergedStyle = bg
+                  ? { ...rowStyle, backgroundColor: bg, width: "fit-content" }
+                  : rowStyle;
                 return (
                   <div
                     key={idx}
