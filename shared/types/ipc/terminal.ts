@@ -58,6 +58,16 @@ export interface TerminalState {
   isInputLocked?: boolean;
   /** Current URL for browser panes (kind === 'browser') */
   browserUrl?: string;
+  /** Path to note file (kind === 'notes') */
+  notePath?: string;
+  /** Note ID (kind === 'notes') */
+  noteId?: string;
+  /** Note scope (kind === 'notes') */
+  scope?: "worktree" | "project";
+  /** Note creation timestamp (kind === 'notes') */
+  createdAt?: number;
+  /** Dev command override for dev-preview panels */
+  devCommand?: string;
 }
 
 /** Terminal data payload for IPC */

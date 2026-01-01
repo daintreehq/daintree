@@ -23,6 +23,15 @@ const DEFAULT_OPTIONS: Required<TerminalPersistenceOptions> = {
       location: t.location,
     };
 
+    if (t.kind === "dev-preview") {
+      return {
+        ...base,
+        type: t.type,
+        cwd: t.cwd,
+        devCommand: t.devCommand?.trim() || undefined,
+      };
+    }
+
     if (panelKindHasPty(t.kind ?? "terminal")) {
       return {
         ...base,

@@ -1,4 +1,4 @@
-import type { StateCreator } from "zustand";
+import type { StateCreator, StoreApi } from "zustand";
 import type {
   TerminalInstance as TerminalInstanceType,
   TerminalRestartError,
@@ -168,6 +168,48 @@ export type TerminalRegistryMiddleware = {
   ) => void;
 };
 
+type TerminalRegistryStoreApi = StoreApi<TerminalRegistrySlice>;
+
+const createTrashExpiryHelpers = (
+  get: TerminalRegistryStoreApi["getState"],
+  set: TerminalRegistryStoreApi["setState"]
+) => {
+  const trashExpiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  const clearTrashExpiryTimer = (id: string) => {
+    const timer = trashExpiryTimers.get(id);
+    if (!timer) return;
+    clearTimeout(timer);
+    trashExpiryTimers.delete(id);
+  };
+
+  const scheduleTrashExpiry = (id: string, expiresAt: number) => {
+    clearTrashExpiryTimer(id);
+    const delay = Math.max(0, expiresAt - Date.now());
+    const timer = setTimeout(() => {
+      clearTrashExpiryTimer(id);
+      const state = get();
+      const trashedInfo = state.trashedTerminals.get(id);
+      if (!trashedInfo || trashedInfo.expiresAt !== expiresAt) return;
+
+      const terminal = state.terminals.find((t) => t.id === id);
+      if (terminal?.location === "trash") {
+        state.removeTerminal(id);
+      } else if (!terminal) {
+        set((state) => {
+          if (!state.trashedTerminals.has(id)) return state;
+          const newTrashed = new Map(state.trashedTerminals);
+          newTrashed.delete(id);
+          return { trashedTerminals: newTrashed };
+        });
+      }
+    }, delay);
+    trashExpiryTimers.set(id, timer);
+  };
+
+  return { clearTrashExpiryTimer, scheduleTrashExpiry };
+};
+
 const optimizeForDock = (id: string) => {
   terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
 };
@@ -176,7 +218,7 @@ export const createTerminalRegistrySlice =
   (
     middleware?: TerminalRegistryMiddleware
   ): StateCreator<TerminalRegistrySlice, [], [], TerminalRegistrySlice> =>
-  (set, get) => ({
+  (set, get) => (({ clearTrashExpiryTimer, scheduleTrashExpiry }) => ({
     terminals: [],
     trashedTerminals: new Map(),
 
@@ -451,6 +493,7 @@ export const createTerminalRegistrySlice =
     },
 
     removeTerminal: (id) => {
+      clearTrashExpiryTimer(id);
       const currentTerminals = get().terminals;
       const removedIndex = currentTerminals.findIndex((t) => t.id === id);
       const terminal = currentTerminals.find((t) => t.id === id);
@@ -680,31 +723,16 @@ export const createTerminalRegistrySlice =
         return { terminals: newTerminals, trashedTerminals: newTrashed };
       });
 
+      scheduleTrashExpiry(id, expiresAt);
+
       if (panelKindHasPty(terminal.kind ?? "terminal")) {
         terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
         return;
       }
-
-      // Non-PTY panels never receive backend exit/TTL events, so enforce TTL locally.
-      window.setTimeout(
-        () => {
-          const state = get();
-          const currentTerminal = state.terminals.find((t) => t.id === id);
-          const currentTrashedInfo = state.trashedTerminals.get(id);
-          if (
-            currentTerminal &&
-            !panelKindHasPty(currentTerminal.kind ?? "terminal") &&
-            currentTerminal.location === "trash" &&
-            currentTrashedInfo?.expiresAt === expiresAt
-          ) {
-            state.removeTerminal(id);
-          }
-        },
-        Math.max(0, expiresAt - Date.now())
-      );
     },
 
     restoreTerminal: (id, targetWorktreeId) => {
+      clearTrashExpiryTimer(id);
       const trashedInfo = get().trashedTerminals.get(id);
       const restoreLocation = trashedInfo?.originalLocation ?? "grid";
       const terminal = get().terminals.find((t) => t.id === id);
@@ -744,6 +772,16 @@ export const createTerminalRegistrySlice =
 
     markAsTrashed: (id, expiresAt, originalLocation) => {
       const terminal = get().terminals.find((t) => t.id === id);
+      if (!terminal) {
+        clearTrashExpiryTimer(id);
+        set((state) => {
+          if (!state.trashedTerminals.has(id)) return state;
+          const newTrashed = new Map(state.trashedTerminals);
+          newTrashed.delete(id);
+          return { trashedTerminals: newTrashed };
+        });
+        return;
+      }
 
       set((state) => {
         // Ignore stale trashed events if terminal was already restored
@@ -763,6 +801,8 @@ export const createTerminalRegistrySlice =
         return { trashedTerminals: newTrashed, terminals: newTerminals };
       });
 
+      scheduleTrashExpiry(id, expiresAt);
+
       // Only apply renderer policy for PTY-backed panels
       if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
         terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
@@ -770,6 +810,7 @@ export const createTerminalRegistrySlice =
     },
 
     markAsRestored: (id) => {
+      clearTrashExpiryTimer(id);
       const terminal = get().terminals.find((t) => t.id === id);
 
       // If terminal is no longer in trash, respect its current location (set by restoreTerminal)
@@ -1458,4 +1499,4 @@ export const createTerminalRegistrySlice =
         return { terminals: newTerminals };
       });
     },
-  });
+  }))(createTrashExpiryHelpers(get, set));

@@ -36,6 +36,7 @@ export interface HydrationOptions {
     noteId?: string; // Note ID (kind === 'notes')
     scope?: "worktree" | "project"; // Note scope (kind === 'notes')
     createdAt?: number; // Note creation timestamp (kind === 'notes')
+    devCommand?: string; // Dev command override for dev-preview panels
   }) => Promise<string>;
   setActiveWorktree: (id: string | null) => void;
   loadRecipes: () => Promise<void>;
@@ -118,10 +119,11 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
           if (terminal.id === "default") continue;
 
           const cwd = terminal.cwd || projectRoot || "";
+          const terminalKind = terminal.kind ?? "terminal";
 
           // Handle non-PTY panels separately - they don't need backend PTY
-          if (!panelKindHasPty(terminal.kind ?? "terminal")) {
-            if (terminal.kind === "notes") {
+          if (!panelKindHasPty(terminalKind) || terminalKind === "dev-preview") {
+            if (terminalKind === "notes") {
               await addTerminal({
                 kind: "notes",
                 title: terminal.title,
@@ -129,14 +131,24 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
                 worktreeId: terminal.worktreeId,
                 location: terminal.location === "dock" ? "dock" : "grid",
                 requestedId: terminal.id,
-                notePath: (terminal as any).notePath,
-                noteId: (terminal as any).noteId,
-                scope: (terminal as any).scope,
-                createdAt: (terminal as any).createdAt,
+                notePath: terminal.notePath,
+                noteId: terminal.noteId,
+                scope: terminal.scope,
+                createdAt: terminal.createdAt,
+              });
+            } else if (terminalKind === "dev-preview") {
+              await addTerminal({
+                kind: "dev-preview",
+                title: terminal.title,
+                cwd,
+                worktreeId: terminal.worktreeId,
+                location: terminal.location === "dock" ? "dock" : "grid",
+                requestedId: terminal.id,
+                devCommand: terminal.devCommand,
               });
             } else {
               await addTerminal({
-                kind: terminal.kind ?? "browser",
+                kind: terminalKind ?? "browser",
                 title: terminal.title,
                 cwd,
                 worktreeId: terminal.worktreeId,

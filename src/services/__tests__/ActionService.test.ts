@@ -231,6 +231,37 @@ describe("ActionService", () => {
       expect(manifest[0].enabled).toBe(false);
       expect(manifest[0].disabledReason).toBe("Test disabled");
     });
+
+    it("should omit restricted actions", () => {
+      const safeAction: ActionDefinition = {
+        id: "actions.safe" as ActionId,
+        title: "Safe Action",
+        description: "A safe action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        run: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const restrictedAction: ActionDefinition = {
+        id: "actions.restricted" as ActionId,
+        title: "Restricted Action",
+        description: "A restricted action",
+        category: "test",
+        kind: "command",
+        danger: "restricted",
+        scope: "renderer",
+        run: vi.fn().mockResolvedValue(undefined),
+      };
+
+      service.register(safeAction);
+      service.register(restrictedAction);
+
+      const manifest = service.list();
+      expect(manifest).toHaveLength(1);
+      expect(manifest[0].id).toBe("actions.safe");
+    });
   });
 
   describe("get", () => {

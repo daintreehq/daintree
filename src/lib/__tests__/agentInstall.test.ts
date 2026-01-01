@@ -1,12 +1,28 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { detectOS, getInstallBlocksForCurrentOS } from "../agentInstall";
 import type { AgentConfig } from "../../../shared/config/agentRegistry";
 
 describe("agentInstall", () => {
+  const originalNavigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+
+  const setNavigator = (value: Navigator | undefined) => {
+    Object.defineProperty(globalThis, "navigator", {
+      value,
+      configurable: true,
+      writable: true,
+    });
+  };
+
   beforeEach(() => {
-    global.navigator = {
-      platform: "Linux x86_64",
-    } as Navigator;
+    setNavigator({ platform: "Linux x86_64" } as Navigator);
+  });
+
+  afterEach(() => {
+    if (originalNavigatorDescriptor) {
+      Object.defineProperty(globalThis, "navigator", originalNavigatorDescriptor);
+    } else {
+      delete (globalThis as { navigator?: Navigator }).navigator;
+    }
   });
 
   describe("detectOS", () => {
@@ -41,11 +57,8 @@ describe("agentInstall", () => {
     });
 
     it("should return generic when navigator is undefined", () => {
-      const originalNavigator = global.navigator;
-      // @ts-expect-error - testing undefined navigator
-      delete global.navigator;
+      setNavigator(undefined);
       expect(detectOS()).toBe("generic");
-      global.navigator = originalNavigator;
     });
 
     it("should return generic when platform is empty", () => {

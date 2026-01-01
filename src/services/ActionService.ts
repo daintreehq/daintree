@@ -122,7 +122,9 @@ export class ActionService {
 
   list(ctx?: ActionContext): ActionManifestEntry[] {
     const context = ctx ?? this.getActionContext();
-    return Array.from(this.registry.values()).map((def) => this.toManifestEntry(def, context));
+    return Array.from(this.registry.values())
+      .filter((def) => def.danger !== "restricted")
+      .map((def) => this.toManifestEntry(def, context));
   }
 
   get(actionId: ActionId, ctx?: ActionContext): ActionManifestEntry | null {
