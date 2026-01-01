@@ -230,6 +230,9 @@ export type PanelLocation = "grid" | "dock" | "trash";
  */
 export type TerminalLocation = PanelLocation;
 
+/** Dock display mode */
+export type DockMode = "expanded" | "slim" | "hidden";
+
 /** Type guard to check if a panel kind is a built-in kind */
 export function isBuiltInPanelKind(kind: PanelKind): kind is BuiltInPanelKind {
   return (

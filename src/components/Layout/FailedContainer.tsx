@@ -16,7 +16,11 @@ function getLocationIcon(location: TerminalLocation | undefined) {
   return <LayoutGrid className="w-3 h-3" />;
 }
 
-export function FailedContainer() {
+interface FailedContainerProps {
+  compact?: boolean;
+}
+
+export function FailedContainer({ compact = false }: FailedContainerProps) {
   const [isOpen, setIsOpen] = useState(false);
   const failedTerminals = useFailedTerminals();
   const { activateTerminal, pingTerminal } = useTerminalStore(
@@ -46,7 +50,7 @@ export function FailedContainer() {
           variant="pill"
           size="sm"
           className={cn(
-            "px-3",
+            compact ? "px-1.5 min-w-0" : "px-3",
             isOpen && "bg-canopy-border border-canopy-accent/40 ring-1 ring-canopy-accent/30"
           )}
           title={`View failed agent sessions${shortcut ? ` (${shortcut})` : ""}`}
@@ -55,8 +59,15 @@ export function FailedContainer() {
           aria-controls={contentId}
           aria-label={`Failed: ${count} agent${count === 1 ? "" : "s"}`}
         >
-          <XCircle className="w-3.5 h-3.5 text-red-400" aria-hidden="true" />
-          <span className="font-medium">Failed ({count})</span>
+          <span className="relative">
+            <XCircle className="w-3.5 h-3.5 text-red-400" aria-hidden="true" />
+            {compact && count > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full bg-red-500 text-[10px] font-bold text-white">
+                {count > 9 ? "9+" : count}
+              </span>
+            )}
+          </span>
+          {!compact && <span className="font-medium">Failed ({count})</span>}
         </Button>
       </PopoverTrigger>
 

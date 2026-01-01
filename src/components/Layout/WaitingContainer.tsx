@@ -16,7 +16,11 @@ function getLocationIcon(location: TerminalLocation | undefined) {
   return <LayoutGrid className="w-3 h-3" />;
 }
 
-export function WaitingContainer() {
+interface WaitingContainerProps {
+  compact?: boolean;
+}
+
+export function WaitingContainer({ compact = false }: WaitingContainerProps) {
   const [isOpen, setIsOpen] = useState(false);
   const waitingTerminals = useWaitingTerminals();
   const { activateTerminal, pingTerminal } = useTerminalStore(
@@ -46,7 +50,7 @@ export function WaitingContainer() {
           variant="pill"
           size="sm"
           className={cn(
-            "px-3",
+            compact ? "px-1.5 min-w-0" : "px-3",
             isOpen && "bg-canopy-border border-canopy-accent/40 ring-1 ring-canopy-accent/30"
           )}
           title={`View agents waiting for input${shortcut ? ` (${shortcut})` : ""}`}
@@ -55,8 +59,15 @@ export function WaitingContainer() {
           aria-controls={contentId}
           aria-label={`Waiting: ${count} agent${count === 1 ? "" : "s"}`}
         >
-          <AlertCircle className="w-3.5 h-3.5 text-amber-400" aria-hidden="true" />
-          <span className="font-medium">Waiting ({count})</span>
+          <span className="relative">
+            <AlertCircle className="w-3.5 h-3.5 text-amber-400" aria-hidden="true" />
+            {compact && count > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full bg-amber-500 text-[10px] font-bold text-white">
+                {count > 9 ? "9+" : count}
+              </span>
+            )}
+          </span>
+          {!compact && <span className="font-medium">Waiting ({count})</span>}
         </Button>
       </PopoverTrigger>
 

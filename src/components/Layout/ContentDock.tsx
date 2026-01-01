@@ -28,7 +28,13 @@ const AGENT_OPTIONS = [
   { type: "browser" as const, label: "Browser" },
 ];
 
-export function ContentDock() {
+export type DockDensity = "normal" | "compact";
+
+interface ContentDockProps {
+  density?: DockDensity;
+}
+
+export function ContentDock({ density = "normal" }: ContentDockProps) {
   const { showMenu } = useNativeContextMenu();
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
 
@@ -123,6 +129,8 @@ export function ContentDock() {
     return activeDockTerminals.map((t) => t.id);
   }, [activeDockTerminals]);
 
+  const isCompact = density === "compact";
+
   return (
     <div
       onContextMenu={handleContextMenu}
@@ -133,7 +141,7 @@ export function ContentDock() {
         "flex items-center px-[var(--dock-padding-x)] py-[var(--dock-padding-y)] gap-[var(--dock-gap)]",
         "z-40 shrink-0"
       )}
-      role="list"
+      data-dock-density={density}
     >
       <div className="relative flex-1 min-w-0">
         {/* Left Scroll Chevron - Overlay */}
@@ -210,9 +218,9 @@ export function ContentDock() {
 
       {/* Action containers: Waiting + Failed + Trash */}
       <div className="shrink-0 pl-1 flex items-center gap-2">
-        <WaitingContainer />
-        <FailedContainer />
-        <TrashContainer trashedTerminals={trashedItems} />
+        <WaitingContainer compact={isCompact} />
+        <FailedContainer compact={isCompact} />
+        <TrashContainer trashedTerminals={trashedItems} compact={isCompact} />
       </div>
     </div>
   );

@@ -13,9 +13,10 @@ interface TrashContainerProps {
     terminal: TerminalInstance;
     trashedInfo: TrashedTerminal;
   }>;
+  compact?: boolean;
 }
 
-export function TrashContainer({ trashedTerminals }: TrashContainerProps) {
+export function TrashContainer({ trashedTerminals, compact = false }: TrashContainerProps) {
   const [isOpen, setIsOpen] = useState(false);
   const { worktreeMap } = useWorktrees();
 
@@ -35,7 +36,7 @@ export function TrashContainer({ trashedTerminals }: TrashContainerProps) {
           variant="pill"
           size="sm"
           className={cn(
-            "px-3",
+            compact ? "px-1.5 min-w-0" : "px-3",
             isOpen && "bg-canopy-border border-canopy-accent/40 ring-1 ring-canopy-accent/30"
           )}
           title="View recently closed terminals"
@@ -44,8 +45,15 @@ export function TrashContainer({ trashedTerminals }: TrashContainerProps) {
           aria-controls={contentId}
           aria-label={`Trash: ${count} terminal${count === 1 ? "" : "s"}`}
         >
-          <Trash2 className="w-3.5 h-3.5 text-canopy-text/60" aria-hidden="true" />
-          <span className="font-medium">Trash ({count})</span>
+          <span className="relative">
+            <Trash2 className="w-3.5 h-3.5 text-canopy-text/60" aria-hidden="true" />
+            {compact && count > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full bg-canopy-text/40 text-[10px] font-bold text-white">
+                {count > 9 ? "9+" : count}
+              </span>
+            )}
+          </span>
+          {!compact && <span className="font-medium">Trash ({count})</span>}
         </Button>
       </PopoverTrigger>
 
