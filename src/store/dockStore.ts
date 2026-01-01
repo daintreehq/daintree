@@ -18,21 +18,22 @@ interface DockState {
   hydrate: (state: Partial<Pick<DockState, "mode" | "behavior" | "autoHideWhenEmpty">>) => void;
 }
 
-const MODE_CYCLE: DockMode[] = ["expanded", "slim", "hidden"];
+const MODE_CYCLE: DockMode[] = ["expanded", "hidden"];
 
 export const useDockStore = create<DockState>()((set, get) => ({
-  mode: "slim",
+  mode: "hidden",
   behavior: "auto",
   autoHideWhenEmpty: false,
   peek: false,
   isHydrated: false,
 
   setMode: (mode) => {
+    const normalizedMode: DockMode = mode === "slim" ? "hidden" : mode;
     // Setting mode explicitly switches to manual behavior
-    set({ mode, behavior: "manual" });
+    set({ mode: normalizedMode, behavior: "manual" });
     const state = get();
     void persistDockState({
-      mode: state.mode,
+      mode: normalizedMode,
       behavior: state.behavior,
       autoHideWhenEmpty: state.autoHideWhenEmpty,
     });
@@ -54,7 +55,8 @@ export const useDockStore = create<DockState>()((set, get) => ({
     if (behavior === "auto") {
       set({ behavior: "manual" });
     }
-    const currentIndex = MODE_CYCLE.indexOf(mode);
+    const normalizedMode: DockMode = mode === "slim" ? "hidden" : mode;
+    const currentIndex = MODE_CYCLE.indexOf(normalizedMode);
     const nextIndex = (currentIndex + 1) % MODE_CYCLE.length;
     const nextMode = MODE_CYCLE[nextIndex];
     set({ mode: nextMode });

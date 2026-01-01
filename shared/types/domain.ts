@@ -230,12 +230,12 @@ export type PanelLocation = "grid" | "dock" | "trash";
  */
 export type TerminalLocation = PanelLocation;
 
-/** Dock display mode */
+/** Dock display mode (slim is legacy and treated as hidden) */
 export type DockMode = "expanded" | "slim" | "hidden";
 
 /**
  * Dock behavior controls how the dock mode is determined:
- * - "auto": Slim by default, expands when there are docked terminals
+ * - "auto": Hidden by default, expands when there are docked terminals
  * - "manual": User controls the mode directly
  */
 export type DockBehavior = "auto" | "manual";
@@ -249,11 +249,11 @@ export interface DockRenderState {
   effectiveMode: DockMode;
   /** Whether the dock content should render in the layout (takes up space) */
   shouldShowInLayout: boolean;
-  /** Whether to show the floating status overlay (hidden/slim mode with status) */
+  /** Whether to show the floating status overlay (hidden mode with status) */
   showStatusOverlay: boolean;
   /** Density for ContentDock components */
   density: "normal" | "compact";
-  /** Whether the dock handle should show as "visible" (expanded/slim) or "hidden" */
+  /** Whether the dock handle should show as "visible" (expanded) or "hidden" */
   isHandleVisible: boolean;
   /** Whether hydration is complete */
   isHydrated: boolean;

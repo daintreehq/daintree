@@ -101,7 +101,7 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
   actions.set("panel.dockCycleMode", () => ({
     id: "panel.dockCycleMode",
     title: "Cycle Dock Mode",
-    description: "Cycle dock mode: expanded → slim → hidden",
+    description: "Cycle dock mode: expanded ↔ hidden",
     category: "panel",
     kind: "command",
     danger: "safe",
@@ -126,14 +126,14 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("panel.dockSetSlim", () => ({
     id: "panel.dockSetSlim",
-    title: "Set Dock Slim",
-    description: "Set dock to slim mode (compact icons)",
+    title: "Hide Dock (Legacy Slim)",
+    description: "Legacy action: hide the dock",
     category: "panel",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      useDockStore.getState().setMode("slim");
+      useDockStore.getState().setMode("hidden");
     },
   }));
 

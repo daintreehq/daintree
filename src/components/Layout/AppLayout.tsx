@@ -99,11 +99,7 @@ export function AppLayout({
         const rawBehavior = appState.dockBehavior;
         const isValidMode = rawMode && validModes.includes(rawMode as any);
         const isValidBehavior = rawBehavior && validBehaviors.includes(rawBehavior as any);
-        const dockMode = isValidMode
-          ? rawMode
-          : appState.dockCollapsed === true
-            ? "hidden"
-            : "slim";
+        const dockMode = isValidMode ? (rawMode === "expanded" ? "expanded" : "hidden") : "hidden";
         const dockBehavior = isValidBehavior ? rawBehavior : "auto";
         useDockStore.getState().hydrate({
           mode: dockMode,

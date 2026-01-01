@@ -57,11 +57,11 @@ export function useDockRenderState(): DockRenderState & {
     if (!isHydrated) return "hidden";
 
     if (behavior === "auto") {
-      // Auto mode: slim by default, expanded when there are docked terminals
-      return hasDocked ? "expanded" : "slim";
+      // Auto mode: hidden by default, expanded when there are docked terminals
+      return hasDocked ? "expanded" : "hidden";
     }
     // Manual mode: use the stored mode
-    return mode;
+    return mode === "slim" ? "hidden" : mode;
   }, [isHydrated, behavior, mode, hasDocked]);
 
   // Determine if we should show dock in layout (takes up space)
@@ -76,7 +76,7 @@ export function useDockRenderState(): DockRenderState & {
     // Hidden mode never shows in layout
     if (effectiveMode === "hidden") return false;
 
-    // Expanded/slim modes show unless auto-hide is on and empty
+    // Expanded mode shows unless auto-hide is on and empty
     if (autoHideWhenEmpty && !hasContent) return false;
 
     return true;
@@ -93,18 +93,15 @@ export function useDockRenderState(): DockRenderState & {
   }, [isDragging, effectiveMode, peek, setPeek]);
 
   // Compute density for ContentDock
-  const density = effectiveMode === "slim" ? "compact" : "normal";
+  const density: DockRenderState["density"] = "normal";
 
-  // Show status overlay when dock is hidden/slim and there are status indicators
+  // Show status overlay when dock is hidden and there are status indicators
   // CRITICAL: Must be mutually exclusive with shouldShowInLayout
   const showStatusOverlay =
-    isHydrated &&
-    (effectiveMode === "hidden" || effectiveMode === "slim") &&
-    hasStatus &&
-    !shouldShowInLayout;
+    isHydrated && effectiveMode === "hidden" && hasStatus && !shouldShowInLayout;
 
   // Whether the dock handle should indicate visible/hidden state
-  const isHandleVisible = effectiveMode === "expanded" || effectiveMode === "slim";
+  const isHandleVisible = effectiveMode === "expanded";
 
   return {
     effectiveMode,

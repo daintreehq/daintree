@@ -19,7 +19,7 @@ export function DockHandleOverlay() {
   const tooltip = tooltipParts.join(" ");
 
   const handleClick = () => {
-    if (effectiveMode === "expanded" || effectiveMode === "slim") {
+    if (effectiveMode === "expanded") {
       setMode("hidden");
     } else {
       setMode("expanded");

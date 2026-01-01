@@ -9,6 +9,13 @@ import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { useDockStore } from "@/store/dockStore";
 
 export function registerTerminalActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
+  const revealDockIfHidden = () => {
+    const dockState = useDockStore.getState();
+    if (dockState.behavior === "manual" && dockState.mode !== "expanded") {
+      dockState.setMode("expanded");
+    }
+  };
+
   actions.set("terminal.new", () => ({
     id: "terminal.new",
     title: "New Terminal",
@@ -246,10 +253,7 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
       if (targetId) {
         state.moveTerminalToDock(targetId);
         // Reveal dock if hidden so the terminal is visible
-        const dockState = useDockStore.getState();
-        if (dockState.mode === "hidden") {
-          dockState.setMode("expanded");
-        }
+        revealDockIfHidden();
       }
     },
   }));
@@ -285,6 +289,7 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
       const state = useTerminalStore.getState();
       if (state.focusedId) {
         state.moveTerminalToDock(state.focusedId);
+        revealDockIfHidden();
       }
     },
   }));
@@ -662,6 +667,7 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
     scope: "renderer",
     run: async () => {
       useTerminalStore.getState().bulkMoveToDock();
+      revealDockIfHidden();
     },
   }));
 

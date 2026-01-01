@@ -70,7 +70,7 @@ export interface AppState {
   terminalGridConfig?: import("../config.js").TerminalGridConfig;
   /** Whether the terminal dock is collapsed */
   dockCollapsed?: boolean;
-  /** Dock display mode: expanded (full), slim (compact icons), or hidden */
+  /** Dock display mode: expanded (full) or hidden (slim is legacy) */
   dockMode?: import("../domain.js").DockMode;
   /** Dock behavior: auto (expands when docked terminals) or manual (user controlled) */
   dockBehavior?: import("../domain.js").DockBehavior;

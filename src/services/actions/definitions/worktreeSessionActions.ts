@@ -2,12 +2,20 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
 import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
+import { useDockStore } from "@/store/dockStore";
 import { useTerminalStore } from "@/store/terminalStore";
 
 export function registerWorktreeSessionActions(
   actions: ActionRegistry,
   _callbacks: ActionCallbacks
 ): void {
+  const revealDockIfHidden = () => {
+    const dockState = useDockStore.getState();
+    if (dockState.behavior === "manual" && dockState.mode !== "expanded") {
+      dockState.setMode("expanded");
+    }
+  };
+
   actions.set("worktree.sessions.minimizeAll", () => ({
     id: "worktree.sessions.minimizeAll",
     title: "Minimize All Sessions",
@@ -22,6 +30,7 @@ export function registerWorktreeSessionActions(
       const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
       useTerminalStore.getState().bulkMoveToDockByWorktree(targetWorktreeId);
+      revealDockIfHidden();
     },
   }));
 
