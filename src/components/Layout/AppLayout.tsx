@@ -1,12 +1,12 @@
 import { useState, useCallback, useEffect, type ReactNode } from "react";
 import { Toolbar } from "./Toolbar";
 import { Sidebar } from "./Sidebar";
-import { ContentDock } from "./ContentDock";
+import { TerminalDockRegion } from "./TerminalDockRegion";
 import { DiagnosticsDock } from "../Diagnostics";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { SidecarDock, SidecarVisibilityController } from "../Sidecar";
 import { ProjectSettingsDialog } from "@/components/Project";
-import { useDiagnosticsStore, type PanelState } from "@/store";
+import { useDiagnosticsStore, useDockStore, type PanelState } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
 import type { RetryAction } from "@/store";
 import { appClient } from "@/clients";
@@ -38,7 +38,6 @@ export function AppLayout({
   agentAvailability,
   agentSettings,
 }: AppLayoutProps) {
-  const [isTerminalDockVisible, setIsTerminalDockVisible] = useState(true);
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const [isProjectSettingsOpen, setIsProjectSettingsOpen] = useState(false);
 
@@ -93,6 +92,19 @@ export function AppLayout({
               };
           layout.setFocusMode(true, savedState);
         }
+        // Hydrate dock state with legacy migration and validation
+        const validModes: Array<"expanded" | "slim" | "hidden"> = ["expanded", "slim", "hidden"];
+        const rawMode = appState.dockMode;
+        const isValidMode = rawMode && validModes.includes(rawMode as any);
+        const dockMode = isValidMode
+          ? rawMode
+          : appState.dockCollapsed === true
+            ? "hidden"
+            : "expanded";
+        useDockStore.getState().hydrate({
+          mode: dockMode,
+          autoHideWhenEmpty: Boolean(appState.dockAutoHideWhenEmpty),
+        });
       } catch (error) {
         console.error("Failed to restore app state:", error);
       }
@@ -172,15 +184,6 @@ export function AppLayout({
       window.removeEventListener("canopy:toggle-focus-mode", handleFocusModeToggle);
     };
   }, [handleToggleFocusMode]);
-
-  useEffect(() => {
-    const handleDockToggle = () => {
-      setIsTerminalDockVisible((visible) => !visible);
-    };
-
-    window.addEventListener("canopy:toggle-terminal-dock", handleDockToggle);
-    return () => window.removeEventListener("canopy:toggle-terminal-dock", handleDockToggle);
-  }, []);
 
   useEffect(() => {
     const handleSidecarToggle = () => {
@@ -297,12 +300,8 @@ export function AppLayout({
               }}
             >
               <div className="flex-1 overflow-hidden min-h-0">{children}</div>
-              {/* Content Dock - appears at bottom only when panels are docked */}
-              {isTerminalDockVisible && (
-                <ErrorBoundary variant="section" componentName="ContentDock">
-                  <ContentDock />
-                </ErrorBoundary>
-              )}
+              {/* Terminal Dock Region - manages dock visibility and overlays */}
+              <TerminalDockRegion />
               {/* Overlay mode - sidecar floats over content */}
               {layout.sidecarOpen && layout.sidecarLayoutMode === "overlay" && (
                 <ErrorBoundary variant="section" componentName="SidecarDock">

@@ -6,6 +6,7 @@ import { appClient, terminalClient } from "@/clients";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { useTerminalStore } from "@/store/terminalStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { useDockStore } from "@/store/dockStore";
 
 export function registerTerminalActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("terminal.new", () => ({
@@ -244,6 +245,11 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
         state.moveTerminalToDock(targetId);
+        // Reveal dock if hidden so the terminal is visible
+        const dockState = useDockStore.getState();
+        if (dockState.mode === "hidden") {
+          dockState.setMode("expanded");
+        }
       }
     },
   }));

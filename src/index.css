@@ -169,6 +169,13 @@
   --sidebar-ring: oklch(0.708 0 0);
 }
 
+/* Compact density mode for dock - reduced padding and heights */
+[data-dock-density="compact"] {
+  --dock-padding-y: 0.25rem;
+  --dock-gap: 0.25rem;
+  --dock-item-height: 1.75rem;
+}
+
 /* Dark Mode - Unified Token System
  *
  * CANONICAL SOURCE: Canopy tokens (defined in @theme inline above)

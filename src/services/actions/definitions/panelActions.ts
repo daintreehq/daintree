@@ -5,6 +5,7 @@ import { cliAvailabilityClient, systemClient } from "@/clients";
 import { getAIAgentInfo } from "@/lib/aiAgentDetection";
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { useSidecarStore } from "@/store/sidecarStore";
+import { useDockStore } from "@/store/dockStore";
 
 export function registerPanelActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("panel.palette", () => ({
@@ -74,26 +75,92 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
   actions.set("panel.toggleDock", () => ({
     id: "panel.toggleDock",
     title: "Toggle Terminal Dock",
-    description: "Toggle the terminal dock visibility",
+    description: "Toggle the terminal dock between expanded and hidden",
     category: "panel",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      window.dispatchEvent(new CustomEvent("canopy:toggle-terminal-dock"));
+      useDockStore.getState().toggleExpanded();
     },
   }));
 
   actions.set("panel.toggleDockAlt", () => ({
     id: "panel.toggleDockAlt",
     title: "Toggle Terminal Dock (Alt)",
-    description: "Toggle the terminal dock visibility",
+    description: "Toggle the terminal dock between expanded and hidden",
     category: "panel",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      window.dispatchEvent(new CustomEvent("canopy:toggle-terminal-dock"));
+      useDockStore.getState().toggleExpanded();
+    },
+  }));
+
+  actions.set("panel.dockCycleMode", () => ({
+    id: "panel.dockCycleMode",
+    title: "Cycle Dock Mode",
+    description: "Cycle dock mode: expanded → slim → hidden",
+    category: "panel",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      useDockStore.getState().cycleMode();
+    },
+  }));
+
+  actions.set("panel.dockSetExpanded", () => ({
+    id: "panel.dockSetExpanded",
+    title: "Expand Dock",
+    description: "Set dock to expanded mode (full height)",
+    category: "panel",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      useDockStore.getState().setMode("expanded");
+    },
+  }));
+
+  actions.set("panel.dockSetSlim", () => ({
+    id: "panel.dockSetSlim",
+    title: "Set Dock Slim",
+    description: "Set dock to slim mode (compact icons)",
+    category: "panel",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      useDockStore.getState().setMode("slim");
+    },
+  }));
+
+  actions.set("panel.dockSetHidden", () => ({
+    id: "panel.dockSetHidden",
+    title: "Hide Dock",
+    description: "Hide the terminal dock",
+    category: "panel",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      useDockStore.getState().setMode("hidden");
+    },
+  }));
+
+  actions.set("panel.dockToggleAutoHide", () => ({
+    id: "panel.dockToggleAutoHide",
+    title: "Toggle Dock Auto-Hide",
+    description: "Toggle auto-hide dock when empty",
+    category: "panel",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const { autoHideWhenEmpty, setAutoHideWhenEmpty } = useDockStore.getState();
+      setAutoHideWhenEmpty(!autoHideWhenEmpty);
     },
   }));
 
