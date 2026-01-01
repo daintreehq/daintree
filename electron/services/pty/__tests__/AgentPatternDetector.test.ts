@@ -298,6 +298,189 @@ describe("AgentPatternDetector", () => {
     });
   });
 
+  describe("long status text detection (issue #1444)", () => {
+    describe("Codex patterns with long descriptions", () => {
+      const detector = createPatternDetector("codex");
+
+      it("should detect pattern with very long status text (120+ chars)", () => {
+        const longDescription =
+          "Exploring files with search and listing across multiple directories including node_modules and checking for dependencies in package.json";
+        const output = `• ${longDescription} (4s • esc to interrupt)`;
+        const result = detector.detect(output);
+
+        expect(result.isWorking).toBe(true);
+        expect(result.matchTier).toBe("primary");
+      });
+
+      it("should detect pattern with just time + escape hint structure", () => {
+        const output = "(15s • esc to interrupt)";
+        const result = detector.detect(output);
+
+        expect(result.isWorking).toBe(true);
+        expect(result.matchTier).toBe("primary");
+      });
+
+      it("should detect 'esc to interrupt' at end of line", () => {
+        const output = "some very long text esc to interrupt)";
+        const result = detector.detect(output);
+
+        expect(result.isWorking).toBe(true);
+        expect(result.matchTier).toBe("primary");
+      });
+
+      it("should detect pattern when status text wraps to new line", () => {
+        const output = `• Exploring files with search and listing across multiple
+(4s • esc to interrupt)`;
+        const result = detector.detect(output);
+
+        expect(result.isWorking).toBe(true);
+        expect(result.matchTier).toBe("primary");
+      });
+
+      it("should detect escape hint on separate line after wrap", () => {
+        const output = `Previous output
+• Very long status description that gets cut off at terminal edge and
+wraps to the next line where the escape hint appears: esc to interrupt)`;
+        const result = detector.detect(output);
+
+        expect(result.isWorking).toBe(true);
+      });
+    });
+
+    describe("Claude patterns with long descriptions", () => {
+      const detector = createPatternDetector("claude");
+
+      it("should detect pattern with very long status text (120+ chars)", () => {
+        const longDescription =
+          "Deliberating about the best approach to implement the feature while considering multiple factors and edge cases that might arise";
+        const output = `✽ ${longDescription} (esc to interrupt · 15s)`;
+        const result = detector.detect(output);
+
+        expect(result.isWorking).toBe(true);
+        expect(result.matchTier).toBe("primary");
+      });
+
+      it("should detect pattern with just time + escape hint structure", () => {
+        const output = "(15s · esc to interrupt)";
+        const result = detector.detect(output);
+
+        expect(result.isWorking).toBe(true);
+        expect(result.matchTier).toBe("primary");
+      });
+
+      it("should detect 'esc to interrupt' at end of line", () => {
+        const output = "some very long wrapped text esc to interrupt)";
+        const result = detector.detect(output);
+
+        expect(result.isWorking).toBe(true);
+        expect(result.matchTier).toBe("primary");
+      });
+    });
+
+    describe("Gemini patterns with long descriptions", () => {
+      const detector = createPatternDetector("gemini");
+
+      it("should detect pattern with very long status text (120+ chars)", () => {
+        const longDescription =
+          "Unpacking Project Details including analyzing the directory structure and understanding the codebase architecture thoroughly";
+        const output = `⠼ ${longDescription} (esc to cancel, 14s)`;
+        const result = detector.detect(output);
+
+        expect(result.isWorking).toBe(true);
+        expect(result.matchTier).toBe("primary");
+      });
+
+      it("should detect pattern with just time + escape hint structure", () => {
+        const output = "(14s, esc to cancel)";
+        const result = detector.detect(output);
+
+        expect(result.isWorking).toBe(true);
+        expect(result.matchTier).toBe("primary");
+      });
+
+      it("should detect 'esc to cancel' at end of line", () => {
+        const output = "some very long wrapped text esc to cancel)";
+        const result = detector.detect(output);
+
+        expect(result.isWorking).toBe(true);
+        expect(result.matchTier).toBe("primary");
+      });
+    });
+
+    describe("Universal patterns with long descriptions", () => {
+      const detector = createPatternDetector();
+
+      it("should detect 'esc to interrupt' at end of line regardless of text before", () => {
+        const output =
+          "A very long status description that exceeds 80 characters and might cause issues with pattern matching esc to interrupt)";
+        const result = detector.detect(output);
+
+        expect(result.isWorking).toBe(true);
+        expect(result.matchTier).toBe("primary");
+      });
+
+      it("should detect 'esc to cancel' at end of line regardless of text before", () => {
+        const output =
+          "A very long status description that exceeds 80 characters and might cause issues with pattern matching esc to cancel)";
+        const result = detector.detect(output);
+
+        expect(result.isWorking).toBe(true);
+        expect(result.matchTier).toBe("primary");
+      });
+    });
+
+    describe("Known pattern behavior", () => {
+      it("end-of-line patterns may match help text (acceptable tradeoff)", () => {
+        const detector = createPatternDetector("codex");
+        const output = "Press esc to interrupt the operation when needed";
+        const result = detector.detect(output);
+
+        expect(result.isWorking).toBe(true);
+        expect(result.matchTier).toBe("primary");
+      });
+
+      it("patterns prioritize detecting real status over avoiding false positives", () => {
+        const detector = createPatternDetector("claude");
+        const output = "You can always use esc to interrupt if the task takes too long";
+        const result = detector.detect(output);
+
+        expect(result.isWorking).toBe(true);
+        expect(result.matchTier).toBe("primary");
+      });
+
+      it("escape hints in idle output may trigger detection (rare in practice)", () => {
+        const detector = createPatternDetector("gemini");
+        const output =
+          "Task complete. Remember esc to cancel works anytime.\n\nReady for next task.";
+        const result = detector.detect(output);
+
+        expect(result.isWorking).toBe(true);
+        expect(result.matchTier).toBe("primary");
+      });
+    });
+
+    describe("ANSI codes in long status text", () => {
+      it("should detect Codex pattern with ANSI-colored long description", () => {
+        const detector = createPatternDetector("codex");
+        const longDescription =
+          "Exploring files with search and listing across multiple directories";
+        const output = `\x1b[34m•\x1b[0m \x1b[1m${longDescription}\x1b[0m (4s • esc to interrupt)`;
+        const result = detector.detect(output);
+
+        expect(result.isWorking).toBe(true);
+        expect(result.matchTier).toBe("primary");
+      });
+
+      it("should detect escape hint with ANSI codes at end of line", () => {
+        const detector = createPatternDetector("claude");
+        const output = "Very long text here \x1b[2mesc to interrupt\x1b[0m)";
+        const result = detector.detect(output);
+
+        expect(result.isWorking).toBe(true);
+      });
+    });
+  });
+
   describe("edge cases", () => {
     const detector = createPatternDetector("claude");
 

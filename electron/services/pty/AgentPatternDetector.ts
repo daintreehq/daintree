@@ -91,8 +91,12 @@ export function stripAnsi(text: string): string {
 export const AGENT_PATTERN_CONFIGS: Record<string, PatternDetectionConfig> = {
   claude: {
     primaryPatterns: [
-      // Full format with interrupt hint
+      // Full format with interrupt hint (short descriptions)
       /[✽✻✼✾⟡◇◆●○]\s+[^()\n]{2,80}\s*\(esc to interrupt/i,
+      // Simple: just "esc to interrupt" at end of line (handles long/wrapped text)
+      /esc to interrupt[^)\n]*\)?$/im,
+      // Time + escape hint structure: (15s · esc to interrupt)
+      /\(\d+s\s*[·•]\s*esc to interrupt/i,
     ],
     fallbackPatterns: [
       // Minimal format (just spinner + activity word, no parens)
@@ -105,8 +109,12 @@ export const AGENT_PATTERN_CONFIGS: Record<string, PatternDetectionConfig> = {
 
   gemini: {
     primaryPatterns: [
-      // ASCII spinner + text + cancel hint
+      // ASCII spinner + text + cancel hint (short descriptions)
       /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+[^()\n]{2,80}\s*\(esc to cancel/i,
+      // Simple: just "esc to cancel" at end of line (handles long/wrapped text)
+      /esc to cancel[^)\n]*\)?$/im,
+      // Time + escape hint structure: (14s, esc to cancel)
+      /\(\d+s,?\s*esc to cancel/i,
     ],
     fallbackPatterns: [
       // Just the spinner (Braille dots used by Gemini)
@@ -119,8 +127,12 @@ export const AGENT_PATTERN_CONFIGS: Record<string, PatternDetectionConfig> = {
 
   codex: {
     primaryPatterns: [
-      // Full format with interrupt hint
+      // Full format with interrupt hint (short descriptions)
       /[•·]\s+[^()\n]{2,80}\s+\([^)]*esc to interrupt/i,
+      // Simple: just "esc to interrupt" at end of line (handles long/wrapped text)
+      /esc to interrupt[^)\n]*\)?$/im,
+      // Time + escape hint structure: (4s • esc to interrupt)
+      /\(\d+s\s*[·•]\s*esc to interrupt/i,
     ],
     fallbackPatterns: [
       // Minimal "Working" indicator
@@ -138,9 +150,17 @@ export const AGENT_PATTERN_CONFIGS: Record<string, PatternDetectionConfig> = {
  */
 export const UNIVERSAL_PATTERN_CONFIG: PatternDetectionConfig = {
   primaryPatterns: [
+    // Full format patterns (short descriptions)
     /[✽✻✼✾⟡◇◆●○•·⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+[^()\n]{2,80}\s*\(esc to interrupt/i,
     /[✽✻✼✾⟡◇◆●○•·⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+[^()\n]{2,80}\s*\(esc to cancel/i,
     /[✽✻✼✾⟡◇◆●○•·⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+[^()\n]{2,80}\s*\(escape to interrupt/i,
+    // Simple: escape hints at end of line (handles long/wrapped text)
+    /esc to interrupt[^)\n]*\)?$/im,
+    /esc to cancel[^)\n]*\)?$/im,
+    /escape to interrupt[^)\n]*\)?$/im,
+    // Time + escape hint structures
+    /\(\d+s\s*[·•]\s*esc to interrupt/i,
+    /\(\d+s,?\s*esc to cancel/i,
   ],
   fallbackPatterns: [
     // Common spinner characters followed by activity

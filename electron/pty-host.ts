@@ -600,10 +600,7 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
                 while (pending.length > 0) {
                   const segment = pending[0];
                   while (segment.offset < segment.data.length) {
-                    const end = Math.min(
-                      segment.offset + MAX_PACKET_PAYLOAD,
-                      segment.data.length
-                    );
+                    const end = Math.min(segment.offset + MAX_PACKET_PAYLOAD, segment.data.length);
                     const pendingChunk = segment.data.subarray(segment.offset, end);
                     const pendingPacket = packetFramer.frame(id, pendingChunk);
                     if (!pendingPacket) {

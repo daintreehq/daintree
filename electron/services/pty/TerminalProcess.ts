@@ -1216,7 +1216,7 @@ export class TerminalProcess {
     const compiled: RegExp[] = [];
     for (const pattern of patterns) {
       try {
-        compiled.push(new RegExp(pattern, "i"));
+        compiled.push(new RegExp(pattern, "im"));
       } catch (error) {
         if (process.env.CANOPY_VERBOSE) {
           const prefix = agentId ? `${agentId} ${label}` : label;
