@@ -357,12 +357,40 @@ export class WorkspaceService {
     }
   }
 
+  private scheduleCircuitBreakerRetry(monitor: MonitorState): void {
+    if (!monitor.isRunning || !monitor.pollingEnabled || !this.pollingEnabled) {
+      return;
+    }
+
+    if (!monitor.pollingStrategy.isCircuitBreakerTripped()) {
+      return;
+    }
+
+    if (monitor.pollingTimer || monitor.resumeTimer) {
+      return;
+    }
+
+    const cooldown = Math.max(
+      this.pollIntervalMax,
+      monitor.pollingStrategy.calculateNextInterval()
+    );
+    const jitter = Math.random() * 2000;
+
+    monitor.resumeTimer = setTimeout(() => {
+      monitor.resumeTimer = null;
+      if (monitor.isRunning && monitor.pollingEnabled && this.pollingEnabled) {
+        void this.poll(monitor, true);
+      }
+    }, cooldown + jitter);
+  }
+
   private scheduleNextPoll(monitor: MonitorState): void {
     if (!monitor.isRunning || !monitor.pollingEnabled || !this.pollingEnabled) {
       return;
     }
 
     if (monitor.pollingStrategy.isCircuitBreakerTripped()) {
+      this.scheduleCircuitBreakerRetry(monitor);
       return;
     }
 
@@ -378,25 +406,26 @@ export class WorkspaceService {
     }, nextInterval);
   }
 
-  private async poll(monitor: MonitorState): Promise<void> {
-    if (!monitor.isRunning || monitor.pollingStrategy.isCircuitBreakerTripped()) {
+  private async poll(monitor: MonitorState, force: boolean = false): Promise<void> {
+    if (!monitor.isRunning || (!force && monitor.pollingStrategy.isCircuitBreakerTripped())) {
       return;
     }
+
+    let tripped = false;
 
     const executePoll = async (): Promise<void> => {
       const startTime = Date.now();
 
       try {
-        await this.updateGitStatus(monitor);
+        await this.updateGitStatus(monitor, monitor.isCurrent);
         monitor.pollingStrategy.recordSuccess(Date.now() - startTime);
       } catch (error) {
-        const tripped = monitor.pollingStrategy.recordFailure(Date.now() - startTime);
+        tripped = monitor.pollingStrategy.recordFailure(Date.now() - startTime);
 
         if (tripped) {
           monitor.mood = "error";
-          monitor.summary = "⚠️ Polling stopped after consecutive failures";
+          monitor.summary = "⚠️ Polling delayed after consecutive failures";
           this.emitUpdate(monitor);
-          return;
         }
       }
     };
@@ -407,7 +436,12 @@ export class WorkspaceService {
       // Queue execution failed
     }
 
-    if (monitor.isRunning && !monitor.pollingStrategy.isCircuitBreakerTripped()) {
+    if (tripped) {
+      this.scheduleCircuitBreakerRetry(monitor);
+      return;
+    }
+
+    if (monitor.isRunning && monitor.pollingEnabled && this.pollingEnabled) {
       this.scheduleNextPoll(monitor);
     }
   }

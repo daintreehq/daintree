@@ -17,12 +17,22 @@ export interface ProjectSwitchDependencies {
 
 export class ProjectSwitchService {
   private deps: ProjectSwitchDependencies;
+  private switchChain: Promise<void> = Promise.resolve();
 
   constructor(deps: ProjectSwitchDependencies) {
     this.deps = deps;
   }
 
   async switchProject(projectId: string): Promise<Project> {
+    const task = this.switchChain.then(() => this.performSwitch(projectId));
+    this.switchChain = task.then(
+      () => undefined,
+      () => undefined
+    );
+    return task;
+  }
+
+  private async performSwitch(projectId: string): Promise<Project> {
     const project = projectStore.getProjectById(projectId);
     if (!project) {
       throw new Error(`Project not found: ${projectId}`);
@@ -34,8 +44,6 @@ export class ProjectSwitchService {
 
     try {
       await this.cleanupPreviousProject(projectId);
-
-      this.deps.ptyClient.setActiveProject(projectId);
 
       console.log("[ProjectSwitch] Previous project state cleaned up");
 
@@ -54,7 +62,11 @@ export class ProjectSwitchService {
       return updatedProject;
     } catch (error) {
       console.error("[ProjectSwitch] Project switch failed, rolling back:", error);
-      this.deps.ptyClient.setActiveProject(previousProjectId);
+      if (previousProjectId) {
+        this.deps.ptyClient.onProjectSwitch(previousProjectId);
+      } else {
+        this.deps.ptyClient.setActiveProject(null);
+      }
       throw error;
     }
   }

@@ -8,6 +8,9 @@
  * Semantic actions that can be triggered by keyboard shortcuts.
  * Actions are namespaced by category for organization.
  */
+type WorktreeSwitchIndex = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+type WorktreeSwitchAction = `worktree.switch${WorktreeSwitchIndex}`;
+
 export type KeyAction =
   // Navigation actions
   | "nav.up"
@@ -37,15 +40,7 @@ export type KeyAction =
   | "worktree.next"
   | "worktree.previous"
   | "worktree.panel"
-  | "worktree.switch1"
-  | "worktree.switch2"
-  | "worktree.switch3"
-  | "worktree.switch4"
-  | "worktree.switch5"
-  | "worktree.switch6"
-  | "worktree.switch7"
-  | "worktree.switch8"
-  | "worktree.switch9"
+  | WorktreeSwitchAction
   | "worktree.up"
   | "worktree.down"
   | "worktree.upVim"

@@ -252,9 +252,18 @@ const pauseStartTimes = new Map<string, number>();
 const terminalStatuses = new Map<string, TerminalFlowStatus>();
 const terminalActivityTiers = new Map<string, PtyHostActivityTier>();
 const suspendedDueToStall = new Set<string>();
-const pendingVisualPackets = new Map<string, Uint8Array[]>();
+type PendingVisualSegment = {
+  data: Uint8Array;
+  offset: number;
+};
+const pendingVisualSegments = new Map<string, PendingVisualSegment[]>();
+const pendingVisualBytes = new Map<string, number>();
+let totalPendingVisualBytes = 0;
 
+const MAX_PACKET_PAYLOAD = 65535;
 const STREAM_STALL_SUSPEND_MS = 2000;
+const MAX_PENDING_BYTES_PER_TERMINAL = 4 * 1024 * 1024;
+const MAX_TOTAL_PENDING_BYTES = 16 * 1024 * 1024;
 
 // Resume threshold - use hysteresis to prevent rapid pause/resume oscillation
 const BACKPRESSURE_RESUME_THRESHOLD = 80; // Resume when buffer drops below 80%
@@ -297,6 +306,100 @@ function emitTerminalStatus(
   });
 }
 
+function pendingBytesRemaining(segment: PendingVisualSegment): number {
+  return Math.max(0, segment.data.length - segment.offset);
+}
+
+function enqueuePendingSegment(id: string, segment: PendingVisualSegment): boolean {
+  const remaining = pendingBytesRemaining(segment);
+  if (remaining <= 0) {
+    return true;
+  }
+
+  const current = pendingVisualBytes.get(id) ?? 0;
+  const nextTerminal = current + remaining;
+  const nextTotal = totalPendingVisualBytes + remaining;
+
+  if (nextTerminal > MAX_PENDING_BYTES_PER_TERMINAL || nextTotal > MAX_TOTAL_PENDING_BYTES) {
+    return false;
+  }
+
+  const queue = pendingVisualSegments.get(id) ?? [];
+  queue.push(segment);
+  pendingVisualSegments.set(id, queue);
+  pendingVisualBytes.set(id, nextTerminal);
+  totalPendingVisualBytes = nextTotal;
+  return true;
+}
+
+function consumePendingBytes(id: string, bytes: number): void {
+  if (bytes <= 0) return;
+  const current = pendingVisualBytes.get(id);
+  if (current === undefined) return;
+  const next = current - bytes;
+  if (next <= 0) {
+    pendingVisualBytes.delete(id);
+  } else {
+    pendingVisualBytes.set(id, next);
+  }
+  totalPendingVisualBytes = Math.max(0, totalPendingVisualBytes - bytes);
+}
+
+function clearPendingVisual(id: string): void {
+  const pendingBytes = pendingVisualBytes.get(id);
+  if (pendingBytes !== undefined) {
+    totalPendingVisualBytes = Math.max(0, totalPendingVisualBytes - pendingBytes);
+    pendingVisualBytes.delete(id);
+  }
+  pendingVisualSegments.delete(id);
+}
+
+function suspendVisualStream(
+  id: string,
+  reason: string,
+  utilization?: number,
+  pauseDuration?: number,
+  shardIndex?: number
+): void {
+  const terminal = ptyManager.getTerminal(id);
+  if (terminal?.ptyProcess) {
+    try {
+      terminal.ptyProcess.resume();
+    } catch {
+      // ignore
+    }
+  }
+
+  const checkInterval = pausedTerminals.get(id);
+  if (checkInterval) {
+    clearInterval(checkInterval);
+    pausedTerminals.delete(id);
+  }
+  pauseStartTimes.delete(id);
+
+  suspendedDueToStall.add(id);
+  clearPendingVisual(id);
+
+  emitTerminalStatus(id, "suspended", utilization, pauseDuration);
+
+  if (utilization !== undefined) {
+    console.warn(
+      `[PtyHost] Suspended streaming for ${id} (${reason}) (buffer ${utilization.toFixed(1)}%).`
+    );
+  } else {
+    console.warn(`[PtyHost] Suspended streaming for ${id} (${reason}).`);
+  }
+
+  emitReliabilityMetric({
+    terminalId: id,
+    metricType: "suspend",
+    timestamp: Date.now(),
+    durationMs: pauseDuration,
+    bufferUtilization: utilization,
+    shardIndex,
+  });
+}
+
 // MessagePort for direct Renderer ↔ Pty Host communication (bypasses Main)
 // Note: This variable holds the port reference so the message handler stays active
 let rendererPort: MessagePort | null = null;
@@ -314,8 +417,7 @@ function toStringForIpc(data: string | Uint8Array): string {
 
 // Wire up PtyManager events
 ptyManager.on("data", (id: string, data: string | Uint8Array) => {
-  // Always forward data - never drop based on activity tier.
-  // Reliability is more important than resource optimization.
+  // Terminal output always updates headless state; visual streaming can be suspended under backpressure.
   const isSuspended = suspendedDueToStall.has(id);
   if (isSuspended) {
     return;
@@ -333,259 +435,257 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
     const shardIndex = selectShard(id, visualBuffers.length);
     const shard = visualBuffers[shardIndex];
 
-    const MAX_PAYLOAD = 65535;
     const dataBytes = typeof data === "string" ? Buffer.from(data) : data;
-    const packets: Uint8Array[] = [];
+    let wroteAny = false;
+    let offset = 0;
 
-    for (let offset = 0; offset < dataBytes.length; offset += MAX_PAYLOAD) {
-      const chunk = dataBytes.subarray(offset, offset + MAX_PAYLOAD);
-      const p = packetFramer.frame(id, chunk);
-      if (p) packets.push(p);
-    }
+    while (offset < dataBytes.length) {
+      const nextOffset = Math.min(offset + MAX_PACKET_PAYLOAD, dataBytes.length);
+      const chunk = dataBytes.subarray(offset, nextOffset);
+      const packet = packetFramer.frame(id, chunk);
 
-    if (packets.length > 0) {
-      let allWritten = true;
-      for (let i = 0; i < packets.length; i++) {
-        const p = packets[i];
-        const bytesWritten = shard.write(p);
+      if (!packet) {
+        break;
+      }
 
-        if (bytesWritten === 0) {
-          // Ring buffer is full - apply backpressure by pausing the PTY
-          const remaining = packets.slice(i);
-          const existing = pendingVisualPackets.get(id) || [];
-          pendingVisualPackets.set(id, existing.concat(remaining));
-          allWritten = false;
-          visualWritten = true; // partial write counts as handled
+      const bytesWritten = shard.write(packet);
 
-          if (!pausedTerminals.has(id)) {
-            const utilization = shard.getUtilization();
+      if (bytesWritten === 0) {
+        // Ring buffer is full - apply backpressure by pausing the PTY
+        const queued = enqueuePendingSegment(id, { data: dataBytes, offset });
+        visualWritten = true; // partial write counts as handled
+
+        if (!queued) {
+          const utilization = shard.getUtilization();
+          const pauseStart = pauseStartTimes.get(id);
+          const pauseDuration = pauseStart ? Date.now() - pauseStart : undefined;
+          suspendVisualStream(id, "pending cap exceeded", utilization, pauseDuration, shardIndex);
+        } else if (!pausedTerminals.has(id)) {
+          const utilization = shard.getUtilization();
+          console.warn(
+            `[PtyHost] Visual buffer full (${utilization.toFixed(1)}% utilized). Pausing PTY ${id} for backpressure.`
+          );
+
+          const terminal = ptyManager.getTerminal(id);
+          if (!terminal?.ptyProcess) {
             console.warn(
-              `[PtyHost] Visual buffer full (${utilization.toFixed(1)}% utilized). Pausing PTY ${id} for backpressure.`
+              `[PtyHost] Cannot apply backpressure: missing PTY process for ${id}. Falling back to IPC.`
             );
+            // Note: We already partially wrote to SAB, falling back to IPC for remainder is tricky/racy.
+            // Since we buffered the remainder in pendingVisualSegments, we just stick to the pause logic.
+            break;
+          }
+          try {
+            terminal.ptyProcess.pause();
+          } catch (error) {
+            console.error(`[PtyHost] Failed to pause PTY ${id}:`, error);
+            break;
+          }
 
-            const terminal = ptyManager.getTerminal(id);
-            if (!terminal?.ptyProcess) {
-              console.warn(
-                `[PtyHost] Cannot apply backpressure: missing PTY process for ${id}. Falling back to IPC.`
+          // Track when we started pausing for timeout safety
+          const pauseStartTime = Date.now();
+          pauseStartTimes.set(id, pauseStartTime);
+
+          // Emit status event for UI
+          emitTerminalStatus(id, "paused-backpressure", utilization);
+
+          // Emit metrics for pause-start
+          emitReliabilityMetric({
+            terminalId: id,
+            metricType: "pause-start",
+            timestamp: pauseStartTime,
+            bufferUtilization: utilization,
+            shardIndex,
+          });
+
+          // Start monitoring for buffer clearance
+          const checkInterval = setInterval(() => {
+            if (visualBuffers.length === 0) {
+              // Buffer disappeared - resume PTY if still exists
+              const terminal = ptyManager.getTerminal(id);
+              if (terminal?.ptyProcess) {
+                try {
+                  terminal.ptyProcess.resume();
+                  console.log(`[PtyHost] Visual buffers removed. Resumed PTY ${id}`);
+                  // Emit resume status
+                  const pauseDuration = Date.now() - (pauseStartTimes.get(id) ?? pauseStartTime);
+                  emitTerminalStatus(id, "running", undefined, pauseDuration);
+
+                  // Emit metrics for pause-end
+                  emitReliabilityMetric({
+                    terminalId: id,
+                    metricType: "pause-end",
+                    timestamp: Date.now(),
+                    durationMs: pauseDuration,
+                  });
+                } catch (error) {
+                  console.error(
+                    `[PtyHost] Failed to resume PTY ${id} after buffer removal:`,
+                    error
+                  );
+                }
+              }
+              clearInterval(checkInterval);
+              pausedTerminals.delete(id);
+              pauseStartTimes.delete(id);
+              clearPendingVisual(id);
+              return;
+            }
+
+            const shardIndex = selectShard(id, visualBuffers.length);
+            const shard = visualBuffers[shardIndex];
+            const currentUtilization = shard.getUtilization();
+            const pauseDuration = Date.now() - pauseStartTime;
+
+            // If the stream is stalled for too long, stop streaming for this terminal
+            // and rely on headless state + explicit wake to restore fidelity.
+            if (pauseDuration > STREAM_STALL_SUSPEND_MS) {
+              suspendVisualStream(
+                id,
+                `${pauseDuration}ms stall`,
+                currentUtilization,
+                pauseDuration,
+                shardIndex
               );
-              // Note: We already partially wrote to SAB, falling back to IPC for remainder is tricky/racy.
-              // Since we buffered the remainder in pendingVisualPackets, we just stick to the pause logic.
-              break;
-            }
-            try {
-              terminal.ptyProcess.pause();
-            } catch (error) {
-              console.error(`[PtyHost] Failed to pause PTY ${id}:`, error);
-              break;
+              return;
             }
 
-            // Track when we started pausing for timeout safety
-            const pauseStartTime = Date.now();
-            pauseStartTimes.set(id, pauseStartTime);
-
-            // Emit status event for UI
-            emitTerminalStatus(id, "paused-backpressure", utilization);
-
-            // Emit metrics for pause-start
-            emitReliabilityMetric({
-              terminalId: id,
-              metricType: "pause-start",
-              timestamp: pauseStartTime,
-              bufferUtilization: utilization,
-              shardIndex,
-            });
-
-            // Start monitoring for buffer clearance
-            const checkInterval = setInterval(() => {
-              if (visualBuffers.length === 0) {
-                // Buffer disappeared - resume PTY if still exists
-                const terminal = ptyManager.getTerminal(id);
-                if (terminal?.ptyProcess) {
-                  try {
+            // Force resume if paused too long (safety against indefinite pause)
+            if (pauseDuration > BACKPRESSURE_MAX_PAUSE_MS) {
+              const terminal = ptyManager.getTerminal(id);
+              if (terminal?.ptyProcess) {
+                try {
+                  // If we still can't flush the pending packet, stop streaming and rely on wake.
+                  if (pendingVisualSegments.has(id)) {
+                    suspendVisualStream(
+                      id,
+                      `${pauseDuration}ms max pause`,
+                      currentUtilization,
+                      pauseDuration,
+                      shardIndex
+                    );
+                  } else {
                     terminal.ptyProcess.resume();
-                    console.log(`[PtyHost] Visual buffers removed. Resumed PTY ${id}`);
-                    // Emit resume status
-                    const pauseDuration = Date.now() - (pauseStartTimes.get(id) ?? pauseStartTime);
-                    emitTerminalStatus(id, "running", undefined, pauseDuration);
+                    console.warn(
+                      `[PtyHost] Force resumed PTY ${id} after ${pauseDuration}ms (buffer at ${currentUtilization.toFixed(1)}%). ` +
+                        `Consumer may be stalled.`
+                    );
+                    // Emit resume status with duration
+                    emitTerminalStatus(id, "running", currentUtilization, pauseDuration);
 
-                    // Emit metrics for pause-end
+                    // Emit metrics for pause-end (force resume path)
                     emitReliabilityMetric({
                       terminalId: id,
                       metricType: "pause-end",
                       timestamp: Date.now(),
                       durationMs: pauseDuration,
+                      bufferUtilization: currentUtilization,
                     });
-                  } catch (error) {
-                    console.error(
-                      `[PtyHost] Failed to resume PTY ${id} after buffer removal:`,
-                      error
+                  }
+                } catch (error) {
+                  console.error(`[PtyHost] Failed to force resume PTY ${id}:`, error);
+                }
+              }
+              clearInterval(checkInterval);
+              pausedTerminals.delete(id);
+              pauseStartTimes.delete(id);
+              return;
+            }
+
+            // Resume when buffer drops below threshold (hysteresis to prevent rapid pause/resume)
+            if (currentUtilization < BACKPRESSURE_RESUME_THRESHOLD) {
+              const pending = pendingVisualSegments.get(id);
+              if (pending && pending.length > 0) {
+                let wrotePending = false;
+                while (pending.length > 0) {
+                  const segment = pending[0];
+                  while (segment.offset < segment.data.length) {
+                    const end = Math.min(
+                      segment.offset + MAX_PACKET_PAYLOAD,
+                      segment.data.length
                     );
+                    const pendingChunk = segment.data.subarray(segment.offset, end);
+                    const pendingPacket = packetFramer.frame(id, pendingChunk);
+                    if (!pendingPacket) {
+                      const remaining = segment.data.length - segment.offset;
+                      consumePendingBytes(id, remaining);
+                      segment.offset = segment.data.length;
+                      break;
+                    }
+                    const pendingWritten = shard.write(pendingPacket);
+                    if (pendingWritten === 0) {
+                      if (wrotePending && visualSignalView) {
+                        Atomics.add(visualSignalView, 0, 1);
+                        Atomics.notify(visualSignalView, 0, 1);
+                      }
+                      return; // Still full
+                    }
+                    wrotePending = true;
+                    segment.offset = end;
+                    consumePendingBytes(id, pendingChunk.length);
+                  }
+
+                  if (segment.offset >= segment.data.length) {
+                    pending.shift();
+                  } else {
+                    break;
                   }
                 }
-                clearInterval(checkInterval);
-                pausedTerminals.delete(id);
-                pauseStartTimes.delete(id);
-                pendingVisualPackets.delete(id);
-                return;
+
+                if (wrotePending && visualSignalView) {
+                  Atomics.add(visualSignalView, 0, 1);
+                  Atomics.notify(visualSignalView, 0, 1);
+                }
+
+                if (pending.length === 0) {
+                  clearPendingVisual(id);
+                }
               }
 
-              const shardIndex = selectShard(id, visualBuffers.length);
-              const shard = visualBuffers[shardIndex];
-              const currentUtilization = shard.getUtilization();
-              const pauseDuration = Date.now() - pauseStartTime;
-
-              // If the stream is stalled for too long, stop streaming for this terminal
-              // and rely on headless state + explicit wake to restore fidelity.
-              if (pauseDuration > STREAM_STALL_SUSPEND_MS) {
+              if (!pendingVisualSegments.has(id)) {
                 const terminal = ptyManager.getTerminal(id);
                 if (terminal?.ptyProcess) {
                   try {
                     terminal.ptyProcess.resume();
-                  } catch {
-                    // ignore
-                  }
-                }
+                    console.log(
+                      `[PtyHost] Buffer cleared to ${currentUtilization.toFixed(1)}%. Resumed PTY ${id}`
+                    );
+                    // Emit resume status with duration
+                    emitTerminalStatus(id, "running", currentUtilization, pauseDuration);
 
-                suspendedDueToStall.add(id);
-                pendingVisualPackets.delete(id);
-                emitTerminalStatus(id, "suspended", currentUtilization, pauseDuration);
-                console.warn(
-                  `[PtyHost] Suspended streaming for ${id} after ${pauseDuration}ms stall (buffer ${currentUtilization.toFixed(1)}%).`
-                );
-
-                // Emit metrics for suspend
-                emitReliabilityMetric({
-                  terminalId: id,
-                  metricType: "suspend",
-                  timestamp: Date.now(),
-                  durationMs: pauseDuration,
-                  bufferUtilization: currentUtilization,
-                  shardIndex,
-                });
-
-                clearInterval(checkInterval);
-                pausedTerminals.delete(id);
-                pauseStartTimes.delete(id);
-                return;
-              }
-
-              // Force resume if paused too long (safety against indefinite pause)
-              if (pauseDuration > BACKPRESSURE_MAX_PAUSE_MS) {
-                const terminal = ptyManager.getTerminal(id);
-                if (terminal?.ptyProcess) {
-                  try {
-                    // If we still can't flush the pending packet, stop streaming and rely on wake.
-                    if (pendingVisualPackets.has(id)) {
-                      terminal.ptyProcess.resume();
-                      suspendedDueToStall.add(id);
-                      pendingVisualPackets.delete(id);
-                      emitTerminalStatus(id, "suspended", currentUtilization, pauseDuration);
-                      console.warn(
-                        `[PtyHost] Suspended streaming for ${id} after ${pauseDuration}ms max pause (buffer ${currentUtilization.toFixed(1)}%).`
-                      );
-
-                      // Emit metrics for suspend (force resume path)
-                      emitReliabilityMetric({
-                        terminalId: id,
-                        metricType: "suspend",
-                        timestamp: Date.now(),
-                        durationMs: pauseDuration,
-                        bufferUtilization: currentUtilization,
-                        shardIndex,
-                      });
-                    } else {
-                      terminal.ptyProcess.resume();
-                      console.warn(
-                        `[PtyHost] Force resumed PTY ${id} after ${pauseDuration}ms (buffer at ${currentUtilization.toFixed(1)}%). ` +
-                          `Consumer may be stalled.`
-                      );
-                      // Emit resume status with duration
-                      emitTerminalStatus(id, "running", currentUtilization, pauseDuration);
-
-                      // Emit metrics for pause-end (force resume path)
-                      emitReliabilityMetric({
-                        terminalId: id,
-                        metricType: "pause-end",
-                        timestamp: Date.now(),
-                        durationMs: pauseDuration,
-                        bufferUtilization: currentUtilization,
-                      });
-                    }
+                    // Emit metrics for pause-end (normal resume path)
+                    emitReliabilityMetric({
+                      terminalId: id,
+                      metricType: "pause-end",
+                      timestamp: Date.now(),
+                      durationMs: pauseDuration,
+                      bufferUtilization: currentUtilization,
+                    });
                   } catch (error) {
-                    console.error(`[PtyHost] Failed to force resume PTY ${id}:`, error);
+                    console.error(`[PtyHost] Failed to resume PTY ${id}:`, error);
                   }
                 }
                 clearInterval(checkInterval);
                 pausedTerminals.delete(id);
                 pauseStartTimes.delete(id);
-                return;
               }
+            }
+          }, BACKPRESSURE_CHECK_INTERVAL_MS);
 
-              // Resume when buffer drops below threshold (hysteresis to prevent rapid pause/resume)
-              if (currentUtilization < BACKPRESSURE_RESUME_THRESHOLD) {
-                const pending = pendingVisualPackets.get(id);
-                if (pending && pending.length > 0) {
-                  while (pending.length > 0) {
-                    const p = pending[0];
-                    const pendingWritten = shard.write(p);
-                    if (pendingWritten === 0) {
-                      return; // Still full
-                    }
-                    pending.shift(); // Remove written packet
-                  }
-
-                  if (visualSignalView) {
-                    Atomics.add(visualSignalView, 0, 1);
-                    Atomics.notify(visualSignalView, 0, 1);
-                  }
-
-                  if (pending.length === 0) {
-                    pendingVisualPackets.delete(id);
-                  }
-                }
-
-                if (!pendingVisualPackets.has(id)) {
-                  const terminal = ptyManager.getTerminal(id);
-                  if (terminal?.ptyProcess) {
-                    try {
-                      terminal.ptyProcess.resume();
-                      console.log(
-                        `[PtyHost] Buffer cleared to ${currentUtilization.toFixed(1)}%. Resumed PTY ${id}`
-                      );
-                      // Emit resume status with duration
-                      emitTerminalStatus(id, "running", currentUtilization, pauseDuration);
-
-                      // Emit metrics for pause-end (normal resume path)
-                      emitReliabilityMetric({
-                        terminalId: id,
-                        metricType: "pause-end",
-                        timestamp: Date.now(),
-                        durationMs: pauseDuration,
-                        bufferUtilization: currentUtilization,
-                      });
-                    } catch (error) {
-                      console.error(`[PtyHost] Failed to resume PTY ${id}:`, error);
-                    }
-                  }
-                  clearInterval(checkInterval);
-                  pausedTerminals.delete(id);
-                  pauseStartTimes.delete(id);
-                }
-              }
-            }, BACKPRESSURE_CHECK_INTERVAL_MS);
-
-            pausedTerminals.set(id, checkInterval);
-          }
-          break; // Stop writing packets
+          pausedTerminals.set(id, checkInterval);
         }
+        break; // Stop writing packets
       }
 
-      if (allWritten) {
-        visualWritten = true;
-        if (visualSignalView) {
-          Atomics.add(visualSignalView, 0, 1);
-          Atomics.notify(visualSignalView, 0, 1);
-        }
+      wroteAny = true;
+      offset = nextOffset;
+    }
+
+    if (wroteAny) {
+      visualWritten = true;
+      if (visualSignalView) {
+        Atomics.add(visualSignalView, 0, 1);
+        Atomics.notify(visualSignalView, 0, 1);
       }
     }
   }
@@ -622,7 +722,7 @@ ptyManager.on("exit", (id: string, exitCode: number) => {
   terminalStatuses.delete(id);
   terminalActivityTiers.delete(id);
   suspendedDueToStall.delete(id);
-  pendingVisualPackets.delete(id);
+  clearPendingVisual(id);
 
   sendEvent({ type: "exit", id, exitCode });
 });
@@ -796,9 +896,16 @@ port.on("message", async (rawMsg: any) => {
             break;
           }
 
-          if (rendererPort && rendererPortMessageHandler) {
+          if (rendererPort) {
+            if (rendererPortMessageHandler) {
+              try {
+                rendererPort.removeListener("message", rendererPortMessageHandler);
+              } catch {
+                // ignore
+              }
+            }
             try {
-              rendererPort.removeListener("message", rendererPortMessageHandler);
+              rendererPort.close();
             } catch {
               // ignore
             }
@@ -931,7 +1038,7 @@ port.on("message", async (rawMsg: any) => {
 
         // If tier flips, clear any stall suspension and unblock the PTY.
         suspendedDueToStall.delete(msg.id);
-        pendingVisualPackets.delete(msg.id);
+        clearPendingVisual(msg.id);
 
         const checkInterval = pausedTerminals.get(msg.id);
         const wasPaused = checkInterval !== undefined;
@@ -973,7 +1080,7 @@ port.on("message", async (rawMsg: any) => {
         // Wake implies we want a faithful snapshot + resume streaming.
         terminalActivityTiers.set(msg.id, "active");
         suspendedDueToStall.delete(msg.id);
-        pendingVisualPackets.delete(msg.id);
+        clearPendingVisual(msg.id);
 
         // Clear any active pause interval and timing
         const checkInterval = pausedTerminals.get(msg.id);
@@ -1243,7 +1350,7 @@ port.on("message", async (rawMsg: any) => {
               clearInterval(checkInterval);
               pausedTerminals.delete(msg.id);
             }
-            pendingVisualPackets.delete(msg.id);
+            clearPendingVisual(msg.id);
 
             // Calculate pause duration if we have a start time
             const pauseStart = pauseStartTimes.get(msg.id);

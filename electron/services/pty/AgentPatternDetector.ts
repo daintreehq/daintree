@@ -73,13 +73,14 @@ export function stripAnsi(text: string): string {
   // Note: Control characters are intentional for ANSI escape matching
   /* eslint-disable no-control-regex */
   return text
-    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "") // CSI sequences
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "") // CSI sequences
     .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "") // OSC sequences
     .replace(/\x1b[()][AB012]/g, "") // Character set designation
     .replace(/\x1b[=>]/g, "") // Keypad mode
     .replace(/\x1b[78]/g, "") // Save/restore cursor
     .replace(/\x1b[DME]/g, "") // Line control
-    .replace(/\x1b\[[\d;]*m/g, ""); // SGR (colors/styles) - catch-all
+    .replace(/\x1b\[[\d;]*m/g, "") // SGR (colors/styles) - catch-all
+    .replace(/\x1b[@-Z\\-_]/g, ""); // 7-bit C1 escapes
   /* eslint-enable no-control-regex */
 }
 
@@ -91,9 +92,7 @@ export const AGENT_PATTERN_CONFIGS: Record<string, PatternDetectionConfig> = {
   claude: {
     primaryPatterns: [
       // Full format with interrupt hint
-      /[✽✻✼✾⟡◇◆●○]\s+\w+…?\s+\(esc to interrupt/i,
-      // Generic interrupt hint (catches variations)
-      /esc to interrupt/i,
+      /[✽✻✼✾⟡◇◆●○]\s+[^()\n]{2,80}\s*\(esc to interrupt/i,
     ],
     fallbackPatterns: [
       // Minimal format (just spinner + activity word, no parens)
@@ -107,9 +106,7 @@ export const AGENT_PATTERN_CONFIGS: Record<string, PatternDetectionConfig> = {
   gemini: {
     primaryPatterns: [
       // ASCII spinner + text + cancel hint
-      /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+.+\s+\(esc to cancel/i,
-      // Generic cancel hint
-      /esc to cancel/i,
+      /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+[^()\n]{2,80}\s*\(esc to cancel/i,
     ],
     fallbackPatterns: [
       // Just the spinner (Braille dots used by Gemini)
@@ -123,9 +120,7 @@ export const AGENT_PATTERN_CONFIGS: Record<string, PatternDetectionConfig> = {
   codex: {
     primaryPatterns: [
       // Full format with interrupt hint
-      /[•·]\s+Working\s+\([^)]*esc to interrupt/i,
-      // Generic interrupt hint
-      /esc to interrupt/i,
+      /[•·]\s+[^()\n]{2,80}\s+\([^)]*esc to interrupt/i,
     ],
     fallbackPatterns: [
       // Minimal "Working" indicator
@@ -142,7 +137,11 @@ export const AGENT_PATTERN_CONFIGS: Record<string, PatternDetectionConfig> = {
  * Used when agent-specific patterns aren't configured.
  */
 export const UNIVERSAL_PATTERN_CONFIG: PatternDetectionConfig = {
-  primaryPatterns: [/esc to interrupt/i, /esc to cancel/i, /escape to interrupt/i],
+  primaryPatterns: [
+    /[✽✻✼✾⟡◇◆●○•·⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+[^()\n]{2,80}\s*\(esc to interrupt/i,
+    /[✽✻✼✾⟡◇◆●○•·⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+[^()\n]{2,80}\s*\(esc to cancel/i,
+    /[✽✻✼✾⟡◇◆●○•·⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+[^()\n]{2,80}\s*\(escape to interrupt/i,
+  ],
   fallbackPatterns: [
     // Common spinner characters followed by activity
     /[✽✻✼✾⟡◇◆●○•·⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+(thinking|working|loading|processing|running)/i,

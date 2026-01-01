@@ -137,11 +137,17 @@ export class PtyClient extends EventEmitter {
   private isInitialized = false;
   private isDisposed = false;
   private healthCheckInterval: NodeJS.Timeout | null = null;
+  private restartTimer: NodeJS.Timeout | null = null;
   private restartAttempts = 0;
   private isHealthCheckPaused = false;
   private isWaitingForHandshake = false;
   private handshakeTimeout: NodeJS.Timeout | null = null;
   private pendingSpawns: Map<string, PtyHostSpawnOptions> = new Map();
+  private needsRespawn = false;
+  private activeProjectId: string | null = null;
+  private projectContextMode: "active" | "switch" = "active";
+  private shouldResyncProjectContext = false;
+  private pendingMessagePort: MessagePortMain | null = null;
 
   /** Watchdog: Track missed heartbeat responses to detect deadlocks */
   private missedHeartbeats = 0;
@@ -285,6 +291,11 @@ export class PtyClient extends EventEmitter {
       return;
     }
 
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+
     // Reset initialization state for restart
     this.isInitialized = false;
     this.readyPromise = new Promise((resolve) => {
@@ -367,6 +378,9 @@ export class PtyClient extends EventEmitter {
         return;
       }
 
+      this.broker.clear(new Error("Pty host restarted"));
+      this.shouldResyncProjectContext = true;
+
       // Emit crash payload with classification for downstream consumers
       if (crashType !== "CLEAN_EXIT") {
         const crashPayload: HostCrashPayload = {
@@ -386,10 +400,13 @@ export class PtyClient extends EventEmitter {
           `[PtyClient] Restarting Host in ${delay}ms (attempt ${this.restartAttempts}/${this.config.maxRestartAttempts})`
         );
 
-        setTimeout(() => {
+        if (this.restartTimer) {
+          clearTimeout(this.restartTimer);
+        }
+        this.restartTimer = setTimeout(() => {
+          this.restartTimer = null;
+          this.needsRespawn = true;
           this.startHost();
-          // Re-spawn any terminals that were pending
-          this.respawnPending();
         }, delay);
       } else {
         console.error("[PtyClient] Max restart attempts reached, giving up");
@@ -449,6 +466,15 @@ export class PtyClient extends EventEmitter {
           this.readyResolve = null;
         }
         console.log("[PtyClient] Pty Host is ready");
+        if (this.needsRespawn) {
+          this.needsRespawn = false;
+          this.respawnPending();
+        }
+        if (this.shouldResyncProjectContext) {
+          this.shouldResyncProjectContext = false;
+          this.syncProjectContext();
+        }
+        this.flushPendingMessagePort();
         break;
 
       case "data":
@@ -567,6 +593,14 @@ export class PtyClient extends EventEmitter {
   private respawnPending(): void {
     // Notify that ports need refresh after host restart
     if (this.onPortRefresh) {
+      if (this.pendingMessagePort) {
+        try {
+          this.pendingMessagePort.close();
+        } catch {
+          // ignore
+        }
+        this.pendingMessagePort = null;
+      }
       this.onPortRefresh();
     }
 
@@ -582,10 +616,30 @@ export class PtyClient extends EventEmitter {
     this.onPortRefresh = callback;
   }
 
+  private flushPendingMessagePort(): void {
+    if (!this.child || !this.pendingMessagePort) {
+      return;
+    }
+
+    const port = this.pendingMessagePort;
+    this.pendingMessagePort = null;
+    this.connectMessagePort(port);
+  }
+
   /** Forward MessagePort to Pty Host for direct Renderer↔PtyHost communication */
   connectMessagePort(port: MessagePortMain): void {
+    if (this.pendingMessagePort && this.pendingMessagePort !== port) {
+      try {
+        this.pendingMessagePort.close();
+      } catch {
+        // ignore
+      }
+      this.pendingMessagePort = null;
+    }
+
     if (!this.child) {
       console.warn("[PtyClient] Cannot connect MessagePort - host not running, will retry");
+      this.pendingMessagePort = port;
       return;
     }
 
@@ -596,6 +650,7 @@ export class PtyClient extends EventEmitter {
       }
     } catch (error) {
       console.error("[PtyClient] Failed to forward MessagePort to Pty Host:", error);
+      this.pendingMessagePort = port;
     }
   }
 
@@ -703,11 +758,46 @@ export class PtyClient extends EventEmitter {
     return promise.catch(() => ({ state: null }));
   }
 
+  private syncProjectContext(): void {
+    if (!this.child) {
+      this.shouldResyncProjectContext = true;
+      return;
+    }
+
+    if (!this.activeProjectId) {
+      this.send({ type: "set-active-project", projectId: null });
+      return;
+    }
+
+    if (this.projectContextMode === "switch") {
+      this.send({ type: "project-switch", projectId: this.activeProjectId });
+      return;
+    }
+
+    this.send({ type: "set-active-project", projectId: this.activeProjectId });
+  }
+
   setActiveProject(projectId: string | null): void {
+    this.activeProjectId = projectId;
+    this.projectContextMode = "active";
+
+    if (!this.child) {
+      this.shouldResyncProjectContext = true;
+      return;
+    }
+
     this.send({ type: "set-active-project", projectId });
   }
 
   onProjectSwitch(projectId: string): void {
+    this.activeProjectId = projectId;
+    this.projectContextMode = "switch";
+
+    if (!this.child) {
+      this.shouldResyncProjectContext = true;
+      return;
+    }
+
     this.send({ type: "project-switch", projectId });
   }
 
@@ -989,6 +1079,8 @@ export class PtyClient extends EventEmitter {
   dispose(): void {
     if (this.isDisposed) return;
     this.isDisposed = true;
+    this.shouldResyncProjectContext = false;
+    this.needsRespawn = false;
 
     console.log("[PtyClient] Disposing...");
 
@@ -997,11 +1089,25 @@ export class PtyClient extends EventEmitter {
       this.healthCheckInterval = null;
     }
 
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+
     if (this.handshakeTimeout) {
       clearTimeout(this.handshakeTimeout);
       this.handshakeTimeout = null;
     }
     this.isWaitingForHandshake = false;
+
+    if (this.pendingMessagePort) {
+      try {
+        this.pendingMessagePort.close();
+      } catch {
+        // ignore
+      }
+      this.pendingMessagePort = null;
+    }
 
     if (this.child) {
       this.send({ type: "dispose" });

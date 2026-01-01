@@ -282,12 +282,40 @@ export class WorktreeMonitor {
     }
   }
 
+  private scheduleCircuitBreakerRetry(): void {
+    if (!this.isRunning || !this.pollingEnabled) {
+      return;
+    }
+
+    if (!this.pollingStrategy.isCircuitBreakerTripped()) {
+      return;
+    }
+
+    if (this.pollingTimer || this.resumeTimer) {
+      return;
+    }
+
+    const cooldown = Math.max(
+      this.config.pollIntervalMax,
+      this.pollingStrategy.calculateNextInterval()
+    );
+    const jitter = Math.random() * 2000;
+
+    this.resumeTimer = setTimeout(() => {
+      this.resumeTimer = null;
+      if (this.isRunning && this.pollingEnabled) {
+        void this.poll(true);
+      }
+    }, cooldown + jitter);
+  }
+
   private scheduleNextPoll(): void {
     if (!this.isRunning || !this.pollingEnabled) {
       return;
     }
 
     if (this.pollingStrategy.isCircuitBreakerTripped()) {
+      this.scheduleCircuitBreakerRetry();
       return;
     }
 
@@ -303,8 +331,8 @@ export class WorktreeMonitor {
     }, nextInterval);
   }
 
-  private async poll(): Promise<void> {
-    if (!this.isRunning || this.pollingStrategy.isCircuitBreakerTripped()) {
+  private async poll(force: boolean = false): Promise<void> {
+    if (!this.isRunning || (!force && this.pollingStrategy.isCircuitBreakerTripped())) {
       return;
     }
 
@@ -318,8 +346,9 @@ export class WorktreeMonitor {
 
       if (tripped) {
         this.mood = "error";
-        this.summary = "⚠️ Polling stopped after consecutive failures";
+        this.summary = "⚠️ Polling delayed after consecutive failures";
         this.emitUpdate();
+        this.scheduleCircuitBreakerRetry();
         return;
       }
     }

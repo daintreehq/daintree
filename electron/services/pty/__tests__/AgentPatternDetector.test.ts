@@ -198,7 +198,7 @@ describe("AgentPatternDetector", () => {
     const detector = createPatternDetector(); // No agent ID = universal
 
     it("should detect generic 'esc to interrupt' pattern", () => {
-      const output = "Processing... (esc to interrupt)";
+      const output = "✽ Processing... (esc to interrupt)";
       const result = detector.detect(output);
 
       expect(result.isWorking).toBe(true);
@@ -206,7 +206,7 @@ describe("AgentPatternDetector", () => {
     });
 
     it("should detect generic 'esc to cancel' pattern", () => {
-      const output = "Running task (esc to cancel)";
+      const output = "⠼ Running task (esc to cancel)";
       const result = detector.detect(output);
 
       expect(result.isWorking).toBe(true);

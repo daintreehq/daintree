@@ -52,6 +52,7 @@ export class WorkspaceClient extends EventEmitter {
   private isInitialized = false;
   private isDisposed = false;
   private healthCheckInterval: NodeJS.Timeout | null = null;
+  private restartTimer: NodeJS.Timeout | null = null;
   private restartAttempts = 0;
   private isHealthCheckPaused = false;
 
@@ -99,6 +100,11 @@ export class WorkspaceClient extends EventEmitter {
     if (this.isDisposed) {
       console.warn("[WorkspaceClient] Cannot start host - already disposed");
       return;
+    }
+
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
     }
 
     // Reject previous ready promise only if host is restarting (not on initial boot)
@@ -170,7 +176,11 @@ export class WorkspaceClient extends EventEmitter {
           `[WorkspaceClient] Restarting Host in ${delay}ms (attempt ${this.restartAttempts}/${this.config.maxRestartAttempts})`
         );
 
-        setTimeout(() => {
+        if (this.restartTimer) {
+          clearTimeout(this.restartTimer);
+        }
+        this.restartTimer = setTimeout(() => {
+          this.restartTimer = null;
           this.startHost();
           // Re-load project if we had one
           if (this.currentRootPath) {
@@ -805,6 +815,11 @@ export class WorkspaceClient extends EventEmitter {
     if (this.healthCheckInterval) {
       clearInterval(this.healthCheckInterval);
       this.healthCheckInterval = null;
+    }
+
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
     }
 
     // Reject all pending requests and clear their timeouts
