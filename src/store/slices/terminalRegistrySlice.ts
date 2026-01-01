@@ -7,6 +7,7 @@ import type {
   TerminalLocation,
   AgentStateChangeTrigger,
   TerminalFlowStatus,
+  TerminalRuntimeStatus,
 } from "@/types";
 import { terminalClient, agentSettingsClient } from "@/clients";
 import { generateAgentFlags } from "@shared/types";
@@ -44,6 +45,23 @@ const DOCK_TERM_HEIGHT = DOCK_HEIGHT - HEADER_HEIGHT - PADDING_Y;
 // Dock previews are clipped rather than driving PTY resizes.
 const DOCK_PREWARM_WIDTH_PX = 1200;
 const DOCK_PREWARM_HEIGHT_PX = 800;
+
+const deriveRuntimeStatus = (
+  isVisible: boolean | undefined,
+  flowStatus?: TerminalFlowStatus,
+  currentStatus?: TerminalRuntimeStatus
+): TerminalRuntimeStatus => {
+  if (currentStatus === "exited" || currentStatus === "error") {
+    return currentStatus;
+  }
+  if (flowStatus && flowStatus !== "running") {
+    return flowStatus;
+  }
+  if (isVisible === false) {
+    return "background";
+  }
+  return "running";
+};
 
 export type TerminalInstance = TerminalInstanceType;
 
@@ -149,6 +167,7 @@ export interface TerminalRegistrySlice {
   updateTerminalCwd: (id: string, cwd: string) => void;
   moveTerminalToWorktree: (id: string, worktreeId: string) => void;
   updateFlowStatus: (id: string, status: TerminalFlowStatus, timestamp: number) => void;
+  setRuntimeStatus: (id: string, status: TerminalRuntimeStatus) => void;
   setInputLocked: (id: string, locked: boolean) => void;
   toggleInputLocked: (id: string) => void;
   convertTerminalType: (id: string, newType: TerminalType, newAgentId?: string) => Promise<void>;
@@ -246,6 +265,11 @@ export const createTerminalRegistrySlice =
           requestedLocation === "grid" && currentGridCount >= maxCapacity
             ? "dock"
             : requestedLocation;
+        const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
+        const isInActiveWorktree = (options.worktreeId ?? null) === (activeWorktreeId ?? null);
+        const shouldBackground =
+          location === "dock" || (location === "grid" && !isInActiveWorktree);
+        const runtimeStatus: TerminalRuntimeStatus = shouldBackground ? "background" : "running";
 
         let terminal: TerminalInstance;
         if (requestedKind === "browser") {
@@ -256,6 +280,7 @@ export const createTerminalRegistrySlice =
             worktreeId: options.worktreeId,
             location,
             isVisible: location === "grid",
+            runtimeStatus,
             browserUrl: options.browserUrl || "http://localhost:3000",
             type: "terminal" as const,
             cwd: "",
@@ -270,6 +295,7 @@ export const createTerminalRegistrySlice =
             worktreeId: options.worktreeId,
             location,
             isVisible: location === "grid",
+            runtimeStatus,
             notePath: options.notePath ?? "",
             noteId: options.noteId ?? "",
             scope: options.scope ?? "project",
@@ -287,6 +313,7 @@ export const createTerminalRegistrySlice =
             worktreeId: options.worktreeId,
             location,
             isVisible: location === "grid",
+            runtimeStatus,
             type: "terminal" as const,
             cwd: options.cwd || "",
             cols: 80,
@@ -301,6 +328,7 @@ export const createTerminalRegistrySlice =
             worktreeId: options.worktreeId,
             location,
             isVisible: location === "grid",
+            runtimeStatus,
             type: "terminal" as const,
             cwd: "",
             cols: 80,
@@ -339,6 +367,11 @@ export const createTerminalRegistrySlice =
         requestedLocation === "grid" && currentGridCount >= maxCapacity
           ? "dock"
           : requestedLocation;
+      const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
+      const isInActiveWorktree = (options.worktreeId ?? null) === (activeWorktreeId ?? null);
+      const shouldBackground =
+        location === "dock" || (location === "grid" && !isInActiveWorktree);
+      const runtimeStatus: TerminalRuntimeStatus = shouldBackground ? "background" : "running";
 
       try {
         let id: string;
@@ -459,6 +492,7 @@ export const createTerminalRegistrySlice =
           // Initialize grid terminals as visible to avoid initial under-throttling
           // IntersectionObserver will update this once mounted
           isVisible: location === "grid" ? true : false,
+          runtimeStatus,
           isInputLocked: options.isInputLocked,
         };
 
@@ -472,11 +506,6 @@ export const createTerminalRegistrySlice =
         // 1. Dock terminals are always backgrounded (offscreen)
         // 2. Grid terminals in inactive worktrees should also be backgrounded
         //    since they won't mount until the worktree becomes active
-        const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
-        const isInActiveWorktree = (options.worktreeId ?? null) === (activeWorktreeId ?? null);
-        const shouldBackground =
-          location === "dock" || (location === "grid" && !isInActiveWorktree);
-
         if (shouldBackground) {
           // Terminal is either in dock or in an inactive worktree.
           // Apply BACKGROUND policy to prevent renderer updates for unmounted terminals.
@@ -618,7 +647,14 @@ export const createTerminalRegistrySlice =
           return state;
         }
 
-        const newTerminals = state.terminals.map((t) => (t.id === id ? { ...t, isVisible } : t));
+        const runtimeStatus = deriveRuntimeStatus(
+          isVisible,
+          terminal.flowStatus,
+          terminal.runtimeStatus
+        );
+        const newTerminals = state.terminals.map((t) =>
+          t.id === id ? { ...t, isVisible, runtimeStatus } : t
+        );
 
         return { terminals: newTerminals };
       });
@@ -1262,6 +1298,11 @@ export const createTerminalRegistrySlice =
                 worktreeId,
                 location: newLocation,
                 isVisible: newLocation === "grid" ? true : false,
+                runtimeStatus: deriveRuntimeStatus(
+                  newLocation === "grid",
+                  t.flowStatus,
+                  t.runtimeStatus
+                ),
               }
             : t
         );
@@ -1292,9 +1333,34 @@ export const createTerminalRegistrySlice =
           return state;
         }
 
+        const runtimeStatus = deriveRuntimeStatus(
+          terminal.isVisible,
+          status,
+          terminal.runtimeStatus
+        );
+
         return {
           terminals: state.terminals.map((t) =>
-            t.id === id ? { ...t, flowStatus: status, flowStatusTimestamp: timestamp } : t
+            t.id === id
+              ? { ...t, flowStatus: status, flowStatusTimestamp: timestamp, runtimeStatus }
+              : t
+          ),
+        };
+      });
+    },
+
+    setRuntimeStatus: (id, status) => {
+      set((state) => {
+        const terminal = state.terminals.find((t) => t.id === id);
+        if (!terminal) return state;
+
+        if (terminal.runtimeStatus === status) {
+          return state;
+        }
+
+        return {
+          terminals: state.terminals.map((t) =>
+            t.id === id ? { ...t, runtimeStatus: status } : t
           ),
         };
       });

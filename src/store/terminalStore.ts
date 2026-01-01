@@ -443,6 +443,8 @@ export function setupTerminalStoreListeners() {
       return;
     }
 
+    state.setRuntimeStatus(id, "exited");
+
     // If already trashed, this is TTL expiry cleanup - permanently remove
     if (terminal.location === "trash") {
       state.removeTerminal(id);

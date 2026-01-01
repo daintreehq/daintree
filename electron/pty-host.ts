@@ -1006,6 +1006,13 @@ port.on("message", async (rawMsg: any) => {
 
       case "spawn":
         ptyManager.spawn(msg.id, msg.options);
+        {
+          const terminalInfo = ptyManager.getTerminal(msg.id);
+          const pid = terminalInfo?.ptyProcess?.pid;
+          if (pid !== undefined) {
+            sendEvent({ type: "terminal-pid", id: msg.id, pid });
+          }
+        }
         break;
 
       case "write":

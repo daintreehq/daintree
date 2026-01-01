@@ -399,11 +399,14 @@ export class WorkspaceService {
     }
 
     const nextInterval = monitor.pollingStrategy.calculateNextInterval();
+    const jitterRange = Math.min(2000, Math.floor(nextInterval * 0.2));
+    const jitter = jitterRange > 0 ? Math.floor(Math.random() * jitterRange) : 0;
+    const delayMs = nextInterval + jitter;
 
     monitor.pollingTimer = setTimeout(() => {
       monitor.pollingTimer = null;
       void this.poll(monitor);
-    }, nextInterval);
+    }, delayMs);
   }
 
   private async poll(monitor: MonitorState, force: boolean = false): Promise<void> {
@@ -412,15 +415,17 @@ export class WorkspaceService {
     }
 
     let tripped = false;
+    const queuedAt = Date.now();
 
     const executePoll = async (): Promise<void> => {
       const startTime = Date.now();
+      const queueDelayMs = Math.max(0, startTime - queuedAt);
 
       try {
         await this.updateGitStatus(monitor, monitor.isCurrent);
-        monitor.pollingStrategy.recordSuccess(Date.now() - startTime);
+        monitor.pollingStrategy.recordSuccess(Date.now() - startTime, queueDelayMs);
       } catch (error) {
-        tripped = monitor.pollingStrategy.recordFailure(Date.now() - startTime);
+        tripped = monitor.pollingStrategy.recordFailure(Date.now() - startTime, queueDelayMs);
 
         if (tripped) {
           monitor.mood = "error";

@@ -9,6 +9,7 @@ export interface AdaptivePollingConfig {
 
 export interface AdaptivePollingMetrics {
   lastOperationDuration: number;
+  lastQueueDelay: number;
   consecutiveFailures: number;
   circuitBreakerTripped: boolean;
   currentInterval: number;
@@ -21,6 +22,7 @@ export class AdaptivePollingStrategy {
   private circuitBreakerThreshold: number;
 
   private lastOperationDuration: number = 0;
+  private lastQueueDelay: number = 0;
   private consecutiveFailures: number = 0;
   private circuitBreakerTripped: boolean = false;
 
@@ -43,16 +45,20 @@ export class AdaptivePollingStrategy {
     return Math.min(nextInterval, this.maxInterval);
   }
 
-  public recordSuccess(durationMs: number): void {
-    this.lastOperationDuration = durationMs;
+  public recordSuccess(durationMs: number, queueDelayMs: number = 0): void {
+    const queueDelay = Math.max(0, queueDelayMs);
+    this.lastOperationDuration = durationMs + queueDelay;
+    this.lastQueueDelay = queueDelay;
     this.consecutiveFailures = 0;
     if (this.circuitBreakerTripped) {
       this.circuitBreakerTripped = false;
     }
   }
 
-  public recordFailure(durationMs: number): boolean {
-    this.lastOperationDuration = durationMs;
+  public recordFailure(durationMs: number, queueDelayMs: number = 0): boolean {
+    const queueDelay = Math.max(0, queueDelayMs);
+    this.lastOperationDuration = durationMs + queueDelay;
+    this.lastQueueDelay = queueDelay;
     this.consecutiveFailures++;
 
     if (this.consecutiveFailures >= this.circuitBreakerThreshold) {
@@ -70,11 +76,13 @@ export class AdaptivePollingStrategy {
     this.circuitBreakerTripped = false;
     this.consecutiveFailures = 0;
     this.lastOperationDuration = 0;
+    this.lastQueueDelay = 0;
   }
 
   public getMetrics(): AdaptivePollingMetrics {
     return {
       lastOperationDuration: this.lastOperationDuration,
+      lastQueueDelay: this.lastQueueDelay,
       consecutiveFailures: this.consecutiveFailures,
       circuitBreakerTripped: this.circuitBreakerTripped,
       currentInterval: this.calculateNextInterval(),

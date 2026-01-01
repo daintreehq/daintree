@@ -268,6 +268,12 @@ export enum TerminalRefreshTier {
   BACKGROUND = 1000, // 1fps
 }
 
+/** Flow-control states emitted by the PTY host */
+export type TerminalFlowStatus = "running" | "paused-backpressure" | "paused-user" | "suspended";
+
+/** Runtime lifecycle status for terminals (visibility + flow + exit/error) */
+export type TerminalRuntimeStatus = TerminalFlowStatus | "background" | "exited" | "error";
+
 /** Structured error state for terminal restart failures */
 export interface TerminalRestartError {
   /** Human-readable error message */
@@ -351,7 +357,9 @@ interface PtyPanelData extends BasePanelData {
   /** Restart failure error - set when restart fails, cleared on success or manual action */
   restartError?: TerminalRestartError;
   /** Flow control status - indicates if terminal is paused/suspended due to backpressure or safety policy */
-  flowStatus?: "running" | "paused-backpressure" | "paused-user" | "suspended";
+  flowStatus?: TerminalFlowStatus;
+  /** Combined lifecycle status for UI + diagnostics */
+  runtimeStatus?: TerminalRuntimeStatus;
   /** Timestamp when flow status last changed */
   flowStatusTimestamp?: number;
   /** Whether user input is locked (read-only monitor mode) */
@@ -432,7 +440,8 @@ export interface TerminalInstance {
   restartKey?: number;
   isRestarting?: boolean;
   restartError?: TerminalRestartError;
-  flowStatus?: "running" | "paused-backpressure" | "paused-user" | "suspended";
+  flowStatus?: TerminalFlowStatus;
+  runtimeStatus?: TerminalRuntimeStatus;
   flowStatusTimestamp?: number;
   isInputLocked?: boolean;
   browserUrl?: string;

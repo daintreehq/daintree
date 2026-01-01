@@ -324,11 +324,14 @@ export class WorktreeMonitor {
     }
 
     const nextInterval = this.pollingStrategy.calculateNextInterval();
+    const jitterRange = Math.min(2000, Math.floor(nextInterval * 0.2));
+    const jitter = jitterRange > 0 ? Math.floor(Math.random() * jitterRange) : 0;
+    const delayMs = nextInterval + jitter;
 
     this.pollingTimer = setTimeout(() => {
       this.pollingTimer = null;
       void this.poll();
-    }, nextInterval);
+    }, delayMs);
   }
 
   private async poll(force: boolean = false): Promise<void> {

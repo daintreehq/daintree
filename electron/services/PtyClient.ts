@@ -148,6 +148,7 @@ export class PtyClient extends EventEmitter {
   private projectContextMode: "active" | "switch" = "active";
   private shouldResyncProjectContext = false;
   private pendingMessagePort: MessagePortMain | null = null;
+  private terminalPids: Map<string, number> = new Map();
 
   /** Watchdog: Track missed heartbeat responses to detect deadlocks */
   private missedHeartbeats = 0;
@@ -378,6 +379,8 @@ export class PtyClient extends EventEmitter {
         return;
       }
 
+      this.cleanupOrphanedPtys(crashType);
+
       this.broker.clear(new Error("Pty host restarted"));
       this.shouldResyncProjectContext = true;
 
@@ -483,6 +486,7 @@ export class PtyClient extends EventEmitter {
 
       case "exit":
         this.pendingSpawns.delete(event.id);
+        this.terminalPids.delete(event.id);
         this.emit("exit", event.id, event.exitCode);
         break;
 
@@ -569,6 +573,10 @@ export class PtyClient extends EventEmitter {
         this.broker.resolve(event.requestId, event.info);
         break;
 
+      case "terminal-pid":
+        this.terminalPids.set(event.id, event.pid);
+        break;
+
       default:
         console.warn("[PtyClient] Unknown event type:", (event as { type: string }).type);
     }
@@ -609,6 +617,44 @@ export class PtyClient extends EventEmitter {
       console.log(`[PtyClient] Respawning terminal: ${id}`);
       this.send({ type: "spawn", id, options });
     }
+  }
+
+  private cleanupOrphanedPtys(crashType: CrashType): void {
+    if (crashType === "CLEAN_EXIT" || this.terminalPids.size === 0) {
+      return;
+    }
+
+    const uniquePids = new Set(this.terminalPids.values());
+    console.warn(
+      `[PtyClient] Attempting to clean up ${uniquePids.size} orphaned PTY process(es) after host crash`
+    );
+
+    for (const pid of uniquePids) {
+      if (!Number.isFinite(pid) || pid <= 0) continue;
+      if (pid === process.pid) continue;
+
+      let killed = false;
+      if (process.platform !== "win32") {
+        try {
+          process.kill(-pid, "SIGKILL");
+          killed = true;
+        } catch {
+          // ignore - fall back to direct kill
+        }
+      }
+
+      if (!killed) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch (error) {
+          if (process.env.CANOPY_VERBOSE) {
+            console.warn(`[PtyClient] Failed to kill orphaned PTY pid=${pid}:`, error);
+          }
+        }
+      }
+    }
+
+    this.terminalPids.clear();
   }
 
   /** Set callback for MessagePort refresh (called on host restart) */
@@ -1132,6 +1178,7 @@ export class PtyClient extends EventEmitter {
     }
 
     this.pendingSpawns.clear();
+    this.terminalPids.clear();
     this.snapshotCallbacks.clear();
     this.transitionCallbacks.clear();
     this.removeAllListeners();

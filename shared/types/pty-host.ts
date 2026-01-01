@@ -7,7 +7,15 @@
  * All types are serializable (no functions, no circular refs) for IPC transport.
  */
 
-import type { AgentState, AgentId, TerminalType, TerminalKind } from "./domain.js";
+import type {
+  AgentState,
+  AgentId,
+  TerminalType,
+  TerminalKind,
+  TerminalFlowStatus,
+} from "./domain.js";
+
+export type { TerminalFlowStatus };
 
 /** Options for spawning a new PTY process (matches PtyManager interface) */
 export interface PtyHostSpawnOptions {
@@ -148,6 +156,7 @@ export type PtyHostEvent =
   | { type: "agent-killed"; payload: AgentKilledPayload }
   | { type: "terminal-trashed"; id: string; expiresAt: number }
   | { type: "terminal-restored"; id: string }
+  | { type: "terminal-pid"; id: string; pid: number }
   | { type: "snapshot"; id: string; snapshot: PtyHostTerminalSnapshot | null }
   | { type: "all-snapshots"; snapshots: PtyHostTerminalSnapshot[] }
   | { type: "transition-result"; id: string; requestId: string; success: boolean }
@@ -240,9 +249,6 @@ export interface AgentKilledPayload {
   terminalId?: string;
   worktreeId?: string;
 }
-
-/** Terminal flow control status */
-export type TerminalFlowStatus = "running" | "paused-backpressure" | "paused-user" | "suspended";
 
 /** Terminal activity tier (streaming policy) */
 export type PtyHostActivityTier = "active" | "background";
