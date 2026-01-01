@@ -139,7 +139,11 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       blockCursorToTop: false,
     },
     detection: {
-      primaryPatterns: ["[✽✻✼✾⟡◇◆●○]\\s+\\w+…?\\s+\\(esc to interrupt", "esc to interrupt"],
+      primaryPatterns: [
+        "[✽✻✼✾⟡◇◆●○]\\s+[^()\\n]{2,80}\\s*\\(esc to interrupt",
+        "esc to interrupt[^)\\n]*\\)?$",
+        "\\(\\d+s\\s*[·•]\\s*esc to interrupt",
+      ],
       fallbackPatterns: [
         "[✽✻✼✾⟡◇◆●○]\\s+(thinking|deliberating|working|reading|writing|searching|executing)",
       ],
@@ -195,7 +199,11 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       blockCursorToTop: false,
     },
     detection: {
-      primaryPatterns: ["[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+.+\\s+\\(esc to cancel", "esc to cancel"],
+      primaryPatterns: [
+        "[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+[^()\\n]{2,80}\\s*\\(esc to cancel",
+        "esc to cancel[^)\\n]*\\)?$",
+        "\\(\\d+s,?\\s*esc to cancel",
+      ],
       fallbackPatterns: ["[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+\\w"],
       bootCompletePatterns: ["type\\s+your\\s+message"],
       scanLineCount: 10,
@@ -250,7 +258,11 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       blockCursorToTop: false,
     },
     detection: {
-      primaryPatterns: ["[•·]\\s+Working\\s+\\([^)]*esc to interrupt", "esc to interrupt"],
+      primaryPatterns: [
+        "[•·]\\s+[^()\\n]{2,80}\\s+\\([^)]*esc to interrupt",
+        "esc to interrupt[^)\\n]*\\)?$",
+        "\\(\\d+s\\s*[·•]\\s*esc to interrupt",
+      ],
       fallbackPatterns: ["[•·]\\s+Working"],
       bootCompletePatterns: ["openai[-\\s]+codex", "codex\\s+v"],
       scanLineCount: 10,

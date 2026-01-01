@@ -174,11 +174,7 @@ export function WorktreeCard({
   }, [worktree.id]);
 
   const handleOpenPR = useCallback(() => {
-    void actionService.dispatch(
-      "worktree.openPR",
-      { worktreeId: worktree.id },
-      { source: "user" }
-    );
+    void actionService.dispatch("worktree.openPR", { worktreeId: worktree.id }, { source: "user" });
   }, [worktree.id]);
 
   const handleTerminalSelect = useCallback(
