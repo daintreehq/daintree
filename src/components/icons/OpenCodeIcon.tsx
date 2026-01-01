@@ -7,6 +7,8 @@ interface OpenCodeIconProps {
 }
 
 export function OpenCodeIcon({ className, size = 16, brandColor }: OpenCodeIconProps) {
+  // Official OpenCode logo: rectangular frame with inner square
+  // Adapted from opencode-logo-light.svg (240x300 viewBox)
   return (
     <svg
       width={size}
@@ -17,12 +19,15 @@ export function OpenCodeIcon({ className, size = 16, brandColor }: OpenCodeIconP
       className={cn(className)}
       aria-hidden="true"
     >
+      {/* Outer frame with cutout - the distinctive OpenCode "O" shape */}
       <path
         fill={brandColor || "currentColor"}
         fillRule="evenodd"
         clipRule="evenodd"
-        d="M3 5a2 2 0 012-2h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5zm2 0h14v14H5V5zm3.293 4.293a1 1 0 011.414 0L12 11.586l2.293-2.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414zM8 15a1 1 0 100 2h8a1 1 0 100-2H8z"
+        d="M2 2h20v20H2V2zm5 3h10v12H7V5z"
       />
+      {/* Inner square at bottom */}
+      <rect x="7" y="10" width="10" height="7" fill={brandColor || "currentColor"} opacity="0.4" />
     </svg>
   );
 }
