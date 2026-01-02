@@ -34,7 +34,7 @@ export const FileSearchPayloadSchema = z.object({
 });
 
 export const SlashCommandListRequestSchema = z.object({
-  agentId: z.enum(["claude", "gemini", "codex"]),
+  agentId: z.enum(["claude", "gemini", "codex", "opencode"]),
   projectPath: z.string().optional(),
 });
 

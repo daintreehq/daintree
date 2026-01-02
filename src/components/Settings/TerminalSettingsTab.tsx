@@ -62,6 +62,7 @@ const TYPICAL_TERMINAL_COUNTS: Partial<Record<TerminalType, number>> = {
   claude: 2,
   gemini: 2,
   codex: 2,
+  opencode: 2,
   terminal: 8,
 };
 
@@ -85,7 +86,7 @@ export function TerminalSettingsTab() {
   const scrollbackLimits = useMemo(() => {
     const effectiveBase = performanceMode ? PERFORMANCE_MODE_SCROLLBACK : scrollbackLines;
     const types: Array<{ type: TerminalType; label: string }> = [
-      { type: "claude", label: "Agent (Claude/Gemini/Codex)" },
+      { type: "claude", label: "Agent (Claude/Gemini/Codex/OpenCode)" },
       { type: "terminal", label: "Terminal" },
     ];
     return types.map(({ type, label }) => ({

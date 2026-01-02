@@ -341,7 +341,7 @@ function SidebarContent() {
             <div className="font-medium mb-1">Quick Start:</div>
             <ol className="space-y-1 list-decimal list-inside">
               <li>Open a repository</li>
-              <li>Launch Claude or Gemini</li>
+              <li>Launch an agent</li>
               <li>Inject context to AI agent</li>
             </ol>
           </div>
@@ -589,7 +589,7 @@ function App() {
   useFirstRunToasts(isStateLoaded);
 
   const handleLaunchAgent = useCallback(
-    async (type: "claude" | "gemini" | "codex" | "terminal" | "browser") => {
+    async (type: "claude" | "gemini" | "codex" | "opencode" | "terminal" | "browser") => {
       await launchAgent(type);
     },
     [launchAgent]

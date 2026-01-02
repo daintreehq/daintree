@@ -281,7 +281,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       throw new Error(`Recipe cannot exceed ${MAX_TERMINALS_PER_RECIPE} terminals`);
     }
 
-    const ALLOWED_TYPES = ["terminal", "claude", "gemini", "codex", "dev-preview"];
+    const ALLOWED_TYPES = ["terminal", "claude", "gemini", "codex", "opencode", "dev-preview"];
     const sanitizedTerminals = recipe.terminals
       .filter((terminal) => {
         if (!ALLOWED_TYPES.includes(terminal.type)) return false;

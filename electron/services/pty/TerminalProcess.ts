@@ -1568,6 +1568,7 @@ export class TerminalProcess {
             claude: "Claude",
             gemini: "Gemini",
             codex: "Codex",
+            opencode: "OpenCode",
             terminal: "Terminal",
           };
           terminal.title = agentNames[result.agentType];

@@ -135,7 +135,10 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
     scope: "renderer",
     argsSchema: z.object({ agentId: LegacyAgentTypeSchema, projectPath: z.string().optional() }),
     run: async (args: unknown) => {
-      const payload = args as { agentId: "claude" | "gemini" | "codex"; projectPath?: string };
+      const payload = args as {
+        agentId: "claude" | "gemini" | "codex" | "opencode";
+        projectPath?: string;
+      };
       return await slashCommandsClient.list(payload as any);
     },
   }));

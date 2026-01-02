@@ -16,7 +16,9 @@ import { useLayoutState } from "@/hooks";
 interface AppLayoutProps {
   children?: ReactNode;
   sidebarContent?: ReactNode;
-  onLaunchAgent?: (type: "claude" | "gemini" | "codex" | "terminal" | "browser") => void;
+  onLaunchAgent?: (
+    type: "claude" | "gemini" | "codex" | "opencode" | "terminal" | "browser"
+  ) => void;
   onSettings?: () => void;
   onOpenAgentSettings?: () => void;
   onRetry?: (id: string, action: RetryAction, args?: Record<string, unknown>) => void;
@@ -229,7 +231,7 @@ export function AppLayout({
   }, []);
 
   const handleLaunchAgent = useCallback(
-    (type: "claude" | "gemini" | "codex" | "terminal" | "browser") => {
+    (type: "claude" | "gemini" | "codex" | "opencode" | "terminal" | "browser") => {
       onLaunchAgent?.(type);
     },
     [onLaunchAgent]

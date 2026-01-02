@@ -18,6 +18,7 @@ const TERMINAL_TYPES: RecipeTerminalType[] = [
   "claude",
   "gemini",
   "codex",
+  "opencode",
   "dev-preview",
 ];
 
@@ -26,6 +27,7 @@ const TYPE_LABELS: Record<RecipeTerminalType, string> = {
   claude: "Claude",
   gemini: "Gemini",
   codex: "Codex",
+  opencode: "OpenCode",
   "dev-preview": "Dev Server",
 };
 

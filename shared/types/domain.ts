@@ -198,7 +198,7 @@ export interface RunRecord {
 // Panel Types
 
 export type AgentId = string;
-export type LegacyAgentType = "claude" | "gemini" | "codex";
+export type LegacyAgentType = "claude" | "gemini" | "codex" | "opencode";
 
 /** Built-in panel kinds */
 export type BuiltInPanelKind = "terminal" | "agent" | "browser" | "notes" | "dev-preview";
@@ -668,6 +668,7 @@ export type ToolbarButtonId =
   | "claude"
   | "gemini"
   | "codex"
+  | "opencode"
   | "terminal"
   | "browser"
   | "dev-server"
@@ -691,7 +692,14 @@ export interface LauncherDefaults {
   /** Always show dev server option in palette, even if devServerCommand not configured */
   alwaysShowDevServer: boolean;
   /** Default panel type to highlight when palette opens */
-  defaultSelection?: "terminal" | "claude" | "gemini" | "codex" | "browser" | "dev-server";
+  defaultSelection?:
+    | "terminal"
+    | "claude"
+    | "gemini"
+    | "codex"
+    | "opencode"
+    | "browser"
+    | "dev-server";
 }
 
 /** Complete toolbar preferences configuration */

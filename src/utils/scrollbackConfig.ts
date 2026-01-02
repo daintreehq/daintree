@@ -13,6 +13,7 @@ const SCROLLBACK_POLICIES: Record<TerminalType, ScrollbackPolicy> = {
   claude: { multiplier: 1.0, maxLines: 10000, minLines: 1000 },
   gemini: { multiplier: 1.0, maxLines: 10000, minLines: 1000 },
   codex: { multiplier: 1.0, maxLines: 10000, minLines: 1000 },
+  opencode: { multiplier: 1.0, maxLines: 10000, minLines: 1000 },
 
   // Standard terminals: limited (ephemeral commands)
   terminal: { multiplier: 0.2, maxLines: 2000, minLines: 200 },
@@ -48,7 +49,7 @@ export function estimateMemoryUsage(
   const perType = {} as Record<TerminalType, number>;
   let total = 0;
 
-  const allTypes: TerminalType[] = ["claude", "gemini", "codex", "terminal"];
+  const allTypes: TerminalType[] = ["claude", "gemini", "codex", "opencode", "terminal"];
 
   for (const type of allTypes) {
     const count = terminalCounts[type] ?? 0;
@@ -85,6 +86,7 @@ export function getScrollbackSummary(
     claude: "Claude",
     gemini: "Gemini",
     codex: "Codex",
+    opencode: "OpenCode",
     terminal: "Terminal",
   };
 

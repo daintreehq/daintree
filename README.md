@@ -2,7 +2,7 @@
 
 **The AI-Native Mini IDE for Agent Orchestration**
 
-Canopy is a feature-rich, Electron-based command center designed to streamline the workflow of developing with AI coding agents. It bridges the gap between your terminal, git worktrees, and AI CLI tools like Claude Code, Gemini, and Codex.
+Canopy is a feature-rich, Electron-based command center designed to streamline the workflow of developing with AI coding agents. It bridges the gap between your terminal, git worktrees, and AI CLI tools like Claude Code, Gemini, Codex, and OpenCode.
 
 Instead of juggling multiple terminal windows and manually copying context, Canopy provides a unified dashboard to monitor worktrees, orchestrate agents, and inject codebase context with a single click.
 
@@ -55,6 +55,9 @@ npm install -g @anthropic-ai/claude-code
 
 # Codex CLI
 npm install -g @openai/codex
+
+# OpenCode CLI
+npm install -g opencode-ai@latest
 ```
 
 ## Getting Started
@@ -97,7 +100,7 @@ npm run dev
 Canopy works out of the box for local terminal management, but AI features require configuration via the **Settings** icon (bottom left sidebar).
 
 1. **GitHub Token**: Required for fetching PR statuses and issue details without hitting rate limits
-2. **Agent Settings**: Configure default models and flags for Claude, Gemini, and Codex
+2. **Agent Settings**: Configure default models and flags for Claude, Gemini, Codex, and OpenCode
 
 ## Architecture
 
@@ -171,7 +174,7 @@ Namespaced API for renderer → main communication:
 | Styling            | Tailwind CSS v4                    |
 | Drag & Drop        | dnd-kit (sortable)                 |
 | Validation         | Zod + zod-to-json-schema           |
-| AI Integration     | Agent CLIs (Claude, Gemini, Codex) |
+| AI Integration     | Agent CLIs (Claude, Gemini, Codex, OpenCode) |
 
 ## Directory Structure
 

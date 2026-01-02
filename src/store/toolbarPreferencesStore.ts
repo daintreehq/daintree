@@ -26,6 +26,7 @@ const DEFAULT_LEFT_BUTTONS: ToolbarButtonId[] = [
   "claude",
   "gemini",
   "codex",
+  "opencode",
   "terminal",
   "browser",
   "dev-server",

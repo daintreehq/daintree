@@ -142,7 +142,7 @@ These rules protect the maintainer:
 
 2. **State over Database** - Use the file system (git) as the source of truth whenever possible. Don't sync state that can be derived from the folder structure.
 
-3. **Opinionated Integrations** - Don't try to support every AI tool. Support the CLIs that are installed (Claude, Gemini, Codex) and support them _deeply_.
+3. **Opinionated Integrations** - Don't try to support every AI tool. Support the CLIs that are installed (Claude, Gemini, Codex, OpenCode) and support them _deeply_.
 
 ## Feature Evaluation Checklist
 

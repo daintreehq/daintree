@@ -7,7 +7,7 @@ import type { WorktreeState } from "@/types";
 
 interface UseNewTerminalPaletteProps {
   launchAgent: (
-    type: "claude" | "gemini" | "codex" | "terminal",
+    type: "claude" | "gemini" | "codex" | "opencode" | "terminal",
     options?: LaunchAgentOptions
   ) => Promise<string | null>;
   worktreeMap: Map<string, WorktreeState>;

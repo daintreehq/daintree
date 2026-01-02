@@ -440,7 +440,10 @@ class TerminalInstanceService {
     });
     listeners.push(unsubExit);
 
-    const kind = type === "claude" || type === "gemini" || type === "codex" ? "agent" : "terminal";
+    const kind =
+      type === "claude" || type === "gemini" || type === "codex" || type === "opencode"
+        ? "agent"
+        : "terminal";
     const agentId = kind === "agent" ? type : undefined;
 
     const managed: ManagedTerminal = {

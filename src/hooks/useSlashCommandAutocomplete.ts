@@ -34,7 +34,7 @@ export function useSlashCommandAutocomplete({
     if (agentId === "claude") return CLAUDE_BUILTIN_SLASH_COMMANDS;
     if (agentId === "gemini") return GEMINI_BUILTIN_SLASH_COMMANDS;
     if (agentId === "codex") return CODEX_BUILTIN_SLASH_COMMANDS;
-    return GEMINI_BUILTIN_SLASH_COMMANDS;
+    return [];
   }, [agentId]);
 
   const [commands, setCommands] = useState<SlashCommand[]>(initial);
@@ -59,7 +59,8 @@ export function useSlashCommandAutocomplete({
         if (requestIdRef.current !== requestId) return;
         if (agentId === "claude") setCommands(CLAUDE_BUILTIN_SLASH_COMMANDS);
         else if (agentId === "gemini") setCommands(GEMINI_BUILTIN_SLASH_COMMANDS);
-        else setCommands(CODEX_BUILTIN_SLASH_COMMANDS);
+        else if (agentId === "codex") setCommands(CODEX_BUILTIN_SLASH_COMMANDS);
+        else setCommands([]);
       })
       .finally(() => {
         if (requestIdRef.current !== requestId) return;

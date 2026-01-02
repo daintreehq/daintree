@@ -9,6 +9,7 @@ import { useScrollbackStore, usePerformanceModeStore, useTerminalFontStore } fro
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
 import { CANOPY_TERMINAL_THEME, getTerminalThemeFromCSS } from "@/utils/terminalTheme";
+import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { getSoftNewlineSequence } from "../../../shared/utils/terminalInputProtocol.js";
 
 export interface XtermAdapterProps {
@@ -76,7 +77,11 @@ function XtermAdapterComponent({
     return getScrollbackForType(terminalType, scrollbackLines);
   }, [performanceMode, scrollbackLines, terminalType]);
 
-  const terminalTheme = getTerminalThemeFromCSS();
+  // Get agent-specific background color if available
+  const agentConfig = agentId ? getEffectiveAgentConfig(agentId) : undefined;
+  const agentBackgroundColor = agentConfig?.backgroundColor;
+
+  const terminalTheme = getTerminalThemeFromCSS({ backgroundColor: agentBackgroundColor });
 
   const terminalOptions = useMemo(
     () => ({
@@ -334,9 +339,11 @@ function XtermAdapterComponent({
     <div
       className={cn(
         // Outer wrapper provides padding - xterm container must have no padding for correct column calculation
-        "w-full h-full bg-canopy-bg text-white overflow-hidden rounded-b-[var(--radius-lg)] pl-3 pt-3 pb-3 pr-4",
+        "w-full h-full text-white overflow-hidden rounded-b-[var(--radius-lg)] pl-3 pt-3 pb-3 pr-4",
+        !agentBackgroundColor && "bg-canopy-bg",
         className
       )}
+      style={agentBackgroundColor ? { backgroundColor: agentBackgroundColor } : undefined}
     >
       <div ref={containerRef} className="w-full h-full" />
     </div>

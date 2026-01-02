@@ -12,6 +12,7 @@ const AGENT_CLI_NAMES: Record<string, TerminalType> = {
   claude: "claude",
   gemini: "gemini",
   codex: "codex",
+  opencode: "opencode",
 };
 
 export interface DetectionResult {

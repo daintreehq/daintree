@@ -52,7 +52,9 @@ import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 
 interface ToolbarProps {
-  onLaunchAgent: (type: "claude" | "gemini" | "codex" | "terminal" | "browser") => void;
+  onLaunchAgent: (
+    type: "claude" | "gemini" | "codex" | "opencode" | "terminal" | "browser"
+  ) => void;
   onSettings: () => void;
   onOpenAgentSettings?: () => void;
   errorCount?: number;
@@ -256,6 +258,18 @@ export function Toolbar({
             type="codex"
             availability={agentAvailability?.codex}
             isEnabled={agentSettings?.agents?.codex?.enabled ?? true}
+            onOpenSettings={openAgentSettings}
+          />
+        ),
+        isAvailable: true,
+      },
+      opencode: {
+        render: () => (
+          <AgentButton
+            key="opencode"
+            type="opencode"
+            availability={agentAvailability?.opencode}
+            isEnabled={agentSettings?.agents?.opencode?.enabled ?? true}
             onOpenSettings={openAgentSettings}
           />
         ),

@@ -1,4 +1,5 @@
 import type { RecipeTerminal } from "@/types";
+import { getAgentConfig } from "@/config/agents";
 
 export function getRecipeGridClasses(recipeCount: number): string {
   if (recipeCount === 1) {
@@ -26,7 +27,9 @@ export function getRecipeTerminalSummary(terminals: RecipeTerminal[]): string {
     if (terminal.type === "terminal") {
       return terminal.title || "Terminal";
     }
-    const agentLabel = terminal.type.charAt(0).toUpperCase() + terminal.type.slice(1);
+    const agentLabel =
+      getAgentConfig(terminal.type)?.name ??
+      terminal.type.charAt(0).toUpperCase() + terminal.type.slice(1);
     return terminal.title || agentLabel;
   });
 

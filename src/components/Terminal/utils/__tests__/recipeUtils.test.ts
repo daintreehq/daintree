@@ -93,6 +93,12 @@ describe("recipeUtils", () => {
       expect(summary).toBe("Claude • Gemini • Codex");
     });
 
+    it("uses agent config display names when available", () => {
+      const terminals: RecipeTerminal[] = [{ type: "opencode" }];
+      const summary = getRecipeTerminalSummary(terminals);
+      expect(summary).toBe("OpenCode");
+    });
+
     it("handles dev-preview terminals", () => {
       const terminals: RecipeTerminal[] = [{ type: "dev-preview" }];
       const summary = getRecipeTerminalSummary(terminals);

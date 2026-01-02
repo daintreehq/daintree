@@ -91,6 +91,7 @@ export type KeyAction =
   | "agent.claude"
   | "agent.gemini"
   | "agent.codex"
+  | "agent.opencode"
   | "agent.terminal"
   | "agent.focusNextWaiting"
   | "agent.focusNextFailed"

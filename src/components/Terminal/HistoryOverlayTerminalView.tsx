@@ -126,7 +126,6 @@ export const HistoryOverlayTerminalView = forwardRef<
   const [historyRowBackgrounds, setHistoryRowBackgrounds] = useState<(string | null)[]>([]);
   const historyStateRef = useRef<HistoryState | null>(null);
 
-  const [scrollbackUnavailable, setScrollbackUnavailable] = useState(false);
   const [showTruncationBanner, setShowTruncationBanner] = useState(false);
 
   // Output tracking for settle logic
@@ -273,8 +272,6 @@ export const HistoryOverlayTerminalView = forwardRef<
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const isAltBuffer = term.buffer.active === (term.buffer as any).alternate;
       if (isAltBuffer) {
-        setScrollbackUnavailable(true);
-        setTimeout(() => setScrollbackUnavailable(false), 3000);
         return;
       }
 
@@ -598,6 +595,11 @@ export const HistoryOverlayTerminalView = forwardRef<
     // Enforce lock-to-bottom: if xterm scrolls away from bottom, snap back immediately.
     const scrollDisposable = term.onScroll(() => {
       const buffer = term.buffer.active;
+      // Alt buffer (full-screen) should manage its own scroll behavior.
+      const isAltBuffer = buffer === (term.buffer as any).alternate;
+      if (isAltBuffer) {
+        return;
+      }
       const isAtBottom = buffer.baseY - buffer.viewportY < 1;
 
       if (!isAtBottom) {
@@ -645,6 +647,13 @@ export const HistoryOverlayTerminalView = forwardRef<
       if (e.deltaY === 0) return;
 
       if (viewModeRef.current === "live") {
+        const term = xtermRef.current;
+        const isAltBuffer = term
+          ? term.buffer.active === (term.buffer as any).alternate
+          : false;
+        if (isAltBuffer) {
+          return;
+        }
         // LIVE MODE: xterm is hard-locked to bottom. All scrolling control comes from history mode.
         // Intercept ALL wheel events so xterm never scrolls via wheel.
         e.preventDefault();
@@ -910,12 +919,6 @@ export const HistoryOverlayTerminalView = forwardRef<
         </div>
       )}
 
-      {/* Scrollback unavailable notice (alt buffer) */}
-      {scrollbackUnavailable && viewMode === "live" && (
-        <div className="absolute bottom-4 left-4 right-4 z-30 px-4 py-3 bg-black/80 backdrop-blur-sm border border-white/10 rounded-md text-xs font-sans text-white/70">
-          Scrollback isn't available while the terminal is in full-screen mode.
-        </div>
-      )}
     </div>
   );
 });

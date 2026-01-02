@@ -168,9 +168,9 @@ function TerminalPaneComponent({
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
   const hybridInputAutoFocus = useTerminalInputStore((state) => state.hybridInputAutoFocus);
   const effectiveAgentId =
-    agentId === "claude" || agentId === "gemini" || agentId === "codex"
+    agentId === "claude" || agentId === "gemini" || agentId === "codex" || agentId === "opencode"
       ? agentId
-      : type === "claude" || type === "gemini" || type === "codex"
+      : type === "claude" || type === "gemini" || type === "codex" || type === "opencode"
         ? type
         : undefined;
   const isAgentTerminal = effectiveAgentId !== undefined;

@@ -30,6 +30,7 @@ const CURATED_SHORTCUTS = [
       "agent.claude",
       "agent.gemini",
       "agent.codex",
+      "agent.opencode",
       "agent.terminal",
       "terminal.inject",
     ],

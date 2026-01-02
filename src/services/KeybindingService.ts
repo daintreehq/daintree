@@ -179,6 +179,14 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Agents",
   },
   {
+    actionId: "agent.opencode",
+    combo: "Cmd+Alt+O",
+    scope: "global",
+    priority: 0,
+    description: "Launch OpenCode agent",
+    category: "Agents",
+  },
+  {
     actionId: "agent.terminal",
     combo: "Cmd+Alt+N",
     scope: "global",

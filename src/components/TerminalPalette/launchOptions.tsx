@@ -1,5 +1,5 @@
 import { Terminal, Globe } from "lucide-react";
-import { ClaudeIcon, GeminiIcon, CodexIcon } from "@/components/icons";
+import { ClaudeIcon, GeminiIcon, CodexIcon, OpenCodeIcon } from "@/components/icons";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import type { TerminalType, TerminalKind } from "@/types";
 
@@ -34,6 +34,13 @@ export function getLaunchOptions(): LaunchOption[] {
       label: "Codex CLI",
       description: "OpenAI-powered methodical execution.",
       icon: <CodexIcon className="w-4 h-4" brandColor={getBrandColorHex("codex")} />,
+    },
+    {
+      id: "opencode",
+      type: "opencode",
+      label: "OpenCode",
+      description: "Provider-agnostic open source agent.",
+      icon: <OpenCodeIcon className="w-4 h-4" brandColor={getBrandColorHex("opencode")} />,
     },
     {
       id: "terminal",

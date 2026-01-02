@@ -58,6 +58,11 @@ const BUTTON_METADATA: Record<
     icon: <Bot className="h-4 w-4" />,
     description: "Launch Codex AI agent",
   },
+  opencode: {
+    label: "OpenCode Agent",
+    icon: <Bot className="h-4 w-4" />,
+    description: "Launch OpenCode AI agent",
+  },
   terminal: {
     label: "Terminal",
     icon: <Terminal className="h-4 w-4" />,
@@ -355,6 +360,7 @@ export function ToolbarSettingsTab() {
                 <option value="claude">Claude</option>
                 <option value="gemini">Gemini</option>
                 <option value="codex">Codex</option>
+                <option value="opencode">OpenCode</option>
                 <option value="browser">Browser</option>
                 <option value="dev-server">Dev Server</option>
               </select>

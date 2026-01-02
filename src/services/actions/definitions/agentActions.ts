@@ -85,6 +85,19 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     },
   }));
 
+  actions.set("agent.opencode", () => ({
+    id: "agent.opencode",
+    title: "Launch OpenCode",
+    description: "Launch OpenCode agent",
+    category: "agent",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      await callbacks.onLaunchAgent("opencode");
+    },
+  }));
+
   actions.set("agent.terminal", () => ({
     id: "agent.terminal",
     title: "Launch Terminal",

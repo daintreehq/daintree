@@ -44,7 +44,7 @@ export interface StoreSchema {
     };
     terminals: Array<{
       id: string;
-      type: "terminal" | "claude" | "gemini" | "codex";
+      type: "terminal" | "claude" | "gemini" | "codex" | "opencode";
       title: string;
       cwd: string;
       worktreeId?: string;
@@ -60,7 +60,7 @@ export interface StoreSchema {
       name: string;
       worktreeId?: string;
       terminals: Array<{
-        type: "terminal" | "claude" | "gemini" | "codex";
+        type: "terminal" | "claude" | "gemini" | "codex" | "opencode";
         title?: string;
         command?: string;
         env?: Record<string, string>;

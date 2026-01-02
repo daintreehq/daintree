@@ -1,6 +1,13 @@
 import { z } from "zod";
 
-export const AgentIdSchema = z.enum(["claude", "gemini", "codex", "terminal", "browser"]);
+export const AgentIdSchema = z.enum([
+  "claude",
+  "gemini",
+  "codex",
+  "opencode",
+  "terminal",
+  "browser",
+]);
 
 export const LaunchLocationSchema = z.enum(["grid", "dock"]);
 
@@ -17,11 +24,11 @@ export const SettingsTabSchema = z.enum([
   "troubleshooting",
 ]);
 
-export const TerminalTypeSchema = z.enum(["terminal", "claude", "gemini", "codex"]);
+export const TerminalTypeSchema = z.enum(["terminal", "claude", "gemini", "codex", "opencode"]);
 
 export const SidecarLayoutModeSchema = z.enum(["auto", "push", "overlay"]);
 
-export const LegacyAgentTypeSchema = z.enum(["claude", "gemini", "codex"]);
+export const LegacyAgentTypeSchema = z.enum(["claude", "gemini", "codex", "opencode"]);
 
 export const GitStatusSchema = z.enum([
   "modified",

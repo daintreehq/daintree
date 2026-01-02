@@ -25,7 +25,13 @@ const CANOPY_TERMINAL_THEME_FALLBACK = {
 
 export const CANOPY_TERMINAL_THEME = CANOPY_TERMINAL_THEME_FALLBACK;
 
-export function getTerminalThemeFromCSS(): typeof CANOPY_TERMINAL_THEME_FALLBACK {
+export interface TerminalThemeOptions {
+  backgroundColor?: string;
+}
+
+export function getTerminalThemeFromCSS(
+  options?: TerminalThemeOptions
+): typeof CANOPY_TERMINAL_THEME_FALLBACK {
   if (typeof document === "undefined") return CANOPY_TERMINAL_THEME_FALLBACK;
 
   const styles = getComputedStyle(document.documentElement);
@@ -34,8 +40,11 @@ export function getTerminalThemeFromCSS(): typeof CANOPY_TERMINAL_THEME_FALLBACK
     return value || fallback;
   };
 
+  const background =
+    options?.backgroundColor ?? getVar("--color-canopy-bg", CANOPY_TERMINAL_THEME_FALLBACK.background);
+
   return {
-    background: getVar("--color-canopy-bg", CANOPY_TERMINAL_THEME_FALLBACK.background),
+    background,
     foreground: getVar("--color-canopy-text", CANOPY_TERMINAL_THEME_FALLBACK.foreground),
     cursor: getVar("--color-canopy-accent", CANOPY_TERMINAL_THEME_FALLBACK.cursor),
     cursorAccent: getVar("--color-canopy-bg", CANOPY_TERMINAL_THEME_FALLBACK.cursorAccent),

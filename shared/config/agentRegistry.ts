@@ -76,6 +76,11 @@ export interface AgentConfig {
   usageUrl?: string;
   help?: AgentHelpConfig;
   install?: AgentInstallHelp;
+  /**
+   * Custom background color for the terminal (hex format).
+   * If not specified, uses the default canopy-bg color.
+   */
+  backgroundColor?: string;
   capabilities?: {
     scrollback?: number;
     blockAltScreen?: boolean;
@@ -268,6 +273,96 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       scanLineCount: 10,
       primaryConfidence: 0.95,
       fallbackConfidence: 0.75,
+    },
+  },
+  opencode: {
+    id: "opencode",
+    name: "OpenCode",
+    command: "opencode",
+    color: "#10b981",
+    iconId: "opencode",
+    supportsContextInjection: true,
+    shortcut: "Cmd/Ctrl+Alt+O",
+    tooltip: "provider-agnostic, open source",
+    usageUrl: "https://opencode.ai/",
+    backgroundColor: "#0a0a0a", // rgb(10, 10, 10) - OpenCode's native background
+    install: {
+      docsUrl: "https://opencode.ai/docs/",
+      byOs: {
+        macos: [
+          {
+            label: "curl",
+            commands: ["curl -fsSL https://opencode.ai/install | bash"],
+          },
+          {
+            label: "npm",
+            commands: ["npm install -g opencode-ai@latest"],
+          },
+          {
+            label: "Homebrew",
+            commands: ["brew install opencode"],
+          },
+        ],
+        windows: [
+          {
+            label: "npm",
+            commands: ["npm install -g opencode-ai@latest"],
+          },
+          {
+            label: "Scoop",
+            commands: ["scoop bucket add extras", "scoop install extras/opencode"],
+          },
+          {
+            label: "Chocolatey",
+            commands: ["choco install opencode"],
+          },
+        ],
+        linux: [
+          {
+            label: "curl",
+            commands: ["curl -fsSL https://opencode.ai/install | bash"],
+          },
+          {
+            label: "npm",
+            commands: ["npm install -g opencode-ai@latest"],
+          },
+          {
+            label: "Homebrew",
+            commands: ["brew install opencode"],
+          },
+          {
+            label: "Paru (Arch)",
+            commands: ["paru -S opencode-bin"],
+          },
+        ],
+      },
+      troubleshooting: [
+        "Restart Canopy after installation to update PATH",
+        "Ensure Node.js is installed for npm-based installation",
+        "Verify installation with: opencode --version",
+        "Run '/connect' in OpenCode to configure LLM provider",
+        "For provider setup, authenticate at opencode.ai/auth",
+      ],
+    },
+    capabilities: {
+      scrollback: 10000,
+      blockAltScreen: false,
+      blockMouseReporting: false,
+      blockScrollRegion: false,
+      blockClearScreen: false,
+      blockCursorToTop: false,
+    },
+    detection: {
+      primaryPatterns: [
+        "[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+[^\\n]{2,80}\\s*\\(.*esc",
+        "esc\\s*(again\\s+)?interrupt",
+        "Press again to interrupt",
+      ],
+      fallbackPatterns: ["[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+\\w", "working[…\\.]+", "generating"],
+      bootCompletePatterns: ["^\\s*opencode\\s+v?\\d"],
+      scanLineCount: 10,
+      primaryConfidence: 0.95,
+      fallbackConfidence: 0.7,
     },
   },
 };

@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import { ClaudeIcon, GeminiIcon, CodexIcon } from "@/components/icons";
+import { ClaudeIcon, GeminiIcon, CodexIcon, OpenCodeIcon } from "@/components/icons";
 import {
   AGENT_REGISTRY as BASE_AGENT_REGISTRY,
   type AgentConfig as BaseAgentConfig,
@@ -22,6 +22,7 @@ const ICON_MAP: Record<string, ComponentType<AgentIconProps>> = {
   claude: ClaudeIcon,
   gemini: GeminiIcon,
   codex: CodexIcon,
+  opencode: OpenCodeIcon,
 };
 
 export const AGENT_REGISTRY: Record<string, AgentConfig> = Object.fromEntries(

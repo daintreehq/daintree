@@ -423,7 +423,10 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
       const state = useTerminalStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
-        state.convertTerminalType(targetId, type as "terminal" | "claude" | "gemini" | "codex");
+        state.convertTerminalType(
+          targetId,
+          type as "terminal" | "claude" | "gemini" | "codex" | "opencode"
+        );
       }
     },
   }));

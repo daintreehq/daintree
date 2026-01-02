@@ -24,6 +24,7 @@ const AGENT_OPTIONS = [
   { type: "claude" as const, label: "Claude" },
   { type: "gemini" as const, label: "Gemini" },
   { type: "codex" as const, label: "Codex" },
+  { type: "opencode" as const, label: "OpenCode" },
   { type: "terminal" as const, label: "Terminal" },
   { type: "browser" as const, label: "Browser" },
 ];

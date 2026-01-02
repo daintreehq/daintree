@@ -8,7 +8,9 @@ export interface UseMenuActionsOptions {
   onOpenSettingsTab?: (tab: string) => void;
   onToggleSidebar: () => void;
   onOpenAgentPalette: () => void;
-  onLaunchAgent: (agentId: "claude" | "gemini" | "codex" | "terminal" | "browser") => void;
+  onLaunchAgent: (
+    agentId: "claude" | "gemini" | "codex" | "opencode" | "terminal" | "browser"
+  ) => void;
   defaultCwd: string;
   activeWorktreeId?: string;
 }
