@@ -44,6 +44,7 @@ import type {
 } from "../../shared/types/pty-host.js";
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
+import type { AgentState, TerminalType, TerminalKind, AgentId } from "../../shared/types/domain.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -51,11 +52,13 @@ const __dirname = path.dirname(__filename);
 interface TerminalInfoResponse {
   id: string;
   projectId?: string;
-  type?: string;
+  kind?: TerminalKind;
+  type?: TerminalType;
+  agentId?: AgentId;
   title?: string;
   cwd: string;
   worktreeId?: string;
-  agentState?: string;
+  agentState?: AgentState;
   lastStateChange?: number;
   spawnedAt: number;
 }
