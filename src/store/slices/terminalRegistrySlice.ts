@@ -521,12 +521,16 @@ export const createTerminalRegistrySlice =
               );
               const existing = state.terminals[existingIndex];
               // Preserve existing agentState/lastStateChange if new values are undefined
-              const preservedTerminal = isReconnect ? {
-                ...terminal,
-                agentState: terminal.agentState ?? existing.agentState,
-                lastStateChange: terminal.lastStateChange ?? existing.lastStateChange,
-              } : terminal;
-              newTerminals = state.terminals.map((t, i) => (i === existingIndex ? preservedTerminal : t));
+              const preservedTerminal = isReconnect
+                ? {
+                    ...terminal,
+                    agentState: terminal.agentState ?? existing.agentState,
+                    lastStateChange: terminal.lastStateChange ?? existing.lastStateChange,
+                  }
+                : terminal;
+              newTerminals = state.terminals.map((t, i) =>
+                i === existingIndex ? preservedTerminal : t
+              );
             } else {
               newTerminals = [...state.terminals, terminal];
             }

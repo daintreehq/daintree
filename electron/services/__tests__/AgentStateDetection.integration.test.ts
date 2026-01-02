@@ -450,7 +450,7 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
       manager.onProjectSwitch(projectId);
       await sleep(100);
 
-      manager.transitionState(id, { type: "exit" }, "activity", 1.0);
+      manager.transitionState(id, { type: "exit", code: 0 }, "activity", 1.0);
       await sleep(200);
 
       const terminal = manager.getTerminal(id);
@@ -471,7 +471,7 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
       manager.onProjectSwitch(projectId);
       await sleep(100);
 
-      manager.transitionState(id, { type: "error" }, "activity", 1.0);
+      manager.transitionState(id, { type: "error", error: "test error" }, "activity", 1.0);
       await sleep(200);
 
       const terminal = manager.getTerminal(id);
