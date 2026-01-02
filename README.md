@@ -162,18 +162,18 @@ Namespaced API for renderer → main communication:
 
 ### Key Technologies
 
-| Component          | Technology                         |
-| ------------------ | ---------------------------------- |
-| Runtime            | Electron 33                        |
-| UI Framework       | React 19 + TypeScript              |
-| Build              | Vite 6                             |
-| State Management   | Zustand (atomic selectors)         |
-| Terminal Emulation | xterm.js v5.5 + addons             |
-| PTY                | node-pty v1.0 (native module)      |
-| Git                | simple-git v3.30                   |
-| Styling            | Tailwind CSS v4                    |
-| Drag & Drop        | dnd-kit (sortable)                 |
-| Validation         | Zod + zod-to-json-schema           |
+| Component          | Technology                                   |
+| ------------------ | -------------------------------------------- |
+| Runtime            | Electron 33                                  |
+| UI Framework       | React 19 + TypeScript                        |
+| Build              | Vite 6                                       |
+| State Management   | Zustand (atomic selectors)                   |
+| Terminal Emulation | xterm.js v5.5 + addons                       |
+| PTY                | node-pty v1.0 (native module)                |
+| Git                | simple-git v3.30                             |
+| Styling            | Tailwind CSS v4                              |
+| Drag & Drop        | dnd-kit (sortable)                           |
+| Validation         | Zod + zod-to-json-schema                     |
 | AI Integration     | Agent CLIs (Claude, Gemini, Codex, OpenCode) |
 
 ## Directory Structure

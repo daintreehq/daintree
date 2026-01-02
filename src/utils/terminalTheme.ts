@@ -41,7 +41,8 @@ export function getTerminalThemeFromCSS(
   };
 
   const background =
-    options?.backgroundColor ?? getVar("--color-canopy-bg", CANOPY_TERMINAL_THEME_FALLBACK.background);
+    options?.backgroundColor ??
+    getVar("--color-canopy-bg", CANOPY_TERMINAL_THEME_FALLBACK.background);
 
   return {
     background,

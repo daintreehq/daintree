@@ -648,9 +648,7 @@ export const HistoryOverlayTerminalView = forwardRef<
 
       if (viewModeRef.current === "live") {
         const term = xtermRef.current;
-        const isAltBuffer = term
-          ? term.buffer.active === (term.buffer as any).alternate
-          : false;
+        const isAltBuffer = term ? term.buffer.active === (term.buffer as any).alternate : false;
         if (isAltBuffer) {
           return;
         }
@@ -918,7 +916,6 @@ export const HistoryOverlayTerminalView = forwardRef<
           </div>
         </div>
       )}
-
     </div>
   );
 });
