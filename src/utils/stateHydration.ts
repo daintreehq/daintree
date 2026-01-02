@@ -107,28 +107,12 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
           try {
             console.log(`[Hydration] Reconnecting to terminal: ${terminal.id}`);
 
-            // Get current state from backend
-            let reconnectResult;
-            try {
-              reconnectResult = await terminalClient.reconnect(terminal.id);
-            } catch (reconnectError) {
-              console.warn(`[Hydration] Reconnect failed for ${terminal.id}:`, reconnectError);
-              continue;
-            }
-
-            if (!reconnectResult.exists) {
-              console.warn(`[Hydration] Terminal ${terminal.id} no longer exists in backend`);
-              continue;
-            }
-
             const cwd = terminal.cwd || projectRoot || "";
-            const currentAgentState = reconnectResult.agentState as AgentState | undefined;
-            // Use the backend's lastStateChange timestamp to preserve agent state timing.
-            // This prevents the stale event check from rejecting valid state updates.
-            const backendLastStateChange = reconnectResult.lastStateChange as number | undefined;
-            // Derive agentId from type if it's a registered agent
+            const currentAgentState = terminal.agentState;
+            const backendLastStateChange = terminal.lastStateChange;
             const agentId =
-              terminal.type && isRegisteredAgent(terminal.type) ? terminal.type : undefined;
+              terminal.agentId ??
+              (terminal.type && isRegisteredAgent(terminal.type) ? terminal.type : undefined);
 
             await addTerminal({
               kind: terminal.kind ?? (agentId ? "agent" : "terminal"),
@@ -137,8 +121,8 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
               title: terminal.title,
               cwd,
               worktreeId: terminal.worktreeId,
-              location: "grid", // Default to grid - dock location isn't persisted in backend
-              existingId: terminal.id, // Reconnect to existing process
+              location: "grid",
+              existingId: terminal.id,
               agentState: currentAgentState,
               lastStateChange: backendLastStateChange,
             });

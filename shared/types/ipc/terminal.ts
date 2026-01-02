@@ -106,10 +106,12 @@ export interface BackendTerminalInfo {
   projectId?: string;
   kind?: TerminalKind;
   type?: TerminalType;
+  agentId?: AgentId;
   title?: string;
   cwd: string;
   worktreeId?: string;
-  agentState?: string;
+  agentState?: AgentState;
+  lastStateChange?: number;
   spawnedAt: number;
 }
 
@@ -120,7 +122,7 @@ export interface TerminalReconnectResult {
   kind?: TerminalKind;
   type?: TerminalType;
   cwd?: string;
-  agentState?: string;
+  agentState?: AgentState;
   lastStateChange?: number;
   error?: string;
 }

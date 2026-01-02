@@ -413,4 +413,75 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
       expect(workingStates.length).toBeGreaterThanOrEqual(1);
     }, 15000);
   });
+
+  describe("Project Switch State Preservation", () => {
+    it("should preserve agentState and lastStateChange when retrieving terminal info", async () => {
+      const projectId = "test-project-123";
+      const id = await spawnShellTerminal(manager, { type: "claude" });
+      await sleep(500);
+
+      manager.onProjectSwitch(projectId);
+      await sleep(100);
+
+      manager.transitionState(id, { type: "prompt" }, "activity", 1.0);
+      await sleep(200);
+
+      const terminal = manager.getTerminal(id);
+      expect(terminal).toBeDefined();
+      expect(terminal?.agentState).toBe("waiting");
+      expect(terminal?.lastStateChange).toBeDefined();
+      expect(typeof terminal?.lastStateChange).toBe("number");
+
+      const preservedAgentState = terminal?.agentState;
+      const preservedLastStateChange = terminal?.lastStateChange;
+
+      await sleep(500);
+
+      const terminalAfter = manager.getTerminal(id);
+      expect(terminalAfter?.agentState).toBe(preservedAgentState);
+      expect(terminalAfter?.lastStateChange).toBe(preservedLastStateChange);
+    }, 10000);
+
+    it("should preserve completed state across project switches", async () => {
+      const projectId = "test-project-456";
+      const id = await spawnShellTerminal(manager, { type: "claude" });
+      await sleep(500);
+
+      manager.onProjectSwitch(projectId);
+      await sleep(100);
+
+      manager.transitionState(id, { type: "exit" }, "activity", 1.0);
+      await sleep(200);
+
+      const terminal = manager.getTerminal(id);
+      expect(terminal).toBeDefined();
+      expect(terminal?.agentState).toBe("completed");
+
+      await sleep(500);
+
+      const terminalAfter = manager.getTerminal(id);
+      expect(terminalAfter?.agentState).toBe("completed");
+    }, 10000);
+
+    it("should preserve failed state across project switches", async () => {
+      const projectId = "test-project-789";
+      const id = await spawnShellTerminal(manager, { type: "gemini" });
+      await sleep(500);
+
+      manager.onProjectSwitch(projectId);
+      await sleep(100);
+
+      manager.transitionState(id, { type: "error" }, "activity", 1.0);
+      await sleep(200);
+
+      const terminal = manager.getTerminal(id);
+      expect(terminal).toBeDefined();
+      expect(terminal?.agentState).toBe("failed");
+
+      await sleep(500);
+
+      const terminalAfter = manager.getTerminal(id);
+      expect(terminalAfter?.agentState).toBe("failed");
+    }, 10000);
+  });
 });
