@@ -3,6 +3,7 @@ import { appClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@shared/types/domain";
 import type { GitHubIssue } from "@shared/types/github";
+import { useFocusStore } from "@/store/focusStore";
 
 interface CreateDialogState {
   isOpen: boolean;
@@ -154,7 +155,12 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       return { expandedTerminals: next };
     }),
 
-  openCreateDialog: (initialIssue = null) => set({ createDialog: { isOpen: true, initialIssue } }),
+  openCreateDialog: (initialIssue = null) => {
+    if (useFocusStore.getState().isFocusMode) {
+      window.dispatchEvent(new Event("canopy:toggle-focus-mode"));
+    }
+    set({ createDialog: { isOpen: true, initialIssue } });
+  },
 
   closeCreateDialog: () => set({ createDialog: { isOpen: false, initialIssue: null } }),
 
