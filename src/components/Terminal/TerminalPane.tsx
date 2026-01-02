@@ -543,6 +543,7 @@ function TerminalPaneComponent({
                 key={`${id}-${restartKey}`}
                 terminalId={id}
                 type={type ?? "terminal"}
+                agentId={agentId}
                 isFocused={isFocused}
                 isVisible={terminal?.isVisible ?? true}
                 isInputLocked={isInputLocked}

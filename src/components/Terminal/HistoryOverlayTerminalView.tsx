@@ -35,6 +35,7 @@ import { useScrollbackStore } from "@/store/scrollbackStore";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { getTerminalThemeFromCSS } from "@/utils/terminalTheme";
+import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
 import { useIsDragging } from "@/components/DragDrop";
 import type { TerminalType } from "@/types";
@@ -65,6 +66,7 @@ const INITIAL_HISTORY_SKIP_LINES = 4; // Number of lines to skip from bottom whe
 export interface HistoryOverlayTerminalViewProps {
   terminalId: string;
   type: TerminalType;
+  agentId?: string;
   isFocused: boolean;
   isVisible: boolean;
   isInputLocked?: boolean;
@@ -102,7 +104,7 @@ export const HistoryOverlayTerminalView = forwardRef<
   HistoryOverlayTerminalViewHandle,
   HistoryOverlayTerminalViewProps
 >(function HistoryOverlayTerminalView(
-  { terminalId, type, isFocused, isVisible, isInputLocked, className, onViewModeChange },
+  { terminalId, type, agentId, isFocused, isVisible, isInputLocked, className, onViewModeChange },
   ref
 ) {
   // Refs
@@ -185,6 +187,10 @@ export const HistoryOverlayTerminalView = forwardRef<
 
   // Use the same font family as XtermAdapter for pixel-perfect alignment
   const effectiveFontFamily = fontFamily || DEFAULT_TERMINAL_FONT_FAMILY;
+
+  // Get agent-specific background color if available
+  const agentConfig = agentId ? getEffectiveAgentConfig(agentId) : undefined;
+  const agentBackgroundColor = agentConfig?.backgroundColor;
 
   const effectiveScrollback = useMemo(() => {
     if (performanceMode) {
@@ -481,7 +487,7 @@ export const HistoryOverlayTerminalView = forwardRef<
     const xtermContainer = xtermContainerRef.current;
     if (!container || !xtermContainer) return;
 
-    const terminalTheme = getTerminalThemeFromCSS();
+    const terminalTheme = getTerminalThemeFromCSS({ backgroundColor: agentBackgroundColor });
 
     const terminalOptions = {
       allowProposedApi: true,
@@ -819,8 +825,16 @@ export const HistoryOverlayTerminalView = forwardRef<
   return (
     <div
       ref={containerRef}
-      className={cn("absolute inset-0 overflow-hidden bg-canopy-bg", className)}
-      style={containerStyle}
+      className={cn(
+        "absolute inset-0 overflow-hidden",
+        !agentBackgroundColor && "bg-canopy-bg",
+        className
+      )}
+      style={
+        agentBackgroundColor
+          ? { ...containerStyle, backgroundColor: agentBackgroundColor }
+          : containerStyle
+      }
       aria-label="Terminal view"
     >
       {/* Live xterm layer - always mounted */}
@@ -847,11 +861,15 @@ export const HistoryOverlayTerminalView = forwardRef<
           <div
             ref={overlayScrollRef}
             tabIndex={-1}
-            className="history-overlay h-full overflow-y-auto overflow-x-hidden bg-canopy-bg outline-none"
+            className={cn(
+              "history-overlay h-full overflow-y-auto overflow-x-hidden outline-none",
+              !agentBackgroundColor && "bg-canopy-bg"
+            )}
             style={{
               ...overlayStyle,
               overscrollBehavior: "contain",
               scrollBehavior: "auto",
+              ...(agentBackgroundColor && { backgroundColor: agentBackgroundColor }),
             }}
           >
             {/* History overlay styles for pixel-perfect alignment with xterm
