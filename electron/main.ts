@@ -538,6 +538,19 @@ async function createWindow(): Promise<void> {
 
   // Now fully ready
   createAndDistributePorts();
+
+  // Load the current project's worktrees if there is one
+  const currentProject = projectStore.getCurrentProject();
+  if (currentProject && workspaceClient) {
+    console.log("[MAIN] Loading worktrees for current project:", currentProject.name);
+    try {
+      await workspaceClient.loadProject(currentProject.path);
+      console.log("[MAIN] Worktrees loaded for current project");
+    } catch (error) {
+      console.error("[MAIN] Failed to load worktrees for current project:", error);
+    }
+  }
+
   sendToRenderer(mainWindow, CHANNELS.SYSTEM_BACKEND_READY);
 
   // Spawn Default Terminal

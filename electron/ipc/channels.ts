@@ -136,6 +136,7 @@ export const CHANNELS = {
   PROJECT_DETECT_RUNNERS: "project:detect-runners",
   PROJECT_CLOSE: "project:close",
   PROJECT_GET_STATS: "project:get-stats",
+  PROJECT_INIT_GIT: "project:init-git",
 
   AGENT_SETTINGS_GET: "agent-settings:get",
   AGENT_SETTINGS_SET: "agent-settings:set",

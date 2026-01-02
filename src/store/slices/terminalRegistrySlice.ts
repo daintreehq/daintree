@@ -338,7 +338,15 @@ export const createTerminalRegistrySlice =
           }
 
           set((state) => {
-            const newTerminals = [...state.terminals, terminal];
+            // Check for duplicate - if panel with this ID exists, update it instead of appending
+            const existingIndex = state.terminals.findIndex((t) => t.id === id);
+            let newTerminals: TerminalInstance[];
+            if (existingIndex >= 0) {
+              console.log(`[TerminalStore] Panel ${id} already exists, updating instead of adding`);
+              newTerminals = state.terminals.map((t, i) => (i === existingIndex ? terminal : t));
+            } else {
+              newTerminals = [...state.terminals, terminal];
+            }
             terminalPersistence.save(newTerminals);
             return { terminals: newTerminals };
           });
@@ -498,7 +506,18 @@ export const createTerminalRegistrySlice =
           };
 
           set((state) => {
-            const newTerminals = [...state.terminals, terminal];
+            // Check for duplicate - if terminal with this ID exists, update it instead of appending
+            const existingIndex = state.terminals.findIndex((t) => t.id === id);
+            let newTerminals: TerminalInstance[];
+            if (existingIndex >= 0) {
+              // Update existing terminal in place (reconnection case or double hydration)
+              console.log(
+                `[TerminalStore] Terminal ${id} already exists, updating instead of adding`
+              );
+              newTerminals = state.terminals.map((t, i) => (i === existingIndex ? terminal : t));
+            } else {
+              newTerminals = [...state.terminals, terminal];
+            }
             terminalPersistence.save(newTerminals);
             return { terminals: newTerminals };
           });

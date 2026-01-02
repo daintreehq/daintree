@@ -262,10 +262,28 @@ export function cleanupWorktreeDataStore() {
     cleanupListeners = null;
   }
   initPromise = null;
+  // Clear worktrees but keep isInitialized: true to prevent
+  // auto-reinitialization race during project switch.
+  // The store will be properly reinitialized when forceReinitialize() is called.
+  useWorktreeDataStore.setState({
+    worktrees: new Map(),
+    isLoading: true,
+    error: null,
+    isInitialized: true,
+  });
+}
+
+export function forceReinitializeWorktreeDataStore() {
+  // Called after backend project switch is complete to load worktrees for new project
+  cleanupListeners?.();
+  cleanupListeners = null;
+  initPromise = null;
   useWorktreeDataStore.setState({
     worktrees: new Map(),
     isLoading: true,
     error: null,
     isInitialized: false,
   });
+  // Trigger initialization
+  useWorktreeDataStore.getState().initialize();
 }

@@ -203,6 +203,7 @@ export interface ElectronAPI {
     detectRunners(projectId: string): Promise<RunCommand[]>;
     close(projectId: string): Promise<ProjectCloseResult>;
     getStats(projectId: string): Promise<ProjectStats>;
+    initGit(directoryPath: string): Promise<void>;
   };
   agentSettings: {
     get(): Promise<AgentSettings>;

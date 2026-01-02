@@ -284,6 +284,7 @@ const CHANNELS = {
   PROJECT_DETECT_RUNNERS: "project:detect-runners",
   PROJECT_CLOSE: "project:close",
   PROJECT_GET_STATS: "project:get-stats",
+  PROJECT_INIT_GIT: "project:init-git",
 
   // Agent settings channels
   AGENT_SETTINGS_GET: "agent-settings:get",
@@ -705,6 +706,9 @@ const api: ElectronAPI = {
     close: (projectId: string) => ipcRenderer.invoke(CHANNELS.PROJECT_CLOSE, projectId),
 
     getStats: (projectId: string) => ipcRenderer.invoke(CHANNELS.PROJECT_GET_STATS, projectId),
+
+    initGit: (directoryPath: string) =>
+      ipcRenderer.invoke(CHANNELS.PROJECT_INIT_GIT, directoryPath),
   },
 
   // Agent Settings API

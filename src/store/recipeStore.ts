@@ -47,6 +47,8 @@ interface RecipeState {
   importRecipe: (json: string) => Promise<void>;
 
   generateRecipeFromActiveTerminals: (worktreeId: string) => RecipeTerminal[];
+
+  reset: () => void;
 }
 
 const MAX_TERMINALS_PER_RECIPE = 10;
@@ -373,6 +375,8 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     return terminalsToCapture.map(terminalToRecipeTerminal);
   },
+
+  reset: () => set({ recipes: [], isLoading: false }),
 });
 
 export const useRecipeStore = create<RecipeState>()(createRecipeStore);

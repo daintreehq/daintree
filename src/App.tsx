@@ -745,7 +745,7 @@ function App() {
     <ErrorBoundary variant="fullscreen" componentName="App">
       <DndProvider>
         <AppLayout
-          sidebarContent={<SidebarContent />}
+          sidebarContent={<SidebarContent key={currentProject?.id ?? "no-project"} />}
           onLaunchAgent={handleLaunchAgent}
           onSettings={handleSettings}
           onOpenAgentSettings={handleOpenAgentSettings}
@@ -754,6 +754,7 @@ function App() {
           agentSettings={agentSettings}
         >
           <ContentGrid
+            key={currentProject?.id ?? "no-project"}
             className="h-full w-full"
             agentAvailability={availability}
             defaultCwd={defaultTerminalCwd}

@@ -75,7 +75,7 @@ function Toast({ notification }: { notification: Notification }) {
         <Icon className="h-4 w-4" />
       </div>
 
-      <div className="flex-1 space-y-0.5 min-w-0">
+      <div className="flex-1 space-y-1 min-w-0">
         {notification.title && (
           <h4
             className={cn(
@@ -89,6 +89,24 @@ function Toast({ notification }: { notification: Notification }) {
         <div className="text-xs text-canopy-text/75 leading-snug break-words">
           {notification.message}
         </div>
+        {notification.action && (
+          <button
+            type="button"
+            onClick={() => {
+              notification.action?.onClick();
+              handleDismiss();
+            }}
+            className={cn(
+              "mt-1.5 px-2.5 py-1 rounded-[var(--radius-xs)]",
+              "text-xs font-medium",
+              "bg-canopy-accent/10 text-canopy-accent",
+              "hover:bg-canopy-accent/20 transition-colors",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
+            )}
+          >
+            {notification.action.label}
+          </button>
+        )}
       </div>
 
       <button

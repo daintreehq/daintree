@@ -5,12 +5,18 @@ const uuidv4 = () => crypto.randomUUID();
 
 export type NotificationType = "success" | "error" | "info" | "warning";
 
+export interface NotificationAction {
+  label: string;
+  onClick: () => void;
+}
+
 export interface Notification {
   id: string;
   type: NotificationType;
   title?: string;
   message: string | ReactNode;
   duration?: number;
+  action?: NotificationAction;
 }
 
 interface NotificationStore {

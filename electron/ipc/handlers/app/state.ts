@@ -1,16 +1,31 @@
 import { ipcMain, app } from "electron";
 import { CHANNELS } from "../../channels.js";
-import { store } from "../../../store.js";
+import { store, type StoreSchema } from "../../../store.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 
 export function registerAppStateHandlers(): () => void {
   const handlers: Array<() => void> = [];
 
   const handleAppHydrate = async () => {
+    const currentProject = projectStore.getCurrentProject();
+    const globalAppState = store.get("appState");
+
+    // Don't restore terminals from saved state - terminals stay running in the backend
+    // and the frontend will query for running terminals via terminalClient.getForProject()
+    const appState: StoreSchema["appState"] = {
+      ...globalAppState,
+      terminals: [], // Always start with empty - running terminals will be discovered
+      activeWorktreeId: undefined,
+    };
+
+    console.log(
+      `[AppHydrate] Project: ${currentProject?.name ?? "none"} - terminals will be discovered from running processes`
+    );
+
     return {
-      appState: store.get("appState"),
+      appState,
       terminalConfig: store.get("terminalConfig"),
-      project: projectStore.getCurrentProject(),
+      project: currentProject,
       agentSettings: store.get("agentSettings"),
     };
   };
@@ -48,6 +63,8 @@ export function registerAppStateHandlers(): () => void {
         updates.activeWorktreeId = partialState.activeWorktreeId;
       }
 
+      // Note: terminals are NOT persisted - they stay running in the backend
+      // and are discovered via terminalClient.getForProject() on hydration
       if ("terminals" in partialState && Array.isArray(partialState.terminals)) {
         updates.terminals = partialState.terminals;
       }
@@ -147,6 +164,9 @@ export function registerAppStateHandlers(): () => void {
       }
 
       store.set("appState", { ...currentState, ...updates });
+
+      // Note: We intentionally do NOT save per-project terminal state.
+      // Terminals stay running in the backend and are discovered on hydration.
     } catch (error) {
       console.error("Failed to set app state:", error);
     }

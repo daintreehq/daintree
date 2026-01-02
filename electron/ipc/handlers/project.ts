@@ -346,5 +346,29 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
   ipcMain.handle(CHANNELS.PROJECT_GET_STATS, handleProjectGetStats);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_GET_STATS));
 
+  const handleProjectInitGit = async (
+    _event: Electron.IpcMainInvokeEvent,
+    directoryPath: string
+  ): Promise<void> => {
+    if (typeof directoryPath !== "string" || !directoryPath) {
+      throw new Error("Invalid directory path");
+    }
+    if (!path.isAbsolute(directoryPath)) {
+      throw new Error("Directory path must be absolute");
+    }
+
+    const fs = await import("fs");
+    const stats = await fs.promises.stat(directoryPath);
+    if (!stats.isDirectory()) {
+      throw new Error("Path is not a directory");
+    }
+
+    const simpleGit = await import("simple-git");
+    const git = simpleGit.simpleGit(directoryPath);
+    await git.init();
+  };
+  ipcMain.handle(CHANNELS.PROJECT_INIT_GIT, handleProjectInitGit);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_INIT_GIT));
+
   return () => handlers.forEach((cleanup) => cleanup());
 }

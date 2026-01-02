@@ -67,4 +67,8 @@ export const projectClient = {
   getStats: (projectId: string): Promise<ProjectStats> => {
     return window.electron.project.getStats(projectId);
   },
+
+  initGit: (directoryPath: string): Promise<void> => {
+    return window.electron.project.initGit(directoryPath);
+  },
 } as const;

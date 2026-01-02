@@ -7,13 +7,11 @@ import {
   useTerminalInputStore,
 } from "@/store";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
-import type { TerminalType, TerminalState, AgentState, TerminalKind } from "@/types";
-import { generateAgentFlags, type AgentSettings } from "@shared/types";
+import type { TerminalType, AgentState, TerminalKind } from "@/types";
 import { keybindingService } from "@/services/KeybindingService";
-import { isRegisteredAgent, getAgentConfig } from "@/config/agents";
+import { isRegisteredAgent } from "@/config/agents";
 import { normalizeScrollbackLines } from "@shared/config/scrollback";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 
 export interface HydrationOptions {
   addTerminal: (options: {
@@ -54,12 +52,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     await useUserAgentRegistryStore.getState().initialize();
 
     // Batch fetch initial state
-    const {
-      appState,
-      terminalConfig,
-      project: currentProject,
-      agentSettings,
-    } = await appClient.hydrate();
+    const { appState, terminalConfig, project: currentProject } = await appClient.hydrate();
 
     // Hydrate terminal config (scrollback, performance mode) BEFORE restoring terminals
     try {
@@ -98,128 +91,70 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
       return;
     }
 
-    if (appState.terminals && appState.terminals.length > 0) {
-      const projectRoot = currentProject?.path;
-      const currentProjectId = currentProject?.id;
+    // Discover running terminals from the backend
+    // Terminals stay running across project switches - we just reconnect to them
+    const currentProjectId = currentProject?.id;
+    const projectRoot = currentProject?.path;
 
-      // Query backend for existing terminals in this project
-      let backendTerminalIds = new Set<string>();
-      if (currentProjectId) {
-        try {
-          const backendTerminals = await terminalClient.getForProject(currentProjectId);
-          backendTerminalIds = new Set(backendTerminals.map((t) => t.id));
-          console.log(`[Hydration] Found ${backendTerminalIds.size} existing terminals in backend`);
-        } catch (error) {
-          console.warn("Failed to query backend terminals:", error);
-        }
-      }
+    if (currentProjectId) {
+      try {
+        const backendTerminals = await terminalClient.getForProject(currentProjectId);
+        console.log(
+          `[Hydration] Found ${backendTerminals.length} running terminals for project ${currentProjectId}`
+        );
 
-      for (const terminal of appState.terminals) {
-        try {
-          if (terminal.id === "default") continue;
+        for (const terminal of backendTerminals) {
+          try {
+            console.log(`[Hydration] Reconnecting to terminal: ${terminal.id}`);
 
-          const cwd = terminal.cwd || projectRoot || "";
-          const terminalKind = terminal.kind ?? "terminal";
-
-          // Handle non-PTY panels separately - they don't need backend PTY
-          if (!panelKindHasPty(terminalKind) || terminalKind === "dev-preview") {
-            if (terminalKind === "notes") {
-              await addTerminal({
-                kind: "notes",
-                title: terminal.title,
-                cwd,
-                worktreeId: terminal.worktreeId,
-                location: terminal.location === "dock" ? "dock" : "grid",
-                requestedId: terminal.id,
-                notePath: terminal.notePath,
-                noteId: terminal.noteId,
-                scope: terminal.scope,
-                createdAt: terminal.createdAt,
-              });
-            } else if (terminalKind === "dev-preview") {
-              await addTerminal({
-                kind: "dev-preview",
-                title: terminal.title,
-                cwd,
-                worktreeId: terminal.worktreeId,
-                location: terminal.location === "dock" ? "dock" : "grid",
-                requestedId: terminal.id,
-                devCommand: terminal.devCommand,
-              });
-            } else {
-              await addTerminal({
-                kind: terminalKind ?? "browser",
-                title: terminal.title,
-                cwd,
-                worktreeId: terminal.worktreeId,
-                location: terminal.location === "dock" ? "dock" : "grid",
-                requestedId: terminal.id,
-                browserUrl: terminal.browserUrl,
-              });
-            }
-            continue;
-          }
-
-          // Check if backend already has this terminal (from Phase 1 process preservation)
-          if (backendTerminalIds.has(terminal.id)) {
-            console.log(`[Hydration] Reconnecting to existing terminal: ${terminal.id}`);
-
-            // Verify terminal still exists and get current state
+            // Get current state from backend
             let reconnectResult;
             try {
               reconnectResult = await terminalClient.reconnect(terminal.id);
             } catch (reconnectError) {
               console.warn(`[Hydration] Reconnect failed for ${terminal.id}:`, reconnectError);
-              await spawnNewTerminal(terminal, cwd, addTerminal, agentSettings);
               continue;
             }
 
-            if (reconnectResult.exists) {
-              // Add to UI without spawning new process, preserving agent state and command
-              const currentAgentState = reconnectResult.agentState as AgentState | undefined;
-              // Get effective agentId - handles migration from type-based to agentId-based system
-              const agentId =
-                terminal.agentId ??
-                (terminal.type && isRegisteredAgent(terminal.type) ? terminal.type : undefined);
-              await addTerminal({
-                kind: terminal.kind ?? (agentId ? "agent" : "terminal"),
-                type: terminal.type,
-                agentId,
-                title: terminal.title,
-                cwd,
-                worktreeId: terminal.worktreeId,
-                location: terminal.location === "dock" ? "dock" : "grid",
-                command: terminal.command, // Preserve for manual refresh
-                existingId: terminal.id, // Flag to skip spawning
-                agentState: currentAgentState,
-                lastStateChange: currentAgentState ? Date.now() : undefined,
-                isInputLocked: terminal.isInputLocked,
-              });
-
-              // Restore a faithful snapshot from backend headless state.
-              // This avoids replay ordering issues and preserves alt-buffer TUIs.
-              try {
-                await terminalInstanceService.fetchAndRestore(terminal.id);
-              } catch (snapshotError) {
-                console.warn(
-                  `[Hydration] Serialized state restore failed for ${terminal.id}:`,
-                  snapshotError
-                );
-              }
-            } else {
-              // Backend lost this terminal - spawn new
-              console.warn(
-                `[Hydration] Terminal ${terminal.id} not found in backend, spawning new`
-              );
-              await spawnNewTerminal(terminal, cwd, addTerminal, agentSettings);
+            if (!reconnectResult.exists) {
+              console.warn(`[Hydration] Terminal ${terminal.id} no longer exists in backend`);
+              continue;
             }
-          } else {
-            // No existing process - spawn new
-            await spawnNewTerminal(terminal, cwd, addTerminal, agentSettings);
+
+            const cwd = terminal.cwd || projectRoot || "";
+            const currentAgentState = reconnectResult.agentState as AgentState | undefined;
+            // Derive agentId from type if it's a registered agent
+            const agentId =
+              terminal.type && isRegisteredAgent(terminal.type) ? terminal.type : undefined;
+
+            await addTerminal({
+              kind: terminal.kind ?? (agentId ? "agent" : "terminal"),
+              type: terminal.type,
+              agentId,
+              title: terminal.title,
+              cwd,
+              worktreeId: terminal.worktreeId,
+              location: "grid", // Default to grid - dock location isn't persisted in backend
+              existingId: terminal.id, // Reconnect to existing process
+              agentState: currentAgentState,
+              lastStateChange: currentAgentState ? Date.now() : undefined,
+            });
+
+            // Restore terminal content from backend headless state
+            try {
+              await terminalInstanceService.fetchAndRestore(terminal.id);
+            } catch (snapshotError) {
+              console.warn(
+                `[Hydration] Serialized state restore failed for ${terminal.id}:`,
+                snapshotError
+              );
+            }
+          } catch (error) {
+            console.warn(`Failed to reconnect to terminal ${terminal.id}:`, error);
           }
-        } catch (error) {
-          console.warn(`Failed to restore terminal ${terminal.id}:`, error);
         }
+      } catch (error) {
+        console.warn("Failed to query backend terminals:", error);
       }
     }
 
@@ -241,91 +176,4 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     console.error("Failed to hydrate app state:", error);
     throw error;
   }
-}
-
-/**
- * Get the effective agent ID from a terminal state.
- * Handles migration from old type-based system to new agentId-based system.
- */
-function getEffectiveAgentId(terminal: TerminalState): string | undefined {
-  // New system: use agentId directly
-  if (terminal.agentId) {
-    return terminal.agentId;
-  }
-  // Migration: if type is an agent, use type as agentId
-  if (terminal.type && isRegisteredAgent(terminal.type)) {
-    return terminal.type;
-  }
-  return undefined;
-}
-
-/**
- * Generate the command to run for a terminal on restart.
- *
- * - For agents (claude, gemini, codex): Regenerate command from current settings
- * - For other types with a saved command (scripts, package managers): Use saved command
- * - For plain shells (type=shell with no command): No command
- */
-function getRestartCommand(
-  terminal: TerminalState,
-  agentSettings: AgentSettings | null
-): string | undefined {
-  const agentId = getEffectiveAgentId(terminal);
-
-  if (agentId) {
-    // Regenerate command from current agent settings
-    const agentConfig = getAgentConfig(agentId);
-    const baseCommand = agentConfig?.command || agentId;
-
-    if (!agentSettings) {
-      // Fallback to saved command if settings unavailable
-      // This preserves the user's last-known configuration
-      return terminal.command?.trim() || baseCommand;
-    }
-
-    const flags = generateAgentFlags(agentSettings.agents?.[agentId] ?? {}, agentId);
-
-    return flags.length > 0 ? `${baseCommand} ${flags.join(" ")}` : baseCommand;
-  }
-
-  // For non-agent terminals: use saved command if present
-  // This covers scripts from QuickRun, package manager commands, etc.
-  // Plain shells (type=shell with no command) will return undefined
-  return terminal.command?.trim() || undefined;
-}
-
-async function spawnNewTerminal(
-  terminal: TerminalState,
-  cwd: string,
-  addTerminal: HydrationOptions["addTerminal"],
-  agentSettings: AgentSettings | null
-): Promise<void> {
-  const commandToRun = getRestartCommand(terminal, agentSettings);
-  const agentId = getEffectiveAgentId(terminal);
-  const kind: TerminalKind = agentId ? "agent" : "terminal";
-
-  // Skip orphaned agent terminals without a worktreeId.
-  // These are likely leftover from a bug where recipe-created terminals
-  // weren't properly associated with their worktree (fixed in PR #1392).
-  // Without a running backend process to reconnect to, these orphans
-  // would just create unwanted agent terminals in the main project.
-  if (agentId && !terminal.worktreeId) {
-    console.log(
-      `[Hydration] Skipping orphaned agent terminal ${terminal.id} (no worktreeId, no backend process)`
-    );
-    return;
-  }
-
-  await addTerminal({
-    kind,
-    type: terminal.type,
-    agentId,
-    title: terminal.title,
-    cwd,
-    worktreeId: terminal.worktreeId,
-    location: terminal.location === "dock" ? "dock" : "grid",
-    command: commandToRun,
-    requestedId: terminal.id,
-    isInputLocked: terminal.isInputLocked,
-  });
 }

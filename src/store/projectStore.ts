@@ -1,8 +1,8 @@
 import { create, type StateCreator } from "zustand";
 import type { Project, ProjectCloseResult } from "@shared/types";
-import { projectClient, appClient } from "@/clients";
+import { projectClient } from "@/clients";
 import { resetAllStoresForProjectSwitch } from "./resetStores";
-import { flushTerminalPersistence } from "./slices";
+import { forceReinitializeWorktreeDataStore } from "./worktreeDataStore";
 import { useNotificationStore } from "./notificationStore";
 
 interface ProjectState {
@@ -76,6 +76,40 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       await get().switchProject(newProject.id);
     } catch (error) {
       console.error("Failed to add project:", error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+
+      if (errorMessage.includes("Not a git repository")) {
+        const resolvedPath = path.trim() || errorMessage.match(/Not a git repository: (.+)/)?.[1];
+        if (resolvedPath) {
+          useNotificationStore.getState().addNotification({
+            type: "warning",
+            title: "Not a Git repository",
+            message: "Would you like to initialize a Git repository in this directory?",
+            duration: 0,
+            action: {
+              label: "Initialize Git",
+              onClick: async () => {
+                try {
+                  await projectClient.initGit(resolvedPath);
+                  await get().addProjectByPath(resolvedPath);
+                } catch (initError) {
+                  console.error("Failed to initialize git:", initError);
+                  useNotificationStore.getState().addNotification({
+                    type: "error",
+                    title: "Failed to initialize Git",
+                    message:
+                      initError instanceof Error ? initError.message : "Unknown error occurred",
+                    duration: 6000,
+                  });
+                }
+              },
+            },
+          });
+          set({ isLoading: false });
+          return;
+        }
+      }
+
       const message = getProjectOpenErrorMessage(error);
       useNotificationStore.getState().addNotification({
         type: "error",
@@ -120,29 +154,8 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   switchProject: async (projectId) => {
     set({ isLoading: true, error: null });
     try {
-      const currentProject = get().currentProject;
-      const oldProjectId = currentProject?.id;
-
-      // Save current project state BEFORE switching
-      // The backend persists terminals to electron-store so they're restored on hydration
-      if (oldProjectId) {
-        flushTerminalPersistence(); // ensure debounced terminal state is persisted
-        console.log("[ProjectSwitch] Saving state for project:", oldProjectId);
-        try {
-          const currentState = await appClient.getState();
-          if (currentState) {
-            // Save current terminal state - backend handles per-project persistence
-            await appClient.setState({
-              terminals: currentState.terminals || [],
-              activeWorktreeId: currentState.activeWorktreeId,
-              terminalGridConfig: currentState.terminalGridConfig,
-            });
-          }
-        } catch (saveError) {
-          // Don't fail the switch if state save fails
-          console.warn("[ProjectSwitch] Failed to save state:", saveError);
-        }
-      }
+      // Terminals stay running in the backend - no need to save state
+      // They will be discovered via getForProject() when switching back
 
       console.log("[ProjectSwitch] Resetting renderer stores...");
       await resetAllStoresForProjectSwitch();
@@ -150,6 +163,10 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       console.log("[ProjectSwitch] Switching project in main process...");
       const project = await projectClient.switch(projectId);
       set({ currentProject: project, isLoading: false });
+
+      // Now that backend has switched, reinitialize worktree data for the new project
+      console.log("[ProjectSwitch] Reinitializing worktree data store...");
+      forceReinitializeWorktreeDataStore();
 
       await get().loadProjects();
 
