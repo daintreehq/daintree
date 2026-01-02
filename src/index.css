@@ -111,6 +111,8 @@
    */
   --shadow-overlay: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 12px 40px rgba(0, 0, 0, 0.4);
   --shadow-modal: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 20px 56px rgba(0, 0, 0, 0.5);
+  --shadow-dock-popover:
+    0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 25px 70px -10px rgba(0, 0, 0, 0.6);
   --border-overlay: rgba(255, 255, 255, 0.06);
 
   /* Subtle divider - lighter than borders for internal separations */

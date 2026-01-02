@@ -58,7 +58,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   );
 
   const collisionPadding = useMemo(() => {
-    const basePadding = 16;
+    const basePadding = 32;
     return {
       top: basePadding,
       left: basePadding,
@@ -243,7 +243,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
       </TerminalContextMenu>
 
       <PopoverContent
-        className="w-[700px] max-w-[90vw] h-[500px] max-h-[80vh] p-0 bg-canopy-bg/95 backdrop-blur-sm border border-[var(--border-overlay)] shadow-[var(--shadow-modal)] rounded-[var(--radius-lg)] overflow-hidden"
+        className="w-[700px] max-w-[90vw] h-[500px] max-h-[80vh] p-0 bg-canopy-bg/95 backdrop-blur-sm border border-[var(--border-overlay)] shadow-[var(--shadow-dock-popover)] rounded-[var(--radius-lg)] overflow-hidden"
         side="top"
         align="start"
         sideOffset={10}
