@@ -34,17 +34,14 @@ function groupProjects(
   };
 
   for (const project of projects) {
-    if (project.id === currentProjectId) {
+    // Treat project as active if it matches currentProjectId OR has status "active"
+    // This handles race conditions where currentProject state is stale
+    if (project.id === currentProjectId || project.status === "active") {
       groups.active.push(project);
     } else {
       const stats = projectStats.get(project.id);
       const hasProcesses = stats && stats.processCount > 0;
       const isBackground = project.status === "background";
-
-      // Debug: log project grouping decisions
-      console.log(
-        `[ProjectSwitcher] Grouping "${project.name}": status=${project.status}, hasProcesses=${hasProcesses}, isBackground=${isBackground}`
-      );
 
       // Projects with running processes or explicitly backgrounded
       if (hasProcesses || isBackground) {

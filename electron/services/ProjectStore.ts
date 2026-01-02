@@ -158,14 +158,68 @@ export class ProjectStore {
   }
 
   getAllProjects(): Project[] {
-    const projects = store.get("projects.list", []);
+    const rawProjects = store.get("projects.list", []);
+
+    // Defensive: ensure projects.list is a valid array
+    if (!Array.isArray(rawProjects)) {
+      console.error("[ProjectStore] projects.list is not an array, resetting to empty");
+      store.set("projects.list", []);
+      return [];
+    }
+
+    const currentProjectId = this.getCurrentProjectId();
+    let needsPersistence = false;
+
+    // Normalize status for all projects (handles legacy projects without status)
+    const normalizedProjects = rawProjects
+      .filter((p) => p && typeof p === "object" && p.id) // Filter out corrupted entries
+      .map((project) => {
+        const validStatuses: ProjectStatus[] = ["active", "background", "closed"];
+        const isValidStatus = validStatuses.includes(project.status as ProjectStatus);
+
+        // Enforce single active project: only the current project can be active
+        if (project.id === currentProjectId) {
+          // This is the current project - must be active
+          if (project.status !== "active") {
+            needsPersistence = true;
+            return { ...project, status: "active" as const };
+          }
+          return project;
+        } else {
+          // Not the current project - cannot be active
+          if (project.status === "active") {
+            // Demote incorrectly active projects to background
+            needsPersistence = true;
+            console.warn(
+              `[ProjectStore] Demoting incorrectly active project ${project.id} to background`
+            );
+            return { ...project, status: "background" as const };
+          }
+
+          // Handle invalid/missing status for non-current projects
+          if (!isValidStatus) {
+            needsPersistence = true;
+            // Default to closed for safety (background would imply running processes)
+            return { ...project, status: "closed" as const };
+          }
+
+          return project;
+        }
+      });
+
+    // Persist normalized data to heal corrupted/missing statuses
+    if (needsPersistence) {
+      console.log("[ProjectStore] Persisting normalized project statuses");
+      store.set("projects.list", normalizedProjects);
+    }
+
     if (process.env.CANOPY_VERBOSE) {
       console.log(
         "[ProjectStore] getAllProjects statuses:",
-        projects.map((p) => ({ name: p.name, status: p.status }))
+        normalizedProjects.map((p) => ({ name: p.name, status: p.status }))
       );
     }
-    return projects.sort((a, b) => b.lastOpened - a.lastOpened);
+    return normalizedProjects.sort((a, b) => b.lastOpened - a.lastOpened);
   }
 
   async getProjectByPath(projectPath: string): Promise<Project | null> {

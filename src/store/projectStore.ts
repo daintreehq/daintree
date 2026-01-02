@@ -130,10 +130,6 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const projects = await projectClient.getAll();
-      console.log(
-        "[ProjectStore] loadProjects received:",
-        projects.map((p) => ({ name: p.name, status: p.status }))
-      );
       set({ projects, isLoading: false });
     } catch (error) {
       console.error("Failed to load projects:", error);
