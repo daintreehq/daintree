@@ -60,8 +60,15 @@ export const projectClient = {
     return window.electron.project.detectRunners(projectId);
   },
 
-  close: (projectId: string): Promise<ProjectCloseResult> => {
-    return window.electron.project.close(projectId);
+  close: (
+    projectId: string,
+    options?: { killTerminals?: boolean }
+  ): Promise<ProjectCloseResult> => {
+    return window.electron.project.close(projectId, options);
+  },
+
+  reopen: (projectId: string): Promise<Project> => {
+    return window.electron.project.reopen(projectId);
   },
 
   getStats: (projectId: string): Promise<ProjectStats> => {

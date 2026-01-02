@@ -60,6 +60,7 @@ export { TerminalRefreshTier } from "./domain.js";
 // Continue with domain type exports
 export type {
   // Project types
+  ProjectStatus,
   Project,
   TerminalSnapshot,
   TerminalLayout,

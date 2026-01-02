@@ -280,12 +280,17 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
   ipcMain.handle(CHANNELS.PROJECT_DETECT_RUNNERS, handleProjectDetectRunners);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_DETECT_RUNNERS));
 
-  const handleProjectClose = async (_event: Electron.IpcMainInvokeEvent, projectId: string) => {
+  const handleProjectClose = async (
+    _event: Electron.IpcMainInvokeEvent,
+    projectId: string,
+    options?: { killTerminals?: boolean }
+  ) => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
     }
 
-    console.log(`[IPC] project:close: ${projectId}`);
+    const killTerminals = options?.killTerminals ?? false;
+    console.log(`[IPC] project:close: ${projectId} (killTerminals: ${killTerminals})`);
 
     const storeActiveProjectId = projectStore.getCurrentProjectId();
 
@@ -293,23 +298,53 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
       throw new Error("Cannot close the active project. Switch to another project first.");
     }
 
+    const project = projectStore.getProjectById(projectId);
+    if (!project) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+
+    // If project is already closed and we're not killing, no-op
+    if (!killTerminals && project.status === "closed") {
+      return { success: true, processesKilled: 0, terminalsKilled: 0 };
+    }
+
     try {
-      // Kill terminals
-      const terminalsKilled = await deps.ptyClient.killByProject(projectId);
+      const ptyStats = await deps.ptyClient.getProjectStats(projectId);
 
-      // Clear persisted state
-      await projectStore.clearProjectState(projectId);
+      if (killTerminals) {
+        // Kill terminals when explicitly requested (freeing resources completely)
+        const terminalsKilled = await deps.ptyClient.killByProject(projectId);
 
-      console.log(
-        `[IPC] project:close: Closed ${terminalsKilled} process(es) ` +
-          `(${terminalsKilled} terminals)`
-      );
+        // Clear persisted state
+        await projectStore.clearProjectState(projectId);
 
-      return {
-        success: true,
-        processesKilled: terminalsKilled,
-        terminalsKilled,
-      };
+        // Set status to 'closed' (no running processes)
+        projectStore.updateProjectStatus(projectId, "closed");
+
+        console.log(
+          `[IPC] project:close: Killed ${terminalsKilled} process(es) ` +
+            `(${terminalsKilled} terminals)`
+        );
+
+        return {
+          success: true,
+          processesKilled: terminalsKilled,
+          terminalsKilled,
+        };
+      } else {
+        // Background mode: just mark as background, terminals keep running
+        projectStore.updateProjectStatus(projectId, "background");
+
+        console.log(
+          `[IPC] project:close: Backgrounded project with ${ptyStats.terminalCount} running terminals`
+        );
+
+        return {
+          success: true,
+          processesKilled: 0,
+          terminalsKilled: 0,
+        };
+      }
     } catch (error) {
       console.error(`[IPC] project:close: Failed to close project ${projectId}:`, error);
       return {
@@ -322,6 +357,31 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
   };
   ipcMain.handle(CHANNELS.PROJECT_CLOSE, handleProjectClose);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_CLOSE));
+
+  const handleProjectReopen = async (_event: Electron.IpcMainInvokeEvent, projectId: string) => {
+    if (typeof projectId !== "string" || !projectId) {
+      throw new Error("Invalid project ID");
+    }
+
+    console.log(`[IPC] project:reopen: ${projectId}`);
+
+    const project = projectStore.getProjectById(projectId);
+    if (!project) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+
+    // Reopen is only meaningful for background projects
+    if (project.status !== "background") {
+      throw new Error(
+        `Cannot reopen project ${projectId} unless status is "background" (current: ${project.status ?? "unset"})`
+      );
+    }
+
+    // Use the switch service which handles all the cleanup/load logic
+    return await projectSwitchService.reopenProject(projectId);
+  };
+  ipcMain.handle(CHANNELS.PROJECT_REOPEN, handleProjectReopen);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_REOPEN));
 
   const handleProjectGetStats = async (_event: Electron.IpcMainInvokeEvent, projectId: string) => {
     if (typeof projectId !== "string" || !projectId) {

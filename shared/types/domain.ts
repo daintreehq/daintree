@@ -508,6 +508,14 @@ export interface TerminalDimensions {
 
 // Project Types
 
+/**
+ * Project lifecycle status:
+ * - `active`: Currently open and in use (only one project can be active at a time)
+ * - `background`: Has running processes but not currently displayed
+ * - `closed`: No running processes, fully dormant
+ */
+export type ProjectStatus = "active" | "background" | "closed";
+
 /** Project (Git repository) managed by Canopy */
 export interface Project {
   /** Unique identifier (UUID or path hash) */
@@ -522,6 +530,8 @@ export interface Project {
   lastOpened: number;
   /** Theme color/gradient (optional) */
   color?: string;
+  /** Project lifecycle status (defaults to 'closed' for backward compatibility) */
+  status?: ProjectStatus;
 }
 
 /**

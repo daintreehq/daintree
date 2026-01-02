@@ -102,4 +102,13 @@ export class ProjectSwitchService {
       console.error("Failed to load worktrees for project:", err);
     }
   }
+
+  /**
+   * Reopen a background project, making it the active project.
+   * This is essentially a switch operation but specifically for background projects.
+   * Terminals that were running in the background will be reconnected on the frontend.
+   */
+  async reopenProject(projectId: string): Promise<Project> {
+    return this.switchProject(projectId);
+  }
 }

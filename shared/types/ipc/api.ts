@@ -201,7 +201,17 @@ export interface ElectronAPI {
     getSettings(projectId: string): Promise<ProjectSettings>;
     saveSettings(projectId: string, settings: ProjectSettings): Promise<void>;
     detectRunners(projectId: string): Promise<RunCommand[]>;
-    close(projectId: string): Promise<ProjectCloseResult>;
+    /**
+     * Close/background a project.
+     * @param projectId - Project ID to close
+     * @param options - Optional: { killTerminals: true } to kill running terminals (default: false, just backgrounds)
+     */
+    close(projectId: string, options?: { killTerminals?: boolean }): Promise<ProjectCloseResult>;
+    /**
+     * Reopen a background project, making it the active project.
+     * Terminals that were running in the background will be reconnected.
+     */
+    reopen(projectId: string): Promise<Project>;
     getStats(projectId: string): Promise<ProjectStats>;
   };
   agentSettings: {

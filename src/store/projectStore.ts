@@ -18,7 +18,11 @@ interface ProjectState {
   switchProject: (projectId: string) => Promise<void>;
   updateProject: (id: string, updates: Partial<Project>) => Promise<void>;
   removeProject: (id: string) => Promise<void>;
-  closeProject: (projectId: string) => Promise<ProjectCloseResult>;
+  closeProject: (
+    projectId: string,
+    options?: { killTerminals?: boolean }
+  ) => Promise<ProjectCloseResult>;
+  reopenProject: (projectId: string) => Promise<void>;
 }
 
 function getProjectOpenErrorMessage(error: unknown): string {
@@ -199,7 +203,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     }
   },
 
-  closeProject: async (projectId) => {
+  closeProject: async (projectId, options) => {
     const currentProjectId = get().currentProject?.id;
 
     // Prevent closing active project
@@ -208,19 +212,64 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     }
 
     try {
-      const result = await projectClient.close(projectId);
+      const result = await projectClient.close(projectId, options);
 
       if (!result.success) {
         throw new Error(result.error || "Failed to close project");
       }
 
-      console.log(
-        `[ProjectStore] Closed project ${projectId}: ${result.processesKilled} processes killed`
-      );
+      const action = options?.killTerminals ? "killed" : "backgrounded";
+      console.log(`[ProjectStore] Closed (${action}) project ${projectId}`);
+
+      // Refresh project list to get updated status
+      await get().loadProjects();
 
       return result;
     } catch (error) {
       console.error(`[ProjectStore] Failed to close project ${projectId}:`, error);
+      throw error;
+    }
+  },
+
+  reopenProject: async (projectId) => {
+    set({ isLoading: true, error: null });
+    try {
+      const currentProject = get().currentProject;
+      const oldProjectId = currentProject?.id;
+
+      // Save current project state BEFORE switching (same as switchProject)
+      if (oldProjectId) {
+        flushTerminalPersistence();
+        console.log("[ProjectStore] Saving state before reopen:", oldProjectId);
+        try {
+          const currentState = await appClient.getState();
+          if (currentState) {
+            await appClient.setState({
+              terminals: currentState.terminals || [],
+              activeWorktreeId: currentState.activeWorktreeId,
+              terminalGridConfig: currentState.terminalGridConfig,
+            });
+          }
+        } catch (saveError) {
+          console.warn("[ProjectStore] Failed to save state:", saveError);
+        }
+      }
+
+      console.log("[ProjectStore] Resetting renderer stores...");
+      await resetAllStoresForProjectSwitch();
+
+      console.log("[ProjectStore] Reopening project...");
+      const project = await projectClient.reopen(projectId);
+      set({ currentProject: project, isLoading: false });
+
+      await get().loadProjects();
+
+      console.log("[ProjectStore] Triggering state re-hydration...");
+      window.dispatchEvent(new CustomEvent("project-switched"));
+    } catch (error) {
+      console.error("Failed to reopen project:", error);
+      const message = getProjectOpenErrorMessage(error);
+      set({ error: message, isLoading: false });
       throw error;
     }
   },

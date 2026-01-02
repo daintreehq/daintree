@@ -1,5 +1,5 @@
 import { store } from "../store.js";
-import type { Project, ProjectState, ProjectSettings } from "../types/index.js";
+import type { Project, ProjectState, ProjectSettings, ProjectStatus } from "../types/index.js";
 import { createHash } from "crypto";
 import path from "path";
 import fs from "fs/promises";
@@ -93,6 +93,7 @@ export class ProjectStore {
       name: path.basename(normalizedPath),
       emoji: "🌲",
       lastOpened: Date.now(),
+      status: "closed",
     };
 
     const projects = this.getAllProjects();
@@ -138,12 +139,22 @@ export class ProjectStore {
     if (updates.emoji !== undefined) safeUpdates.emoji = updates.emoji;
     if (updates.color !== undefined) safeUpdates.color = updates.color;
     if (updates.lastOpened !== undefined) safeUpdates.lastOpened = updates.lastOpened;
+    if (updates.status !== undefined) safeUpdates.status = updates.status;
 
     const updated = { ...projects[index], ...safeUpdates };
     projects[index] = updated;
     store.set("projects.list", projects);
 
     return updated;
+  }
+
+  /**
+   * Update a project's lifecycle status.
+   * @param projectId - Project ID to update
+   * @param status - New status (active, background, closed)
+   */
+  updateProjectStatus(projectId: string, status: ProjectStatus): Project {
+    return this.updateProject(projectId, { status });
   }
 
   getAllProjects(): Project[] {
@@ -178,8 +189,25 @@ export class ProjectStore {
       throw new Error(`Project not found: ${projectId}`);
     }
 
+    // Mark the previous active project as background (if any and not already closed)
+    const previousProjectId = this.getCurrentProjectId();
+    if (previousProjectId && previousProjectId !== projectId) {
+      const previousProject = this.getProjectById(previousProjectId);
+      if (previousProject && previousProject.status !== "closed") {
+        // Mark as background - terminals keep running but UI state is cleared
+        this.updateProjectStatus(previousProjectId, "background");
+      }
+    }
+
     store.set("projects.currentProjectId", projectId);
-    this.updateProject(projectId, { lastOpened: Date.now() });
+    this.updateProject(projectId, { lastOpened: Date.now(), status: "active" });
+  }
+
+  /**
+   * Clear the current project reference (used when closing the active project).
+   */
+  clearCurrentProject(): void {
+    store.set("projects.currentProjectId", undefined);
   }
 
   private getStateFilePath(projectId: string): string | null {

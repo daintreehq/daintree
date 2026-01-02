@@ -283,6 +283,7 @@ const CHANNELS = {
   PROJECT_SAVE_SETTINGS: "project:save-settings",
   PROJECT_DETECT_RUNNERS: "project:detect-runners",
   PROJECT_CLOSE: "project:close",
+  PROJECT_REOPEN: "project:reopen",
   PROJECT_GET_STATS: "project:get-stats",
 
   // Agent settings channels
@@ -702,7 +703,10 @@ const api: ElectronAPI = {
 
     detectRunners: (projectId: string) => _typedInvoke(CHANNELS.PROJECT_DETECT_RUNNERS, projectId),
 
-    close: (projectId: string) => ipcRenderer.invoke(CHANNELS.PROJECT_CLOSE, projectId),
+    close: (projectId: string, options?: { killTerminals?: boolean }) =>
+      ipcRenderer.invoke(CHANNELS.PROJECT_CLOSE, projectId, options),
+
+    reopen: (projectId: string) => ipcRenderer.invoke(CHANNELS.PROJECT_REOPEN, projectId),
 
     getStats: (projectId: string) => ipcRenderer.invoke(CHANNELS.PROJECT_GET_STATS, projectId),
   },

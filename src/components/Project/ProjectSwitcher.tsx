@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
-import { ChevronsUpDown, Plus, Check, XCircle, Circle } from "lucide-react";
+import { ChevronsUpDown, Plus, Check, Circle, PlayCircle, StopCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { useProjectStore } from "@/store/projectStore";
@@ -18,7 +18,7 @@ import type { Project, ProjectStats } from "@shared/types";
 
 interface GroupedProjects {
   active: Project[];
-  running: Project[];
+  background: Project[];
   recent: Project[];
 }
 
@@ -29,7 +29,7 @@ function groupProjects(
 ): GroupedProjects {
   const groups: GroupedProjects = {
     active: [],
-    running: [],
+    background: [],
     recent: [],
   };
 
@@ -39,17 +39,19 @@ function groupProjects(
     } else {
       const stats = projectStats.get(project.id);
       const hasProcesses = stats && stats.processCount > 0;
+      const isBackground = project.status === "background";
 
-      if (hasProcesses) {
-        groups.running.push(project);
+      // Projects with running processes or explicitly backgrounded
+      if (hasProcesses || isBackground) {
+        groups.background.push(project);
       } else {
         groups.recent.push(project);
       }
     }
   }
 
-  // Sort running projects by process count (most active first)
-  groups.running.sort((a, b) => {
+  // Sort background projects by process count (most active first)
+  groups.background.sort((a, b) => {
     const statsA = projectStats.get(a.id);
     const statsB = projectStats.get(b.id);
     return (statsB?.processCount || 0) - (statsA?.processCount || 0);
@@ -71,6 +73,7 @@ export function ProjectSwitcher() {
     switchProject,
     addProject,
     closeProject,
+    reopenProject,
   } = useProjectStore();
 
   const { addNotification } = useNotificationStore();
@@ -112,57 +115,87 @@ export function ProjectSwitcher() {
     setProjectStats(stats);
   }, [projects]);
 
-  const handleCloseProject = async (projectId: string, e: React.MouseEvent) => {
+  const handleCloseProject = async (
+    projectId: string,
+    e: React.MouseEvent,
+    killTerminals: boolean = false
+  ) => {
     e.stopPropagation(); // Prevent dropdown from closing
 
     const stats = projectStats.get(projectId);
-
     const project = projects.find((p) => p.id === projectId);
 
-    // Handle case where stats are unavailable
-    if (!stats) {
-      const confirmed = window.confirm(
-        `Close "${project?.name}"?\n\n` +
-          `Process stats unavailable. This will close any running processes for this project.`
-      );
-
-      if (!confirmed) return;
-    } else {
-      const processCount = stats.processCount;
+    if (killTerminals) {
+      // Kill mode: confirm before killing processes
+      const processCount = stats?.processCount ?? 0;
 
       if (processCount === 0) {
         addNotification({
           type: "info",
           title: "No processes running",
-          message: "This project has no active processes",
+          message: "This project has no active processes to close",
           duration: 3000,
         });
         return;
       }
 
       const confirmed = window.confirm(
-        `Close "${project?.name}"?\n\n` +
-          `This will close ${processCount} process(es):\n` +
-          `- ${stats.terminalCount} terminal(s)`
+        `Stop "${project?.name}"?\n\n` +
+          `This will terminate ${processCount} process(es):\n` +
+          `- ${stats?.terminalCount ?? 0} terminal(s)\n\n` +
+          `Terminals cannot be recovered after this.`
       );
 
       if (!confirmed) return;
     }
 
     try {
-      const result = await closeProject(projectId);
-      addNotification({
-        type: "success",
-        title: "Project closed",
-        message: `Ended ${result.processesKilled} process(es)`,
-        duration: 3000,
-      });
+      const result = await closeProject(projectId, { killTerminals });
+
+      if (killTerminals) {
+        addNotification({
+          type: "success",
+          title: "Project stopped",
+          message: `Terminated ${result.processesKilled} process(es)`,
+          duration: 3000,
+        });
+      } else {
+        addNotification({
+          type: "info",
+          title: "Project backgrounded",
+          message: "Terminals are still running in the background",
+          duration: 3000,
+        });
+      }
+
       // Refresh stats after close
       await fetchProjectStats();
     } catch (error) {
       addNotification({
         type: "error",
         title: "Failed to close project",
+        message: error instanceof Error ? error.message : "Unknown error",
+        duration: 5000,
+      });
+    }
+  };
+
+  const handleReopenProject = async (projectId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+
+    addNotification({
+      type: "info",
+      title: "Reopening project",
+      message: "Reconnecting to background terminals...",
+      duration: 1500,
+    });
+
+    try {
+      await reopenProject(projectId);
+    } catch (error) {
+      addNotification({
+        type: "error",
+        title: "Failed to reopen project",
         message: error instanceof Error ? error.message : "Unknown error",
         duration: 5000,
       });
@@ -236,13 +269,19 @@ export function ProjectSwitcher() {
   const renderProjectItem = (project: Project, isActive: boolean) => {
     const stats = projectStats.get(project.id);
     const isRunning = stats && stats.processCount > 0;
+    const isBackground = project.status === "background";
 
     return (
       <DropdownMenuItem
         key={project.id}
-        onClick={() => {
+        onClick={(e) => {
           if (!isActive && !isLoading) {
-            handleProjectSwitch(project.id);
+            // Use reopen for background projects, switch for others
+            if (isBackground) {
+              handleReopenProject(project.id, e);
+            } else {
+              handleProjectSwitch(project.id);
+            }
           }
         }}
         disabled={isLoading}
@@ -253,7 +292,7 @@ export function ProjectSwitcher() {
       >
         <div className="w-3 flex items-center justify-center shrink-0">
           {isRunning && (
-            <span title={getStatsTooltip(stats)}>
+            <span title={getStatsTooltip(stats)} aria-label={`Running: ${getStatsTooltip(stats)}`}>
               <Circle className="h-2 w-2 fill-green-500 text-green-500" />
             </span>
           )}
@@ -262,14 +301,21 @@ export function ProjectSwitcher() {
         {renderIcon(project.emoji || "🌲", project.color, "h-8 w-8 text-base")}
 
         <div className="flex flex-col min-w-0 flex-1">
-          <span
-            className={cn(
-              "truncate text-sm font-medium",
-              isActive ? "text-foreground" : "text-foreground/80"
+          <div className="flex items-center gap-1.5">
+            <span
+              className={cn(
+                "truncate text-sm font-medium",
+                isActive ? "text-foreground" : "text-foreground/80"
+              )}
+            >
+              {project.name}
+            </span>
+            {isBackground && (
+              <span className="text-[9px] px-1 py-0.5 rounded bg-muted/50 text-muted-foreground uppercase tracking-wider shrink-0">
+                BG
+              </span>
             )}
-          >
-            {project.name}
-          </span>
+          </div>
           <span className="truncate text-[11px] font-mono text-muted-foreground/70">
             {project.path.split(/[/\\]/).pop()}
           </span>
@@ -277,14 +323,30 @@ export function ProjectSwitcher() {
 
         {isActive && <Check className="h-4 w-4 text-canopy-accent ml-2 shrink-0" />}
 
+        {/* Actions for non-active projects */}
         {!isActive && isRunning && (
-          <button
-            onClick={(e) => handleCloseProject(project.id, e)}
-            className="p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition-colors shrink-0"
-            title="Close project and end processes"
-          >
-            <XCircle className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-0.5 shrink-0">
+            {isBackground && (
+              <button
+                type="button"
+                onClick={(e) => handleReopenProject(project.id, e)}
+                className="p-1 rounded hover:bg-canopy-accent/20 text-muted-foreground hover:text-canopy-accent transition-colors"
+                title="Reopen project"
+                aria-label="Reopen project"
+              >
+                <PlayCircle className="h-4 w-4" />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={(e) => handleCloseProject(project.id, e, true)}
+              className="p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition-colors"
+              title="Stop all terminals and close project"
+              aria-label="Stop all terminals and close project"
+            >
+              <StopCircle className="h-4 w-4" />
+            </button>
+          </div>
         )}
       </DropdownMenuItem>
     );
@@ -305,16 +367,16 @@ export function ProjectSwitcher() {
       );
     }
 
-    // Running Projects Section
-    if (groupedProjects.running.length > 0) {
+    // Background Projects Section
+    if (groupedProjects.background.length > 0) {
       sections.push(
-        <div key="running">
+        <div key="background">
           {sections.length > 0 && <DropdownMenuSeparator className="my-1 bg-border/40" />}
           <DropdownMenuLabel className="text-[11px] font-semibold text-muted-foreground/50 uppercase tracking-widest px-2 py-1.5 flex items-center gap-2">
             <Circle className="h-2 w-2 fill-green-500 text-green-500" />
-            Running ({groupedProjects.running.length})
+            Background ({groupedProjects.background.length})
           </DropdownMenuLabel>
-          {groupedProjects.running.map((project) => renderProjectItem(project, false))}
+          {groupedProjects.background.map((project) => renderProjectItem(project, false))}
         </div>
       );
     }
