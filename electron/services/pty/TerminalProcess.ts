@@ -1106,14 +1106,23 @@ export class TerminalProcess {
 
   /**
    * Start activity monitor for agent terminals.
+   * @param options.preserveState - If true, prevents the monitor from emitting state changes
+   *   on startup. Used during project switch to preserve existing agent state.
    */
-  startActivityMonitor(): void {
+  startActivityMonitor(options?: { preserveState?: boolean }): void {
     if (this.isAgentTerminal && !this.activityMonitor) {
       const ptyPid = this.terminalInfo.ptyProcess.pid;
       const processStateValidator = this.createProcessStateValidator(
         ptyPid,
         this.deps.processTreeCache
       );
+
+      // When preserving state, pass the current agent state to the monitor
+      // so it doesn't trigger spurious transitions on startup
+      const preserveState = options?.preserveState ?? false;
+      const currentAgentState = this.terminalInfo.agentState;
+      const initialState = preserveState && currentAgentState === "working" ? "busy" : "idle";
+
       this.activityMonitor = new ActivityMonitor(
         this.id,
         this.terminalInfo.spawnedAt,
@@ -1127,7 +1136,12 @@ export class TerminalProcess {
           }
           this.deps.agentStateService.handleActivityState(this.terminalInfo, state, metadata);
         },
-        { ...this.getActivityMonitorOptions(), processStateValidator }
+        {
+          ...this.getActivityMonitorOptions(),
+          processStateValidator,
+          initialState,
+          skipInitialStateEmit: preserveState,
+        }
       );
       this.activityMonitor.startPolling();
     }

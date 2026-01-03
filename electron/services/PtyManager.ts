@@ -468,6 +468,7 @@ export class PtyManager extends EventEmitter {
 
   /**
    * Handle project switch.
+   * Preserves agent state across switches by using preserveState option when restarting monitors.
    */
   onProjectSwitch(newProjectId: string): void {
     console.log(`[PtyManager] Switching to project: ${newProjectId}`);
@@ -501,7 +502,9 @@ export class PtyManager extends EventEmitter {
         });
 
         terminalProcess.startProcessDetector();
-        terminalProcess.startActivityMonitor();
+        // Pass preserveState: true to prevent monitor from emitting spurious state changes
+        // This preserves the terminal's agent state (e.g., completed stays completed)
+        terminalProcess.startActivityMonitor({ preserveState: true });
       }
     }
 
