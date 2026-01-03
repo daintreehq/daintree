@@ -1,7 +1,15 @@
+import { createHash } from "crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { events } from "../events.js";
 import type { TerminalSnapshot } from "./types.js";
 import { TRASH_TTL_MS } from "./types.js";
 import type { TerminalProcess } from "./TerminalProcess.js";
+
+type ProjectIdCandidates = {
+  mainProjectId: string | null;
+  worktreeProjectId: string | null;
+};
 
 /**
  * Manages the Map of terminal instances, trash/restore functionality, and project filtering.
@@ -10,6 +18,7 @@ export class TerminalRegistry {
   private terminals: Map<string, TerminalProcess> = new Map();
   private trashTimeouts: Map<string, NodeJS.Timeout> = new Map();
   private lastKnownProjectId: string | null = null;
+  private projectIdCandidatesByTerminalId: Map<string, ProjectIdCandidates> = new Map();
 
   constructor(private readonly trashTtlMs: number = TRASH_TTL_MS) {}
 
@@ -23,6 +32,7 @@ export class TerminalRegistry {
 
   delete(id: string): void {
     this.terminals.delete(id);
+    this.projectIdCandidatesByTerminalId.delete(id);
   }
 
   has(id: string): boolean {
@@ -108,11 +118,7 @@ export class TerminalRegistry {
   getForProject(projectId: string): string[] {
     const result: string[] = [];
     for (const [id, terminal] of this.terminals) {
-      const info = terminal.getInfo();
-      // Only match terminals that explicitly belong to this project.
-      // Don't use lastKnownProjectId fallback - terminals without projectId
-      // should not be counted for any project in stats queries.
-      if (info.projectId === projectId) {
+      if (this.terminalMatchesProject(terminal, projectId)) {
         result.push(id);
       }
     }
@@ -141,11 +147,7 @@ export class TerminalRegistry {
     }
 
     const projectTerminals = allTerminals.filter((t) => {
-      const info = t.getInfo();
-      // Only count terminals that explicitly belong to this project.
-      // Don't use lastKnownProjectId fallback for stats - this prevents
-      // background project terminals from being misattributed to the active project.
-      return info.projectId === projectId;
+      return this.terminalMatchesProject(t, projectId);
     });
 
     const processIds = projectTerminals
@@ -216,8 +218,25 @@ export class TerminalRegistry {
    */
   terminalBelongsToProject(terminal: TerminalProcess, projectId: string): boolean {
     const info = terminal.getInfo();
-    const terminalProjectId = info.projectId || this.lastKnownProjectId;
-    return terminalProjectId === projectId;
+    if (info.projectId) {
+      return info.projectId === projectId;
+    }
+
+    const candidates = this.getProjectIdCandidates(terminal);
+    const matches =
+      candidates.mainProjectId === projectId || candidates.worktreeProjectId === projectId;
+
+    if (matches) {
+      info.projectId = projectId;
+      return true;
+    }
+
+    // Only fallback to lastKnownProjectId if we couldn't infer anything from the filesystem.
+    if (!candidates.mainProjectId && !candidates.worktreeProjectId) {
+      return this.lastKnownProjectId === projectId;
+    }
+
+    return false;
   }
 
   dispose(): void {
@@ -226,5 +245,146 @@ export class TerminalRegistry {
     }
     this.trashTimeouts.clear();
     this.terminals.clear();
+    this.projectIdCandidatesByTerminalId.clear();
+  }
+
+  private hashProjectId(projectRootPath: string): string {
+    let canonical = projectRootPath;
+    try {
+      canonical = fs.realpathSync(projectRootPath);
+    } catch {
+      // Best-effort: fall back to the provided path (still stable enough for hashing).
+    }
+    const normalized = path.normalize(canonical);
+    return createHash("sha256").update(normalized).digest("hex");
+  }
+
+  private findGitWorktreeRoot(startPath: string): string | null {
+    if (!startPath || typeof startPath !== "string") return null;
+
+    let current: string;
+    try {
+      const stats = fs.statSync(startPath);
+      current = stats.isDirectory() ? startPath : path.dirname(startPath);
+    } catch {
+      current = path.dirname(startPath);
+    }
+
+    if (!path.isAbsolute(current)) {
+      return null;
+    }
+
+    while (true) {
+      const gitEntryPath = path.join(current, ".git");
+      if (fs.existsSync(gitEntryPath)) {
+        return current;
+      }
+
+      const parent = path.dirname(current);
+      if (parent === current) {
+        return null;
+      }
+      current = parent;
+    }
+  }
+
+  private inferProjectIdCandidatesFromGitRoot(worktreeRoot: string): ProjectIdCandidates | null {
+    const gitEntryPath = path.join(worktreeRoot, ".git");
+    try {
+      const stats = fs.statSync(gitEntryPath);
+
+      // Standard main worktree (.git is a directory)
+      if (stats.isDirectory()) {
+        const id = this.hashProjectId(worktreeRoot);
+        return { mainProjectId: id, worktreeProjectId: id };
+      }
+
+      if (!stats.isFile()) {
+        return null;
+      }
+
+      // Linked worktree/submodule/etc (.git is a file pointing to the real gitdir)
+      const gitFile = fs.readFileSync(gitEntryPath, "utf8");
+      const firstLine = gitFile.split(/\r?\n/)[0] ?? "";
+      const match = firstLine.match(/^\s*gitdir:\s*(.+)\s*$/i);
+      if (!match) {
+        // Unknown .git file format; treat as unresolvable.
+        return null;
+      }
+
+      const rawGitDir = match[1];
+      const gitDir = path.isAbsolute(rawGitDir) ? rawGitDir : path.resolve(worktreeRoot, rawGitDir);
+
+      // If we can resolve commondir, this is likely a linked worktree. Use the main worktree
+      // root (parent of common .git dir) as the canonical project identity, but keep the
+      // worktree-root-derived ID as a fallback for legacy projects created from linked worktrees.
+      const commondirPath = path.join(gitDir, "commondir");
+      if (!fs.existsSync(commondirPath)) {
+        const id = this.hashProjectId(worktreeRoot);
+        return { mainProjectId: id, worktreeProjectId: id };
+      }
+
+      const commondirRaw = fs.readFileSync(commondirPath, "utf8").trim();
+      const commonGitDir = path.isAbsolute(commondirRaw)
+        ? commondirRaw
+        : path.resolve(gitDir, commondirRaw);
+      const mainRoot = path.dirname(commonGitDir);
+
+      return {
+        mainProjectId: this.hashProjectId(mainRoot),
+        worktreeProjectId: this.hashProjectId(worktreeRoot),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private getProjectIdCandidates(terminal: TerminalProcess): ProjectIdCandidates {
+    const info = terminal.getInfo();
+    const cached = this.projectIdCandidatesByTerminalId.get(info.id);
+    if (cached) {
+      return cached;
+    }
+
+    const startPaths: string[] = [];
+    if (typeof info.worktreeId === "string" && info.worktreeId.trim()) {
+      startPaths.push(info.worktreeId);
+    }
+    if (typeof info.cwd === "string" && info.cwd.trim()) {
+      startPaths.push(info.cwd);
+    }
+
+    for (const startPath of startPaths) {
+      const worktreeRoot = this.findGitWorktreeRoot(startPath);
+      if (!worktreeRoot) continue;
+
+      const inferred = this.inferProjectIdCandidatesFromGitRoot(worktreeRoot);
+      if (!inferred) continue;
+
+      this.projectIdCandidatesByTerminalId.set(info.id, inferred);
+      return inferred;
+    }
+
+    const empty = { mainProjectId: null, worktreeProjectId: null };
+    this.projectIdCandidatesByTerminalId.set(info.id, empty);
+    return empty;
+  }
+
+  private terminalMatchesProject(terminal: TerminalProcess, projectId: string): boolean {
+    const info = terminal.getInfo();
+    if (info.projectId) {
+      return info.projectId === projectId;
+    }
+
+    const candidates = this.getProjectIdCandidates(terminal);
+    const matches =
+      candidates.mainProjectId === projectId || candidates.worktreeProjectId === projectId;
+
+    if (matches) {
+      info.projectId = projectId;
+      return true;
+    }
+
+    return false;
   }
 }

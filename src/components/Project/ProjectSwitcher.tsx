@@ -133,41 +133,35 @@ export function ProjectSwitcher() {
     }, 1500);
   };
 
-  const fetchProjectStats = useCallback(
-    async (projectsToFetch: Project[]) => {
-      setIsLoadingStats(true);
-      const stats = new Map<string, ProjectStats>();
+  const fetchProjectStats = useCallback(async (projectsToFetch: Project[]) => {
+    setIsLoadingStats(true);
+    const stats = new Map<string, ProjectStats>();
 
-      try {
-        const results = await Promise.allSettled(
-          projectsToFetch.map((project) => projectClient.getStats(project.id))
-        );
+    try {
+      const results = await Promise.allSettled(
+        projectsToFetch.map((project) => projectClient.getStats(project.id))
+      );
 
-        results.forEach((result, index) => {
-          if (result.status === "fulfilled") {
-            stats.set(projectsToFetch[index].id, result.value);
-            // Debug: log stats for each project
-            if (process.env.CANOPY_VERBOSE) {
-              console.log(
-                `[ProjectSwitcher] Stats for "${projectsToFetch[index].name}":`,
-                result.value
-              );
-            }
-          } else {
-            console.warn(
-              `Failed to fetch stats for ${projectsToFetch[index].id}:`,
-              result.reason
+      results.forEach((result, index) => {
+        if (result.status === "fulfilled") {
+          stats.set(projectsToFetch[index].id, result.value);
+          // Debug: log stats for each project
+          if (process.env.CANOPY_VERBOSE) {
+            console.log(
+              `[ProjectSwitcher] Stats for "${projectsToFetch[index].name}":`,
+              result.value
             );
           }
-        });
+        } else {
+          console.warn(`Failed to fetch stats for ${projectsToFetch[index].id}:`, result.reason);
+        }
+      });
 
-        setProjectStats(stats);
-      } finally {
-        setIsLoadingStats(false);
-      }
-    },
-    []
-  );
+      setProjectStats(stats);
+    } finally {
+      setIsLoadingStats(false);
+    }
+  }, []);
 
   const handleCloseProject = async (
     projectId: string,
@@ -181,9 +175,10 @@ export function ProjectSwitcher() {
 
     if (killTerminals) {
       // Kill mode: confirm before killing processes
-      const processCount = stats?.processCount ?? 0;
+      const isBackground = project?.status === "background";
+      const processCount = stats?.processCount;
 
-      if (processCount === 0) {
+      if (!isBackground && (!processCount || processCount === 0)) {
         addNotification({
           type: "info",
           title: "No processes running",
@@ -193,12 +188,18 @@ export function ProjectSwitcher() {
         return;
       }
 
-      const confirmed = window.confirm(
-        `Stop "${project?.name}"?\n\n` +
-          `This will terminate ${processCount} process(es):\n` +
-          `- ${stats?.terminalCount ?? 0} terminal(s)\n\n` +
-          `Terminals cannot be recovered after this.`
-      );
+      const name = project?.name ?? "this project";
+      const confirmMessage =
+        processCount && processCount > 0
+          ? `Stop "${name}"?\n\n` +
+            `This will terminate ${processCount} process(es):\n` +
+            `- ${stats?.terminalCount ?? 0} terminal(s)\n\n` +
+            "Terminals cannot be recovered after this."
+          : `Stop "${name}"?\n\n` +
+            "This will terminate all terminals for this project.\n\n" +
+            "Terminals cannot be recovered after this.";
+
+      const confirmed = window.confirm(confirmMessage);
 
       if (!confirmed) return;
     }
