@@ -1,11 +1,10 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
-import { ChevronsUpDown, Plus, Circle, StopCircle } from "lucide-react";
-import { useShallow } from "zustand/react/shallow";
+import { ChevronsUpDown, Plus, Circle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { useProjectStore } from "@/store/projectStore";
 import { useNotificationStore } from "@/store/notificationStore";
-import { useTerminalStore } from "@/store/terminalStore";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,7 +24,6 @@ import { ProjectActionRow } from "./ProjectActionRow";
 interface ProjectTerminalCounts {
   activeAgentCount: number;
   waitingAgentCount: number;
-  terminalCount: number;
 }
 
 export function ProjectSwitcher() {
@@ -41,43 +39,61 @@ export function ProjectSwitcher() {
     reopenProject,
   } = useProjectStore();
 
-  const activeProjectTerminalCounts = useTerminalStore(
-    useShallow((state) => {
-      let activeAgentCount = 0;
-      let waitingAgentCount = 0;
-      let terminalCount = 0;
-
-      for (const terminal of state.terminals) {
-        if (!panelKindHasPty(terminal.kind ?? "terminal")) continue;
-        if (terminal.kind === "dev-preview") continue;
-
-        const agentState = terminal.agentState;
-        const isAgent = isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId);
-
-        if (isAgent) {
-          if (agentState === "waiting") {
-            waitingAgentCount += 1;
-          } else if (agentState === "working" || agentState === "running" || agentState == null) {
-            activeAgentCount += 1;
-          }
-        } else {
-          terminalCount += 1;
-        }
-      }
-
-      return { activeAgentCount, waitingAgentCount, terminalCount };
-    })
-  );
-
   const { addNotification } = useNotificationStore();
   const [isOpen, setIsOpen] = useState(false);
   const [projectStats, setProjectStats] = useState<Map<string, ProjectStats>>(new Map());
   const [terminalCounts, setTerminalCounts] = useState<Map<string, ProjectTerminalCounts>>(
     new Map()
   );
+  const [stopConfirmProjectId, setStopConfirmProjectId] = useState<string | null>(null);
+  const [isStoppingProject, setIsStoppingProject] = useState(false);
   const [isLoadingStats, setIsLoadingStats] = useState(false);
   const [isLoadingTerminalCounts, setIsLoadingTerminalCounts] = useState(false);
   const switchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const refreshStopCandidateCounts = useCallback(
+    async (projectId: string) => {
+      const [statsResult, terminalsResult] = await Promise.allSettled([
+        projectClient.getStats(projectId),
+        terminalClient.getForProject(projectId),
+      ]);
+
+      if (statsResult.status === "fulfilled") {
+        setProjectStats((prev) => {
+          const next = new Map(prev);
+          next.set(projectId, statsResult.value);
+          return next;
+        });
+      }
+
+      if (terminalsResult.status === "fulfilled") {
+        let activeAgentCount = 0;
+        let waitingAgentCount = 0;
+
+        for (const terminal of terminalsResult.value) {
+          if (!panelKindHasPty(terminal.kind ?? "terminal")) continue;
+          if (terminal.kind === "dev-preview") continue;
+
+          const agentState = terminal.agentState;
+          const isAgent = isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId);
+          if (!isAgent) continue;
+
+          if (agentState === "waiting") {
+            waitingAgentCount += 1;
+          } else if (agentState === "working" || agentState === "running") {
+            activeAgentCount += 1;
+          }
+        }
+
+        setTerminalCounts((prev) => {
+          const next = new Map(prev);
+          next.set(projectId, { activeAgentCount, waitingAgentCount });
+          return next;
+        });
+      }
+    },
+    [setProjectStats, setTerminalCounts]
+  );
 
   const handleProjectSwitch = (projectId: string) => {
     if (switchTimeoutRef.current) {
@@ -151,7 +167,6 @@ export function ProjectSwitcher() {
 
         let activeAgentCount = 0;
         let waitingAgentCount = 0;
-        let terminalCount = 0;
 
         for (const terminal of result.value) {
           if (!panelKindHasPty(terminal.kind ?? "terminal")) continue;
@@ -160,21 +175,18 @@ export function ProjectSwitcher() {
           const agentState = terminal.agentState;
           const isAgent = isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId);
 
-          if (isAgent) {
-            if (agentState === "waiting") {
-              waitingAgentCount += 1;
-            } else if (agentState === "working" || agentState === "running" || agentState == null) {
-              activeAgentCount += 1;
-            }
-          } else {
-            terminalCount += 1;
+          if (!isAgent) continue;
+
+          if (agentState === "waiting") {
+            waitingAgentCount += 1;
+          } else if (agentState === "working" || agentState === "running") {
+            activeAgentCount += 1;
           }
         }
 
         nextCounts.set(projectsToFetch[index].id, {
           activeAgentCount,
           waitingAgentCount,
-          terminalCount,
         });
       });
 
@@ -192,27 +204,11 @@ export function ProjectSwitcher() {
     e.stopPropagation();
     e.preventDefault();
 
-    const stats = projectStats.get(projectId);
-    const project = projects.find((p) => p.id === projectId);
-
     if (killTerminals) {
-      // Kill mode: confirm before killing processes
-      const processCount = stats?.processCount;
-
-      const name = project?.name ?? "this project";
-      const confirmMessage =
-        processCount && processCount > 0
-          ? `Stop "${name}"?\n\n` +
-            `This will terminate ${processCount} process(es):\n` +
-            `- ${stats?.terminalCount ?? 0} terminal(s)\n\n` +
-            "Terminals cannot be recovered after this."
-          : `Stop "${name}"?\n\n` +
-            "This will terminate all terminals for this project.\n\n" +
-            "Terminals cannot be recovered after this.";
-
-      const confirmed = window.confirm(confirmMessage);
-
-      if (!confirmed) return;
+      setIsOpen(false);
+      void refreshStopCandidateCounts(projectId);
+      setStopConfirmProjectId(projectId);
+      return;
     }
 
     try {
@@ -232,7 +228,7 @@ export function ProjectSwitcher() {
         });
         setTerminalCounts((prev) => {
           const next = new Map(prev);
-          next.set(projectId, { activeAgentCount: 0, waitingAgentCount: 0, terminalCount: 0 });
+          next.set(projectId, { activeAgentCount: 0, waitingAgentCount: 0 });
           return next;
         });
 
@@ -264,6 +260,55 @@ export function ProjectSwitcher() {
         message: error instanceof Error ? error.message : "Unknown error",
         duration: 5000,
       });
+    }
+  };
+
+  const confirmStopProject = async () => {
+    if (!stopConfirmProjectId) return;
+    setIsStoppingProject(true);
+
+    try {
+      const result = await closeProject(stopConfirmProjectId, { killTerminals: true });
+
+      setProjectStats((prev) => {
+        const next = new Map(prev);
+        next.set(stopConfirmProjectId, {
+          processCount: 0,
+          terminalCount: 0,
+          estimatedMemoryMB: 0,
+          terminalTypes: {},
+          processIds: [],
+        });
+        return next;
+      });
+      setTerminalCounts((prev) => {
+        const next = new Map(prev);
+        next.set(stopConfirmProjectId, { activeAgentCount: 0, waitingAgentCount: 0 });
+        return next;
+      });
+
+      addNotification({
+        type: "success",
+        title: "Project stopped",
+        message: `Terminated ${result.processesKilled} process(es)`,
+        duration: 3000,
+      });
+
+      const updatedProjects = await projectClient.getAll();
+      await Promise.all([
+        fetchProjectStats(updatedProjects),
+        fetchProjectTerminalCounts(updatedProjects),
+      ]);
+      setStopConfirmProjectId(null);
+    } catch (error) {
+      addNotification({
+        type: "error",
+        title: "Failed to stop project",
+        message: error instanceof Error ? error.message : "Unknown error",
+        duration: 5000,
+      });
+    } finally {
+      setIsStoppingProject(false);
     }
   };
 
@@ -363,26 +408,10 @@ export function ProjectSwitcher() {
   const renderProjectItem = (project: Project, isActive: boolean) => {
     const stats = projectStats.get(project.id);
     const isBackground = project.status === "background";
-    const isCurrentProject = currentProject?.id === project.id;
     const counts = terminalCounts.get(project.id);
-    const activeAgentCount = isCurrentProject
-      ? activeProjectTerminalCounts.activeAgentCount
-      : counts
-        ? counts.activeAgentCount
-        : null;
-    const waitingAgentCount = isCurrentProject
-      ? activeProjectTerminalCounts.waitingAgentCount
-      : counts
-        ? counts.waitingAgentCount
-        : null;
-    const terminalCount = isCurrentProject
-      ? activeProjectTerminalCounts.terminalCount
-      : counts
-        ? counts.terminalCount
-        : null;
-    const hasProcesses = Boolean(stats && stats.processCount > 0);
-    const showStop =
-      project.status === "active" || project.status === "background" || isActive || hasProcesses;
+    const activeAgentCount = counts ? counts.activeAgentCount : null;
+    const waitingAgentCount = counts ? counts.waitingAgentCount : null;
+    const showStop = (stats?.processCount ?? 0) > 0;
 
     return (
       <DropdownMenuItem
@@ -400,26 +429,9 @@ export function ProjectSwitcher() {
         disabled={isLoading}
         className={cn(
           "p-2 cursor-pointer mb-1 rounded-[var(--radius-lg)] transition-colors",
-          showStop && "pr-9",
           isActive ? "bg-white/[0.04]" : "hover:bg-white/[0.03]"
         )}
       >
-        {showStop && (
-          <button
-            type="button"
-            onClick={(e) => void handleCloseProject(project.id, e, true)}
-            className={cn(
-              "absolute top-2 right-2 p-1 rounded transition-colors",
-              "text-muted-foreground/60 hover:text-red-500 hover:bg-red-500/10",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-            )}
-            title="Stop project"
-            aria-label="Stop project"
-          >
-            <StopCircle className="w-4 h-4" aria-hidden="true" />
-          </button>
-        )}
-
         <div className="flex items-center gap-3 w-full min-w-0">
           {renderIcon(project.emoji || "🌲", project.color, "h-8 w-8 text-base")}
 
@@ -434,12 +446,31 @@ export function ProjectSwitcher() {
                 {project.name}
               </span>
 
-              <ProjectActionRow
-                activeAgentCount={activeAgentCount}
-                waitingAgentCount={waitingAgentCount}
-                terminalCount={terminalCount}
-                className="ml-auto"
-              />
+              <div className="ml-auto flex items-center gap-1.5 shrink-0">
+                <ProjectActionRow
+                  activeAgentCount={activeAgentCount}
+                  waitingAgentCount={waitingAgentCount}
+                />
+
+                {showStop && (
+                  <button
+                    type="button"
+                    onClick={(e) => void handleCloseProject(project.id, e, true)}
+                    className={cn(
+                      "p-0.5 rounded transition-colors cursor-pointer",
+                      "text-muted-foreground/60 hover:text-red-500 hover:bg-red-500/10",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                    )}
+                    title="Stop project"
+                    aria-label="Stop project"
+                  >
+                    <span
+                      className="block w-3 h-3 box-border rounded-[2px] border-2 border-current"
+                      aria-hidden="true"
+                    />
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className="flex items-center min-w-0 mt-0.5">
@@ -503,99 +534,150 @@ export function ProjectSwitcher() {
     return sections;
   };
 
+  const stopProject = stopConfirmProjectId
+    ? projects.find((project) => project.id === stopConfirmProjectId)
+    : null;
+  const stopProjectStats = stopConfirmProjectId ? projectStats.get(stopConfirmProjectId) : null;
+  const stopProjectCounts = stopConfirmProjectId ? terminalCounts.get(stopConfirmProjectId) : null;
+  const stopAgentCount =
+    (stopProjectCounts?.activeAgentCount ?? 0) + (stopProjectCounts?.waitingAgentCount ?? 0);
+  const stopTerminalCount = stopProjectStats?.terminalCount ?? null;
+
+  const stopDialog = (
+    <ConfirmDialog
+      isOpen={stopConfirmProjectId != null}
+      onClose={() => {
+        if (isStoppingProject) return;
+        setStopConfirmProjectId(null);
+      }}
+      title={`Stop "${stopProject?.name ?? "this project"}"?`}
+      description={
+        <>
+          <span className="block">
+            This will terminate all running sessions in this project
+            {stopTerminalCount != null
+              ? ` (${stopTerminalCount} session${stopTerminalCount === 1 ? "" : "s"})`
+              : ""}
+            .
+          </span>
+          {stopAgentCount > 0 && (
+            <span className="block mt-2">
+              It will also stop {stopAgentCount} agent session{stopAgentCount === 1 ? "" : "s"}.
+            </span>
+          )}
+          <span className="block mt-2">This can’t be undone.</span>
+        </>
+      }
+      confirmLabel="Stop project"
+      cancelLabel="Cancel"
+      onConfirm={confirmStopProject}
+      isConfirmLoading={isStoppingProject}
+      variant="destructive"
+    />
+  );
+
   if (!currentProject) {
     if (projects.length > 0) {
       return (
-        <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="outline"
-              className="w-full justify-between text-muted-foreground border-dashed h-12 active:scale-100"
-              disabled={isLoading}
+        <>
+          {stopDialog}
+          <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                className="w-full justify-between text-muted-foreground border-dashed h-12 active:scale-100"
+                disabled={isLoading}
+              >
+                <span>Select Project...</span>
+                <ChevronsUpDown className="h-4 w-4 opacity-50" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              className="w-[484px] max-w-[calc(100vw-2rem)] max-h-[60vh] overflow-y-auto p-2"
+              align="start"
             >
-              <span>Select Project...</span>
-              <ChevronsUpDown className="h-4 w-4 opacity-50" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            className="w-[440px] max-w-[calc(100vw-2rem)] max-h-[60vh] overflow-y-auto p-2"
-            align="start"
-          >
-            {renderGroupedProjects()}
+              {renderGroupedProjects()}
 
-            <DropdownMenuSeparator className="my-1 bg-border/40" />
+              <DropdownMenuSeparator className="my-1 bg-border/40" />
 
-            <DropdownMenuItem onClick={addProject} className="gap-3 p-2 cursor-pointer">
-              <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20">
-                <Plus className="h-4 w-4" />
-              </div>
-              <span className="font-medium text-sm text-muted-foreground">Add Project...</span>
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+              <DropdownMenuItem onClick={addProject} className="gap-3 p-2 cursor-pointer">
+                <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20">
+                  <Plus className="h-4 w-4" />
+                </div>
+                <span className="font-medium text-sm text-muted-foreground">Add Project...</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </>
       );
     }
 
     return (
-      <Button
-        variant="outline"
-        className="w-full justify-start text-muted-foreground border-dashed h-12 active:scale-100"
-        onClick={addProject}
-        disabled={isLoading}
-      >
-        <Plus className="mr-2 h-4 w-4" />
-        Open Project...
-      </Button>
+      <>
+        {stopDialog}
+        <Button
+          variant="outline"
+          className="w-full justify-start text-muted-foreground border-dashed h-12 active:scale-100"
+          onClick={addProject}
+          disabled={isLoading}
+        >
+          <Plus className="mr-2 h-4 w-4" />
+          Open Project...
+        </Button>
+      </>
     );
   }
 
   return (
-    <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          className={cn(
-            "w-full justify-between h-12 px-2.5",
-            "rounded-[var(--radius-lg)]",
-            "border border-white/[0.06]",
-            "bg-white/[0.02] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
-            "hover:bg-white/[0.04] transition-colors",
-            "active:scale-100"
-          )}
-          disabled={isLoading}
-        >
-          <div className="flex items-center gap-3 text-left min-w-0">
-            {renderIcon(currentProject.emoji || "🌲", currentProject.color, "h-9 w-9 text-xl")}
+    <>
+      {stopDialog}
+      <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            className={cn(
+              "w-full justify-between h-12 px-2.5",
+              "rounded-[var(--radius-lg)]",
+              "border border-white/[0.06]",
+              "bg-white/[0.02] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
+              "hover:bg-white/[0.04] transition-colors",
+              "active:scale-100"
+            )}
+            disabled={isLoading}
+          >
+            <div className="flex items-center gap-3 text-left min-w-0">
+              {renderIcon(currentProject.emoji || "🌲", currentProject.color, "h-9 w-9 text-xl")}
 
-            <div className="flex flex-col min-w-0 gap-0.5">
-              <span className="truncate font-semibold text-canopy-text text-sm leading-none">
-                {currentProject.name}
-              </span>
-              <span className="truncate text-xs text-muted-foreground/60 font-mono">
-                {currentProject.path.split(/[/\\]/).pop()}
-              </span>
+              <div className="flex flex-col min-w-0 gap-0.5">
+                <span className="truncate font-semibold text-canopy-text text-sm leading-none">
+                  {currentProject.name}
+                </span>
+                <span className="truncate text-xs text-muted-foreground/60 font-mono">
+                  {currentProject.path.split(/[/\\]/).pop()}
+                </span>
+              </div>
             </div>
-          </div>
-          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 text-muted-foreground/40 group-hover:text-muted-foreground/70 transition-colors" />
-        </Button>
-      </DropdownMenuTrigger>
+            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 text-muted-foreground/40 group-hover:text-muted-foreground/70 transition-colors" />
+          </Button>
+        </DropdownMenuTrigger>
 
-      <DropdownMenuContent
-        className="w-[440px] max-w-[calc(100vw-2rem)] max-h-[60vh] overflow-y-auto p-2"
-        align="start"
-        sideOffset={8}
-      >
-        {renderGroupedProjects()}
+        <DropdownMenuContent
+          className="w-[484px] max-w-[calc(100vw-2rem)] max-h-[60vh] overflow-y-auto p-2"
+          align="start"
+          sideOffset={8}
+        >
+          {renderGroupedProjects()}
 
-        <DropdownMenuSeparator className="my-1 bg-border/40" />
+          <DropdownMenuSeparator className="my-1 bg-border/40" />
 
-        <DropdownMenuItem onClick={addProject} className="gap-3 p-2 cursor-pointer">
-          <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
-            <Plus className="h-4 w-4" />
-          </div>
-          <span className="font-medium text-sm text-muted-foreground">Add Project...</span>
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+          <DropdownMenuItem onClick={addProject} className="gap-3 p-2 cursor-pointer">
+            <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
+              <Plus className="h-4 w-4" />
+            </div>
+            <span className="font-medium text-sm text-muted-foreground">Add Project...</span>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </>
   );
 }

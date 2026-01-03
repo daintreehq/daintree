@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect, useMemo, useCallback } from "react";
 import type React from "react";
-import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { FixedDropdown } from "@/components/ui/fixed-dropdown";
 import {
   Settings,
@@ -25,7 +25,6 @@ import {
   StickyNote,
   Rocket,
   Circle,
-  StopCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
@@ -36,12 +35,7 @@ import { useWorktreeActions } from "@/hooks/useWorktreeActions";
 import { useProjectSettings } from "@/hooks";
 import { useProjectStore } from "@/store/projectStore";
 import { useNotificationStore } from "@/store/notificationStore";
-import {
-  useSidecarStore,
-  usePreferencesStore,
-  useToolbarPreferencesStore,
-  useTerminalStore,
-} from "@/store";
+import { useSidecarStore, usePreferencesStore, useToolbarPreferencesStore } from "@/store";
 import type { ToolbarButtonId } from "@/../../shared/types/domain";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
@@ -67,7 +61,6 @@ import { isAgentTerminal } from "@/utils/terminalType";
 interface ProjectTerminalCounts {
   activeAgentCount: number;
   waitingAgentCount: number;
-  terminalCount: number;
 }
 
 interface ToolbarProps {
@@ -110,33 +103,6 @@ export function Toolbar({
     activeWorktreeId ? state.worktrees.get(activeWorktreeId) : null
   );
   const branchName = activeWorktree?.branch;
-  const activeProjectTerminalCounts = useTerminalStore(
-    useShallow((state) => {
-      let activeAgentCount = 0;
-      let waitingAgentCount = 0;
-      let terminalCount = 0;
-
-      for (const terminal of state.terminals) {
-        if (!panelKindHasPty(terminal.kind ?? "terminal")) continue;
-        if (terminal.kind === "dev-preview") continue;
-
-        const agentState = terminal.agentState;
-        const isAgent = isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId);
-
-        if (isAgent) {
-          if (agentState === "waiting") {
-            waitingAgentCount += 1;
-          } else if (agentState === "working" || agentState === "running" || agentState == null) {
-            activeAgentCount += 1;
-          }
-        } else {
-          terminalCount += 1;
-        }
-      }
-
-      return { activeAgentCount, waitingAgentCount, terminalCount };
-    })
-  );
   const handleProjectSwitch = (projectId: string) => {
     void actionService.dispatch("project.switch", { projectId }, { source: "user" });
   };
@@ -169,6 +135,8 @@ export function Toolbar({
     new Map()
   );
   const [isLoadingTerminalCounts, setIsLoadingTerminalCounts] = useState(false);
+  const [stopConfirmProjectId, setStopConfirmProjectId] = useState<string | null>(null);
+  const [isStoppingProject, setIsStoppingProject] = useState(false);
   const [treeCopied, setTreeCopied] = useState(false);
   const [isCopyingTree, setIsCopyingTree] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState<string>("");
@@ -223,7 +191,6 @@ export function Toolbar({
 
         let activeAgentCount = 0;
         let waitingAgentCount = 0;
-        let terminalCount = 0;
 
         for (const terminal of result.value) {
           if (!panelKindHasPty(terminal.kind ?? "terminal")) continue;
@@ -232,21 +199,18 @@ export function Toolbar({
           const agentState = terminal.agentState;
           const isAgent = isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId);
 
-          if (isAgent) {
-            if (agentState === "waiting") {
-              waitingAgentCount += 1;
-            } else if (agentState === "working" || agentState === "running" || agentState == null) {
-              activeAgentCount += 1;
-            }
-          } else {
-            terminalCount += 1;
+          if (!isAgent) continue;
+
+          if (agentState === "waiting") {
+            waitingAgentCount += 1;
+          } else if (agentState === "working" || agentState === "running") {
+            activeAgentCount += 1;
           }
         }
 
         nextCounts.set(projectsToFetch[index].id, {
           activeAgentCount,
           waitingAgentCount,
-          terminalCount,
         });
       });
 
@@ -294,34 +258,68 @@ export function Toolbar({
     [projects, currentProject?.id, projectStats]
   );
 
-  const handleStopProject = async (projectId: string, e: React.MouseEvent) => {
+  const refreshStopCandidateCounts = useCallback(
+    async (projectId: string) => {
+      const [statsResult, terminalsResult] = await Promise.allSettled([
+        projectClient.getStats(projectId),
+        terminalClient.getForProject(projectId),
+      ]);
+
+      if (statsResult.status === "fulfilled") {
+        setProjectStats((prev) => {
+          const next = new Map(prev);
+          next.set(projectId, statsResult.value);
+          return next;
+        });
+      }
+
+      if (terminalsResult.status === "fulfilled") {
+        let activeAgentCount = 0;
+        let waitingAgentCount = 0;
+
+        for (const terminal of terminalsResult.value) {
+          if (!panelKindHasPty(terminal.kind ?? "terminal")) continue;
+          if (terminal.kind === "dev-preview") continue;
+
+          const agentState = terminal.agentState;
+          const isAgent = isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId);
+          if (!isAgent) continue;
+
+          if (agentState === "waiting") {
+            waitingAgentCount += 1;
+          } else if (agentState === "working" || agentState === "running") {
+            activeAgentCount += 1;
+          }
+        }
+
+        setTerminalCounts((prev) => {
+          const next = new Map(prev);
+          next.set(projectId, { activeAgentCount, waitingAgentCount });
+          return next;
+        });
+      }
+    },
+    [setProjectStats, setTerminalCounts]
+  );
+
+  const handleStopProject = (projectId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
+    setProjectSelectorOpen(false);
+    void refreshStopCandidateCounts(projectId);
+    setStopConfirmProjectId(projectId);
+  };
 
-    const projectStat = projectStats.get(projectId);
-    const project = projects.find((p) => p.id === projectId);
-
-    const processCount = projectStat?.processCount;
-    const name = project?.name ?? "this project";
-    const confirmMessage =
-      processCount && processCount > 0
-        ? `Stop "${name}"?\n\n` +
-          `This will terminate ${processCount} process(es):\n` +
-          `- ${projectStat?.terminalCount ?? 0} terminal(s)\n\n` +
-          "Terminals cannot be recovered after this."
-        : `Stop "${name}"?\n\n` +
-          "This will terminate all terminals for this project.\n\n" +
-          "Terminals cannot be recovered after this.";
-
-    const confirmed = window.confirm(confirmMessage);
-    if (!confirmed) return;
+  const confirmStopProject = async () => {
+    if (!stopConfirmProjectId) return;
+    setIsStoppingProject(true);
 
     try {
-      const result = await closeProject(projectId, { killTerminals: true });
+      const result = await closeProject(stopConfirmProjectId, { killTerminals: true });
 
       setProjectStats((prev) => {
         const next = new Map(prev);
-        next.set(projectId, {
+        next.set(stopConfirmProjectId, {
           processCount: 0,
           terminalCount: 0,
           estimatedMemoryMB: 0,
@@ -332,7 +330,7 @@ export function Toolbar({
       });
       setTerminalCounts((prev) => {
         const next = new Map(prev);
-        next.set(projectId, { activeAgentCount: 0, waitingAgentCount: 0, terminalCount: 0 });
+        next.set(stopConfirmProjectId, { activeAgentCount: 0, waitingAgentCount: 0 });
         return next;
       });
 
@@ -348,6 +346,7 @@ export function Toolbar({
         fetchProjectStats(updatedProjects),
         fetchProjectTerminalCounts(updatedProjects),
       ]);
+      setStopConfirmProjectId(null);
     } catch (error) {
       addNotification({
         type: "error",
@@ -355,31 +354,17 @@ export function Toolbar({
         message: error instanceof Error ? error.message : "Unknown error",
         duration: 5000,
       });
+    } finally {
+      setIsStoppingProject(false);
     }
   };
 
   const renderProjectItem = (project: Project, isActive: boolean) => {
     const projectStat = projectStats.get(project.id);
-    const isCurrentProject = currentProject?.id === project.id;
     const counts = terminalCounts.get(project.id);
-    const activeAgentCount = isCurrentProject
-      ? activeProjectTerminalCounts.activeAgentCount
-      : counts
-        ? counts.activeAgentCount
-        : null;
-    const waitingAgentCount = isCurrentProject
-      ? activeProjectTerminalCounts.waitingAgentCount
-      : counts
-        ? counts.waitingAgentCount
-        : null;
-    const terminalCount = isCurrentProject
-      ? activeProjectTerminalCounts.terminalCount
-      : counts
-        ? counts.terminalCount
-        : null;
-    const hasProcesses = Boolean(projectStat && projectStat.processCount > 0);
-    const showStop =
-      project.status === "active" || project.status === "background" || isActive || hasProcesses;
+    const activeAgentCount = counts ? counts.activeAgentCount : null;
+    const waitingAgentCount = counts ? counts.waitingAgentCount : null;
+    const showStop = (projectStat?.processCount ?? 0) > 0;
 
     return (
       <DropdownMenuItem
@@ -391,26 +376,9 @@ export function Toolbar({
         }}
         className={cn(
           "p-2 cursor-pointer mb-1 rounded-[var(--radius-lg)] transition-colors",
-          showStop && "pr-9",
           isActive ? "bg-white/[0.04]" : "hover:bg-white/[0.03]"
         )}
       >
-        {showStop && (
-          <button
-            type="button"
-            onClick={(e) => void handleStopProject(project.id, e)}
-            className={cn(
-              "absolute top-2 right-2 p-1 rounded transition-colors",
-              "text-muted-foreground/60 hover:text-red-500 hover:bg-red-500/10",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-            )}
-            title="Stop project"
-            aria-label="Stop project"
-          >
-            <StopCircle className="w-4 h-4" aria-hidden="true" />
-          </button>
-        )}
-
         <div className="flex items-center gap-3 w-full min-w-0">
           <div
             className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] text-base shrink-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
@@ -430,12 +398,31 @@ export function Toolbar({
                 {project.name}
               </span>
 
-              <ProjectActionRow
-                activeAgentCount={activeAgentCount}
-                waitingAgentCount={waitingAgentCount}
-                terminalCount={terminalCount}
-                className="ml-auto"
-              />
+              <div className="ml-auto flex items-center gap-1.5 shrink-0">
+                <ProjectActionRow
+                  activeAgentCount={activeAgentCount}
+                  waitingAgentCount={waitingAgentCount}
+                />
+
+                {showStop && (
+                  <button
+                    type="button"
+                    onClick={(e) => handleStopProject(project.id, e)}
+                    className={cn(
+                      "p-0.5 rounded transition-colors cursor-pointer",
+                      "text-muted-foreground/60 hover:text-red-500 hover:bg-red-500/10",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                    )}
+                    title="Stop project"
+                    aria-label="Stop project"
+                  >
+                    <span
+                      className="block w-3 h-3 box-border rounded-[2px] border-2 border-current"
+                      aria-hidden="true"
+                    />
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className="flex items-center min-w-0 mt-0.5">
@@ -931,167 +918,218 @@ export function Toolbar({
       .map((id) => buttonRegistry[id].render());
   };
 
+  const stopProject = stopConfirmProjectId
+    ? projects.find((project) => project.id === stopConfirmProjectId)
+    : null;
+  const stopProjectStats = stopConfirmProjectId ? projectStats.get(stopConfirmProjectId) : null;
+  const stopProjectCounts = stopConfirmProjectId ? terminalCounts.get(stopConfirmProjectId) : null;
+  const stopAgentCount =
+    (stopProjectCounts?.activeAgentCount ?? 0) + (stopProjectCounts?.waitingAgentCount ?? 0);
+  const stopTerminalCount = stopProjectStats?.terminalCount ?? null;
+
   return (
-    <header
-      ref={headerRef}
-      className="relative flex h-12 items-center justify-between px-4 pt-1 shrink-0 app-drag-region bg-canopy-sidebar/95 backdrop-blur-sm border-b border-divider shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
-    >
-      <div className="window-resize-strip" />
+    <>
+      <ConfirmDialog
+        isOpen={stopConfirmProjectId != null}
+        onClose={() => {
+          if (isStoppingProject) return;
+          setStopConfirmProjectId(null);
+        }}
+        title={`Stop "${stopProject?.name ?? "this project"}"?`}
+        description={
+          <>
+            <span className="block">
+              This will terminate all running sessions in this project
+              {stopTerminalCount != null
+                ? ` (${stopTerminalCount} session${stopTerminalCount === 1 ? "" : "s"})`
+                : ""}
+              .
+            </span>
+            {stopAgentCount > 0 && (
+              <span className="block mt-2">
+                It will also stop {stopAgentCount} agent session{stopAgentCount === 1 ? "" : "s"}.
+              </span>
+            )}
+            <span className="block mt-2">This can’t be undone.</span>
+          </>
+        }
+        confirmLabel="Stop project"
+        cancelLabel="Cancel"
+        onConfirm={confirmStopProject}
+        isConfirmLoading={isStoppingProject}
+        variant="destructive"
+      />
 
-      {/* LEFT GROUP */}
-      <div className="flex items-center gap-1.5 app-no-drag z-20">
-        <div
-          className={cn("shrink-0 transition-[width] duration-200", isFullscreen ? "w-0" : "w-16")}
-        />
-        {buttonRegistry["sidebar-toggle"].render()}
+      <header
+        ref={headerRef}
+        className="relative flex h-12 items-center justify-between px-4 pt-1 shrink-0 app-drag-region bg-canopy-sidebar/95 backdrop-blur-sm border-b border-divider shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
+      >
+        <div className="window-resize-strip" />
 
-        <div className="w-px h-5 bg-white/[0.08] mx-1" />
+        {/* LEFT GROUP */}
+        <div className="flex items-center gap-1.5 app-no-drag z-20">
+          <div
+            className={cn(
+              "shrink-0 transition-[width] duration-200",
+              isFullscreen ? "w-0" : "w-16"
+            )}
+          />
+          {buttonRegistry["sidebar-toggle"].render()}
 
-        <div className="flex items-center gap-0.5">{renderButtons(toolbarLayout.leftButtons)}</div>
-      </div>
+          <div className="w-px h-5 bg-white/[0.08] mx-1" />
 
-      {/* CENTER GROUP - Absolutely positioned dead center */}
-      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center z-10 pointer-events-none">
-        <DropdownMenu open={projectSelectorOpen} onOpenChange={setProjectSelectorOpen}>
-          <DropdownMenuTrigger asChild>
-            <button
-              ref={projectSelectorTriggerRef}
-              className={cn(
-                "flex items-center justify-center gap-2 px-3 h-9 rounded-[var(--radius-md)] select-none border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] app-no-drag pointer-events-auto outline-none",
-                "opacity-80 hover:opacity-100 transition-opacity cursor-pointer"
-              )}
-              style={{
-                background: currentProject
-                  ? getProjectGradient(currentProject.color)
-                  : "linear-gradient(135deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02))",
+          <div className="flex items-center gap-0.5">
+            {renderButtons(toolbarLayout.leftButtons)}
+          </div>
+        </div>
+
+        {/* CENTER GROUP - Absolutely positioned dead center */}
+        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center z-10 pointer-events-none">
+          <DropdownMenu open={projectSelectorOpen} onOpenChange={setProjectSelectorOpen}>
+            <DropdownMenuTrigger asChild>
+              <button
+                ref={projectSelectorTriggerRef}
+                className={cn(
+                  "flex items-center justify-center gap-2 px-3 h-9 rounded-[var(--radius-md)] select-none border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] app-no-drag pointer-events-auto outline-none",
+                  "opacity-80 hover:opacity-100 transition-opacity cursor-pointer"
+                )}
+                style={{
+                  background: currentProject
+                    ? getProjectGradient(currentProject.color)
+                    : "linear-gradient(135deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02))",
+                }}
+              >
+                {currentProject ? (
+                  <>
+                    <span className="text-base leading-none" aria-label="Project emoji">
+                      {currentProject.emoji}
+                    </span>
+                    <span className="text-xs font-medium text-white/90 tracking-wide">
+                      {currentProject.name}
+                    </span>
+                    {branchName && (
+                      <span
+                        className="font-mono text-[10px] tabular-nums text-white/70 px-1.5 py-0.5 rounded-full bg-white/10"
+                        aria-label={`Current branch ${branchName}`}
+                      >
+                        {branchName}
+                      </span>
+                    )}
+                    <ChevronsUpDown className="h-3 w-3 text-white/50 ml-0.5" />
+                  </>
+                ) : (
+                  <>
+                    <span className="text-xs font-medium text-canopy-text tracking-wide">
+                      Canopy Command Center
+                    </span>
+                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-canopy-accent/20 text-canopy-accent">
+                      Beta
+                    </span>
+                    <ChevronsUpDown className="h-3 w-3 text-canopy-text/50 ml-0.5" />
+                  </>
+                )}
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              className="w-[480px] max-w-[calc(100vw-2rem)] max-h-[60vh] overflow-y-auto p-2"
+              align="center"
+              onInteractOutside={(event) => {
+                const target = event.target as HTMLElement;
+                const trigger = projectSelectorTriggerRef.current;
+                const header = headerRef.current;
+
+                if (header?.contains(target) && !trigger?.contains(target)) {
+                  setProjectSelectorOpen(false);
+                }
               }}
             >
-              {currentProject ? (
+              {groupedProjects.active.length > 0 && (
                 <>
-                  <span className="text-base leading-none" aria-label="Project emoji">
-                    {currentProject.emoji}
-                  </span>
-                  <span className="text-xs font-medium text-white/90 tracking-wide">
-                    {currentProject.name}
-                  </span>
-                  {branchName && (
-                    <span
-                      className="font-mono text-[10px] tabular-nums text-white/70 px-1.5 py-0.5 rounded-full bg-white/10"
-                      aria-label={`Current branch ${branchName}`}
-                    >
-                      {branchName}
-                    </span>
-                  )}
-                  <ChevronsUpDown className="h-3 w-3 text-white/50 ml-0.5" />
-                </>
-              ) : (
-                <>
-                  <span className="text-xs font-medium text-canopy-text tracking-wide">
-                    Canopy Command Center
-                  </span>
-                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-canopy-accent/20 text-canopy-accent">
-                    Beta
-                  </span>
-                  <ChevronsUpDown className="h-3 w-3 text-canopy-text/50 ml-0.5" />
+                  <DropdownMenuLabel className="text-[11px] font-semibold text-muted-foreground/50 uppercase tracking-widest px-2 py-1.5">
+                    Active
+                  </DropdownMenuLabel>
+                  {groupedProjects.active.map((project) => renderProjectItem(project, true))}
                 </>
               )}
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            className="w-[440px] max-w-[calc(100vw-2rem)] max-h-[60vh] overflow-y-auto p-2"
-            align="center"
-            onInteractOutside={(event) => {
-              const target = event.target as HTMLElement;
-              const trigger = projectSelectorTriggerRef.current;
-              const header = headerRef.current;
 
-              if (header?.contains(target) && !trigger?.contains(target)) {
-                setProjectSelectorOpen(false);
-              }
-            }}
-          >
-            {groupedProjects.active.length > 0 && (
-              <>
-                <DropdownMenuLabel className="text-[11px] font-semibold text-muted-foreground/50 uppercase tracking-widest px-2 py-1.5">
-                  Active
-                </DropdownMenuLabel>
-                {groupedProjects.active.map((project) => renderProjectItem(project, true))}
-              </>
-            )}
+              {groupedProjects.background.length > 0 && (
+                <>
+                  {groupedProjects.active.length > 0 && (
+                    <DropdownMenuSeparator className="my-1 bg-border/40" />
+                  )}
+                  <DropdownMenuLabel className="text-[11px] font-semibold text-muted-foreground/50 uppercase tracking-widest px-2 py-1.5 flex items-center gap-2">
+                    <Circle
+                      className={cn(
+                        "h-2 w-2 fill-green-500 text-green-500",
+                        (isLoadingProjectStats || isLoadingTerminalCounts) && "animate-pulse"
+                      )}
+                    />
+                    Background ({groupedProjects.background.length})
+                  </DropdownMenuLabel>
+                  {groupedProjects.background.map((project) => renderProjectItem(project, false))}
+                </>
+              )}
 
-            {groupedProjects.background.length > 0 && (
-              <>
-                {groupedProjects.active.length > 0 && (
-                  <DropdownMenuSeparator className="my-1 bg-border/40" />
-                )}
-                <DropdownMenuLabel className="text-[11px] font-semibold text-muted-foreground/50 uppercase tracking-widest px-2 py-1.5 flex items-center gap-2">
-                  <Circle
-                    className={cn(
-                      "h-2 w-2 fill-green-500 text-green-500",
-                      (isLoadingProjectStats || isLoadingTerminalCounts) && "animate-pulse"
-                    )}
-                  />
-                  Background ({groupedProjects.background.length})
-                </DropdownMenuLabel>
-                {groupedProjects.background.map((project) => renderProjectItem(project, false))}
-              </>
-            )}
+              {groupedProjects.recent.length > 0 && (
+                <>
+                  {(groupedProjects.active.length > 0 || groupedProjects.background.length > 0) && (
+                    <DropdownMenuSeparator className="my-1 bg-border/40" />
+                  )}
+                  <DropdownMenuLabel className="text-[11px] font-semibold text-muted-foreground/50 uppercase tracking-widest px-2 py-1.5">
+                    Recent
+                  </DropdownMenuLabel>
+                  {groupedProjects.recent
+                    .slice(0, 5)
+                    .map((project) => renderProjectItem(project, false))}
+                </>
+              )}
 
-            {groupedProjects.recent.length > 0 && (
-              <>
-                {(groupedProjects.active.length > 0 || groupedProjects.background.length > 0) && (
-                  <DropdownMenuSeparator className="my-1 bg-border/40" />
-                )}
-                <DropdownMenuLabel className="text-[11px] font-semibold text-muted-foreground/50 uppercase tracking-widest px-2 py-1.5">
-                  Recent
-                </DropdownMenuLabel>
-                {groupedProjects.recent
-                  .slice(0, 5)
-                  .map((project) => renderProjectItem(project, false))}
-              </>
-            )}
+              <DropdownMenuSeparator className="my-1 bg-border/40" />
 
-            <DropdownMenuSeparator className="my-1 bg-border/40" />
+              {currentProject && (
+                <DropdownMenuItem
+                  onClick={() => {
+                    void actionService.dispatch("project.settings.open", undefined, {
+                      source: "user",
+                    });
+                  }}
+                  className="gap-2 p-2 cursor-pointer"
+                >
+                  <div className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-md)] bg-white/[0.04] text-muted-foreground">
+                    <Settings2 className="h-3.5 w-3.5" />
+                  </div>
+                  <span className="font-medium text-sm text-foreground/80">
+                    Project Settings...
+                  </span>
+                </DropdownMenuItem>
+              )}
 
-            {currentProject && (
               <DropdownMenuItem
                 onClick={() => {
-                  void actionService.dispatch("project.settings.open", undefined, {
-                    source: "user",
-                  });
+                  void actionService.dispatch("project.add", undefined, { source: "user" });
                 }}
                 className="gap-2 p-2 cursor-pointer"
               >
-                <div className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-md)] bg-white/[0.04] text-muted-foreground">
-                  <Settings2 className="h-3.5 w-3.5" />
+                <div className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-md)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
+                  <Plus className="h-3.5 w-3.5" />
                 </div>
-                <span className="font-medium text-sm text-foreground/80">Project Settings...</span>
+                <span className="font-medium text-sm text-muted-foreground">Add Project...</span>
               </DropdownMenuItem>
-            )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
 
-            <DropdownMenuItem
-              onClick={() => {
-                void actionService.dispatch("project.add", undefined, { source: "user" });
-              }}
-              className="gap-2 p-2 cursor-pointer"
-            >
-              <div className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-md)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
-                <Plus className="h-3.5 w-3.5" />
-              </div>
-              <span className="font-medium text-sm text-muted-foreground">Add Project...</span>
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
+        {/* RIGHT GROUP */}
+        <div className="flex items-center gap-1.5 app-no-drag z-20">
+          <div className="flex items-center gap-0.5">
+            {renderButtons(toolbarLayout.rightButtons)}
+          </div>
 
-      {/* RIGHT GROUP */}
-      <div className="flex items-center gap-1.5 app-no-drag z-20">
-        <div className="flex items-center gap-0.5">{renderButtons(toolbarLayout.rightButtons)}</div>
+          <div className="w-px h-5 bg-white/[0.08] mx-1" />
 
-        <div className="w-px h-5 bg-white/[0.08] mx-1" />
-
-        {buttonRegistry["sidecar-toggle"].render()}
-      </div>
-    </header>
+          {buttonRegistry["sidecar-toggle"].render()}
+        </div>
+      </header>
+    </>
   );
 }
