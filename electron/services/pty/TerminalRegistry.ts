@@ -17,6 +17,7 @@ type ProjectIdCandidates = {
 export class TerminalRegistry {
   private terminals: Map<string, TerminalProcess> = new Map();
   private trashTimeouts: Map<string, NodeJS.Timeout> = new Map();
+  private trashExpiryTimes: Map<string, number> = new Map();
   private lastKnownProjectId: string | null = null;
   private projectIdCandidatesByTerminalId: Map<string, ProjectIdCandidates> = new Map();
 
@@ -31,6 +32,7 @@ export class TerminalRegistry {
   }
 
   delete(id: string): void {
+    this.clearTrashTimeout(id);
     this.terminals.delete(id);
     this.projectIdCandidatesByTerminalId.delete(id);
   }
@@ -69,14 +71,17 @@ export class TerminalRegistry {
       return;
     }
 
+    const expiresAt = Date.now() + this.trashTtlMs;
     const timeout = setTimeout(() => {
       console.log(`[TerminalRegistry] Auto-killing trashed terminal after TTL: ${id}`);
       onExpire(id);
       this.trashTimeouts.delete(id);
+      this.trashExpiryTimes.delete(id);
     }, this.trashTtlMs);
 
     this.trashTimeouts.set(id, timeout);
-    events.emit("terminal:trashed", { id, expiresAt: Date.now() + this.trashTtlMs });
+    this.trashExpiryTimes.set(id, expiresAt);
+    events.emit("terminal:trashed", { id, expiresAt });
   }
 
   /**
@@ -89,6 +94,7 @@ export class TerminalRegistry {
     if (timeout) {
       clearTimeout(timeout);
       this.trashTimeouts.delete(id);
+      this.trashExpiryTimes.delete(id);
 
       if (this.terminals.has(id)) {
         console.log(`[TerminalRegistry] Restored terminal from trash: ${id}`);
@@ -112,13 +118,18 @@ export class TerminalRegistry {
     if (timeout) {
       clearTimeout(timeout);
       this.trashTimeouts.delete(id);
+      this.trashExpiryTimes.delete(id);
     }
+  }
+
+  getTrashExpiresAt(id: string): number | undefined {
+    return this.trashExpiryTimes.get(id);
   }
 
   getForProject(projectId: string): string[] {
     const result: string[] = [];
     for (const [id, terminal] of this.terminals) {
-      if (this.terminalMatchesProject(terminal, projectId)) {
+      if (this.terminalMatchesProject(terminal, projectId) && !this.isInTrash(id)) {
         result.push(id);
       }
     }
@@ -147,7 +158,8 @@ export class TerminalRegistry {
     }
 
     const projectTerminals = allTerminals.filter((t) => {
-      return this.terminalMatchesProject(t, projectId);
+      const info = t.getInfo();
+      return this.terminalMatchesProject(t, projectId) && !this.isInTrash(info.id);
     });
 
     const processIds = projectTerminals
@@ -244,6 +256,7 @@ export class TerminalRegistry {
       clearTimeout(timeout);
     }
     this.trashTimeouts.clear();
+    this.trashExpiryTimes.clear();
     this.terminals.clear();
     this.projectIdCandidatesByTerminalId.clear();
   }

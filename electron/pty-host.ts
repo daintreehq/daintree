@@ -1295,6 +1295,8 @@ port.on("message", async (rawMsg: any) => {
                 agentState: terminal.agentState,
                 lastStateChange: terminal.lastStateChange,
                 spawnedAt: terminal.spawnedAt,
+                isTrashed: terminal.isTrashed,
+                trashExpiresAt: terminal.trashExpiresAt,
               }
             : null,
         });

@@ -105,4 +105,83 @@ describe("TerminalRegistry projectId inference", () => {
       fs.rmSync(sandbox, { recursive: true, force: true });
     }
   });
+
+  it("excludes trashed terminals from getForProject and getProjectStats", () => {
+    const registry = new TerminalRegistry(120000);
+    const projectId = "project-123";
+
+    const activeTerminal = createMockTerminalProcess({
+      id: "t-active",
+      cwd: "/tmp",
+      projectId,
+    });
+
+    const trashedTerminal = createMockTerminalProcess({
+      id: "t-trashed",
+      cwd: "/tmp",
+      projectId,
+    });
+
+    registry.add("t-active", activeTerminal);
+    registry.add("t-trashed", trashedTerminal);
+
+    registry.trash("t-trashed", () => {});
+
+    const terminals = registry.getForProject(projectId);
+    expect(terminals).toEqual(["t-active"]);
+    expect(terminals).not.toContain("t-trashed");
+
+    const stats = registry.getProjectStats(projectId);
+    expect(stats.terminalCount).toBe(1);
+    expect(stats.processIds).toEqual([12345]);
+  });
+
+  it("includes terminals in getForProject after restore from trash", () => {
+    const registry = new TerminalRegistry(120000);
+    const projectId = "project-123";
+
+    const terminal = createMockTerminalProcess({
+      id: "t-1",
+      cwd: "/tmp",
+      projectId,
+    });
+
+    registry.add("t-1", terminal);
+    registry.trash("t-1", () => {});
+
+    expect(registry.getForProject(projectId)).toEqual([]);
+
+    registry.restore("t-1");
+
+    expect(registry.getForProject(projectId)).toEqual(["t-1"]);
+
+    const stats = registry.getProjectStats(projectId);
+    expect(stats.terminalCount).toBe(1);
+    expect(stats.processIds).toEqual([12345]);
+    expect(stats.terminalTypes).toEqual({ terminal: 1 });
+  });
+
+  it("clears trash timeout when terminal is deleted", () => {
+    const registry = new TerminalRegistry(120000);
+    const projectId = "project-123";
+    let killedId: string | null = null;
+
+    const terminal = createMockTerminalProcess({
+      id: "t-1",
+      cwd: "/tmp",
+      projectId,
+    });
+
+    registry.add("t-1", terminal);
+    registry.trash("t-1", (id) => {
+      killedId = id;
+    });
+
+    expect(registry.isInTrash("t-1")).toBe(true);
+
+    registry.delete("t-1");
+
+    expect(registry.isInTrash("t-1")).toBe(false);
+    expect(killedId).toBe(null);
+  });
 });

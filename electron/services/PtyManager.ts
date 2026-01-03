@@ -288,7 +288,17 @@ export class PtyManager extends EventEmitter {
    * Get terminal info.
    */
   getTerminal(id: string): TerminalInfo | undefined {
-    return this.registry.get(id)?.getInfo();
+    const info = this.registry.get(id)?.getInfo();
+    if (!info) return undefined;
+
+    const isTrashed = this.registry.isInTrash(id);
+    const trashExpiresAt = isTrashed ? this.registry.getTrashExpiresAt(id) : undefined;
+
+    return {
+      ...info,
+      isTrashed,
+      trashExpiresAt,
+    };
   }
 
   /**
