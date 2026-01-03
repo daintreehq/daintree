@@ -50,6 +50,16 @@ export interface ActivityMonitorOptions {
    * If provided, polling uses this instead of raw buffer.
    */
   getVisibleLines?: (n: number) => string[];
+  /**
+   * Initial state for the monitor (default: "idle").
+   * When resuming after project switch, set to previous state to avoid spurious transitions.
+   */
+  initialState?: "busy" | "idle";
+  /**
+   * Skip initial state emission on startPolling().
+   * Used when resuming after project switch to preserve terminal's agent state.
+   */
+  skipInitialStateEmit?: boolean;
 }
 
 export interface ActivityStateMetadata {
@@ -101,6 +111,9 @@ export class ActivityMonitor {
   private hasExitedBootState = false; // Whether we've completed initial boot
   private hasSeenWorkingPattern = false; // Whether we've ever detected a working pattern
 
+  // State preservation for project switch
+  private readonly skipInitialStateEmit: boolean;
+
   // Boot detection patterns - when these appear, the agent is ready
   private static readonly BOOT_COMPLETE_PATTERNS = [
     /claude\s+code\s+v?\d/i, // Claude Code vX.X.X or Claude Code X.X.X
@@ -147,6 +160,10 @@ export class ActivityMonitor {
       options?.bootCompletePatterns?.length && options.bootCompletePatterns.length > 0
         ? options.bootCompletePatterns
         : ActivityMonitor.BOOT_COMPLETE_PATTERNS;
+
+    // State preservation for project switch - allows resuming without spurious state emissions
+    this.state = options?.initialState ?? "idle";
+    this.skipInitialStateEmit = options?.skipInitialStateEmit ?? false;
   }
 
   /**
@@ -482,23 +499,40 @@ export class ActivityMonitor {
 
   /**
    * Start polling for patterns in xterm visible lines.
-   * - Starts in busy state during boot (indicator spinning)
+   * - Starts in busy state during boot (indicator spinning) unless skipInitialStateEmit is set
    * - Boot completes when agent-ready pattern detected OR 15s timeout
    * - After boot: idle shortly after ready when no working pattern is present
    * - After first working pattern: busy while working, idle after 1s without pattern
    * This ensures the activity indicator never hides prematurely.
+   *
+   * When resuming after project switch (skipInitialStateEmit=true), the monitor preserves
+   * the terminal's existing agent state instead of forcing a transition to busy.
    */
   startPolling(): void {
     if (!this.getVisibleLines || this.pollingInterval) return;
 
     this.patternLostTime = 0;
     this.pollingStartTime = Date.now();
-    this.hasExitedBootState = false;
-    this.hasSeenWorkingPattern = false;
 
-    // Always start in busy state and emit to sync UI
-    this.state = "busy";
-    this.onStateChange(this.terminalId, this.spawnedAt, "busy", { trigger: "pattern" });
+    // When resuming after project switch, preserve existing state:
+    // - For idle/waiting states: mark boot complete to allow normal pattern detection
+    // - For busy/working states: keep boot detection active to prevent premature idle transition
+    // - hasSeenWorkingPattern is set based on current state
+    // - skipInitialStateEmit prevents the initial busy emission
+    if (this.skipInitialStateEmit) {
+      // Only skip boot detection if we're resuming in an idle state
+      // Working states need boot protection to avoid premature waiting transitions
+      this.hasExitedBootState = this.state === "idle";
+      this.hasSeenWorkingPattern = this.state === "busy"; // Trust existing state
+      // Don't emit - preserve terminal's agent state (polling starts below)
+    } else {
+      this.hasExitedBootState = false;
+      this.hasSeenWorkingPattern = false;
+
+      // Fresh start: begin in busy state and emit to sync UI
+      this.state = "busy";
+      this.onStateChange(this.terminalId, this.spawnedAt, "busy", { trigger: "pattern" });
+    }
 
     this.pollingInterval = setInterval(() => {
       const now = Date.now();
@@ -512,9 +546,13 @@ export class ActivityMonitor {
       if (patternResult) {
         this.lastPatternResult = patternResult;
       }
+      // When resuming (skipInitialStateEmit), only trust explicit pattern detector
+      // to avoid matching stale "esc to interrupt" text from previous runs
       const isWorking = patternResult
         ? patternResult.isWorking
-        : text.includes("esc to interrupt") || text.includes("esc to cancel");
+        : this.skipInitialStateEmit
+          ? false
+          : text.includes("esc to interrupt") || text.includes("esc to cancel");
 
       // Check for boot completion (agent-specific ready patterns)
       if (!this.hasExitedBootState) {
