@@ -113,6 +113,8 @@ export interface BackendTerminalInfo {
   agentState?: AgentState;
   lastStateChange?: number;
   spawnedAt: number;
+  isTrashed?: boolean;
+  trashExpiresAt?: number;
 }
 
 /** Result from terminal reconnect operation */

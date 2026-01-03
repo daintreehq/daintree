@@ -43,6 +43,8 @@ export interface TerminalPublicState {
   lastCheckTime: number;
   detectedAgentType?: TerminalType;
   restartCount: number;
+  isTrashed?: boolean;
+  trashExpiresAt?: number;
 }
 
 /**

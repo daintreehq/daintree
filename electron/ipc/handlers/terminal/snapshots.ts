@@ -158,6 +158,8 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
             agentState: terminal.agentState,
             lastStateChange: terminal.lastStateChange,
             spawnedAt: terminal.spawnedAt,
+            isTrashed: terminal.isTrashed,
+            trashExpiresAt: terminal.trashExpiresAt,
           });
         }
       }

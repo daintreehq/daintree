@@ -200,6 +200,8 @@ export interface PtyHostTerminalInfo {
   agentState?: AgentState;
   lastStateChange?: number;
   spawnedAt: number;
+  isTrashed?: boolean;
+  trashExpiresAt?: number;
 }
 
 /** Payload for agent:spawned event */
