@@ -404,7 +404,8 @@ export function ProjectSwitcher() {
                 <PlayCircle className="h-4 w-4" />
               </button>
             )}
-            {isRunning && (
+            {/* Show stop button for background projects (have terminals by definition) or running stats */}
+            {(isBackground || isRunning) && (
               <button
                 type="button"
                 onClick={(e) => handleCloseProject(project.id, e, true)}
