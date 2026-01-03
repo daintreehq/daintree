@@ -13,6 +13,7 @@ export interface ActionCallbacks {
   onOpenWorktreePalette: () => void;
   onOpenNewTerminalPalette: () => void;
   onOpenPanelPalette: () => void;
+  onOpenProjectSwitcherPalette: () => void;
   onOpenShortcuts: () => void;
   onLaunchAgent: (
     agentId: string,

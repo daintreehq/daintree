@@ -120,6 +120,9 @@ export type KeyAction =
   // Notes actions
   | "notes.openPalette"
 
+  // Project actions
+  | "project.switcherPalette"
+
   // Help/Settings
   | "help.shortcuts"
   | "help.shortcutsAlt"

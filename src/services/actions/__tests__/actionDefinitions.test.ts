@@ -12,6 +12,7 @@ async function createRegistry() {
     onOpenWorktreePalette: () => {},
     onOpenNewTerminalPalette: () => {},
     onOpenPanelPalette: () => {},
+    onOpenProjectSwitcherPalette: () => {},
     onOpenShortcuts: () => {},
     onLaunchAgent: async () => {},
     onInject: () => {},

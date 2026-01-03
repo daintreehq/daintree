@@ -8,6 +8,7 @@ import {
   useTerminalPalette,
   useNewTerminalPalette,
   usePanelPalette,
+  useProjectSwitcherPalette,
   useTerminalConfig,
   useGlobalKeybindings,
   useContextInjection,
@@ -36,6 +37,7 @@ import { NewWorktreeDialog } from "./components/Worktree/NewWorktreeDialog";
 import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
 import { TerminalPalette, NewTerminalPalette } from "./components/TerminalPalette";
 import { PanelPalette } from "./components/PanelPalette/PanelPalette";
+import { ProjectSwitcherPalette } from "./components/Project/ProjectSwitcherPalette";
 import { RecipeEditor } from "./components/TerminalRecipe/RecipeEditor";
 import { NotesPalette } from "./components/Notes";
 import { SettingsDialog, type SettingsTab } from "./components/Settings";
@@ -469,6 +471,7 @@ function App() {
   const { worktrees, worktreeMap } = useWorktrees();
   const newTerminalPalette = useNewTerminalPalette({ launchAgent, worktreeMap });
   const panelPalette = usePanelPalette();
+  const projectSwitcherPalette = useProjectSwitcherPalette();
   const currentProject = useProjectStore((state) => state.currentProject);
   const { setActiveWorktree, selectWorktree, activeWorktreeId } = useWorktreeSelectionStore(
     useShallow((state) => ({
@@ -693,6 +696,7 @@ function App() {
     onOpenWorktreePalette: openWorktreePalette,
     onOpenNewTerminalPalette: newTerminalPalette.open,
     onOpenPanelPalette: panelPalette.open,
+    onOpenProjectSwitcherPalette: projectSwitcherPalette.open,
     onOpenShortcuts: () => setIsShortcutsOpen(true),
     onLaunchAgent: async (agentId, options) => {
       await launchAgent(agentId, options);
@@ -817,6 +821,17 @@ function App() {
           }
         }}
         onClose={panelPalette.close}
+      />
+      <ProjectSwitcherPalette
+        isOpen={projectSwitcherPalette.isOpen}
+        query={projectSwitcherPalette.query}
+        results={projectSwitcherPalette.results}
+        selectedIndex={projectSwitcherPalette.selectedIndex}
+        onQueryChange={projectSwitcherPalette.setQuery}
+        onSelectPrevious={projectSwitcherPalette.selectPrevious}
+        onSelectNext={projectSwitcherPalette.selectNext}
+        onSelect={projectSwitcherPalette.selectProject}
+        onClose={projectSwitcherPalette.close}
       />
 
       <NotesPalette isOpen={isNotesPaletteOpen} onClose={closeNotesPalette} />

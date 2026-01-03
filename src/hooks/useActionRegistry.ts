@@ -33,6 +33,7 @@ export function useActionRegistry(options: ActionCallbacks): void {
       onOpenWorktreePalette: () => callbacksRef.current.onOpenWorktreePalette(),
       onOpenNewTerminalPalette: () => callbacksRef.current.onOpenNewTerminalPalette(),
       onOpenPanelPalette: () => callbacksRef.current.onOpenPanelPalette(),
+      onOpenProjectSwitcherPalette: () => callbacksRef.current.onOpenProjectSwitcherPalette(),
       onOpenShortcuts: () => callbacksRef.current.onOpenShortcuts(),
       onLaunchAgent: (agentId, opts) => callbacksRef.current.onLaunchAgent(agentId, opts),
       onInject: (worktreeId) => callbacksRef.current.onInject(worktreeId),

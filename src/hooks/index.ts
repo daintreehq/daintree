@@ -16,6 +16,11 @@ export type { SearchableTerminal, UseTerminalPaletteReturn } from "./useTerminal
 export { useNewTerminalPalette } from "./useNewTerminalPalette";
 export { usePanelPalette } from "./usePanelPalette";
 export type { PanelKindOption, UsePanelPaletteReturn } from "./usePanelPalette";
+export { useProjectSwitcherPalette } from "./useProjectSwitcherPalette";
+export type {
+  SearchableProject,
+  UseProjectSwitcherPaletteReturn,
+} from "./useProjectSwitcherPalette";
 export { useTerminalConfig } from "./useTerminalConfig";
 
 export { useWorktreeTerminals } from "./useWorktreeTerminals";

@@ -4,7 +4,20 @@ import { projectClient } from "@/clients";
 import { useNotificationStore } from "@/store/notificationStore";
 import { useProjectStore } from "@/store/projectStore";
 
-export function registerProjectActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
+export function registerProjectActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
+  actions.set("project.switcherPalette", () => ({
+    id: "project.switcherPalette",
+    title: "Open Project Switcher",
+    description: "Open the quick project switcher palette",
+    category: "project",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      callbacks.onOpenProjectSwitcherPalette();
+    },
+  }));
+
   actions.set("project.add", () => ({
     id: "project.add",
     title: "Add Project",
