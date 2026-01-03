@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useMemo } from "react";
+import { useRef, useState, useEffect, useMemo, useCallback } from "react";
 import type React from "react";
 import { Button } from "@/components/ui/button";
 import { FixedDropdown } from "@/components/ui/fixed-dropdown";
@@ -23,6 +23,9 @@ import {
   Clock,
   StickyNote,
   Rocket,
+  Circle,
+  PlayCircle,
+  StopCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
@@ -32,6 +35,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { useWorktreeActions } from "@/hooks/useWorktreeActions";
 import { useProjectSettings } from "@/hooks";
 import { useProjectStore } from "@/store/projectStore";
+import { useNotificationStore } from "@/store/notificationStore";
 import { useSidecarStore, usePreferencesStore, useToolbarPreferencesStore } from "@/store";
 import type { ToolbarButtonId } from "@/../../shared/types/domain";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -46,10 +50,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { CliAvailability, AgentSettings } from "@shared/types";
+import type { CliAvailability, AgentSettings, Project, ProjectStats } from "@shared/types";
 import type { MenuItemOption } from "@/types";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
+import { groupProjects } from "@/components/Project/projectGrouping";
 
 interface ToolbarProps {
   onLaunchAgent: (
@@ -81,6 +86,8 @@ export function Toolbar({
   const projects = useProjectStore((state) => state.projects);
   const loadProjects = useProjectStore((state) => state.loadProjects);
   const getCurrentProject = useProjectStore((state) => state.getCurrentProject);
+  const closeProject = useProjectStore((state) => state.closeProject);
+  const addNotification = useNotificationStore((state) => state.addNotification);
   const { settings: projectSettings } = useProjectSettings();
   const devServerCommand = projectSettings?.devServerCommand?.trim();
   const { stats, refresh: refreshStats, isStale, lastUpdated } = useRepositoryStats();
@@ -115,6 +122,8 @@ export function Toolbar({
   const [commitsOpen, setCommitsOpen] = useState(false);
   const [projectSelectorOpen, setProjectSelectorOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [projectStats, setProjectStats] = useState<Map<string, ProjectStats>>(new Map());
+  const [isLoadingProjectStats, setIsLoadingProjectStats] = useState(false);
   const [treeCopied, setTreeCopied] = useState(false);
   const [isCopyingTree, setIsCopyingTree] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState<string>("");
@@ -125,6 +134,208 @@ export function Toolbar({
   const projectSelectorTriggerRef = useRef<HTMLButtonElement>(null);
 
   const { handleCopyTree } = useWorktreeActions();
+
+  const fetchProjectStats = useCallback(async (projectsToFetch: Project[]) => {
+    setIsLoadingProjectStats(true);
+    const statsMap = new Map<string, ProjectStats>();
+
+    try {
+      const results = await Promise.allSettled(
+        projectsToFetch.map((project) => projectClient.getStats(project.id))
+      );
+
+      results.forEach((result, index) => {
+        if (result.status === "fulfilled") {
+          statsMap.set(projectsToFetch[index].id, result.value);
+        } else {
+          console.warn(`Failed to fetch stats for ${projectsToFetch[index].id}:`, result.reason);
+        }
+      });
+
+      setProjectStats(statsMap);
+    } finally {
+      setIsLoadingProjectStats(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!projectSelectorOpen) return;
+
+    let cancelled = false;
+    let inFlight = false;
+
+    const runFetch = async () => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
+
+      try {
+        await loadProjects();
+        const freshProjects = await projectClient.getAll();
+        if (!cancelled && freshProjects.length > 0) {
+          await fetchProjectStats(freshProjects);
+        }
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void runFetch();
+    const interval = setInterval(() => void runFetch(), 10000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [projectSelectorOpen, fetchProjectStats, loadProjects]);
+
+  const groupedProjects = useMemo(
+    () => groupProjects(projects, currentProject?.id ?? null, projectStats),
+    [projects, currentProject?.id, projectStats]
+  );
+
+  const getStatsTooltip = (projectStat: ProjectStats | undefined) => {
+    if (!projectStat || projectStat.processCount === 0) return "";
+    const parts = [];
+    parts.push(
+      `${projectStat.terminalCount} terminal${projectStat.terminalCount !== 1 ? "s" : ""}`
+    );
+    parts.push(`~${projectStat.estimatedMemoryMB} MB`);
+    return parts.join(", ");
+  };
+
+  const handleStopProject = async (projectId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+
+    const projectStat = projectStats.get(projectId);
+    const project = projects.find((p) => p.id === projectId);
+
+    const processCount = projectStat?.processCount;
+    const name = project?.name ?? "this project";
+    const confirmMessage =
+      processCount && processCount > 0
+        ? `Stop "${name}"?\n\n` +
+          `This will terminate ${processCount} process(es):\n` +
+          `- ${projectStat?.terminalCount ?? 0} terminal(s)\n\n` +
+          "Terminals cannot be recovered after this."
+        : `Stop "${name}"?\n\n` +
+          "This will terminate all terminals for this project.\n\n" +
+          "Terminals cannot be recovered after this.";
+
+    const confirmed = window.confirm(confirmMessage);
+    if (!confirmed) return;
+
+    try {
+      const result = await closeProject(projectId, { killTerminals: true });
+      addNotification({
+        type: "success",
+        title: "Project stopped",
+        message: `Terminated ${result.processesKilled} process(es)`,
+        duration: 3000,
+      });
+
+      const updatedProjects = await projectClient.getAll();
+      await fetchProjectStats(updatedProjects);
+    } catch (error) {
+      addNotification({
+        type: "error",
+        title: "Failed to stop project",
+        message: error instanceof Error ? error.message : "Unknown error",
+        duration: 5000,
+      });
+    }
+  };
+
+  const renderProjectItem = (project: Project, isActive: boolean) => {
+    const projectStat = projectStats.get(project.id);
+    const isRunning = projectStat && projectStat.processCount > 0;
+    const isBackground = project.status === "background";
+
+    return (
+      <DropdownMenuItem
+        key={project.id}
+        onClick={() => {
+          if (!isActive) {
+            handleProjectSwitch(project.id);
+          }
+        }}
+        className={cn(
+          "gap-2 p-2 cursor-pointer mb-0.5 rounded-[var(--radius-md)] transition-colors",
+          isActive && "bg-white/[0.03]"
+        )}
+      >
+        <div className="w-3 flex items-center justify-center shrink-0">
+          {isRunning && (
+            <span
+              title={getStatsTooltip(projectStat)}
+              aria-label={`Running: ${getStatsTooltip(projectStat)}`}
+            >
+              <Circle
+                className={cn(
+                  "h-2 w-2 fill-green-500 text-green-500",
+                  isLoadingProjectStats && "animate-pulse"
+                )}
+              />
+            </span>
+          )}
+        </div>
+
+        <div
+          className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-md)] text-sm shrink-0"
+          style={{ background: getProjectGradient(project.color) }}
+        >
+          {project.emoji}
+        </div>
+
+        <div className="flex flex-col min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className={cn("truncate text-sm font-medium", isActive && "text-foreground")}>
+              {project.name}
+            </span>
+            {isBackground && (
+              <span className="text-[9px] px-1 py-0.5 rounded bg-muted/50 text-muted-foreground uppercase tracking-wider shrink-0">
+                BG
+              </span>
+            )}
+          </div>
+          <span className="truncate text-[11px] font-mono text-muted-foreground/70">
+            {project.path.split(/[/\\]/).pop()}
+          </span>
+        </div>
+
+        {(isRunning || isBackground) && (
+          <div className="flex items-center gap-0.5 shrink-0">
+            {!isActive && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  handleProjectSwitch(project.id);
+                }}
+                className="p-1 rounded hover:bg-canopy-accent/20 text-muted-foreground hover:text-canopy-accent transition-colors"
+                title="Open project"
+                aria-label="Open project"
+              >
+                <PlayCircle className="h-4 w-4" />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={(e) => void handleStopProject(project.id, e)}
+              className="p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition-colors"
+              title="Stop all terminals for this project"
+              aria-label="Stop all terminals for this project"
+            >
+              <StopCircle className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+
+        {isActive && <Check className="h-4 w-4 text-canopy-accent shrink-0" />}
+      </DropdownMenuItem>
+    );
+  };
 
   const getTimeSinceUpdate = (timestamp: number | null): string => {
     if (timestamp == null || !Number.isFinite(timestamp) || timestamp <= 0) {
@@ -687,65 +898,44 @@ export function Toolbar({
               }
             }}
           >
-            {currentProject && (
+            {groupedProjects.active.length > 0 && (
               <>
                 <DropdownMenuLabel className="text-[11px] font-semibold text-muted-foreground/50 uppercase tracking-widest px-2 py-1.5">
                   Active
                 </DropdownMenuLabel>
-                <DropdownMenuItem
-                  className="gap-2 p-2 cursor-default mb-0.5 rounded-[var(--radius-md)] bg-white/[0.03]"
-                  disabled
-                >
-                  <div
-                    className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-md)] text-sm shrink-0"
-                    style={{ background: getProjectGradient(currentProject.color) }}
-                  >
-                    {currentProject.emoji}
-                  </div>
-                  <div className="flex flex-col min-w-0 flex-1">
-                    <span className="truncate text-sm font-medium text-foreground">
-                      {currentProject.name}
-                    </span>
-                    <span className="truncate text-[11px] font-mono text-muted-foreground/70">
-                      {currentProject.path.split(/[/\\]/).pop()}
-                    </span>
-                  </div>
-                  <Check className="h-4 w-4 text-canopy-accent shrink-0" />
-                </DropdownMenuItem>
+                {groupedProjects.active.map((project) => renderProjectItem(project, true))}
               </>
             )}
 
-            {projects.filter((p) => p.id !== currentProject?.id).length > 0 && (
+            {groupedProjects.background.length > 0 && (
               <>
-                <DropdownMenuSeparator className="my-1 bg-border/40" />
+                {groupedProjects.active.length > 0 && (
+                  <DropdownMenuSeparator className="my-1 bg-border/40" />
+                )}
+                <DropdownMenuLabel className="text-[11px] font-semibold text-muted-foreground/50 uppercase tracking-widest px-2 py-1.5 flex items-center gap-2">
+                  <Circle
+                    className={cn(
+                      "h-2 w-2 fill-green-500 text-green-500",
+                      isLoadingProjectStats && "animate-pulse"
+                    )}
+                  />
+                  Background ({groupedProjects.background.length})
+                </DropdownMenuLabel>
+                {groupedProjects.background.map((project) => renderProjectItem(project, false))}
+              </>
+            )}
+
+            {groupedProjects.recent.length > 0 && (
+              <>
+                {(groupedProjects.active.length > 0 || groupedProjects.background.length > 0) && (
+                  <DropdownMenuSeparator className="my-1 bg-border/40" />
+                )}
                 <DropdownMenuLabel className="text-[11px] font-semibold text-muted-foreground/50 uppercase tracking-widest px-2 py-1.5">
                   Recent
                 </DropdownMenuLabel>
-                {projects
-                  .filter((p) => p.id !== currentProject?.id)
+                {groupedProjects.recent
                   .slice(0, 5)
-                  .map((project) => (
-                    <DropdownMenuItem
-                      key={project.id}
-                      onClick={() => handleProjectSwitch(project.id)}
-                      className="gap-2 p-2 cursor-pointer mb-0.5 rounded-[var(--radius-md)]"
-                    >
-                      <div
-                        className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-md)] text-sm shrink-0"
-                        style={{ background: getProjectGradient(project.color) }}
-                      >
-                        {project.emoji}
-                      </div>
-                      <div className="flex flex-col min-w-0 flex-1">
-                        <span className="truncate text-sm font-medium text-foreground/80">
-                          {project.name}
-                        </span>
-                        <span className="truncate text-[11px] font-mono text-muted-foreground/70">
-                          {project.path.split(/[/\\]/).pop()}
-                        </span>
-                      </div>
-                    </DropdownMenuItem>
-                  ))}
+                  .map((project) => renderProjectItem(project, false))}
               </>
             )}
 
