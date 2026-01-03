@@ -276,7 +276,7 @@ export function ProjectSwitcher() {
 
   // Refresh projects and fetch stats when dropdown opens
   useEffect(() => {
-    if (!isOpen || projects.length === 0) return;
+    if (!isOpen) return;
 
     let cancelled = false;
     let inFlight = false;
@@ -289,7 +289,7 @@ export function ProjectSwitcher() {
         // Refresh project list to get latest statuses, then fetch stats
         await loadProjects();
         const freshProjects = await projectClient.getAll();
-        if (!cancelled) {
+        if (!cancelled && freshProjects.length > 0) {
           await fetchProjectStats(freshProjects);
         }
       } finally {
