@@ -62,7 +62,7 @@ export function FailedContainer({ compact = false }: FailedContainerProps) {
           <span className="relative">
             <XCircle className="w-3.5 h-3.5 text-red-400" aria-hidden="true" />
             {compact && count > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full bg-red-500 text-[10px] font-bold text-white">
+              <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full bg-red-400 text-[10px] font-bold text-red-950 shadow-sm">
                 {count > 9 ? "9+" : count}
               </span>
             )}

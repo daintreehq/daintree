@@ -39,9 +39,13 @@ export function DockStatusOverlay({
         "absolute bottom-2 right-4 z-50",
         "flex items-center gap-2",
         "p-1.5 rounded-full",
-        "bg-[var(--dock-bg)]/95 backdrop-blur-sm",
-        "border border-[var(--dock-border)]",
-        "shadow-lg"
+        "bg-[var(--dock-bg)]/60 backdrop-blur-sm",
+        "border border-[var(--dock-border)]/60",
+        "shadow-lg",
+        "transition-[opacity,background-color,border-color] duration-200",
+        "opacity-85 hover:opacity-100 focus-within:opacity-100",
+        "hover:bg-[var(--dock-bg)]/95 hover:border-[var(--dock-border)]",
+        "focus-within:bg-[var(--dock-bg)]/95 focus-within:border-[var(--dock-border)]"
       )}
       aria-live="polite"
       aria-label="Dock status indicators"
