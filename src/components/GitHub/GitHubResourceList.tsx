@@ -55,8 +55,8 @@ export function GitHubResourceList({
     if (type === "pr") {
       return [
         { id: "open", label: "Open" },
-        { id: "closed", label: "Closed" },
         { id: "merged", label: "Merged" },
+        { id: "closed", label: "Closed" },
       ];
     }
     return [
