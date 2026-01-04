@@ -103,7 +103,45 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
           `[Hydration] Found ${backendTerminals.length} running terminals for project ${currentProjectId}`
         );
 
-        for (const terminal of backendTerminals) {
+        // Build a map of saved terminal ordering from appState.terminals
+        // The saved terminals array preserves the user's panel order
+        const savedTerminalOrder = new Map<string, { index: number; location?: string }>();
+        if (appState.terminals) {
+          appState.terminals.forEach((saved, index) => {
+            savedTerminalOrder.set(saved.id, { index, location: saved.location });
+          });
+        }
+
+        // Sort backend terminals by saved order, orphans go to end
+        // Create index map for stable orphan ordering (original backend order)
+        const backendIndexMap = new Map(backendTerminals.map((t, i) => [t.id, i]));
+
+        const sortedBackendTerminals = [...backendTerminals].sort((a, b) => {
+          const orderA = savedTerminalOrder.get(a.id);
+          const orderB = savedTerminalOrder.get(b.id);
+
+          // If both are in saved order, sort by their saved index
+          if (orderA !== undefined && orderB !== undefined) {
+            return orderA.index - orderB.index;
+          }
+          // If only A is in saved order, A comes first
+          if (orderA !== undefined) return -1;
+          // If only B is in saved order, B comes first
+          if (orderB !== undefined) return 1;
+          // Both are orphans - use original backend index for stable ordering
+          return (backendIndexMap.get(a.id) ?? 0) - (backendIndexMap.get(b.id) ?? 0);
+        });
+
+        const orphanCount = sortedBackendTerminals.filter(
+          (t) => !savedTerminalOrder.has(t.id)
+        ).length;
+        if (orphanCount > 0) {
+          console.log(
+            `[Hydration] ${orphanCount} terminal(s) not in saved order, appending at end`
+          );
+        }
+
+        for (const terminal of sortedBackendTerminals) {
           try {
             console.log(`[Hydration] Reconnecting to terminal: ${terminal.id}`);
 
@@ -114,6 +152,10 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
               terminal.agentId ??
               (terminal.type && isRegisteredAgent(terminal.type) ? terminal.type : undefined);
 
+            // Restore location from saved state if available, default to grid
+            const savedInfo = savedTerminalOrder.get(terminal.id);
+            const location = (savedInfo?.location === "dock" ? "dock" : "grid") as "grid" | "dock";
+
             await addTerminal({
               kind: terminal.kind ?? (agentId ? "agent" : "terminal"),
               type: terminal.type,
@@ -121,7 +163,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
               title: terminal.title,
               cwd,
               worktreeId: terminal.worktreeId,
-              location: "grid",
+              location,
               existingId: terminal.id,
               agentState: currentAgentState,
               lastStateChange: backendLastStateChange,

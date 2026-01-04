@@ -10,16 +10,17 @@ export function registerAppStateHandlers(): () => void {
     const currentProject = projectStore.getCurrentProject();
     const globalAppState = store.get("appState");
 
-    // Don't restore terminals from saved state - terminals stay running in the backend
-    // and the frontend will query for running terminals via terminalClient.getForProject()
+    // Terminal processes are discovered from backend via terminalClient.getForProject(),
+    // but we preserve saved terminals array for ordering metadata (IDs and locations).
+    // The frontend uses this to restore panel order when reconnecting to running terminals.
     const appState: StoreSchema["appState"] = {
       ...globalAppState,
-      terminals: [], // Always start with empty - running terminals will be discovered
+      // Keep terminals for ordering - frontend sorts discovered terminals by this saved order
       activeWorktreeId: undefined,
     };
 
     console.log(
-      `[AppHydrate] Project: ${currentProject?.name ?? "none"} - terminals will be discovered from running processes`
+      `[AppHydrate] Project: ${currentProject?.name ?? "none"} - terminals will be discovered from running processes (${globalAppState.terminals?.length ?? 0} saved for ordering)`
     );
 
     return {
