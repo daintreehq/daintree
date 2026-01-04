@@ -44,7 +44,7 @@ export function AppLayout({
   const [isProjectSettingsOpen, setIsProjectSettingsOpen] = useState(false);
 
   const currentProject = useProjectStore((state) => state.currentProject);
-  const isProjectSwitching = useProjectStore((state) => state.isLoading);
+  const isProjectSwitching = useProjectStore((state) => state.isSwitching);
   const layout = useLayoutState();
 
   useEffect(() => {
@@ -339,7 +339,7 @@ export function AppLayout({
         />
       )}
 
-      <ProjectSwitchOverlay isLoading={isProjectSwitching} projectName={currentProject?.name} />
+      <ProjectSwitchOverlay isSwitching={isProjectSwitching} projectName={currentProject?.name} />
     </div>
   );
 }

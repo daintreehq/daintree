@@ -8,6 +8,7 @@ import { useEffect } from "react";
 import { hydrateAppState } from "../../utils/stateHydration";
 import { isElectronAvailable } from "../useElectron";
 import { projectClient } from "@/clients";
+import { useProjectStore } from "@/store";
 import type { HydrationCallbacks } from "./useAppHydration";
 
 export function useProjectSwitchRehydration(callbacks: HydrationCallbacks) {
@@ -28,6 +29,8 @@ export function useProjectSwitchRehydration(callbacks: HydrationCallbacks) {
           "[useProjectSwitchRehydration] Failed to re-hydrate state after project switch:",
           error
         );
+      } finally {
+        useProjectStore.getState().finishProjectSwitch();
       }
     };
 

@@ -5,13 +5,13 @@ import { cn } from "@/lib/utils";
 import { getUiAnimationDuration } from "@/lib/animationUtils";
 
 export interface ProjectSwitchOverlayProps {
-  isLoading: boolean;
+  isSwitching: boolean;
   projectName?: string;
 }
 
 const MIN_DISPLAY_DURATION = 200;
 
-export function ProjectSwitchOverlay({ isLoading, projectName }: ProjectSwitchOverlayProps) {
+export function ProjectSwitchOverlay({ isSwitching, projectName }: ProjectSwitchOverlayProps) {
   const [isVisible, setIsVisible] = useState(false);
   const [shouldRender, setShouldRender] = useState(false);
   const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -21,7 +21,7 @@ export function ProjectSwitchOverlay({ isLoading, projectName }: ProjectSwitchOv
   const pendingCloseRef = useRef(false);
 
   useEffect(() => {
-    if (isLoading) {
+    if (isSwitching) {
       pendingCloseRef.current = false;
       if (closeTimeoutRef.current) {
         clearTimeout(closeTimeoutRef.current);
@@ -86,7 +86,7 @@ export function ProjectSwitchOverlay({ isLoading, projectName }: ProjectSwitchOv
         rafRef.current = null;
       }
     };
-  }, [isLoading]);
+  }, [isSwitching]);
 
   if (!shouldRender) return null;
 
@@ -101,7 +101,7 @@ export function ProjectSwitchOverlay({ isLoading, projectName }: ProjectSwitchOv
       role="status"
       aria-live="polite"
       aria-atomic="true"
-      aria-busy={isLoading}
+      aria-busy={isSwitching}
     >
       <div
         className={cn(

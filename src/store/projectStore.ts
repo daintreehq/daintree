@@ -10,6 +10,7 @@ interface ProjectState {
   projects: Project[];
   currentProject: Project | null;
   isLoading: boolean;
+  isSwitching: boolean;
   error: string | null;
 
   loadProjects: () => Promise<void>;
@@ -24,6 +25,7 @@ interface ProjectState {
     options?: { killTerminals?: boolean }
   ) => Promise<ProjectCloseResult>;
   reopenProject: (projectId: string) => Promise<void>;
+  finishProjectSwitch: () => void;
 }
 
 function getProjectOpenErrorMessage(error: unknown): string {
@@ -64,6 +66,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   projects: [],
   currentProject: null,
   isLoading: false,
+  isSwitching: false,
   error: null,
 
   addProjectByPath: async (path) => {
@@ -157,7 +160,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   },
 
   switchProject: async (projectId) => {
-    set({ isLoading: true, error: null });
+    set({ isLoading: true, isSwitching: true, error: null });
     try {
       // Terminals stay running in the backend - no need to save state
       // They will be discovered via getForProject() when switching back
@@ -186,7 +189,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         message,
         duration: 6000,
       });
-      set({ error: message, isLoading: false });
+      set({ error: message, isLoading: false, isSwitching: false });
     }
   },
 
@@ -250,7 +253,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   },
 
   reopenProject: async (projectId) => {
-    set({ isLoading: true, error: null });
+    set({ isLoading: true, isSwitching: true, error: null });
     try {
       const currentProject = get().currentProject;
       const oldProjectId = currentProject?.id;
@@ -287,9 +290,13 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     } catch (error) {
       console.error("Failed to reopen project:", error);
       const message = getProjectOpenErrorMessage(error);
-      set({ error: message, isLoading: false });
+      set({ error: message, isLoading: false, isSwitching: false });
       throw error;
     }
+  },
+
+  finishProjectSwitch: () => {
+    set({ isSwitching: false });
   },
 });
 
