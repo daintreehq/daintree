@@ -1180,6 +1180,7 @@ export class TerminalProcess {
     const patternConfig = this.buildPatternConfig(detection, agentId);
     const bootCompletePatterns = this.buildBootCompletePatterns(detection, agentId);
     const promptPatterns = this.buildPromptPatterns(detection, agentId);
+    const promptHintPatterns = this.buildPromptHintPatterns(detection, agentId);
 
     // Enable output-based activity detection for agent terminals.
     // AI agents often have low CPU while waiting for API responses (network I/O),
@@ -1206,6 +1207,7 @@ export class TerminalProcess {
       patternConfig,
       bootCompletePatterns,
       promptPatterns,
+      promptHintPatterns,
       promptScanLineCount: detection?.promptScanLineCount,
       promptConfidence: detection?.promptConfidence,
       idleDebounceMs: detection?.debounceMs,
@@ -1262,6 +1264,23 @@ export class TerminalProcess {
     const promptPatterns = this.compilePatterns(detection.promptPatterns, agentId, "prompt");
 
     return promptPatterns.length ? promptPatterns : undefined;
+  }
+
+  private buildPromptHintPatterns(
+    detection: AgentDetectionConfig | undefined,
+    agentId: string | undefined
+  ): RegExp[] | undefined {
+    if (!detection?.promptHintPatterns || detection.promptHintPatterns.length === 0) {
+      return undefined;
+    }
+
+    const promptHintPatterns = this.compilePatterns(
+      detection.promptHintPatterns,
+      agentId,
+      "prompt hint"
+    );
+
+    return promptHintPatterns.length ? promptHintPatterns : undefined;
   }
 
   private compilePatterns(

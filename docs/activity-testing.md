@@ -16,7 +16,7 @@ Manual verification that agent terminal activity states (working/waiting) are ac
 ## Steps
 | Step | Action | Expected |
 | --- | --- | --- |
-| 1 | Wait 3 seconds with a visible prompt and no output. | Terminal shows Waiting. "Waiting (N)" includes this terminal. |
+| 1 | Wait 2 seconds with a visible prompt and no output. | Terminal shows Waiting. "Waiting (N)" includes this terminal. |
 | 2 | Press Enter on an empty prompt (no text). Wait 1 second. | State stays Waiting; no Working flicker. |
 | 3 | Send a quick request that returns immediately (e.g., `help`, `/?`). | State flips to Working quickly, then returns to Waiting once the prompt is back. |
 | 4 | Send a longer request that streams output for 5-10 seconds. | State stays Working during streaming; returns to Waiting after prompt is visible and stable. |

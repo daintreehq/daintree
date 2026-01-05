@@ -70,6 +70,11 @@ export interface ActivityMonitorOptions {
    */
   promptPatterns?: RegExp[];
   /**
+   * Prompt hint patterns that indicate an empty input prompt is visible.
+   * Safe to scan from visible lines even when the cursor line is active output.
+   */
+  promptHintPatterns?: RegExp[];
+  /**
    * Number of lines to scan for prompt detection (default: 6).
    */
   promptScanLineCount?: number;
@@ -120,14 +125,19 @@ export class ActivityMonitor {
   private readonly INPUT_CONFIRM_MS: number;
   private readonly MAX_NO_PROMPT_IDLE_MS: number;
   private readonly PROMPT_DEBOUNCE_MS = 200;
-  private readonly WORKING_HOLD_MS = 400;
+  private readonly PROMPT_QUIET_MS = 200;
+  private readonly PROMPT_HISTORY_FALLBACK_MS = 3000;
+  private readonly WORKING_HOLD_MS = 200;
   private readonly SPINNER_ACTIVE_MS = 1500;
+  private readonly INPUT_CONFIRM_ACTIVE_MS = 400;
   private inBracketedPaste = false;
   private partialEscape = "";
   private pasteStartTime = 0;
   private readonly PASTE_TIMEOUT_MS = 5000;
   private readonly ignoredInputSequences: Set<string>;
   private pendingInputUntil = 0;
+  private pendingInputWasNonEmpty = false;
+  private pendingInputChars = 0;
   private workingHoldUntil = 0;
 
   // Volume-based output detection
@@ -164,6 +174,7 @@ export class ActivityMonitor {
 
   // Prompt detection
   private readonly promptPatterns: RegExp[];
+  private readonly promptHintPatterns: RegExp[];
   private readonly promptScanLineCount: number;
   private readonly promptConfidence: number;
 
@@ -232,6 +243,7 @@ export class ActivityMonitor {
       options?.promptPatterns?.length && options.promptPatterns.length > 0
         ? options.promptPatterns
         : ActivityMonitor.DEFAULT_PROMPT_PATTERNS;
+    this.promptHintPatterns = options?.promptHintPatterns ?? [];
     this.promptScanLineCount = options?.promptScanLineCount ?? 6;
     this.promptConfidence = options?.promptConfidence ?? 0.85;
 
@@ -270,37 +282,70 @@ export class ActivityMonitor {
     const fullData = this.partialEscape + data;
     this.partialEscape = "";
 
-    let sawEnter = false;
-    for (let i = 0; i < fullData.length; i++) {
-      // Check for potential escape sequence start near end of buffer
-      // This must be FIRST to properly handle partial sequences like Shift+Enter (\x1b\r)
-      if (i >= fullData.length - 5 && fullData[i] === "\x1b") {
-        // Save remaining characters as partial escape for next call
-        this.partialEscape = fullData.substring(i);
-        break;
-      }
+    const { scanData, partialEscape } = this.splitTrailingEscapeSequence(fullData);
+    this.partialEscape = partialEscape;
 
+    if (scanData.length === 0) {
+      return;
+    }
+
+    if (this.ignoredInputSequences.has(scanData)) {
+      return;
+    }
+
+    let sawEnter = false;
+    let inputHadText = false;
+    for (let i = 0; i < scanData.length; i++) {
       // Check for Bracketed Paste Start: \x1b[200~
-      if (fullData[i] === "\x1b" && fullData.substring(i, i + 6) === "\x1b[200~") {
+      if (scanData[i] === "\x1b" && scanData.substring(i, i + 6) === "\x1b[200~") {
         this.inBracketedPaste = true;
         this.pasteStartTime = Date.now();
+        this.pendingInputChars = Math.max(this.pendingInputChars, 1);
         i += 5;
         continue;
       }
 
       // Check for Bracketed Paste End: \x1b[201~
-      if (fullData[i] === "\x1b" && fullData.substring(i, i + 6) === "\x1b[201~") {
+      if (scanData[i] === "\x1b" && scanData.substring(i, i + 6) === "\x1b[201~") {
         this.inBracketedPaste = false;
         this.pasteStartTime = 0;
         i += 5;
         continue;
       }
 
+      if (scanData[i] === "\x1b") {
+        const escapeEnd = this.findEscapeSequenceEnd(scanData.slice(i));
+        if (escapeEnd !== null) {
+          i += escapeEnd - 1;
+          continue;
+        }
+      }
+
       // Only trigger busy on Enter if we are NOT inside a paste
-      const char = fullData[i];
+      const char = scanData[i];
+      if (this.inBracketedPaste) {
+        if (char !== "\r" && char !== "\n") {
+          this.pendingInputChars = Math.max(1, this.pendingInputChars + 1);
+        }
+        continue;
+      }
+
       if ((char === "\r" || char === "\n") && !this.inBracketedPaste) {
         sawEnter = true;
+        inputHadText = this.pendingInputChars > 0;
         break;
+      }
+
+      if (char === "\x7f" || char === "\b") {
+        this.pendingInputChars = Math.max(0, this.pendingInputChars - 1);
+        continue;
+      }
+      if (char === "\x15" || char === "\x17") {
+        this.pendingInputChars = 0;
+        continue;
+      }
+      if (char >= " " || char === "\t") {
+        this.pendingInputChars += 1;
       }
     }
 
@@ -308,13 +353,86 @@ export class ActivityMonitor {
       return;
     }
 
+    this.pendingInputChars = 0;
+
     const now = Date.now();
     if (!this.getVisibleLines) {
       this.becomeBusy({ trigger: "input" });
       return;
     }
 
-    this.pendingInputUntil = now + this.INPUT_CONFIRM_MS;
+    this.pendingInputWasNonEmpty = inputHadText;
+    const confirmMs = inputHadText
+      ? Math.min(this.INPUT_CONFIRM_MS, this.INPUT_CONFIRM_ACTIVE_MS)
+      : this.INPUT_CONFIRM_MS;
+    this.pendingInputUntil = now + confirmMs;
+  }
+
+  private splitTrailingEscapeSequence(data: string): {
+    scanData: string;
+    partialEscape: string;
+  } {
+    const escIndex = data.lastIndexOf("\x1b");
+    if (escIndex === -1) {
+      return { scanData: data, partialEscape: "" };
+    }
+
+    const trailing = data.slice(escIndex);
+    const escapeEnd = this.findEscapeSequenceEnd(trailing);
+    if (escapeEnd !== null) {
+      return { scanData: data, partialEscape: "" };
+    }
+
+    return {
+      scanData: data.slice(0, escIndex),
+      partialEscape: trailing,
+    };
+  }
+
+  private findEscapeSequenceEnd(sequence: string): number | null {
+    if (!sequence.startsWith("\x1b")) {
+      return null;
+    }
+    if (sequence.length < 2) {
+      return null;
+    }
+
+    const second = sequence[1];
+    if (second === "[") {
+      for (let i = 2; i < sequence.length; i++) {
+        const code = sequence.charCodeAt(i);
+        if (code >= 0x40 && code <= 0x7e) {
+          return i + 1;
+        }
+      }
+      return null;
+    }
+
+    if (second === "]") {
+      const belIndex = sequence.indexOf("\x07", 2);
+      if (belIndex !== -1) {
+        return belIndex + 1;
+      }
+      const stIndex = sequence.indexOf("\x1b\\", 2);
+      if (stIndex !== -1) {
+        return stIndex + 2;
+      }
+      return null;
+    }
+
+    if (second === "P") {
+      const stIndex = sequence.indexOf("\x1b\\", 2);
+      if (stIndex !== -1) {
+        return stIndex + 2;
+      }
+      return null;
+    }
+
+    if (second === "O" || second === "(" || second === ")") {
+      return sequence.length >= 3 ? 3 : null;
+    }
+
+    return sequence.length >= 2 ? 2 : null;
   }
 
   /**
@@ -481,15 +599,32 @@ export class ActivityMonitor {
     return count;
   }
 
-  private detectPrompt(lines: string[], cursorLine?: string | null): PromptDetectionResult {
+  private detectPrompt(
+    lines: string[],
+    cursorLine?: string | null,
+    options?: { allowHistoryScan?: boolean }
+  ): PromptDetectionResult {
     const patterns = this.promptPatterns;
-    if (patterns.length === 0) {
+    const hintPatterns = this.promptHintPatterns;
+    if (patterns.length === 0 && hintPatterns.length === 0) {
       return { isPrompt: false, confidence: 0 };
     }
 
-    if (cursorLine) {
-      const cleanCursor = stripAnsi(cursorLine);
+    const cleanCursor =
+      cursorLine !== undefined && cursorLine !== null ? stripAnsi(cursorLine) : null;
+    if (cleanCursor !== null) {
       for (const pattern of patterns) {
+        const match = cleanCursor.match(pattern);
+        if (match) {
+          return {
+            isPrompt: true,
+            confidence: this.promptConfidence,
+            matchedText: match[0],
+          };
+        }
+      }
+
+      for (const pattern of hintPatterns) {
         const match = cleanCursor.match(pattern);
         if (match) {
           return {
@@ -503,6 +638,28 @@ export class ActivityMonitor {
 
     const scanCount = Math.min(this.promptScanLineCount, lines.length);
     const scanLines = lines.slice(-scanCount);
+    for (const line of scanLines) {
+      const cleanLine = stripAnsi(line);
+      for (const pattern of hintPatterns) {
+        const match = cleanLine.match(pattern);
+        if (match) {
+          return {
+            isPrompt: true,
+            confidence: this.promptConfidence,
+            matchedText: match[0],
+          };
+        }
+      }
+    }
+
+    if (
+      cleanCursor &&
+      cleanCursor.trim().length > 0 &&
+      !options?.allowHistoryScan
+    ) {
+      return { isPrompt: false, confidence: 0 };
+    }
+
     for (const line of scanLines) {
       const cleanLine = stripAnsi(line);
       for (const pattern of patterns) {
@@ -543,7 +700,7 @@ export class ActivityMonitor {
       if (this.getVisibleLines) {
         const lines = this.getVisibleLines(Math.max(this.promptScanLineCount, 15));
         const cursorLine = this.getCursorLine?.() ?? null;
-        const promptResult = this.detectPrompt(lines, cursorLine);
+        const promptResult = this.detectPrompt(lines, cursorLine, { allowHistoryScan: true });
         if (!promptResult.isPrompt) {
           return;
         }
@@ -559,6 +716,10 @@ export class ActivityMonitor {
 
   private becomeBusy(metadata: ActivityStateMetadata, now: number = Date.now()): void {
     this.pendingInputUntil = 0;
+    this.pendingInputWasNonEmpty = false;
+    if (metadata.trigger === "input") {
+      this.lastActivityTimestamp = now;
+    }
     this.recordWorkingSignal(now);
     this.resetDebounceTimer();
 
@@ -642,6 +803,8 @@ export class ActivityMonitor {
     this.pollingStartTime = 0;
     this.hasExitedBootState = false;
     this.pendingInputUntil = 0;
+    this.pendingInputWasNonEmpty = false;
+    this.pendingInputChars = 0;
     this.workingHoldUntil = 0;
     this.lastWorkingSignalAt = 0;
     this.lastOutputActivityAt = 0;
@@ -712,6 +875,8 @@ export class ActivityMonitor {
       const lines = this.getVisibleLines!(scanCount);
       const cursorLine = this.getCursorLine?.() ?? null;
       const text = stripAnsi(lines.join(" ")).toLowerCase();
+      const quietForMs = now - this.lastActivityTimestamp;
+      const isQuietForIdle = quietForMs >= this.IDLE_DEBOUNCE_MS;
 
       const patternResult = this.patternDetector
         ? this.patternDetector.detectFromLines(lines)
@@ -728,11 +893,8 @@ export class ActivityMonitor {
           ? false
           : text.includes("esc to interrupt") || text.includes("esc to cancel");
 
-      if (isWorkingPattern) {
-        this.recordWorkingSignal(now);
-      }
-
-      const promptResult = this.detectPrompt(lines, cursorLine);
+      const allowHistoryScan = quietForMs >= this.PROMPT_HISTORY_FALLBACK_MS;
+      const promptResult = this.detectPrompt(lines, cursorLine, { allowHistoryScan });
       const isPrompt = promptResult.isPrompt;
       if (isPrompt) {
         if (this.promptStableSince === 0) {
@@ -755,16 +917,36 @@ export class ActivityMonitor {
       const hasRecentOutputActivity =
         this.lastOutputActivityAt > 0 && now - this.lastOutputActivityAt <= this.outputWindowMs;
       const isSpinnerActive = this.isSpinnerActive(now);
-      const isWorkingSignal = isWorkingPattern || isSpinnerActive || hasRecentOutputActivity;
+      const isOutputQuiet = quietForMs >= this.PROMPT_QUIET_MS;
+      const promptStableForMs =
+        this.promptStableSince === 0 ? 0 : now - this.promptStableSince;
+      const shouldAllowPromptStability =
+        isPrompt && isOutputQuiet && !isSpinnerActive && !hasRecentOutputActivity;
+      const shouldPreferPrompt =
+        shouldAllowPromptStability && promptStableForMs >= this.PROMPT_DEBOUNCE_MS;
+
+      if (isWorkingPattern && !shouldAllowPromptStability && !isQuietForIdle) {
+        this.recordWorkingSignal(now);
+      }
+
+      const isWorkingSignal =
+        isSpinnerActive ||
+        hasRecentOutputActivity ||
+        (isWorkingPattern &&
+          !shouldPreferPrompt &&
+          !shouldAllowPromptStability &&
+          !isQuietForIdle);
       if (isWorkingSignal) {
         this.promptStableSince = 0;
       }
 
       if (this.pendingInputUntil > 0) {
-        if (isWorkingSignal || isPrompt) {
+        if (isWorkingSignal || (isPrompt && !this.pendingInputWasNonEmpty)) {
           this.pendingInputUntil = 0;
+          this.pendingInputWasNonEmpty = false;
         } else if (now >= this.pendingInputUntil) {
           this.pendingInputUntil = 0;
+          this.pendingInputWasNonEmpty = false;
           this.becomeBusy({ trigger: "input" }, now);
           return;
         }
@@ -780,25 +962,14 @@ export class ActivityMonitor {
         return;
       }
 
-      if (isPrompt && this.state === "busy" && now >= this.workingHoldUntil) {
-        if (now - this.promptStableSince >= this.PROMPT_DEBOUNCE_MS) {
-          this.state = "idle";
-          this.onStateChange(this.terminalId, this.spawnedAt, "idle");
-        }
-        return;
-      }
-
       if (
         this.state === "busy" &&
-        !isPrompt &&
+        isQuietForIdle &&
         now >= this.workingHoldUntil &&
         !(this.pendingInputUntil > 0 && now < this.pendingInputUntil)
       ) {
-        const sinceWorking = now - this.lastWorkingSignalAt;
-        if (this.lastWorkingSignalAt > 0 && sinceWorking >= this.MAX_NO_PROMPT_IDLE_MS) {
-          this.state = "idle";
-          this.onStateChange(this.terminalId, this.spawnedAt, "idle");
-        }
+        this.state = "idle";
+        this.onStateChange(this.terminalId, this.spawnedAt, "idle");
       }
     }, 50); // Poll at 50ms for responsive state detection
   }

@@ -64,6 +64,27 @@ describe("ActivityMonitor", () => {
 
       expect(onStateChange).not.toHaveBeenCalled();
     });
+
+    it("should detect Enter after escape sequences", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange);
+
+      monitor.onInput("\x1b[A\r");
+
+      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", { trigger: "input" });
+    });
+
+    it("should ignore split ignored input sequences", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        ignoredInputSequences: ["\x1b\r"],
+      });
+
+      monitor.onInput("\x1b");
+      monitor.onInput("\r");
+
+      expect(onStateChange).not.toHaveBeenCalled();
+    });
   });
 
   describe("Output-driven activity", () => {
@@ -135,11 +156,92 @@ describe("ActivityMonitor", () => {
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
         getVisibleLines: () => ["> "],
         getCursorLine: () => "> ",
+        idleDebounceMs: 2000,
+      });
+
+      monitor.startPolling();
+
+      vi.advanceTimersByTime(2200);
+
+      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "idle");
+
+      monitor.dispose();
+    });
+
+    it("should ignore prompt-like history when cursor line is active output", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines: () => ["> prompt", "working output"],
+        getCursorLine: () => "working output",
+        bootCompletePatterns: [/working output/i],
+        initialState: "busy",
+        skipInitialStateEmit: true,
+        idleDebounceMs: 2000,
       });
 
       monitor.startPolling();
 
       vi.advanceTimersByTime(600);
+
+      expect(onStateChange).not.toHaveBeenCalledWith("test-1", 1000, "idle");
+
+      monitor.dispose();
+    });
+
+    it("should accept prompt hints even when cursor line is active output", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines: () => ["100% context left ? for shortcuts", "working output"],
+        getCursorLine: () => "working output",
+        promptHintPatterns: [/context left/i],
+        initialState: "busy",
+        skipInitialStateEmit: true,
+        idleDebounceMs: 2000,
+      });
+
+      monitor.startPolling();
+
+      vi.advanceTimersByTime(2200);
+
+      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "idle");
+
+      monitor.dispose();
+    });
+
+    it("should transition to idle after sustained quiet without prompt", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines: () => ["> prompt", "working output"],
+        getCursorLine: () => "working output",
+        bootCompletePatterns: [/working output/i],
+        initialState: "busy",
+        skipInitialStateEmit: true,
+        idleDebounceMs: 2000,
+      });
+
+      monitor.startPolling();
+
+      vi.advanceTimersByTime(2200);
+
+      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "idle");
+
+      monitor.dispose();
+    });
+
+    it("should settle to idle after quiet even with stale working patterns", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        agentId: "claude",
+        getVisibleLines: () => ["✽ Deliberating (esc to interrupt)", "> "],
+        getCursorLine: () => "> ",
+        initialState: "busy",
+        skipInitialStateEmit: true,
+        idleDebounceMs: 2000,
+      });
+
+      monitor.startPolling();
+
+      vi.advanceTimersByTime(2200);
 
       expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "idle");
 
@@ -164,6 +266,32 @@ describe("ActivityMonitor", () => {
       });
 
       vi.advanceTimersByTime(700);
+      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", {
+        trigger: "input",
+      });
+
+      monitor.dispose();
+    });
+
+    it("should enter busy after non-empty input even if prompt stays visible", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines: () => ["> "],
+        getCursorLine: () => "> ",
+        initialState: "idle",
+        skipInitialStateEmit: true,
+      });
+
+      monitor.startPolling();
+      monitor.onInput("ls");
+      monitor.onInput("\r");
+
+      vi.advanceTimersByTime(350);
+      expect(onStateChange).not.toHaveBeenCalledWith("test-1", 1000, "busy", {
+        trigger: "input",
+      });
+
+      vi.advanceTimersByTime(200);
       expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", {
         trigger: "input",
       });

@@ -49,6 +49,12 @@ export interface AgentDetectionConfig {
   promptPatterns?: string[];
 
   /**
+   * Patterns that indicate an empty input prompt is visible.
+   * Safe to scan from visible lines even when the cursor line is active output.
+   */
+  promptHintPatterns?: string[];
+
+  /**
    * Number of lines from end of output to scan (default: 10).
    */
   scanLineCount?: number;
@@ -170,10 +176,12 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       ],
       bootCompletePatterns: ["claude\\s+code\\s+v?\\d"],
       promptPatterns: ["^\\s*>\\s*", "^\\s*❯\\s*"],
+      promptHintPatterns: ["bypass permissions", "^\\s*>\\s+Try\\b"],
       scanLineCount: 10,
       primaryConfidence: 0.95,
       fallbackConfidence: 0.75,
       promptConfidence: 0.85,
+      debounceMs: 2000,
     },
   },
   gemini: {
@@ -230,10 +238,12 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       fallbackPatterns: ["[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+\\w"],
       bootCompletePatterns: ["type\\s+your\\s+message"],
       promptPatterns: ["^\\s*>\\s*", "type\\s+your\\s+message"],
+      promptHintPatterns: ["type\\s+your\\s+message"],
       scanLineCount: 10,
       primaryConfidence: 0.95,
       fallbackConfidence: 0.7,
       promptConfidence: 0.85,
+      debounceMs: 2000,
     },
   },
   codex: {
@@ -291,10 +301,12 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       fallbackPatterns: ["[•·]\\s+Working"],
       bootCompletePatterns: ["openai[-\\s]+codex", "codex\\s+v"],
       promptPatterns: ["^\\s*[›❯>]\\s*", "^\\s*codex\\s*>\\s*"],
+      promptHintPatterns: ["context\\s+left"],
       scanLineCount: 10,
       primaryConfidence: 0.95,
       fallbackConfidence: 0.75,
       promptConfidence: 0.85,
+      debounceMs: 2000,
     },
   },
   opencode: {
@@ -383,10 +395,12 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       fallbackPatterns: ["[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+\\w", "working[…\\.]+", "generating"],
       bootCompletePatterns: ["Ask anything", "Build\\s+OpenCode"],
       promptPatterns: ["^\\s*[›❯>]\\s*", "Ask anything"],
+      promptHintPatterns: ["Ask anything"],
       scanLineCount: 10,
       primaryConfidence: 0.95,
       fallbackConfidence: 0.7,
       promptConfidence: 0.85,
+      debounceMs: 2000,
     },
   },
 };
