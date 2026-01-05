@@ -51,6 +51,11 @@ export interface ActivityMonitorOptions {
    */
   getVisibleLines?: (n: number) => string[];
   /**
+   * Callback to get the current cursor line from xterm.
+   * Used to confirm prompt visibility for waiting detection.
+   */
+  getCursorLine?: () => string | null;
+  /**
    * Initial state for the monitor (default: "idle").
    * When resuming after project switch, set to previous state to avoid spurious transitions.
    */
@@ -60,6 +65,38 @@ export interface ActivityMonitorOptions {
    * Used when resuming after project switch to preserve terminal's agent state.
    */
   skipInitialStateEmit?: boolean;
+  /**
+   * Prompt patterns that indicate the agent is waiting for input.
+   */
+  promptPatterns?: RegExp[];
+  /**
+   * Number of lines to scan for prompt detection (default: 6).
+   */
+  promptScanLineCount?: number;
+  /**
+   * Confidence level when prompt pattern matches (default: 0.85).
+   */
+  promptConfidence?: number;
+  /**
+   * Debounce window before transitioning to idle (default: 2500ms).
+   */
+  idleDebounceMs?: number;
+  /**
+   * Input confirmation window before marking busy (default: 1000ms).
+   */
+  inputConfirmMs?: number;
+  /**
+   * Fallback idle timeout when no prompt signal is detected (default: 120000ms).
+   */
+  maxNoPromptIdleMs?: number;
+  /**
+   * Line rewrite detection for spinner-like output.
+   */
+  lineRewriteDetection?: {
+    enabled?: boolean;
+    windowMs?: number;
+    minRewrites?: number;
+  };
 }
 
 export interface ActivityStateMetadata {
@@ -70,15 +107,28 @@ export interface ActivityStateMetadata {
   patternConfidence?: number;
 }
 
+interface PromptDetectionResult {
+  isPrompt: boolean;
+  confidence: number;
+  matchedText?: string;
+}
+
 export class ActivityMonitor {
   private state: "busy" | "idle" = "idle";
   private debounceTimer: NodeJS.Timeout | null = null;
-  private readonly DEBOUNCE_MS = 2500;
+  private readonly IDLE_DEBOUNCE_MS: number;
+  private readonly INPUT_CONFIRM_MS: number;
+  private readonly MAX_NO_PROMPT_IDLE_MS: number;
+  private readonly PROMPT_DEBOUNCE_MS = 200;
+  private readonly WORKING_HOLD_MS = 400;
+  private readonly SPINNER_ACTIVE_MS = 1500;
   private inBracketedPaste = false;
   private partialEscape = "";
   private pasteStartTime = 0;
   private readonly PASTE_TIMEOUT_MS = 5000;
   private readonly ignoredInputSequences: Set<string>;
+  private pendingInputUntil = 0;
+  private workingHoldUntil = 0;
 
   // Volume-based output detection
   private readonly outputDetectionEnabled: boolean;
@@ -91,6 +141,10 @@ export class ActivityMonitor {
 
   private readonly processStateValidator?: ProcessStateValidator;
   private lastActivityTimestamp = Date.now();
+  private lastWorkingSignalAt = 0;
+  private lastOutputActivityAt = 0;
+  private lastSpinnerDetectedAt = 0;
+  private promptStableSince = 0;
   private readonly SLEEP_DETECTION_THRESHOLD_MS = 5000;
   private pendingStateRevalidation = false;
 
@@ -100,16 +154,25 @@ export class ActivityMonitor {
   private readonly PATTERN_BUFFER_SIZE: number;
   private lastPatternResult?: PatternDetectionResult;
   private readonly getVisibleLines?: (n: number) => string[];
+  private readonly getCursorLine?: () => string | null;
   private pollingInterval?: ReturnType<typeof setInterval>;
 
   // Polling debounce state
   private readonly POLLING_MAX_BOOT_MS = 15000; // Max 15s boot time before forcing boot complete
-  private readonly POLLING_IDLE_DEBOUNCE_MS = 5000; // Wait 5s before transitioning to idle
-  private readonly POLLING_BOOT_IDLE_DEBOUNCE_MS = 250; // Quick idle after boot completes
-  private patternLostTime = 0; // When the pattern was last lost
   private pollingStartTime = 0; // When polling started
   private hasExitedBootState = false; // Whether we've completed initial boot
-  private hasSeenWorkingPattern = false; // Whether we've ever detected a working pattern
+
+  // Prompt detection
+  private readonly promptPatterns: RegExp[];
+  private readonly promptScanLineCount: number;
+  private readonly promptConfidence: number;
+
+  // Line rewrite detection
+  private readonly rewriteDetectionEnabled: boolean;
+  private readonly rewriteWindowMs: number;
+  private readonly rewriteMinCount: number;
+  private rewriteWindowStart = 0;
+  private rewriteCount = 0;
 
   // State preservation for project switch
   private readonly skipInitialStateEmit: boolean;
@@ -121,6 +184,7 @@ export class ActivityMonitor {
     /codex\s+v/i, // Codex vX.X.X variant
     /type\s+your\s+message/i, // Gemini CLI ready prompt
   ];
+  private static readonly DEFAULT_PROMPT_PATTERNS = [/^\s*[>›❯⟩]\s*/i];
   private readonly bootCompletePatterns: RegExp[];
 
   constructor(
@@ -137,6 +201,9 @@ export class ActivityMonitor {
     this.ignoredInputSequences = new Set(options?.ignoredInputSequences ?? ["\x1b\r"]);
     this.processStateValidator = options?.processStateValidator;
     this.PATTERN_BUFFER_SIZE = options?.patternBufferSize ?? 2000;
+    this.IDLE_DEBOUNCE_MS = options?.idleDebounceMs ?? 2500;
+    this.INPUT_CONFIRM_MS = options?.inputConfirmMs ?? 1000;
+    this.MAX_NO_PROMPT_IDLE_MS = options?.maxNoPromptIdleMs ?? 120000;
 
     // Volume-based output detection config
     const outputDefaults = {
@@ -156,10 +223,23 @@ export class ActivityMonitor {
       this.patternDetector = new AgentPatternDetector(options.agentId, options.patternConfig);
     }
     this.getVisibleLines = options?.getVisibleLines;
+    this.getCursorLine = options?.getCursorLine;
     this.bootCompletePatterns =
       options?.bootCompletePatterns?.length && options.bootCompletePatterns.length > 0
         ? options.bootCompletePatterns
         : ActivityMonitor.BOOT_COMPLETE_PATTERNS;
+    this.promptPatterns =
+      options?.promptPatterns?.length && options.promptPatterns.length > 0
+        ? options.promptPatterns
+        : ActivityMonitor.DEFAULT_PROMPT_PATTERNS;
+    this.promptScanLineCount = options?.promptScanLineCount ?? 6;
+    this.promptConfidence = options?.promptConfidence ?? 0.85;
+
+    const rewriteDefaults = { enabled: true, windowMs: 500, minRewrites: 2 };
+    const rewriteConfig = { ...rewriteDefaults, ...options?.lineRewriteDetection };
+    this.rewriteDetectionEnabled = rewriteConfig.enabled;
+    this.rewriteWindowMs = rewriteConfig.windowMs;
+    this.rewriteMinCount = rewriteConfig.minRewrites;
 
     // State preservation for project switch - allows resuming without spurious state emissions
     this.state = options?.initialState ?? "idle";
@@ -168,7 +248,7 @@ export class ActivityMonitor {
 
   /**
    * Called when user sends input to the terminal.
-   * Proactively transitions to BUSY on Enter key, but ignores pastes.
+   * Tracks Enter key intent while avoiding false positives from pastes.
    */
   onInput(data: string): void {
     // Ignore synthetic "soft newline" sequences (e.g. Shift+Enter in the renderer).
@@ -190,6 +270,7 @@ export class ActivityMonitor {
     const fullData = this.partialEscape + data;
     this.partialEscape = "";
 
+    let sawEnter = false;
     for (let i = 0; i < fullData.length; i++) {
       // Check for potential escape sequence start near end of buffer
       // This must be FIRST to properly handle partial sequences like Shift+Enter (\x1b\r)
@@ -218,11 +299,22 @@ export class ActivityMonitor {
       // Only trigger busy on Enter if we are NOT inside a paste
       const char = fullData[i];
       if ((char === "\r" || char === "\n") && !this.inBracketedPaste) {
-        this.becomeBusy();
-        // Once busy is triggered, we don't need to keep checking this chunk
+        sawEnter = true;
         break;
       }
     }
+
+    if (!sawEnter) {
+      return;
+    }
+
+    const now = Date.now();
+    if (!this.getVisibleLines) {
+      this.becomeBusy({ trigger: "input" });
+      return;
+    }
+
+    this.pendingInputUntil = now + this.INPUT_CONFIRM_MS;
   }
 
   /**
@@ -243,10 +335,13 @@ export class ActivityMonitor {
     }
 
     this.lastActivityTimestamp = now;
-
     if (this.pendingStateRevalidation && this.state === "busy") {
       this.pendingStateRevalidation = false;
       this.revalidateStateAfterWake();
+    }
+
+    if (data) {
+      this.updateLineRewriteDetection(data, now);
     }
 
     // For polling-enabled terminals: check raw stream for patterns FIRST
@@ -275,43 +370,31 @@ export class ActivityMonitor {
         ? patternResult.isWorking
         : lowerBuffer.includes("esc to interrupt") || lowerBuffer.includes("esc to cancel");
       if (isWorking) {
-        this.hasSeenWorkingPattern = true;
-        this.patternLostTime = 0;
-        if (this.state !== "busy") {
-          this.state = "busy";
-          this.onStateChange(this.terminalId, this.spawnedAt, "busy", {
-            trigger: "pattern",
-            patternConfidence: patternResult?.confidence ?? 0.9,
-          });
-        }
+        this.becomeBusy({
+          trigger: "pattern",
+          patternConfidence: patternResult?.confidence ?? 0.9,
+        });
       }
     }
 
     // Now handle busy state - reset debounce timer
     if (this.state === "busy") {
       this.resetDebounceTimer();
-      return;
     }
 
     if (!data) {
       return;
     }
 
-    // Polling terminals already handled above
-    if (this.getVisibleLines) {
-      return;
-    }
-
-    // Legacy: Update pattern buffer and check for working patterns (non-polling terminals only)
-    if (this.patternDetector) {
+    // Update pattern buffer and check for working patterns (non-polling terminals only)
+    if (!this.getVisibleLines && this.patternDetector) {
       this.updatePatternBuffer(data);
       const patternResult = this.patternDetector.detect(this.patternBuffer);
       this.lastPatternResult = patternResult;
 
       if (patternResult.isWorking) {
         // Pattern detected - transition to busy with high confidence
-        this.becomeBusyFromPattern(patternResult.confidence);
-        return;
+        this.becomeBusyFromPattern(patternResult.confidence, now);
       }
     }
 
@@ -336,7 +419,7 @@ export class ActivityMonitor {
         this.outputBytesInWindow >= this.outputMinBytes) ||
       this.outputBytesInWindow >= this.outputMinBytes
     ) {
-      this.becomeBusyFromOutput();
+      this.becomeBusyFromOutput(now);
       this.resetOutputWindow();
     }
   }
@@ -357,19 +440,98 @@ export class ActivityMonitor {
     }
   }
 
+  private recordWorkingSignal(now: number): void {
+    this.lastWorkingSignalAt = now;
+    this.workingHoldUntil = Math.max(this.workingHoldUntil, now + this.WORKING_HOLD_MS);
+  }
+
+  private updateLineRewriteDetection(data: string, now: number): void {
+    if (!this.rewriteDetectionEnabled) {
+      return;
+    }
+
+    const rewriteHits = this.countLineRewrites(data);
+    if (rewriteHits === 0) {
+      return;
+    }
+
+    if (this.rewriteWindowStart === 0 || now - this.rewriteWindowStart > this.rewriteWindowMs) {
+      this.rewriteWindowStart = now;
+      this.rewriteCount = rewriteHits;
+    } else {
+      this.rewriteCount += rewriteHits;
+    }
+
+    if (this.rewriteCount >= this.rewriteMinCount) {
+      this.lastSpinnerDetectedAt = now;
+      this.becomeBusy({ trigger: "output" }, now);
+    }
+  }
+
+  private countLineRewrites(data: string): number {
+    let count = 0;
+    for (let i = 0; i < data.length; i++) {
+      if (data[i] === "\r" && data[i + 1] !== "\n") {
+        count++;
+      }
+    }
+    if (data.includes("\x1b[2K") || data.includes("\x1b[K")) {
+      count++;
+    }
+    return count;
+  }
+
+  private detectPrompt(lines: string[], cursorLine?: string | null): PromptDetectionResult {
+    const patterns = this.promptPatterns;
+    if (patterns.length === 0) {
+      return { isPrompt: false, confidence: 0 };
+    }
+
+    if (cursorLine) {
+      const cleanCursor = stripAnsi(cursorLine);
+      for (const pattern of patterns) {
+        const match = cleanCursor.match(pattern);
+        if (match) {
+          return {
+            isPrompt: true,
+            confidence: this.promptConfidence,
+            matchedText: match[0],
+          };
+        }
+      }
+    }
+
+    const scanCount = Math.min(this.promptScanLineCount, lines.length);
+    const scanLines = lines.slice(-scanCount);
+    for (const line of scanLines) {
+      const cleanLine = stripAnsi(line);
+      for (const pattern of patterns) {
+        const match = cleanLine.match(pattern);
+        if (match) {
+          return {
+            isPrompt: true,
+            confidence: this.promptConfidence * 0.8,
+            matchedText: match[0],
+          };
+        }
+      }
+    }
+
+    return { isPrompt: false, confidence: 0 };
+  }
+
+  private isSpinnerActive(now: number): boolean {
+    return (
+      this.lastSpinnerDetectedAt > 0 &&
+      now - this.lastSpinnerDetectedAt <= this.SPINNER_ACTIVE_MS
+    );
+  }
+
   /**
    * Transition to busy state based on pattern detection.
    */
-  private becomeBusyFromPattern(confidence: number): void {
-    this.resetDebounceTimer();
-
-    if (this.state !== "busy") {
-      this.state = "busy";
-      this.onStateChange(this.terminalId, this.spawnedAt, "busy", {
-        trigger: "pattern",
-        patternConfidence: confidence,
-      });
-    }
+  private becomeBusyFromPattern(confidence: number, now: number): void {
+    this.becomeBusy({ trigger: "pattern", patternConfidence: confidence }, now);
   }
 
   private revalidateStateAfterWake(): void {
@@ -378,6 +540,14 @@ export class ActivityMonitor {
       return;
     }
     if (!actuallyBusy && this.state === "busy") {
+      if (this.getVisibleLines) {
+        const lines = this.getVisibleLines(Math.max(this.promptScanLineCount, 15));
+        const cursorLine = this.getCursorLine?.() ?? null;
+        const promptResult = this.detectPrompt(lines, cursorLine);
+        if (!promptResult.isPrompt) {
+          return;
+        }
+      }
       if (this.debounceTimer) {
         clearTimeout(this.debounceTimer);
         this.debounceTimer = null;
@@ -387,34 +557,30 @@ export class ActivityMonitor {
     }
   }
 
-  private becomeBusy(): void {
+  private becomeBusy(metadata: ActivityStateMetadata, now: number = Date.now()): void {
+    this.pendingInputUntil = 0;
+    this.recordWorkingSignal(now);
     this.resetDebounceTimer();
 
     if (this.state !== "busy") {
       this.state = "busy";
-      this.onStateChange(this.terminalId, this.spawnedAt, "busy", { trigger: "input" });
+      this.onStateChange(this.terminalId, this.spawnedAt, "busy", metadata);
     }
   }
 
-  private becomeBusyFromOutput(): void {
-    if (this.state !== "busy") {
-      // Validate CPU activity before entering busy state from output detection.
-      // This prevents character echoes during typing from triggering active state.
-      // null = no validator available, allow transition (fail open for compatibility)
-      // true = CPU activity detected, allow transition
-      // false = no CPU activity, user is typing, deny transition
-      const actuallyBusy = this.hasActiveChildrenSafe();
-      if (actuallyBusy === false) {
-        return;
-      }
-
-      this.state = "busy";
-      this.onStateChange(this.terminalId, this.spawnedAt, "busy", {
-        trigger: "output",
-      });
+  private becomeBusyFromOutput(now: number): void {
+    // Validate CPU activity before entering busy state from output detection.
+    // This prevents character echoes during typing from triggering active state.
+    // null = no validator available, allow transition (fail open for compatibility)
+    // true = CPU activity detected, allow transition
+    // false = no CPU activity, user is typing, deny transition
+    const actuallyBusy = this.hasActiveChildrenSafe();
+    if (actuallyBusy === false) {
+      return;
     }
 
-    this.resetDebounceTimer();
+    this.lastOutputActivityAt = now;
+    this.becomeBusy({ trigger: "output" }, now);
   }
 
   private resetDebounceTimer(): void {
@@ -444,7 +610,7 @@ export class ActivityMonitor {
       this.state = "idle";
       this.onStateChange(this.terminalId, this.spawnedAt, "idle");
       this.debounceTimer = null;
-    }, this.DEBOUNCE_MS);
+    }, this.IDLE_DEBOUNCE_MS);
   }
 
   private hasActiveChildrenSafe(): boolean | null {
@@ -473,10 +639,16 @@ export class ActivityMonitor {
     this.resetOutputWindow();
     this.patternBuffer = "";
     this.lastPatternResult = undefined;
-    this.patternLostTime = 0;
     this.pollingStartTime = 0;
     this.hasExitedBootState = false;
-    this.hasSeenWorkingPattern = false;
+    this.pendingInputUntil = 0;
+    this.workingHoldUntil = 0;
+    this.lastWorkingSignalAt = 0;
+    this.lastOutputActivityAt = 0;
+    this.lastSpinnerDetectedAt = 0;
+    this.promptStableSince = 0;
+    this.rewriteWindowStart = 0;
+    this.rewriteCount = 0;
   }
 
   /**
@@ -501,8 +673,7 @@ export class ActivityMonitor {
    * Start polling for patterns in xterm visible lines.
    * - Starts in busy state during boot (indicator spinning) unless skipInitialStateEmit is set
    * - Boot completes when agent-ready pattern detected OR 15s timeout
-   * - After boot: idle shortly after ready when no working pattern is present
-   * - After first working pattern: busy while working, idle after 1s without pattern
+   * - After boot: idle when prompt becomes visible; busy on working signals
    * This ensures the activity indicator never hides prematurely.
    *
    * When resuming after project switch (skipInitialStateEmit=true), the monitor preserves
@@ -511,92 +682,124 @@ export class ActivityMonitor {
   startPolling(): void {
     if (!this.getVisibleLines || this.pollingInterval) return;
 
-    this.patternLostTime = 0;
     this.pollingStartTime = Date.now();
 
     // When resuming after project switch, preserve existing state:
     // - For idle/waiting states: mark boot complete to allow normal pattern detection
     // - For busy/working states: keep boot detection active to prevent premature idle transition
-    // - hasSeenWorkingPattern is set based on current state
     // - skipInitialStateEmit prevents the initial busy emission
     if (this.skipInitialStateEmit) {
       // Only skip boot detection if we're resuming in an idle state
       // Working states need boot protection to avoid premature waiting transitions
       this.hasExitedBootState = this.state === "idle";
-      this.hasSeenWorkingPattern = this.state === "busy"; // Trust existing state
+      if (this.state === "busy") {
+        this.recordWorkingSignal(this.pollingStartTime);
+      }
       // Don't emit - preserve terminal's agent state (polling starts below)
     } else {
       this.hasExitedBootState = false;
-      this.hasSeenWorkingPattern = false;
 
       // Fresh start: begin in busy state and emit to sync UI
       this.state = "busy";
       this.onStateChange(this.terminalId, this.spawnedAt, "busy", { trigger: "pattern" });
+      this.recordWorkingSignal(this.pollingStartTime);
     }
 
     this.pollingInterval = setInterval(() => {
       const now = Date.now();
 
-      // Scan bottom 15 lines - status/spinner can appear anywhere in visible area
-      const lines = this.getVisibleLines!(15);
+      const scanCount = Math.max(this.promptScanLineCount, 15);
+      const lines = this.getVisibleLines!(scanCount);
+      const cursorLine = this.getCursorLine?.() ?? null;
       const text = stripAnsi(lines.join(" ")).toLowerCase();
+
       const patternResult = this.patternDetector
         ? this.patternDetector.detectFromLines(lines)
         : undefined;
       if (patternResult) {
         this.lastPatternResult = patternResult;
       }
+
       // When resuming (skipInitialStateEmit), only trust explicit pattern detector
       // to avoid matching stale "esc to interrupt" text from previous runs
-      const isWorking = patternResult
+      const isWorkingPattern = patternResult
         ? patternResult.isWorking
         : this.skipInitialStateEmit
           ? false
           : text.includes("esc to interrupt") || text.includes("esc to cancel");
 
+      if (isWorkingPattern) {
+        this.recordWorkingSignal(now);
+      }
+
+      const promptResult = this.detectPrompt(lines, cursorLine);
+      const isPrompt = promptResult.isPrompt;
+      if (isPrompt) {
+        if (this.promptStableSince === 0) {
+          this.promptStableSince = now;
+        }
+      } else {
+        this.promptStableSince = 0;
+      }
+
       // Check for boot completion (agent-specific ready patterns)
       if (!this.hasExitedBootState) {
         const timeSinceBoot = now - this.pollingStartTime;
-        if (this.isBootComplete(text) || timeSinceBoot >= this.POLLING_MAX_BOOT_MS) {
+        if (isPrompt || this.isBootComplete(text) || timeSinceBoot >= this.POLLING_MAX_BOOT_MS) {
           this.hasExitedBootState = true;
-          // Note: We allow idle after debounce if no working pattern appears
-          // This stops the indicator promptly once boot completes
         } else {
           return; // Still booting, stay busy
         }
       }
 
-      if (isWorking) {
-        // Pattern found - mark that we've seen work and reset lost timer
-        this.hasSeenWorkingPattern = true;
-        this.patternLostTime = 0;
+      const hasRecentOutputActivity =
+        this.lastOutputActivityAt > 0 && now - this.lastOutputActivityAt <= this.outputWindowMs;
+      const isSpinnerActive = this.isSpinnerActive(now);
+      const isWorkingSignal = isWorkingPattern || isSpinnerActive || hasRecentOutputActivity;
+      if (isWorkingSignal) {
+        this.promptStableSince = 0;
+      }
 
-        if (this.state !== "busy") {
-          this.state = "busy";
-          this.onStateChange(this.terminalId, this.spawnedAt, "busy", {
-            trigger: "pattern",
-            patternConfidence: patternResult?.confidence ?? 0.9,
-          });
-        }
-      } else if (this.state === "busy" && (this.hasSeenWorkingPattern || this.hasExitedBootState)) {
-        // Allow idle transition after boot completes OR after we've seen a working pattern
-        // This ensures: (1) indicator stays spinning during boot, (2) transitions to idle after boot
-        if (this.patternLostTime === 0) {
-          this.patternLostTime = now;
-        }
-
-        // Check idle debounce - wait before transitioning
-        const timeSinceLost = now - this.patternLostTime;
-        const idleDebounceMs = this.hasSeenWorkingPattern
-          ? this.POLLING_IDLE_DEBOUNCE_MS
-          : this.POLLING_BOOT_IDLE_DEBOUNCE_MS;
-        if (timeSinceLost >= idleDebounceMs) {
-          this.state = "idle";
-          this.onStateChange(this.terminalId, this.spawnedAt, "idle");
-          this.patternLostTime = 0;
+      if (this.pendingInputUntil > 0) {
+        if (isWorkingSignal || isPrompt) {
+          this.pendingInputUntil = 0;
+        } else if (now >= this.pendingInputUntil) {
+          this.pendingInputUntil = 0;
+          this.becomeBusy({ trigger: "input" }, now);
+          return;
         }
       }
-      // If busy but haven't seen working pattern yet, stay busy (keep indicator spinning)
+
+      if (isWorkingSignal) {
+        if (this.state !== "busy") {
+          const metadata = isWorkingPattern
+            ? { trigger: "pattern" as const, patternConfidence: patternResult?.confidence ?? 0.9 }
+            : { trigger: "output" as const };
+          this.becomeBusy(metadata, now);
+        }
+        return;
+      }
+
+      if (isPrompt && this.state === "busy" && now >= this.workingHoldUntil) {
+        if (now - this.promptStableSince >= this.PROMPT_DEBOUNCE_MS) {
+          this.state = "idle";
+          this.onStateChange(this.terminalId, this.spawnedAt, "idle");
+        }
+        return;
+      }
+
+      if (
+        this.state === "busy" &&
+        !isPrompt &&
+        now >= this.workingHoldUntil &&
+        !(this.pendingInputUntil > 0 && now < this.pendingInputUntil)
+      ) {
+        const sinceWorking = now - this.lastWorkingSignalAt;
+        if (this.lastWorkingSignalAt > 0 && sinceWorking >= this.MAX_NO_PROMPT_IDLE_MS) {
+          this.state = "idle";
+          this.onStateChange(this.terminalId, this.spawnedAt, "idle");
+        }
+      }
     }, 50); // Poll at 50ms for responsive state detection
   }
 

@@ -129,6 +129,72 @@ describe("ActivityMonitor", () => {
     });
   });
 
+  describe("Prompt-driven polling", () => {
+    it("should transition to idle when prompt is visible", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines: () => ["> "],
+        getCursorLine: () => "> ",
+      });
+
+      monitor.startPolling();
+
+      vi.advanceTimersByTime(600);
+
+      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "idle");
+
+      monitor.dispose();
+    });
+
+    it("should delay busy on Enter until confirmation window expires", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines: () => [""],
+        getCursorLine: () => "",
+        initialState: "idle",
+        skipInitialStateEmit: true,
+      });
+
+      monitor.startPolling();
+      monitor.onInput("\r");
+
+      vi.advanceTimersByTime(500);
+      expect(onStateChange).not.toHaveBeenCalledWith("test-1", 1000, "busy", {
+        trigger: "input",
+      });
+
+      vi.advanceTimersByTime(700);
+      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", {
+        trigger: "input",
+      });
+
+      monitor.dispose();
+    });
+
+    it("should not enter busy when prompt appears during input confirmation", () => {
+      const onStateChange = vi.fn();
+      let showPrompt = false;
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines: () => (showPrompt ? ["> "] : [""]),
+        getCursorLine: () => (showPrompt ? "> " : ""),
+        initialState: "idle",
+        skipInitialStateEmit: true,
+      });
+
+      monitor.startPolling();
+      monitor.onInput("\r");
+
+      showPrompt = true;
+      vi.advanceTimersByTime(600);
+
+      expect(onStateChange).not.toHaveBeenCalledWith("test-1", 1000, "busy", {
+        trigger: "input",
+      });
+
+      monitor.dispose();
+    });
+  });
+
   describe("Debounce timer (idle transition)", () => {
     it("should transition to idle after debounce period", () => {
       const onStateChange = vi.fn();

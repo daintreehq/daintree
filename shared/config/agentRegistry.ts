@@ -43,9 +43,20 @@ export interface AgentDetectionConfig {
   bootCompletePatterns?: string[];
 
   /**
+   * Patterns that indicate the agent is waiting for user input (prompt visible).
+   * Use strings that will be converted to RegExp with case-insensitive flag.
+   */
+  promptPatterns?: string[];
+
+  /**
    * Number of lines from end of output to scan (default: 10).
    */
   scanLineCount?: number;
+
+  /**
+   * Number of lines from end of output to scan for prompt detection (default: 6).
+   */
+  promptScanLineCount?: number;
 
   /**
    * Activity debounce period in ms (default: 1500).
@@ -62,6 +73,11 @@ export interface AgentDetectionConfig {
    * Confidence level when fallback pattern matches (default: 0.75).
    */
   fallbackConfidence?: number;
+
+  /**
+   * Confidence level when prompt pattern matches (default: 0.85).
+   */
+  promptConfidence?: number;
 }
 
 export interface AgentConfig {
@@ -153,9 +169,11 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
         "[✽✻✼✾⟡◇◆●○]\\s+(thinking|deliberating|working|reading|writing|searching|executing)",
       ],
       bootCompletePatterns: ["claude\\s+code\\s+v?\\d"],
+      promptPatterns: ["^\\s*>\\s*", "^\\s*❯\\s*"],
       scanLineCount: 10,
       primaryConfidence: 0.95,
       fallbackConfidence: 0.75,
+      promptConfidence: 0.85,
     },
   },
   gemini: {
@@ -211,9 +229,11 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       ],
       fallbackPatterns: ["[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+\\w"],
       bootCompletePatterns: ["type\\s+your\\s+message"],
+      promptPatterns: ["^\\s*>\\s*", "type\\s+your\\s+message"],
       scanLineCount: 10,
       primaryConfidence: 0.95,
       fallbackConfidence: 0.7,
+      promptConfidence: 0.85,
     },
   },
   codex: {
@@ -270,9 +290,11 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       ],
       fallbackPatterns: ["[•·]\\s+Working"],
       bootCompletePatterns: ["openai[-\\s]+codex", "codex\\s+v"],
+      promptPatterns: ["^\\s*[›❯>]\\s*", "^\\s*codex\\s*>\\s*"],
       scanLineCount: 10,
       primaryConfidence: 0.95,
       fallbackConfidence: 0.75,
+      promptConfidence: 0.85,
     },
   },
   opencode: {
@@ -360,9 +382,11 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       ],
       fallbackPatterns: ["[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+\\w", "working[…\\.]+", "generating"],
       bootCompletePatterns: ["Ask anything", "Build\\s+OpenCode"],
+      promptPatterns: ["^\\s*[›❯>]\\s*", "Ask anything"],
       scanLineCount: 10,
       primaryConfidence: 0.95,
       fallbackConfidence: 0.7,
+      promptConfidence: 0.85,
     },
   },
 };
