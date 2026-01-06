@@ -298,7 +298,7 @@ describe("DevPreviewService", () => {
 
     it("stops existing session before starting new one on same panel", async () => {
       const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
-      
+
       await service.start({
         panelId: "panel-1",
         cwd: "/tmp/test",
@@ -540,7 +540,7 @@ describe("DevPreviewService", () => {
   describe("session isolation", () => {
     it("maintains separate sessions for different panels", async () => {
       const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
-      
+
       await service.start({
         panelId: "panel-1",
         cwd: "/tmp/project1",
