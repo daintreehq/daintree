@@ -915,18 +915,20 @@ class TerminalInstanceService {
 
   /**
    * Safely resize xterm.js terminal, respecting alternate screen buffer state.
-   * When in alternate buffer, we skip the xterm.js resize to avoid reflow corruption.
+   * When in alternate buffer, we clear the screen before resizing to avoid reflow artifacts.
    * The TUI app owns the screen content and will redraw after receiving SIGWINCH.
-   * We still track the intended dimensions so we can apply them when exiting alternate buffer.
+   * xterm.js must always be resized to match the PTY dimensions, otherwise TUI output
+   * (rendered for new dimensions) will display incorrectly on old-dimension xterm canvas.
    */
   private resizeTerminal(managed: ManagedTerminal, cols: number, rows: number): void {
-    if (!managed.isInAlternateBuffer) {
-      managed.terminal.resize(cols, rows);
-    } else {
-      // Track intended dimensions for deferred resize when exiting alternate buffer
-      managed.latestCols = cols;
-      managed.latestRows = rows;
+    if (managed.isInAlternateBuffer) {
+      // Clear the alternate screen buffer before resize to prevent reflow artifacts.
+      // The TUI application will redraw the entire screen after receiving SIGWINCH.
+      // ESC[2J = Clear entire screen (ED - Erase in Display)
+      // ESC[H = Move cursor to home position (top-left)
+      managed.terminal.write("\x1b[2J\x1b[H");
     }
+    managed.terminal.resize(cols, rows);
     // Note: PTY resize is handled separately by caller
   }
 
