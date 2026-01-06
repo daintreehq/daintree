@@ -1321,7 +1321,7 @@ port.on("message", async (rawMsg: any) => {
         break;
       }
 
-      case "acknowledge-data":
+      case "acknowledge-data": {
         // Acknowledge data consumption from renderer to manage IPC backpressure
         // Renderer now sends exact byte count (not character count) for accurate accounting
         const acknowledgedBytes = msg.charCount ?? 0;
@@ -1330,6 +1330,7 @@ port.on("message", async (rawMsg: any) => {
         // Note: ptyManager.acknowledgeData is still a no-op for SAB mode compatibility
         ptyManager.acknowledgeData(msg.id, acknowledgedBytes);
         break;
+      }
 
       case "set-analysis-enabled":
         if (typeof msg.id === "string" && typeof msg.enabled === "boolean") {

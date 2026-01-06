@@ -295,7 +295,8 @@ class TerminalInstanceService {
     const shouldAck = !sabMode || isAgentTerminal;
 
     // Calculate exact byte length for accurate flow control
-    const dataBytes = typeof data === "string" ? new TextEncoder().encode(data).length : data.byteLength;
+    const dataBytes =
+      typeof data === "string" ? new TextEncoder().encode(data).length : data.byteLength;
 
     // Write data and apply flow control acknowledgement after xterm processes the buffer update
     const terminal = managed.terminal;
