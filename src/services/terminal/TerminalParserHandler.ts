@@ -1,9 +1,16 @@
 import { ManagedTerminal } from "./types";
 import { getAgentConfig } from "@/config/agents";
 
+// DEC private mode codes that switch to alternate screen buffer
+// Mode 47: Switch to alternate screen (older)
+// Mode 1047: Use alternate screen buffer
+// Mode 1049: Save cursor + switch to alternate screen buffer (most common)
+const ALT_SCREEN_MODES = new Set([47, 1047, 1049]);
+
 export class TerminalParserHandler {
   private managed: ManagedTerminal;
   private disposables: Array<{ dispose: () => void }> = [];
+  private onBufferExit?: () => void;
 
   private normalizeCsiParams(params: Array<number | number[]> | undefined): number[] {
     if (!params) return [];
@@ -18,8 +25,9 @@ export class TerminalParserHandler {
     return flat;
   }
 
-  constructor(managed: ManagedTerminal) {
+  constructor(managed: ManagedTerminal, onBufferExit?: () => void) {
     this.managed = managed;
+    this.onBufferExit = onBufferExit;
     this.attachHandlers();
   }
 
@@ -55,11 +63,47 @@ export class TerminalParserHandler {
   private attachHandlers(): void {
     const { terminal } = this.managed;
 
-    if (!terminal.parser || !terminal.parser.registerEscHandler) {
+    if (!terminal.parser || !terminal.parser.registerCsiHandler) {
       return; // Graceful degradation if proposed API missing
     }
 
     const capabilities = this.getAgentCapabilities();
+
+    // Track alternate screen buffer mode switches via DEC private mode sequences.
+    // This allows us to detect when a TUI app activates the alternate screen
+    // so we can skip xterm.js reflow during resize operations.
+    // CSI ? Pm h = DECSET (enable mode)
+    const altScreenSetHandler = terminal.parser.registerCsiHandler(
+      { prefix: "?", final: "h" },
+      (params) => {
+        const p = this.normalizeCsiParams(params);
+        if (p.some((v) => ALT_SCREEN_MODES.has(v))) {
+          this.managed.isInAlternateBuffer = true;
+        }
+        return false; // Don't block, just observe
+      }
+    );
+    this.disposables.push(altScreenSetHandler);
+
+    // CSI ? Pm l = DECRST (disable mode)
+    const altScreenResetHandler = terminal.parser.registerCsiHandler(
+      { prefix: "?", final: "l" },
+      (params) => {
+        const p = this.normalizeCsiParams(params);
+        if (p.some((v) => ALT_SCREEN_MODES.has(v))) {
+          const wasInAltBuffer = this.managed.isInAlternateBuffer;
+          this.managed.isInAlternateBuffer = false;
+
+          // Apply deferred resize when leaving alternate buffer.
+          // If dimensions changed while in alt buffer, the normal buffer needs to catch up.
+          if (wasInAltBuffer && this.onBufferExit) {
+            this.onBufferExit();
+          }
+        }
+        return false; // Don't block, just observe
+      }
+    );
+    this.disposables.push(altScreenResetHandler);
 
     // Block mouse reporting mode toggles (enables programs to capture mouse events).
     // We block this for agent terminals to avoid surprising interactions inside the app.

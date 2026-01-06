@@ -472,13 +472,16 @@ class TerminalInstanceService {
       latestWasAtBottom: true,
       isUserScrolledBack: false,
       isFocused: false,
+      isInAlternateBuffer: false,
       writeChain: Promise.resolve(),
       restoreGeneration: 0,
       isSerializedRestoreInProgress: false,
       deferredOutput: [],
     };
 
-    managed.parserHandler = new TerminalParserHandler(managed);
+    managed.parserHandler = new TerminalParserHandler(managed, () => {
+      this.applyDeferredResize(id);
+    });
 
     const scrollDisposable = terminal.onScroll(() => {
       const buffer = terminal.buffer.active;
@@ -798,6 +801,44 @@ class TerminalInstanceService {
     };
   }
 
+  /**
+   * Safely resize xterm.js terminal, respecting alternate screen buffer state.
+   * When in alternate buffer, we skip the xterm.js resize to avoid reflow corruption.
+   * The TUI app owns the screen content and will redraw after receiving SIGWINCH.
+   * We still track the intended dimensions so we can apply them when exiting alternate buffer.
+   */
+  private resizeTerminal(managed: ManagedTerminal, cols: number, rows: number): void {
+    if (!managed.isInAlternateBuffer) {
+      managed.terminal.resize(cols, rows);
+    } else {
+      // Track intended dimensions for deferred resize when exiting alternate buffer
+      managed.latestCols = cols;
+      managed.latestRows = rows;
+    }
+    // Note: PTY resize is handled separately by caller
+  }
+
+  /**
+   * Apply deferred resize when exiting alternate screen buffer.
+   * This ensures the normal buffer catches up to window size changes that occurred
+   * while the TUI app was in control of the alternate buffer.
+   */
+  private applyDeferredResize(id: string): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+
+    // If dimensions differ from current xterm state, apply the deferred resize
+    const currentCols = managed.terminal.cols;
+    const currentRows = managed.terminal.rows;
+    const targetCols = managed.latestCols;
+    const targetRows = managed.latestRows;
+
+    if (currentCols !== targetCols || currentRows !== targetRows) {
+      managed.terminal.resize(targetCols, targetRows);
+      terminalClient.resize(id, targetCols, targetRows);
+    }
+  }
+
   private applyResize(id: string, cols: number, rows: number): void {
     const managed = this.instances.get(id);
     if (!managed) return;
@@ -808,8 +849,7 @@ class TerminalInstanceService {
 
     this.dataBuffer.flushForTerminal(id);
     this.dataBuffer.resetForTerminal(id);
-    managed.terminal.resize(cols, rows);
-
+    this.resizeTerminal(managed, cols, rows);
     terminalClient.resize(id, cols, rows);
   }
 
@@ -858,7 +898,7 @@ class TerminalInstanceService {
             if (current) {
               this.dataBuffer.flushForTerminal(id);
               this.dataBuffer.resetForTerminal(id);
-              current.terminal.resize(current.latestCols, current.terminal.rows);
+              this.resizeTerminal(current, current.latestCols, current.terminal.rows);
               terminalClient.resize(id, current.latestCols, current.terminal.rows);
               current.resizeXJob = undefined;
             }
@@ -872,7 +912,7 @@ class TerminalInstanceService {
           if (current) {
             this.dataBuffer.flushForTerminal(id);
             this.dataBuffer.resetForTerminal(id);
-            current.terminal.resize(current.latestCols, current.terminal.rows);
+            this.resizeTerminal(current, current.latestCols, current.terminal.rows);
             terminalClient.resize(id, current.latestCols, current.terminal.rows);
             current.resizeXJob = undefined;
           }
@@ -889,7 +929,7 @@ class TerminalInstanceService {
             if (current) {
               this.dataBuffer.flushForTerminal(id);
               this.dataBuffer.resetForTerminal(id);
-              current.terminal.resize(current.latestCols, current.latestRows);
+              this.resizeTerminal(current, current.latestCols, current.latestRows);
               terminalClient.resize(id, current.latestCols, current.latestRows);
               current.resizeYJob = undefined;
             }
@@ -903,7 +943,7 @@ class TerminalInstanceService {
           if (current) {
             this.dataBuffer.flushForTerminal(id);
             this.dataBuffer.resetForTerminal(id);
-            current.terminal.resize(current.latestCols, current.latestRows);
+            this.resizeTerminal(current, current.latestCols, current.latestRows);
             terminalClient.resize(id, current.latestCols, current.latestRows);
             current.resizeYJob = undefined;
           }
@@ -924,7 +964,7 @@ class TerminalInstanceService {
       if (current) {
         this.dataBuffer.flushForTerminal(id);
         this.dataBuffer.resetForTerminal(id);
-        current.terminal.resize(cols, current.terminal.rows);
+        this.resizeTerminal(current, cols, current.terminal.rows);
         terminalClient.resize(id, cols, current.terminal.rows);
         current.resizeXJob = undefined;
       }
@@ -944,7 +984,7 @@ class TerminalInstanceService {
       }
       this.dataBuffer.flushForTerminal(id);
       this.dataBuffer.resetForTerminal(id);
-      managed.terminal.resize(managed.latestCols, rows);
+      this.resizeTerminal(managed, managed.latestCols, rows);
       terminalClient.resize(id, managed.latestCols, rows);
       return;
     }
@@ -957,7 +997,7 @@ class TerminalInstanceService {
           current.lastYResizeTime = Date.now();
           this.dataBuffer.flushForTerminal(id);
           this.dataBuffer.resetForTerminal(id);
-          current.terminal.resize(current.latestCols, current.latestRows);
+          this.resizeTerminal(current, current.latestCols, current.latestRows);
           terminalClient.resize(id, current.latestCols, current.latestRows);
           current.resizeYJob = undefined;
         }
@@ -1009,6 +1049,9 @@ class TerminalInstanceService {
   handleBackendRecovery(): void {
     this.instances.forEach((managed, id) => {
       try {
+        // Reset alternate buffer tracking - backend restart clears PTY state
+        managed.isInAlternateBuffer = false;
+
         // 1. Send soft terminal reset to clear stuck ANSI state
         // \x1b[!p = DECSTR (Soft Terminal Reset)
         // Resets colors, cursor, scrolling regions but keeps text
@@ -1288,6 +1331,9 @@ class TerminalInstanceService {
       // This makes the restore atomic - no blank terminal between reset and write completion.
       managed.isSerializedRestoreInProgress = true;
 
+      // Reset alternate buffer tracking - terminal.reset() clears all state
+      managed.isInAlternateBuffer = false;
+
       managed.terminal.reset();
       managed.terminal.write(serializedState, () => {
         // Guard against stale callback after destroy/restart
@@ -1330,6 +1376,9 @@ class TerminalInstanceService {
         if (this.instances.get(id) !== managed || managed.restoreGeneration !== restoreGeneration) {
           return false;
         }
+
+        // Reset alternate buffer tracking - terminal.reset() clears all state
+        managed.isInAlternateBuffer = false;
 
         managed.terminal.reset();
 

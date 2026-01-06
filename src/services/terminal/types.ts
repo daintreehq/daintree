@@ -66,6 +66,10 @@ export interface ManagedTerminal {
   // Input lock state (read-only monitor mode)
   isInputLocked?: boolean;
 
+  // Alternate screen buffer state (tracked via escape sequences)
+  // When true, resize operations should skip xterm.js reflow and only notify the PTY
+  isInAlternateBuffer: boolean;
+
   // Incremental restore state
   writeChain: Promise<void>;
   restoreGeneration: number;
