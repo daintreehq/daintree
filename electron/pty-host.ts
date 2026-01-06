@@ -426,12 +426,18 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
   // Agent terminals use snapshot projection and do not consume the raw visual stream.
   // Writing agent output into the visual ring buffer would immediately backpressure the PTY.
   const skipVisualStream = terminalInfo?.kind === "agent";
+
+  // Background tier: suppress visual streaming entirely (wake snapshots will resync state)
+  // Analysis buffer writes still occur for agent state detection
+  const activityTier = terminalActivityTiers.get(id) ?? "active";
+  const isBackgrounded = activityTier === "background";
+
   // PRIORITY 1: VISUAL RENDERER (Zero-Latency Path)
   // Write to SharedArrayBuffer immediately before doing ANY processing.
   // This ensures terminal output reaches xterm.js with minimal latency.
   let visualWritten = false;
 
-  if (!skipVisualStream && visualBuffers.length > 0) {
+  if (!skipVisualStream && !isBackgrounded && visualBuffers.length > 0) {
     const shardIndex = selectShard(id, visualBuffers.length);
     const shard = visualBuffers[shardIndex];
 
@@ -688,7 +694,8 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
   }
 
   // Fallback: If ring buffer failed or isn't set up, use IPC
-  if (!visualWritten) {
+  // Skip IPC fallback for backgrounded terminals (wake will resync via snapshot)
+  if (!visualWritten && !isBackgrounded) {
     sendEvent({ type: "data", id, data: toStringForIpc(data) });
   }
 
@@ -1038,9 +1045,10 @@ port.on("message", async (rawMsg: any) => {
 
       case "set-activity-tier": {
         const tier = msg.tier === "background" ? "background" : "active";
+        const previousTier = terminalActivityTiers.get(msg.id);
         terminalActivityTiers.set(msg.id, tier);
 
-        // If tier flips, clear any stall suspension and unblock the PTY.
+        // Clear any stall suspension and unblock the PTY
         suspendedDueToStall.delete(msg.id);
         clearPendingVisual(msg.id);
 
@@ -1062,6 +1070,10 @@ port.on("message", async (rawMsg: any) => {
           } catch {
             // ignore
           }
+
+          // Apply tier-driven ActivityMonitor polling: 50ms active, 500ms background
+          const pollingInterval = tier === "active" ? 50 : 500;
+          terminal.setActivityMonitorTier(pollingInterval);
         }
 
         emitTerminalStatus(msg.id, "running");
@@ -1086,13 +1098,31 @@ port.on("message", async (rawMsg: any) => {
         suspendedDueToStall.delete(msg.id);
         clearPendingVisual(msg.id);
 
-        // Clear any active pause interval and timing
+        // Clear any active pause interval and timing, and resume the PTY
         const checkInterval = pausedTerminals.get(msg.id);
+        const wasPaused = checkInterval !== undefined;
         if (checkInterval) {
           clearInterval(checkInterval);
           pausedTerminals.delete(msg.id);
         }
+        const pauseStart = pauseStartTimes.get(msg.id);
+        const pauseDuration = pauseStart ? Date.now() - pauseStart : undefined;
         pauseStartTimes.delete(msg.id);
+
+        // Apply active tier polling (50ms) and resume PTY when waking
+        const terminal = ptyManager.getTerminal(msg.id);
+        if (terminal) {
+          terminal.setActivityMonitorTier(50);
+
+          // Resume PTY if it was paused for backpressure
+          if (wasPaused && terminal.ptyProcess) {
+            try {
+              terminal.ptyProcess.resume();
+            } catch {
+              // ignore
+            }
+          }
+        }
 
         // Best-effort warning: cwd missing
         const warnings: string[] = [];

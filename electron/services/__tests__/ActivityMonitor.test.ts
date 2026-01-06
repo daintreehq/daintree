@@ -12,6 +12,69 @@ describe("ActivityMonitor", () => {
     vi.restoreAllMocks();
   });
 
+  describe("setPollingInterval", () => {
+    it("should reschedule polling without resetting state", () => {
+      const onStateChange = vi.fn();
+      const getVisibleLines = vi.fn(() => []);
+      const monitor = new ActivityMonitor("test-1", 100, onStateChange, {
+        getVisibleLines,
+      });
+
+      monitor.startPolling();
+
+      // Initial polling should be at 100ms
+      vi.advanceTimersByTime(100);
+      const initialCallCount = onStateChange.mock.calls.length;
+
+      // Change polling to 500ms
+      monitor.setPollingInterval(500);
+
+      // Verify polling continues at new interval
+      vi.advanceTimersByTime(500);
+      expect(onStateChange.mock.calls.length).toBeGreaterThan(initialCallCount);
+    });
+
+    it("should short-circuit if interval unchanged", () => {
+      const onStateChange = vi.fn();
+      const getVisibleLines = vi.fn(() => []);
+      const monitor = new ActivityMonitor("test-1", 100, onStateChange, {
+        getVisibleLines,
+      });
+
+      monitor.startPolling();
+
+      // Spy on clearInterval to verify it's not called
+      const clearIntervalSpy = vi.spyOn(global, "clearInterval");
+
+      // Set same interval
+      monitor.setPollingInterval(100);
+
+      expect(clearIntervalSpy).not.toHaveBeenCalled();
+    });
+
+    it("should apply tier-driven polling changes (50ms active, 500ms background)", () => {
+      const onStateChange = vi.fn();
+      const getVisibleLines = vi.fn(() => []);
+      const monitor = new ActivityMonitor("test-1", 50, onStateChange, {
+        getVisibleLines,
+      });
+
+      monitor.startPolling();
+
+      // Active tier: 50ms polling
+      vi.advanceTimersByTime(50);
+      const activeCallCount = onStateChange.mock.calls.length;
+
+      // Switch to background tier: 500ms polling
+      monitor.setPollingInterval(500);
+      onStateChange.mockClear();
+
+      // Verify new interval takes effect
+      vi.advanceTimersByTime(500);
+      expect(onStateChange).toHaveBeenCalled();
+    });
+  });
+
   describe("Input-driven activity", () => {
     it("should transition to busy on Enter key", () => {
       const onStateChange = vi.fn();
