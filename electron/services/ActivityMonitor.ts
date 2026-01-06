@@ -27,6 +27,24 @@ export interface ActivityMonitorOptions {
     minBytes?: number;
   };
   /**
+   * High output activity threshold configuration.
+   * Used to prevent premature waiting transitions and to recover from incorrect waiting state.
+   * When output exceeds these thresholds over the specified window:
+   * - Debounce timer will NOT transition to idle
+   * - Recovery from waiting/idle to working can occur (when highOutputRecovery enabled)
+   */
+  highOutputThreshold?: {
+    enabled?: boolean;
+    /** Time window in milliseconds to measure output rate (default: 500ms) */
+    windowMs?: number;
+    /** Minimum bytes per second to consider "high output" (default: 2048 bytes/sec) */
+    bytesPerSecond?: number;
+    /** Enable recovery from waiting state on sustained high output (default: false for backwards compat) */
+    recoveryEnabled?: boolean;
+    /** Minimum sustained high output duration before recovery in ms (default: 500ms) */
+    recoveryDelayMs?: number;
+  };
+  /**
    * Agent ID for pattern-based detection (e.g., "claude", "gemini", "codex").
    * If provided, enables pattern detection using built-in patterns.
    */
@@ -153,6 +171,16 @@ export class ActivityMonitor {
   private outputFramesInWindow = 0;
   private outputBytesInWindow = 0;
 
+  // High output activity threshold (prevents premature idle and enables recovery)
+  private readonly highOutputEnabled: boolean;
+  private readonly highOutputWindowMs: number;
+  private readonly highOutputBytesPerSecond: number;
+  private readonly highOutputRecoveryEnabled: boolean;
+  private readonly highOutputRecoveryDelayMs: number;
+  private highOutputWindowStart = 0;
+  private highOutputBytesInWindow = 0;
+  private sustainedHighOutputSince = 0;
+
   private readonly processStateValidator?: ProcessStateValidator;
   private lastActivityTimestamp = Date.now();
   private lastOutputActivityAt = 0;
@@ -233,6 +261,21 @@ export class ActivityMonitor {
     this.outputWindowMs = outputConfig.windowMs;
     this.outputMinFrames = outputConfig.minFrames;
     this.outputMinBytes = outputConfig.minBytes;
+
+    // High output activity threshold config (prevents premature idle, enables recovery)
+    const highOutputDefaults = {
+      enabled: false,
+      windowMs: 500,
+      bytesPerSecond: 2048,
+      recoveryEnabled: false,
+      recoveryDelayMs: 500,
+    };
+    const highOutputConfig = { ...highOutputDefaults, ...options?.highOutputThreshold };
+    this.highOutputEnabled = highOutputConfig.enabled;
+    this.highOutputWindowMs = highOutputConfig.windowMs;
+    this.highOutputBytesPerSecond = highOutputConfig.bytesPerSecond;
+    this.highOutputRecoveryEnabled = highOutputConfig.recoveryEnabled;
+    this.highOutputRecoveryDelayMs = highOutputConfig.recoveryDelayMs;
 
     // Initialize pattern detector if agent ID or custom config is provided
     if (options?.patternConfig || options?.agentId) {
@@ -528,12 +571,25 @@ export class ActivityMonitor {
       }
     }
 
+    const dataLength = Buffer.byteLength(data, "utf8");
+
+    // Track high output activity (for preventing premature idle and recovery)
+    this.updateHighOutputTracking(dataLength, now);
+
+    // High output recovery: if we're idle and seeing sustained high output,
+    // this indicates we may have incorrectly transitioned to idle/waiting.
+    // Re-enter busy state when high output is sustained long enough.
+    // Note: This only triggers when the external state machine is in waiting state,
+    // which maps to internal "idle" state. Issue #1498.
+    if (this.state === "idle" && this.shouldTriggerHighOutputRecovery(now)) {
+      this.becomeBusy({ trigger: "output" }, now);
+      return;
+    }
+
     // Volume-based output detection (when enabled)
     if (!this.outputDetectionEnabled) {
       return;
     }
-
-    const dataLength = Buffer.byteLength(data, "utf8");
 
     if (this.outputWindowStart === 0 || now - this.outputWindowStart > this.outputWindowMs) {
       this.outputWindowStart = now;
@@ -558,6 +614,91 @@ export class ActivityMonitor {
     this.outputWindowStart = 0;
     this.outputFramesInWindow = 0;
     this.outputBytesInWindow = 0;
+  }
+
+  /**
+   * Update high output tracking and return whether we're in a high-output state.
+   * Called on every data event to track output rate.
+   */
+  private updateHighOutputTracking(dataLength: number, now: number): void {
+    if (!this.highOutputEnabled) {
+      return;
+    }
+
+    // Reset window if expired or first data
+    if (
+      this.highOutputWindowStart === 0 ||
+      now - this.highOutputWindowStart > this.highOutputWindowMs
+    ) {
+      this.highOutputWindowStart = now;
+      this.highOutputBytesInWindow = dataLength;
+      // Reset sustained tracking when window expires to prevent stale recovery
+      this.sustainedHighOutputSince = 0;
+    } else {
+      this.highOutputBytesInWindow += dataLength;
+    }
+  }
+
+  /**
+   * Check if current output rate exceeds the high output threshold.
+   * Returns true if:
+   * 1. High output detection is enabled
+   * 2. We have valid window data (window hasn't expired)
+   * 3. Output rate exceeds the configured bytes per second threshold
+   */
+  isHighOutputActivity(now: number = Date.now()): boolean {
+    if (!this.highOutputEnabled) {
+      return false;
+    }
+
+    // No valid window data
+    if (this.highOutputWindowStart === 0) {
+      return false;
+    }
+
+    // Window expired - no recent high output
+    const windowAge = now - this.highOutputWindowStart;
+    if (windowAge > this.highOutputWindowMs) {
+      return false;
+    }
+
+    // Calculate bytes per second based on actual window duration
+    // Use a minimum window size to avoid division by tiny numbers
+    const effectiveWindowMs = Math.max(windowAge, 50);
+    const bytesPerSecond = (this.highOutputBytesInWindow / effectiveWindowMs) * 1000;
+
+    return bytesPerSecond >= this.highOutputBytesPerSecond;
+  }
+
+  /**
+   * Check if high output has been sustained long enough to trigger recovery.
+   * Requires sustained high output for at least recoveryDelayMs milliseconds.
+   */
+  private shouldTriggerHighOutputRecovery(now: number): boolean {
+    if (!this.highOutputEnabled || !this.highOutputRecoveryEnabled) {
+      return false;
+    }
+
+    const isHighOutput = this.isHighOutputActivity(now);
+
+    if (isHighOutput) {
+      // Start tracking sustained high output if not already
+      if (this.sustainedHighOutputSince === 0) {
+        this.sustainedHighOutputSince = now;
+      }
+      // Check if sustained long enough
+      return now - this.sustainedHighOutputSince >= this.highOutputRecoveryDelayMs;
+    } else {
+      // Reset sustained tracking when output drops
+      this.sustainedHighOutputSince = 0;
+      return false;
+    }
+  }
+
+  private resetHighOutputWindow(): void {
+    this.highOutputWindowStart = 0;
+    this.highOutputBytesInWindow = 0;
+    this.sustainedHighOutputSince = 0;
   }
 
   /**
@@ -788,6 +929,13 @@ export class ActivityMonitor {
         return;
       }
 
+      // Prevent premature idle if high output activity is detected. Issue #1498.
+      // This ensures we don't transition to waiting while still receiving substantial output.
+      if (this.isHighOutputActivity()) {
+        this.resetDebounceTimer();
+        return;
+      }
+
       this.state = "idle";
       this.onStateChange(this.terminalId, this.spawnedAt, "idle");
       this.debounceTimer = null;
@@ -818,6 +966,7 @@ export class ActivityMonitor {
     this.partialEscape = "";
     this.pasteStartTime = 0;
     this.resetOutputWindow();
+    this.resetHighOutputWindow();
     this.patternBuffer = "";
     this.lastPatternResult = undefined;
     this.pollingStartTime = 0;
@@ -943,8 +1092,16 @@ export class ActivityMonitor {
     const isSpinnerActive = this.isSpinnerActive(now);
     const isOutputQuiet = quietForMs >= this.PROMPT_QUIET_MS;
     const promptStableForMs = this.promptStableSince === 0 ? 0 : now - this.promptStableSince;
+
+    // High output activity is a strong working signal - Issue #1498
+    const hasHighOutputActivity = this.isHighOutputActivity(now);
+
     const shouldAllowPromptStability =
-      isPrompt && isOutputQuiet && !isSpinnerActive && !hasRecentOutputActivity;
+      isPrompt &&
+      isOutputQuiet &&
+      !isSpinnerActive &&
+      !hasRecentOutputActivity &&
+      !hasHighOutputActivity;
     const shouldPreferPrompt =
       shouldAllowPromptStability && promptStableForMs >= this.PROMPT_DEBOUNCE_MS;
 
@@ -955,6 +1112,7 @@ export class ActivityMonitor {
     const isWorkingSignal =
       isSpinnerActive ||
       hasRecentOutputActivity ||
+      hasHighOutputActivity || // High output activity is a working signal - Issue #1498
       (isWorkingPattern && !shouldPreferPrompt && !shouldAllowPromptStability && !isQuietForIdle);
     if (isWorkingSignal) {
       this.promptStableSince = 0;
@@ -970,6 +1128,13 @@ export class ActivityMonitor {
         this.becomeBusy({ trigger: "input" }, now);
         return;
       }
+    }
+
+    // High output recovery: when idle and sustained high output detected,
+    // re-enter busy state. This handles incorrect waiting transitions. Issue #1498.
+    if (this.state === "idle" && this.shouldTriggerHighOutputRecovery(now)) {
+      this.becomeBusy({ trigger: "output" }, now);
+      return;
     }
 
     if (isWorkingSignal) {
@@ -994,6 +1159,7 @@ export class ActivityMonitor {
       this.state === "busy" &&
       isQuietForIdle &&
       now >= this.workingHoldUntil &&
+      !hasHighOutputActivity && // Prevent premature idle during high output - Issue #1498
       !(this.pendingInputUntil > 0 && now < this.pendingInputUntil)
     ) {
       this.state = "idle";
