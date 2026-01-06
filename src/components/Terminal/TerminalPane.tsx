@@ -36,6 +36,9 @@ import { getCanopyCommand, isEscapedCommand, unescapeCommand } from "./canopySla
 
 export type { TerminalType };
 
+// Temporary toggle: disable agent history overlay for behavior comparison.
+const ENABLE_AGENT_HISTORY_VIEW = false;
+
 export interface ActivityState {
   headline: string;
   status: "working" | "waiting" | "success" | "failure";
@@ -174,6 +177,7 @@ function TerminalPaneComponent({
         ? type
         : undefined;
   const isAgentTerminal = effectiveAgentId !== undefined;
+  const showHistoryOverlay = isAgentTerminal && ENABLE_AGENT_HISTORY_VIEW;
   const showHybridInputBar = isAgentTerminal && hybridInputEnabled;
 
   // Reset history view mode when terminal restarts
@@ -537,7 +541,7 @@ function TerminalPaneComponent({
             )}
             onPointerDownCapture={handleXtermPointerDownCapture}
           >
-            {isAgentTerminal ? (
+            {showHistoryOverlay ? (
               <HistoryOverlayTerminalView
                 ref={historyOverlayRef}
                 key={`${id}-${restartKey}`}
