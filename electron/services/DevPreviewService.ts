@@ -125,7 +125,11 @@ export class DevPreviewService extends EventEmitter {
     const submitTimeout = setTimeout(() => {
       // Check generation to ensure this session wasn't stopped/replaced during delay
       const currentSession = this.sessions.get(panelId);
-      if (currentSession && currentSession.generation === generation && this.ptyClient.hasTerminal(ptyId)) {
+      if (
+        currentSession &&
+        currentSession.generation === generation &&
+        this.ptyClient.hasTerminal(ptyId)
+      ) {
         this.ptyClient.submit(ptyId, fullCommand);
       }
     }, 100);
