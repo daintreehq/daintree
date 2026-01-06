@@ -5,6 +5,137 @@
 import { z } from "zod";
 import { TerminalTypeSchema } from "./agent.js";
 
+// ============================================================================
+// Terminal Entry Validation Schemas
+// ============================================================================
+
+/**
+ * Schema for terminal location in appState - only grid or dock are persisted.
+ * Note: "trash" is a runtime state not persisted at the app level.
+ */
+export const AppStateTerminalLocationSchema = z.enum(["grid", "dock"]);
+
+/**
+ * Schema for terminal location in project state - includes all locations.
+ */
+export const TerminalLocationSchema = z.enum(["grid", "dock", "trash"]);
+
+/**
+ * Schema for panel/terminal kind - distinguishes built-in panel types.
+ */
+export const PanelKindSchema = z.union([
+  z.enum(["terminal", "agent", "browser", "notes", "dev-preview"]),
+  z.string(), // Allow extension-provided kinds
+]);
+
+/**
+ * Schema for terminal entries in appState.terminals (persisted globally).
+ * This is the minimal schema for ordering/metadata preservation.
+ * Note: Uses AppStateTerminalLocationSchema which excludes "trash" to match StoreSchema.
+ * Uses passthrough() to preserve unknown fields for forward compatibility with extensions.
+ */
+export const AppStateTerminalEntrySchema = z
+  .object({
+    id: z.string().min(1),
+    type: TerminalTypeSchema,
+    title: z.string(),
+    cwd: z.string(),
+    worktreeId: z.string().optional(),
+    location: AppStateTerminalLocationSchema,
+    command: z.string().optional(),
+    settings: z
+      .object({
+        autoRestart: z.boolean().optional(),
+      })
+      .optional(),
+    isInputLocked: z.boolean().optional(),
+  })
+  .passthrough();
+
+/**
+ * Schema for terminal snapshots in ProjectState.terminals (per-project state).
+ * Matches the TerminalSnapshot interface from shared/types/domain.ts.
+ * Uses passthrough() to preserve unknown fields for forward compatibility with extensions.
+ */
+export const TerminalSnapshotSchema = z
+  .object({
+    id: z.string().min(1),
+    kind: PanelKindSchema.optional(),
+    type: TerminalTypeSchema.optional(),
+    agentId: z.string().optional(),
+    title: z.string(),
+    cwd: z.string(),
+    worktreeId: z.string().optional(),
+    location: TerminalLocationSchema,
+    command: z.string().optional(),
+    browserUrl: z.string().optional(),
+    notePath: z.string().optional(),
+    noteId: z.string().optional(),
+    scope: z.enum(["worktree", "project"]).optional(),
+    createdAt: z.number().optional(),
+  })
+  .passthrough();
+
+export type AppStateTerminalEntry = z.infer<typeof AppStateTerminalEntrySchema>;
+export type TerminalSnapshotEntry = z.infer<typeof TerminalSnapshotSchema>;
+
+/**
+ * Validates an array of terminal entries and returns only the valid ones.
+ * Logs warnings for any filtered invalid entries.
+ *
+ * @param entries - The raw terminal entries array to validate
+ * @param schema - The Zod schema to validate against
+ * @param context - Context string for logging (e.g., "appState" or "projectState")
+ * @returns Array of valid terminal entries
+ */
+export function filterValidTerminalEntries<T>(
+  entries: unknown[] | null | undefined,
+  schema: z.ZodType<T>,
+  context: string
+): T[] {
+  // Guard against null/undefined entries array
+  if (!Array.isArray(entries)) {
+    if (entries !== undefined && entries !== null) {
+      console.warn(`[${context}] Expected array but received ${typeof entries}`);
+    }
+    return [];
+  }
+
+  const validEntries: T[] = [];
+
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    const result = schema.safeParse(entry);
+
+    if (result.success) {
+      validEntries.push(result.data);
+    } else {
+      // Prefer non-empty string id, otherwise use index
+      const entryId =
+        entry &&
+        typeof entry === "object" &&
+        "id" in entry &&
+        typeof entry.id === "string" &&
+        entry.id.length > 0
+          ? entry.id
+          : `index-${i}`;
+
+      const flattened = result.error.flatten();
+      // Log both field errors and form errors for better diagnostics
+      const errorDetails =
+        Object.keys(flattened.fieldErrors).length > 0
+          ? flattened.fieldErrors
+          : flattened.formErrors.length > 0
+            ? { _errors: flattened.formErrors }
+            : { type: typeof entry };
+
+      console.warn(`[${context}] Filtering invalid terminal entry ${entryId}:`, errorDetails);
+    }
+  }
+
+  return validEntries;
+}
+
 export const TerminalSpawnOptionsSchema = z.object({
   id: z.string().optional(),
   kind: z.enum(["terminal", "agent"]).optional(),

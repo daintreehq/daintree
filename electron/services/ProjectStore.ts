@@ -8,6 +8,7 @@ import { app } from "electron";
 import { GitService } from "./GitService.js";
 import { isCanopyError } from "../utils/errorTypes.js";
 import { sanitizeSvg } from "../../shared/utils/svgSanitizer.js";
+import { TerminalSnapshotSchema, filterValidTerminalEntries } from "../schemas/ipc.js";
 
 const SETTINGS_FILENAME = "settings.json";
 
@@ -311,9 +312,19 @@ export class ProjectStore {
       throw new Error(`Invalid project ID: ${projectId}`);
     }
 
+    // Validate and filter terminal snapshots before persisting
+    const validatedState: ProjectState = {
+      ...state,
+      terminals: filterValidTerminalEntries(
+        state.terminals,
+        TerminalSnapshotSchema,
+        `ProjectStore.saveProjectState(${projectId})`
+      ),
+    };
+
     const tempFilePath = `${stateFilePath}.tmp`;
     try {
-      await fs.writeFile(tempFilePath, JSON.stringify(state, null, 2), "utf-8");
+      await fs.writeFile(tempFilePath, JSON.stringify(validatedState, null, 2), "utf-8");
       await fs.rename(tempFilePath, stateFilePath);
     } catch (error) {
       console.error(`[ProjectStore] Failed to save state for project ${projectId}:`, error);
@@ -336,11 +347,19 @@ export class ProjectStore {
       const content = await fs.readFile(stateFilePath, "utf-8");
       const parsed = JSON.parse(content);
 
+      // Validate and filter terminal snapshots during deserialization
+      const rawTerminals = Array.isArray(parsed.terminals) ? parsed.terminals : [];
+      const validTerminals = filterValidTerminalEntries(
+        rawTerminals,
+        TerminalSnapshotSchema,
+        `ProjectStore.getProjectState(${projectId})`
+      );
+
       const state: ProjectState = {
         projectId: parsed.projectId || projectId,
         activeWorktreeId: parsed.activeWorktreeId,
         sidebarWidth: typeof parsed.sidebarWidth === "number" ? parsed.sidebarWidth : 350,
-        terminals: Array.isArray(parsed.terminals) ? parsed.terminals : [],
+        terminals: validTerminals,
         terminalLayout: parsed.terminalLayout || undefined,
       };
 

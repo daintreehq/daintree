@@ -2,6 +2,7 @@ import { ipcMain, app } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { store, type StoreSchema } from "../../../store.js";
 import { projectStore } from "../../../services/ProjectStore.js";
+import { AppStateTerminalEntrySchema, filterValidTerminalEntries } from "../../../schemas/ipc.js";
 
 export function registerAppStateHandlers(): () => void {
   const handlers: Array<() => void> = [];
@@ -10,17 +11,25 @@ export function registerAppStateHandlers(): () => void {
     const currentProject = projectStore.getCurrentProject();
     const globalAppState = store.get("appState");
 
+    // Validate terminals array on hydration to prevent corrupted data from reaching renderer
+    const validatedTerminals = filterValidTerminalEntries(
+      globalAppState.terminals,
+      AppStateTerminalEntrySchema,
+      "app:hydrate"
+    );
+
     // Terminal processes are discovered from backend via terminalClient.getForProject(),
     // but we preserve saved terminals array for ordering metadata (IDs and locations).
     // The frontend uses this to restore panel order when reconnecting to running terminals.
     const appState: StoreSchema["appState"] = {
       ...globalAppState,
+      terminals: validatedTerminals,
       // Keep terminals for ordering - frontend sorts discovered terminals by this saved order
       activeWorktreeId: undefined,
     };
 
     console.log(
-      `[AppHydrate] Project: ${currentProject?.name ?? "none"} - terminals will be discovered from running processes (${globalAppState.terminals?.length ?? 0} saved for ordering)`
+      `[AppHydrate] Project: ${currentProject?.name ?? "none"} - terminals will be discovered from running processes (${validatedTerminals.length} valid of ${globalAppState.terminals?.length ?? 0} saved for ordering)`
     );
 
     return {
@@ -67,7 +76,13 @@ export function registerAppStateHandlers(): () => void {
       // Note: terminals are NOT persisted - they stay running in the backend
       // and are discovered via terminalClient.getForProject() on hydration
       if ("terminals" in partialState && Array.isArray(partialState.terminals)) {
-        updates.terminals = partialState.terminals;
+        // Validate and filter terminal entries before persisting
+        const validTerminals = filterValidTerminalEntries(
+          partialState.terminals,
+          AppStateTerminalEntrySchema,
+          "app:set-state"
+        );
+        updates.terminals = validTerminals;
       }
 
       if ("recipes" in partialState && Array.isArray(partialState.recipes)) {
