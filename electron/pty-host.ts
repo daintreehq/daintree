@@ -28,6 +28,13 @@ import type {
   PtyHostActivityTier,
   TerminalReliabilityMetricPayload,
 } from "../shared/types/pty-host.js";
+import {
+  IPC_MAX_QUEUE_BYTES,
+  IPC_HIGH_WATERMARK_PERCENT,
+  IPC_LOW_WATERMARK_PERCENT,
+  IPC_BACKPRESSURE_CHECK_INTERVAL_MS,
+  IPC_MAX_PAUSE_MS,
+} from "./services/pty/types.js";
 
 function getEmergencyLogPath(): string {
   const userData = process.env.CANOPY_USER_DATA;
@@ -232,6 +239,12 @@ const textDecoder = new TextDecoder();
 // Maps terminal ID to the interval timer used for resume checking
 const pausedTerminals = new Map<string, ReturnType<typeof setInterval>>();
 
+// IPC flow control state
+// Maps terminal ID to pending IPC data bytes and pause state
+const ipcQueuedBytes = new Map<string, number>();
+const ipcPausedTerminals = new Map<string, ReturnType<typeof setInterval>>();
+const ipcPauseStartTimes = new Map<string, number>();
+
 // PROTECTED INFRASTRUCTURE:
 // SAB Backpressure System
 // Pauses the PTY when the visual ring buffer is full to prevent memory explosions
@@ -352,6 +365,39 @@ function clearPendingVisual(id: string): void {
     pendingVisualBytes.delete(id);
   }
   pendingVisualSegments.delete(id);
+}
+
+// IPC flow control helpers
+function getIpcQueueUtilization(id: string): number {
+  const bytes = ipcQueuedBytes.get(id) ?? 0;
+  return (bytes / IPC_MAX_QUEUE_BYTES) * 100;
+}
+
+function addIpcBytes(id: string, bytes: number): number {
+  const current = ipcQueuedBytes.get(id) ?? 0;
+  const next = current + bytes;
+  ipcQueuedBytes.set(id, next);
+  return next;
+}
+
+function removeIpcBytes(id: string, bytes: number): void {
+  const current = ipcQueuedBytes.get(id) ?? 0;
+  const next = Math.max(0, current - bytes);
+  if (next === 0) {
+    ipcQueuedBytes.delete(id);
+  } else {
+    ipcQueuedBytes.set(id, next);
+  }
+}
+
+function clearIpcQueue(id: string): void {
+  ipcQueuedBytes.delete(id);
+  const checkInterval = ipcPausedTerminals.get(id);
+  if (checkInterval) {
+    clearInterval(checkInterval);
+    ipcPausedTerminals.delete(id);
+  }
+  ipcPauseStartTimes.delete(id);
 }
 
 function suspendVisualStream(
@@ -687,9 +733,127 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
     }
   }
 
-  // Fallback: If ring buffer failed or isn't set up, use IPC
+  // Fallback: If ring buffer failed or isn't set up, use IPC with backpressure
   if (!visualWritten) {
-    sendEvent({ type: "data", id, data: toStringForIpc(data) });
+    const dataString = toStringForIpc(data);
+    const dataBytes = Buffer.byteLength(dataString, "utf8");
+    const currentQueuedBytes = ipcQueuedBytes.get(id) ?? 0;
+
+    // Enforce hard cap: drop data if adding it would exceed max queue size
+    // This prevents unbounded memory growth when renderer is stalled
+    if (currentQueuedBytes + dataBytes > IPC_MAX_QUEUE_BYTES) {
+      const utilization = getIpcQueueUtilization(id);
+      console.warn(
+        `[PtyHost] IPC queue full (${utilization.toFixed(1)}%). Dropping ${dataBytes} bytes for terminal ${id}`
+      );
+      emitReliabilityMetric({
+        terminalId: id,
+        metricType: "suspend",
+        timestamp: Date.now(),
+        bufferUtilization: utilization,
+      });
+      return; // Drop this chunk to prevent OOM
+    }
+
+    const totalQueued = addIpcBytes(id, dataBytes);
+    const utilization = getIpcQueueUtilization(id);
+
+    // Send the data via IPC
+    sendEvent({ type: "data", id, data: dataString });
+
+    // Apply backpressure if queue exceeds high watermark
+    const highWatermarkBytes = (IPC_MAX_QUEUE_BYTES * IPC_HIGH_WATERMARK_PERCENT) / 100;
+    if (totalQueued >= highWatermarkBytes && !ipcPausedTerminals.has(id)) {
+      const terminal = ptyManager.getTerminal(id);
+      if (!terminal?.ptyProcess) {
+        console.warn(
+          `[PtyHost] Cannot apply IPC backpressure: missing PTY process for ${id}. Queue at ${utilization.toFixed(1)}%`
+        );
+      } else {
+        try {
+          terminal.ptyProcess.pause();
+          console.warn(
+            `[PtyHost] IPC queue high (${utilization.toFixed(1)}%). Pausing PTY ${id} for backpressure.`
+          );
+
+          const pauseStartTime = Date.now();
+          ipcPauseStartTimes.set(id, pauseStartTime);
+
+          emitTerminalStatus(id, "paused-backpressure", utilization);
+          emitReliabilityMetric({
+            terminalId: id,
+            metricType: "pause-start",
+            timestamp: pauseStartTime,
+            bufferUtilization: utilization,
+          });
+
+          // Monitor queue and resume when it drops below low watermark
+          const checkInterval = setInterval(() => {
+            const currentUtilization = getIpcQueueUtilization(id);
+            const lowWatermarkBytes = (IPC_MAX_QUEUE_BYTES * IPC_LOW_WATERMARK_PERCENT) / 100;
+            const currentBytes = ipcQueuedBytes.get(id) ?? 0;
+            const pauseDuration = Date.now() - pauseStartTime;
+
+            // Force resume if paused too long (safety against indefinite pause)
+            if (pauseDuration > IPC_MAX_PAUSE_MS) {
+              const terminal = ptyManager.getTerminal(id);
+              if (terminal?.ptyProcess) {
+                try {
+                  terminal.ptyProcess.resume();
+                  console.warn(
+                    `[PtyHost] Force resumed IPC PTY ${id} after ${pauseDuration}ms (queue at ${currentUtilization.toFixed(1)}%). Consumer may be stalled.`
+                  );
+                  emitTerminalStatus(id, "running", currentUtilization, pauseDuration);
+                  emitReliabilityMetric({
+                    terminalId: id,
+                    metricType: "pause-end",
+                    timestamp: Date.now(),
+                    durationMs: pauseDuration,
+                    bufferUtilization: currentUtilization,
+                  });
+                } catch (error) {
+                  console.error(`[PtyHost] Failed to force resume IPC PTY ${id}:`, error);
+                }
+              }
+              clearInterval(checkInterval);
+              ipcPausedTerminals.delete(id);
+              ipcPauseStartTimes.delete(id);
+              return;
+            }
+
+            // Resume when queue drops below low watermark
+            if (currentBytes < lowWatermarkBytes) {
+              const terminal = ptyManager.getTerminal(id);
+              if (terminal?.ptyProcess) {
+                try {
+                  terminal.ptyProcess.resume();
+                  console.log(
+                    `[PtyHost] IPC queue cleared to ${currentUtilization.toFixed(1)}%. Resumed PTY ${id}`
+                  );
+                  emitTerminalStatus(id, "running", currentUtilization, pauseDuration);
+                  emitReliabilityMetric({
+                    terminalId: id,
+                    metricType: "pause-end",
+                    timestamp: Date.now(),
+                    durationMs: pauseDuration,
+                    bufferUtilization: currentUtilization,
+                  });
+                } catch (error) {
+                  console.error(`[PtyHost] Failed to resume IPC PTY ${id}:`, error);
+                }
+              }
+              clearInterval(checkInterval);
+              ipcPausedTerminals.delete(id);
+              ipcPauseStartTimes.delete(id);
+            }
+          }, IPC_BACKPRESSURE_CHECK_INTERVAL_MS);
+
+          ipcPausedTerminals.set(id, checkInterval);
+        } catch (error) {
+          console.error(`[PtyHost] Failed to pause IPC PTY ${id}:`, error);
+        }
+      }
+    }
   }
 
   // PRIORITY 2: BACKGROUND TASKS (Deferred Processing)
@@ -720,6 +884,9 @@ ptyManager.on("exit", (id: string, exitCode: number) => {
   terminalActivityTiers.delete(id);
   suspendedDueToStall.delete(id);
   clearPendingVisual(id);
+
+  // Clean up IPC backpressure state
+  clearIpcQueue(id);
 
   sendEvent({ type: "exit", id, exitCode });
 });
@@ -1155,7 +1322,13 @@ port.on("message", async (rawMsg: any) => {
       }
 
       case "acknowledge-data":
-        ptyManager.acknowledgeData(msg.id, msg.charCount);
+        // Acknowledge data consumption from renderer to manage IPC backpressure
+        // Renderer now sends exact byte count (not character count) for accurate accounting
+        const acknowledgedBytes = msg.charCount ?? 0;
+        removeIpcBytes(msg.id, acknowledgedBytes);
+
+        // Note: ptyManager.acknowledgeData is still a no-op for SAB mode compatibility
+        ptyManager.acknowledgeData(msg.id, acknowledgedBytes);
         break;
 
       case "set-analysis-enabled":
@@ -1417,6 +1590,22 @@ function cleanup(): void {
   pausedTerminals.clear();
   pauseStartTimes.clear();
   terminalStatuses.clear();
+
+  // Clear all IPC backpressure monitoring intervals
+  for (const [id, checkInterval] of ipcPausedTerminals) {
+    clearInterval(checkInterval);
+    console.log(`[PtyHost] Cleared IPC backpressure monitor for terminal ${id}`);
+  }
+  ipcPausedTerminals.clear();
+  ipcPauseStartTimes.clear();
+  ipcQueuedBytes.clear();
+
+  // Clear all other per-terminal state to prevent memory leaks
+  terminalActivityTiers.clear();
+  suspendedDueToStall.clear();
+  pendingVisualSegments.clear();
+  pendingVisualBytes.clear();
+  totalPendingVisualBytes = 0;
 
   processTreeCache.stop();
 

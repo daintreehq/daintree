@@ -288,7 +288,14 @@ class TerminalInstanceService {
     this.unseenTracker.incrementUnseen(id, managed.isUserScrolledBack);
 
     // Capture SAB mode decision before write to avoid mode-flip ambiguity during callback
-    const shouldAck = !this.dataBuffer.isEnabled();
+    const sabMode = this.dataBuffer.isEnabled();
+    // For agent terminals or systems without SAB, we need to acknowledge IPC data
+    // Check both kind and agentId to cover all agent terminal types (legacy and new)
+    const isAgentTerminal = managed.kind === "agent" || !!managed.agentId;
+    const shouldAck = !sabMode || isAgentTerminal;
+
+    // Calculate exact byte length for accurate flow control
+    const dataBytes = typeof data === "string" ? new TextEncoder().encode(data).length : data.byteLength;
 
     // Write data and apply flow control acknowledgement after xterm processes the buffer update
     const terminal = managed.terminal;
@@ -299,11 +306,12 @@ class TerminalInstanceService {
 
       managed.pendingWrites = Math.max(0, (managed.pendingWrites ?? 1) - 1);
 
-      // Flow control: Only send acknowledgements in IPC fallback mode.
-      // In SAB mode, flow control is handled globally via SAB backpressure.
+      // Flow control: Send acknowledgements for IPC data (agent terminals or SAB disabled).
+      // Agent terminals always use IPC even when SAB is available, so they need acks.
+      // In pure SAB mode (non-agent terminals), flow control is handled via SAB backpressure.
+      // Send exact byte count (not character count) for accurate queue accounting.
       if (shouldAck) {
-        const len = typeof data === "string" ? data.length : data.byteLength;
-        terminalClient.acknowledgeData(id, len);
+        terminalClient.acknowledgeData(id, dataBytes);
       }
     });
   }
