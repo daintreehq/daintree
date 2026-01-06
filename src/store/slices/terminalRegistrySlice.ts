@@ -1640,9 +1640,7 @@ export const createTerminalRegistrySlice =
           if (!terminal) return state;
 
           const newTerminals = state.terminals.map((t) =>
-            t.id === id
-              ? { ...t, spawnError: undefined, runtimeStatus: undefined }
-              : t
+            t.id === id ? { ...t, spawnError: undefined, runtimeStatus: undefined } : t
           );
 
           return { terminals: newTerminals };
