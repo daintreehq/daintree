@@ -208,6 +208,7 @@ export async function spawnShellTerminal(
     cwd?: string;
     type?: string;
     worktreeId?: string;
+    projectId?: string;
     cols?: number;
     rows?: number;
     kind?: "terminal" | "agent" | "browser";
@@ -228,6 +229,7 @@ export async function spawnShellTerminal(
     rows: options?.rows || 24,
     type: options?.type as any,
     worktreeId: options?.worktreeId,
+    projectId: options?.projectId,
     kind: isAgent ? "agent" : (options?.kind ?? "terminal"),
     agentId: isAgent ? id : undefined,
   });

@@ -1387,6 +1387,17 @@ export class TerminalProcess {
   }
 
   /**
+   * Set activity monitoring tier (active vs background).
+   * Changes polling frequency without stopping the monitor.
+   * @param pollingIntervalMs - Polling interval in ms (50ms for active, 500ms for background)
+   */
+  setActivityMonitorTier(pollingIntervalMs: number): void {
+    if (this.activityMonitor) {
+      this.activityMonitor.setPollingInterval(pollingIntervalMs);
+    }
+  }
+
+  /**
    * Update SAB mode setting dynamically.
    * This is a no-op - SAB-based backpressure in pty-host.ts handles all flow control.
    * Kept for API compatibility with PtyManager.setSabMode().

@@ -478,13 +478,17 @@ export class PtyManager extends EventEmitter {
 
   /**
    * Handle project switch.
-   * Preserves agent state across switches by using preserveState option when restarting monitors.
+   * Uses tiered monitoring: active terminals poll at 50ms, background at 500ms.
+   * This keeps agent state accurate across all projects while reducing CPU for background terminals.
    */
   onProjectSwitch(newProjectId: string): void {
     console.log(`[PtyManager] Switching to project: ${newProjectId}`);
 
     let backgrounded = 0;
     let foregrounded = 0;
+
+    const ACTIVE_POLLING_MS = 50;
+    const BACKGROUND_POLLING_MS = 500;
 
     for (const [id, terminalProcess] of this.registry.entries()) {
       const terminalInfo = terminalProcess.getInfo();
@@ -501,8 +505,9 @@ export class PtyManager extends EventEmitter {
           timestamp: Date.now(),
         });
 
-        terminalProcess.stopProcessDetector();
-        terminalProcess.stopActivityMonitor();
+        // Keep monitors running but reduce polling frequency for background terminals
+        terminalProcess.setActivityMonitorTier(BACKGROUND_POLLING_MS);
+        // Process detector remains active to detect new agents
       } else {
         foregrounded++;
         events.emit("terminal:foregrounded", {
@@ -511,10 +516,10 @@ export class PtyManager extends EventEmitter {
           timestamp: Date.now(),
         });
 
+        // Active terminals get full-speed polling
+        terminalProcess.setActivityMonitorTier(ACTIVE_POLLING_MS);
+        // Ensure process detector is running
         terminalProcess.startProcessDetector();
-        // Pass preserveState: true to prevent monitor from emitting spurious state changes
-        // This preserves the terminal's agent state (e.g., completed stays completed)
-        terminalProcess.startActivityMonitor({ preserveState: true });
       }
     }
 

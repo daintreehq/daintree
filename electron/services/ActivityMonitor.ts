@@ -102,6 +102,11 @@ export interface ActivityMonitorOptions {
     windowMs?: number;
     minRewrites?: number;
   };
+  /**
+   * Polling interval for pattern detection (default: 50ms for active, 500ms for background).
+   * Used to reduce CPU usage for background project terminals.
+   */
+  pollingIntervalMs?: number;
 }
 
 export interface ActivityStateMetadata {
@@ -186,6 +191,9 @@ export class ActivityMonitor {
   // State preservation for project switch
   private readonly skipInitialStateEmit: boolean;
 
+  // Polling interval configuration
+  private POLLING_INTERVAL_MS: number;
+
   // Boot detection patterns - when these appear, the agent is ready
   private static readonly BOOT_COMPLETE_PATTERNS = [
     /claude\s+code\s+v?\d/i, // Claude Code vX.X.X or Claude Code X.X.X
@@ -253,6 +261,9 @@ export class ActivityMonitor {
     // State preservation for project switch - allows resuming without spurious state emissions
     this.state = options?.initialState ?? "idle";
     this.skipInitialStateEmit = options?.skipInitialStateEmit ?? false;
+
+    // Polling interval - default 50ms for active terminals
+    this.POLLING_INTERVAL_MS = options?.pollingIntervalMs ?? 50;
   }
 
   /**
@@ -957,13 +968,109 @@ export class ActivityMonitor {
         this.state = "idle";
         this.onStateChange(this.terminalId, this.spawnedAt, "idle");
       }
-    }, 50); // Poll at 50ms for responsive state detection
+    }, this.POLLING_INTERVAL_MS);
   }
 
   stopPolling(): void {
     if (this.pollingInterval) {
       clearInterval(this.pollingInterval);
       this.pollingInterval = undefined;
+    }
+  }
+
+  /**
+   * Update polling interval dynamically (for tier changes like active → background).
+   * Reschedules the interval without resetting state or boot detection.
+   */
+  setPollingInterval(intervalMs: number): void {
+    // Short-circuit if interval unchanged
+    if (this.POLLING_INTERVAL_MS === intervalMs) {
+      return;
+    }
+
+    const wasPolling = this.pollingInterval !== undefined;
+    this.POLLING_INTERVAL_MS = intervalMs;
+
+    // If currently polling, reschedule without state reset
+    if (wasPolling && this.pollingInterval) {
+      clearInterval(this.pollingInterval);
+      this.pollingInterval = undefined;
+
+      // Restart polling without boot/state reset (reuse existing interval setup)
+      this.pollingInterval = setInterval(() => {
+        const now = Date.now();
+
+        const scanCount = Math.max(this.promptScanLineCount, 15);
+        const lines = this.getVisibleLines!(scanCount);
+        const cursorLine = this.getCursorLine?.() ?? null;
+        const text = stripAnsi(lines.join(" ")).toLowerCase();
+        const quietForMs = now - this.lastActivityTimestamp;
+        const isQuietForIdle = quietForMs >= this.IDLE_DEBOUNCE_MS;
+
+        const patternResult = this.patternDetector
+          ? this.patternDetector.detectFromLines(lines)
+          : undefined;
+        if (patternResult) {
+          this.lastPatternResult = patternResult;
+        }
+
+        const bootCompleteDetected = this.detectBootComplete(text);
+        if (bootCompleteDetected || now - this.pollingStartTime > this.POLLING_MAX_BOOT_MS) {
+          this.hasExitedBootState = true;
+        }
+
+        const promptDetection = this.detectPrompt(lines, cursorLine);
+        const isPromptStable = this.trackPromptStability(promptDetection.isPrompt, now);
+
+        if (
+          isPromptStable &&
+          promptDetection.confidence >= this.promptConfidence &&
+          this.state === "busy" &&
+          now >= this.workingHoldUntil
+        ) {
+          this.state = "idle";
+          this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
+            trigger: "pattern",
+            patternConfidence: promptDetection.confidence,
+          });
+          return;
+        }
+
+        const hasSpinnerActivity = now - this.lastSpinnerDetectedAt < this.SPINNER_ACTIVE_MS;
+        const hasRecentInput =
+          this.pendingInputUntil > 0 && now < this.pendingInputUntil + this.INPUT_CONFIRM_ACTIVE_MS;
+        const hasProcessChildren = this.processStateValidator?.hasActiveChildren() ?? false;
+
+        const isWorkingPattern =
+          patternResult?.state === "working" ||
+          patternResult?.state === "busy" ||
+          patternResult?.state === "booting";
+        const isWorkingSignal =
+          isWorkingPattern ||
+          hasSpinnerActivity ||
+          hasRecentInput ||
+          (hasProcessChildren && !this.hasExitedBootState);
+
+        if (isWorkingSignal) {
+          if (this.state !== "busy") {
+            const metadata = isWorkingPattern
+              ? { trigger: "pattern" as const, patternConfidence: patternResult?.confidence ?? 0.9 }
+              : { trigger: "output" as const };
+            this.becomeBusy(metadata, now);
+          }
+          return;
+        }
+
+        if (
+          this.state === "busy" &&
+          isQuietForIdle &&
+          now >= this.workingHoldUntil &&
+          !(this.pendingInputUntil > 0 && now < this.pendingInputUntil)
+        ) {
+          this.state = "idle";
+          this.onStateChange(this.terminalId, this.spawnedAt, "idle");
+        }
+      }, this.POLLING_INTERVAL_MS);
     }
   }
 }

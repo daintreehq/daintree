@@ -484,4 +484,142 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
       expect(terminalAfter?.agentState).toBe("failed");
     }, 10000);
   });
+
+  describe("Cross-Project Agent Monitoring", () => {
+    it("should continue monitoring agent state for background project terminals", async () => {
+      // Create two terminals in different projects
+      const projectA = "project-A";
+      const projectB = "project-B";
+
+      const terminalA = await spawnShellTerminal(manager, {
+        type: "claude",
+        projectId: projectA,
+      });
+      const terminalB = await spawnShellTerminal(manager, {
+        type: "gemini",
+        projectId: projectB,
+      });
+      await sleep(500);
+
+      // Set project A as active
+      manager.setActiveProject(projectA);
+      manager.onProjectSwitch(projectA);
+      await sleep(200);
+
+      // Track state changes for both terminals
+      const stateChanges: Array<{ terminalId: string; state: string; timestamp: number }> = [];
+      const handler: AgentStateChangedHandler = (data) => {
+        if (data.terminalId === terminalA || data.terminalId === terminalB) {
+          stateChanges.push({
+            terminalId: data.terminalId,
+            state: data.state,
+            timestamp: data.timestamp,
+          });
+        }
+      };
+
+      events.on("agent:state-changed", handler);
+
+      // Trigger state changes in BOTH terminals
+      // Terminal A (active project) - should emit state changes
+      manager.transitionState(terminalA, { type: "busy" }, "activity", 1.0);
+      await sleep(100);
+
+      // Terminal B (background project) - should ALSO emit state changes despite being backgrounded
+      manager.transitionState(terminalB, { type: "busy" }, "activity", 1.0);
+      await sleep(100);
+
+      events.off("agent:state-changed", handler);
+
+      // Verify both terminals emitted state changes
+      const terminalAChanges = stateChanges.filter((s) => s.terminalId === terminalA);
+      const terminalBChanges = stateChanges.filter((s) => s.terminalId === terminalB);
+
+      expect(terminalAChanges.length).toBeGreaterThan(0);
+      expect(terminalBChanges.length).toBeGreaterThan(0);
+
+      // Verify both reached working state
+      expect(terminalAChanges.some((s) => s.state === "working")).toBe(true);
+      expect(terminalBChanges.some((s) => s.state === "working")).toBe(true);
+    }, 10000);
+
+    it("should emit terminal:backgrounded and terminal:foregrounded events on project switch", async () => {
+      const projectA = "project-A";
+      const projectB = "project-B";
+
+      const terminalA = await spawnShellTerminal(manager, {
+        type: "claude",
+        projectId: projectA,
+      });
+      const terminalB = await spawnShellTerminal(manager, {
+        type: "gemini",
+        projectId: projectB,
+      });
+      await sleep(500);
+
+      // Track terminal lifecycle events
+      const backgroundedEvents: string[] = [];
+      const foregroundedEvents: string[] = [];
+
+      const bgHandler = (data: CanopyEventMap["terminal:backgrounded"]) => {
+        backgroundedEvents.push(data.id);
+      };
+      const fgHandler = (data: CanopyEventMap["terminal:foregrounded"]) => {
+        foregroundedEvents.push(data.id);
+      };
+
+      events.on("terminal:backgrounded", bgHandler);
+      events.on("terminal:foregrounded", fgHandler);
+
+      // Switch to project A - terminal B should be backgrounded
+      manager.setActiveProject(projectA);
+      manager.onProjectSwitch(projectA);
+      await sleep(200);
+
+      expect(backgroundedEvents.includes(terminalB)).toBe(true);
+      expect(foregroundedEvents.includes(terminalA)).toBe(true);
+
+      events.off("terminal:backgrounded", bgHandler);
+      events.off("terminal:foregrounded", fgHandler);
+    }, 10000);
+
+    it("should maintain accurate agent state for background terminals over time", async () => {
+      const projectA = "project-A";
+      const projectB = "project-B";
+
+      const terminalA = await spawnShellTerminal(manager, {
+        type: "claude",
+        projectId: projectA,
+      });
+      const terminalB = await spawnShellTerminal(manager, {
+        type: "gemini",
+        projectId: projectB,
+      });
+      await sleep(500);
+
+      // Set project A as active (terminal B becomes background)
+      manager.setActiveProject(projectA);
+      manager.onProjectSwitch(projectA);
+      await sleep(200);
+
+      // Transition background terminal through multiple states
+      manager.transitionState(terminalB, { type: "busy" }, "activity", 1.0);
+      await sleep(100);
+
+      const stateAfterBusy = manager.getTerminal(terminalB);
+      expect(stateAfterBusy?.agentState).toBe("working");
+
+      manager.transitionState(terminalB, { type: "prompt" }, "activity", 1.0);
+      await sleep(100);
+
+      const stateAfterPrompt = manager.getTerminal(terminalB);
+      expect(stateAfterPrompt?.agentState).toBe("waiting");
+
+      manager.transitionState(terminalB, { type: "exit", code: 0 }, "activity", 1.0);
+      await sleep(100);
+
+      const stateAfterExit = manager.getTerminal(terminalB);
+      expect(stateAfterExit?.agentState).toBe("completed");
+    }, 10000);
+  });
 });
