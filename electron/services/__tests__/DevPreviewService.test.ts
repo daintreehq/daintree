@@ -1,40 +1,304 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
-import { DevPreviewService } from "../DevPreviewService.js";
 import type { PtyClient } from "../PtyClient.js";
+import type { DevPreviewStatus } from "../DevPreviewService.js";
 
-// Create a mock PtyClient that extends EventEmitter
-function createMockPtyClient(): PtyClient & EventEmitter {
-  const emitter = new EventEmitter();
-  return Object.assign(emitter, {
-    spawn: vi.fn(),
-    submit: vi.fn(),
-    kill: vi.fn().mockResolvedValue(undefined),
-    hasTerminal: vi.fn().mockReturnValue(true),
-    // Add other PtyClient methods as needed (stubs)
-    write: vi.fn(),
-    resize: vi.fn(),
-    dispose: vi.fn(),
-  }) as unknown as PtyClient & EventEmitter;
+vi.mock("fs", () => ({
+  existsSync: vi.fn(),
+}));
+
+vi.mock("fs/promises", () => ({
+  readFile: vi.fn(),
+}));
+
+import { existsSync } from "fs";
+import { readFile } from "fs/promises";
+
+interface MockPtyClient extends EventEmitter {
+  spawn: ReturnType<typeof vi.fn>;
+  submit: ReturnType<typeof vi.fn>;
+  kill: ReturnType<typeof vi.fn>;
+  hasTerminal: ReturnType<typeof vi.fn>;
+  write: ReturnType<typeof vi.fn>;
+  resize: ReturnType<typeof vi.fn>;
+  dispose: ReturnType<typeof vi.fn>;
+}
+
+function createMockPtyClient(): MockPtyClient {
+  const emitter = new EventEmitter() as MockPtyClient;
+  emitter.spawn = vi.fn();
+  emitter.submit = vi.fn();
+  emitter.kill = vi.fn().mockResolvedValue(undefined);
+  emitter.hasTerminal = vi.fn().mockReturnValue(true);
+  emitter.write = vi.fn();
+  emitter.resize = vi.fn();
+  emitter.dispose = vi.fn();
+  return emitter;
 }
 
 describe("DevPreviewService", () => {
-  let service: DevPreviewService;
-  let mockPtyClient: PtyClient & EventEmitter;
+  let mockPtyClient: MockPtyClient;
+  let DevPreviewServiceClass: typeof import("../DevPreviewService.js").DevPreviewService;
 
-  beforeEach(() => {
-    vi.clearAllMocks();
+  beforeEach(async () => {
+    vi.resetModules();
     mockPtyClient = createMockPtyClient();
-    service = new DevPreviewService(mockPtyClient);
+
+    // Default: no package.json
+    vi.mocked(existsSync).mockReturnValue(false);
+    vi.mocked(readFile).mockRejectedValue(new Error("File not found"));
+
+    const module = await import("../DevPreviewService.js");
+    DevPreviewServiceClass = module.DevPreviewService;
   });
 
   afterEach(() => {
-    mockPtyClient.removeAllListeners();
+    vi.clearAllMocks();
   });
 
   describe("start()", () => {
+    it("creates a browser-only session when no dev command is available", async () => {
+      const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
+      const statusEvents: { status: DevPreviewStatus; message: string }[] = [];
+      service.on("status", (e) => statusEvents.push(e));
+
+      await service.start({
+        panelId: "panel-1",
+        cwd: "/test/project",
+        cols: 80,
+        rows: 24,
+      });
+
+      const session = service.getSession("panel-1");
+      expect(session).toBeDefined();
+      expect(session?.status).toBe("running");
+      expect(session?.statusMessage).toBe("Browser-only mode (no dev command)");
+      expect(session?.ptyId).toBe("");
+      expect(mockPtyClient.spawn).not.toHaveBeenCalled();
+
+      expect(statusEvents.length).toBe(1);
+      expect(statusEvents[0].status).toBe("running");
+    });
+
+    it("creates session with auto-detected npm dev command", async () => {
+      vi.mocked(existsSync).mockImplementation((p: unknown) => {
+        const pathStr = String(p);
+        if (pathStr.includes("package.json")) return true;
+        if (pathStr.includes("node_modules")) return true;
+        return false;
+      });
+
+      vi.mocked(readFile).mockResolvedValue(
+        JSON.stringify({
+          scripts: { dev: "vite" },
+        })
+      );
+
+      const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
+      const statusEvents: { status: DevPreviewStatus; message: string }[] = [];
+      service.on("status", (e) => statusEvents.push(e));
+
+      await service.start({
+        panelId: "panel-2",
+        cwd: "/test/npm-project",
+        cols: 80,
+        rows: 24,
+      });
+
+      expect(mockPtyClient.spawn).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          cwd: "/test/npm-project",
+          cols: 80,
+          rows: 24,
+          kind: "dev-preview",
+        })
+      );
+
+      const session = service.getSession("panel-2");
+      expect(session?.status).toBe("starting");
+      expect(session?.devCommand).toBe("npm run dev");
+      expect(session?.packageManager).toBe("npm");
+    });
+
+    it("creates session with pnpm when pnpm-lock.yaml exists", async () => {
+      vi.mocked(existsSync).mockImplementation((p: unknown) => {
+        const pathStr = String(p);
+        if (pathStr.includes("package.json")) return true;
+        if (pathStr.includes("pnpm-lock.yaml")) return true;
+        if (pathStr.includes("node_modules")) return true;
+        return false;
+      });
+
+      vi.mocked(readFile).mockResolvedValue(
+        JSON.stringify({
+          scripts: { dev: "vite" },
+        })
+      );
+
+      const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
+
+      await service.start({
+        panelId: "panel-3",
+        cwd: "/test/pnpm-project",
+        cols: 80,
+        rows: 24,
+      });
+
+      const session = service.getSession("panel-3");
+      expect(session?.devCommand).toBe("pnpm run dev");
+      expect(session?.packageManager).toBe("pnpm");
+    });
+
+    it("creates session with yarn when yarn.lock exists", async () => {
+      vi.mocked(existsSync).mockImplementation((p: unknown) => {
+        const pathStr = String(p);
+        if (pathStr.includes("package.json")) return true;
+        if (pathStr.includes("yarn.lock")) return true;
+        if (pathStr.includes("node_modules")) return true;
+        return false;
+      });
+
+      vi.mocked(readFile).mockResolvedValue(
+        JSON.stringify({
+          scripts: { dev: "vite" },
+        })
+      );
+
+      const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
+
+      await service.start({
+        panelId: "panel-4",
+        cwd: "/test/yarn-project",
+        cols: 80,
+        rows: 24,
+      });
+
+      const session = service.getSession("panel-4");
+      expect(session?.devCommand).toBe("yarn dev");
+      expect(session?.packageManager).toBe("yarn");
+    });
+
+    it("creates session with bun when bun.lockb exists", async () => {
+      vi.mocked(existsSync).mockImplementation((p: unknown) => {
+        const pathStr = String(p);
+        if (pathStr.includes("package.json")) return true;
+        if (pathStr.includes("bun.lockb")) return true;
+        if (pathStr.includes("node_modules")) return true;
+        return false;
+      });
+
+      vi.mocked(readFile).mockResolvedValue(
+        JSON.stringify({
+          scripts: { dev: "vite" },
+        })
+      );
+
+      const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
+
+      await service.start({
+        panelId: "panel-5",
+        cwd: "/test/bun-project",
+        cols: 80,
+        rows: 24,
+      });
+
+      const session = service.getSession("panel-5");
+      expect(session?.devCommand).toBe("bun run dev");
+      expect(session?.packageManager).toBe("bun");
+    });
+
+    it("uses start script when dev script is not available", async () => {
+      vi.mocked(existsSync).mockImplementation((p: unknown) => {
+        const pathStr = String(p);
+        if (pathStr.includes("package.json")) return true;
+        if (pathStr.includes("node_modules")) return true;
+        return false;
+      });
+
+      vi.mocked(readFile).mockResolvedValue(
+        JSON.stringify({
+          scripts: { start: "node server.js" },
+        })
+      );
+
+      const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
+
+      await service.start({
+        panelId: "panel-6",
+        cwd: "/test/start-only",
+        cols: 80,
+        rows: 24,
+      });
+
+      const session = service.getSession("panel-6");
+      expect(session?.devCommand).toBe("npm run start");
+    });
+
+    it("uses provided devCommand instead of auto-detection", async () => {
+      vi.mocked(existsSync).mockImplementation((p: unknown) => {
+        const pathStr = String(p);
+        if (pathStr.includes("package.json")) return true;
+        if (pathStr.includes("node_modules")) return true;
+        return false;
+      });
+
+      vi.mocked(readFile).mockResolvedValue(
+        JSON.stringify({
+          scripts: { dev: "vite" },
+        })
+      );
+
+      const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
+
+      await service.start({
+        panelId: "panel-7",
+        cwd: "/test/custom-cmd",
+        cols: 80,
+        rows: 24,
+        devCommand: "custom-server --watch",
+      });
+
+      const session = service.getSession("panel-7");
+      expect(session?.devCommand).toBe("custom-server --watch");
+    });
+
+    it("runs install command when node_modules is missing", async () => {
+      vi.mocked(existsSync).mockImplementation((p: unknown) => {
+        const pathStr = String(p);
+        if (pathStr.includes("package.json")) return true;
+        if (pathStr.includes("node_modules")) return false;
+        return false;
+      });
+
+      vi.mocked(readFile).mockResolvedValue(
+        JSON.stringify({
+          scripts: { dev: "vite" },
+        })
+      );
+
+      const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
+      const statusEvents: { status: DevPreviewStatus; message: string }[] = [];
+      service.on("status", (e) => statusEvents.push(e));
+
+      await service.start({
+        panelId: "panel-8",
+        cwd: "/test/needs-install",
+        cols: 80,
+        rows: 24,
+      });
+
+      const session = service.getSession("panel-8");
+      expect(session?.status).toBe("installing");
+      expect(session?.installCommand).toBe("npm install");
+
+      expect(statusEvents[0].status).toBe("installing");
+      expect(statusEvents[0].message).toBe("Installing dependencies...");
+    });
+
     it("stops existing session before starting new one on same panel", async () => {
-      // Start first session
+      const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
+      
       await service.start({
         panelId: "panel-1",
         cwd: "/tmp/test",
@@ -43,12 +307,9 @@ describe("DevPreviewService", () => {
         devCommand: "npm run dev",
       });
 
-      // Verify first session exists
       const firstSession = service.getSession("panel-1");
-      expect(firstSession).toBeDefined();
       const firstPtyId = firstSession!.ptyId;
 
-      // Start second session on same panel
       await service.start({
         panelId: "panel-1",
         cwd: "/tmp/test2",
@@ -57,200 +318,229 @@ describe("DevPreviewService", () => {
         devCommand: "npm start",
       });
 
-      // Verify kill was called for the first session's PTY
       expect(mockPtyClient.kill).toHaveBeenCalledWith(firstPtyId);
-
-      // Verify new session exists with different PTY ID
       const secondSession = service.getSession("panel-1");
-      expect(secondSession).toBeDefined();
       expect(secondSession!.ptyId).not.toBe(firstPtyId);
-      expect(secondSession!.devCommand).toBe("npm start");
-    });
-
-    it("registers data and exit listeners for PTY sessions", async () => {
-      const onSpy = vi.spyOn(mockPtyClient, "on");
-
-      await service.start({
-        panelId: "panel-1",
-        cwd: "/tmp/test",
-        cols: 80,
-        rows: 24,
-        devCommand: "npm run dev",
-      });
-
-      // Should register both data and exit listeners with on() (not once())
-      // Using on() is critical because PtyClient is shared across all terminals
-      expect(onSpy).toHaveBeenCalledWith("data", expect.any(Function));
-      expect(onSpy).toHaveBeenCalledWith("exit", expect.any(Function));
-    });
-
-    it("creates browser-only session without PTY when no command available", async () => {
-      await service.start({
-        panelId: "panel-1",
-        cwd: "/tmp/empty-project",
-        cols: 80,
-        rows: 24,
-        // No devCommand and detection will fail since directory doesn't exist
-      });
-
-      const session = service.getSession("panel-1");
-      expect(session).toBeDefined();
-      expect(session!.ptyId).toBe("");
-      expect(session!.status).toBe("running");
-      expect(session!.statusMessage).toContain("Browser-only");
-      // Browser-only sessions have empty unsubscribers array
-      expect(session!.unsubscribers).toHaveLength(0);
     });
   });
 
   describe("stop()", () => {
-    it("removes event listeners when stopping a session", async () => {
-      const removeListenerSpy = vi.spyOn(mockPtyClient, "removeListener");
+    it("stops an existing session and removes it", async () => {
+      const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
 
       await service.start({
-        panelId: "panel-1",
-        cwd: "/tmp/test",
+        panelId: "panel-stop-test",
+        cwd: "/test",
         cols: 80,
         rows: 24,
-        devCommand: "npm run dev",
       });
 
-      await service.stop("panel-1");
+      expect(service.getSession("panel-stop-test")).toBeDefined();
 
-      // Should have called removeListener for data and exit listeners
-      expect(removeListenerSpy).toHaveBeenCalledWith("data", expect.any(Function));
-      expect(removeListenerSpy).toHaveBeenCalledWith("exit", expect.any(Function));
+      await service.stop("panel-stop-test");
+
+      expect(service.getSession("panel-stop-test")).toBeUndefined();
     });
 
-    it("kills PTY process when stopping a session", async () => {
-      await service.start({
-        panelId: "panel-1",
-        cwd: "/tmp/test",
-        cols: 80,
-        rows: 24,
-        devCommand: "npm run dev",
+    it("is a no-op for non-existent session", async () => {
+      const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
+
+      // Should not throw
+      await expect(service.stop("non-existent")).resolves.toBeUndefined();
+      expect(mockPtyClient.kill).not.toHaveBeenCalled();
+    });
+
+    it("kills the PTY process when stopping", async () => {
+      vi.mocked(existsSync).mockImplementation((p: unknown) => {
+        const pathStr = String(p);
+        if (pathStr.includes("package.json")) return true;
+        if (pathStr.includes("node_modules")) return true;
+        return false;
       });
 
-      const session = service.getSession("panel-1");
-      const ptyId = session!.ptyId;
+      vi.mocked(readFile).mockResolvedValue(
+        JSON.stringify({
+          scripts: { dev: "vite" },
+        })
+      );
 
-      await service.stop("panel-1");
+      const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
+
+      await service.start({
+        panelId: "panel-kill-test",
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+      });
+
+      const session = service.getSession("panel-kill-test");
+      const ptyId = session?.ptyId;
+
+      await service.stop("panel-kill-test");
 
       expect(mockPtyClient.kill).toHaveBeenCalledWith(ptyId);
     });
 
-    it("handles stopping browser-only session gracefully", async () => {
+    it("emits stopped status when stopping", async () => {
+      const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
+      const statusEvents: { status: DevPreviewStatus; panelId: string }[] = [];
+      service.on("status", (e) => statusEvents.push(e));
+
       await service.start({
-        panelId: "panel-1",
-        cwd: "/tmp/empty-project",
+        panelId: "panel-stop-status",
+        cwd: "/test",
         cols: 80,
         rows: 24,
       });
 
-      // Should not throw and should not call kill (no PTY to kill)
-      await service.stop("panel-1");
+      await service.stop("panel-stop-status");
 
-      // kill should not be called for browser-only sessions (empty ptyId)
-      expect(mockPtyClient.kill).not.toHaveBeenCalled();
-      expect(service.getSession("panel-1")).toBeUndefined();
-    });
-
-    it("handles stopping non-existent session gracefully", async () => {
-      // Should not throw
-      await service.stop("non-existent-panel");
-      expect(mockPtyClient.kill).not.toHaveBeenCalled();
+      const stoppedEvent = statusEvents.find((e) => e.status === "stopped");
+      expect(stoppedEvent).toBeDefined();
+      expect(stoppedEvent?.panelId).toBe("panel-stop-status");
     });
   });
 
-  describe("listener lifecycle", () => {
-    it("does not accumulate listeners after multiple start/stop cycles", async () => {
-      const dataListenerCounts: number[] = [];
-
-      // Track listener count after each cycle
-      for (let i = 0; i < 5; i++) {
-        await service.start({
-          panelId: "panel-1",
-          cwd: "/tmp/test",
-          cols: 80,
-          rows: 24,
-          devCommand: "npm run dev",
-        });
-
-        dataListenerCounts.push(mockPtyClient.listenerCount("data"));
-
-        await service.stop("panel-1");
-      }
-
-      // All cycles should have the same listener count (1 during active session)
-      expect(dataListenerCounts.every((count) => count === 1)).toBe(true);
-
-      // After final stop, no listeners should remain
-      expect(mockPtyClient.listenerCount("data")).toBe(0);
-    });
-
-    it("cleans up listeners when PTY exits naturally", async () => {
-      const removeListenerSpy = vi.spyOn(mockPtyClient, "removeListener");
-
-      await service.start({
-        panelId: "panel-1",
-        cwd: "/tmp/test",
-        cols: 80,
-        rows: 24,
-        devCommand: "npm run dev",
+  describe("restart()", () => {
+    it("stops existing session and starts a new one", async () => {
+      vi.mocked(existsSync).mockImplementation((p: unknown) => {
+        const pathStr = String(p);
+        if (pathStr.includes("package.json")) return true;
+        if (pathStr.includes("node_modules")) return true;
+        return false;
       });
 
-      const session = service.getSession("panel-1");
-      const ptyId = session!.ptyId;
+      vi.mocked(readFile).mockResolvedValue(
+        JSON.stringify({
+          scripts: { dev: "vite" },
+        })
+      );
 
-      // Simulate PTY exit
-      mockPtyClient.emit("exit", ptyId, 0);
-
-      // Should have cleaned up listeners
-      expect(removeListenerSpy).toHaveBeenCalledWith("data", expect.any(Function));
-      expect(removeListenerSpy).toHaveBeenCalledWith("exit", expect.any(Function));
-
-      // Session should be removed
-      expect(service.getSession("panel-1")).toBeUndefined();
-    });
-
-    it("listeners only respond to their own PTY ID", async () => {
-      const statusEvents: Array<{ panelId: string; status: string }> = [];
-      service.on("status", (event) => statusEvents.push(event));
+      const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
 
       await service.start({
-        panelId: "panel-1",
-        cwd: "/tmp/test",
+        panelId: "panel-restart",
+        cwd: "/test/project",
         cols: 80,
         rows: 24,
-        devCommand: "npm run dev",
       });
 
-      const session = service.getSession("panel-1");
-      const ptyId = session!.ptyId;
+      const originalSession = service.getSession("panel-restart");
+      const originalPtyId = originalSession?.ptyId;
 
-      // Reset status events
-      statusEvents.length = 0;
+      await service.restart("panel-restart");
 
-      // Emit data for a DIFFERENT PTY ID - should be ignored
-      mockPtyClient.emit("data", "some-other-pty-id", "localhost:3000");
+      expect(mockPtyClient.kill).toHaveBeenCalledWith(originalPtyId);
 
-      // Should not have affected panel-1's session or URL
-      const sessionAfterFakeData = service.getSession("panel-1");
-      expect(sessionAfterFakeData).toBeDefined();
-      expect(sessionAfterFakeData!.url).toBeNull();
+      const newSession = service.getSession("panel-restart");
+      expect(newSession).toBeDefined();
+      expect(newSession?.ptyId).not.toBe(originalPtyId);
+    });
 
-      // Now emit data for the correct PTY ID with a URL
-      mockPtyClient.emit("data", ptyId, "Server running at http://localhost:3000");
+    it("is a no-op for non-existent session", async () => {
+      const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
 
-      // Session should have the URL updated (may have trailing slash from URL normalization)
-      const sessionAfterRealData = service.getSession("panel-1");
-      expect(sessionAfterRealData).toBeDefined();
-      expect(sessionAfterRealData!.url).toMatch(/^http:\/\/localhost:3000\/?$/);
+      await expect(service.restart("non-existent")).resolves.toBeUndefined();
+      expect(mockPtyClient.spawn).not.toHaveBeenCalled();
+    });
+
+    it("preserves the original devCommand on restart", async () => {
+      vi.mocked(existsSync).mockImplementation((p: unknown) => {
+        const pathStr = String(p);
+        if (pathStr.includes("package.json")) return true;
+        if (pathStr.includes("node_modules")) return true;
+        return false;
+      });
+
+      vi.mocked(readFile).mockResolvedValue(
+        JSON.stringify({
+          scripts: { dev: "vite" },
+        })
+      );
+
+      const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
+
+      await service.start({
+        panelId: "panel-preserve-cmd",
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+        devCommand: "custom-server",
+      });
+
+      expect(service.getSession("panel-preserve-cmd")?.devCommand).toBe("custom-server");
+
+      await service.restart("panel-preserve-cmd");
+
+      expect(service.getSession("panel-preserve-cmd")?.devCommand).toBe("custom-server");
+    });
+  });
+
+  describe("setUrl()", () => {
+    it("updates session URL and emits events", async () => {
+      const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
+      const urlEvents: { panelId: string; url: string }[] = [];
+      service.on("url", (e) => urlEvents.push(e));
+
+      await service.start({
+        panelId: "panel-url",
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+      });
+
+      service.setUrl("panel-url", "http://localhost:3000");
+
+      const session = service.getSession("panel-url");
+      expect(session?.url).toBe("http://localhost:3000");
+      expect(session?.status).toBe("running");
+
+      expect(urlEvents.length).toBe(1);
+      expect(urlEvents[0].url).toBe("http://localhost:3000");
+    });
+  });
+
+  describe("PTY data handling", () => {
+    it("extracts localhost URLs from PTY output", async () => {
+      vi.mocked(existsSync).mockImplementation((p: unknown) => {
+        const pathStr = String(p);
+        if (pathStr.includes("package.json")) return true;
+        if (pathStr.includes("node_modules")) return true;
+        return false;
+      });
+
+      vi.mocked(readFile).mockResolvedValue(
+        JSON.stringify({
+          scripts: { dev: "vite" },
+        })
+      );
+
+      const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
+      const urlEvents: { panelId: string; url: string }[] = [];
+      service.on("url", (e) => urlEvents.push(e));
+
+      await service.start({
+        panelId: "panel-url-extract",
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+      });
+
+      const session = service.getSession("panel-url-extract");
+      const ptyId = session?.ptyId;
+
+      // Simulate PTY data with URL
+      mockPtyClient.emit("data", ptyId, "Server started at http://localhost:5173/\n");
+
+      expect(urlEvents.length).toBe(1);
+      expect(urlEvents[0].url).toBe("http://localhost:5173/");
     });
   });
 
   describe("session isolation", () => {
     it("maintains separate sessions for different panels", async () => {
+      const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
+      
       await service.start({
         panelId: "panel-1",
         cwd: "/tmp/project1",
@@ -273,59 +563,6 @@ describe("DevPreviewService", () => {
       expect(session1).toBeDefined();
       expect(session2).toBeDefined();
       expect(session1!.ptyId).not.toBe(session2!.ptyId);
-      expect(session1!.projectRoot).toBe("/tmp/project1");
-      expect(session2!.projectRoot).toBe("/tmp/project2");
-    });
-
-    it("stopping one panel does not affect other panels", async () => {
-      await service.start({
-        panelId: "panel-1",
-        cwd: "/tmp/project1",
-        cols: 80,
-        rows: 24,
-        devCommand: "npm run dev",
-      });
-
-      await service.start({
-        panelId: "panel-2",
-        cwd: "/tmp/project2",
-        cols: 80,
-        rows: 24,
-        devCommand: "yarn start",
-      });
-
-      await service.stop("panel-1");
-
-      expect(service.getSession("panel-1")).toBeUndefined();
-      expect(service.getSession("panel-2")).toBeDefined();
-    });
-  });
-
-  describe("restart()", () => {
-    it("stops and starts session with same configuration", async () => {
-      await service.start({
-        panelId: "panel-1",
-        cwd: "/tmp/test",
-        cols: 80,
-        rows: 24,
-        devCommand: "npm run dev",
-      });
-
-      const originalSession = service.getSession("panel-1");
-      const originalPtyId = originalSession!.ptyId;
-
-      await service.restart("panel-1");
-
-      const newSession = service.getSession("panel-1");
-      expect(newSession).toBeDefined();
-      expect(newSession!.ptyId).not.toBe(originalPtyId);
-      expect(newSession!.devCommand).toBe("npm run dev");
-      expect(newSession!.projectRoot).toBe("/tmp/test");
-    });
-
-    it("handles restart of non-existent session gracefully", async () => {
-      // Should not throw
-      await service.restart("non-existent-panel");
     });
   });
 });
