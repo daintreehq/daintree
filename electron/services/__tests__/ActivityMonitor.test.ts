@@ -264,7 +264,7 @@ describe("ActivityMonitor", () => {
   });
 
   describe("Output-driven activity", () => {
-    it("should transition from idle to busy on any output with CPU activity", () => {
+    it("should NOT trigger busy from output alone (requires Enter first) - Issue #1476", () => {
       const onStateChange = vi.fn();
       const processStateValidator = {
         hasActiveChildren: vi.fn().mockReturnValue(true),
@@ -274,12 +274,38 @@ describe("ActivityMonitor", () => {
         outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
       });
 
+      // Output alone should NOT trigger busy - only Enter should
       monitor.onData("some output");
 
-      expect(processStateValidator.hasActiveChildren).toHaveBeenCalled();
-      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", {
-        trigger: "output",
+      expect(onStateChange).not.toHaveBeenCalled();
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+
+    it("should trigger busy from output when there is pending input (Enter pressed)", () => {
+      const onStateChange = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(true),
+      };
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        processStateValidator,
+        outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
       });
+
+      // Press Enter first to set pending input
+      monitor.onInput("\r");
+      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", { trigger: "input" });
+
+      // Reset to test output confirmation
+      onStateChange.mockClear();
+      monitor.onData("agent output");
+
+      // Already busy, output just confirms - no duplicate call
+      expect(onStateChange).not.toHaveBeenCalled();
+      expect(monitor.getState()).toBe("busy");
+
+      monitor.dispose();
     });
 
     it("should not trigger busy from output when no CPU activity (user typing)", () => {
@@ -292,25 +318,27 @@ describe("ActivityMonitor", () => {
         outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
       });
 
-      monitor.onData("character echo");
+      // Even with Enter, CPU check should prevent busy from output
+      monitor.onInput("\r");
+      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", { trigger: "input" });
 
-      expect(processStateValidator.hasActiveChildren).toHaveBeenCalled();
-      expect(onStateChange).not.toHaveBeenCalled();
-      expect(monitor.getState()).toBe("idle");
+      // After going busy from input, output with no CPU won't extend/retrigger
+      expect(monitor.getState()).toBe("busy");
+
+      monitor.dispose();
     });
 
-    it("should allow busy from output when no validator present (fail-open)", () => {
+    it("should NOT trigger busy from output alone even without validator - Issue #1476", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
         outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
       });
 
+      // Output alone should NOT trigger busy - need Enter first
       monitor.onData("output");
 
-      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", {
-        trigger: "output",
-      });
-      expect(monitor.getState()).toBe("busy");
+      expect(onStateChange).not.toHaveBeenCalled();
+      expect(monitor.getState()).toBe("idle");
 
       monitor.dispose();
     });
@@ -553,16 +581,22 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
-    it("should not fire duplicate busy from output", () => {
+    it("should not fire duplicate busy from output after Enter", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
         outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
       });
 
+      // Press Enter first to allow output-based busy
+      monitor.onInput("\r");
+      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", { trigger: "input" });
+
+      // Multiple outputs should not fire duplicate busy calls
       monitor.onData("output1");
       monitor.onData("output2");
       monitor.onData("output3");
 
+      // Only the initial input-triggered busy should have been called
       expect(onStateChange).toHaveBeenCalledTimes(1);
 
       monitor.dispose();
@@ -597,7 +631,7 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
-    it("should re-enter busy from idle via output after accidental exit", () => {
+    it("should NOT re-enter busy from idle via output alone - Issue #1476", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
         outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
@@ -610,11 +644,35 @@ describe("ActivityMonitor", () => {
       vi.advanceTimersByTime(2500);
       expect(onStateChange).toHaveBeenNthCalledWith(2, "test-1", 1000, "idle");
 
+      // After going idle, output alone should NOT re-trigger busy
+      // User must press Enter again to start a new work cycle
       monitor.onData("agent output");
+
+      expect(onStateChange).toHaveBeenCalledTimes(2); // Only initial busy and idle
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+
+    it("should re-enter busy when Enter is pressed again after going idle", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
+      });
+
+      monitor.onInput("\r");
+      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", { trigger: "input" });
+
+      // Debounce is 2500ms
+      vi.advanceTimersByTime(2500);
+      expect(onStateChange).toHaveBeenNthCalledWith(2, "test-1", 1000, "idle");
+
+      // Press Enter again to start a new work cycle
+      monitor.onInput("\r");
 
       expect(onStateChange).toHaveBeenCalledTimes(3);
       expect(onStateChange).toHaveBeenLastCalledWith("test-1", 1000, "busy", {
-        trigger: "output",
+        trigger: "input",
       });
 
       monitor.dispose();
@@ -640,7 +698,8 @@ describe("ActivityMonitor", () => {
         outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
       });
 
-      monitor.onData("some output");
+      // Press Enter to enter busy state
+      monitor.onInput("\r");
       expect(monitor.getState()).toBe("busy");
 
       monitor.dispose();

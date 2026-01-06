@@ -495,7 +495,11 @@ export class ActivityMonitor {
       const isWorking = patternResult
         ? patternResult.isWorking
         : lowerBuffer.includes("esc to interrupt") || lowerBuffer.includes("esc to cancel");
-      if (isWorking) {
+      // Only allow pattern-based busy transitions if:
+      // 1. We're already busy (to keep the state), OR
+      // 2. There's pending input confirmation (Enter was pressed)
+      // This prevents stale patterns from triggering busy during typing. Issue #1476.
+      if (isWorking && (this.state === "busy" || this.pendingInputUntil > 0)) {
         this.becomeBusy({
           trigger: "pattern",
           patternConfidence: patternResult?.confidence ?? 0.9,
@@ -589,7 +593,10 @@ export class ActivityMonitor {
 
     if (this.rewriteCount >= this.rewriteMinCount) {
       this.lastSpinnerDetectedAt = now;
-      this.becomeBusy({ trigger: "output" }, now);
+      // Only trigger busy if already busy OR pending input (Enter was pressed). Issue #1476.
+      if (this.state === "busy" || this.pendingInputUntil > 0) {
+        this.becomeBusy({ trigger: "output" }, now);
+      }
     }
   }
 
@@ -732,6 +739,17 @@ export class ActivityMonitor {
   }
 
   private becomeBusyFromOutput(now: number): void {
+    // Only allow output-based busy transitions if:
+    // 1. We're already busy (to keep the state via output activity), OR
+    // 2. There's pending input confirmation (Enter was pressed, waiting for agent to start)
+    //
+    // This prevents character echoes during typing from triggering working state.
+    // The key insight: output alone should CONFIRM working state after Enter,
+    // not independently trigger it. Issue #1476.
+    if (this.state !== "busy" && this.pendingInputUntil === 0) {
+      return;
+    }
+
     // Validate CPU activity before entering busy state from output detection.
     // This prevents character echoes during typing from triggering active state.
     // null = no validator available, allow transition (fail open for compatibility)
@@ -955,6 +973,14 @@ export class ActivityMonitor {
     }
 
     if (isWorkingSignal) {
+      // Only allow working signal to trigger busy if:
+      // 1. We're already busy (to stay busy), OR
+      // 2. There's pending input (Enter was pressed, waiting for confirmation)
+      // This prevents output/patterns during typing from triggering working state. Issue #1476.
+      if (this.state !== "busy" && this.pendingInputUntil === 0) {
+        // Not busy and no pending input - don't transition to busy
+        return;
+      }
       if (this.state !== "busy") {
         const metadata = isWorkingPattern
           ? { trigger: "pattern" as const, patternConfidence: patternResult?.confidence ?? 0.9 }
