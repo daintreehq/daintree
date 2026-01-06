@@ -35,10 +35,12 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // Normalize kind and agentId from type when type is a registered agent
     // This ensures agent terminals are consistently identified across all layers
     // Override kind when type is an agent to prevent mixed metadata
-    const { isRegisteredAgent } = await import("../../../shared/config/agentRegistry.js");
+    const { isRegisteredAgent } = await import("../../../../shared/config/agentRegistry.js");
     const isAgentType = type !== "terminal" && isRegisteredAgent(type);
 
-    const kind = isAgentType ? "agent" : (validatedOptions.kind || (validatedOptions.agentId ? "agent" : "terminal"));
+    const kind = isAgentType
+      ? "agent"
+      : validatedOptions.kind || (validatedOptions.agentId ? "agent" : "terminal");
     const agentId = validatedOptions.agentId || (isAgentType ? type : undefined);
     const title = validatedOptions.title;
     const worktreeId = validatedOptions.worktreeId;

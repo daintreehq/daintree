@@ -374,7 +374,7 @@ export class TerminalProcess {
     // This ensures terminals with type="claude" but kind="terminal" are still treated as agents
     const isAgentByKind = options.kind === "agent";
     const isAgentByAgentId = !!options.agentId;
-    const isAgentByType = options.type && options.type !== "terminal";
+    const isAgentByType = !!(options.type && options.type !== "terminal");
     this.isAgentTerminal = isAgentByKind || isAgentByAgentId || isAgentByType;
     // Preserve type as agentId when type is an agent (for detection config lookups)
     const agentId = this.isAgentTerminal
