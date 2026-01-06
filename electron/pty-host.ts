@@ -471,7 +471,11 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
   const terminalInfo = ptyManager.getTerminal(id);
   // Agent terminals use snapshot projection and do not consume the raw visual stream.
   // Writing agent output into the visual ring buffer would immediately backpressure the PTY.
-  const skipVisualStream = terminalInfo?.kind === "agent";
+  // Check kind, agentId, or type to determine if this is an agent terminal
+  const skipVisualStream =
+    terminalInfo?.kind === "agent" ||
+    !!terminalInfo?.agentId ||
+    (terminalInfo?.type && terminalInfo.type !== "terminal");
   // PRIORITY 1: VISUAL RENDERER (Zero-Latency Path)
   // Write to SharedArrayBuffer immediately before doing ANY processing.
   // This ensures terminal output reaches xterm.js with minimal latency.

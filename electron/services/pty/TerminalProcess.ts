@@ -370,8 +370,16 @@ export class TerminalProcess {
     const args = options.args || this.getDefaultShellArgs(shell);
     const spawnedAt = Date.now();
 
-    this.isAgentTerminal = options.kind === "agent" || !!options.agentId;
-    const agentId = this.isAgentTerminal ? (options.agentId ?? id) : undefined;
+    // Agent detection: check kind, agentId, or type (registered agent)
+    // This ensures terminals with type="claude" but kind="terminal" are still treated as agents
+    const isAgentByKind = options.kind === "agent";
+    const isAgentByAgentId = !!options.agentId;
+    const isAgentByType = options.type && options.type !== "terminal";
+    this.isAgentTerminal = isAgentByKind || isAgentByAgentId || isAgentByType;
+    // Preserve type as agentId when type is an agent (for detection config lookups)
+    const agentId = this.isAgentTerminal
+      ? (options.agentId ?? (options.type !== "terminal" ? options.type : id))
+      : undefined;
 
     const baseEnv = process.env as Record<string, string | undefined>;
     const mergedEnv = { ...baseEnv, ...options.env };
