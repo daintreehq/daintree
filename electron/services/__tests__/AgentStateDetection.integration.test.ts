@@ -320,11 +320,11 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
     // Note: These tests verify the full PTY → ActivityMonitor → AgentStateMachine pipeline.
     // They need to wait for ActivityMonitor's natural state transitions (via its debounce timer).
 
-    it("should transition waiting → working when Enter key is pressed after natural idle (core issue #1326)", async () => {
+    it("should transition waiting → working after Enter from idle", async () => {
       const id = await spawnShellTerminal(manager, { type: "claude" });
 
       // Wait for shell startup activity to settle and ActivityMonitor to reach idle state
-      // ActivityMonitor debounce is 1500ms, so wait longer for natural state transition
+      // ActivityMonitor debounce is 2500ms, so wait longer for natural state transition
       await sleep(2500);
 
       // At this point, ActivityMonitor should be in "idle" state naturally
@@ -340,10 +340,10 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
 
       events.on("agent:state-changed", handler);
 
-      // Send Enter key - should trigger idle → busy in ActivityMonitor
+      // Send Enter key - busy transition is gated by input confirmation
       // which maps to waiting → working in agent state
       manager.write(id, "\n");
-      await sleep(500);
+      await sleep(1500);
 
       events.off("agent:state-changed", handler);
 
@@ -368,9 +368,9 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
 
       events.on("agent:state-changed", handler);
 
-      // Send Enter key
+      // Send Enter key (input confirmation window applies)
       manager.write(id, "\r");
-      await sleep(500);
+      await sleep(1500);
 
       events.off("agent:state-changed", handler);
 
@@ -400,7 +400,7 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
       // Send multiple commands to trigger working → waiting cycles
       for (let i = 0; i < 3; i++) {
         manager.write(id, "echo test\n");
-        await sleep(500);
+        await sleep(1500);
       }
 
       // Wait for final idle transition

@@ -48,6 +48,14 @@ import {
   containsFullBracketedPaste,
 } from "../../../shared/utils/terminalInputProtocol.js";
 
+type CursorBuffer = {
+  cursorY?: number;
+  baseY: number;
+  getLine: (
+    index: number
+  ) => { translateToString: (trimRight?: boolean) => string } | undefined;
+};
+
 const TERMINAL_DISABLE_URL_STYLING: boolean = process.env.CANOPY_DISABLE_URL_STYLING === "1";
 const TERMINAL_SESSION_PERSISTENCE_ENABLED: boolean =
   process.env.CANOPY_TERMINAL_SESSION_PERSISTENCE !== "0";
@@ -1001,6 +1009,20 @@ export class TerminalProcess {
   }
 
   /**
+   * Get the current cursor line from the visible buffer.
+   */
+  getCursorLine(): string | null {
+    const terminal = this.terminalInfo.headlessTerminal;
+    if (!terminal) return null;
+
+    const buffer = terminal.buffer.active as CursorBuffer;
+    if (!buffer || typeof buffer.getLine !== "function") return null;
+    const cursorY = buffer.cursorY ?? 0;
+    const line = buffer.getLine(buffer.baseY + cursorY);
+    return line ? line.translateToString(true) : null;
+  }
+
+  /**
    * Get serialized terminal state for fast restoration (synchronous).
    * Use getSerializedStateAsync() for large terminals to avoid blocking.
    * Creates headless terminal on-demand for non-agent terminals.
@@ -1148,15 +1170,21 @@ export class TerminalProcess {
   }
 
   private getActivityMonitorOptions(): import("../ActivityMonitor.js").ActivityMonitorOptions {
+    const effectiveAgentId =
+      this.terminalInfo.agentId ??
+      (this.terminalInfo.type !== "terminal" ? this.terminalInfo.type : undefined);
     const ignoredInputSequences =
-      this.terminalInfo.type === "codex" ? ["\n", "\x1b\r"] : ["\x1b\r"];
+      effectiveAgentId === "codex" ? ["\n", "\x1b\r"] : ["\x1b\r"];
 
-    // Enable pattern-based detection for agent terminals
-    // The agentId here refers to the agent type (claude, gemini, codex)
-    const agentId = this.terminalInfo.type !== "terminal" ? this.terminalInfo.type : undefined;
-    const detection = agentId ? getEffectiveAgentConfig(agentId)?.detection : undefined;
-    const patternConfig = this.buildPatternConfig(detection, agentId);
-    const bootCompletePatterns = this.buildBootCompletePatterns(detection, agentId);
+    // Enable pattern-based detection for agent terminals.
+    // Prefer agentId when available to support custom/legacy terminals.
+    const detection = effectiveAgentId
+      ? getEffectiveAgentConfig(effectiveAgentId)?.detection
+      : undefined;
+    const patternConfig = this.buildPatternConfig(detection, effectiveAgentId);
+    const bootCompletePatterns = this.buildBootCompletePatterns(detection, effectiveAgentId);
+    const promptPatterns = this.buildPromptPatterns(detection, effectiveAgentId);
+    const promptHintPatterns = this.buildPromptHintPatterns(detection, effectiveAgentId);
 
     // Enable output-based activity detection for agent terminals.
     // AI agents often have low CPU while waiting for API responses (network I/O),
@@ -1171,15 +1199,22 @@ export class TerminalProcess {
     };
 
     // Provide callback to get visible lines from xterm for pattern detection
-    const getVisibleLines = agentId ? (n: number) => this.getLastNLines(n) : undefined;
+    const getVisibleLines = effectiveAgentId ? (n: number) => this.getLastNLines(n) : undefined;
+    const getCursorLine = effectiveAgentId ? () => this.getCursorLine() : undefined;
 
     return {
       ignoredInputSequences,
-      agentId,
+      agentId: effectiveAgentId,
       outputActivityDetection,
       getVisibleLines,
+      getCursorLine,
       patternConfig,
       bootCompletePatterns,
+      promptPatterns,
+      promptHintPatterns,
+      promptScanLineCount: detection?.promptScanLineCount,
+      promptConfidence: detection?.promptConfidence,
+      idleDebounceMs: effectiveAgentId ? (detection?.debounceMs ?? 2000) : undefined,
     };
   }
 
@@ -1220,6 +1255,36 @@ export class TerminalProcess {
     const bootPatterns = this.compilePatterns(detection.bootCompletePatterns, agentId, "boot");
 
     return bootPatterns.length ? bootPatterns : undefined;
+  }
+
+  private buildPromptPatterns(
+    detection: AgentDetectionConfig | undefined,
+    agentId: string | undefined
+  ): RegExp[] | undefined {
+    if (!detection?.promptPatterns || detection.promptPatterns.length === 0) {
+      return undefined;
+    }
+
+    const promptPatterns = this.compilePatterns(detection.promptPatterns, agentId, "prompt");
+
+    return promptPatterns.length ? promptPatterns : undefined;
+  }
+
+  private buildPromptHintPatterns(
+    detection: AgentDetectionConfig | undefined,
+    agentId: string | undefined
+  ): RegExp[] | undefined {
+    if (!detection?.promptHintPatterns || detection.promptHintPatterns.length === 0) {
+      return undefined;
+    }
+
+    const promptHintPatterns = this.compilePatterns(
+      detection.promptHintPatterns,
+      agentId,
+      "prompt hint"
+    );
+
+    return promptHintPatterns.length ? promptHintPatterns : undefined;
   }
 
   private compilePatterns(
