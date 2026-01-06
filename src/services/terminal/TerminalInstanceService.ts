@@ -29,6 +29,26 @@ const RESIZE_LOCK_TTL_MS = 5000;
 // Minimum interval between wake calls for the same terminal (rate limiting)
 const WAKE_RATE_LIMIT_MS = 1000;
 
+/**
+ * Get actual cell dimensions from xterm's internal renderer.
+ * This is needed to set exact pixel width on the host element to eliminate
+ * the gap between the terminal canvas and container edge.
+ */
+function getXtermCellDimensions(terminal: Terminal): { width: number; height: number } | null {
+  try {
+    // Access xterm's internal renderer dimensions
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const core = (terminal as any)._core;
+    const dimensions = core?._renderService?.dimensions?.css?.cell;
+    if (dimensions && typeof dimensions.width === "number" && typeof dimensions.height === "number") {
+      return { width: dimensions.width, height: dimensions.height };
+    }
+  } catch {
+    // Fall through to null
+  }
+  return null;
+}
+
 class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
   private dataBuffer = new TerminalOutputIngestService((id, data) =>
@@ -664,6 +684,30 @@ class TerminalInstanceService {
     managed.lastDetachAt = Date.now();
   }
 
+  /**
+   * Update the host element width to exactly match the terminal's rendered columns.
+   * This eliminates the gap between the terminal canvas and container edge that
+   * occurs when the container width isn't an exact multiple of cell width.
+   */
+  private updateExactWidth(managed: ManagedTerminal): void {
+    const cellDims = getXtermCellDimensions(managed.terminal);
+    if (!cellDims) return;
+
+    const cols = managed.terminal.cols;
+    const exactWidth = Math.ceil(cols * cellDims.width);
+
+    // Set exact width on host element to eliminate the gap
+    managed.hostElement.style.width = `${exactWidth}px`;
+  }
+
+  /**
+   * Reset host element width to 100% before fitting.
+   * This ensures xterm calculates dimensions based on the full available space.
+   */
+  private resetWidthForFit(managed: ManagedTerminal): void {
+    managed.hostElement.style.width = "100%";
+  }
+
   fit(id: string): { cols: number; rows: number } | null {
     const managed = this.instances.get(id);
     if (!managed) return null;
@@ -677,9 +721,13 @@ class TerminalInstanceService {
     }
 
     try {
+      // Reset width to 100% before fitting so xterm can calculate dimensions
+      // based on full available space, then set exact width after fitting
+      this.resetWidthForFit(managed);
       managed.fitAddon.fit();
       const { cols, rows } = managed.terminal;
       terminalClient.resize(id, cols, rows);
+      this.updateExactWidth(managed);
       return { cols, rows };
     } catch (error) {
       console.warn("Terminal fit failed:", error);
@@ -740,6 +788,7 @@ class TerminalInstanceService {
         managed.latestWasAtBottom = wasAtBottom;
         managed.isUserScrolledBack = !wasAtBottom;
         terminalClient.resize(id, cols, rows);
+        this.updateExactWidth(managed);
         return { cols, rows };
       }
 
@@ -951,6 +1000,7 @@ class TerminalInstanceService {
       managed.terminal.resize(targetCols, targetRows);
       terminalClient.resize(id, targetCols, targetRows);
     }
+    this.updateExactWidth(managed);
   }
 
   private applyResize(id: string, cols: number, rows: number): void {
@@ -965,6 +1015,7 @@ class TerminalInstanceService {
     this.dataBuffer.resetForTerminal(id);
     this.resizeTerminal(managed, cols, rows);
     terminalClient.resize(id, cols, rows);
+    this.updateExactWidth(managed);
   }
 
   setFocused(id: string, isFocused: boolean): void {
@@ -1014,6 +1065,7 @@ class TerminalInstanceService {
               this.dataBuffer.resetForTerminal(id);
               this.resizeTerminal(current, current.latestCols, current.terminal.rows);
               terminalClient.resize(id, current.latestCols, current.terminal.rows);
+              this.updateExactWidth(current);
               current.resizeXJob = undefined;
             }
           },
@@ -1028,6 +1080,7 @@ class TerminalInstanceService {
             this.dataBuffer.resetForTerminal(id);
             this.resizeTerminal(current, current.latestCols, current.terminal.rows);
             terminalClient.resize(id, current.latestCols, current.terminal.rows);
+            this.updateExactWidth(current);
             current.resizeXJob = undefined;
           }
         }, IDLE_CALLBACK_TIMEOUT_MS);
@@ -1045,6 +1098,7 @@ class TerminalInstanceService {
               this.dataBuffer.resetForTerminal(id);
               this.resizeTerminal(current, current.latestCols, current.latestRows);
               terminalClient.resize(id, current.latestCols, current.latestRows);
+              this.updateExactWidth(current);
               current.resizeYJob = undefined;
             }
           },
@@ -1059,6 +1113,7 @@ class TerminalInstanceService {
             this.dataBuffer.resetForTerminal(id);
             this.resizeTerminal(current, current.latestCols, current.latestRows);
             terminalClient.resize(id, current.latestCols, current.latestRows);
+            this.updateExactWidth(current);
             current.resizeYJob = undefined;
           }
         }, IDLE_CALLBACK_TIMEOUT_MS);
@@ -1080,6 +1135,7 @@ class TerminalInstanceService {
         this.dataBuffer.resetForTerminal(id);
         this.resizeTerminal(current, cols, current.terminal.rows);
         terminalClient.resize(id, cols, current.terminal.rows);
+        this.updateExactWidth(current);
         current.resizeXJob = undefined;
       }
     }, HORIZONTAL_DEBOUNCE_MS);
@@ -1100,6 +1156,7 @@ class TerminalInstanceService {
       this.dataBuffer.resetForTerminal(id);
       this.resizeTerminal(managed, managed.latestCols, rows);
       terminalClient.resize(id, managed.latestCols, rows);
+      this.updateExactWidth(managed);
       return;
     }
 
@@ -1113,6 +1170,7 @@ class TerminalInstanceService {
           this.dataBuffer.resetForTerminal(id);
           this.resizeTerminal(current, current.latestCols, current.latestRows);
           terminalClient.resize(id, current.latestCols, current.latestRows);
+          this.updateExactWidth(current);
           current.resizeYJob = undefined;
         }
       }, remainingTime);
