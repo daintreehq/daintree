@@ -7,6 +7,7 @@ import { existsSync } from "fs";
 import { app } from "electron";
 import { GitService } from "./GitService.js";
 import { isCanopyError } from "../utils/errorTypes.js";
+import { sanitizeSvg } from "../../shared/utils/svgSanitizer.js";
 
 const SETTINGS_FILENAME = "settings.json";
 
@@ -373,12 +374,30 @@ export class ProjectStore {
       const content = await fs.readFile(filePath, "utf-8");
       const parsed = JSON.parse(content);
 
+      // Sanitize projectIconSvg on load (defense in depth for existing files)
+      let sanitizedIconSvg: string | undefined;
+      if (typeof parsed.projectIconSvg === "string" && parsed.projectIconSvg.trim()) {
+        const sanitizeResult = sanitizeSvg(parsed.projectIconSvg);
+        if (sanitizeResult.ok) {
+          sanitizedIconSvg = sanitizeResult.svg;
+          if (sanitizeResult.modified) {
+            console.warn(
+              `[ProjectStore] Sanitized potentially unsafe SVG content for project ${projectId}`
+            );
+          }
+        } else {
+          console.warn(
+            `[ProjectStore] Invalid SVG in settings for project ${projectId}: ${sanitizeResult.error}`
+          );
+          // Don't include invalid SVG in settings
+        }
+      }
+
       const settings: ProjectSettings = {
         runCommands: Array.isArray(parsed.runCommands) ? parsed.runCommands : [],
         environmentVariables: parsed.environmentVariables,
         excludedPaths: parsed.excludedPaths,
-        projectIconSvg:
-          typeof parsed.projectIconSvg === "string" ? parsed.projectIconSvg : undefined,
+        projectIconSvg: sanitizedIconSvg,
         defaultWorktreeRecipeId:
           typeof parsed.defaultWorktreeRecipeId === "string"
             ? parsed.defaultWorktreeRecipeId
@@ -416,9 +435,29 @@ export class ProjectStore {
       throw new Error(`Invalid project ID: ${projectId}`);
     }
 
+    // Sanitize projectIconSvg before saving
+    let sanitizedSettings = settings;
+    if (settings.projectIconSvg) {
+      const sanitizeResult = sanitizeSvg(settings.projectIconSvg);
+      if (sanitizeResult.ok) {
+        sanitizedSettings = { ...settings, projectIconSvg: sanitizeResult.svg };
+        if (sanitizeResult.modified) {
+          console.warn(
+            `[ProjectStore] Sanitized potentially unsafe SVG content before saving for project ${projectId}`
+          );
+        }
+      } else {
+        // Don't save invalid SVG - strip it from settings
+        console.warn(
+          `[ProjectStore] Rejecting invalid SVG for project ${projectId}: ${sanitizeResult.error}`
+        );
+        sanitizedSettings = { ...settings, projectIconSvg: undefined };
+      }
+    }
+
     const tempFilePath = `${filePath}.tmp`;
     try {
-      await fs.writeFile(tempFilePath, JSON.stringify(settings, null, 2), "utf-8");
+      await fs.writeFile(tempFilePath, JSON.stringify(sanitizedSettings, null, 2), "utf-8");
       await fs.rename(tempFilePath, filePath);
     } catch (error) {
       console.error(`[ProjectStore] Failed to save settings for ${projectId}:`, error);

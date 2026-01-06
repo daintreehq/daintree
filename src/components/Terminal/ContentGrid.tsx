@@ -26,7 +26,7 @@ import { AlertTriangle, Settings, Play, Pin } from "lucide-react";
 import { CanopyIcon } from "@/components/icons";
 import { ProjectPulseCard } from "@/components/Pulse";
 import { Kbd } from "@/components/ui/Kbd";
-import { svgToDataUrl } from "@/lib/svg";
+import { svgToDataUrl, sanitizeSvg } from "@/lib/svg";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { computeGridColumns, MIN_TERMINAL_HEIGHT_PX } from "@/lib/terminalLayout";
 import { useWorktrees } from "@/hooks/useWorktrees";
@@ -123,11 +123,20 @@ function EmptyState({
         <div className="mb-12 flex flex-col items-center text-center">
           <div className="relative group mb-8">
             {projectIconSvg ? (
-              <img
-                src={svgToDataUrl(projectIconSvg)}
-                alt="Project icon"
-                className="h-28 w-28 object-contain"
-              />
+              (() => {
+                // Defense-in-depth: sanitize SVG at render time
+                const sanitized = sanitizeSvg(projectIconSvg);
+                if (!sanitized.ok) {
+                  return <CanopyIcon className="h-28 w-28 text-white/80" />;
+                }
+                return (
+                  <img
+                    src={svgToDataUrl(sanitized.svg)}
+                    alt="Project icon"
+                    className="h-28 w-28 object-contain"
+                  />
+                );
+              })()
             ) : (
               <CanopyIcon className="h-28 w-28 text-white/80" />
             )}

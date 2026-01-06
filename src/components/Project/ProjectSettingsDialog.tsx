@@ -35,7 +35,7 @@ import { useWorktrees } from "@/hooks/useWorktrees";
 import type { RunCommand, TerminalRecipe } from "@/types";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { cn } from "@/lib/utils";
-import { validateProjectSvg, svgToDataUrl } from "@/lib/svg";
+import { validateProjectSvg, sanitizeSvg, svgToDataUrl } from "@/lib/svg";
 import { RecipeEditor } from "@/components/TerminalRecipe/RecipeEditor";
 import { ConfirmDialog } from "@/components/Terminal/ConfirmDialog";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
@@ -541,11 +541,24 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                       {projectIconSvg ? (
                         <div className="flex items-center gap-4 p-3 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border">
                           <div className="h-16 w-16 rounded-[var(--radius-md)] bg-canopy-sidebar flex items-center justify-center overflow-hidden">
-                            <img
-                              src={svgToDataUrl(projectIconSvg)}
-                              alt="Project icon preview"
-                              className="max-h-14 max-w-14 object-contain"
-                            />
+                            {(() => {
+                              const sanitized = sanitizeSvg(projectIconSvg);
+                              if (!sanitized.ok) {
+                                return (
+                                  <Image
+                                    className="h-8 w-8 text-canopy-text/40"
+                                    aria-hidden="true"
+                                  />
+                                );
+                              }
+                              return (
+                                <img
+                                  src={svgToDataUrl(sanitized.svg)}
+                                  alt="Project icon preview"
+                                  className="max-h-14 max-w-14 object-contain"
+                                />
+                              );
+                            })()}
                           </div>
                           <div className="flex-1 min-w-0">
                             <p className="text-sm text-canopy-text mb-1">Custom icon configured</p>
