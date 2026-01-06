@@ -12,6 +12,71 @@ describe("ActivityMonitor", () => {
     vi.restoreAllMocks();
   });
 
+  describe("setPollingInterval", () => {
+    it("should reschedule polling without resetting state", () => {
+      const onStateChange = vi.fn();
+      const getVisibleLines = vi.fn(() => []);
+      const monitor = new ActivityMonitor("test-1", 100, onStateChange, {
+        getVisibleLines,
+        pollingIntervalMs: 100,
+      });
+
+      monitor.startPolling();
+
+      // Initial polling should be at 100ms
+      vi.advanceTimersByTime(100);
+      const initialCallCount = getVisibleLines.mock.calls.length;
+
+      // Change polling to 500ms
+      monitor.setPollingInterval(500);
+
+      // Verify polling continues at new interval
+      vi.advanceTimersByTime(500);
+      expect(getVisibleLines.mock.calls.length).toBeGreaterThan(initialCallCount);
+    });
+
+    it("should short-circuit if interval unchanged", () => {
+      const onStateChange = vi.fn();
+      const getVisibleLines = vi.fn(() => []);
+      const monitor = new ActivityMonitor("test-1", 100, onStateChange, {
+        getVisibleLines,
+        pollingIntervalMs: 100,
+      });
+
+      monitor.startPolling();
+
+      // Spy on clearInterval to verify it's not called
+      const clearIntervalSpy = vi.spyOn(global, "clearInterval");
+
+      // Set same interval
+      monitor.setPollingInterval(100);
+
+      expect(clearIntervalSpy).not.toHaveBeenCalled();
+    });
+
+    it("should apply tier-driven polling changes (50ms active, 500ms background)", () => {
+      const onStateChange = vi.fn();
+      const getVisibleLines = vi.fn(() => []);
+      const monitor = new ActivityMonitor("test-1", 50, onStateChange, {
+        getVisibleLines,
+        pollingIntervalMs: 50,
+      });
+
+      monitor.startPolling();
+
+      // Active tier: 50ms polling
+      vi.advanceTimersByTime(50);
+
+      // Switch to background tier: 500ms polling
+      monitor.setPollingInterval(500);
+      getVisibleLines.mockClear();
+
+      // Verify new interval takes effect
+      vi.advanceTimersByTime(500);
+      expect(getVisibleLines).toHaveBeenCalled();
+    });
+  });
+
   describe("Input-driven activity", () => {
     it("should transition to busy on Enter key", () => {
       const onStateChange = vi.fn();

@@ -290,6 +290,14 @@ export type AgentStateChangeTrigger =
   | "exit"
   | "activity";
 
+/**
+ * Renderer refresh rate tiers for terminal UI updates.
+ *
+ * Maps to backend PtyHostActivityTier:
+ * - BURST/FOCUSED/VISIBLE → backend "active" (full visual streaming, 50ms polling)
+ * - BACKGROUND → backend "background" (visual streaming suppressed, 500ms polling)
+ *                Analysis buffer writes continue for agent state detection
+ */
 export enum TerminalRefreshTier {
   BURST = 16, // 60fps - only during active typing
   FOCUSED = 100, // 10fps - focused but idle

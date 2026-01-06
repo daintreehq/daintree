@@ -255,7 +255,19 @@ export interface AgentKilledPayload {
   worktreeId?: string;
 }
 
-/** Terminal activity tier (streaming policy) */
+/**
+ * Terminal activity tier (streaming policy).
+ *
+ * Controls backend streaming behavior and resource allocation:
+ * - `active`: Full visual streaming to SAB/IPC (50ms ActivityMonitor polling)
+ * - `background`: Visual streaming suppressed, wake snapshots only (500ms polling)
+ *                 Analysis buffer writes continue for agent state detection
+ *
+ * Maps from renderer TerminalRefreshTier:
+ * - BURST/FOCUSED → active
+ * - VISIBLE → active (for now, may become background in future)
+ * - BACKGROUND → background
+ */
 export type PtyHostActivityTier = "active" | "background";
 
 /** Error codes for spawn failures */

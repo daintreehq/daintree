@@ -531,6 +531,16 @@ export class PtyManager extends EventEmitter {
   }
 
   /**
+   * Set activity monitoring tier (active vs background).
+   */
+  setActivityMonitorTier(id: string, interval: number): void {
+    const terminal = this.registry.get(id);
+    if (terminal) {
+      terminal.setActivityMonitorTier(interval);
+    }
+  }
+
+  /**
    * Clean up all terminals.
    */
   dispose(): void {
