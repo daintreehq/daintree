@@ -6,6 +6,10 @@ import { logDebug, logError, logWarn } from "../utils/logger.js";
 import type { GitStatus, WorktreeChanges } from "../../shared/types/index.js";
 import { WorktreeRemovedError, GitError } from "../utils/errorTypes.js";
 
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 export interface BranchInfo {
   name: string;
   current: boolean;
@@ -325,6 +329,50 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     return this.handleGitOperation(async () => {
       await this.git.raw(args);
     }, "removeWorktree");
+  }
+
+  async findAvailableBranchName(baseName: string): Promise<string> {
+    const branches = await this.listBranches();
+    // Only check local branches for conflicts (remote branches don't prevent local creation)
+    const localBranchNames = new Set(branches.filter((b) => !b.remote).map((b) => b.name));
+
+    if (!localBranchNames.has(baseName)) {
+      return baseName;
+    }
+
+    // Find highest existing suffix for this base
+    // Start at 2 for first conflict (baseName gets -2, not -1)
+    let maxSuffix = 1;
+    for (const name of localBranchNames) {
+      // Check if it's an exact match of the base
+      if (name === baseName) {
+        maxSuffix = Math.max(maxSuffix, 1);
+        continue;
+      }
+
+      // Check for suffixed versions: baseName-N (where N is a number)
+      const match = name.match(new RegExp(`^${escapeRegex(baseName)}-(\\d+)$`));
+      if (match) {
+        maxSuffix = Math.max(maxSuffix, parseInt(match[1], 10));
+      }
+    }
+
+    // Return next available (first conflict gets -2)
+    return `${baseName}-${maxSuffix + 1}`;
+  }
+
+  findAvailablePath(basePath: string): string {
+    if (!existsSync(basePath)) {
+      return basePath;
+    }
+
+    // Find next available suffix (start at 2 for first conflict)
+    let suffix = 2;
+    while (existsSync(`${basePath}-${suffix}`)) {
+      suffix++;
+    }
+
+    return `${basePath}-${suffix}`;
   }
 
   private async handleGitOperation<T>(operation: () => Promise<T>, context: string): Promise<T> {

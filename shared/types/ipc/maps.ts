@@ -120,6 +120,10 @@ export interface IpcInvokeMap {
     args: [payload: { rootPath: string; branchName: string }];
     result: string;
   };
+  "worktree:get-available-branch": {
+    args: [payload: { rootPath: string; branchName: string }];
+    result: string;
+  };
   "worktree:delete": {
     args: [payload: WorktreeDeletePayload];
     result: void;

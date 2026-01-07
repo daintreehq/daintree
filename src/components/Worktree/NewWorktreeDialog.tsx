@@ -57,8 +57,8 @@ export function NewWorktreeDialog({
   const [fromRemote, setFromRemote] = useState(false);
   const [selectedIssue, setSelectedIssue] = useState<GitHubIssue | null>(null);
   const [selectedPrefix, setSelectedPrefix] = useState(BRANCH_TYPES[0].prefix);
-  const [branchExistsError, setBranchExistsError] = useState(false);
-  const [branchExists, setBranchExists] = useState(false);
+  const [branchWasAutoResolved, setBranchWasAutoResolved] = useState(false);
+  const [pathWasAutoResolved, setPathWasAutoResolved] = useState(false);
 
   const [branchPickerOpen, setBranchPickerOpen] = useState(false);
   const [branchQuery, setBranchQuery] = useState("");
@@ -240,8 +240,8 @@ export function NewWorktreeDialog({
 
     setLoading(true);
     setError(null);
-    setBranchExistsError(false);
-    setBranchExists(false);
+    setBranchWasAutoResolved(false);
+    setPathWasAutoResolved(false);
     setBranches([]);
     setBaseBranch("");
     setFromRemote(false);
@@ -311,23 +311,66 @@ export function NewWorktreeDialog({
     }
   }, [selectedIssue]);
 
+  // Auto-resolve branch name and path conflicts (debounced)
   useEffect(() => {
-    if (!newBranch || !rootPath) return;
-
     const trimmedName = newBranch.trim();
+
+    // Validate input before calling IPC
+    if (!trimmedName || !rootPath) {
+      setBranchWasAutoResolved(false);
+      setPathWasAutoResolved(false);
+      return;
+    }
+
+    // Check for invalid characters
+    if (/[\s.]$/.test(trimmedName) || /^[.-]/.test(trimmedName) || /[/\\:]/.test(trimmedName)) {
+      return;
+    }
+
     const fullBranchName = `${selectedPrefix}/${trimmedName}`;
     const abortController = new AbortController();
 
-    worktreeClient
-      .getDefaultPath(rootPath, fullBranchName)
-      .then((suggestedPath) => {
-        if (!abortController.signal.aborted) {
-          setWorktreePath(suggestedPath);
+    // Debounce to avoid IPC calls on every keystroke (300ms)
+    const timeoutId = setTimeout(() => {
+      // Fetch both the available branch name and path in parallel
+      Promise.allSettled([
+        worktreeClient.getAvailableBranch(rootPath, fullBranchName),
+        worktreeClient.getDefaultPath(rootPath, fullBranchName),
+      ]).then((results) => {
+        if (abortController.signal.aborted) return;
+
+        const branchResult = results[0];
+        const pathResult = results[1];
+
+        // Handle branch resolution
+        if (branchResult.status === "fulfilled") {
+          const availableBranch = branchResult.value;
+          const branchResolved = availableBranch !== fullBranchName;
+          setBranchWasAutoResolved(branchResolved);
+
+          // If branch was auto-resolved, update the branch name in the UI
+          if (branchResolved) {
+            const resolvedBranchParts = availableBranch.split("/");
+            const branchNameWithoutPrefix = resolvedBranchParts.slice(1).join("/");
+            setNewBranch(branchNameWithoutPrefix);
+          }
+        } else {
+          console.error("Failed to get available branch:", branchResult.reason);
+          setBranchWasAutoResolved(false);
         }
-      })
-      .catch((err) => {
-        if (!abortController.signal.aborted) {
-          console.error("Failed to get default path:", err);
+
+        // Handle path resolution
+        if (pathResult.status === "fulfilled") {
+          const suggestedPath = pathResult.value;
+          const pathBaseName = suggestedPath.split(/[/\\]/).pop() || "";
+          const branchSlug = fullBranchName.replace(/[^a-zA-Z0-9-_]/g, "-");
+          const pathResolved = pathBaseName !== branchSlug && /-\d+$/.test(pathBaseName);
+          setPathWasAutoResolved(pathResolved);
+          setWorktreePath(suggestedPath);
+        } else {
+          console.error("Failed to get default path:", pathResult.reason);
+          setPathWasAutoResolved(false);
+          // Fallback path generation
           const sanitizedBranch = fullBranchName.replace(/[^a-zA-Z0-9-_]/g, "-");
           const separator = rootPath.includes("\\") ? "\\" : "/";
           const repoName = rootPath.split(/[/\\]/).pop() || "repo";
@@ -336,29 +379,16 @@ export function NewWorktreeDialog({
           );
         }
       });
+    }, 300);
 
-    return () => abortController.abort();
+    return () => {
+      clearTimeout(timeoutId);
+      abortController.abort();
+    };
   }, [newBranch, selectedPrefix, rootPath]);
 
-  // Check if the branch already exists locally (debounced)
-  useEffect(() => {
-    if (!newBranch.trim() || branches.length === 0) {
-      setBranchExists(false);
-      return;
-    }
-
-    const fullBranchName = `${selectedPrefix}/${newBranch.trim()}`;
-    const timeoutId = setTimeout(() => {
-      // Only check for local branches - remote branches need fromRemote to be checked
-      const exists = branches.some((b) => b.name === fullBranchName && !b.remote);
-      setBranchExists(exists);
-    }, 150);
-
-    return () => clearTimeout(timeoutId);
-  }, [newBranch, selectedPrefix, branches]);
-
-  const handleCreate = async (useExistingBranch = false) => {
-    if (!useExistingBranch && !baseBranch) {
+  const handleCreate = async () => {
+    if (!baseBranch) {
       setError("Please select a base branch");
       return;
     }
@@ -388,18 +418,13 @@ export function NewWorktreeDialog({
 
     setCreating(true);
     setError(null);
-    setBranchExistsError(false);
 
     try {
-      // Automatically use existing branch if we detected it exists
-      const shouldUseExisting = useExistingBranch || branchExists;
-
       const options: CreateWorktreeOptions = {
         baseBranch,
         newBranch: fullBranchName,
         path: worktreePath.trim(),
         fromRemote,
-        useExistingBranch: shouldUseExisting,
       };
 
       const result = await actionService.dispatch(
@@ -454,9 +479,7 @@ export function NewWorktreeDialog({
       setSelectedPrefix(BRANCH_TYPES[0].prefix);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Failed to create worktree";
-      const isBranchExists = /branch named .* already exists/.test(message);
-      setBranchExistsError(isBranchExists);
-      setError(isBranchExists ? `Branch "${fullBranchName}" already exists` : message);
+      setError(message);
     } finally {
       setCreating(false);
     }
@@ -661,7 +684,7 @@ export function NewWorktreeDialog({
                   placeholder="my-awesome-feature"
                   className="flex-1 px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
                   disabled={creating}
-                  aria-describedby={branchExists ? "branch-exists-hint" : undefined}
+                  aria-describedby={branchWasAutoResolved ? "branch-resolved-hint" : undefined}
                 />
               </div>
               <p className="text-xs text-canopy-text/60">
@@ -670,15 +693,15 @@ export function NewWorktreeDialog({
                   {selectedPrefix}/{newBranch || "..."}
                 </span>
               </p>
-              {branchExists && (
+              {branchWasAutoResolved && (
                 <p
-                  id="branch-exists-hint"
-                  className="text-xs text-canopy-accent flex items-center gap-1.5 mt-1"
+                  id="branch-resolved-hint"
+                  className="text-xs text-green-500 flex items-center gap-1.5 mt-1"
                   role="status"
                   aria-live="polite"
                 >
                   <Info className="w-3.5 h-3.5" aria-hidden="true" />
-                  This branch already exists and will be reused
+                  Name auto-incremented to avoid conflict with existing branch
                 </p>
               )}
             </div>
@@ -723,6 +746,16 @@ export function NewWorktreeDialog({
               <p className="text-xs text-canopy-text/60">
                 Directory where the worktree will be created
               </p>
+              {pathWasAutoResolved && (
+                <p
+                  className="text-xs text-green-500 flex items-center gap-1.5 mt-1"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <Info className="w-3.5 h-3.5" aria-hidden="true" />
+                  Path auto-incremented to avoid conflict with existing directory
+                </p>
+              )}
             </div>
 
             <div className="flex items-center gap-2">
@@ -864,21 +897,7 @@ export function NewWorktreeDialog({
             {error && (
               <div className="flex items-start gap-2 p-3 bg-red-500/10 border border-red-500/20 rounded-[var(--radius-md)]">
                 <AlertCircle className="w-4 h-4 text-[var(--color-status-error)] mt-0.5 flex-shrink-0" />
-                <div className="flex-1">
-                  <p className="text-sm text-[var(--color-status-error)]">{error}</p>
-                  {branchExistsError && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="mt-2"
-                      onClick={() => handleCreate(true)}
-                      disabled={creating}
-                    >
-                      <GitBranch className="w-3.5 h-3.5 mr-1.5" />
-                      Use existing branch
-                    </Button>
-                  )}
-                </div>
+                <p className="text-sm text-[var(--color-status-error)]">{error}</p>
               </div>
             )}
           </div>
@@ -889,11 +908,7 @@ export function NewWorktreeDialog({
         <Button variant="ghost" onClick={onClose} disabled={creating}>
           Cancel
         </Button>
-        <Button
-          onClick={() => handleCreate()}
-          disabled={creating || loading}
-          className="min-w-[100px]"
-        >
+        <Button onClick={handleCreate} disabled={creating || loading} className="min-w-[100px]">
           {creating ? (
             <>
               <Loader2 className="w-4 h-4 mr-2 animate-spin" />

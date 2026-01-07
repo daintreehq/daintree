@@ -9,6 +9,7 @@ import {
   DEFAULT_WORKTREE_PATH_PATTERN,
   validatePathPattern,
 } from "../../../shared/utils/pathPattern.js";
+import { GitService } from "../../services/GitService.js";
 
 export function registerWorktreeHandlers(deps: HandlerDependencies): () => void {
   const { worktreeService: workspaceClient } = deps;
@@ -119,10 +120,39 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
       throw new Error(`Invalid stored pattern: ${validation.error}`);
     }
 
-    return generateWorktreePath(rootPath, branchName, pattern);
+    // Generate the initial path
+    const initialPath = generateWorktreePath(rootPath, branchName, pattern);
+
+    // Auto-resolve path conflicts by finding an available path
+    const gitService = new GitService(rootPath);
+    return gitService.findAvailablePath(initialPath);
   };
   ipcMain.handle(CHANNELS.WORKTREE_GET_DEFAULT_PATH, handleWorktreeGetDefaultPath);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_GET_DEFAULT_PATH));
+
+  const handleWorktreeGetAvailableBranch = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: { rootPath: string; branchName: string }
+  ): Promise<string> => {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid payload for worktree:get-available-branch");
+    }
+
+    const { rootPath, branchName } = payload;
+
+    if (typeof rootPath !== "string" || !rootPath.trim()) {
+      throw new Error("Invalid rootPath: must be a non-empty string");
+    }
+
+    if (typeof branchName !== "string" || !branchName.trim()) {
+      throw new Error("Invalid branchName: must be a non-empty string");
+    }
+
+    const gitService = new GitService(rootPath);
+    return gitService.findAvailableBranchName(branchName);
+  };
+  ipcMain.handle(CHANNELS.WORKTREE_GET_AVAILABLE_BRANCH, handleWorktreeGetAvailableBranch);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_GET_AVAILABLE_BRANCH));
 
   const handleWorktreeDelete = async (
     _event: Electron.IpcMainInvokeEvent,

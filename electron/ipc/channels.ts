@@ -9,6 +9,7 @@ export const CHANNELS = {
   WORKTREE_PR_REFRESH: "worktree:pr-refresh",
   WORKTREE_PR_STATUS: "worktree:pr-status",
   WORKTREE_GET_DEFAULT_PATH: "worktree:get-default-path",
+  WORKTREE_GET_AVAILABLE_BRANCH: "worktree:get-available-branch",
   WORKTREE_DELETE: "worktree:delete",
 
   TERMINAL_SPAWN: "terminal:spawn",

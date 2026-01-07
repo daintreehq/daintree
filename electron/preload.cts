@@ -133,6 +133,7 @@ const CHANNELS = {
   WORKTREE_PR_REFRESH: "worktree:pr-refresh",
   WORKTREE_PR_STATUS: "worktree:pr-status",
   WORKTREE_GET_DEFAULT_PATH: "worktree:get-default-path",
+  WORKTREE_GET_AVAILABLE_BRANCH: "worktree:get-available-branch",
   WORKTREE_DELETE: "worktree:delete",
 
   // Terminal channels
@@ -401,6 +402,9 @@ const api: ElectronAPI = {
 
     getDefaultPath: (rootPath: string, branchName: string): Promise<string> =>
       _typedInvoke(CHANNELS.WORKTREE_GET_DEFAULT_PATH, { rootPath, branchName }),
+
+    getAvailableBranch: (rootPath: string, branchName: string): Promise<string> =>
+      _typedInvoke(CHANNELS.WORKTREE_GET_AVAILABLE_BRANCH, { rootPath, branchName }),
 
     delete: (worktreeId: string, force?: boolean) =>
       _typedInvoke(CHANNELS.WORKTREE_DELETE, { worktreeId, force }),
