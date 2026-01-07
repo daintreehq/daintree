@@ -29,8 +29,6 @@ export const CHANNELS = {
   TERMINAL_RECONNECT: "terminal:reconnect",
   TERMINAL_REPLAY_HISTORY: "terminal:replay-history",
   TERMINAL_GET_SERIALIZED_STATE: "terminal:get-serialized-state",
-  TERMINAL_GET_SNAPSHOT: "terminal:get-snapshot",
-  TERMINAL_GET_CLEAN_LOG: "terminal:get-clean-log",
   TERMINAL_GET_SHARED_BUFFERS: "terminal:get-shared-buffers",
   TERMINAL_GET_ANALYSIS_BUFFER: "terminal:get-analysis-buffer",
   TERMINAL_GET_INFO: "terminal:get-info",
@@ -44,7 +42,6 @@ export const CHANNELS = {
   FILES_SEARCH: "files:search",
 
   AGENT_STATE_CHANGED: "agent:state-changed",
-  AGENT_GET_STATE: "agent:get-state",
   AGENT_DETECTED: "agent:detected",
   AGENT_EXITED: "agent:exited",
 
@@ -70,7 +67,6 @@ export const CHANNELS = {
   SYSTEM_GET_CLI_AVAILABILITY: "system:get-cli-availability",
   SYSTEM_REFRESH_CLI_AVAILABILITY: "system:refresh-cli-availability",
   SYSTEM_WAKE: "system:wake",
-  SYSTEM_BACKEND_READY: "system:backend-ready",
 
   PR_DETECTED: "pr:detected",
   PR_CLEARED: "pr:cleared",
@@ -212,8 +208,6 @@ export const CHANNELS = {
   NOTIFICATION_UPDATE: "notification:update",
 
   SLASH_COMMANDS_LIST: "slash-commands:list",
-
-  WINDOW_VISIBILITY_CHANGE: "window:visibility-change",
 
   GEMINI_GET_STATUS: "gemini:get-status",
   GEMINI_ENABLE_ALTERNATE_BUFFER: "gemini:enable-alternate-buffer",

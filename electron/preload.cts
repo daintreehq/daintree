@@ -169,7 +169,6 @@ const CHANNELS = {
 
   // Agent state channels
   AGENT_STATE_CHANGED: "agent:state-changed",
-  AGENT_GET_STATE: "agent:get-state",
   AGENT_DETECTED: "agent:detected",
   AGENT_EXITED: "agent:exited",
 

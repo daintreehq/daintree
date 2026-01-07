@@ -556,8 +556,6 @@ async function createWindow(): Promise<void> {
     }
   }
 
-  sendToRenderer(mainWindow, CHANNELS.SYSTEM_BACKEND_READY);
-
   // Spawn Default Terminal
   console.log("[MAIN] Spawning default terminal...");
   try {
