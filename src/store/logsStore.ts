@@ -1,5 +1,6 @@
 import { create, type StateCreator } from "zustand";
 import type { LogEntry, LogFilterOptions } from "@/types";
+import { safeStringify } from "@/lib/safeStringify";
 
 interface LogsState {
   logs: LogEntry[];
@@ -121,7 +122,7 @@ export function filterLogs(logs: LogEntry[], filters: LogFilterOptions): LogEntr
       (log) =>
         log.message.toLowerCase().includes(searchLower) ||
         (log.source && log.source.toLowerCase().includes(searchLower)) ||
-        (log.context && JSON.stringify(log.context).toLowerCase().includes(searchLower))
+        (log.context && safeStringify(log.context).toLowerCase().includes(searchLower))
     );
   }
 

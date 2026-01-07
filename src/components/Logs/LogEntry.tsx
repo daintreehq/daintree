@@ -1,5 +1,6 @@
 import { memo, useCallback } from "react";
 import { cn } from "@/lib/utils";
+import { safeStringify } from "@/lib/safeStringify";
 import type { LogEntry as LogEntryType, LogLevel } from "@/types";
 
 interface LogEntryProps {
@@ -42,7 +43,7 @@ function formatTimestamp(timestamp: number): string {
 }
 
 function formatContext(context: Record<string, unknown>): string {
-  return JSON.stringify(context, null, 2);
+  return safeStringify(context, 2);
 }
 
 function LogEntryComponent({ entry, isExpanded, onToggle }: LogEntryProps) {
