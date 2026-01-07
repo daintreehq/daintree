@@ -153,9 +153,12 @@ export interface IpcInvokeMap {
     args: [terminalId: string];
     result: string | null;
   };
-  "terminal:get-shared-buffer": {
+  "terminal:get-shared-buffers": {
     args: [];
-    result: SharedArrayBuffer | null;
+    result: {
+      visualBuffers: SharedArrayBuffer[];
+      signalBuffer: SharedArrayBuffer | null;
+    };
   };
   "terminal:get-analysis-buffer": {
     args: [];
@@ -183,10 +186,6 @@ export interface IpcInvokeMap {
   };
 
   // Agent channels
-  "agent:get-state": {
-    args: [agentId: string];
-    result: string | null;
-  };
   "agent-help:get": {
     args: [request: AgentHelpRequest];
     result: AgentHelpResult;
