@@ -944,10 +944,7 @@ export class WorkspaceService {
               throw new Error(
                 `Branch '${branchToDelete}' has unmerged changes. Enable force delete to remove it.`
               );
-            } else if (
-              errorMsg.includes("checked out at") ||
-              errorMsg.includes("Cannot delete")
-            ) {
+            } else if (errorMsg.includes("checked out at") || errorMsg.includes("Cannot delete")) {
               throw new Error(
                 `Cannot delete branch '${branchToDelete}': ${errorMsg.split("\n")[0]}`
               );

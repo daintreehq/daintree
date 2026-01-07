@@ -50,7 +50,6 @@ export const worktreeClient = {
   delete: (worktreeId: string, force?: boolean, deleteBranch?: boolean): Promise<void> => {
     return window.electron.worktree.delete(worktreeId, force, deleteBranch);
   },
-  },
 
   onUpdate: (callback: (state: WorktreeState) => void): (() => void) => {
     return window.electron.worktree.onUpdate(callback);
