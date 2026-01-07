@@ -236,6 +236,8 @@ export class WorkspaceService {
       const isActive = wt.id === activeWorktreeId;
 
       if (existingMonitor) {
+        // Check if branch changed - if so, re-extract issue number
+        const branchChanged = existingMonitor.branch !== wt.branch;
         existingMonitor.branch = wt.branch;
         existingMonitor.name = wt.name;
         const interval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
@@ -246,6 +248,31 @@ export class WorkspaceService {
           this.pollIntervalMax,
           this.circuitBreakerThreshold
         );
+
+        // Re-extract issue number when branch changes
+        if (branchChanged && wt.branch) {
+          const syncIssueNumber = extractIssueNumberSync(wt.branch, wt.name);
+          if (syncIssueNumber) {
+            existingMonitor.issueNumber = syncIssueNumber;
+          } else {
+            // Clear immediately, then try async extraction
+            existingMonitor.issueNumber = undefined;
+            void this.extractIssueNumberAsync(existingMonitor, wt.branch, wt.name);
+          }
+          // Clear stale issue title - will be repopulated by PR service
+          existingMonitor.issueTitle = undefined;
+          // Emit update if initial status has completed
+          if (existingMonitor.hasInitialStatus) {
+            this.emitUpdate(existingMonitor);
+          }
+        } else if (branchChanged && !wt.branch) {
+          // Branch cleared (e.g., detached HEAD) - clear issue number and title
+          existingMonitor.issueNumber = undefined;
+          existingMonitor.issueTitle = undefined;
+          if (existingMonitor.hasInitialStatus) {
+            this.emitUpdate(existingMonitor);
+          }
+        }
       } else {
         await ensureNoteFile(wt.path);
         const issueNumber = wt.branch ? extractIssueNumberSync(wt.branch, wt.name) : null;
@@ -318,7 +345,8 @@ export class WorkspaceService {
   ): Promise<void> {
     try {
       const issueNumber = await extractIssueNumber(branchName, folderName);
-      if (issueNumber && monitor.isRunning) {
+      // Guard against race condition: only update if branch hasn't changed
+      if (issueNumber && monitor.isRunning && monitor.branch === branchName) {
         monitor.issueNumber = issueNumber;
         // Only emit if initial git status has completed to avoid partial snapshots
         if (monitor.hasInitialStatus) {
