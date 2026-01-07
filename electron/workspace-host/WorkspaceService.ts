@@ -225,6 +225,8 @@ export class WorkspaceService {
 
         this.stopMonitor(monitor);
         this.monitors.delete(id);
+        clearGitDirCache(monitor.path);
+        invalidateGitStatusCache(monitor.path);
         this.sendEvent({ type: "worktree-removed", worktreeId: id });
         events.emit("sys:worktree:remove", { worktreeId: id, timestamp: Date.now() });
       }
@@ -727,6 +729,8 @@ export class WorkspaceService {
           await this.updateGitStatus(monitor, true);
         }
       } else {
+        // Re-discover worktrees to find new/removed ones
+        await this.discoverAndSyncWorktrees();
         await this.refreshAll();
       }
       this.sendEvent({ type: "refresh-result", requestId, success: true });
@@ -738,6 +742,40 @@ export class WorkspaceService {
         error: (error as Error).message,
       });
     }
+  }
+
+  private async discoverAndSyncWorktrees(): Promise<void> {
+    if (!this.git) {
+      return;
+    }
+
+    const rawWorktrees = await this.listWorktreesFromGit();
+    const worktrees: Worktree[] = rawWorktrees.map((wt) => {
+      let name: string;
+      if (wt.isMainWorktree) {
+        name = wt.path.split(/[/\\]/).pop() || "Main";
+      } else if (wt.isDetached && wt.head) {
+        name = wt.head.substring(0, 7);
+      } else if (wt.branch) {
+        name = wt.branch;
+      } else {
+        name = wt.path.split(/[/\\]/).pop() || "Worktree";
+      }
+
+      return {
+        id: wt.path,
+        path: wt.path,
+        name: name,
+        branch: wt.branch || undefined,
+        head: wt.head,
+        isDetached: wt.isDetached,
+        isCurrent: false,
+        isMainWorktree: wt.isMainWorktree,
+        gitDir: getGitDir(wt.path) || undefined,
+      };
+    });
+
+    await this.syncMonitors(worktrees, this.activeWorktreeId, this.mainBranch, undefined, true);
   }
 
   private async refreshAll(): Promise<void> {
