@@ -1,7 +1,6 @@
 import { ipcMain, BrowserWindow, shell } from "electron";
-import { homedir } from "os";
-import { join } from "path";
 import { CHANNELS } from "./channels.js";
+import { getLogFilePath } from "../utils/logger.js";
 import {
   GitError,
   ProcessError,
@@ -145,12 +144,20 @@ class ErrorService {
   }
 
   async openLogs(): Promise<void> {
-    const logPath = join(homedir(), ".config", "canopy", "worktree-debug.log");
+    const logPath = getLogFilePath();
+    const { dirname } = await import("path");
+    const logDir = dirname(logPath);
+
     try {
-      await shell.openPath(logPath);
-    } catch (_error) {
-      const configDir = join(homedir(), ".config", "canopy");
-      await shell.openPath(configDir);
+      const fs = await import("fs");
+      await fs.promises.mkdir(logDir, { recursive: true });
+    } catch {
+      // Ignore mkdir errors
+    }
+
+    const openResult = await shell.openPath(logPath);
+    if (openResult) {
+      await shell.openPath(logDir);
     }
   }
 }

@@ -1,9 +1,7 @@
 import { ipcMain, shell } from "electron";
-import { join } from "path";
-import { homedir } from "os";
 import { CHANNELS } from "../channels.js";
 import { logBuffer } from "../../services/LogBuffer.js";
-import { setVerboseLogging, isVerboseLogging, logInfo } from "../../utils/logger.js";
+import { setVerboseLogging, isVerboseLogging, logInfo, getLogFilePath } from "../../utils/logger.js";
 import type { FilterOptions as LogFilterOptions } from "../../services/LogBuffer.js";
 
 export function registerLogsHandlers(): () => void {
@@ -34,17 +32,34 @@ export function registerLogsHandlers(): () => void {
   handlers.push(() => ipcMain.removeHandler(CHANNELS.LOGS_CLEAR));
 
   const handleLogsOpenFile = async () => {
-    const logFilePath = join(homedir(), ".config", "canopy", "worktree-debug.log");
+    const logFilePath = getLogFilePath();
     try {
       const fs = await import("fs");
       await fs.promises.access(logFilePath);
-      await shell.openPath(logFilePath);
-    } catch (_error) {
+      const openResult = await shell.openPath(logFilePath);
+      if (openResult) {
+        const { dirname } = await import("path");
+        await shell.openPath(dirname(logFilePath));
+      }
+    } catch (error) {
       const fs = await import("fs");
-      const dir = join(homedir(), ".config", "canopy");
-      await fs.promises.mkdir(dir, { recursive: true });
-      await fs.promises.writeFile(logFilePath, "# Canopy Debug Log\n", "utf8");
-      await shell.openPath(logFilePath);
+      const { dirname } = await import("path");
+      const dir = dirname(logFilePath);
+
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        try {
+          await fs.promises.mkdir(dir, { recursive: true });
+          await fs.promises.writeFile(logFilePath, "", "utf8");
+          const openResult = await shell.openPath(logFilePath);
+          if (openResult) {
+            await shell.openPath(dir);
+          }
+        } catch {
+          await shell.openPath(dir);
+        }
+      } else {
+        await shell.openPath(dir);
+      }
     }
   };
   ipcMain.handle(CHANNELS.LOGS_OPEN_FILE, handleLogsOpenFile);

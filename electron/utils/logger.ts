@@ -75,7 +75,7 @@ function getLogDirectory(): string {
   return join(process.cwd(), "logs");
 }
 
-function getLogFilePath(): string {
+export function getLogFilePath(): string {
   return join(getLogDirectory(), "canopy.log");
 }
 
