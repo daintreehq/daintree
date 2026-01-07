@@ -205,7 +205,7 @@ function safeStringify(value: unknown): string {
         const lowerKey = key.toLowerCase();
         if (SENSITIVE_KEYS.has(lowerKey)) return "[redacted]";
 
-        if (sensitivePatterns.some(pattern => lowerKey.includes(pattern))) {
+        if (sensitivePatterns.some((pattern) => lowerKey.includes(pattern))) {
           return "[redacted]";
         }
 
@@ -287,7 +287,10 @@ function redactSensitiveData(
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(obj)) {
     const lowerKey = key.toLowerCase();
-    if (SENSITIVE_KEYS.has(lowerKey) || sensitivePatterns.some(pattern => lowerKey.includes(pattern))) {
+    if (
+      SENSITIVE_KEYS.has(lowerKey) ||
+      sensitivePatterns.some((pattern) => lowerKey.includes(pattern))
+    ) {
       result[key] = "[redacted]";
     } else if (Array.isArray(value)) {
       result[key] = redactArrayWithCycleDetection(value, visited);
