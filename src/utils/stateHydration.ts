@@ -12,6 +12,7 @@ import { keybindingService } from "@/services/KeybindingService";
 import { isRegisteredAgent } from "@/config/agents";
 import { normalizeScrollbackLines } from "@shared/config/scrollback";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 
 export interface HydrationOptions {
   addTerminal: (options: {
@@ -103,83 +104,135 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
           `[Hydration] Found ${backendTerminals.length} running terminals for project ${currentProjectId}`
         );
 
-        // Build a map of saved terminal ordering from appState.terminals
-        // The saved terminals array preserves the user's panel order
-        const savedTerminalOrder = new Map<string, { index: number; location?: string }>();
-        if (appState.terminals) {
-          appState.terminals.forEach((saved, index) => {
-            savedTerminalOrder.set(saved.id, { index, location: saved.location });
-          });
-        }
+        // Build a map of backend terminals by ID for quick lookup
+        const backendTerminalMap = new Map(backendTerminals.map((t) => [t.id, t]));
 
-        // Sort backend terminals by saved order, orphans go to end
-        // Create index map for stable orphan ordering (original backend order)
-        const backendIndexMap = new Map(backendTerminals.map((t, i) => [t.id, i]));
+        // Restore all panels in saved order (mix of PTY reconnects and non-PTY recreations)
+        if (appState.terminals && appState.terminals.length > 0) {
+          console.log(`[Hydration] Restoring ${appState.terminals.length} saved panel(s)`);
 
-        const sortedBackendTerminals = [...backendTerminals].sort((a, b) => {
-          const orderA = savedTerminalOrder.get(a.id);
-          const orderB = savedTerminalOrder.get(b.id);
-
-          // If both are in saved order, sort by their saved index
-          if (orderA !== undefined && orderB !== undefined) {
-            return orderA.index - orderB.index;
-          }
-          // If only A is in saved order, A comes first
-          if (orderA !== undefined) return -1;
-          // If only B is in saved order, B comes first
-          if (orderB !== undefined) return 1;
-          // Both are orphans - use original backend index for stable ordering
-          return (backendIndexMap.get(a.id) ?? 0) - (backendIndexMap.get(b.id) ?? 0);
-        });
-
-        const orphanCount = sortedBackendTerminals.filter(
-          (t) => !savedTerminalOrder.has(t.id)
-        ).length;
-        if (orphanCount > 0) {
-          console.log(
-            `[Hydration] ${orphanCount} terminal(s) not in saved order, appending at end`
-          );
-        }
-
-        for (const terminal of sortedBackendTerminals) {
-          try {
-            console.log(`[Hydration] Reconnecting to terminal: ${terminal.id}`);
-
-            const cwd = terminal.cwd || projectRoot || "";
-            const currentAgentState = terminal.agentState;
-            const backendLastStateChange = terminal.lastStateChange;
-            const agentId =
-              terminal.agentId ??
-              (terminal.type && isRegisteredAgent(terminal.type) ? terminal.type : undefined);
-
-            // Restore location from saved state if available, default to grid
-            const savedInfo = savedTerminalOrder.get(terminal.id);
-            const location = (savedInfo?.location === "dock" ? "dock" : "grid") as "grid" | "dock";
-
-            await addTerminal({
-              kind: terminal.kind ?? (agentId ? "agent" : "terminal"),
-              type: terminal.type,
-              agentId,
-              title: terminal.title,
-              cwd,
-              worktreeId: terminal.worktreeId,
-              location,
-              existingId: terminal.id,
-              agentState: currentAgentState,
-              lastStateChange: backendLastStateChange,
-            });
-
-            // Restore terminal content from backend headless state
+          for (const saved of appState.terminals) {
             try {
-              await terminalInstanceService.fetchAndRestore(terminal.id);
-            } catch (snapshotError) {
-              console.warn(
-                `[Hydration] Serialized state restore failed for ${terminal.id}:`,
-                snapshotError
-              );
+              const backendTerminal = backendTerminalMap.get(saved.id);
+
+              if (backendTerminal) {
+                // PTY terminal - reconnect to existing backend process
+                console.log(`[Hydration] Reconnecting to terminal: ${saved.id}`);
+
+                const cwd = backendTerminal.cwd || projectRoot || "";
+                const currentAgentState = backendTerminal.agentState;
+                const backendLastStateChange = backendTerminal.lastStateChange;
+                const agentId =
+                  backendTerminal.agentId ??
+                  (backendTerminal.type && isRegisteredAgent(backendTerminal.type)
+                    ? backendTerminal.type
+                    : undefined);
+
+                const location = (saved.location === "dock" ? "dock" : "grid") as "grid" | "dock";
+
+                await addTerminal({
+                  kind: backendTerminal.kind ?? (agentId ? "agent" : "terminal"),
+                  type: backendTerminal.type,
+                  agentId,
+                  title: backendTerminal.title,
+                  cwd,
+                  worktreeId: backendTerminal.worktreeId,
+                  location,
+                  existingId: backendTerminal.id,
+                  agentState: currentAgentState,
+                  lastStateChange: backendLastStateChange,
+                });
+
+                // Restore terminal content from backend headless state
+                try {
+                  await terminalInstanceService.fetchAndRestore(backendTerminal.id);
+                } catch (snapshotError) {
+                  console.warn(
+                    `[Hydration] Serialized state restore failed for ${saved.id}:`,
+                    snapshotError
+                  );
+                }
+
+                // Mark as restored
+                backendTerminalMap.delete(saved.id);
+              } else {
+                // Non-PTY panel or PTY panel that no longer exists in backend - try to recreate
+                const kind = (saved.kind ?? "terminal") as TerminalKind;
+
+                if (!panelKindHasPty(kind)) {
+                  // Non-PTY panel (browser, notes) - recreate from saved state
+                  console.log(`[Hydration] Recreating ${kind} panel: ${saved.id}`);
+
+                  const location = (saved.location === "dock" ? "dock" : "grid") as "grid" | "dock";
+
+                  await addTerminal({
+                    kind,
+                    title: saved.title,
+                    cwd: saved.cwd || projectRoot || "",
+                    worktreeId: saved.worktreeId,
+                    location,
+                    requestedId: saved.id,
+                    browserUrl: saved.browserUrl,
+                    notePath: saved.notePath,
+                    noteId: saved.noteId,
+                    scope: saved.scope as "worktree" | "project" | undefined,
+                    createdAt: saved.createdAt,
+                  });
+                } else {
+                  console.log(
+                    `[Hydration] Skipping PTY panel ${saved.id} (no backend process found)`
+                  );
+                }
+              }
+            } catch (error) {
+              console.warn(`Failed to restore panel ${saved.id}:`, error);
             }
-          } catch (error) {
-            console.warn(`Failed to reconnect to terminal ${terminal.id}:`, error);
+          }
+        }
+
+        // Restore any orphaned backend terminals not in saved state (append at end)
+        const orphanedTerminals = Array.from(backendTerminalMap.values());
+        if (orphanedTerminals.length > 0) {
+          console.log(
+            `[Hydration] ${orphanedTerminals.length} orphaned terminal(s) not in saved order, appending at end`
+          );
+
+          for (const terminal of orphanedTerminals) {
+            try {
+              console.log(`[Hydration] Reconnecting to orphaned terminal: ${terminal.id}`);
+
+              const cwd = terminal.cwd || projectRoot || "";
+              const currentAgentState = terminal.agentState;
+              const backendLastStateChange = terminal.lastStateChange;
+              const agentId =
+                terminal.agentId ??
+                (terminal.type && isRegisteredAgent(terminal.type) ? terminal.type : undefined);
+
+              await addTerminal({
+                kind: terminal.kind ?? (agentId ? "agent" : "terminal"),
+                type: terminal.type,
+                agentId,
+                title: terminal.title,
+                cwd,
+                worktreeId: terminal.worktreeId,
+                location: "grid",
+                existingId: terminal.id,
+                agentState: currentAgentState,
+                lastStateChange: backendLastStateChange,
+              });
+
+              // Restore terminal content from backend headless state
+              try {
+                await terminalInstanceService.fetchAndRestore(terminal.id);
+              } catch (snapshotError) {
+                console.warn(
+                  `[Hydration] Serialized state restore failed for ${terminal.id}:`,
+                  snapshotError
+                );
+              }
+            } catch (error) {
+              console.warn(`Failed to reconnect to orphaned terminal ${terminal.id}:`, error);
+            }
           }
         }
       } catch (error) {

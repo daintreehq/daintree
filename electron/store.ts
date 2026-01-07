@@ -44,9 +44,11 @@ export interface StoreSchema {
     };
     terminals: Array<{
       id: string;
-      type: "terminal" | "claude" | "gemini" | "codex" | "opencode";
+      kind?: "terminal" | "agent" | "browser" | "notes" | "dev-preview" | string;
+      type?: "terminal" | "claude" | "gemini" | "codex" | "opencode";
+      agentId?: string;
       title: string;
-      cwd: string;
+      cwd?: string;
       worktreeId?: string;
       location: "grid" | "dock";
       command?: string;
@@ -54,6 +56,12 @@ export interface StoreSchema {
         autoRestart?: boolean;
       };
       isInputLocked?: boolean;
+      browserUrl?: string;
+      notePath?: string;
+      noteId?: string;
+      scope?: "worktree" | "project";
+      createdAt?: number;
+      devCommand?: string;
     }>;
     /** @deprecated Recipes are now stored per-project. This field is kept for migration only. */
     recipes?: Array<{

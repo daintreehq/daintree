@@ -4,6 +4,7 @@
 
 import { z } from "zod";
 import { TerminalTypeSchema } from "./agent.js";
+import { panelKindHasPty } from "../../shared/config/panelKindRegistry.js";
 
 // ============================================================================
 // Terminal Entry Validation Schemas
@@ -33,13 +34,17 @@ export const PanelKindSchema = z.union([
  * This is the minimal schema for ordering/metadata preservation.
  * Note: Uses AppStateTerminalLocationSchema which excludes "trash" to match StoreSchema.
  * Uses passthrough() to preserve unknown fields for forward compatibility with extensions.
+ *
+ * PTY-backed panels (terminal, agent, dev-preview) require `type` and `cwd`.
+ * Non-PTY panels (browser, notes) have these fields optional since they don't spawn processes.
  */
 export const AppStateTerminalEntrySchema = z
   .object({
     id: z.string().min(1),
-    type: TerminalTypeSchema,
+    kind: PanelKindSchema.optional(),
+    type: TerminalTypeSchema.optional(),
     title: z.string(),
-    cwd: z.string(),
+    cwd: z.string().optional(),
     worktreeId: z.string().optional(),
     location: AppStateTerminalLocationSchema,
     command: z.string().optional(),
@@ -49,8 +54,42 @@ export const AppStateTerminalEntrySchema = z
       })
       .optional(),
     isInputLocked: z.boolean().optional(),
+    browserUrl: z.string().optional(),
+    notePath: z.string().optional(),
+    noteId: z.string().optional(),
+    scope: z.enum(["worktree", "project"]).optional(),
+    createdAt: z.number().optional(),
+    devCommand: z.string().optional(),
   })
-  .passthrough();
+  .passthrough()
+  .refine(
+    (data) => {
+      // PTY-backed panels require type and cwd
+      // Non-PTY panels (browser, notes) don't need them
+
+      // Infer kind from content fields if missing (backwards compatibility)
+      let kind = data.kind;
+      if (!kind) {
+        if (data.browserUrl !== undefined) {
+          kind = "browser";
+        } else if (data.notePath !== undefined || data.noteId !== undefined) {
+          kind = "notes";
+        } else if (data.devCommand !== undefined) {
+          kind = "dev-preview";
+        } else {
+          kind = "terminal"; // default to terminal
+        }
+      }
+
+      if (panelKindHasPty(kind)) {
+        return data.type !== undefined && data.cwd !== undefined;
+      }
+      return true;
+    },
+    {
+      message: "PTY-backed panels require 'type' and 'cwd' fields",
+    }
+  );
 
 /**
  * Schema for terminal snapshots in ProjectState.terminals (per-project state).
