@@ -329,8 +329,8 @@ export function WorktreeOverviewModal({
                   </div>
                   <div
                     className={cn(
-                      "grid gap-4",
-                      "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4",
+                      "grid gap-3",
+                      "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3",
                       "auto-rows-min"
                     )}
                   >
@@ -373,8 +373,8 @@ export function WorktreeOverviewModal({
           ) : (
             <div
               className={cn(
-                "grid gap-4",
-                "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4",
+                "grid gap-3",
+                "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3",
                 "items-start"
               )}
             >
