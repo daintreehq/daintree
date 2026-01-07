@@ -168,6 +168,7 @@ export class ClipboardFileInjector {
       ".jsx": "application/javascript",
       ".tsx": "application/typescript",
       ".json": "application/json",
+      ".ndjson": "application/x-ndjson",
       ".png": "image/png",
       ".jpg": "image/jpeg",
       ".jpeg": "image/jpeg",

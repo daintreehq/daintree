@@ -12,7 +12,23 @@ import type {
   CopyTreeResult,
   CopyTreeProgress,
   FileTreeNode,
+  CopyTreeOptions,
 } from "../../types/index.js";
+
+type CopyTreeFormat = NonNullable<CopyTreeOptions["format"]>;
+
+const FORMAT_TO_EXTENSION: Record<CopyTreeFormat, string> = {
+  json: "json",
+  markdown: "md",
+  tree: "txt",
+  ndjson: "ndjson",
+  xml: "xml",
+};
+
+const getExtensionForFormat = (format: CopyTreeFormat | undefined): string => {
+  if (!format) return "xml";
+  return FORMAT_TO_EXTENSION[format] ?? "xml";
+};
 import {
   CopyTreeGeneratePayloadSchema,
   CopyTreeGenerateAndCopyFilePayloadSchema,
@@ -145,7 +161,8 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
           .replace(/-+/g, "-")
           .replace(/^-+|-+$/g, "")
           .slice(0, 100) || "head";
-      const filename = `context-${safeBranch}-${timestamp}.xml`;
+      const extension = getExtensionForFormat(validated.options?.format);
+      const filename = `context-${safeBranch}-${timestamp}.${extension}`;
       const filePath = path.join(tempDir, filename);
 
       await fs.writeFile(filePath, result.content, "utf-8");
