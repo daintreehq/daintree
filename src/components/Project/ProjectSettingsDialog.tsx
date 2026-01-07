@@ -54,7 +54,7 @@ interface EnvVar {
 
 type ProjectSettingsTab = "general" | "context" | "automation";
 
-const SENSITIVE_ENV_KEY_RE = /\b(key|secret|token|password)\b/i;
+const SENSITIVE_ENV_KEY_RE = /(key|secret|token|password)/i;
 
 export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSettingsDialogProps) {
   const { settings, saveSettings, isLoading, error } = useProjectSettings(projectId);
