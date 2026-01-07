@@ -1721,7 +1721,7 @@ export class TerminalProcess {
         terminal.lastStateChange = Date.now();
 
         const stateChangePayload = {
-          agentId: this.id,
+          agentId: this.terminalInfo.agentId,
           terminalId: this.id,
           state: newState,
           previousState,

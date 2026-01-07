@@ -479,7 +479,7 @@ export type CanopyEventMap = {
    * Use this for status indicators and monitoring agent activity.
    */
   "agent:state-changed": WithContext<{
-    agentId: string;
+    agentId?: string;
     state: AgentState;
     previousState: AgentState;
     trigger: AgentStateChangeTrigger;

@@ -37,7 +37,7 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
   switch (event.type) {
     case "agent-state":
       events.emit("agent:state-changed", {
-        agentId: event.id,
+        agentId: event.agentId,
         terminalId: event.id,
         state: event.state,
         previousState: event.previousState,

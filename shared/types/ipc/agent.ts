@@ -31,10 +31,10 @@ export type AgentState = "idle" | "working" | "running" | "waiting" | "completed
 
 /** Payload for agent state change events */
 export interface AgentStateChangePayload {
-  /** Agent/terminal ID */
-  agentId: string;
+  /** Agent ID (e.g., "claude", "gemini") - identifies the agent type. May be undefined for non-agent terminals. */
+  agentId?: AgentId;
   /** Terminal ID (unique identifier for this terminal instance) */
-  terminalId?: string;
+  terminalId: string;
   /** Worktree ID (if terminal is associated with a worktree) */
   worktreeId?: string;
   /** New state */

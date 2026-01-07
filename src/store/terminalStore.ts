@@ -363,17 +363,21 @@ export function setupTerminalStoreListeners() {
   }
 
   agentStateUnsubscribe = terminalClient.onAgentStateChanged((data) => {
-    const { agentId, terminalId, state, timestamp, trigger, confidence } = data;
+    const { terminalId, state, timestamp, trigger, confidence } = data;
 
     if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) {
       console.warn(`Invalid timestamp in agent state event:`, data);
       return;
     }
 
+    if (!terminalId) {
+      console.warn(`Missing terminalId in agent state event:`, data);
+      return;
+    }
+
     const clampedConfidence = Math.max(0, Math.min(1, confidence || 0));
 
-    const targetTerminalId = terminalId || agentId;
-    const terminal = useTerminalStore.getState().terminals.find((t) => t.id === targetTerminalId);
+    const terminal = useTerminalStore.getState().terminals.find((t) => t.id === terminalId);
 
     if (!terminal) {
       return;
@@ -387,14 +391,14 @@ export function setupTerminalStoreListeners() {
       return;
     }
 
-    terminalInstanceService.setAgentState(targetTerminalId, state);
+    terminalInstanceService.setAgentState(terminalId, state);
 
     useTerminalStore
       .getState()
-      .updateAgentState(targetTerminalId, state, undefined, timestamp, trigger, clampedConfidence);
+      .updateAgentState(terminalId, state, undefined, timestamp, trigger, clampedConfidence);
 
     if (state === "waiting" || state === "idle") {
-      useTerminalStore.getState().processQueue(targetTerminalId);
+      useTerminalStore.getState().processQueue(terminalId);
     }
   });
 

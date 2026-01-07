@@ -129,6 +129,7 @@ export type PtyHostEvent =
   | {
       type: "agent-state";
       id: string;
+      agentId?: AgentId;
       state: AgentState;
       previousState: AgentState;
       timestamp: number;

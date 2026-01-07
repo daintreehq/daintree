@@ -947,6 +947,7 @@ events.on("agent:state-changed", (payload) => {
     sendEvent({
       type: "agent-state",
       id: payload.terminalId,
+      agentId: payload.agentId,
       state: payload.state,
       previousState: payload.previousState,
       timestamp: payload.timestamp,
