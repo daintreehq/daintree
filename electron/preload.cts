@@ -131,6 +131,7 @@ const CHANNELS = {
   WORKTREE_CREATE: "worktree:create",
   WORKTREE_LIST_BRANCHES: "worktree:list-branches",
   WORKTREE_PR_REFRESH: "worktree:pr-refresh",
+  WORKTREE_PR_STATUS: "worktree:pr-status",
   WORKTREE_GET_DEFAULT_PATH: "worktree:get-default-path",
   WORKTREE_DELETE: "worktree:delete",
 
@@ -389,6 +390,8 @@ const api: ElectronAPI = {
     refresh: () => _typedInvoke(CHANNELS.WORKTREE_REFRESH),
 
     refreshPullRequests: () => _typedInvoke(CHANNELS.WORKTREE_PR_REFRESH),
+
+    getPRStatus: () => _typedInvoke(CHANNELS.WORKTREE_PR_STATUS),
 
     setActive: (worktreeId: string) => _typedInvoke(CHANNELS.WORKTREE_SET_ACTIVE, { worktreeId }),
 

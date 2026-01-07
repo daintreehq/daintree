@@ -42,6 +42,15 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
   ipcMain.handle(CHANNELS.WORKTREE_PR_REFRESH, handleWorktreePRRefresh);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_PR_REFRESH));
 
+  const handleWorktreePRStatus = async () => {
+    if (!workspaceClient) {
+      return null;
+    }
+    return await workspaceClient.getPRStatus();
+  };
+  ipcMain.handle(CHANNELS.WORKTREE_PR_STATUS, handleWorktreePRStatus);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_PR_STATUS));
+
   const handleWorktreeSetActive = async (
     _event: Electron.IpcMainInvokeEvent,
     payload: WorktreeSetActivePayload

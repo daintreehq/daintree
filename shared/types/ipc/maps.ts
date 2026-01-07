@@ -91,6 +91,10 @@ export interface IpcInvokeMap {
     args: [];
     result: void;
   };
+  "worktree:pr-status": {
+    args: [];
+    result: import("../workspace-host.js").PRServiceStatus | null;
+  };
   "worktree:set-active": {
     args: [payload: WorktreeSetActivePayload];
     result: void;

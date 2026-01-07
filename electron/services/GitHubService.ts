@@ -250,7 +250,9 @@ function parseBatchPRResponse(
     const issueData = issueResponse?.timelineItems?.nodes;
     if (issueData && Array.isArray(issueData)) {
       const prs: LinkedPR[] = [];
+      const seenPRNumbers = new Set<number>();
       for (const node of issueData as Array<{
+        // CROSS_REFERENCED_EVENT uses 'source'
         source?: {
           number?: number;
           title?: string;
@@ -259,17 +261,28 @@ function parseBatchPRResponse(
           isDraft?: boolean;
           merged?: boolean;
         };
+        // CONNECTED_EVENT uses 'subject'
+        subject?: {
+          number?: number;
+          title?: string;
+          url?: string;
+          state?: string;
+          isDraft?: boolean;
+          merged?: boolean;
+        };
       }>) {
-        const source = node?.source;
-        if (source?.number && source?.url) {
+        // Handle both CROSS_REFERENCED_EVENT (source) and CONNECTED_EVENT (subject)
+        const prData = node?.source ?? node?.subject;
+        if (prData?.number && prData?.url && !seenPRNumbers.has(prData.number)) {
+          seenPRNumbers.add(prData.number);
           prs.push({
-            number: source.number,
-            title: source.title || "",
-            url: source.url,
-            state: source.merged
+            number: prData.number,
+            title: prData.title || "",
+            url: prData.url,
+            state: prData.merged
               ? "merged"
-              : (source.state?.toLowerCase() as "open" | "closed") || "open",
-            isDraft: source.isDraft ?? false,
+              : (prData.state?.toLowerCase() as "open" | "closed") || "open",
+            isDraft: prData.isDraft ?? false,
           });
         }
       }
@@ -290,23 +303,41 @@ function parseBatchPRResponse(
     if (!foundPR) {
       const branchData = (data?.[`${alias}_branch`] as { pullRequests?: { nodes?: unknown[] } })
         ?.pullRequests?.nodes;
-      if (branchData && Array.isArray(branchData) && branchData.length > 0) {
-        const pr = branchData[0] as {
+      if (branchData && Array.isArray(branchData)) {
+        // Parse all PRs from branch query
+        const branchPRs: LinkedPR[] = [];
+        for (const node of branchData as Array<{
           number?: number;
           title?: string;
           url?: string;
           state?: string;
           isDraft?: boolean;
           merged?: boolean;
-        };
-        if (pr?.number && pr?.url) {
-          foundPR = {
-            number: pr.number,
-            title: pr.title || "",
-            url: pr.url,
-            state: pr.merged ? "merged" : (pr.state?.toLowerCase() as "open" | "closed") || "open",
-            isDraft: pr.isDraft ?? false,
-          };
+        }>) {
+          if (node?.number && node?.url) {
+            branchPRs.push({
+              number: node.number,
+              title: node.title || "",
+              url: node.url,
+              state: node.merged
+                ? "merged"
+                : (node.state?.toLowerCase() as "open" | "closed") || "open",
+              isDraft: node.isDraft ?? false,
+            });
+          }
+        }
+
+        // Apply same preference: open > merged > closed
+        const openPRs = branchPRs.filter((pr) => pr.state === "open");
+        const mergedPRs = branchPRs.filter((pr) => pr.state === "merged");
+        const closedPRs = branchPRs.filter((pr) => pr.state === "closed");
+
+        if (openPRs.length > 0) {
+          foundPR = openPRs[openPRs.length - 1];
+        } else if (mergedPRs.length > 0) {
+          foundPR = mergedPRs[mergedPRs.length - 1];
+        } else if (closedPRs.length > 0) {
+          foundPR = closedPRs[closedPRs.length - 1];
         }
       }
     }
@@ -581,7 +612,10 @@ function extractLinkedPR(
   timelineItems:
     | {
         nodes?: Array<{
+          // CROSS_REFERENCED_EVENT uses 'source'
           source?: { number?: number; state?: string; merged?: boolean; url?: string };
+          // CONNECTED_EVENT uses 'subject'
+          subject?: { number?: number; state?: string; merged?: boolean; url?: string };
         }>;
       }
     | undefined
@@ -589,14 +623,17 @@ function extractLinkedPR(
   if (!timelineItems?.nodes) return undefined;
 
   const prs: Array<{ number: number; state: "OPEN" | "CLOSED" | "MERGED"; url: string }> = [];
+  const seenPRNumbers = new Set<number>();
 
   for (const node of timelineItems.nodes) {
-    const source = node?.source;
-    if (source?.number && source?.url) {
-      const state: "OPEN" | "CLOSED" | "MERGED" = source.merged
+    // Handle both CROSS_REFERENCED_EVENT (source) and CONNECTED_EVENT (subject)
+    const prData = node?.source ?? node?.subject;
+    if (prData?.number && prData?.url && !seenPRNumbers.has(prData.number)) {
+      seenPRNumbers.add(prData.number);
+      const state: "OPEN" | "CLOSED" | "MERGED" = prData.merged
         ? "MERGED"
-        : (source.state?.toUpperCase() as "OPEN" | "CLOSED") || "OPEN";
-      prs.push({ number: source.number, state, url: source.url });
+        : (prData.state?.toUpperCase() as "OPEN" | "CLOSED") || "OPEN";
+      prs.push({ number: prData.number, state, url: prData.url });
     }
   }
 

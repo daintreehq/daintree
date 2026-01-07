@@ -68,6 +68,7 @@ export interface ElectronAPI {
     getAll(): Promise<WorktreeState[]>;
     refresh(): Promise<void>;
     refreshPullRequests(): Promise<void>;
+    getPRStatus(): Promise<import("../workspace-host.js").PRServiceStatus | null>;
     setActive(worktreeId: string): Promise<void>;
     create(options: CreateWorktreeOptions, rootPath: string): Promise<string>;
     listBranches(rootPath: string): Promise<BranchInfo[]>;

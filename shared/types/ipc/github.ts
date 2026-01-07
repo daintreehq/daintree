@@ -59,11 +59,13 @@ export interface PRDetectedPayload {
   prTitle?: string;
   issueNumber?: number;
   issueTitle?: string;
+  timestamp: number;
 }
 
 /** Payload for PR cleared notification */
 export interface PRClearedPayload {
   worktreeId: string;
+  timestamp: number;
 }
 
 /** Issue detected payload */

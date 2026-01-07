@@ -1,4 +1,5 @@
 import type { WorktreeState, CreateWorktreeOptions, BranchInfo } from "@shared/types";
+import type { PRServiceStatus } from "@shared/types/workspace-host";
 
 /**
  * @example
@@ -20,6 +21,10 @@ export const worktreeClient = {
 
   refreshPullRequests: (): Promise<void> => {
     return window.electron.worktree.refreshPullRequests();
+  },
+
+  getPRStatus: (): Promise<PRServiceStatus | null> => {
+    return window.electron.worktree.getPRStatus();
   },
 
   setActive: (worktreeId: string): Promise<void> => {

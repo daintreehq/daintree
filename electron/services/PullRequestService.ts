@@ -10,6 +10,9 @@ const ERROR_BACKOFF_INTERVALS = [5 * 60 * 1000, 10 * 60 * 1000, 30 * 60 * 1000];
 const MAX_CONSECUTIVE_ERRORS = 3;
 const UPDATE_DEBOUNCE_MS = 100;
 
+// Slow-cadence revalidation for resolved PRs to detect state changes (merged/closed)
+const RESOLVED_REVALIDATION_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+
 interface WorktreeContext {
   issueNumber?: number;
   branchName?: string;
@@ -35,6 +38,7 @@ function isCandidateBranch(branchName: string | undefined): boolean {
 
 class PullRequestService {
   private pollTimer: NodeJS.Timeout | null = null;
+  private revalidationTimer: NodeJS.Timeout | null = null;
   private pollIntervalMs: number = DEFAULT_POLL_INTERVAL_MS;
   private cwd: string = "";
   private isPolling: boolean = false;
@@ -177,6 +181,7 @@ class PullRequestService {
 
     return this.checkForPRs().finally(() => {
       this.scheduleNextPoll();
+      this.scheduleRevalidation();
     });
   }
 
@@ -184,6 +189,10 @@ class PullRequestService {
     if (this.pollTimer) {
       clearTimeout(this.pollTimer);
       this.pollTimer = null;
+    }
+    if (this.revalidationTimer) {
+      clearTimeout(this.revalidationTimer);
+      this.revalidationTimer = null;
     }
     if (this.updateDebounceTimer) {
       clearTimeout(this.updateDebounceTimer);
@@ -253,6 +262,116 @@ class PullRequestService {
       }
     }
     return false;
+  }
+
+  private scheduleRevalidation(): void {
+    if (!this.isPolling || !this.isEnabled) {
+      return;
+    }
+
+    if (this.revalidationTimer) {
+      clearTimeout(this.revalidationTimer);
+    }
+
+    this.revalidationTimer = setTimeout(() => {
+      this.revalidationTimer = null;
+      void this.revalidateResolvedPRs().then(() => this.scheduleRevalidation());
+    }, RESOLVED_REVALIDATION_INTERVAL_MS);
+  }
+
+  private async revalidateResolvedPRs(): Promise<void> {
+    if (!this.isEnabled || this.resolvedWorktrees.size === 0) {
+      return;
+    }
+
+    // Collect resolved worktrees that need revalidation
+    const candidatesToRevalidate: PRCheckCandidate[] = [];
+    for (const worktreeId of this.resolvedWorktrees) {
+      const context = this.candidates.get(worktreeId);
+      if (context) {
+        candidatesToRevalidate.push({
+          worktreeId,
+          issueNumber: context.issueNumber,
+          branchName: context.branchName,
+        });
+      }
+    }
+
+    if (candidatesToRevalidate.length === 0) {
+      return;
+    }
+
+    logDebug("Revalidating resolved PRs", { count: candidatesToRevalidate.length });
+
+    try {
+      const result = await batchCheckLinkedPRs(this.cwd, candidatesToRevalidate);
+
+      if (result.error) {
+        logWarn("Revalidation check failed", { error: result.error });
+        return;
+      }
+
+      for (const [worktreeId, checkResult] of result.results) {
+        const existingPR = this.detectedPRs.get(worktreeId);
+        const newPR = checkResult.pr;
+
+        if (!newPR) {
+          // PR no longer exists (deleted?) - clear state
+          this.resolvedWorktrees.delete(worktreeId);
+          this.detectedPRs.delete(worktreeId);
+
+          logInfo("PR no longer found during revalidation - clearing state", { worktreeId });
+          events.emit("sys:pr:cleared", { worktreeId, timestamp: Date.now() });
+          continue;
+        }
+
+        // Check if PR metadata changed (state, number, title, or url)
+        const prChanged =
+          existingPR &&
+          (existingPR.state !== newPR.state ||
+            existingPR.number !== newPR.number ||
+            existingPR.title !== newPR.title ||
+            existingPR.url !== newPR.url);
+
+        if (prChanged) {
+          logInfo("PR metadata changed during revalidation", {
+            worktreeId,
+            prNumber: newPR.number,
+            changes: {
+              state:
+                existingPR.state !== newPR.state
+                  ? `${existingPR.state} → ${newPR.state}`
+                  : undefined,
+              number:
+                existingPR.number !== newPR.number
+                  ? `${existingPR.number} → ${newPR.number}`
+                  : undefined,
+              title: existingPR.title !== newPR.title ? true : undefined,
+              url: existingPR.url !== newPR.url ? true : undefined,
+            },
+          });
+
+          this.detectedPRs.set(worktreeId, newPR);
+
+          const issueNumber =
+            checkResult.issueNumber ?? this.candidates.get(worktreeId)?.issueNumber;
+          events.emit("sys:pr:detected", {
+            worktreeId,
+            prNumber: newPR.number,
+            prUrl: newPR.url,
+            prState: newPR.state,
+            prTitle: newPR.title,
+            issueNumber,
+            issueTitle: checkResult.issueTitle,
+            timestamp: Date.now(),
+          });
+        }
+      }
+    } catch (error) {
+      logWarn("Revalidation check error", {
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
   }
 
   private async checkForPRs(): Promise<void> {

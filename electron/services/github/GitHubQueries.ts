@@ -42,10 +42,20 @@ export const LIST_ISSUES_QUERY = `
               color
             }
           }
-          timelineItems(itemTypes: [CROSS_REFERENCED_EVENT], last: 10) {
+          timelineItems(itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT], last: 20) {
             nodes {
               ... on CrossReferencedEvent {
                 source {
+                  ... on PullRequest {
+                    number
+                    state
+                    merged
+                    url
+                  }
+                }
+              }
+              ... on ConnectedEvent {
+                subject {
                   ... on PullRequest {
                     number
                     state
@@ -235,10 +245,22 @@ export function buildBatchPRQuery(
         ${alias}_issue: repository(owner: "${owner}", name: "${repo}") {
           issue(number: ${candidate.issueNumber}) {
             title
-            timelineItems(itemTypes: [CROSS_REFERENCED_EVENT], last: 10) {
+            timelineItems(itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT], last: 20) {
               nodes {
                 ... on CrossReferencedEvent {
                   source {
+                    ... on PullRequest {
+                      number
+                      title
+                      url
+                      state
+                      isDraft
+                      merged
+                    }
+                  }
+                }
+                ... on ConnectedEvent {
+                  subject {
                     ... on PullRequest {
                       number
                       title
@@ -256,11 +278,13 @@ export function buildBatchPRQuery(
       `);
     }
 
-    if (candidate.issueNumber && candidate.branchName) {
+    // Query by branch whenever branchName exists - enables PR detection for branches without issue numbers
+    // Fetch multiple PRs to allow preference selection (open > merged > closed)
+    if (candidate.branchName) {
       const escapedBranch = JSON.stringify(candidate.branchName).slice(1, -1);
       branchQueries.push(`
         ${alias}_branch: repository(owner: "${owner}", name: "${repo}") {
-          pullRequests(first: 1, states: [OPEN, MERGED, CLOSED], headRefName: "${escapedBranch}", orderBy: {field: UPDATED_AT, direction: DESC}) {
+          pullRequests(first: 10, states: [OPEN, MERGED, CLOSED], headRefName: "${escapedBranch}", orderBy: {field: UPDATED_AT, direction: DESC}) {
             nodes {
               number
               title

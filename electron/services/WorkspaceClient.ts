@@ -347,6 +347,9 @@ export class WorkspaceClient extends EventEmitter {
           prNumber: event.prNumber,
           prUrl: event.prUrl,
           prState: event.prState,
+          prTitle: event.prTitle,
+          issueNumber: event.issueNumber,
+          issueTitle: event.issueTitle,
           timestamp: Date.now(),
         };
         events.emit("sys:pr:detected", prPayload);
