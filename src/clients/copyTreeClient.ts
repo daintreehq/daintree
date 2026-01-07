@@ -17,17 +17,18 @@ export const copyTreeClient = {
   injectToTerminal: (
     terminalId: string,
     worktreeId: string,
-    options?: CopyTreeOptions
+    options?: CopyTreeOptions,
+    injectionId?: string
   ): Promise<CopyTreeResult> => {
-    return window.electron.copyTree.injectToTerminal(terminalId, worktreeId, options);
+    return window.electron.copyTree.injectToTerminal(terminalId, worktreeId, options, injectionId);
   },
 
   isAvailable: (): Promise<boolean> => {
     return window.electron.copyTree.isAvailable();
   },
 
-  cancel: (): Promise<void> => {
-    return window.electron.copyTree.cancel();
+  cancel: (injectionId?: string): Promise<void> => {
+    return window.electron.copyTree.cancel(injectionId);
   },
 
   getFileTree: (worktreeId: string, dirPath?: string): Promise<FileTreeNode[]> => {

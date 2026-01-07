@@ -2,18 +2,10 @@ import { useCallback, useState, useEffect, useRef, useSyncExternalStore } from "
 import { useShallow } from "zustand/react/shallow";
 import { useTerminalStore, type TerminalInstance } from "@/store/terminalStore";
 import { useErrorStore } from "@/store/errorStore";
-import type { AgentState } from "@/types";
+import type { AgentState, CopyTreeProgress } from "@/types";
 import { copyTreeClient } from "@/clients";
 import { getFormatForTerminal } from "@/lib/copyTreeFormat";
 
-export interface CopyTreeProgress {
-  stage: string;
-  progress: number;
-  message: string;
-  filesProcessed?: number;
-  totalFiles?: number;
-  currentFile?: string;
-}
 
 export type InjectionStatus = "idle" | "waiting" | "injecting";
 
@@ -51,6 +43,7 @@ const globalInjectionState = {
   activeTerminalId: null as string | null,
   lastProgress: null as CopyTreeProgress | null,
   injectionId: 0, // Incremented on each injection to prevent cross-run interference
+  activeInjectionUuid: null as string | null, // UUID for per-operation cancellation
   pendingInjection: null as PendingInjection | null,
   listeners: new Set<InjectionStateListener>(),
 
@@ -200,6 +193,12 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         return;
       }
 
+      // Block concurrent injections to prevent state corruption
+      if (globalInjectionState.isInjecting || globalInjectionState.isPendingInjection) {
+        setError("Another injection is already in progress. Please wait or cancel it first.");
+        return;
+      }
+
       let terminal = terminals.find((t: TerminalInstance) => t.id === activeTerminal);
       if (!terminal) {
         setError(`Terminal not found: ${activeTerminal}`);
@@ -265,6 +264,8 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
           if (message !== "Injection cancelled") {
             setError(message);
           }
+          // Clear stale progress on early abort
+          localProgressRef.current = null;
           return;
         }
 
@@ -283,6 +284,8 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
             `Agent state changed to ${updatedTerminal.agentState} while waiting, aborting injection`
           );
           setError("Agent became busy again, injection aborted");
+          // Clear stale progress on early abort
+          localProgressRef.current = null;
           return;
         }
 
@@ -292,9 +295,13 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         console.log("Agent is now idle, proceeding with context injection");
       }
 
+      // Generate a unique ID for this injection operation (for per-operation cancellation)
+      const injectionUuid = crypto.randomUUID();
+
       // Set global state so all hook instances can see the active injection
       globalInjectionState.isInjecting = true;
       globalInjectionState.activeTerminalId = activeTerminal;
+      globalInjectionState.activeInjectionUuid = injectionUuid;
       globalInjectionState.lastProgress = {
         stage: "Starting",
         progress: 0,
@@ -318,7 +325,12 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
           ...(selectedPaths && selectedPaths.length > 0 ? { includePaths: selectedPaths } : {}),
         };
 
-        const result = await copyTreeClient.injectToTerminal(activeTerminal, worktreeId, options);
+        const result = await copyTreeClient.injectToTerminal(
+          activeTerminal,
+          worktreeId,
+          options,
+          injectionUuid
+        );
 
         if (result.error) {
           throw new Error(result.error);
@@ -369,6 +381,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         if (globalInjectionState.injectionId === currentInjectionId) {
           globalInjectionState.isInjecting = false;
           globalInjectionState.activeTerminalId = null;
+          globalInjectionState.activeInjectionUuid = null;
           globalInjectionState.lastProgress = null;
           localProgressRef.current = null;
           globalInjectionState.notify();
@@ -382,12 +395,16 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
     // Cancel pending injection if waiting
     globalInjectionState.clearPending();
 
-    // Cancel active injection if running
-    copyTreeClient.cancel().catch(console.error);
+    // Cancel only the current active injection (not all CopyTree operations)
+    const injectionUuid = globalInjectionState.activeInjectionUuid;
+    if (injectionUuid) {
+      copyTreeClient.cancel(injectionUuid).catch(console.error);
+    }
 
     globalInjectionState.isInjecting = false;
     globalInjectionState.isPendingInjection = false;
     globalInjectionState.activeTerminalId = null;
+    globalInjectionState.activeInjectionUuid = null;
     globalInjectionState.lastProgress = null;
     localProgressRef.current = null;
     globalInjectionState.notify();

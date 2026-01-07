@@ -91,6 +91,7 @@ export type {
   CopyTreeGeneratePayload,
   CopyTreeGenerateAndCopyFilePayload,
   CopyTreeInjectPayload,
+  CopyTreeCancelPayload,
   CopyTreeGetFileTreePayload,
   CopyTreeResult,
   CopyTreeProgress,

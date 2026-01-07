@@ -41,6 +41,14 @@ export interface CopyTreeInjectPayload {
   terminalId: string;
   worktreeId: string;
   options?: CopyTreeOptions;
+  /** Unique identifier for this injection operation (for per-operation cancellation) */
+  injectionId?: string;
+}
+
+/** Payload for cancelling a specific injection operation */
+export interface CopyTreeCancelPayload {
+  /** If provided, only cancel this specific injection. If omitted, cancels all. */
+  injectionId?: string;
 }
 
 /** Payload for getting file tree */

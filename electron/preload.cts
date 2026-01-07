@@ -575,12 +575,16 @@ const api: ElectronAPI = {
     generateAndCopyFile: (worktreeId: string, options?: CopyTreeOptions) =>
       _typedInvoke(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE, { worktreeId, options }),
 
-    injectToTerminal: (terminalId: string, worktreeId: string, options?: CopyTreeOptions) =>
-      _typedInvoke(CHANNELS.COPYTREE_INJECT, { terminalId, worktreeId, options }),
+    injectToTerminal: (
+      terminalId: string,
+      worktreeId: string,
+      options?: CopyTreeOptions,
+      injectionId?: string
+    ) => _typedInvoke(CHANNELS.COPYTREE_INJECT, { terminalId, worktreeId, options, injectionId }),
 
     isAvailable: () => _typedInvoke(CHANNELS.COPYTREE_AVAILABLE),
 
-    cancel: () => _typedInvoke(CHANNELS.COPYTREE_CANCEL),
+    cancel: (injectionId?: string) => _typedInvoke(CHANNELS.COPYTREE_CANCEL, { injectionId }),
 
     getFileTree: (worktreeId: string, dirPath?: string) =>
       _typedInvoke(CHANNELS.COPYTREE_GET_FILE_TREE, { worktreeId, dirPath }),

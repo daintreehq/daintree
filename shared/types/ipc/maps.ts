@@ -41,6 +41,7 @@ import type {
   CopyTreeResult,
   CopyTreeGenerateAndCopyFilePayload,
   CopyTreeInjectPayload,
+  CopyTreeCancelPayload,
   CopyTreeGetFileTreePayload,
   FileTreeNode,
   CopyTreeProgress,
@@ -231,7 +232,7 @@ export interface IpcInvokeMap {
     result: boolean;
   };
   "copytree:cancel": {
-    args: [];
+    args: [payload: CopyTreeCancelPayload];
     result: void;
   };
   "copytree:get-file-tree": {

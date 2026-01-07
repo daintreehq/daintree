@@ -137,10 +137,11 @@ export interface ElectronAPI {
     injectToTerminal(
       terminalId: string,
       worktreeId: string,
-      options?: CopyTreeOptions
+      options?: CopyTreeOptions,
+      injectionId?: string
     ): Promise<CopyTreeResult>;
     isAvailable(): Promise<boolean>;
-    cancel(): Promise<void>;
+    cancel(injectionId?: string): Promise<void>;
     getFileTree(worktreeId: string, dirPath?: string): Promise<FileTreeNode[]>;
     onProgress(callback: (progress: CopyTreeProgress) => void): () => void;
   };

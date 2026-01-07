@@ -34,13 +34,17 @@ import {
   CopyTreeGenerateAndCopyFilePayloadSchema,
   CopyTreeInjectPayloadSchema,
   CopyTreeGetFileTreePayloadSchema,
+  CopyTreeCancelPayloadSchema,
 } from "../../schemas/ipc.js";
+import type { CopyTreeCancelPayload } from "../../types/index.js";
 
 export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void {
   const { mainWindow, worktreeService: workspaceClient, ptyClient } = deps;
   const handlers: Array<() => void> = [];
 
   const injectionsInProgress = new Set<string>();
+  const cancelledInjections = new Set<string>();
+  const activeInjectionIds = new Map<string, string>(); // terminalId -> injectionId mapping
 
   const handleCopyTreeGenerate = async (
     _event: Electron.IpcMainInvokeEvent,
@@ -217,6 +221,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     }
 
     const validated = parseResult.data;
+    const injectionId = validated.injectionId || traceId;
 
     if (injectionsInProgress.has(validated.terminalId)) {
       return {
@@ -235,6 +240,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     }
 
     injectionsInProgress.add(validated.terminalId);
+    activeInjectionIds.set(validated.terminalId, injectionId);
 
     try {
       const states = await workspaceClient.getAllStatesAsync();
@@ -274,6 +280,16 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       const content = result.content;
 
       for (let i = 0; i < content.length; i += CHUNK_SIZE) {
+        if (cancelledInjections.has(injectionId)) {
+          console.log(`[${traceId}] CopyTree inject cancelled by user`);
+          cancelledInjections.delete(injectionId);
+          return {
+            content: "",
+            fileCount: 0,
+            error: "Injection cancelled",
+          };
+        }
+
         if (!ptyClient.hasTerminal(validated.terminalId)) {
           return {
             content: "",
@@ -293,6 +309,8 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       return result;
     } finally {
       injectionsInProgress.delete(validated.terminalId);
+      activeInjectionIds.delete(validated.terminalId);
+      cancelledInjections.delete(injectionId);
     }
   };
   ipcMain.handle(CHANNELS.COPYTREE_INJECT, handleCopyTreeInject);
@@ -304,9 +322,36 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
   ipcMain.handle(CHANNELS.COPYTREE_AVAILABLE, handleCopyTreeAvailable);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.COPYTREE_AVAILABLE));
 
-  const handleCopyTreeCancel = async (): Promise<void> => {
-    if (workspaceClient) {
-      workspaceClient.cancelAllContext();
+  const handleCopyTreeCancel = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload?: CopyTreeCancelPayload
+  ): Promise<void> => {
+    const parseResult = CopyTreeCancelPayloadSchema.safeParse(payload ?? {});
+    if (!parseResult.success) {
+      console.warn("Invalid cancel payload, ignoring");
+      return;
+    }
+
+    const validated = parseResult.success ? parseResult.data : {};
+
+    if (validated.injectionId) {
+      // Only mark for cancellation if this injectionId is actually active
+      const isActive = Array.from(activeInjectionIds.values()).includes(validated.injectionId);
+      if (isActive) {
+        cancelledInjections.add(validated.injectionId);
+        console.log(`[cancel] Marked injection ${validated.injectionId} for cancellation`);
+      } else {
+        console.log(`[cancel] Ignoring cancel for unknown/completed injection ${validated.injectionId}`);
+      }
+    } else {
+      // Cancel all active injections and call legacy cancelAllContext
+      Array.from(activeInjectionIds.values()).forEach((id) => {
+        cancelledInjections.add(id);
+      });
+      if (workspaceClient) {
+        workspaceClient.cancelAllContext();
+      }
+      console.log(`[cancel] Marked all ${activeInjectionIds.size} active injections for cancellation`);
     }
   };
   ipcMain.handle(CHANNELS.COPYTREE_CANCEL, handleCopyTreeCancel);

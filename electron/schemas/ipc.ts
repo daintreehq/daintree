@@ -202,6 +202,11 @@ export const CopyTreeInjectPayloadSchema = z.object({
   terminalId: z.string().min(1),
   worktreeId: z.string().min(1),
   options: CopyTreeOptionsSchema,
+  injectionId: z.string().min(1).optional(),
+});
+
+export const CopyTreeCancelPayloadSchema = z.object({
+  injectionId: z.string().min(1).optional(),
 });
 
 export const CopyTreeProgressSchema = z.object({
@@ -291,6 +296,7 @@ export type CopyTreeGenerateAndCopyFilePayload = z.infer<
   typeof CopyTreeGenerateAndCopyFilePayloadSchema
 >;
 export type CopyTreeInjectPayload = z.infer<typeof CopyTreeInjectPayloadSchema>;
+export type CopyTreeCancelPayload = z.infer<typeof CopyTreeCancelPayloadSchema>;
 export type CopyTreeProgress = z.infer<typeof CopyTreeProgressSchema>;
 export type CopyTreeGetFileTreePayload = z.infer<typeof CopyTreeGetFileTreePayloadSchema>;
 export type SystemOpenExternalPayload = z.infer<typeof SystemOpenExternalPayloadSchema>;
