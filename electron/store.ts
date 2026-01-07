@@ -72,6 +72,9 @@ export interface StoreSchema {
     }>;
     terminalGridConfig?: TerminalGridConfig;
     dockCollapsed?: boolean;
+    dockMode?: "expanded" | "slim" | "hidden";
+    dockBehavior?: "auto" | "manual";
+    dockAutoHideWhenEmpty?: boolean;
   };
   projects: {
     list: Project[];
@@ -118,6 +121,9 @@ const storeOptions = {
       hasSeenWelcome: false,
       terminalGridConfig: { strategy: "automatic" as const, value: 3 },
       dockCollapsed: false,
+      dockMode: "hidden" as const,
+      dockBehavior: "auto" as const,
+      dockAutoHideWhenEmpty: false,
     },
     projects: {
       list: [],
