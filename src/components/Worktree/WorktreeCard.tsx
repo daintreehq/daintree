@@ -204,7 +204,15 @@ export function WorktreeCard({
       // Invoke callback (e.g. close modal) after focusing terminal
       onAfterTerminalSelect?.();
     },
-    [isActive, onSelect, setFocused, pingTerminal, openDockTerminal, trackTerminalFocus, onAfterTerminalSelect]
+    [
+      isActive,
+      onSelect,
+      setFocused,
+      pingTerminal,
+      openDockTerminal,
+      trackTerminalFocus,
+      onAfterTerminalSelect,
+    ]
   );
 
   const handleToggleExpand = useCallback(
