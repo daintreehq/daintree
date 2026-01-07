@@ -121,9 +121,10 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
 
   // Only show progress for the active terminal
   // Use localProgressRef if available, otherwise fall back to global state for initial messages
-  const progress = isInjecting || isPendingInjection
-    ? localProgressRef.current ?? globalState.lastProgress
-    : null;
+  const progress =
+    isInjecting || isPendingInjection
+      ? (localProgressRef.current ?? globalState.lastProgress)
+      : null;
 
   // Subscribe to global injection progress and filter for this terminal
   useEffect(() => {
