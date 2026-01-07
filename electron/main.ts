@@ -523,30 +523,82 @@ async function createWindow(): Promise<void> {
 
   // WAIT for services to be ready (Parallel)
   console.log("[MAIN] Waiting for services to initialize...");
+  let ptyReady = false;
+  let workspaceReady = false;
+
   try {
-    await Promise.all([
+    const results = await Promise.allSettled([
       ptyClient.waitForReady(),
       workspaceClient.waitForReady(),
       projectStore.initialize(),
     ]);
-    console.log("[MAIN] All critical services ready");
+
+    ptyReady = results[0].status === "fulfilled";
+    workspaceReady = results[1].status === "fulfilled";
+    const projectStoreReady = results[2].status === "fulfilled";
+
+    if (ptyReady && workspaceReady && projectStoreReady) {
+      console.log("[MAIN] All critical services ready");
+    } else {
+      const failures: string[] = [];
+      if (!ptyReady)
+        failures.push(
+          `PTY service: ${results[0].status === "rejected" ? results[0].reason?.message || "unknown error" : "timeout"}`
+        );
+      if (!workspaceReady)
+        failures.push(
+          `Workspace service: ${results[1].status === "rejected" ? results[1].reason?.message || "unknown error" : "timeout"}`
+        );
+      if (!projectStoreReady)
+        failures.push(
+          `Project store: ${results[2].status === "rejected" ? results[2].reason?.message || "unknown error" : "timeout"}`
+        );
+
+      console.error("[MAIN] Service initialization failed:", failures);
+
+      // Show error dialog so user knows something went wrong
+      dialog
+        .showMessageBox({
+          type: "error",
+          title: "Service Initialization Failed",
+          message: `One or more services failed to start:\n\n${failures.join("\n")}\n\nThe application will continue in degraded mode. Some features may be unavailable.\n\nTry restarting the application if problems persist.`,
+          buttons: ["OK"],
+        })
+        .catch(console.error);
+    }
   } catch (error) {
-    console.error("[MAIN] Critical service initialization failed:", error);
-    // Continue anyway? Or show error?
-    // If critical services fail, app is broken. But we have error handlers.
+    // This shouldn't happen with allSettled, but handle it just in case
+    console.error("[MAIN] Unexpected error during service initialization:", error);
   }
 
-  // Now fully ready
-  createAndDistributePorts();
+  // Only set up PTY-related features if PTY is ready
+  if (ptyReady) {
+    createAndDistributePorts();
 
-  // Ensure PTY host has an active project context even on cold start (no explicit switch yet).
-  // This is important for project-aware PTY spawns that don't explicitly set projectId.
-  const currentProjectId = projectStore.getCurrentProjectId();
-  ptyClient.setActiveProject(currentProjectId);
+    // Ensure PTY host has an active project context even on cold start (no explicit switch yet).
+    // This is important for project-aware PTY spawns that don't explicitly set projectId.
+    const currentProjectId = projectStore.getCurrentProjectId();
+    ptyClient.setActiveProject(currentProjectId);
 
-  // Load the current project's worktrees if there is one
+    // Spawn Default Terminal
+    console.log("[MAIN] Spawning default terminal...");
+    try {
+      ptyClient.spawn(DEFAULT_TERMINAL_ID, {
+        cwd: process.env.HOME || os.homedir(),
+        cols: 80,
+        rows: 30,
+        projectId: currentProjectId ?? undefined,
+      });
+    } catch (error) {
+      console.error("[MAIN] Failed to spawn default terminal:", error);
+    }
+  } else {
+    console.warn("[MAIN] PTY service unavailable - skipping terminal setup");
+  }
+
+  // Load the current project's worktrees if workspace service is ready
   const currentProject = projectStore.getCurrentProject();
-  if (currentProject && workspaceClient) {
+  if (currentProject && workspaceClient && workspaceReady) {
     console.log("[MAIN] Loading worktrees for current project:", currentProject.name);
     try {
       await workspaceClient.loadProject(currentProject.path);
@@ -554,22 +606,11 @@ async function createWindow(): Promise<void> {
     } catch (error) {
       console.error("[MAIN] Failed to load worktrees for current project:", error);
     }
+  } else if (currentProject && !workspaceReady) {
+    console.warn("[MAIN] Workspace service unavailable - skipping worktree loading");
   }
 
   sendToRenderer(mainWindow, CHANNELS.SYSTEM_BACKEND_READY);
-
-  // Spawn Default Terminal
-  console.log("[MAIN] Spawning default terminal...");
-  try {
-    ptyClient.spawn(DEFAULT_TERMINAL_ID, {
-      cwd: process.env.HOME || os.homedir(),
-      cols: 80,
-      rows: 30,
-      projectId: currentProjectId ?? undefined,
-    });
-  } catch (error) {
-    console.error("[MAIN] Failed to spawn default terminal:", error);
-  }
 
   let eventInspectorActive = false;
   ipcMain.on(CHANNELS.EVENT_INSPECTOR_SUBSCRIBE, () => {

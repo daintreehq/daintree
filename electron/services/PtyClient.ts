@@ -177,6 +177,7 @@ export class PtyClient extends EventEmitter {
 
   private readyPromise: Promise<void>;
   private readyResolve: (() => void) | null = null;
+  private readyReject: ((error: Error) => void) | null = null;
 
   /** SharedArrayBuffer array for zero-copy terminal I/O (null if unavailable) */
   private visualBuffers: SharedArrayBuffer[] = [];
@@ -197,9 +198,10 @@ export class PtyClient extends EventEmitter {
     super();
     this.config = { ...DEFAULT_CONFIG, ...config };
 
-    // Create ready promise that resolves when host is ready
-    this.readyPromise = new Promise((resolve) => {
+    // Create ready promise that resolves when host is ready or rejects on failure
+    this.readyPromise = new Promise((resolve, reject) => {
       this.readyResolve = resolve;
+      this.readyReject = reject;
     });
 
     try {
@@ -306,8 +308,9 @@ export class PtyClient extends EventEmitter {
 
     // Reset initialization state for restart
     this.isInitialized = false;
-    this.readyPromise = new Promise((resolve) => {
+    this.readyPromise = new Promise((resolve, reject) => {
       this.readyResolve = resolve;
+      this.readyReject = reject;
     });
 
     const hostPath = path.join(__dirname, "pty-host.js");
@@ -327,6 +330,11 @@ export class PtyClient extends EventEmitter {
       console.log(`[PtyClient] Pty Host started with ${this.config.memoryLimitMb}MB memory limit`);
     } catch (error) {
       console.error("[PtyClient] Failed to fork Pty Host:", error);
+      if (this.readyReject) {
+        this.readyReject(new Error("PTY host failed to start"));
+        this.readyResolve = null;
+        this.readyReject = null;
+      }
       this.emit("host-crash", -1);
       return;
     }
@@ -378,12 +386,21 @@ export class PtyClient extends EventEmitter {
         this.healthCheckInterval = null;
       }
 
+      // Reject ready promise if host exited before becoming ready
+      const wasReady = this.isInitialized;
       this.isInitialized = false;
       this.child = null; // Prevent posting to dead process
 
       if (this.isDisposed) {
         // Expected shutdown
         return;
+      }
+
+      // If host crashed before ready, reject the promise so startup doesn't hang
+      if (!wasReady && this.readyReject) {
+        this.readyReject(new Error("PTY host exited before ready"));
+        this.readyResolve = null;
+        this.readyReject = null;
       }
 
       this.cleanupOrphanedPtys(crashType);
@@ -469,11 +486,17 @@ export class PtyClient extends EventEmitter {
     // Handle transport-level events and request/response correlation
     switch (event.type) {
       case "ready":
+        // Ignore late ready events if host is already dead
+        if (!this.child) {
+          console.warn("[PtyClient] Ignoring late ready event - host is dead");
+          break;
+        }
         this.isInitialized = true;
         this.restartAttempts = 0;
         if (this.readyResolve) {
           this.readyResolve();
           this.readyResolve = null;
+          this.readyReject = null;
         }
         console.log("[PtyClient] Pty Host is ready");
         if (this.needsRespawn) {
