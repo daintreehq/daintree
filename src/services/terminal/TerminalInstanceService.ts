@@ -287,12 +287,9 @@ class TerminalInstanceService {
     // Xterm.js is optimized for hidden terminals (parsing is cheap, rendering is skipped).
     this.unseenTracker.incrementUnseen(id, managed.isUserScrolledBack);
 
-    // Capture SAB mode decision before write to avoid mode-flip ambiguity during callback
-    const sabMode = this.dataBuffer.isEnabled();
-    // For agent terminals or systems without SAB, we need to acknowledge IPC data
-    // Check both kind and agentId to cover all agent terminal types (legacy and new)
-    const isAgentTerminal = managed.kind === "agent" || !!managed.agentId;
-    const shouldAck = !sabMode || isAgentTerminal;
+    // Only acknowledge IPC data when not actively polling SAB
+    // When SAB polling is active, all terminals (including agents) use SAB transport
+    const shouldAck = !this.dataBuffer.isPolling();
 
     // Calculate exact byte length for accurate flow control
     const dataBytes =
@@ -307,9 +304,8 @@ class TerminalInstanceService {
 
       managed.pendingWrites = Math.max(0, (managed.pendingWrites ?? 1) - 1);
 
-      // Flow control: Send acknowledgements for IPC data (agent terminals or SAB disabled).
-      // Agent terminals always use IPC even when SAB is available, so they need acks.
-      // In pure SAB mode (non-agent terminals), flow control is handled via SAB backpressure.
+      // Flow control: Send acknowledgements for IPC data when SAB is not polling.
+      // When SAB polling is active, flow control is handled via SAB backpressure.
       // Send exact byte count (not character count) for accurate queue accounting.
       if (shouldAck) {
         terminalClient.acknowledgeData(id, dataBytes);

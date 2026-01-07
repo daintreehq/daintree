@@ -500,17 +500,7 @@ function toStringForIpc(data: string | Uint8Array): string {
 ptyManager.on("data", (id: string, data: string | Uint8Array) => {
   // Terminal output always updates headless state; visual streaming can be suspended under backpressure.
   const isSuspended = suspendedDueToStall.has(id);
-  if (isSuspended) {
-    return;
-  }
   const terminalInfo = ptyManager.getTerminal(id);
-  // Agent terminals use snapshot projection and do not consume the raw visual stream.
-  // Writing agent output into the visual ring buffer would immediately backpressure the PTY.
-  // Check kind, agentId, or type to determine if this is an agent terminal
-  const skipVisualStream =
-    terminalInfo?.kind === "agent" ||
-    !!terminalInfo?.agentId ||
-    (terminalInfo?.type && terminalInfo.type !== "terminal");
 
   // Background tier: suppress visual streaming entirely (wake snapshots will resync state)
   // Analysis buffer writes still occur for agent state detection
@@ -519,9 +509,10 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
   // PRIORITY 1: VISUAL RENDERER (Zero-Latency Path)
   // Write to SharedArrayBuffer immediately before doing ANY processing.
   // This ensures terminal output reaches xterm.js with minimal latency.
-  let visualWritten = false;
+  // Skip visual writes if suspended, but continue to analysis buffer for agent state detection.
+  let visualWritten = isSuspended;
 
-  if (!skipVisualStream && !isBackgrounded && visualBuffers.length > 0) {
+  if (!isSuspended && !isBackgrounded && visualBuffers.length > 0) {
     const shardIndex = selectShard(id, visualBuffers.length);
     const shard = visualBuffers[shardIndex];
 
@@ -778,8 +769,8 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
   }
 
   // Fallback: If ring buffer failed or isn't set up, use IPC with backpressure
-  // Skip IPC fallback for backgrounded terminals (wake will resync via snapshot)
-  if (!visualWritten && !isBackgrounded) {
+  // Skip IPC fallback for backgrounded or suspended terminals (wake will resync via snapshot)
+  if (!visualWritten && !isBackgrounded && !isSuspended) {
     const dataString = toStringForIpc(data);
     const dataBytes = Buffer.byteLength(dataString, "utf8");
     const currentQueuedBytes = ipcQueuedBytes.get(id) ?? 0;
@@ -1620,6 +1611,9 @@ port.on("message", async (rawMsg: any) => {
             const pauseStart = pauseStartTimes.get(msg.id);
             const pauseDuration = pauseStart ? Date.now() - pauseStart : undefined;
             pauseStartTimes.delete(msg.id);
+
+            // Clear suspended flag to allow output to flow again
+            suspendedDueToStall.delete(msg.id);
 
             // Emit resume status
             const utilization =
