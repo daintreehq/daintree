@@ -1,7 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { AlertTriangle, Trash2 } from "lucide-react";
+import { AlertTriangle, Trash2, GitBranch } from "lucide-react";
 import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
 import { useTerminalStore } from "@/store";
 import { actionService } from "@/services/ActionService";
@@ -13,11 +13,17 @@ interface WorktreeDeleteDialogProps {
   worktree: WorktreeState;
 }
 
+const ARMED_TIMEOUT_MS = 4000;
+const PROTECTED_BRANCHES = ["main", "master", "develop", "development"];
+
 export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDeleteDialogProps) {
   const [isDeleting, setIsDeleting] = useState(false);
   const [force, setForce] = useState(false);
   const [closeTerminals, setCloseTerminals] = useState(true);
+  const [deleteBranch, setDeleteBranch] = useState(false);
+  const [isArmed, setIsArmed] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const armedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { counts: terminalCounts } = useWorktreeTerminals(worktree.id);
   const bulkCloseByWorktree = useTerminalStore((state) => state.bulkCloseByWorktree);
@@ -25,23 +31,70 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const hasChanges = (worktree.worktreeChanges?.changedFileCount ?? 0) > 0;
   const hasTerminals = terminalCounts.total > 0;
 
+  const isProtectedBranch =
+    worktree.branch && PROTECTED_BRANCHES.includes(worktree.branch.toLowerCase());
+  const isDetachedHead = !worktree.branch;
+  const canDeleteBranch =
+    !isProtectedBranch && !isDetachedHead && worktree.isMainWorktree === false;
+
+  const clearArmedTimer = useCallback(() => {
+    if (armedTimerRef.current) {
+      clearTimeout(armedTimerRef.current);
+      armedTimerRef.current = null;
+    }
+  }, []);
+
+  const disarm = useCallback(() => {
+    clearArmedTimer();
+    setIsArmed(false);
+  }, [clearArmedTimer]);
+
   useEffect(() => {
     if (isOpen) {
       setForce(false);
+      setDeleteBranch(false);
       setError(null);
+      disarm();
     }
-  }, [isOpen, worktree.id]);
+    return () => clearArmedTimer();
+  }, [isOpen, worktree.id, disarm, clearArmedTimer]);
+
+  useEffect(() => {
+    if (!deleteBranch && isArmed) {
+      disarm();
+    }
+  }, [deleteBranch, isArmed, disarm]);
+
+  useEffect(() => {
+    if (!canDeleteBranch && (deleteBranch || isArmed)) {
+      setDeleteBranch(false);
+      disarm();
+    }
+  }, [canDeleteBranch, deleteBranch, isArmed, disarm]);
 
   const handleDelete = async () => {
+    const effectiveDeleteBranch = deleteBranch && canDeleteBranch;
+
+    if (effectiveDeleteBranch && !isArmed) {
+      setIsArmed(true);
+      clearArmedTimer();
+      armedTimerRef.current = setTimeout(() => {
+        setIsArmed(false);
+      }, ARMED_TIMEOUT_MS);
+      return;
+    }
+
     setIsDeleting(true);
     setError(null);
+    disarm();
+
     try {
       if (closeTerminals && hasTerminals) {
         bulkCloseByWorktree(worktree.id);
       }
       const result = await actionService.dispatch(
         "worktree.delete",
-        { worktreeId: worktree.id, force },
+        { worktreeId: worktree.id, force, deleteBranch: effectiveDeleteBranch },
         { source: "user" }
       );
       if (!result.ok) {
@@ -54,6 +107,12 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     } finally {
       setIsDeleting(false);
     }
+  };
+
+  const getDeleteButtonText = () => {
+    if (isDeleting) return "Deleting...";
+    if (deleteBranch && canDeleteBranch && isArmed) return "Click again to confirm";
+    return "Delete Worktree";
   };
 
   return (
@@ -128,6 +187,38 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
               Close all terminals{hasTerminals ? ` (${terminalCounts.total})` : ""}
             </span>
           </label>
+
+          {canDeleteBranch && (
+            <label className="flex items-start gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={deleteBranch}
+                onChange={(e) => {
+                  setDeleteBranch(e.target.checked);
+                  if (!e.target.checked) {
+                    disarm();
+                  }
+                }}
+                className="mt-0.5 rounded border-canopy-border bg-canopy-bg text-[var(--color-status-error)] focus:ring-[var(--color-status-error)]"
+              />
+              <span className="text-sm text-canopy-text">
+                <span className="flex items-center gap-1.5">
+                  <GitBranch className="w-3.5 h-3.5" />
+                  Delete branch{" "}
+                  <code className="text-xs bg-canopy-bg/50 px-1.5 py-0.5 rounded border border-canopy-border">
+                    {worktree.branch}
+                  </code>
+                </span>
+                {deleteBranch && (
+                  <span className="block text-xs text-canopy-text/60 mt-1">
+                    {force
+                      ? "Branch will be force-deleted (git branch -D)"
+                      : "Safe delete - fails if branch has unmerged changes"}
+                  </span>
+                )}
+              </span>
+            </label>
+          )}
         </div>
       </AppDialog.Body>
 
@@ -135,8 +226,13 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
         <Button variant="ghost" onClick={onClose} disabled={isDeleting}>
           Cancel
         </Button>
-        <Button variant="destructive" onClick={handleDelete} disabled={isDeleting}>
-          {isDeleting ? "Deleting..." : "Delete Worktree"}
+        <Button
+          variant="destructive"
+          onClick={handleDelete}
+          disabled={isDeleting}
+          className={isArmed ? "animate-pulse ring-2 ring-[var(--color-status-error)]" : ""}
+        >
+          {getDeleteButtonText()}
         </Button>
       </AppDialog.Footer>
     </AppDialog>

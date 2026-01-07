@@ -124,10 +124,18 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "confirm",
     scope: "renderer",
-    argsSchema: z.object({ worktreeId: z.string(), force: z.boolean().optional() }),
+    argsSchema: z.object({
+      worktreeId: z.string(),
+      force: z.boolean().optional(),
+      deleteBranch: z.boolean().optional(),
+    }),
     run: async (args: unknown) => {
-      const { worktreeId, force } = args as { worktreeId: string; force?: boolean };
-      await worktreeClient.delete(worktreeId, force);
+      const { worktreeId, force, deleteBranch } = args as {
+        worktreeId: string;
+        force?: boolean;
+        deleteBranch?: boolean;
+      };
+      await worktreeClient.delete(worktreeId, force, deleteBranch);
     },
   }));
 

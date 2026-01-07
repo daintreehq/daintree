@@ -121,6 +121,7 @@ export type WorkspaceHostRequest =
       requestId: string;
       worktreeId: string;
       force?: boolean;
+      deleteBranch?: boolean;
     }
   // Branch operations
   | { type: "list-branches"; requestId: string; rootPath: string }

@@ -144,7 +144,12 @@ port.on("message", async (rawMsg: any) => {
         break;
 
       case "delete-worktree":
-        await workspaceService.deleteWorktree(request.requestId, request.worktreeId, request.force);
+        await workspaceService.deleteWorktree(
+          request.requestId,
+          request.worktreeId,
+          request.force,
+          request.deleteBranch
+        );
         break;
 
       case "list-branches":

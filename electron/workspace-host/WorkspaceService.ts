@@ -896,7 +896,8 @@ export class WorkspaceService {
   async deleteWorktree(
     requestId: string,
     worktreeId: string,
-    force: boolean = false
+    force: boolean = false,
+    deleteBranch: boolean = false
   ): Promise<void> {
     try {
       const monitor = this.monitors.get(worktreeId);
@@ -916,8 +917,11 @@ export class WorkspaceService {
         throw new Error("Worktree has uncommitted changes. Use force delete to proceed.");
       }
 
-      this.stopMonitor(monitor);
-      this.monitors.delete(worktreeId);
+      const branchToDelete = deleteBranch ? monitor.branch : undefined;
+
+      if (deleteBranch && !monitor.branch) {
+        throw new Error("Cannot delete branch: worktree has no associated branch (detached HEAD)");
+      }
 
       if (this.git) {
         const args = ["worktree", "remove"];
@@ -927,7 +931,35 @@ export class WorkspaceService {
         args.push(monitor.path);
         await this.git.raw(args);
         clearGitDirCache(monitor.path);
+
+        if (branchToDelete) {
+          try {
+            await this.git.raw(["branch", "-d", branchToDelete]);
+            console.log(`[WorkspaceHost] Deleted branch: ${branchToDelete} (safe)`);
+          } catch (branchError) {
+            const errorMsg = (branchError as Error).message || "";
+            if (errorMsg.includes("not found")) {
+              console.log(`[WorkspaceHost] Branch already deleted: ${branchToDelete}`);
+            } else if (errorMsg.includes("not fully merged")) {
+              throw new Error(
+                `Branch '${branchToDelete}' has unmerged changes. Enable force delete to remove it.`
+              );
+            } else if (
+              errorMsg.includes("checked out at") ||
+              errorMsg.includes("Cannot delete")
+            ) {
+              throw new Error(
+                `Cannot delete branch '${branchToDelete}': ${errorMsg.split("\n")[0]}`
+              );
+            } else {
+              throw new Error(`Failed to delete branch '${branchToDelete}': ${errorMsg}`);
+            }
+          }
+        }
       }
+
+      this.stopMonitor(monitor);
+      this.monitors.delete(worktreeId);
 
       this.sendEvent({ type: "worktree-removed", worktreeId });
       this.sendEvent({ type: "delete-worktree-result", requestId, success: true });

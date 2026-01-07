@@ -406,8 +406,8 @@ const api: ElectronAPI = {
     getAvailableBranch: (rootPath: string, branchName: string): Promise<string> =>
       _typedInvoke(CHANNELS.WORKTREE_GET_AVAILABLE_BRANCH, { rootPath, branchName }),
 
-    delete: (worktreeId: string, force?: boolean) =>
-      _typedInvoke(CHANNELS.WORKTREE_DELETE, { worktreeId, force }),
+    delete: (worktreeId: string, force?: boolean, deleteBranch?: boolean) =>
+      _typedInvoke(CHANNELS.WORKTREE_DELETE, { worktreeId, force, deleteBranch }),
 
     onUpdate: (callback: (state: WorktreeState) => void) =>
       _typedOn(CHANNELS.WORKTREE_UPDATE, callback),

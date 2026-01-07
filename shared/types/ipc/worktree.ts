@@ -12,6 +12,8 @@ export interface WorktreeSetActivePayload {
 export interface WorktreeDeletePayload {
   worktreeId: string;
   force?: boolean;
+  /** Delete the associated git branch after removing the worktree */
+  deleteBranch?: boolean;
 }
 
 export interface BranchInfo {

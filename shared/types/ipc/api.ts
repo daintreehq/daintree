@@ -74,7 +74,7 @@ export interface ElectronAPI {
     listBranches(rootPath: string): Promise<BranchInfo[]>;
     getDefaultPath(rootPath: string, branchName: string): Promise<string>;
     getAvailableBranch(rootPath: string, branchName: string): Promise<string>;
-    delete(worktreeId: string, force?: boolean): Promise<void>;
+    delete(worktreeId: string, force?: boolean, deleteBranch?: boolean): Promise<void>;
     onUpdate(callback: (state: WorktreeState) => void): () => void;
     onRemove(callback: (data: { worktreeId: string }) => void): () => void;
   };

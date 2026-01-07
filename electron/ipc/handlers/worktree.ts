@@ -170,7 +170,10 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     if (payload.force !== undefined && typeof payload.force !== "boolean") {
       throw new Error("Invalid force parameter");
     }
-    await workspaceClient.deleteWorktree(payload.worktreeId, payload.force);
+    if (payload.deleteBranch !== undefined && typeof payload.deleteBranch !== "boolean") {
+      throw new Error("Invalid deleteBranch parameter");
+    }
+    await workspaceClient.deleteWorktree(payload.worktreeId, payload.force, payload.deleteBranch);
   };
   ipcMain.handle(CHANNELS.WORKTREE_DELETE, handleWorktreeDelete);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_DELETE));

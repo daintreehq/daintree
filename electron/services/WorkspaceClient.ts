@@ -656,7 +656,11 @@ export class WorkspaceClient extends EventEmitter {
     return result.worktreeId ?? options.path;
   }
 
-  async deleteWorktree(worktreeId: string, force: boolean = false): Promise<void> {
+  async deleteWorktree(
+    worktreeId: string,
+    force: boolean = false,
+    deleteBranch: boolean = false
+  ): Promise<void> {
     const requestId = this.generateRequestId();
 
     await this.sendWithResponse({
@@ -664,6 +668,7 @@ export class WorkspaceClient extends EventEmitter {
       requestId,
       worktreeId,
       force,
+      deleteBranch,
     });
   }
 
