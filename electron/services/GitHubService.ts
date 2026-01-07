@@ -638,12 +638,12 @@ function parseIssueNode(node: Record<string, unknown>): GitHubIssue {
       login: author?.login ?? "unknown",
       avatarUrl: author?.avatarUrl ?? "",
     },
-    assignees: (assigneesData?.nodes ?? []).map((a) => ({
+    assignees: (assigneesData?.nodes ?? []).filter(Boolean).map((a) => ({
       login: a.login ?? "unknown",
       avatarUrl: a.avatarUrl ?? "",
     })),
     commentCount: commentsData?.totalCount ?? 0,
-    labels: (labelsData?.nodes ?? []).map((l) => ({
+    labels: (labelsData?.nodes ?? []).filter(Boolean).map((l) => ({
       name: l.name ?? "",
       color: l.color ?? "",
     })),
@@ -724,7 +724,7 @@ export async function listIssues(
       const nodes = (search?.nodes ?? []) as Array<Record<string, unknown>>;
 
       result = {
-        items: nodes.map(parseIssueNode),
+        items: nodes.filter(Boolean).map(parseIssueNode),
         pageInfo: {
           hasNextPage: search?.pageInfo?.hasNextPage ?? false,
           endCursor: search?.pageInfo?.endCursor ?? null,
@@ -745,7 +745,7 @@ export async function listIssues(
       const nodes = (issues?.nodes ?? []) as Array<Record<string, unknown>>;
 
       result = {
-        items: nodes.map(parseIssueNode),
+        items: nodes.filter(Boolean).map(parseIssueNode),
         pageInfo: {
           hasNextPage: issues?.pageInfo?.hasNextPage ?? false,
           endCursor: issues?.pageInfo?.endCursor ?? null,
@@ -811,7 +811,7 @@ export async function listPullRequests(
       const nodes = (search?.nodes ?? []) as Array<Record<string, unknown>>;
 
       result = {
-        items: nodes.map(parsePRNode),
+        items: nodes.filter(Boolean).map(parsePRNode),
         pageInfo: {
           hasNextPage: search?.pageInfo?.hasNextPage ?? false,
           endCursor: search?.pageInfo?.endCursor ?? null,
@@ -832,7 +832,7 @@ export async function listPullRequests(
       const nodes = (pullRequests?.nodes ?? []) as Array<Record<string, unknown>>;
 
       result = {
-        items: nodes.map(parsePRNode),
+        items: nodes.filter(Boolean).map(parsePRNode),
         pageInfo: {
           hasNextPage: pullRequests?.pageInfo?.hasNextPage ?? false,
           endCursor: pullRequests?.pageInfo?.endCursor ?? null,
