@@ -194,7 +194,7 @@ function safeStringify(value: unknown): string {
     return JSON.stringify(
       value,
       (key, val) => {
-        if (SENSITIVE_KEYS.has(key)) return "[redacted]";
+        if (SENSITIVE_KEYS.has(key.toLowerCase())) return "[redacted]";
 
         if (typeof val === "bigint") return val.toString();
 
@@ -261,25 +261,48 @@ function log(level: LogLevel, message: string, context?: LogContext): LogEntry {
   return entry;
 }
 
-function redactSensitiveData(obj: Record<string, unknown>): Record<string, unknown> {
+function redactSensitiveData(
+  obj: Record<string, unknown>,
+  visited = new WeakSet<object>()
+): Record<string, unknown> {
+  if (visited.has(obj)) {
+    return "[Circular]" as unknown as Record<string, unknown>;
+  }
+  visited.add(obj);
+
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(obj)) {
     if (SENSITIVE_KEYS.has(key.toLowerCase())) {
       result[key] = "[redacted]";
     } else if (Array.isArray(value)) {
-      result[key] = value.map((item) => {
-        if (item && typeof item === "object") {
-          return redactSensitiveData(item as Record<string, unknown>);
-        }
-        return item;
-      });
-    } else if (value && typeof value === "object") {
-      result[key] = redactSensitiveData(value as Record<string, unknown>);
+      result[key] = redactArrayWithCycleDetection(value, visited);
+    } else if (value !== null && typeof value === "object") {
+      result[key] = redactSensitiveData(value as Record<string, unknown>, visited);
     } else {
       result[key] = value;
     }
   }
   return result;
+}
+
+function redactArrayWithCycleDetection(arr: unknown[], visited: WeakSet<object>): unknown[] {
+  if (visited.has(arr)) {
+    return "[Circular]" as unknown as unknown[];
+  }
+  visited.add(arr);
+
+  return arr.map((item) => {
+    if (item === null) {
+      return item;
+    }
+    if (Array.isArray(item)) {
+      return redactArrayWithCycleDetection(item, visited);
+    }
+    if (typeof item === "object") {
+      return redactSensitiveData(item as Record<string, unknown>, visited);
+    }
+    return item;
+  });
 }
 
 export function logDebug(message: string, context?: LogContext): void {
