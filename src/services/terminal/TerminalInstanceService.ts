@@ -397,6 +397,11 @@ class TerminalInstanceService {
    * Rate-limited to prevent excessive backend calls on rapid focus changes.
    */
   wake(id: string): void {
+    // Guard: Don't wake destroyed terminals to prevent repopulating stale state
+    if (!this.instances.has(id)) {
+      return;
+    }
+
     const now = Date.now();
     const lastWake = this.lastWakeTime.get(id) ?? 0;
 
@@ -1474,6 +1479,8 @@ class TerminalInstanceService {
     this.resizeLocks.delete(id);
     this.suppressedExitUntil.delete(id);
     this.cwdProviders.delete(id);
+    this.lastWakeTime.delete(id);
+    this.lastBackendTier.delete(id);
   }
 
   dispose(): void {
