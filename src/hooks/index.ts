@@ -7,7 +7,7 @@ export { useAgentLauncher } from "./useAgentLauncher";
 export type { LaunchAgentOptions, UseAgentLauncherReturn } from "./useAgentLauncher";
 
 export { useContextInjection } from "./useContextInjection";
-export type { UseContextInjectionReturn } from "./useContextInjection";
+export type { UseContextInjectionReturn, InjectionStatus } from "./useContextInjection";
 
 export { useErrors } from "./useErrors";
 

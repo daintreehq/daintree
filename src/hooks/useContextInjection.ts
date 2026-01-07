@@ -15,32 +15,48 @@ export interface CopyTreeProgress {
   currentFile?: string;
 }
 
+export type InjectionStatus = "idle" | "waiting" | "injecting";
+
 export interface UseContextInjectionReturn {
   inject: (worktreeId: string, terminalId?: string, selectedPaths?: string[]) => Promise<void>;
   cancel: () => void;
   isInjecting: boolean;
+  isPendingInjection: boolean;
+  injectionStatus: InjectionStatus;
   progress: CopyTreeProgress | null;
   error: string | null;
   clearError: () => void;
 }
 
-function isAgentBusy(agentState: AgentState | undefined): boolean {
-  return agentState === "working";
+function isAgentReady(agentState: AgentState | undefined): boolean {
+  return agentState === "idle" || agentState === "waiting";
 }
 
 // Global shared state for injection tracking with event-based subscription
 // All hook instances subscribe to this to coordinate progress display
 type InjectionStateListener = () => void;
 
+interface PendingInjection {
+  id: number;
+  terminalId: string;
+  worktreeId: string;
+  selectedPaths?: string[];
+  resolve: () => void;
+  reject: (error: Error) => void;
+}
+
 const globalInjectionState = {
   isInjecting: false,
+  isPendingInjection: false,
   activeTerminalId: null as string | null,
   lastProgress: null as CopyTreeProgress | null,
   injectionId: 0, // Incremented on each injection to prevent cross-run interference
+  pendingInjection: null as PendingInjection | null,
   listeners: new Set<InjectionStateListener>(),
 
   snapshot: {
     isInjecting: false,
+    isPendingInjection: false,
     activeTerminalId: null as string | null,
     lastProgress: null as CopyTreeProgress | null,
   },
@@ -48,6 +64,7 @@ const globalInjectionState = {
   notify() {
     this.snapshot = {
       isInjecting: this.isInjecting,
+      isPendingInjection: this.isPendingInjection,
       activeTerminalId: this.activeTerminalId,
       lastProgress: this.lastProgress,
     };
@@ -61,6 +78,15 @@ const globalInjectionState = {
   subscribe(listener: InjectionStateListener) {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  },
+
+  clearPending() {
+    if (this.pendingInjection) {
+      this.pendingInjection.reject(new Error("Injection cancelled"));
+      this.pendingInjection = null;
+      this.isPendingInjection = false;
+      this.notify();
+    }
   },
 };
 
@@ -84,9 +110,20 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
   // Determine if this terminal is the injection target
   const isTargetTerminal = targetTerminalId === globalState.activeTerminalId;
   const isInjecting = globalState.isInjecting && isTargetTerminal;
+  const isPendingInjection = globalState.isPendingInjection && isTargetTerminal;
+
+  // Compute injection status for UI feedback
+  const injectionStatus: InjectionStatus = isPendingInjection
+    ? "waiting"
+    : isInjecting
+      ? "injecting"
+      : "idle";
 
   // Only show progress for the active terminal
-  const progress = isInjecting ? localProgressRef.current : null;
+  // Use localProgressRef if available, otherwise fall back to global state for initial messages
+  const progress = isInjecting || isPendingInjection
+    ? localProgressRef.current ?? globalState.lastProgress
+    : null;
 
   // Subscribe to global injection progress and filter for this terminal
   useEffect(() => {
@@ -117,6 +154,42 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
     };
   }, []);
 
+  // Subscribe to terminal store to detect agent state changes for pending injections
+  useEffect(() => {
+    const unsubscribe = useTerminalStore.subscribe((state, prevState) => {
+      const pending = globalInjectionState.pendingInjection;
+      if (!pending) return;
+
+      const terminal = state.terminals.find((t) => t.id === pending.terminalId);
+      const prevTerminal = prevState.terminals.find((t) => t.id === pending.terminalId);
+
+      // Handle terminal deletion while waiting
+      if (!terminal && prevTerminal) {
+        pending.reject(new Error("Terminal was deleted while waiting for agent"));
+        globalInjectionState.pendingInjection = null;
+        globalInjectionState.isPendingInjection = false;
+        globalInjectionState.activeTerminalId = null;
+        globalInjectionState.lastProgress = null;
+        globalInjectionState.notify();
+        return;
+      }
+
+      // Only process if agent state changed to ready
+      if (
+        terminal &&
+        isAgentReady(terminal.agentState) &&
+        !isAgentReady(prevTerminal?.agentState)
+      ) {
+        pending.resolve();
+        globalInjectionState.pendingInjection = null;
+        globalInjectionState.isPendingInjection = false;
+        globalInjectionState.notify();
+      }
+    });
+
+    return unsubscribe;
+  }, []);
+
   const inject = useCallback(
     async (worktreeId: string, terminalId?: string, selectedPaths?: string[]) => {
       const activeTerminal = terminalId || focusedId;
@@ -126,20 +199,99 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         return;
       }
 
-      const terminal = terminals.find((t: TerminalInstance) => t.id === activeTerminal);
+      let terminal = terminals.find((t: TerminalInstance) => t.id === activeTerminal);
       if (!terminal) {
         setError(`Terminal not found: ${activeTerminal}`);
         return;
       }
 
-      // Warn but proceed - agent might finish by the time context is generated
-      if (isAgentBusy(terminal.agentState)) {
-        console.log("Agent is busy, context will be injected when generation completes");
+      // Clear any previous error
+      setError(null);
+
+      // Generate a new injection ID early to track this specific injection
+      globalInjectionState.injectionId++;
+      const currentInjectionId = globalInjectionState.injectionId;
+
+      // Gate injection for agent terminals that are not ready
+      // Non-agent terminals (agentState undefined) inject immediately
+      if (terminal.agentId && !isAgentReady(terminal.agentState)) {
+        console.log(
+          `Agent is not ready (state: ${terminal.agentState}), waiting for idle/waiting state`
+        );
+
+        // Cancel any existing pending injection (regardless of terminal)
+        // to prevent promise leaks
+        if (globalInjectionState.pendingInjection) {
+          globalInjectionState.clearPending();
+        }
+
+        // Set up pending injection state
+        globalInjectionState.isPendingInjection = true;
+        globalInjectionState.activeTerminalId = activeTerminal;
+        globalInjectionState.lastProgress = {
+          stage: "Waiting",
+          progress: 0,
+          message: "Waiting for agent to become idle...",
+        };
+        localProgressRef.current = globalInjectionState.lastProgress;
+        globalInjectionState.notify();
+
+        // Wait for agent to become idle
+        try {
+          await new Promise<void>((resolve, reject) => {
+            globalInjectionState.pendingInjection = {
+              id: currentInjectionId,
+              terminalId: activeTerminal,
+              worktreeId,
+              selectedPaths,
+              resolve,
+              reject,
+            };
+
+            // Immediately re-check if agent became ready between initial check and pending setup
+            const currentTerminal = useTerminalStore
+              .getState()
+              .terminals.find((t) => t.id === activeTerminal);
+            if (currentTerminal && isAgentReady(currentTerminal.agentState)) {
+              resolve();
+              globalInjectionState.pendingInjection = null;
+              globalInjectionState.isPendingInjection = false;
+            }
+          });
+        } catch (e) {
+          // Injection was cancelled while waiting
+          const message = e instanceof Error ? e.message : "Injection cancelled";
+          if (message !== "Injection cancelled") {
+            setError(message);
+          }
+          return;
+        }
+
+        // Re-fetch terminal state after waiting (it may have changed)
+        const updatedTerminal = useTerminalStore
+          .getState()
+          .terminals.find((t) => t.id === activeTerminal);
+        if (!updatedTerminal) {
+          setError(`Terminal no longer exists: ${activeTerminal}`);
+          return;
+        }
+
+        // Verify agent is still ready (could have changed during race)
+        if (updatedTerminal.agentId && !isAgentReady(updatedTerminal.agentState)) {
+          console.log(
+            `Agent state changed to ${updatedTerminal.agentState} while waiting, aborting injection`
+          );
+          setError("Agent became busy again, injection aborted");
+          return;
+        }
+
+        // Use updatedTerminal for subsequent operations (not the stale terminal reference)
+        terminal = updatedTerminal;
+
+        console.log("Agent is now idle, proceeding with context injection");
       }
 
       // Set global state so all hook instances can see the active injection
-      globalInjectionState.injectionId++;
-      const currentInjectionId = globalInjectionState.injectionId;
       globalInjectionState.isInjecting = true;
       globalInjectionState.activeTerminalId = activeTerminal;
       globalInjectionState.lastProgress = {
@@ -147,9 +299,8 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         progress: 0,
         message: "Initializing...",
       };
+      globalInjectionState.isPendingInjection = false;
       globalInjectionState.notify();
-
-      setError(null);
 
       try {
         const isAvailable = await copyTreeClient.isAvailable();
@@ -227,9 +378,14 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
   );
 
   const cancel = useCallback(() => {
+    // Cancel pending injection if waiting
+    globalInjectionState.clearPending();
+
+    // Cancel active injection if running
     copyTreeClient.cancel().catch(console.error);
 
     globalInjectionState.isInjecting = false;
+    globalInjectionState.isPendingInjection = false;
     globalInjectionState.activeTerminalId = null;
     globalInjectionState.lastProgress = null;
     localProgressRef.current = null;
@@ -240,5 +396,14 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
     setError(null);
   }, []);
 
-  return { inject, cancel, isInjecting, progress, error, clearError };
+  return {
+    inject,
+    cancel,
+    isInjecting,
+    isPendingInjection,
+    injectionStatus,
+    progress,
+    error,
+    clearError,
+  };
 }
