@@ -217,6 +217,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             cwd: worktreePath,
             worktreeId: worktreeId,
             devCommand: terminal.devCommand?.trim() || undefined,
+            env: terminal.env,
           });
           continue;
         }
@@ -252,6 +253,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           cwd: worktreePath,
           command,
           worktreeId: worktreeId,
+          env: terminal.env,
         });
       } catch (error) {
         console.error(`Failed to spawn terminal for recipe ${recipeId}:`, error);

@@ -99,6 +99,8 @@ export interface AddTerminalOptions {
   createdAt?: number;
   /** Dev server command override for dev-preview panels (kind === 'dev-preview') */
   devCommand?: string;
+  /** Environment variables to set for this terminal */
+  env?: Record<string, string>;
 }
 
 function getDefaultTitle(kind?: PanelKind, type?: TerminalType, agentId?: string): string {
@@ -407,6 +409,7 @@ export const createTerminalRegistrySlice =
               agentId,
               title,
               worktreeId: options.worktreeId,
+              env: options.env,
             });
           }
 
