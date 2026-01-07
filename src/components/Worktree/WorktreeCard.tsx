@@ -41,6 +41,7 @@ export interface WorktreeCardProps {
   agentSettings?: UseAgentLauncherReturn["agentSettings"];
   homeDir?: string;
   variant?: "sidebar" | "grid";
+  onAfterTerminalSelect?: () => void;
 }
 
 export function WorktreeCard({
@@ -57,6 +58,7 @@ export function WorktreeCard({
   agentSettings,
   homeDir,
   variant = "sidebar",
+  onAfterTerminalSelect,
 }: WorktreeCardProps) {
   const isExpanded = useWorktreeSelectionStore(
     useCallback((state) => state.expandedWorktrees.has(worktree.id), [worktree.id])
@@ -198,8 +200,11 @@ export function WorktreeCard({
 
       // Trigger the ping animation
       pingTerminal(terminal.id);
+
+      // Invoke callback (e.g. close modal) after focusing terminal
+      onAfterTerminalSelect?.();
     },
-    [isActive, onSelect, setFocused, pingTerminal, openDockTerminal, trackTerminalFocus]
+    [isActive, onSelect, setFocused, pingTerminal, openDockTerminal, trackTerminalFocus, onAfterTerminalSelect]
   );
 
   const handleToggleExpand = useCallback(

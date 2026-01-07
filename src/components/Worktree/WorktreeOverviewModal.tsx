@@ -363,6 +363,7 @@ export function WorktreeOverviewModal({
                           agentAvailability={agentAvailability}
                           agentSettings={agentSettings}
                           homeDir={homeDir}
+                          onAfterTerminalSelect={onClose}
                         />
                       </div>
                     ))}
@@ -406,6 +407,7 @@ export function WorktreeOverviewModal({
                     agentAvailability={agentAvailability}
                     agentSettings={agentSettings}
                     homeDir={homeDir}
+                    onAfterTerminalSelect={onClose}
                   />
                 </div>
               ))}
