@@ -4,7 +4,7 @@ import { useTerminalStore, type TerminalInstance } from "@/store/terminalStore";
 import { useErrorStore } from "@/store/errorStore";
 import type { AgentState, CopyTreeProgress } from "@/types";
 import { copyTreeClient } from "@/clients";
-import { getFormatForTerminal } from "@/lib/copyTreeFormat";
+import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
 
 export type InjectionStatus = "idle" | "waiting" | "injecting";
 
@@ -317,10 +317,8 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
           );
         }
 
-        const format = getFormatForTerminal(terminal);
-
         const options = {
-          format,
+          format: DEFAULT_COPYTREE_FORMAT,
           ...(selectedPaths && selectedPaths.length > 0 ? { includePaths: selectedPaths } : {}),
         };
 
@@ -340,7 +338,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
             ? ` from ${selectedPaths.length} selected ${selectedPaths.length === 1 ? "path" : "paths"}`
             : "";
         console.log(
-          `Context injected (${result.fileCount} files as ${format.toUpperCase()}${pathInfo})`
+          `Context injected (${result.fileCount} files as ${DEFAULT_COPYTREE_FORMAT.toUpperCase()}${pathInfo})`
         );
 
         if (currentErrorIdRef.current) {

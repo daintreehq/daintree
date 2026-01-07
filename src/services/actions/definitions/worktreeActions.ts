@@ -4,8 +4,7 @@ import type { ActionContext, ActionId } from "@shared/types/actions";
 import { copyTreeClient, githubClient, systemClient, worktreeClient } from "@/clients";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { useTerminalStore } from "@/store/terminalStore";
-import { getFormatForTerminal } from "@/lib/copyTreeFormat";
+import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
 
 export function registerWorktreeActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("worktree.refresh", () => ({
@@ -441,10 +440,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return null;
 
-      const terminal = ctx.focusedTerminalId
-        ? useTerminalStore.getState().terminals.find((t) => t.id === ctx.focusedTerminalId)
-        : undefined;
-      const format = explicitFormat ?? getFormatForTerminal(terminal);
+      const format = explicitFormat ?? DEFAULT_COPYTREE_FORMAT;
 
       const result = await copyTreeClient.generateAndCopyFile(targetWorktreeId, {
         format,
