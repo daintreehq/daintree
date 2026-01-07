@@ -83,6 +83,46 @@ export async function validateGitHubToken(token: string) {
   return GitHubAuth.validate(token);
 }
 
+/**
+ * Parse owner and repo from a GitHub URL (HTTPS or SSH format).
+ *
+ * Handles:
+ * - HTTPS URLs: https://github.com/owner/repo, https://github.com/owner/repo.git
+ * - SSH URLs: git@github.com:owner/repo, git@github.com:owner/repo.git
+ * - Trailing slashes: https://github.com/owner/repo/
+ * - Dotted repo names: https://github.com/owner/my.repo
+ */
+export function parseGitHubRepoUrl(url: string): { owner: string; repo: string } | null {
+  // Normalize SSH format to HTTPS-like format for easier parsing
+  const normalized = url.replace(/^git@github\.com:/, "https://github.com/");
+
+  try {
+    const parsed = new URL(normalized);
+
+    // Must be github.com
+    if (parsed.hostname !== "github.com") {
+      return null;
+    }
+
+    // Remove leading slash, trailing slash, and .git suffix
+    const pathname = parsed.pathname
+      .replace(/^\//, "")
+      .replace(/\/$/, "")
+      .replace(/\.git$/, "");
+
+    const parts = pathname.split("/");
+
+    // Need at least owner and repo
+    if (parts.length < 2 || !parts[0] || !parts[1]) {
+      return null;
+    }
+
+    return { owner: parts[0], repo: parts[1] };
+  } catch {
+    return null;
+  }
+}
+
 export async function getRepoContext(cwd: string): Promise<RepoContext | null> {
   const cached = repoContextCache.get(cwd);
   if (cached) return cached;
@@ -93,11 +133,10 @@ export async function getRepoContext(cwd: string): Promise<RepoContext | null> {
 
     if (!fetchUrl) return null;
 
-    const match = fetchUrl.match(/github\.com[/:]([^/]+)\/([^/.]+?)(?:\.git)?$/);
+    const parsed = parseGitHubRepoUrl(fetchUrl);
+    if (!parsed) return null;
 
-    if (!match) return null;
-
-    const context = { owner: match[1], repo: match[2] };
+    const context = { owner: parsed.owner, repo: parsed.repo };
     repoContextCache.set(cwd, context);
     return context;
   } catch {
