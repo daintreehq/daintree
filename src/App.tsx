@@ -677,6 +677,7 @@ function App() {
     actionService.setContextProvider(() => ({
       projectId: useProjectStore.getState().currentProject?.id,
       activeWorktreeId: useWorktreeSelectionStore.getState().activeWorktreeId ?? undefined,
+      focusedWorktreeId: useWorktreeSelectionStore.getState().focusedWorktreeId ?? undefined,
       focusedTerminalId: useTerminalStore.getState().focusedId ?? undefined,
     }));
 

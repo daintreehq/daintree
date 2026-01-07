@@ -139,10 +139,14 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ worktreeId: z.string() }),
-    run: async (args: unknown) => {
-      const { worktreeId } = args as { worktreeId: string };
-      useWorktreeSelectionStore.getState().selectWorktree(worktreeId);
+    argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { worktreeId } = (args ?? {}) as { worktreeId?: string };
+      const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+      if (!targetWorktreeId) {
+        throw new Error("No worktree selected");
+      }
+      useWorktreeSelectionStore.getState().selectWorktree(targetWorktreeId);
     },
   }));
 
@@ -370,22 +374,24 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "confirm",
     scope: "renderer",
-    argsSchema: z.object({
-      worktreeId: z.string().optional(),
-      format: z.enum(["xml", "json", "markdown", "tree", "ndjson"]).optional(),
-      modified: z.boolean().optional(),
-    }),
+    argsSchema: z
+      .object({
+        worktreeId: z.string().optional(),
+        format: z.enum(["xml", "json", "markdown", "tree", "ndjson"]).optional(),
+        modified: z.boolean().optional(),
+      })
+      .optional(),
     run: async (args: unknown, ctx: ActionContext) => {
       const {
         worktreeId,
         format: explicitFormat,
         modified,
-      } = args as {
+      } = (args ?? {}) as {
         worktreeId?: string;
         format?: "xml" | "json" | "markdown" | "tree" | "ndjson";
         modified?: boolean;
       };
-      const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
+      const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return null;
 
       const terminal = ctx.focusedTerminalId
@@ -422,11 +428,13 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "confirm",
     scope: "renderer",
-    argsSchema: z.object({
-      worktreeId: z.string().optional(),
-      format: z.enum(["xml", "json", "markdown", "tree", "ndjson"]).optional(),
-      modified: z.boolean().optional(),
-    }),
+    argsSchema: z
+      .object({
+        worktreeId: z.string().optional(),
+        format: z.enum(["xml", "json", "markdown", "tree", "ndjson"]).optional(),
+        modified: z.boolean().optional(),
+      })
+      .optional(),
     run: async (args: unknown) => {
       const { actionService } = await import("@/services/ActionService");
       const result = await actionService.dispatch("worktree.copyTree", args, { source: "user" });
@@ -445,9 +453,11 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({
-      worktreeId: z.string().optional(),
-    }),
+    argsSchema: z
+      .object({
+        worktreeId: z.string().optional(),
+      })
+      .optional(),
     isEnabled: (ctx: ActionContext) => {
       const hasFocusedTerminal = Boolean(ctx.focusedTerminalId);
       return hasFocusedTerminal;
@@ -464,8 +474,8 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       if (!hasFocusedTerminal) {
         throw new Error("No focused terminal to inject into");
       }
-      const { worktreeId } = args as { worktreeId?: string };
-      const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
+      const { worktreeId } = (args ?? {}) as { worktreeId?: string };
+      const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) {
         throw new Error("No worktree selected");
       }
@@ -481,10 +491,10 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ worktreeId: z.string().optional() }),
+    argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
     run: async (args: unknown, ctx: ActionContext) => {
-      const { worktreeId } = args as { worktreeId?: string };
-      const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
+      const { worktreeId } = (args ?? {}) as { worktreeId?: string };
+      const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
 
       const worktree = useWorktreeDataStore.getState().worktrees.get(targetWorktreeId);
@@ -502,10 +512,10 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ worktreeId: z.string().optional() }),
+    argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
     run: async (args: unknown, ctx: ActionContext) => {
-      const { worktreeId } = args as { worktreeId?: string };
-      const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
+      const { worktreeId } = (args ?? {}) as { worktreeId?: string };
+      const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
       const worktree = useWorktreeDataStore.getState().worktrees.get(targetWorktreeId);
       if (!worktree) return;
@@ -521,10 +531,10 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ worktreeId: z.string().optional() }),
+    argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
     run: async (args: unknown, ctx: ActionContext) => {
-      const { worktreeId } = args as { worktreeId?: string };
-      const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
+      const { worktreeId } = (args ?? {}) as { worktreeId?: string };
+      const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
       const worktree = useWorktreeDataStore.getState().worktrees.get(targetWorktreeId);
       if (!worktree?.issueNumber) return;
@@ -540,10 +550,10 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ worktreeId: z.string().optional() }),
+    argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
     run: async (args: unknown, ctx: ActionContext) => {
-      const { worktreeId } = args as { worktreeId?: string };
-      const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
+      const { worktreeId } = (args ?? {}) as { worktreeId?: string };
+      const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
       const worktree = useWorktreeDataStore.getState().worktrees.get(targetWorktreeId);
       if (!worktree?.prUrl) return;
@@ -559,10 +569,10 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ worktreeId: z.string().optional() }),
+    argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
     run: async (args: unknown, ctx: ActionContext) => {
-      const { worktreeId } = args as { worktreeId?: string };
-      const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
+      const { worktreeId } = (args ?? {}) as { worktreeId?: string };
+      const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
 
       const worktree = useWorktreeDataStore.getState().worktrees.get(targetWorktreeId);
@@ -591,7 +601,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       );
     },
     isEnabled: (ctx: ActionContext) => {
-      const worktreeId = ctx.activeWorktreeId;
+      const worktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
       if (!worktreeId) return false;
       const worktree = useWorktreeDataStore.getState().worktrees.get(worktreeId);
       return typeof worktree?.prUrl === "string" && worktree.prUrl.trim().length > 0;
@@ -606,10 +616,10 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ worktreeId: z.string().optional() }),
+    argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
     run: async (args: unknown, ctx: ActionContext) => {
-      const { worktreeId } = args as { worktreeId?: string };
-      const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
+      const { worktreeId } = (args ?? {}) as { worktreeId?: string };
+      const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
 
       const worktree = useWorktreeDataStore.getState().worktrees.get(targetWorktreeId);
@@ -630,7 +640,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       );
     },
     isEnabled: (ctx: ActionContext) => {
-      const worktreeId = ctx.activeWorktreeId;
+      const worktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
       if (!worktreeId) return false;
       const worktree = useWorktreeDataStore.getState().worktrees.get(worktreeId);
       return typeof worktree?.issueNumber === "number" && worktree.issueNumber > 0;

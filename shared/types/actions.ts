@@ -203,6 +203,7 @@ export type ActionId =
 export interface ActionContext {
   projectId?: string;
   activeWorktreeId?: string;
+  focusedWorktreeId?: string;
   focusedTerminalId?: string;
   isTerminalPaletteOpen?: boolean;
   isSettingsOpen?: boolean;
