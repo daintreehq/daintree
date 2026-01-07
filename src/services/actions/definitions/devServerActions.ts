@@ -43,6 +43,7 @@ export function registerDevServerActions(
         cwd,
         worktreeId: activeWorktreeId ?? undefined,
         location: "grid",
+        devCommand: devServerCommand,
       });
     },
   }));
