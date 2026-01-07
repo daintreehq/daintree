@@ -86,6 +86,12 @@ const SENSITIVE_KEYS = new Set([
   "secret",
   "accesstoken",
   "refreshtoken",
+  "lastoutput",
+  "authorization",
+  "cookie",
+  "session",
+  "clientsecret",
+  "privatekey",
 ]);
 
 const IS_DEBUG_BOOT = process.env.NODE_ENV === "development" || Boolean(process.env.CANOPY_DEBUG);
@@ -190,11 +196,18 @@ function getCallerSource(): string | undefined {
 
 function safeStringify(value: unknown): string {
   const seen = new WeakSet<object>();
+  const sensitivePatterns = ["secret", "token", "password", "key"];
+
   try {
     return JSON.stringify(
       value,
       (key, val) => {
-        if (SENSITIVE_KEYS.has(key.toLowerCase())) return "[redacted]";
+        const lowerKey = key.toLowerCase();
+        if (SENSITIVE_KEYS.has(lowerKey)) return "[redacted]";
+
+        if (sensitivePatterns.some(pattern => lowerKey.includes(pattern))) {
+          return "[redacted]";
+        }
 
         if (typeof val === "bigint") return val.toString();
 
@@ -227,7 +240,7 @@ function writeToLogFile(level: string, message: string, context?: LogContext): v
   try {
     const logFile = getLogFilePath();
     const timestamp = new Date().toISOString();
-    const contextStr = context ? ` ${JSON.stringify(context)}` : "";
+    const contextStr = context ? ` ${safeStringify(context)}` : "";
     const logLine = `[${timestamp}] [${level}] ${message}${contextStr}\n`;
 
     const logDir = getLogDirectory();
@@ -270,9 +283,11 @@ function redactSensitiveData(
   }
   visited.add(obj);
 
+  const sensitivePatterns = ["secret", "token", "password", "key"];
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(obj)) {
-    if (SENSITIVE_KEYS.has(key.toLowerCase())) {
+    const lowerKey = key.toLowerCase();
+    if (SENSITIVE_KEYS.has(lowerKey) || sensitivePatterns.some(pattern => lowerKey.includes(pattern))) {
       result[key] = "[redacted]";
     } else if (Array.isArray(value)) {
       result[key] = redactArrayWithCycleDetection(value, visited);
