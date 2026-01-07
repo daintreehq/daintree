@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
-import { FolderOpen, FilterX } from "lucide-react";
+import { FolderOpen, FilterX, Maximize2 } from "lucide-react";
 import {
   isElectronAvailable,
   useAgentLauncher,
@@ -32,7 +32,12 @@ import {
 } from "./hooks/app";
 import { AppLayout } from "./components/Layout";
 import { ContentGrid } from "./components/Terminal";
-import { WorktreeCard, WorktreePalette, WorktreeFilterPopover } from "./components/Worktree";
+import {
+  WorktreeCard,
+  WorktreePalette,
+  WorktreeFilterPopover,
+  WorktreeOverviewModal,
+} from "./components/Worktree";
 import { NewWorktreeDialog } from "./components/Worktree/NewWorktreeDialog";
 import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
 import { TerminalPalette, NewTerminalPalette } from "./components/TerminalPalette";
@@ -72,7 +77,11 @@ import {
 } from "./lib/worktreeFilters";
 import type { WorktreeState, PanelKind } from "./types";
 
-function SidebarContent() {
+interface SidebarContentProps {
+  onOpenOverview: () => void;
+}
+
+function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const { worktrees, isLoading, error, refresh } = useWorktrees();
   useProjectSettings();
   const { launchAgent, availability, agentSettings } = useAgentLauncher();
@@ -377,7 +386,17 @@ function SidebarContent() {
     <div className="flex flex-col h-full">
       {/* Header Section */}
       <div className="flex items-center justify-between px-4 py-4 border-b border-divider bg-transparent shrink-0">
-        <h2 className="text-canopy-text font-semibold text-sm tracking-wide">Worktrees</h2>
+        <div className="flex items-center gap-2">
+          <h2 className="text-canopy-text font-semibold text-sm tracking-wide">Worktrees</h2>
+          <button
+            onClick={onOpenOverview}
+            className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/[0.06] rounded transition-colors"
+            title="Open worktrees overview (⌘⇧O)"
+            aria-label="Open worktrees overview"
+          >
+            <Maximize2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
         <div className="flex items-center gap-1">
           <WorktreeFilterPopover />
           <button
@@ -464,6 +483,11 @@ function App() {
   useTerminalConfig();
   useWindowNotifications();
 
+  const [homeDir, setHomeDir] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    systemClient.getHomeDir().then(setHomeDir).catch(console.error);
+  }, []);
+
   // Grid navigation hook for directional terminal switching
   const { findNearest, findByIndex, findDockByIndex, getCurrentLocation } = useGridNavigation();
 
@@ -473,13 +497,15 @@ function App() {
   const panelPalette = usePanelPalette();
   const projectSwitcherPalette = useProjectSwitcherPalette();
   const currentProject = useProjectStore((state) => state.currentProject);
-  const { setActiveWorktree, selectWorktree, activeWorktreeId } = useWorktreeSelectionStore(
-    useShallow((state) => ({
-      setActiveWorktree: state.setActiveWorktree,
-      selectWorktree: state.selectWorktree,
-      activeWorktreeId: state.activeWorktreeId,
-    }))
-  );
+  const { setActiveWorktree, selectWorktree, activeWorktreeId, focusedWorktreeId } =
+    useWorktreeSelectionStore(
+      useShallow((state) => ({
+        setActiveWorktree: state.setActiveWorktree,
+        selectWorktree: state.selectWorktree,
+        activeWorktreeId: state.activeWorktreeId,
+        focusedWorktreeId: state.focusedWorktreeId,
+      }))
+    );
   const activeWorktree = useMemo(
     () => worktrees.find((w) => w.id === activeWorktreeId) ?? null,
     [worktrees, activeWorktreeId]
@@ -574,6 +600,7 @@ function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [isNotesPaletteOpen, setIsNotesPaletteOpen] = useState(false);
+  const [isWorktreeOverviewOpen, setIsWorktreeOverviewOpen] = useState(false);
 
   // Hydration callbacks for state restoration
   const hydrationCallbacks: HydrationCallbacks = useMemo(
@@ -649,6 +676,16 @@ function App() {
     setIsNotesPaletteOpen(false);
   }, []);
 
+  const openWorktreeOverview = useCallback(() => {
+    setIsWorktreeOverviewOpen(true);
+  }, []);
+
+  const closeWorktreeOverview = useCallback(() => {
+    setIsWorktreeOverviewOpen(false);
+  }, []);
+
+  const overviewWorktreeActions = useWorktreeActions({ launchAgent });
+
   useEffect(() => {
     const handleOpenNotesPalette = () => {
       openNotesPalette();
@@ -695,6 +732,8 @@ function App() {
     onToggleFocusMode: handleToggleSidebar,
     onOpenAgentPalette: terminalPalette.open,
     onOpenWorktreePalette: openWorktreePalette,
+    onOpenWorktreeOverview: openWorktreeOverview,
+    onCloseWorktreeOverview: closeWorktreeOverview,
     onOpenNewTerminalPalette: newTerminalPalette.open,
     onOpenPanelPalette: panelPalette.open,
     onOpenProjectSwitcherPalette: projectSwitcherPalette.open,
@@ -750,7 +789,12 @@ function App() {
     <ErrorBoundary variant="fullscreen" componentName="App">
       <DndProvider>
         <AppLayout
-          sidebarContent={<SidebarContent key={currentProject?.id ?? "no-project"} />}
+          sidebarContent={
+            <SidebarContent
+              key={currentProject?.id ?? "no-project"}
+              onOpenOverview={openWorktreeOverview}
+            />
+          }
           onLaunchAgent={handleLaunchAgent}
           onSettings={handleSettings}
           onOpenAgentSettings={handleOpenAgentSettings}
@@ -836,6 +880,22 @@ function App() {
       />
 
       <NotesPalette isOpen={isNotesPaletteOpen} onClose={closeNotesPalette} />
+
+      <WorktreeOverviewModal
+        isOpen={isWorktreeOverviewOpen}
+        onClose={closeWorktreeOverview}
+        worktrees={worktrees}
+        activeWorktreeId={activeWorktreeId}
+        focusedWorktreeId={focusedWorktreeId}
+        onSelectWorktree={selectWorktree}
+        onCopyTree={overviewWorktreeActions.handleCopyTree}
+        onOpenEditor={overviewWorktreeActions.handleOpenEditor}
+        onSaveLayout={undefined}
+        onLaunchAgent={overviewWorktreeActions.handleLaunchAgent}
+        agentAvailability={availability}
+        agentSettings={agentSettings}
+        homeDir={homeDir}
+      />
 
       <SettingsDialog
         isOpen={isSettingsOpen}

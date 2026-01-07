@@ -525,6 +525,14 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Worktrees",
   },
   {
+    actionId: "worktree.overview",
+    combo: "Cmd+Shift+O",
+    scope: "global",
+    priority: 0,
+    description: "Open worktrees overview",
+    category: "Worktrees",
+  },
+  {
     actionId: "project.switcherPalette",
     combo: "Cmd+K P",
     scope: "global",
