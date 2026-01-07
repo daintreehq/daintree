@@ -172,8 +172,11 @@ export class PtyClient extends EventEmitter {
 
   /** Special callbacks that don't fit the request/response pattern */
   private snapshotCallbacks: Map<string, (snapshot: TerminalSnapshot | null) => void> = new Map();
-  private allSnapshotsCallback: ((snapshots: TerminalSnapshot[]) => void) | null = null;
+  private snapshotTimeouts: Map<string, NodeJS.Timeout> = new Map();
+  private allSnapshotsCallbacks: Map<string, (snapshots: TerminalSnapshot[]) => void> = new Map();
+  private allSnapshotsTimeouts: Map<string, NodeJS.Timeout> = new Map();
   private transitionCallbacks: Map<string, (success: boolean) => void> = new Map();
+  private transitionTimeouts: Map<string, NodeJS.Timeout> = new Map();
 
   private readyPromise: Promise<void>;
   private readyResolve: (() => void) | null = null;
@@ -502,19 +505,29 @@ export class PtyClient extends EventEmitter {
         break;
 
       case "snapshot": {
-        const callback = this.snapshotCallbacks.get(event.id);
+        const callback = this.snapshotCallbacks.get(event.requestId);
         if (callback) {
-          this.snapshotCallbacks.delete(event.id);
+          this.snapshotCallbacks.delete(event.requestId);
+          const timeout = this.snapshotTimeouts.get(event.requestId);
+          if (timeout) {
+            clearTimeout(timeout);
+            this.snapshotTimeouts.delete(event.requestId);
+          }
           callback(event.snapshot as TerminalSnapshot | null);
         }
         break;
       }
 
       case "all-snapshots": {
-        if (this.allSnapshotsCallback) {
-          const cb = this.allSnapshotsCallback;
-          this.allSnapshotsCallback = null;
-          cb(event.snapshots as TerminalSnapshot[]);
+        const callback = this.allSnapshotsCallbacks.get(event.requestId);
+        if (callback) {
+          this.allSnapshotsCallbacks.delete(event.requestId);
+          const timeout = this.allSnapshotsTimeouts.get(event.requestId);
+          if (timeout) {
+            clearTimeout(timeout);
+            this.allSnapshotsTimeouts.delete(event.requestId);
+          }
+          callback(event.snapshots as TerminalSnapshot[]);
         }
         break;
       }
@@ -523,6 +536,11 @@ export class PtyClient extends EventEmitter {
         const cb = this.transitionCallbacks.get(event.requestId);
         if (cb) {
           this.transitionCallbacks.delete(event.requestId);
+          const timeout = this.transitionTimeouts.get(event.requestId);
+          if (timeout) {
+            clearTimeout(timeout);
+            this.transitionTimeouts.delete(event.requestId);
+          }
           cb(event.success);
         }
         break;
@@ -969,33 +987,39 @@ export class PtyClient extends EventEmitter {
 
   /** Get a snapshot of terminal state (async due to IPC) */
   async getTerminalSnapshot(id: string): Promise<TerminalSnapshot | null> {
+    const requestId = this.broker.generateId(`snapshot-${id}`);
     return new Promise((resolve) => {
-      this.snapshotCallbacks.set(id, resolve);
-      this.send({ type: "get-snapshot", id });
+      this.snapshotCallbacks.set(requestId, resolve);
+      this.send({ type: "get-snapshot", id, requestId });
 
       // Timeout after 5s
-      setTimeout(() => {
-        if (this.snapshotCallbacks.has(id)) {
-          this.snapshotCallbacks.delete(id);
+      const timeout = setTimeout(() => {
+        if (this.snapshotCallbacks.has(requestId)) {
+          this.snapshotCallbacks.delete(requestId);
+          this.snapshotTimeouts.delete(requestId);
           resolve(null);
         }
       }, 5000);
+      this.snapshotTimeouts.set(requestId, timeout);
     });
   }
 
   /** Get snapshots for all terminals (async due to IPC) */
   async getAllTerminalSnapshots(): Promise<TerminalSnapshot[]> {
+    const requestId = this.broker.generateId("all-snapshots");
     return new Promise((resolve) => {
-      this.allSnapshotsCallback = resolve;
-      this.send({ type: "get-all-snapshots" });
+      this.allSnapshotsCallbacks.set(requestId, resolve);
+      this.send({ type: "get-all-snapshots", requestId });
 
       // Timeout after 5s
-      setTimeout(() => {
-        if (this.allSnapshotsCallback) {
-          this.allSnapshotsCallback = null;
+      const timeout = setTimeout(() => {
+        if (this.allSnapshotsCallbacks.has(requestId)) {
+          this.allSnapshotsCallbacks.delete(requestId);
+          this.allSnapshotsTimeouts.delete(requestId);
           resolve([]);
         }
       }, 5000);
+      this.allSnapshotsTimeouts.set(requestId, timeout);
     });
   }
 
@@ -1011,7 +1035,7 @@ export class PtyClient extends EventEmitter {
     spawnedAt?: number
   ): Promise<boolean> {
     return new Promise((resolve) => {
-      const requestId = `${id}-${Date.now()}`;
+      const requestId = this.broker.generateId(`transition-${id}`);
       this.transitionCallbacks.set(requestId, resolve);
       this.send({
         type: "transition-state",
@@ -1024,12 +1048,14 @@ export class PtyClient extends EventEmitter {
       });
 
       // Timeout after 5s
-      setTimeout(() => {
+      const timeout = setTimeout(() => {
         if (this.transitionCallbacks.has(requestId)) {
           this.transitionCallbacks.delete(requestId);
+          this.transitionTimeouts.delete(requestId);
           resolve(false);
         }
       }, 5000);
+      this.transitionTimeouts.set(requestId, timeout);
     });
   }
 
@@ -1198,16 +1224,22 @@ export class PtyClient extends EventEmitter {
 
     // Clean up remaining special callbacks
     for (const cb of this.snapshotCallbacks.values()) cb(null);
+    for (const cb of this.allSnapshotsCallbacks.values()) cb([]);
     for (const cb of this.transitionCallbacks.values()) cb(false);
-    if (this.allSnapshotsCallback) {
-      this.allSnapshotsCallback([]);
-      this.allSnapshotsCallback = null;
-    }
+
+    // Clear all timeouts
+    for (const timeout of this.snapshotTimeouts.values()) clearTimeout(timeout);
+    for (const timeout of this.allSnapshotsTimeouts.values()) clearTimeout(timeout);
+    for (const timeout of this.transitionTimeouts.values()) clearTimeout(timeout);
 
     this.pendingSpawns.clear();
     this.terminalPids.clear();
     this.snapshotCallbacks.clear();
+    this.snapshotTimeouts.clear();
+    this.allSnapshotsCallbacks.clear();
+    this.allSnapshotsTimeouts.clear();
     this.transitionCallbacks.clear();
+    this.transitionTimeouts.clear();
     this.removeAllListeners();
 
     console.log("[PtyClient] Disposed");

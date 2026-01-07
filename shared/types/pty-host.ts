@@ -53,8 +53,8 @@ export type PtyHostRequest =
   | { type: "project-switch"; projectId: string }
   | { type: "kill-by-project"; projectId: string; requestId: string }
   | { type: "get-project-stats"; projectId: string; requestId: string }
-  | { type: "get-snapshot"; id: string }
-  | { type: "get-all-snapshots" }
+  | { type: "get-snapshot"; id: string; requestId: string }
+  | { type: "get-all-snapshots"; requestId: string }
   | { type: "mark-checked"; id: string }
   | {
       type: "transition-state";
@@ -159,8 +159,8 @@ export type PtyHostEvent =
   | { type: "terminal-trashed"; id: string; expiresAt: number }
   | { type: "terminal-restored"; id: string }
   | { type: "terminal-pid"; id: string; pid: number }
-  | { type: "snapshot"; id: string; snapshot: PtyHostTerminalSnapshot | null }
-  | { type: "all-snapshots"; snapshots: PtyHostTerminalSnapshot[] }
+  | { type: "snapshot"; id: string; requestId: string; snapshot: PtyHostTerminalSnapshot | null }
+  | { type: "all-snapshots"; requestId: string; snapshots: PtyHostTerminalSnapshot[] }
   | { type: "transition-result"; id: string; requestId: string; success: boolean }
   | { type: "pong" }
   | { type: "ready" }

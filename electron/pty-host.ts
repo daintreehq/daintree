@@ -1423,6 +1423,7 @@ port.on("message", async (rawMsg: any) => {
         sendEvent({
           type: "snapshot",
           id: msg.id,
+          requestId: msg.requestId,
           snapshot: toHostSnapshot(msg.id),
         });
         break;
@@ -1430,6 +1431,7 @@ port.on("message", async (rawMsg: any) => {
       case "get-all-snapshots":
         sendEvent({
           type: "all-snapshots",
+          requestId: msg.requestId,
           snapshots: ptyManager.getAllTerminalSnapshots().map((s) => ({
             id: s.id,
             lines: s.lines,
