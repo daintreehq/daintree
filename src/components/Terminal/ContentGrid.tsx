@@ -64,11 +64,6 @@ function EmptyState({
       (r) => r.worktreeId === activeWorktreeId || r.worktreeId === undefined
     );
   }, [allRecipes, activeWorktreeId]);
-  const dockedTerminals = useTerminalStore(
-    useShallow((state) =>
-      state.terminals.filter((t) => t.location === "dock" && t.worktreeId === activeWorktreeId)
-    )
-  );
 
   // Combine pinned and recently-used recipes into a unified display
   // Pinned recipes first (sorted by lastUsedAt), then recent non-pinned
@@ -111,10 +106,6 @@ function EmptyState({
     } catch (error) {
       console.error("Failed to run recipe:", error);
     }
-  };
-
-  const handleResumeSession = async () => {
-    await actionService.dispatch("worktree.sessions.maximizeAll", {}, { source: "user" });
   };
 
   return (
@@ -170,17 +161,6 @@ function EmptyState({
             <AlertTriangle className="h-4 w-4 shrink-0" />
             <span>Select a worktree in the sidebar to set the working directory for agents</span>
           </div>
-        )}
-
-        {hasActiveWorktree && dockedTerminals.length > 0 && (
-          <button
-            type="button"
-            onClick={handleResumeSession}
-            className="mb-6 px-6 py-3 bg-canopy-accent hover:bg-canopy-accent/90 text-white rounded-[var(--radius-md)] font-medium text-sm transition-all flex items-center gap-2 shadow-lg hover:shadow-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-canopy-bg"
-          >
-            <Play className="h-4 w-4" />
-            Resume Last Session
-          </button>
         )}
 
         {hasActiveWorktree && displayRecipes.length > 0 && (
