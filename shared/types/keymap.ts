@@ -52,6 +52,7 @@ export type KeyAction =
   | "worktree.copyTree"
   | "worktree.openEditor"
   | "worktree.openPalette"
+  | "worktree.overview"
 
   // Terminal actions
   | "terminal.close"

@@ -132,6 +132,8 @@ export type ActionId =
   | "worktree.select"
   | "worktree.copyTree"
   | "worktree.openEditor"
+  | "worktree.overview.open"
+  | "worktree.overview.close"
   | "actions.list"
   | "actions.getContext"
   | "terminal.moveToDock"

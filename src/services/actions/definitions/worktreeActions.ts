@@ -353,6 +353,45 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     },
   }));
 
+  actions.set("worktree.overview", () => ({
+    id: "worktree.overview",
+    title: "Toggle Worktree Overview",
+    description: "Open or close the full-screen worktree overview modal",
+    category: "worktree",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      callbacks.onOpenWorktreeOverview();
+    },
+  }));
+
+  actions.set("worktree.overview.open", () => ({
+    id: "worktree.overview.open",
+    title: "Open Worktree Overview",
+    description: "Open the full-screen worktree overview modal",
+    category: "worktree",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      callbacks.onOpenWorktreeOverview();
+    },
+  }));
+
+  actions.set("worktree.overview.close", () => ({
+    id: "worktree.overview.close",
+    title: "Close Worktree Overview",
+    description: "Close the full-screen worktree overview modal",
+    category: "worktree",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      callbacks.onCloseWorktreeOverview();
+    },
+  }));
+
   actions.set("worktree.panel", () => ({
     id: "worktree.panel",
     title: "Open Worktree Panel",
