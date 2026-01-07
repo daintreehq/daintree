@@ -154,38 +154,28 @@ export function WorktreeOverviewModal({
               className={cn(
                 "grid gap-4",
                 "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4",
-                "auto-rows-min"
+                "items-start"
               )}
             >
               {sortedWorktrees.map((worktree) => (
-                <div
+                <WorktreeCard
                   key={worktree.id}
-                  className={cn(
-                    "rounded-lg overflow-hidden",
-                    "border border-divider",
-                    "bg-canopy-sidebar/50",
-                    "transition-all duration-200",
-                    "hover:border-canopy-accent/50 hover:shadow-lg hover:shadow-canopy-accent/5",
-                    worktree.id === activeWorktreeId && "border-canopy-accent/70 shadow-md"
-                  )}
-                >
-                  <WorktreeCard
-                    worktree={worktree}
-                    isActive={worktree.id === activeWorktreeId}
-                    isFocused={worktree.id === focusedWorktreeId}
-                    isSingleWorktree={worktrees.length === 1}
-                    onSelect={() => handleWorktreeSelect(worktree.id)}
-                    onCopyTree={() => onCopyTree(worktree)}
-                    onOpenEditor={() => onOpenEditor(worktree)}
-                    onSaveLayout={onSaveLayout ? () => onSaveLayout(worktree) : undefined}
-                    onLaunchAgent={
-                      onLaunchAgent ? (agentId) => onLaunchAgent(worktree.id, agentId) : undefined
-                    }
-                    agentAvailability={agentAvailability}
-                    agentSettings={agentSettings}
-                    homeDir={homeDir}
-                  />
-                </div>
+                  variant="grid"
+                  worktree={worktree}
+                  isActive={worktree.id === activeWorktreeId}
+                  isFocused={worktree.id === focusedWorktreeId}
+                  isSingleWorktree={worktrees.length === 1}
+                  onSelect={() => handleWorktreeSelect(worktree.id)}
+                  onCopyTree={() => onCopyTree(worktree)}
+                  onOpenEditor={() => onOpenEditor(worktree)}
+                  onSaveLayout={onSaveLayout ? () => onSaveLayout(worktree) : undefined}
+                  onLaunchAgent={
+                    onLaunchAgent ? (agentId) => onLaunchAgent(worktree.id, agentId) : undefined
+                  }
+                  agentAvailability={agentAvailability}
+                  agentSettings={agentSettings}
+                  homeDir={homeDir}
+                />
               ))}
             </div>
           )}

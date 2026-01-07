@@ -40,6 +40,7 @@ export interface WorktreeCardProps {
   agentAvailability?: UseAgentLauncherReturn["availability"];
   agentSettings?: UseAgentLauncherReturn["agentSettings"];
   homeDir?: string;
+  variant?: "sidebar" | "grid";
 }
 
 export function WorktreeCard({
@@ -55,6 +56,7 @@ export function WorktreeCard({
   agentAvailability,
   agentSettings,
   homeDir,
+  variant = "sidebar",
 }: WorktreeCardProps) {
   const isExpanded = useWorktreeSelectionStore(
     useCallback((state) => state.expandedWorktrees.has(worktree.id), [worktree.id])
@@ -283,15 +285,27 @@ export function WorktreeCard({
     <div
       ref={isActive ? undefined : setNodeRef}
       className={cn(
-        "group relative border-b border-divider transition-all duration-200",
+        "group relative transition-all duration-200",
+        variant === "sidebar" && "border-b border-divider",
+        variant === "grid" && "rounded-lg border border-divider bg-canopy-sidebar/50",
         isActive
           ? "bg-white/[0.03] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]"
-          : "hover:bg-white/[0.02] bg-transparent",
+          : "hover:bg-white/[0.02]",
+        variant === "sidebar" && !isActive && "bg-transparent",
         isActive &&
           !isSingleWorktree &&
+          variant === "sidebar" &&
           "before:absolute before:right-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-l before:bg-canopy-accent before:content-[''] before:z-10 motion-safe:before:animate-in motion-safe:before:fade-in motion-safe:before:duration-200",
+        variant === "grid" && isActive && "border-canopy-accent/70 shadow-md",
+        variant === "grid" &&
+          !isActive &&
+          "hover:border-canopy-accent/50 hover:shadow-lg hover:shadow-canopy-accent/5",
         isFocused && !isActive && "bg-white/[0.02]",
-        (isIdleCard || isStaleCard) && !isActive && !isFocused && "opacity-70 hover:opacity-100",
+        (isIdleCard || isStaleCard) &&
+          !isActive &&
+          !isFocused &&
+          !isOver &&
+          "opacity-70 hover:opacity-100",
         isOver &&
           !isActive &&
           "ring-2 ring-canopy-accent bg-canopy-accent/10 border-canopy-accent/50 transition-all duration-200",
@@ -310,11 +324,19 @@ export function WorktreeCard({
       aria-label={`Worktree: ${branchLabel}${isActive ? " (selected)" : ""}${worktree.isCurrent ? " (current)" : ""}, Status: ${spineState}${worktreeErrors.length > 0 ? `, ${worktreeErrors.length} error${worktreeErrors.length !== 1 ? "s" : ""}` : ""}${hasChanges ? ", has uncommitted changes" : ""}`}
     >
       {isOver && !isActive && (
-        <div className="absolute inset-0 z-50 bg-canopy-accent/20 border-2 border-canopy-accent pointer-events-none animate-in fade-in duration-150" />
+        <div
+          className={cn(
+            "absolute inset-0 z-50 bg-canopy-accent/20 border-2 border-canopy-accent pointer-events-none animate-in fade-in duration-150",
+            variant === "grid" && "rounded-lg"
+          )}
+        />
       )}
       {isComplete && (
         <div
-          className="absolute top-0 left-[1px] w-3 h-3 bg-[var(--color-status-success)]/60 pointer-events-none z-10"
+          className={cn(
+            "absolute w-3 h-3 bg-[var(--color-status-success)]/60 pointer-events-none z-10",
+            variant === "sidebar" ? "top-0 left-[1px]" : "top-0 left-0 rounded-tl-lg"
+          )}
           style={{ clipPath: "polygon(0 0, 100% 0, 0 100%)" }}
           role="img"
           aria-label="Completed: Issue linked, PR opened, all changes committed"
