@@ -223,6 +223,11 @@ export class WorkspaceService {
           continue;
         }
 
+        // Clear activeWorktreeId if this was the active worktree
+        if (this.activeWorktreeId === id) {
+          this.activeWorktreeId = null;
+        }
+
         this.stopMonitor(monitor);
         this.monitors.delete(id);
         clearGitDirCache(monitor.path);
@@ -240,8 +245,10 @@ export class WorkspaceService {
       if (existingMonitor) {
         // Check if branch changed - if so, re-extract issue number
         const branchChanged = existingMonitor.branch !== wt.branch;
+        const isCurrentChanged = existingMonitor.isCurrent !== isActive;
         existingMonitor.branch = wt.branch;
         existingMonitor.name = wt.name;
+        existingMonitor.isCurrent = isActive;
         const interval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
         existingMonitor.pollingInterval = interval;
         existingMonitor.pollingStrategy.setBaseInterval(interval);
@@ -250,6 +257,11 @@ export class WorkspaceService {
           this.pollIntervalMax,
           this.circuitBreakerThreshold
         );
+
+        // Emit update if isCurrent changed
+        if (isCurrentChanged && existingMonitor.hasInitialStatus) {
+          this.emitUpdate(existingMonitor);
+        }
 
         // Re-extract issue number when branch changes
         if (branchChanged && wt.branch) {
@@ -294,7 +306,7 @@ export class WorkspaceService {
           path: wt.path,
           name: wt.name,
           branch: wt.branch,
-          isCurrent: wt.isCurrent,
+          isCurrent: isActive,
           isMainWorktree: Boolean(wt.isMainWorktree),
           gitDir: wt.gitDir,
           worktreeId: wt.id,
@@ -666,6 +678,11 @@ export class WorkspaceService {
       return;
     }
 
+    // Clear activeWorktreeId if this was the active worktree
+    if (this.activeWorktreeId === worktreeId) {
+      this.activeWorktreeId = null;
+    }
+
     // Stop the monitor and remove from map
     this.stopMonitor(monitor);
     this.monitors.delete(worktreeId);
@@ -713,6 +730,10 @@ export class WorkspaceService {
       const interval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
       monitor.pollingInterval = interval;
       monitor.pollingStrategy.setBaseInterval(interval);
+      monitor.isCurrent = isActive;
+      if (monitor.hasInitialStatus) {
+        this.emitUpdate(monitor);
+      }
     }
 
     this.sendEvent({ type: "set-active-result", requestId, success: true });
