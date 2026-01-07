@@ -1,9 +1,23 @@
 import { useCallback, useEffect, useRef, useMemo } from "react";
-import { X, Maximize2 } from "lucide-react";
+import { X, Maximize2, FilterX } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useShallow } from "zustand/react/shallow";
 import { WorktreeCard } from "./WorktreeCard";
+import { WorktreeFilterPopover } from "./WorktreeFilterPopover";
 import type { WorktreeState } from "@/types";
 import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
+import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
+import { useTerminalStore } from "@/store/terminalStore";
+import { useErrorStore } from "@/store/errorStore";
+import {
+  matchesFilters,
+  sortWorktrees,
+  groupByType,
+  type DerivedWorktreeMeta,
+  type FilterState,
+  type GroupedSection,
+} from "@/lib/worktreeFilters";
+import { Button } from "@/components/ui/button";
 
 export interface WorktreeOverviewModalProps {
   isOpen: boolean;
@@ -39,18 +53,125 @@ export function WorktreeOverviewModal({
   const modalRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
-  const sortedWorktrees = useMemo(() => {
-    return [...worktrees].sort((a, b) => {
-      // Active worktree first
-      if (a.id === activeWorktreeId) return -1;
-      if (b.id === activeWorktreeId) return 1;
-      // Main worktree second
-      if (a.isMainWorktree && !b.isMainWorktree) return -1;
-      if (!a.isMainWorktree && b.isMainWorktree) return 1;
-      // Then alphabetical by name
-      return a.name.localeCompare(b.name);
+  // Filter store state
+  const {
+    query,
+    orderBy,
+    groupByType: isGroupedByType,
+    statusFilters,
+    typeFilters,
+    githubFilters,
+    sessionFilters,
+    activityFilters,
+    alwaysShowActive,
+    pinnedWorktrees,
+  } = useWorktreeFilterStore(
+    useShallow((state) => ({
+      query: state.query,
+      orderBy: state.orderBy,
+      groupByType: state.groupByType,
+      statusFilters: state.statusFilters,
+      typeFilters: state.typeFilters,
+      githubFilters: state.githubFilters,
+      sessionFilters: state.sessionFilters,
+      activityFilters: state.activityFilters,
+      alwaysShowActive: state.alwaysShowActive,
+      pinnedWorktrees: state.pinnedWorktrees,
+    }))
+  );
+  const clearAllFilters = useWorktreeFilterStore((state) => state.clearAll);
+  const hasActiveFilters = useWorktreeFilterStore((state) => state.hasActiveFilters);
+
+  // Terminal store for derived metadata
+  const terminals = useTerminalStore(useShallow((state) => state.terminals));
+
+  // Error store for derived metadata
+  const getWorktreeErrors = useErrorStore((state) => state.getWorktreeErrors);
+
+  // Compute derived metadata for each worktree
+  const derivedMetaMap = useMemo(() => {
+    const map = new Map<string, DerivedWorktreeMeta>();
+    for (const worktree of worktrees) {
+      const worktreeTerminals = terminals.filter(
+        (t) => t.worktreeId === worktree.id && t.location !== "trash"
+      );
+      const errors = getWorktreeErrors(worktree.id);
+      map.set(worktree.id, {
+        hasErrors: errors.length > 0,
+        terminalCount: worktreeTerminals.length,
+        hasWorkingAgent: worktreeTerminals.some((t) => t.agentState === "working"),
+        hasRunningAgent: worktreeTerminals.some((t) => t.agentState === "running"),
+        hasWaitingAgent: worktreeTerminals.some((t) => t.agentState === "waiting"),
+        hasFailedAgent: worktreeTerminals.some((t) => t.agentState === "failed"),
+        hasCompletedAgent: worktreeTerminals.some((t) => t.agentState === "completed"),
+      });
+    }
+    return map;
+  }, [worktrees, terminals, getWorktreeErrors]);
+
+  // Apply filters and sorting
+  const { filteredWorktrees, groupedSections } = useMemo(() => {
+    const filters: FilterState = {
+      query,
+      statusFilters,
+      typeFilters,
+      githubFilters,
+      sessionFilters,
+      activityFilters,
+    };
+
+    // Filter worktrees
+    const filtered = worktrees.filter((worktree) => {
+      const derived = derivedMetaMap.get(worktree.id) ?? {
+        hasErrors: false,
+        terminalCount: 0,
+        hasWorkingAgent: false,
+        hasRunningAgent: false,
+        hasWaitingAgent: false,
+        hasFailedAgent: false,
+        hasCompletedAgent: false,
+      };
+      const isActive = worktree.id === activeWorktreeId;
+
+      // Always show active worktree if setting is enabled
+      if (alwaysShowActive && isActive) {
+        return true;
+      }
+
+      return matchesFilters(worktree, filters, derived, isActive);
     });
-  }, [worktrees, activeWorktreeId]);
+
+    // Filter out pinned worktrees that no longer exist
+    const existingWorktreeIds = new Set(worktrees.map((w) => w.id));
+    const validPinnedWorktrees = pinnedWorktrees.filter((id) => existingWorktreeIds.has(id));
+
+    // Sort worktrees
+    const sorted = sortWorktrees(filtered, orderBy, validPinnedWorktrees);
+
+    // Group if enabled
+    if (isGroupedByType) {
+      return {
+        filteredWorktrees: sorted,
+        groupedSections: groupByType(sorted, orderBy, validPinnedWorktrees),
+      };
+    }
+
+    return { filteredWorktrees: sorted, groupedSections: null };
+  }, [
+    worktrees,
+    query,
+    orderBy,
+    isGroupedByType,
+    statusFilters,
+    typeFilters,
+    githubFilters,
+    sessionFilters,
+    activityFilters,
+    alwaysShowActive,
+    pinnedWorktrees,
+    derivedMetaMap,
+    activeWorktreeId,
+  ]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -105,7 +226,7 @@ export function WorktreeOverviewModal({
       onClick={handleBackdropClick}
       role="dialog"
       aria-modal="true"
-      aria-label="Worktrees overview"
+      aria-labelledby="worktree-overview-title"
     >
       <div
         className={cn(
@@ -123,24 +244,53 @@ export function WorktreeOverviewModal({
         <div className="flex items-center justify-between px-6 py-4 border-b border-divider shrink-0">
           <div className="flex items-center gap-3">
             <Maximize2 className="w-5 h-5 text-canopy-text/60" />
-            <h2 className="text-canopy-text font-semibold text-base tracking-wide">
+            <h2
+              id="worktree-overview-title"
+              className="text-canopy-text font-semibold text-base tracking-wide"
+            >
               Worktrees Overview
             </h2>
-            <span className="text-canopy-text/50 text-sm">({worktrees.length})</span>
+            <span className="text-canopy-text/50 text-sm">
+              ({filteredWorktrees.length}
+              {filteredWorktrees.length !== worktrees.length && ` of ${worktrees.length}`})
+            </span>
           </div>
-          <button
-            ref={closeButtonRef}
-            onClick={onClose}
-            className={cn(
-              "p-2 rounded-lg transition-colors",
-              "text-canopy-text/60 hover:text-canopy-text",
-              "hover:bg-white/[0.06]",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
+          <div className="flex items-center gap-2">
+            {/* Filter Popover */}
+            <WorktreeFilterPopover />
+            {/* Clear Filters Button - only shown when filters are active */}
+            {hasActiveFilters() && (
+              <button
+                onClick={clearAllFilters}
+                className={cn(
+                  "flex items-center gap-1.5 px-2 py-1.5 rounded text-xs",
+                  "text-canopy-text/60 hover:text-canopy-text",
+                  "hover:bg-white/[0.06]",
+                  "transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
+                )}
+                aria-label="Clear all filters"
+                title="Clear all filters"
+              >
+                <FilterX className="w-3.5 h-3.5" />
+                <span>Clear</span>
+              </button>
             )}
-            aria-label="Close overview"
-          >
-            <X className="w-5 h-5" />
-          </button>
+            {/* Close Button */}
+            <button
+              ref={closeButtonRef}
+              onClick={onClose}
+              className={cn(
+                "p-2 rounded-lg transition-colors",
+                "text-canopy-text/60 hover:text-canopy-text",
+                "hover:bg-white/[0.06]",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
+              )}
+              aria-label="Close overview"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Content */}
@@ -148,6 +298,77 @@ export function WorktreeOverviewModal({
           {worktrees.length === 0 ? (
             <div className="flex items-center justify-center h-full text-canopy-text/50">
               No worktrees available
+            </div>
+          ) : filteredWorktrees.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full gap-4 text-canopy-text/50">
+              <FilterX className="w-12 h-12 text-canopy-text/30" />
+              <div className="text-center">
+                <p className="text-sm font-medium text-canopy-text/70">
+                  No worktrees match filters
+                </p>
+                <p className="text-xs mt-1">
+                  {worktrees.length} worktree{worktrees.length !== 1 ? "s" : ""} hidden by active
+                  filters
+                </p>
+              </div>
+              <Button variant="subtle" size="sm" onClick={clearAllFilters} className="mt-2">
+                Clear all filters
+              </Button>
+            </div>
+          ) : groupedSections ? (
+            <div className="space-y-6">
+              {groupedSections.map((section: GroupedSection<WorktreeState>) => (
+                <div key={section.type}>
+                  <div className="flex items-center gap-2 mb-3">
+                    <h3 className="text-xs font-medium text-canopy-text/60 uppercase tracking-wider">
+                      {section.displayName}
+                    </h3>
+                    <span className="text-xs text-canopy-text/40">
+                      ({section.worktrees.length})
+                    </span>
+                  </div>
+                  <div
+                    className={cn(
+                      "grid gap-4",
+                      "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4",
+                      "auto-rows-min"
+                    )}
+                  >
+                    {section.worktrees.map((worktree: WorktreeState) => (
+                      <div
+                        key={worktree.id}
+                        className={cn(
+                          "rounded-lg overflow-hidden",
+                          "border border-divider",
+                          "bg-canopy-sidebar/50",
+                          "transition-all duration-200",
+                          "hover:border-canopy-accent/50 hover:shadow-lg hover:shadow-canopy-accent/5",
+                          worktree.id === activeWorktreeId && "border-canopy-accent/70 shadow-md"
+                        )}
+                      >
+                        <WorktreeCard
+                          worktree={worktree}
+                          isActive={worktree.id === activeWorktreeId}
+                          isFocused={worktree.id === focusedWorktreeId}
+                          isSingleWorktree={worktrees.length === 1}
+                          onSelect={() => handleWorktreeSelect(worktree.id)}
+                          onCopyTree={() => onCopyTree(worktree)}
+                          onOpenEditor={() => onOpenEditor(worktree)}
+                          onSaveLayout={onSaveLayout ? () => onSaveLayout(worktree) : undefined}
+                          onLaunchAgent={
+                            onLaunchAgent
+                              ? (agentId) => onLaunchAgent(worktree.id, agentId)
+                              : undefined
+                          }
+                          agentAvailability={agentAvailability}
+                          agentSettings={agentSettings}
+                          homeDir={homeDir}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
             </div>
           ) : (
             <div
@@ -157,25 +378,36 @@ export function WorktreeOverviewModal({
                 "items-start"
               )}
             >
-              {sortedWorktrees.map((worktree) => (
-                <WorktreeCard
+              {filteredWorktrees.map((worktree) => (
+                <div
                   key={worktree.id}
-                  variant="grid"
-                  worktree={worktree}
-                  isActive={worktree.id === activeWorktreeId}
-                  isFocused={worktree.id === focusedWorktreeId}
-                  isSingleWorktree={worktrees.length === 1}
-                  onSelect={() => handleWorktreeSelect(worktree.id)}
-                  onCopyTree={() => onCopyTree(worktree)}
-                  onOpenEditor={() => onOpenEditor(worktree)}
-                  onSaveLayout={onSaveLayout ? () => onSaveLayout(worktree) : undefined}
-                  onLaunchAgent={
-                    onLaunchAgent ? (agentId) => onLaunchAgent(worktree.id, agentId) : undefined
-                  }
-                  agentAvailability={agentAvailability}
-                  agentSettings={agentSettings}
-                  homeDir={homeDir}
-                />
+                  className={cn(
+                    "rounded-lg overflow-hidden",
+                    "border border-divider",
+                    "bg-canopy-sidebar/50",
+                    "transition-all duration-200",
+                    "hover:border-canopy-accent/50 hover:shadow-lg hover:shadow-canopy-accent/5",
+                    worktree.id === activeWorktreeId && "border-canopy-accent/70 shadow-md"
+                  )}
+                >
+                  <WorktreeCard
+                    variant="grid"
+                    worktree={worktree}
+                    isActive={worktree.id === activeWorktreeId}
+                    isFocused={worktree.id === focusedWorktreeId}
+                    isSingleWorktree={worktrees.length === 1}
+                    onSelect={() => handleWorktreeSelect(worktree.id)}
+                    onCopyTree={() => onCopyTree(worktree)}
+                    onOpenEditor={() => onOpenEditor(worktree)}
+                    onSaveLayout={onSaveLayout ? () => onSaveLayout(worktree) : undefined}
+                    onLaunchAgent={
+                      onLaunchAgent ? (agentId) => onLaunchAgent(worktree.id, agentId) : undefined
+                    }
+                    agentAvailability={agentAvailability}
+                    agentSettings={agentSettings}
+                    homeDir={homeDir}
+                  />
+                </div>
               ))}
             </div>
           )}
