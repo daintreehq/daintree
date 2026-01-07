@@ -341,7 +341,9 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
         cancelledInjections.add(validated.injectionId);
         console.log(`[cancel] Marked injection ${validated.injectionId} for cancellation`);
       } else {
-        console.log(`[cancel] Ignoring cancel for unknown/completed injection ${validated.injectionId}`);
+        console.log(
+          `[cancel] Ignoring cancel for unknown/completed injection ${validated.injectionId}`
+        );
       }
     } else {
       // Cancel all active injections and call legacy cancelAllContext
@@ -351,7 +353,9 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       if (workspaceClient) {
         workspaceClient.cancelAllContext();
       }
-      console.log(`[cancel] Marked all ${activeInjectionIds.size} active injections for cancellation`);
+      console.log(
+        `[cancel] Marked all ${activeInjectionIds.size} active injections for cancellation`
+      );
     }
   };
   ipcMain.handle(CHANNELS.COPYTREE_CANCEL, handleCopyTreeCancel);

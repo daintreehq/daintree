@@ -6,7 +6,6 @@ import type { AgentState, CopyTreeProgress } from "@/types";
 import { copyTreeClient } from "@/clients";
 import { getFormatForTerminal } from "@/lib/copyTreeFormat";
 
-
 export type InjectionStatus = "idle" | "waiting" | "injecting";
 
 export interface UseContextInjectionReturn {

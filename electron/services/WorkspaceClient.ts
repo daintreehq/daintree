@@ -136,9 +136,7 @@ export class WorkspaceClient extends EventEmitter {
       // Reject ready promise so waitForReady() doesn't hang indefinitely
       if (this.readyReject) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        this.readyReject(
-          new Error(`Workspace host failed to fork (${hostPath}): ${errorMessage}`)
-        );
+        this.readyReject(new Error(`Workspace host failed to fork (${hostPath}): ${errorMessage}`));
         this.readyReject = null;
       }
       this.emit("host-crash", -1);
