@@ -120,6 +120,7 @@ describe("worktreeDataStore PR events", () => {
       prState: "open",
       prTitle: "Add new feature",
       issueTitle: "Implement new feature",
+      timestamp: Date.now(),
     });
 
     const updated = store.getState().worktrees.get("wt-1");
@@ -144,6 +145,7 @@ describe("worktreeDataStore PR events", () => {
       prNumber: 456,
       prUrl: "https://github.com/test/repo/pull/456",
       prState: "open",
+      timestamp: Date.now(),
     });
 
     expect(store.getState().worktrees).toEqual(initialWorktrees);
@@ -161,6 +163,7 @@ describe("worktreeDataStore PR events", () => {
 
     mockOnPRClearedCallback!({
       worktreeId: "wt-2",
+      timestamp: Date.now(),
     });
 
     const updated = store.getState().worktrees.get("wt-2");
@@ -181,6 +184,7 @@ describe("worktreeDataStore PR events", () => {
 
     mockOnPRClearedCallback!({
       worktreeId: "non-existent",
+      timestamp: Date.now(),
     });
 
     expect(store.getState().worktrees).toEqual(initialWorktrees);
@@ -217,6 +221,7 @@ describe("worktreeDataStore PR events", () => {
       prUrl: "https://github.com/test/repo/pull/999",
       prState: "merged",
       prTitle: "Merged feature",
+      timestamp: Date.now(),
     });
 
     const updated = store.getState().worktrees.get("wt-3");
@@ -239,6 +244,7 @@ describe("worktreeDataStore PR events", () => {
       prUrl: "https://github.com/test/repo/pull/888",
       prState: "closed",
       prTitle: "Closed PR",
+      timestamp: Date.now(),
     });
 
     const updated = store.getState().worktrees.get("wt-4");
@@ -263,6 +269,7 @@ describe("worktreeDataStore PR events", () => {
       prUrl: "https://github.com/test/repo/pull/200",
       prState: "open",
       prTitle: "Updated PR",
+      timestamp: Date.now(),
     });
 
     const updated = store.getState().worktrees.get("wt-5");
