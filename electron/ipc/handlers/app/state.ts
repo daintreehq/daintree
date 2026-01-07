@@ -21,11 +21,10 @@ export function registerAppStateHandlers(): () => void {
     // Terminal processes are discovered from backend via terminalClient.getForProject(),
     // but we preserve saved terminals array for ordering metadata (IDs and locations).
     // The frontend uses this to restore panel order when reconnecting to running terminals.
+    // activeWorktreeId is preserved so the frontend can validate it exists after worktrees load.
     const appState: StoreSchema["appState"] = {
       ...globalAppState,
       terminals: validatedTerminals,
-      // Keep terminals for ordering - frontend sorts discovered terminals by this saved order
-      activeWorktreeId: undefined,
     };
 
     console.log(

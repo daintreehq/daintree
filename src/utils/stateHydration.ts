@@ -1,4 +1,4 @@
-import { appClient, terminalClient } from "@/clients";
+import { appClient, terminalClient, worktreeClient } from "@/clients";
 import { terminalConfigClient } from "@/clients/terminalConfigClient";
 import {
   useLayoutConfigStore,
@@ -187,8 +187,40 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
       }
     }
 
-    if (appState.activeWorktreeId) {
-      setActiveWorktree(appState.activeWorktreeId);
+    // Restore active worktree with validation
+    // Fetch worktrees to validate the saved activeWorktreeId still exists
+    try {
+      const worktrees = await worktreeClient.getAll();
+      const savedActiveId = appState.activeWorktreeId;
+
+      if (worktrees.length > 0) {
+        // Check if the saved active worktree still exists
+        const worktreeExists = savedActiveId && worktrees.some((wt) => wt.id === savedActiveId);
+
+        if (worktreeExists) {
+          // Restore the saved active worktree
+          setActiveWorktree(savedActiveId);
+        } else {
+          // Fallback to the first worktree (main worktree is typically first)
+          const sortedWorktrees = [...worktrees].sort((a, b) => {
+            if (a.isMainWorktree && !b.isMainWorktree) return -1;
+            if (!a.isMainWorktree && b.isMainWorktree) return 1;
+            return a.name.localeCompare(b.name);
+          });
+          const fallbackWorktree = sortedWorktrees[0];
+          console.log(
+            `[Hydration] Active worktree ${savedActiveId ?? "(none)"} not found, falling back to: ${fallbackWorktree.name}`
+          );
+          setActiveWorktree(fallbackWorktree.id);
+        }
+      }
+      // If no worktrees exist, we don't set any active worktree (handled gracefully)
+    } catch (error) {
+      console.warn("[Hydration] Failed to validate active worktree:", error);
+      // On error, still try to use the saved ID if present
+      if (appState.activeWorktreeId) {
+        setActiveWorktree(appState.activeWorktreeId);
+      }
     }
 
     // Load recipes for the current project
