@@ -10,7 +10,9 @@ const VERTICAL_THROTTLE_MS = 150;
 const IDLE_CALLBACK_TIMEOUT_MS = 1000;
 const RESIZE_LOCK_TTL_MS = 5000;
 
-export function getXtermCellDimensions(terminal: Terminal): { width: number; height: number } | null {
+export function getXtermCellDimensions(
+  terminal: Terminal
+): { width: number; height: number } | null {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const core = (terminal as any)._core;
