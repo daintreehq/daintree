@@ -10,6 +10,7 @@ async function createRegistry() {
     onToggleFocusMode: () => {},
     onOpenAgentPalette: () => {},
     onOpenWorktreePalette: () => {},
+    onToggleWorktreeOverview: () => {},
     onOpenWorktreeOverview: () => {},
     onCloseWorktreeOverview: () => {},
     onOpenNewTerminalPalette: () => {},
