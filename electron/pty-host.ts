@@ -11,9 +11,6 @@
 
 import { MessagePort } from "node:worker_threads";
 import os from "node:os";
-import { appendFileSync, mkdirSync } from "node:fs";
-import path from "node:path";
-import v8 from "node:v8";
 import { PtyManager } from "./services/PtyManager.js";
 import { PtyPool, getPtyPool } from "./services/PtyPool.js";
 import { ProcessTreeCache } from "./services/ProcessTreeCache.js";
@@ -23,63 +20,23 @@ import { selectShard } from "../shared/utils/shardSelection.js";
 import type { AgentEvent } from "./services/AgentStateMachine.js";
 import type {
   PtyHostEvent,
-  PtyHostTerminalSnapshot,
-  TerminalFlowStatus,
-  PtyHostActivityTier,
-  TerminalReliabilityMetricPayload,
   SpawnResult,
-  SpawnError,
-  SpawnErrorCode,
 } from "../shared/types/pty-host.js";
 import {
-  IPC_MAX_QUEUE_BYTES,
-  IPC_HIGH_WATERMARK_PERCENT,
-  IPC_LOW_WATERMARK_PERCENT,
-  IPC_BACKPRESSURE_CHECK_INTERVAL_MS,
-  IPC_MAX_PAUSE_MS,
-} from "./services/pty/types.js";
-
-function getEmergencyLogPath(): string {
-  const userData = process.env.CANOPY_USER_DATA;
-  const logDir = userData
-    ? path.join(userData, "logs")
-    : process.env.NODE_ENV === "development"
-      ? path.join(process.cwd(), "logs")
-      : path.join(process.cwd(), "logs");
-  return path.join(logDir, "pty-host.log");
-}
-
-function appendEmergencyLog(lines: string): void {
-  try {
-    const logFile = getEmergencyLogPath();
-    mkdirSync(path.dirname(logFile), { recursive: true });
-    appendFileSync(logFile, lines, "utf8");
-  } catch {
-    // best-effort only
-  }
-}
-
-function emergencyLogFatal(kind: string, error: unknown): void {
-  const timestamp = new Date().toISOString();
-  const pid = process.pid;
-  const uptimeMs = Math.round(process.uptime() * 1000);
-  const memory = process.memoryUsage();
-  const details =
-    error instanceof Error
-      ? { name: error.name, message: error.message, stack: error.stack }
-      : { message: String(error) };
-
-  appendEmergencyLog(
-    [
-      "============================================================",
-      `[${timestamp}] [${kind}] pid=${pid} uptimeMs=${uptimeMs}`,
-      `node=${process.version} platform=${process.platform} arch=${process.arch}`,
-      `memory.rss=${memory.rss} heapUsed=${memory.heapUsed} heapTotal=${memory.heapTotal} external=${memory.external}`,
-      `error=${JSON.stringify(details)}`,
-      "",
-    ].join("\n")
-  );
-}
+  appendEmergencyLog,
+  emergencyLogFatal,
+  ResourceGovernor,
+  BackpressureManager,
+  IpcQueueManager,
+  metricsEnabled,
+  parseSpawnError,
+  toHostSnapshot,
+  MAX_PACKET_PAYLOAD,
+  STREAM_STALL_SUSPEND_MS,
+  BACKPRESSURE_RESUME_THRESHOLD,
+  BACKPRESSURE_CHECK_INTERVAL_MS,
+  BACKPRESSURE_MAX_PAUSE_MS,
+} from "./pty-host/index.js";
 
 // Validate we're running in UtilityProcess context
 if (!process.parentPort) {
@@ -116,118 +73,9 @@ process.on("unhandledRejection", (reason) => {
   }
 });
 
-// Resource Governor - monitors heap usage and applies backpressure proactively
-class ResourceGovernor {
-  private readonly MEMORY_LIMIT_PERCENT = 80; // Pause at 80% of max heap
-  private readonly RESUME_THRESHOLD_PERCENT = 60; // Resume at 60% (hysteresis)
-  private readonly FORCE_RESUME_MS = 10000; // Force resume after 10s to prevent indefinite pause
-  private readonly CHECK_INTERVAL_MS = 2000; // Check every 2 seconds
-  private isThrottling = false;
-  private checkInterval: NodeJS.Timeout | null = null;
-  private throttleStartTime = 0;
-
-  start(): void {
-    this.checkInterval = setInterval(() => this.checkResources(), this.CHECK_INTERVAL_MS);
-    console.log("[ResourceGovernor] Started monitoring memory usage");
-  }
-
-  private checkResources(): void {
-    const memory = process.memoryUsage();
-    const heapUsedMb = memory.heapUsed / 1024 / 1024;
-    // Use heap limit from V8, not heapTotal (which is current allocation, not max)
-    const heapStats = v8.getHeapStatistics();
-    const heapLimitMb = heapStats.heap_size_limit / 1024 / 1024;
-    const utilizationPercent = (heapUsedMb / heapLimitMb) * 100;
-
-    if (!this.isThrottling && utilizationPercent > this.MEMORY_LIMIT_PERCENT) {
-      this.engageThrottle(heapUsedMb, utilizationPercent);
-    } else if (this.isThrottling) {
-      const throttleDuration = Date.now() - this.throttleStartTime;
-      const shouldForceResume = throttleDuration > this.FORCE_RESUME_MS;
-      const belowThreshold = utilizationPercent < this.RESUME_THRESHOLD_PERCENT;
-
-      if (shouldForceResume || belowThreshold) {
-        this.disengageThrottle(heapUsedMb, utilizationPercent, shouldForceResume);
-      }
-    }
-  }
-
-  private engageThrottle(currentUsageMb: number, percent: number): void {
-    console.warn(
-      `[ResourceGovernor] High memory usage (${Math.round(currentUsageMb)}MB, ${percent.toFixed(1)}%). Pausing all terminals.`
-    );
-    this.isThrottling = true;
-    this.throttleStartTime = Date.now();
-
-    // Pause all PTYs to stop new data from entering the heap
-    const terminals = ptyManager.getAll();
-    let pausedCount = 0;
-    for (const term of terminals) {
-      try {
-        term.ptyProcess.pause();
-        pausedCount++;
-      } catch {
-        // Ignore dead processes
-      }
-    }
-    backpressureStats.pauseCount += pausedCount;
-    console.log(`[ResourceGovernor] Paused ${pausedCount}/${terminals.length} terminals`);
-
-    // Request aggressive GC if exposed
-    if (global.gc) {
-      global.gc();
-    }
-
-    sendEvent({
-      type: "host-throttled",
-      isThrottled: true,
-      reason: `High memory usage: ${Math.round(currentUsageMb)}MB (${percent.toFixed(1)}%)`,
-      timestamp: Date.now(),
-    });
-  }
-
-  private disengageThrottle(currentUsageMb: number, percent: number, forced: boolean): void {
-    const duration = Date.now() - this.throttleStartTime;
-    console.log(
-      `[ResourceGovernor] ${forced ? "Force resuming" : "Memory stabilized"} ` +
-        `(${Math.round(currentUsageMb)}MB, ${percent.toFixed(1)}%). ` +
-        `Resuming terminals after ${duration}ms.`
-    );
-    this.isThrottling = false;
-
-    const terminals = ptyManager.getAll();
-    let resumedCount = 0;
-    for (const term of terminals) {
-      try {
-        term.ptyProcess.resume();
-        resumedCount++;
-      } catch {
-        // Ignore dead processes
-      }
-    }
-    console.log(`[ResourceGovernor] Resumed ${resumedCount}/${terminals.length} terminals`);
-
-    sendEvent({
-      type: "host-throttled",
-      isThrottled: false,
-      duration,
-      timestamp: Date.now(),
-    });
-  }
-
-  dispose(): void {
-    if (this.checkInterval) {
-      clearInterval(this.checkInterval);
-      this.checkInterval = null;
-    }
-    console.log("[ResourceGovernor] Disposed");
-  }
-}
-
 const ptyManager = new PtyManager();
 const processTreeCache = new ProcessTreeCache(1000);
 let ptyPool: PtyPool | null = null;
-const resourceGovernor = new ResourceGovernor();
 
 // Zero-copy ring buffers for terminal I/O (set via init-buffers message)
 // Visual buffers: consumed by renderer (xterm.js) - critical path, sharded for isolation
@@ -237,217 +85,6 @@ let visualSignalView: Int32Array | null = null;
 let analysisBuffer: SharedRingBuffer | null = null;
 const packetFramer = new PacketFramer();
 const textDecoder = new TextDecoder();
-
-// Track terminals paused due to ring buffer backpressure
-// Maps terminal ID to the interval timer used for resume checking
-const pausedTerminals = new Map<string, ReturnType<typeof setInterval>>();
-
-// IPC flow control state
-// Maps terminal ID to pending IPC data bytes and pause state
-const ipcQueuedBytes = new Map<string, number>();
-const ipcPausedTerminals = new Map<string, ReturnType<typeof setInterval>>();
-const ipcPauseStartTimes = new Map<string, number>();
-
-// PROTECTED INFRASTRUCTURE:
-// SAB Backpressure System
-// Pauses the PTY when the visual ring buffer is full to prevent memory explosions
-// and UI overload. This is a critical stability guardrail.
-//
-// Debug stats
-const backpressureStats = {
-  pauseCount: 0,
-  resumeCount: 0,
-  suspendCount: 0,
-  forceResumeCount: 0,
-};
-
-// Track terminal pause start times for duration calculation
-const pauseStartTimes = new Map<string, number>();
-
-// Track current terminal flow status to avoid duplicate events
-const terminalStatuses = new Map<string, TerminalFlowStatus>();
-const terminalActivityTiers = new Map<string, PtyHostActivityTier>();
-const suspendedDueToStall = new Set<string>();
-type PendingVisualSegment = {
-  data: Uint8Array;
-  offset: number;
-};
-const pendingVisualSegments = new Map<string, PendingVisualSegment[]>();
-const pendingVisualBytes = new Map<string, number>();
-let totalPendingVisualBytes = 0;
-
-const MAX_PACKET_PAYLOAD = 65535;
-const STREAM_STALL_SUSPEND_MS = 2000;
-const MAX_PENDING_BYTES_PER_TERMINAL = 4 * 1024 * 1024;
-const MAX_TOTAL_PENDING_BYTES = 16 * 1024 * 1024;
-
-// Resume threshold - use hysteresis to prevent rapid pause/resume oscillation
-const BACKPRESSURE_RESUME_THRESHOLD = 80; // Resume when buffer drops below 80%
-const BACKPRESSURE_CHECK_INTERVAL_MS = 100; // Check every 100ms during backpressure
-const BACKPRESSURE_MAX_PAUSE_MS = 5000; // Force resume after 5 seconds to prevent indefinite pause
-
-// Helper to check if reliability metrics are enabled
-function metricsEnabled(): boolean {
-  return process.env.CANOPY_TERMINAL_METRICS === "1";
-}
-
-// Helper to emit terminal reliability metrics (gated by CANOPY_TERMINAL_METRICS)
-function emitReliabilityMetric(payload: TerminalReliabilityMetricPayload): void {
-  if (!metricsEnabled()) return;
-  sendEvent({
-    type: "terminal-reliability-metric",
-    payload,
-  });
-}
-
-// Helper to emit terminal status change (only on actual transitions)
-function emitTerminalStatus(
-  id: string,
-  status: TerminalFlowStatus,
-  bufferUtilization?: number,
-  pauseDuration?: number
-): void {
-  const previousStatus = terminalStatuses.get(id);
-  if (previousStatus === status) {
-    return; // No change, don't emit
-  }
-  terminalStatuses.set(id, status);
-  sendEvent({
-    type: "terminal-status",
-    id,
-    status,
-    bufferUtilization,
-    pauseDuration,
-    timestamp: Date.now(),
-  });
-}
-
-function pendingBytesRemaining(segment: PendingVisualSegment): number {
-  return Math.max(0, segment.data.length - segment.offset);
-}
-
-function enqueuePendingSegment(id: string, segment: PendingVisualSegment): boolean {
-  const remaining = pendingBytesRemaining(segment);
-  if (remaining <= 0) {
-    return true;
-  }
-
-  const current = pendingVisualBytes.get(id) ?? 0;
-  const nextTerminal = current + remaining;
-  const nextTotal = totalPendingVisualBytes + remaining;
-
-  if (nextTerminal > MAX_PENDING_BYTES_PER_TERMINAL || nextTotal > MAX_TOTAL_PENDING_BYTES) {
-    return false;
-  }
-
-  const queue = pendingVisualSegments.get(id) ?? [];
-  queue.push(segment);
-  pendingVisualSegments.set(id, queue);
-  pendingVisualBytes.set(id, nextTerminal);
-  totalPendingVisualBytes = nextTotal;
-  return true;
-}
-
-function consumePendingBytes(id: string, bytes: number): void {
-  if (bytes <= 0) return;
-  const current = pendingVisualBytes.get(id);
-  if (current === undefined) return;
-  const next = current - bytes;
-  if (next <= 0) {
-    pendingVisualBytes.delete(id);
-  } else {
-    pendingVisualBytes.set(id, next);
-  }
-  totalPendingVisualBytes = Math.max(0, totalPendingVisualBytes - bytes);
-}
-
-function clearPendingVisual(id: string): void {
-  const pendingBytes = pendingVisualBytes.get(id);
-  if (pendingBytes !== undefined) {
-    totalPendingVisualBytes = Math.max(0, totalPendingVisualBytes - pendingBytes);
-    pendingVisualBytes.delete(id);
-  }
-  pendingVisualSegments.delete(id);
-}
-
-// IPC flow control helpers
-function getIpcQueueUtilization(id: string): number {
-  const bytes = ipcQueuedBytes.get(id) ?? 0;
-  return (bytes / IPC_MAX_QUEUE_BYTES) * 100;
-}
-
-function addIpcBytes(id: string, bytes: number): number {
-  const current = ipcQueuedBytes.get(id) ?? 0;
-  const next = current + bytes;
-  ipcQueuedBytes.set(id, next);
-  return next;
-}
-
-function removeIpcBytes(id: string, bytes: number): void {
-  const current = ipcQueuedBytes.get(id) ?? 0;
-  const next = Math.max(0, current - bytes);
-  if (next === 0) {
-    ipcQueuedBytes.delete(id);
-  } else {
-    ipcQueuedBytes.set(id, next);
-  }
-}
-
-function clearIpcQueue(id: string): void {
-  ipcQueuedBytes.delete(id);
-  const checkInterval = ipcPausedTerminals.get(id);
-  if (checkInterval) {
-    clearInterval(checkInterval);
-    ipcPausedTerminals.delete(id);
-  }
-  ipcPauseStartTimes.delete(id);
-}
-
-function suspendVisualStream(
-  id: string,
-  reason: string,
-  utilization?: number,
-  pauseDuration?: number,
-  shardIndex?: number
-): void {
-  const terminal = ptyManager.getTerminal(id);
-  if (terminal?.ptyProcess) {
-    try {
-      terminal.ptyProcess.resume();
-    } catch {
-      // ignore
-    }
-  }
-
-  const checkInterval = pausedTerminals.get(id);
-  if (checkInterval) {
-    clearInterval(checkInterval);
-    pausedTerminals.delete(id);
-  }
-  pauseStartTimes.delete(id);
-
-  suspendedDueToStall.add(id);
-  clearPendingVisual(id);
-
-  emitTerminalStatus(id, "suspended", utilization, pauseDuration);
-
-  if (utilization !== undefined) {
-    console.warn(
-      `[PtyHost] Suspended streaming for ${id} (${reason}) (buffer ${utilization.toFixed(1)}%).`
-    );
-  } else {
-    console.warn(`[PtyHost] Suspended streaming for ${id} (${reason}).`);
-  }
-
-  emitReliabilityMetric({
-    terminalId: id,
-    metricType: "suspend",
-    timestamp: Date.now(),
-    durationMs: pauseDuration,
-    bufferUtilization: utilization,
-    shardIndex,
-  });
-}
 
 // MessagePort for direct Renderer ↔ Pty Host communication (bypasses Main)
 // Note: This variable holds the port reference so the message handler stays active
@@ -459,37 +96,28 @@ function sendEvent(event: PtyHostEvent): void {
   port.postMessage(event);
 }
 
-// Helper to parse spawn errors into structured SpawnError
-function parseSpawnError(error: unknown): SpawnError {
-  if (error instanceof Error) {
-    const nodeErr = error as NodeJS.ErrnoException;
+// Instantiate managers with dependency injection
+const backpressureManager = new BackpressureManager({
+  getTerminal: (id) => ptyManager.getTerminal(id),
+  sendEvent,
+  metricsEnabled,
+});
 
-    // Map common errno codes to SpawnErrorCode
-    let code: SpawnErrorCode = "UNKNOWN";
-    if (nodeErr.code === "ENOENT") {
-      code = "ENOENT";
-    } else if (nodeErr.code === "EACCES") {
-      code = "EACCES";
-    } else if (nodeErr.code === "ENOTDIR") {
-      code = "ENOTDIR";
-    } else if (nodeErr.code === "EIO") {
-      code = "EIO";
-    }
+const ipcQueueManager = new IpcQueueManager({
+  getTerminal: (id) => ptyManager.getTerminal(id),
+  sendEvent,
+  metricsEnabled,
+  emitTerminalStatus: (...args) => backpressureManager.emitTerminalStatus(...args),
+  emitReliabilityMetric: (payload) => backpressureManager.emitReliabilityMetric(payload),
+});
 
-    return {
-      code,
-      message: nodeErr.message,
-      errno: nodeErr.errno,
-      syscall: nodeErr.syscall,
-      path: nodeErr.path,
-    };
-  }
-
-  return {
-    code: "UNKNOWN",
-    message: String(error),
-  };
-}
+const resourceGovernor = new ResourceGovernor({
+  getTerminals: () => ptyManager.getAll(),
+  incrementPauseCount: (count) => {
+    backpressureManager.stats.pauseCount += count;
+  },
+  sendEvent,
+});
 
 // Helper to convert data to string for IPC fallback (IPC events expect string)
 function toStringForIpc(data: string | Uint8Array): string {
@@ -499,12 +127,12 @@ function toStringForIpc(data: string | Uint8Array): string {
 // Wire up PtyManager events
 ptyManager.on("data", (id: string, data: string | Uint8Array) => {
   // Terminal output always updates headless state; visual streaming can be suspended under backpressure.
-  const isSuspended = suspendedDueToStall.has(id);
+  const isSuspended = backpressureManager.isSuspended(id);
   const terminalInfo = ptyManager.getTerminal(id);
 
   // Background tier: suppress visual streaming entirely (wake snapshots will resync state)
   // Analysis buffer writes still occur for agent state detection
-  const activityTier = terminalActivityTiers.get(id) ?? "active";
+  const activityTier = backpressureManager.getActivityTier(id);
   const isBackgrounded = activityTier === "background";
   // PRIORITY 1: VISUAL RENDERER (Zero-Latency Path)
   // Write to SharedArrayBuffer immediately before doing ANY processing.
@@ -533,15 +161,21 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
 
       if (bytesWritten === 0) {
         // Ring buffer is full - apply backpressure by pausing the PTY
-        const queued = enqueuePendingSegment(id, { data: dataBytes, offset });
+        const queued = backpressureManager.enqueuePendingSegment(id, { data: dataBytes, offset });
         visualWritten = true; // partial write counts as handled
 
         if (!queued) {
           const utilization = shard.getUtilization();
-          const pauseStart = pauseStartTimes.get(id);
+          const pauseStart = backpressureManager.getPauseStartTime(id);
           const pauseDuration = pauseStart ? Date.now() - pauseStart : undefined;
-          suspendVisualStream(id, "pending cap exceeded", utilization, pauseDuration, shardIndex);
-        } else if (!pausedTerminals.has(id)) {
+          backpressureManager.suspendVisualStream(
+            id,
+            "pending cap exceeded",
+            utilization,
+            pauseDuration,
+            shardIndex
+          );
+        } else if (!backpressureManager.isPaused(id)) {
           const utilization = shard.getUtilization();
           console.warn(
             `[PtyHost] Visual buffer full (${utilization.toFixed(1)}% utilized). Pausing PTY ${id} for backpressure.`
@@ -565,13 +199,13 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
 
           // Track when we started pausing for timeout safety
           const pauseStartTime = Date.now();
-          pauseStartTimes.set(id, pauseStartTime);
+          backpressureManager.setPauseStartTime(id, pauseStartTime);
 
           // Emit status event for UI
-          emitTerminalStatus(id, "paused-backpressure", utilization);
+          backpressureManager.emitTerminalStatus(id, "paused-backpressure", utilization);
 
           // Emit metrics for pause-start
-          emitReliabilityMetric({
+          backpressureManager.emitReliabilityMetric({
             terminalId: id,
             metricType: "pause-start",
             timestamp: pauseStartTime,
@@ -589,11 +223,17 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
                   terminal.ptyProcess.resume();
                   console.log(`[PtyHost] Visual buffers removed. Resumed PTY ${id}`);
                   // Emit resume status
-                  const pauseDuration = Date.now() - (pauseStartTimes.get(id) ?? pauseStartTime);
-                  emitTerminalStatus(id, "running", undefined, pauseDuration);
+                  const pauseDuration =
+                    Date.now() - (backpressureManager.getPauseStartTime(id) ?? pauseStartTime);
+                  backpressureManager.emitTerminalStatus(
+                    id,
+                    "running",
+                    undefined,
+                    pauseDuration
+                  );
 
                   // Emit metrics for pause-end
-                  emitReliabilityMetric({
+                  backpressureManager.emitReliabilityMetric({
                     terminalId: id,
                     metricType: "pause-end",
                     timestamp: Date.now(),
@@ -607,9 +247,9 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
                 }
               }
               clearInterval(checkInterval);
-              pausedTerminals.delete(id);
-              pauseStartTimes.delete(id);
-              clearPendingVisual(id);
+              backpressureManager.deletePausedInterval(id);
+              backpressureManager.deletePauseStartTime(id);
+              backpressureManager.clearPendingVisual(id);
               return;
             }
 
@@ -621,7 +261,7 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
             // If the stream is stalled for too long, stop streaming for this terminal
             // and rely on headless state + explicit wake to restore fidelity.
             if (pauseDuration > STREAM_STALL_SUSPEND_MS) {
-              suspendVisualStream(
+              backpressureManager.suspendVisualStream(
                 id,
                 `${pauseDuration}ms stall`,
                 currentUtilization,
@@ -637,8 +277,8 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
               if (terminal?.ptyProcess) {
                 try {
                   // If we still can't flush the pending packet, stop streaming and rely on wake.
-                  if (pendingVisualSegments.has(id)) {
-                    suspendVisualStream(
+                  if (backpressureManager.hasPendingSegments(id)) {
+                    backpressureManager.suspendVisualStream(
                       id,
                       `${pauseDuration}ms max pause`,
                       currentUtilization,
@@ -652,10 +292,15 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
                         `Consumer may be stalled.`
                     );
                     // Emit resume status with duration
-                    emitTerminalStatus(id, "running", currentUtilization, pauseDuration);
+                    backpressureManager.emitTerminalStatus(
+                      id,
+                      "running",
+                      currentUtilization,
+                      pauseDuration
+                    );
 
                     // Emit metrics for pause-end (force resume path)
-                    emitReliabilityMetric({
+                    backpressureManager.emitReliabilityMetric({
                       terminalId: id,
                       metricType: "pause-end",
                       timestamp: Date.now(),
@@ -668,14 +313,14 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
                 }
               }
               clearInterval(checkInterval);
-              pausedTerminals.delete(id);
-              pauseStartTimes.delete(id);
+              backpressureManager.deletePausedInterval(id);
+              backpressureManager.deletePauseStartTime(id);
               return;
             }
 
             // Resume when buffer drops below threshold (hysteresis to prevent rapid pause/resume)
             if (currentUtilization < BACKPRESSURE_RESUME_THRESHOLD) {
-              const pending = pendingVisualSegments.get(id);
+              const pending = backpressureManager.getPendingSegments(id);
               if (pending && pending.length > 0) {
                 let wrotePending = false;
                 while (pending.length > 0) {
@@ -686,7 +331,7 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
                     const pendingPacket = packetFramer.frame(id, pendingChunk);
                     if (!pendingPacket) {
                       const remaining = segment.data.length - segment.offset;
-                      consumePendingBytes(id, remaining);
+                      backpressureManager.consumePendingBytes(id, remaining);
                       segment.offset = segment.data.length;
                       break;
                     }
@@ -700,7 +345,7 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
                     }
                     wrotePending = true;
                     segment.offset = end;
-                    consumePendingBytes(id, pendingChunk.length);
+                    backpressureManager.consumePendingBytes(id, pendingChunk.length);
                   }
 
                   if (segment.offset >= segment.data.length) {
@@ -716,11 +361,11 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
                 }
 
                 if (pending.length === 0) {
-                  clearPendingVisual(id);
+                  backpressureManager.clearPendingVisual(id);
                 }
               }
 
-              if (!pendingVisualSegments.has(id)) {
+              if (!backpressureManager.hasPendingSegments(id)) {
                 const terminal = ptyManager.getTerminal(id);
                 if (terminal?.ptyProcess) {
                   try {
@@ -729,10 +374,15 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
                       `[PtyHost] Buffer cleared to ${currentUtilization.toFixed(1)}%. Resumed PTY ${id}`
                     );
                     // Emit resume status with duration
-                    emitTerminalStatus(id, "running", currentUtilization, pauseDuration);
+                    backpressureManager.emitTerminalStatus(
+                      id,
+                      "running",
+                      currentUtilization,
+                      pauseDuration
+                    );
 
                     // Emit metrics for pause-end (normal resume path)
-                    emitReliabilityMetric({
+                    backpressureManager.emitReliabilityMetric({
                       terminalId: id,
                       metricType: "pause-end",
                       timestamp: Date.now(),
@@ -744,13 +394,13 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
                   }
                 }
                 clearInterval(checkInterval);
-                pausedTerminals.delete(id);
-                pauseStartTimes.delete(id);
+                backpressureManager.deletePausedInterval(id);
+                backpressureManager.deletePauseStartTime(id);
               }
             }
           }, BACKPRESSURE_CHECK_INTERVAL_MS);
 
-          pausedTerminals.set(id, checkInterval);
+          backpressureManager.setPausedInterval(id, checkInterval);
         }
         break; // Stop writing packets
       }
@@ -773,16 +423,15 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
   if (!visualWritten && !isBackgrounded && !isSuspended) {
     const dataString = toStringForIpc(data);
     const dataBytes = Buffer.byteLength(dataString, "utf8");
-    const currentQueuedBytes = ipcQueuedBytes.get(id) ?? 0;
 
     // Enforce hard cap: drop data if adding it would exceed max queue size
     // This prevents unbounded memory growth when renderer is stalled
-    if (currentQueuedBytes + dataBytes > IPC_MAX_QUEUE_BYTES) {
-      const utilization = getIpcQueueUtilization(id);
+    if (ipcQueueManager.isAtCapacity(id, dataBytes)) {
+      const utilization = ipcQueueManager.getUtilization(id);
       console.warn(
         `[PtyHost] IPC queue full (${utilization.toFixed(1)}%). Dropping ${dataBytes} bytes for terminal ${id}`
       );
-      emitReliabilityMetric({
+      backpressureManager.emitReliabilityMetric({
         terminalId: id,
         metricType: "suspend",
         timestamp: Date.now(),
@@ -791,105 +440,14 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
       return; // Drop this chunk to prevent OOM
     }
 
-    const totalQueued = addIpcBytes(id, dataBytes);
-    const utilization = getIpcQueueUtilization(id);
+    ipcQueueManager.addBytes(id, dataBytes);
+    const utilization = ipcQueueManager.getUtilization(id);
 
     // Send the data via IPC
     sendEvent({ type: "data", id, data: dataString });
 
     // Apply backpressure if queue exceeds high watermark
-    const highWatermarkBytes = (IPC_MAX_QUEUE_BYTES * IPC_HIGH_WATERMARK_PERCENT) / 100;
-    if (totalQueued >= highWatermarkBytes && !ipcPausedTerminals.has(id)) {
-      const terminal = ptyManager.getTerminal(id);
-      if (!terminal?.ptyProcess) {
-        console.warn(
-          `[PtyHost] Cannot apply IPC backpressure: missing PTY process for ${id}. Queue at ${utilization.toFixed(1)}%`
-        );
-      } else {
-        try {
-          terminal.ptyProcess.pause();
-          console.warn(
-            `[PtyHost] IPC queue high (${utilization.toFixed(1)}%). Pausing PTY ${id} for backpressure.`
-          );
-
-          const pauseStartTime = Date.now();
-          ipcPauseStartTimes.set(id, pauseStartTime);
-
-          emitTerminalStatus(id, "paused-backpressure", utilization);
-          emitReliabilityMetric({
-            terminalId: id,
-            metricType: "pause-start",
-            timestamp: pauseStartTime,
-            bufferUtilization: utilization,
-          });
-
-          // Monitor queue and resume when it drops below low watermark
-          const checkInterval = setInterval(() => {
-            const currentUtilization = getIpcQueueUtilization(id);
-            const lowWatermarkBytes = (IPC_MAX_QUEUE_BYTES * IPC_LOW_WATERMARK_PERCENT) / 100;
-            const currentBytes = ipcQueuedBytes.get(id) ?? 0;
-            const pauseDuration = Date.now() - pauseStartTime;
-
-            // Force resume if paused too long (safety against indefinite pause)
-            if (pauseDuration > IPC_MAX_PAUSE_MS) {
-              const terminal = ptyManager.getTerminal(id);
-              if (terminal?.ptyProcess) {
-                try {
-                  terminal.ptyProcess.resume();
-                  console.warn(
-                    `[PtyHost] Force resumed IPC PTY ${id} after ${pauseDuration}ms (queue at ${currentUtilization.toFixed(1)}%). Consumer may be stalled.`
-                  );
-                  emitTerminalStatus(id, "running", currentUtilization, pauseDuration);
-                  emitReliabilityMetric({
-                    terminalId: id,
-                    metricType: "pause-end",
-                    timestamp: Date.now(),
-                    durationMs: pauseDuration,
-                    bufferUtilization: currentUtilization,
-                  });
-                } catch (error) {
-                  console.error(`[PtyHost] Failed to force resume IPC PTY ${id}:`, error);
-                }
-              }
-              clearInterval(checkInterval);
-              ipcPausedTerminals.delete(id);
-              ipcPauseStartTimes.delete(id);
-              return;
-            }
-
-            // Resume when queue drops below low watermark
-            if (currentBytes < lowWatermarkBytes) {
-              const terminal = ptyManager.getTerminal(id);
-              if (terminal?.ptyProcess) {
-                try {
-                  terminal.ptyProcess.resume();
-                  console.log(
-                    `[PtyHost] IPC queue cleared to ${currentUtilization.toFixed(1)}%. Resumed PTY ${id}`
-                  );
-                  emitTerminalStatus(id, "running", currentUtilization, pauseDuration);
-                  emitReliabilityMetric({
-                    terminalId: id,
-                    metricType: "pause-end",
-                    timestamp: Date.now(),
-                    durationMs: pauseDuration,
-                    bufferUtilization: currentUtilization,
-                  });
-                } catch (error) {
-                  console.error(`[PtyHost] Failed to resume IPC PTY ${id}:`, error);
-                }
-              }
-              clearInterval(checkInterval);
-              ipcPausedTerminals.delete(id);
-              ipcPauseStartTimes.delete(id);
-            }
-          }, IPC_BACKPRESSURE_CHECK_INTERVAL_MS);
-
-          ipcPausedTerminals.set(id, checkInterval);
-        } catch (error) {
-          console.error(`[PtyHost] Failed to pause IPC PTY ${id}:`, error);
-        }
-      }
-    }
+    ipcQueueManager.applyBackpressure(id, utilization);
   }
 
   // PRIORITY 2: BACKGROUND TASKS (Deferred Processing)
@@ -910,19 +468,10 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
 
 ptyManager.on("exit", (id: string, exitCode: number) => {
   // Clean up any active backpressure monitoring for this terminal
-  const checkInterval = pausedTerminals.get(id);
-  if (checkInterval) {
-    clearInterval(checkInterval);
-    pausedTerminals.delete(id);
-  }
-  pauseStartTimes.delete(id);
-  terminalStatuses.delete(id);
-  terminalActivityTiers.delete(id);
-  suspendedDueToStall.delete(id);
-  clearPendingVisual(id);
+  backpressureManager.cleanupTerminal(id);
 
   // Clean up IPC backpressure state
-  clearIpcQueue(id);
+  ipcQueueManager.clearQueue(id);
 
   sendEvent({ type: "exit", id, exitCode });
 });
@@ -1053,27 +602,6 @@ events.on("terminal:restored", (payload) => {
     id: payload.id,
   });
 });
-
-// Convert internal terminal snapshot to IPC-safe format
-function toHostSnapshot(id: string): PtyHostTerminalSnapshot | null {
-  const snapshot = ptyManager.getTerminalSnapshot(id);
-  if (!snapshot) return null;
-
-  return {
-    id: snapshot.id,
-    lines: snapshot.lines,
-    lastInputTime: snapshot.lastInputTime,
-    lastOutputTime: snapshot.lastOutputTime,
-    lastCheckTime: snapshot.lastCheckTime,
-    type: snapshot.type,
-    worktreeId: snapshot.worktreeId,
-    agentId: snapshot.agentId,
-    agentState: snapshot.agentState,
-    lastStateChange: snapshot.lastStateChange,
-    error: snapshot.error,
-    spawnedAt: snapshot.spawnedAt,
-  };
-}
 
 // Handle requests from Main
 port.on("message", async (rawMsg: any) => {
@@ -1255,22 +783,22 @@ port.on("message", async (rawMsg: any) => {
 
       case "set-activity-tier": {
         const tier = msg.tier === "background" ? "background" : "active";
-        terminalActivityTiers.set(msg.id, tier);
+        backpressureManager.setActivityTier(msg.id, tier);
 
         // Clear any stall suspension and unblock the PTY
-        suspendedDueToStall.delete(msg.id);
-        clearPendingVisual(msg.id);
+        backpressureManager.clearSuspended(msg.id);
+        backpressureManager.clearPendingVisual(msg.id);
 
-        const checkInterval = pausedTerminals.get(msg.id);
+        const checkInterval = backpressureManager.getPausedInterval(msg.id);
         const wasPaused = checkInterval !== undefined;
         if (checkInterval) {
           clearInterval(checkInterval);
-          pausedTerminals.delete(msg.id);
+          backpressureManager.deletePausedInterval(msg.id);
         }
 
-        const pauseStart = pauseStartTimes.get(msg.id);
+        const pauseStart = backpressureManager.getPauseStartTime(msg.id);
         const pauseDuration = pauseStart ? Date.now() - pauseStart : undefined;
-        pauseStartTimes.delete(msg.id);
+        backpressureManager.deletePauseStartTime(msg.id);
 
         const terminal = ptyManager.getTerminal(msg.id);
         if (terminal?.ptyProcess) {
@@ -1285,11 +813,11 @@ port.on("message", async (rawMsg: any) => {
           ptyManager.setActivityMonitorTier(msg.id, pollingInterval);
         }
 
-        emitTerminalStatus(msg.id, "running");
+        backpressureManager.emitTerminalStatus(msg.id, "running");
 
         // Emit metrics for pause-end (set-activity-tier unpause path)
         if (wasPaused && pauseDuration !== undefined) {
-          emitReliabilityMetric({
+          backpressureManager.emitReliabilityMetric({
             terminalId: msg.id,
             metricType: "pause-end",
             timestamp: Date.now(),
@@ -1303,18 +831,18 @@ port.on("message", async (rawMsg: any) => {
         const wakeStartTime = Date.now();
 
         // Wake implies we want a faithful snapshot + resume streaming.
-        terminalActivityTiers.set(msg.id, "active");
-        suspendedDueToStall.delete(msg.id);
-        clearPendingVisual(msg.id);
+        backpressureManager.setActivityTier(msg.id, "active");
+        backpressureManager.clearSuspended(msg.id);
+        backpressureManager.clearPendingVisual(msg.id);
 
         // Clear any active pause interval and timing, and resume the PTY
-        const checkInterval = pausedTerminals.get(msg.id);
+        const checkInterval = backpressureManager.getPausedInterval(msg.id);
         const wasPaused = checkInterval !== undefined;
         if (checkInterval) {
           clearInterval(checkInterval);
-          pausedTerminals.delete(msg.id);
+          backpressureManager.deletePausedInterval(msg.id);
         }
-        pauseStartTimes.delete(msg.id);
+        backpressureManager.deletePauseStartTime(msg.id);
 
         // Apply active tier polling (50ms) and resume PTY when waking
         const terminal = ptyManager.getTerminal(msg.id);
@@ -1354,13 +882,13 @@ port.on("message", async (rawMsg: any) => {
 
         const wakeLatencyMs = Date.now() - wakeStartTime;
 
-        emitTerminalStatus(msg.id, "running");
+        backpressureManager.emitTerminalStatus(msg.id, "running");
 
         // Emit wake latency metrics (only if enabled to avoid overhead)
         if (metricsEnabled() && state) {
           const { Buffer } = await import("node:buffer");
           const serializedStateBytes = Buffer.byteLength(state, "utf8");
-          emitReliabilityMetric({
+          backpressureManager.emitReliabilityMetric({
             terminalId: msg.id,
             metricType: "wake-latency",
             timestamp: Date.now(),
@@ -1395,7 +923,7 @@ port.on("message", async (rawMsg: any) => {
         // Acknowledge data consumption from renderer to manage IPC backpressure
         // Renderer now sends exact byte count (not character count) for accurate accounting
         const acknowledgedBytes = msg.charCount ?? 0;
-        removeIpcBytes(msg.id, acknowledgedBytes);
+        ipcQueueManager.removeBytes(msg.id, acknowledgedBytes);
 
         // Note: ptyManager.acknowledgeData is still a no-op for SAB mode compatibility
         ptyManager.acknowledgeData(msg.id, acknowledgedBytes);
@@ -1415,7 +943,7 @@ port.on("message", async (rawMsg: any) => {
           type: "snapshot",
           id: msg.id,
           requestId: msg.requestId,
-          snapshot: toHostSnapshot(msg.id),
+          snapshot: toHostSnapshot(ptyManager, msg.id),
         });
         break;
 
@@ -1600,31 +1128,31 @@ port.on("message", async (rawMsg: any) => {
             console.log(`[PtyHost] Force resumed PTY ${msg.id} via user request`);
 
             // Clean up any pending backpressure monitoring
-            const checkInterval = pausedTerminals.get(msg.id);
+            const checkInterval = backpressureManager.getPausedInterval(msg.id);
             if (checkInterval) {
               clearInterval(checkInterval);
-              pausedTerminals.delete(msg.id);
+              backpressureManager.deletePausedInterval(msg.id);
             }
-            clearPendingVisual(msg.id);
+            backpressureManager.clearPendingVisual(msg.id);
 
             // Calculate pause duration if we have a start time
-            const pauseStart = pauseStartTimes.get(msg.id);
+            const pauseStart = backpressureManager.getPauseStartTime(msg.id);
             const pauseDuration = pauseStart ? Date.now() - pauseStart : undefined;
-            pauseStartTimes.delete(msg.id);
+            backpressureManager.deletePauseStartTime(msg.id);
 
             // Clear suspended flag to allow output to flow again
-            suspendedDueToStall.delete(msg.id);
+            backpressureManager.clearSuspended(msg.id);
 
             // Emit resume status
             const utilization =
               visualBuffers.length > 0
                 ? visualBuffers[selectShard(msg.id, visualBuffers.length)].getUtilization()
                 : undefined;
-            emitTerminalStatus(msg.id, "running", utilization, pauseDuration);
+            backpressureManager.emitTerminalStatus(msg.id, "running", utilization, pauseDuration);
 
             // Emit metrics for pause-end (user force-resume path)
             if (pauseDuration !== undefined) {
-              emitReliabilityMetric({
+              backpressureManager.emitReliabilityMetric({
                 terminalId: msg.id,
                 metricType: "pause-end",
                 timestamp: Date.now(),
@@ -1658,30 +1186,8 @@ function cleanup(): void {
 
   resourceGovernor.dispose();
 
-  // Clear all backpressure monitoring intervals
-  for (const [id, checkInterval] of pausedTerminals) {
-    clearInterval(checkInterval);
-    console.log(`[PtyHost] Cleared backpressure monitor for terminal ${id}`);
-  }
-  pausedTerminals.clear();
-  pauseStartTimes.clear();
-  terminalStatuses.clear();
-
-  // Clear all IPC backpressure monitoring intervals
-  for (const [id, checkInterval] of ipcPausedTerminals) {
-    clearInterval(checkInterval);
-    console.log(`[PtyHost] Cleared IPC backpressure monitor for terminal ${id}`);
-  }
-  ipcPausedTerminals.clear();
-  ipcPauseStartTimes.clear();
-  ipcQueuedBytes.clear();
-
-  // Clear all other per-terminal state to prevent memory leaks
-  terminalActivityTiers.clear();
-  suspendedDueToStall.clear();
-  pendingVisualSegments.clear();
-  pendingVisualBytes.clear();
-  totalPendingVisualBytes = 0;
+  backpressureManager.dispose();
+  ipcQueueManager.dispose();
 
   processTreeCache.stop();
 
