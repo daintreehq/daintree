@@ -529,7 +529,7 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Shift+O",
     scope: "global",
     priority: 0,
-    description: "Open worktrees overview",
+    description: "Toggle worktrees overview",
     category: "Worktrees",
   },
   {
@@ -542,7 +542,7 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
   },
   {
     actionId: "notes.openPalette",
-    combo: "Cmd+Shift+O",
+    combo: "Cmd+Shift+N",
     scope: "global",
     priority: 0,
     description: "Open notes palette",

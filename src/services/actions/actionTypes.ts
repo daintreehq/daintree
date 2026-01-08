@@ -11,6 +11,7 @@ export interface ActionCallbacks {
   onToggleFocusMode: () => void;
   onOpenAgentPalette: () => void;
   onOpenWorktreePalette: () => void;
+  onToggleWorktreeOverview: () => void;
   onOpenWorktreeOverview: () => void;
   onCloseWorktreeOverview: () => void;
   onOpenNewTerminalPalette: () => void;

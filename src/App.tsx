@@ -391,7 +391,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           <button
             onClick={onOpenOverview}
             className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/[0.06] rounded transition-colors"
-            title="Open worktrees overview (⌘⇧O)"
+            title="Toggle worktrees overview (⌘⇧O)"
             aria-label="Open worktrees overview"
           >
             <Maximize2 className="w-3.5 h-3.5" />
@@ -676,6 +676,10 @@ function App() {
     setIsNotesPaletteOpen(false);
   }, []);
 
+  const toggleWorktreeOverview = useCallback(() => {
+    setIsWorktreeOverviewOpen((prev) => !prev);
+  }, []);
+
   const openWorktreeOverview = useCallback(() => {
     setIsWorktreeOverviewOpen(true);
   }, []);
@@ -732,6 +736,7 @@ function App() {
     onToggleFocusMode: handleToggleSidebar,
     onOpenAgentPalette: terminalPalette.open,
     onOpenWorktreePalette: openWorktreePalette,
+    onToggleWorktreeOverview: toggleWorktreeOverview,
     onOpenWorktreeOverview: openWorktreeOverview,
     onCloseWorktreeOverview: closeWorktreeOverview,
     onOpenNewTerminalPalette: newTerminalPalette.open,

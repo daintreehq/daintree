@@ -667,7 +667,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
             <div className="px-4 py-3 border-b border-canopy-border bg-canopy-sidebar/50 flex items-center justify-between shrink-0">
               <div className="flex items-center gap-3">
                 <span className="text-sm font-medium text-canopy-text">Notes</span>
-                <span className="text-[11px] text-canopy-text/50 font-mono">⌘⇧O</span>
+                <span className="text-[11px] text-canopy-text/50 font-mono">⌘⇧N</span>
               </div>
               <div className="flex items-center gap-2">
                 <button
