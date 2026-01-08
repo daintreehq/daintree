@@ -330,7 +330,8 @@ export function WorktreeOverviewModal({
                   <div
                     className={cn(
                       "grid gap-3",
-                      "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3",
+                      "grid-cols-[repeat(auto-fit,minmax(min(320px,100%),480px))]",
+                      "justify-center",
                       "auto-rows-min"
                     )}
                   >
@@ -375,7 +376,8 @@ export function WorktreeOverviewModal({
             <div
               className={cn(
                 "grid gap-3",
-                "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3",
+                "grid-cols-[repeat(auto-fit,minmax(min(320px,100%),480px))]",
+                "justify-center",
                 "items-start"
               )}
             >
