@@ -13,6 +13,7 @@ import type { DockRenderState, DockMode } from "@shared/types";
 export function useDockRenderState(): DockRenderState & {
   setPeek: (peek: boolean) => void;
   hasDocked: boolean;
+  dockedCount: number;
   hasStatus: boolean;
   waitingCount: number;
   failedCount: number;
@@ -46,6 +47,7 @@ export function useDockRenderState(): DockRenderState & {
   const { waitingCount, failedCount } = useTerminalNotificationCounts();
 
   const hasDocked = dockTerminals.length > 0;
+  const dockedCount = dockTerminals.length;
   const hasStatus = waitingCount > 0 || failedCount > 0 || trashedCount > 0;
   const hasContent = hasDocked || hasStatus;
 
@@ -112,6 +114,7 @@ export function useDockRenderState(): DockRenderState & {
     isHydrated,
     setPeek,
     hasDocked,
+    dockedCount,
     hasStatus,
     waitingCount,
     failedCount,
