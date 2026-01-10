@@ -350,7 +350,9 @@ export function WorktreeHeader({
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="end"
+              side="bottom"
               sideOffset={4}
+              collisionPadding={8}
               onClick={(e) => e.stopPropagation()}
               className="w-64"
             >

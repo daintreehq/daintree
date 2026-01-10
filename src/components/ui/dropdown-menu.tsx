@@ -37,9 +37,11 @@ DropdownMenuSubTrigger.displayName = DropdownMenuPrimitive.SubTrigger.displayNam
 const DropdownMenuSubContent = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.SubContent>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubContent>
->(({ className, ...props }, ref) => (
+>(({ className, sideOffset = 4, collisionPadding = 8, ...props }, ref) => (
   <DropdownMenuPrimitive.SubContent
     ref={ref}
+    sideOffset={sideOffset}
+    collisionPadding={collisionPadding}
     className={cn(
       "z-[var(--z-popover)] min-w-[10rem] overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-canopy-text",
       className
