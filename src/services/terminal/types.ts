@@ -66,17 +66,15 @@ export interface ManagedTerminal {
   // Input lock state (read-only monitor mode)
   isInputLocked?: boolean;
 
-  // Alternate screen buffer state (tracked via escape sequences)
-  // When true, resize operations should skip xterm.js reflow and only notify the PTY
-  isInAlternateBuffer: boolean;
-
   // Incremental restore state
   writeChain: Promise<void>;
   restoreGeneration: number;
   isSerializedRestoreInProgress: boolean;
   deferredOutput: Array<string | Uint8Array>;
 
-  // Alt buffer state (for TUI applications like OpenCode, vim, htop)
+  // Alternate screen buffer state (tracked via xterm.js onBufferChange).
+  // When true, resize operations clear the screen before resizing to avoid
+  // reflow artifacts in TUI applications (OpenCode, vim, htop, etc.)
   isAltBuffer?: boolean;
   altBufferListeners: Set<(isAltBuffer: boolean) => void>;
 }

@@ -88,6 +88,8 @@ export class TerminalResizeController {
       this.resetWidthForFit(managed);
       managed.fitAddon.fit();
       const { cols, rows } = managed.terminal;
+      managed.latestCols = cols;
+      managed.latestRows = rows;
       terminalClient.resize(id, cols, rows);
       this.updateExactWidth(managed);
       return { cols, rows };
@@ -190,7 +192,7 @@ export class TerminalResizeController {
   }
 
   resizeTerminal(managed: ManagedTerminal, cols: number, rows: number): void {
-    if (managed.isInAlternateBuffer) {
+    if (managed.isAltBuffer) {
       managed.terminal.write("\x1b[2J\x1b[H");
     }
     managed.terminal.resize(cols, rows);
