@@ -636,7 +636,6 @@ function TerminalPaneComponent({
             disabled={isBackendDisconnected || isBackendRecovering || isInputLocked}
             cwd={cwd}
             agentId={effectiveAgentId}
-            agentState={agentState}
             agentHasLifecycleEvent={stateChangeTrigger !== undefined}
             restartKey={restartKey}
             onActivate={handleClick}
