@@ -159,6 +159,12 @@ function TerminalPaneComponent({
   const isInputLocked = useTerminalStore(
     (state) => state.terminals.find((t) => t.id === id)?.isInputLocked ?? false
   );
+  const stateChangeTrigger = useTerminalStore(
+    (state) => state.terminals.find((t) => t.id === id)?.stateChangeTrigger
+  );
+  const isRestarting = useTerminalStore(
+    (state) => state.terminals.find((t) => t.id === id)?.isRestarting ?? false
+  );
 
   const isBackendDisconnected = backendStatus === "disconnected";
   const isBackendRecovering = backendStatus === "recovering";
@@ -172,8 +178,6 @@ function TerminalPaneComponent({
         : undefined;
   const isAgentTerminal = effectiveAgentId !== undefined;
   const showHybridInputBar = isAgentTerminal && hybridInputEnabled;
-
-  const terminal = getTerminal(id);
 
   const queueCount = useTerminalStore(
     useShallow((state) => state.commandQueue.filter((c) => c.terminalId === id).length)
@@ -509,7 +513,7 @@ function TerminalPaneComponent({
         exitCode !== 130 &&
         !dismissedRestartPrompt &&
         !restartError &&
-        !terminal?.isRestarting && (
+        !isRestarting && (
           <TerminalRestartBanner
             exitCode={exitCode}
             onRestart={handleRestart}
@@ -633,7 +637,7 @@ function TerminalPaneComponent({
             cwd={cwd}
             agentId={effectiveAgentId}
             agentState={agentState}
-            agentHasLifecycleEvent={terminal?.stateChangeTrigger !== undefined}
+            agentHasLifecycleEvent={stateChangeTrigger !== undefined}
             restartKey={restartKey}
             onActivate={handleClick}
             onSend={({ trackerData, text }) => {
