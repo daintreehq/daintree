@@ -69,34 +69,19 @@ export class TerminalParserHandler {
 
     const capabilities = this.getAgentCapabilities();
 
-    // Track alternate screen buffer mode switches via DEC private mode sequences.
-    // This allows us to detect when a TUI app activates the alternate screen
-    // so we can skip xterm.js reflow during resize operations.
-    // CSI ? Pm h = DECSET (enable mode)
-    const altScreenSetHandler = terminal.parser.registerCsiHandler(
-      { prefix: "?", final: "h" },
-      (params) => {
-        const p = this.normalizeCsiParams(params);
-        if (p.some((v) => ALT_SCREEN_MODES.has(v))) {
-          this.managed.isInAlternateBuffer = true;
-        }
-        return false; // Don't block, just observe
-      }
-    );
-    this.disposables.push(altScreenSetHandler);
-
+    // Track alternate screen buffer exit via DEC private mode sequences.
+    // Note: Buffer state (isAltBuffer) is primarily tracked via xterm.js's
+    // onBufferChange event in TerminalInstanceService. This handler only
+    // observes the exit sequence to trigger deferred resize application.
     // CSI ? Pm l = DECRST (disable mode)
     const altScreenResetHandler = terminal.parser.registerCsiHandler(
       { prefix: "?", final: "l" },
       (params) => {
         const p = this.normalizeCsiParams(params);
         if (p.some((v) => ALT_SCREEN_MODES.has(v))) {
-          const wasInAltBuffer = this.managed.isInAlternateBuffer;
-          this.managed.isInAlternateBuffer = false;
-
           // Apply deferred resize when leaving alternate buffer.
           // If dimensions changed while in alt buffer, the normal buffer needs to catch up.
-          if (wasInAltBuffer && this.onBufferExit) {
+          if (this.onBufferExit) {
             this.onBufferExit();
           }
         }

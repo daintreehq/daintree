@@ -289,7 +289,6 @@ class TerminalInstanceService {
       latestWasAtBottom: true,
       isUserScrolledBack: false,
       isFocused: false,
-      isInAlternateBuffer: false,
       writeChain: Promise.resolve(),
       restoreGeneration: 0,
       isSerializedRestoreInProgress: false,
@@ -639,8 +638,6 @@ class TerminalInstanceService {
   handleBackendRecovery(): void {
     this.instances.forEach((managed, id) => {
       try {
-        managed.isInAlternateBuffer = false;
-
         managed.terminal.write("\x1b[!p");
 
         this.resetRenderer(id);
@@ -824,8 +821,6 @@ class TerminalInstanceService {
 
       managed.isSerializedRestoreInProgress = true;
 
-      managed.isInAlternateBuffer = false;
-
       managed.terminal.reset();
       managed.terminal.write(serializedState, () => {
         const current = this.instances.get(id);
@@ -865,8 +860,6 @@ class TerminalInstanceService {
         if (this.instances.get(id) !== managed || managed.restoreGeneration !== restoreGeneration) {
           return false;
         }
-
-        managed.isInAlternateBuffer = false;
 
         managed.terminal.reset();
 

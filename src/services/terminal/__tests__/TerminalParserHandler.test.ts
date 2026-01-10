@@ -43,12 +43,11 @@ describe("TerminalParserHandler", () => {
     process.env = originalEnv;
   });
 
-  it("should register alternate screen buffer handlers by default", () => {
+  it("should register alternate screen buffer exit handler", () => {
     new TerminalParserHandler(mockManaged);
-    // Alternate screen buffer handlers should be registered (benign observers)
-    const decset = csiHandlers.find((h) => h.opts.prefix === "?" && h.opts.final === "h");
+    // Only DECRST (exit) handler is registered to trigger deferred resize
+    // Buffer state itself is tracked via xterm.js onBufferChange in TerminalInstanceService
     const decrst = csiHandlers.find((h) => h.opts.prefix === "?" && h.opts.final === "l");
-    expect(decset).toBeDefined();
     expect(decrst).toBeDefined();
   });
 
@@ -93,8 +92,8 @@ describe("TerminalParserHandler", () => {
 
     new TerminalParserHandler(mockManaged);
     expect(escHandlers).toHaveLength(0);
-    // Should have 2 handlers for alternate screen buffer detection (?h and ?l)
-    expect(csiHandlers).toHaveLength(2);
+    // Should have 1 handler for alternate screen buffer exit (?l)
+    expect(csiHandlers).toHaveLength(1);
   });
 
   it("should dispose handlers correctly", () => {
