@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { ProjectActionRow } from "./ProjectActionRow";
+import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 
 export interface ProjectSwitcherPaletteProps {
@@ -31,6 +32,7 @@ export function ProjectSwitcherPalette({
 }: ProjectSwitcherPaletteProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const projectSwitcherShortcut = useKeybindingDisplay("project.switcherPalette");
 
   useEffect(() => {
     if (isOpen && inputRef.current) {
@@ -101,7 +103,7 @@ export function ProjectSwitcherPalette({
 
   return (
     <AppPaletteDialog isOpen={isOpen} onClose={onClose} ariaLabel="Project switcher">
-      <AppPaletteDialog.Header label="Switch Project" keyHint="⌘K, P">
+      <AppPaletteDialog.Header label="Switch Project" keyHint={projectSwitcherShortcut}>
         <AppPaletteDialog.Input
           inputRef={inputRef}
           value={query}

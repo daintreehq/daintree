@@ -14,12 +14,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { projectClient, terminalClient } from "@/clients";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import type { Project, ProjectStats } from "@shared/types";
 import { isAgentTerminal } from "@/utils/terminalType";
 import { groupProjects } from "./projectGrouping";
 import { ProjectActionRow } from "./ProjectActionRow";
+import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 
 interface ProjectTerminalCounts {
   activeAgentCount: number;
@@ -50,6 +52,7 @@ export function ProjectSwitcher() {
   const [isLoadingStats, setIsLoadingStats] = useState(false);
   const [isLoadingTerminalCounts, setIsLoadingTerminalCounts] = useState(false);
   const switchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const projectSwitcherShortcut = useKeybindingDisplay("project.switcherPalette");
 
   const refreshStopCandidateCounts = useCallback(
     async (projectId: string) => {
@@ -632,34 +635,43 @@ export function ProjectSwitcher() {
     <>
       {stopDialog}
       <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant="ghost"
-            className={cn(
-              "w-full justify-between h-12 px-2.5",
-              "rounded-[var(--radius-lg)]",
-              "border border-white/[0.06]",
-              "bg-white/[0.02] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
-              "hover:bg-white/[0.04] transition-colors",
-              "active:scale-100"
-            )}
-            disabled={isLoading}
-          >
-            <div className="flex items-center gap-3 text-left min-w-0">
-              {renderIcon(currentProject.emoji || "🌲", currentProject.color, "h-9 w-9 text-xl")}
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  className={cn(
+                    "w-full justify-between h-12 px-2.5",
+                    "rounded-[var(--radius-lg)]",
+                    "border border-white/[0.06]",
+                    "bg-white/[0.02] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
+                    "hover:bg-white/[0.04] transition-colors",
+                    "active:scale-100"
+                  )}
+                  disabled={isLoading}
+                >
+                  <div className="flex items-center gap-3 text-left min-w-0">
+                    {renderIcon(currentProject.emoji || "🌲", currentProject.color, "h-9 w-9 text-xl")}
 
-              <div className="flex flex-col min-w-0 gap-0.5">
-                <span className="truncate font-semibold text-canopy-text text-sm leading-none">
-                  {currentProject.name}
-                </span>
-                <span className="truncate text-xs text-muted-foreground/60 font-mono">
-                  {currentProject.path.split(/[/\\]/).pop()}
-                </span>
-              </div>
-            </div>
-            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 text-muted-foreground/40 group-hover:text-muted-foreground/70 transition-colors" />
-          </Button>
-        </DropdownMenuTrigger>
+                    <div className="flex flex-col min-w-0 gap-0.5">
+                      <span className="truncate font-semibold text-canopy-text text-sm leading-none">
+                        {currentProject.name}
+                      </span>
+                      <span className="truncate text-xs text-muted-foreground/60 font-mono">
+                        {currentProject.path.split(/[/\\]/).pop()}
+                      </span>
+                    </div>
+                  </div>
+                  <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 text-muted-foreground/40 group-hover:text-muted-foreground/70 transition-colors" />
+                </Button>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              Switch project{projectSwitcherShortcut ? ` (${projectSwitcherShortcut})` : ""}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
 
         <DropdownMenuContent
           className="w-[484px] max-w-[calc(100vw-2rem)] max-h-[60vh] overflow-y-auto p-2"

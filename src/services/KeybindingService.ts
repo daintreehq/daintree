@@ -534,7 +534,7 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
   },
   {
     actionId: "project.switcherPalette",
-    combo: "Cmd+K P",
+    combo: "Cmd+Alt+P",
     scope: "global",
     priority: 0,
     description: "Open project switcher",
