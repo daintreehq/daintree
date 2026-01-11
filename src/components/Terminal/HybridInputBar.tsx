@@ -25,7 +25,6 @@ import {
   type AtFileContext,
   type SlashCommandContext,
 } from "./hybridInputParsing";
-import { isAgentReady } from "@/store/slices/terminalCommandQueueSlice";
 
 const MAX_TEXTAREA_HEIGHT_PX = 160;
 
@@ -41,7 +40,6 @@ export interface HybridInputBarProps {
   onActivate?: () => void;
   cwd: string;
   agentId?: LegacyAgentType;
-  agentState?: import("@/types").AgentState;
   agentHasLifecycleEvent?: boolean;
   restartKey?: number;
   disabled?: boolean;
@@ -102,7 +100,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       onActivate,
       cwd,
       agentId,
-      agentState,
       agentHasLifecycleEvent = false,
       restartKey = 0,
       disabled = false,
@@ -146,15 +143,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     }, [restartKey]);
 
     useEffect(() => {
-      if (
-        initializationState === "initializing" &&
-        isAgentTerminal &&
-        agentHasLifecycleEvent &&
-        isAgentReady(agentState)
-      ) {
+      if (initializationState === "initializing" && isAgentTerminal && agentHasLifecycleEvent) {
         setInitializationState("initialized");
       }
-    }, [initializationState, isAgentTerminal, agentHasLifecycleEvent, agentState]);
+    }, [initializationState, isAgentTerminal, agentHasLifecycleEvent]);
 
     useEffect(() => {
       return () => {
