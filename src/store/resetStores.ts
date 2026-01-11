@@ -9,7 +9,6 @@ import { useErrorStore } from "./errorStore";
 import { useNotificationStore } from "./notificationStore";
 import { cleanupNotesStore } from "./notesStore";
 import { useRecipeStore } from "./recipeStore";
-import { cleanupProjectSettingsStore } from "./projectSettingsStore";
 
 export async function resetAllStoresForProjectSwitch(): Promise<void> {
   // Use resetWithoutKilling instead of reset
