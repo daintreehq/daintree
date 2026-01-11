@@ -9,6 +9,7 @@ export interface BrowserHistory {
 export interface BrowserPanelState {
   url: string;
   history: BrowserHistory;
+  zoomFactor?: number;
 }
 
 interface BrowserStateState {
@@ -19,6 +20,7 @@ interface BrowserStateActions {
   getState: (panelId: string) => BrowserPanelState | undefined;
   setState: (panelId: string, state: BrowserPanelState) => void;
   updateUrl: (panelId: string, url: string, history: BrowserHistory) => void;
+  updateZoomFactor: (panelId: string, zoomFactor: number) => void;
   clearState: (panelId: string) => void;
   reset: () => void;
 }
@@ -47,7 +49,24 @@ const createBrowserStateStore: StateCreator<BrowserStateState & BrowserStateActi
     set((s) => ({
       panelStates: {
         ...s.panelStates,
-        [panelId]: { url, history },
+        [panelId]: {
+          ...s.panelStates[panelId],
+          url,
+          history,
+        },
+      },
+    })),
+
+  updateZoomFactor: (panelId, zoomFactor) =>
+    set((s) => ({
+      panelStates: {
+        ...s.panelStates,
+        [panelId]: {
+          ...s.panelStates[panelId],
+          url: s.panelStates[panelId]?.url ?? "",
+          history: s.panelStates[panelId]?.history ?? { past: [], future: [] },
+          zoomFactor,
+        },
       },
     })),
 

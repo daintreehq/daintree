@@ -156,6 +156,7 @@ export type ActionId =
   | "browser.forward"
   | "browser.openExternal"
   | "browser.copyUrl"
+  | "browser.setZoomLevel"
   | "nav.toggleFocusMode"
   | "sidecar.toggle"
   | "sidecar.closeTab"

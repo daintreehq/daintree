@@ -1,8 +1,28 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { ArrowLeft, ArrowRight, RotateCw, ExternalLink, Copy, Check, Globe } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  RotateCw,
+  ExternalLink,
+  Copy,
+  Check,
+  Globe,
+  ChevronDown,
+  ZoomIn,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { normalizeBrowserUrl, getDisplayUrl } from "./browserUtils";
 import { actionService } from "@/services/ActionService";
+
+const ZOOM_PRESETS = [
+  { value: 0.25, label: "25%" },
+  { value: 0.5, label: "50%" },
+  { value: 0.75, label: "75%" },
+  { value: 1.0, label: "100%" },
+  { value: 1.25, label: "125%" },
+  { value: 1.5, label: "150%" },
+  { value: 2.0, label: "200%" },
+];
 
 interface BrowserToolbarProps {
   terminalId?: string;
@@ -11,11 +31,13 @@ interface BrowserToolbarProps {
   canGoForward: boolean;
   isLoading: boolean;
   urlMightBeStale?: boolean;
+  zoomFactor?: number;
   onNavigate: (url: string) => void;
   onBack: () => void;
   onForward: () => void;
   onReload: () => void;
   onOpenExternal: () => void;
+  onZoomChange?: (zoomFactor: number) => void;
 }
 
 export function BrowserToolbar({
@@ -25,17 +47,23 @@ export function BrowserToolbar({
   canGoForward,
   isLoading,
   urlMightBeStale = false,
+  zoomFactor = 1.0,
   onNavigate,
   onBack,
   onForward,
   onReload,
   onOpenExternal,
+  onZoomChange,
 }: BrowserToolbarProps) {
   const [inputValue, setInputValue] = useState(getDisplayUrl(url));
   const [isEditing, setIsEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [isZoomDropdownOpen, setIsZoomDropdownOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const zoomDropdownRef = useRef<HTMLDivElement>(null);
+  const zoomButtonRef = useRef<HTMLButtonElement>(null);
+  const zoomMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!isEditing) {
@@ -97,6 +125,48 @@ export function BrowserToolbar({
     }
   }, [terminalId, url]);
 
+  const handleZoomSelect = useCallback(
+    (factor: number) => {
+      onZoomChange?.(factor);
+      setIsZoomDropdownOpen(false);
+      zoomButtonRef.current?.focus();
+    },
+    [onZoomChange]
+  );
+
+  const handleZoomKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === "Escape") {
+      setIsZoomDropdownOpen(false);
+      zoomButtonRef.current?.focus();
+    }
+  }, []);
+
+  // Close zoom dropdown when clicking or tabbing outside
+  useEffect(() => {
+    if (!isZoomDropdownOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (zoomDropdownRef.current && !zoomDropdownRef.current.contains(e.target as Node)) {
+        setIsZoomDropdownOpen(false);
+      }
+    };
+    const handleFocusOut = (e: FocusEvent) => {
+      if (zoomDropdownRef.current && !zoomDropdownRef.current.contains(e.target as Node)) {
+        setIsZoomDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("focusin", handleFocusOut);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("focusin", handleFocusOut);
+    };
+  }, [isZoomDropdownOpen]);
+
+  const isNonDefaultZoom = Math.abs(zoomFactor - 1.0) >= 0.01;
+  const currentZoomLabel =
+    ZOOM_PRESETS.find((p) => Math.abs(p.value - zoomFactor) < 0.01)?.label ??
+    `${Math.round(zoomFactor * 100)}%`;
+
   const buttonClass =
     "p-1.5 rounded hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed transition-colors";
 
@@ -129,6 +199,57 @@ export function BrowserToolbar({
       >
         <RotateCw className="w-4 h-4" />
       </button>
+
+      {/* Zoom dropdown */}
+      {onZoomChange && (
+        <div ref={zoomDropdownRef} className="relative">
+          <button
+            ref={zoomButtonRef}
+            type="button"
+            onClick={() => setIsZoomDropdownOpen(!isZoomDropdownOpen)}
+            onKeyDown={handleZoomKeyDown}
+            aria-expanded={isZoomDropdownOpen}
+            aria-haspopup="menu"
+            aria-controls="zoom-menu"
+            className={cn(
+              "flex items-center gap-0.5 px-1.5 py-1 rounded text-xs",
+              "hover:bg-white/10 transition-colors",
+              isNonDefaultZoom && "text-blue-400 font-medium"
+            )}
+            title={`Zoom level: ${currentZoomLabel}`}
+          >
+            <ZoomIn className="w-3.5 h-3.5" />
+            <span className="min-w-[2.5rem] text-center">{currentZoomLabel}</span>
+            <ChevronDown className="w-3 h-3" />
+          </button>
+          {isZoomDropdownOpen && (
+            <div
+              ref={zoomMenuRef}
+              id="zoom-menu"
+              role="menu"
+              aria-label="Zoom level"
+              onKeyDown={handleZoomKeyDown}
+              className="absolute top-full left-0 mt-1 py-1 bg-canopy-surface border border-overlay rounded shadow-lg z-20 min-w-[5rem]"
+            >
+              {ZOOM_PRESETS.map((preset) => (
+                <button
+                  key={preset.value}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={Math.abs(preset.value - zoomFactor) < 0.01}
+                  onClick={() => handleZoomSelect(preset.value)}
+                  className={cn(
+                    "w-full px-3 py-1.5 text-xs text-left hover:bg-white/10 transition-colors",
+                    Math.abs(preset.value - zoomFactor) < 0.01 && "text-blue-400 bg-white/5"
+                  )}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* URL input */}
       <form onSubmit={handleSubmit} className="flex-1 min-w-0">

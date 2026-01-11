@@ -36,12 +36,13 @@ export function BrowserPane({
 }: BrowserPaneProps) {
   const webviewRef = useRef<Electron.WebviewTag>(null);
   const setBrowserUrl = useTerminalStore((state) => state.setBrowserUrl);
-  const browserStateStore = useBrowserStateStore();
+  const updateBrowserUrl = useBrowserStateStore((state) => state.updateUrl);
+  const updateBrowserZoomFactor = useBrowserStateStore((state) => state.updateZoomFactor);
   const isDragging = useIsDragging();
 
   // Initialize history from persisted state or initialUrl
   const [history, setHistory] = useState<BrowserHistory>(() => {
-    const savedState = browserStateStore.getState(id);
+    const savedState = useBrowserStateStore.getState().getState(id);
     if (savedState) {
       return {
         past: savedState.history.past,
@@ -55,6 +56,14 @@ export function BrowserPane({
       present: normalized.url || initialUrl,
       future: [],
     };
+  });
+
+  // Initialize zoom factor from persisted state (default 1.0 = 100%)
+  // Clamp to valid range [0.25, 2.0] to handle corrupt storage
+  const [zoomFactor, setZoomFactor] = useState<number>(() => {
+    const savedState = useBrowserStateStore.getState().getState(id);
+    const savedZoom = savedState?.zoomFactor ?? 1.0;
+    return Number.isFinite(savedZoom) ? Math.max(0.25, Math.min(2.0, savedZoom)) : 1.0;
   });
 
   const [isLoading, setIsLoading] = useState(true);
@@ -77,13 +86,26 @@ export function BrowserPane({
   // Persist state changes (debounced via effect cleanup)
   useEffect(() => {
     const timeoutId = setTimeout(() => {
-      browserStateStore.updateUrl(id, currentUrl, {
+      updateBrowserUrl(id, currentUrl, {
         past: history.past,
         future: history.future,
       });
     }, 300);
     return () => clearTimeout(timeoutId);
-  }, [id, currentUrl, history.past, history.future, browserStateStore]);
+  }, [id, currentUrl, history.past, history.future, updateBrowserUrl]);
+
+  // Apply zoom level when it changes or webview becomes ready
+  useEffect(() => {
+    const webview = webviewRef.current;
+    if (webview && isWebviewReady) {
+      webview.setZoomFactor(zoomFactor);
+    }
+  }, [zoomFactor, isWebviewReady]);
+
+  // Persist zoom factor changes
+  useEffect(() => {
+    updateBrowserZoomFactor(id, zoomFactor);
+  }, [id, zoomFactor, updateBrowserZoomFactor]);
 
   // Set up webview event listeners - reattach whenever webview element changes
   useEffect(() => {
@@ -274,6 +296,19 @@ export function BrowserPane({
       }
     };
 
+    const handleSetZoomEvent = (e: Event) => {
+      if (!(e instanceof CustomEvent)) return;
+      const detail = e.detail as unknown;
+      if (!detail || typeof (detail as { id?: unknown }).id !== "string") return;
+      if (typeof (detail as { zoomFactor?: unknown }).zoomFactor !== "number") return;
+      if ((detail as { id: string }).id === id) {
+        const rawZoom = (detail as { zoomFactor: number }).zoomFactor;
+        // Validate and clamp zoom factor to [0.25, 2.0]
+        const validZoom = Number.isFinite(rawZoom) ? Math.max(0.25, Math.min(2.0, rawZoom)) : 1.0;
+        setZoomFactor(validZoom);
+      }
+    };
+
     const controller = new AbortController();
     window.addEventListener("canopy:reload-browser", handleReloadEvent, {
       signal: controller.signal,
@@ -283,6 +318,9 @@ export function BrowserPane({
     });
     window.addEventListener("canopy:browser-back", handleBackEvent, { signal: controller.signal });
     window.addEventListener("canopy:browser-forward", handleForwardEvent, {
+      signal: controller.signal,
+    });
+    window.addEventListener("canopy:browser-set-zoom", handleSetZoomEvent, {
       signal: controller.signal,
     });
     return () => controller.abort();
@@ -306,6 +344,7 @@ export function BrowserPane({
       canGoForward={canGoForward}
       isLoading={isLoading}
       urlMightBeStale={false}
+      zoomFactor={zoomFactor}
       onNavigate={(url) =>
         void actionService.dispatch("browser.navigate", { terminalId: id, url }, { source: "user" })
       }
@@ -319,6 +358,13 @@ export function BrowserPane({
         void actionService.dispatch("browser.reload", { terminalId: id }, { source: "user" })
       }
       onOpenExternal={handleOpenExternal}
+      onZoomChange={(factor) =>
+        void actionService.dispatch(
+          "browser.setZoomLevel",
+          { terminalId: id, zoomFactor: factor },
+          { source: "user" }
+        )
+      }
     />
   );
 

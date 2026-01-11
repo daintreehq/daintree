@@ -132,4 +132,26 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
       await navigator.clipboard.writeText(derivedUrl);
     },
   }));
+
+  actions.set("browser.setZoomLevel", () => ({
+    id: "browser.setZoomLevel",
+    title: "Set Browser Zoom Level",
+    description: "Set the zoom level for a browser panel",
+    category: "browser",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({
+      terminalId: z.string().optional(),
+      zoomFactor: z.number().min(0.25).max(2.0),
+    }),
+    run: async (args: unknown) => {
+      const { terminalId, zoomFactor } = args as { terminalId?: string; zoomFactor: number };
+      const targetId = terminalId ?? useTerminalStore.getState().focusedId;
+      if (!targetId) return;
+      window.dispatchEvent(
+        new CustomEvent("canopy:browser-set-zoom", { detail: { id: targetId, zoomFactor } })
+      );
+    },
+  }));
 }
