@@ -25,6 +25,8 @@ export { useEventStore } from "./eventStore";
 
 export { useProjectStore } from "./projectStore";
 
+export { useProjectSettingsStore, cleanupProjectSettingsStore } from "./projectSettingsStore";
+
 export { useFocusStore } from "./focusStore";
 export type { PanelState } from "./focusStore";
 

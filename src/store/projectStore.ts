@@ -5,6 +5,7 @@ import { resetAllStoresForProjectSwitch } from "./resetStores";
 import { forceReinitializeWorktreeDataStore } from "./worktreeDataStore";
 import { flushTerminalPersistence } from "./slices";
 import { useNotificationStore } from "./notificationStore";
+import { useProjectSettingsStore } from "./projectSettingsStore";
 
 interface ProjectState {
   projects: Project[];
@@ -172,6 +173,11 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       const project = await projectClient.switch(projectId);
       set({ currentProject: project, isLoading: false });
 
+      // Clear old settings and pre-load new project settings for instant toolbar updates
+      console.log("[ProjectSwitch] Pre-loading project settings...");
+      useProjectSettingsStore.getState().reset();
+      void useProjectSettingsStore.getState().loadSettings(projectId);
+
       // Now that backend has switched, reinitialize worktree data for the new project
       console.log("[ProjectSwitch] Reinitializing worktree data store...");
       forceReinitializeWorktreeDataStore();
@@ -282,6 +288,11 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       console.log("[ProjectStore] Reopening project...");
       const project = await projectClient.reopen(projectId);
       set({ currentProject: project, isLoading: false });
+
+      // Clear old settings and pre-load project settings for instant toolbar updates
+      console.log("[ProjectStore] Pre-loading project settings...");
+      useProjectSettingsStore.getState().reset();
+      void useProjectSettingsStore.getState().loadSettings(projectId);
 
       await get().loadProjects();
 

@@ -9,6 +9,7 @@ import { useErrorStore } from "./errorStore";
 import { useNotificationStore } from "./notificationStore";
 import { cleanupNotesStore } from "./notesStore";
 import { useRecipeStore } from "./recipeStore";
+import { cleanupProjectSettingsStore } from "./projectSettingsStore";
 
 export async function resetAllStoresForProjectSwitch(): Promise<void> {
   // Use resetWithoutKilling instead of reset
@@ -17,6 +18,9 @@ export async function resetAllStoresForProjectSwitch(): Promise<void> {
 
   useWorktreeSelectionStore.getState().reset();
   cleanupWorktreeDataStore();
+  // Note: projectSettingsStore is NOT cleaned up here to avoid triggering
+  // a reload of old project settings. It will be reset and reloaded by
+  // projectStore after the switch completes.
   useRecipeStore.getState().reset();
   useLogsStore.getState().reset();
   useEventStore.getState().reset();
