@@ -23,6 +23,10 @@ vi.mock("@/clients", () => ({
   appClient: {
     getHydrationState: vi.fn(),
   },
+  projectClient: {
+    getTerminals: vi.fn().mockResolvedValue([]),
+    setTerminals: vi.fn().mockResolvedValue(undefined),
+  },
 }));
 
 vi.mock("../TerminalAddonManager", () => ({

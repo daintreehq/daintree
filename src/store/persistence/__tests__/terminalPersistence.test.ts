@@ -238,6 +238,7 @@ describe("TerminalPersistence", () => {
       expect(client.setTerminals).not.toHaveBeenCalled();
 
       persistence.flush();
+      await vi.advanceTimersByTimeAsync(0);
 
       expect(client.setTerminals).toHaveBeenCalledTimes(1);
     });

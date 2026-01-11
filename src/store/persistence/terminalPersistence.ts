@@ -94,18 +94,21 @@ export class TerminalPersistence {
     this.debouncedSave(resolvedProjectId, transformed);
   }
 
+  cancel(): void {
+    this.debouncedSave.cancel();
+    this.pendingPersist = null;
+  }
+
+  async whenIdle(): Promise<void> {
+    await this.pendingPersist;
+  }
+
   flush(): void {
     this.debouncedSave.flush();
   }
 
-  cancel(): void {
-    this.debouncedSave.cancel();
-  }
-
-  async whenIdle(): Promise<void> {
-    if (this.pendingPersist) {
-      await this.pendingPersist;
-    }
+  setProjectIdGetter(getter: () => string | null | undefined): void {
+    this.options.getProjectId = () => getter() ?? null;
   }
 }
 

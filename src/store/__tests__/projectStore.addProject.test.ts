@@ -48,6 +48,9 @@ vi.mock("../worktreeDataStore", () => ({
 vi.mock("../slices", () => ({
   flushTerminalPersistence: vi.fn(),
   createTerminalRegistrySlice: vi.fn(() => () => ({})),
+  createTerminalFocusSlice: vi.fn(() => () => ({})),
+  createTerminalCommandQueueSlice: vi.fn(() => () => ({})),
+  createTerminalBulkActionsSlice: vi.fn(() => () => ({})),
 }));
 
 const { useProjectStore } = await import("../projectStore");

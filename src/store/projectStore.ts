@@ -1,4 +1,5 @@
 import { create, type StateCreator } from "zustand";
+import { persist, subscribeWithSelector } from "zustand/middleware";
 import type { Project, ProjectCloseResult, TerminalSnapshot } from "@shared/types";
 import { projectClient } from "@/clients";
 import { resetAllStoresForProjectSwitch } from "./resetStores";
@@ -403,4 +404,22 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   },
 });
 
-export const useProjectStore = create<ProjectState>()(createProjectStore);
+export const useProjectStore = create<ProjectState>()(
+  subscribeWithSelector(
+    persist(
+      (...a) => ({
+        ...createProjectStore(...a),
+      }),
+      {
+        name: "project-storage",
+        partialize: (state) => ({
+          projects: state.projects,
+          currentProject: state.currentProject,
+        }),
+      }
+    )
+  )
+);
+
+// Break circular dependency by injecting project ID getter
+terminalPersistence.setProjectIdGetter(() => useProjectStore.getState().currentProject?.id);
