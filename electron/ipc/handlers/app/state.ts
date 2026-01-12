@@ -21,6 +21,10 @@ export function registerAppStateHandlers(): () => void {
     let terminalsToUse: StoreSchema["appState"]["terminals"] = [];
     let terminalsSource = "none";
 
+    // Focus mode state to include in response
+    let focusModeToUse = globalAppState.focusMode ?? false;
+    let focusPanelStateToUse = globalAppState.focusPanelState;
+
     if (projectId) {
       const projectState = await projectStore.getProjectState(projectId);
       // Per-project state exists (even if empty) - use it as authoritative
@@ -53,6 +57,27 @@ export function registerAppStateHandlers(): () => void {
             };
           });
         terminalsSource = "per-project";
+
+        // Use per-project focus mode if it has been set (undefined means not migrated yet)
+        if (projectState.focusMode !== undefined) {
+          focusModeToUse = projectState.focusMode;
+          focusPanelStateToUse = projectState.focusPanelState;
+        } else if (globalAppState.focusMode !== undefined) {
+          // Migration: per-project state exists but no focusMode - migrate from global
+          focusModeToUse = globalAppState.focusMode;
+          focusPanelStateToUse = globalAppState.focusPanelState;
+
+          // Save the migrated focus mode to per-project state
+          await projectStore.saveProjectState(projectId, {
+            ...projectState,
+            focusMode: focusModeToUse,
+            focusPanelState: focusPanelStateToUse,
+          });
+
+          console.log(
+            `[AppHydrate] Migrated focusMode (${focusModeToUse}) to per-project state for ${currentProject?.name}`
+          );
+        }
       } else if (globalAppState.terminals && globalAppState.terminals.length > 0) {
         // Migration: use global terminals and migrate them to per-project
         terminalsToUse = filterValidTerminalEntries(
@@ -86,25 +111,82 @@ export function registerAppStateHandlers(): () => void {
             };
           });
 
+          // Normalize legacy focusPanelState (may have logsOpen/eventInspectorOpen instead of diagnosticsOpen)
+          const normalizedFocusPanelState = globalAppState.focusPanelState
+            ? {
+                sidebarWidth: globalAppState.focusPanelState.sidebarWidth,
+                diagnosticsOpen:
+                  "diagnosticsOpen" in globalAppState.focusPanelState
+                    ? globalAppState.focusPanelState.diagnosticsOpen
+                    : Boolean(
+                        (globalAppState.focusPanelState as any).logsOpen ||
+                        (globalAppState.focusPanelState as any).eventInspectorOpen
+                      ),
+              }
+            : undefined;
+
+          // Include focus mode in migration
           await projectStore.saveProjectState(projectId, {
             projectId,
             activeWorktreeId: globalAppState.activeWorktreeId,
             sidebarWidth: globalAppState.sidebarWidth ?? 350,
             terminals: migratedTerminals,
+            focusMode: globalAppState.focusMode,
+            focusPanelState: normalizedFocusPanelState,
           });
 
           console.log(
-            `[AppHydrate] Migrated ${migratedTerminals.length} terminals to per-project state`
+            `[AppHydrate] Migrated ${migratedTerminals.length} terminals and focusMode to per-project state`
           );
         } else {
+          // Normalize legacy focusPanelState
+          const normalizedFocusPanelState = globalAppState.focusPanelState
+            ? {
+                sidebarWidth: globalAppState.focusPanelState.sidebarWidth,
+                diagnosticsOpen:
+                  "diagnosticsOpen" in globalAppState.focusPanelState
+                    ? globalAppState.focusPanelState.diagnosticsOpen
+                    : Boolean(
+                        (globalAppState.focusPanelState as any).logsOpen ||
+                        (globalAppState.focusPanelState as any).eventInspectorOpen
+                      ),
+              }
+            : undefined;
+
           // No terminals to migrate but still save empty state to mark migration complete
           await projectStore.saveProjectState(projectId, {
             projectId,
             activeWorktreeId: globalAppState.activeWorktreeId,
             sidebarWidth: globalAppState.sidebarWidth ?? 350,
             terminals: [],
+            focusMode: globalAppState.focusMode,
+            focusPanelState: normalizedFocusPanelState,
           });
         }
+      } else {
+        // Normalize legacy focusPanelState
+        const normalizedFocusPanelState = globalAppState.focusPanelState
+          ? {
+              sidebarWidth: globalAppState.focusPanelState.sidebarWidth,
+              diagnosticsOpen:
+                "diagnosticsOpen" in globalAppState.focusPanelState
+                  ? globalAppState.focusPanelState.diagnosticsOpen
+                  : Boolean(
+                      (globalAppState.focusPanelState as any).logsOpen ||
+                      (globalAppState.focusPanelState as any).eventInspectorOpen
+                    ),
+            }
+          : undefined;
+
+        // No per-project state and no global terminals - create fresh state with focus mode migration
+        await projectStore.saveProjectState(projectId, {
+          projectId,
+          activeWorktreeId: globalAppState.activeWorktreeId,
+          sidebarWidth: globalAppState.sidebarWidth ?? 350,
+          terminals: [],
+          focusMode: globalAppState.focusMode,
+          focusPanelState: normalizedFocusPanelState,
+        });
       }
     } else {
       // No project - use global terminals (legacy/fallback)
@@ -123,10 +205,13 @@ export function registerAppStateHandlers(): () => void {
     const appState: StoreSchema["appState"] = {
       ...globalAppState,
       terminals: terminalsToUse,
+      // Include per-project focus mode in the response (frontend uses this for hydration)
+      focusMode: focusModeToUse,
+      focusPanelState: focusPanelStateToUse,
     };
 
     console.log(
-      `[AppHydrate] Project: ${currentProject?.name ?? "none"} - terminals from ${terminalsSource} (${terminalsToUse.length} valid)`
+      `[AppHydrate] Project: ${currentProject?.name ?? "none"} - terminals from ${terminalsSource} (${terminalsToUse.length} valid), focusMode: ${focusModeToUse}`
     );
 
     return {

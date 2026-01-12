@@ -42,9 +42,15 @@ export interface AppState {
   activeWorktreeId?: string;
   /** Width of the sidebar in pixels */
   sidebarWidth: number;
-  /** Whether focus mode is active (panels collapsed for max terminal space) */
+  /**
+   * Whether focus mode is active (panels collapsed for max terminal space)
+   * @deprecated Focus mode is now stored per-project in ProjectState. This field is kept for migration only.
+   */
   focusMode?: boolean;
-  /** Saved panel state before entering focus mode (for restoration) */
+  /**
+   * Saved panel state before entering focus mode (for restoration)
+   * @deprecated Focus panel state is now stored per-project in ProjectState. This field is kept for migration only.
+   */
   focusPanelState?: {
     sidebarWidth: number;
     diagnosticsOpen: boolean;

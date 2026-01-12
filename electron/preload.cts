@@ -298,6 +298,8 @@ const CHANNELS = {
   PROJECT_DELETE_RECIPE: "project:delete-recipe",
   PROJECT_GET_TERMINALS: "project:get-terminals",
   PROJECT_SET_TERMINALS: "project:set-terminals",
+  PROJECT_GET_FOCUS_MODE: "project:get-focus-mode",
+  PROJECT_SET_FOCUS_MODE: "project:set-focus-mode",
 
   // Agent settings channels
   AGENT_SETTINGS_GET: "agent-settings:get",
@@ -773,6 +775,20 @@ const api: ElectronAPI = {
       projectId: string,
       terminals: import("../shared/types/index.js").TerminalSnapshot[]
     ): Promise<void> => _typedInvoke(CHANNELS.PROJECT_SET_TERMINALS, { projectId, terminals }),
+
+    getFocusMode: (
+      projectId: string
+    ): Promise<{
+      focusMode: boolean;
+      focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean };
+    }> => _typedInvoke(CHANNELS.PROJECT_GET_FOCUS_MODE, projectId),
+
+    setFocusMode: (
+      projectId: string,
+      focusMode: boolean,
+      focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean }
+    ): Promise<void> =>
+      _typedInvoke(CHANNELS.PROJECT_SET_FOCUS_MODE, { projectId, focusMode, focusPanelState }),
   },
 
   // Agent Settings API

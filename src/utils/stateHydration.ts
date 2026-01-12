@@ -41,6 +41,10 @@ export interface HydrationOptions {
   setActiveWorktree: (id: string | null) => void;
   loadRecipes: (projectId: string) => Promise<void>;
   openDiagnosticsDock: (tab?: "problems" | "logs" | "events") => void;
+  setFocusMode?: (
+    focusMode: boolean,
+    focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean }
+  ) => void;
 }
 
 export async function hydrateAppState(options: HydrationOptions): Promise<void> {
@@ -54,8 +58,12 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     await useUserAgentRegistryStore.getState().initialize();
 
     // Batch fetch initial state
-    const { appState, terminalConfig, project: currentProject, agentSettings } =
-      await appClient.hydrate();
+    const {
+      appState,
+      terminalConfig,
+      project: currentProject,
+      agentSettings,
+    } = await appClient.hydrate();
 
     // Hydrate terminal config (scrollback, performance mode) BEFORE restoring terminals
     try {
@@ -335,6 +343,11 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
 
     if (appState.terminalGridConfig) {
       useLayoutConfigStore.getState().setLayoutConfig(appState.terminalGridConfig);
+    }
+
+    // Restore focus mode from per-project state (hydrate returns per-project focus mode)
+    if (options.setFocusMode && appState.focusMode !== undefined) {
+      options.setFocusMode(appState.focusMode, appState.focusPanelState);
     }
   } catch (error) {
     console.error("Failed to hydrate app state:", error);

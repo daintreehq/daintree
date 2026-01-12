@@ -368,6 +368,16 @@ export class ProjectStore {
         sidebarWidth: typeof parsed.sidebarWidth === "number" ? parsed.sidebarWidth : 350,
         terminals: validTerminals,
         terminalLayout: parsed.terminalLayout || undefined,
+        focusMode: typeof parsed.focusMode === "boolean" ? parsed.focusMode : undefined,
+        focusPanelState:
+          parsed.focusPanelState &&
+          typeof parsed.focusPanelState === "object" &&
+          typeof parsed.focusPanelState.sidebarWidth === "number"
+            ? {
+                sidebarWidth: parsed.focusPanelState.sidebarWidth,
+                diagnosticsOpen: Boolean(parsed.focusPanelState.diagnosticsOpen),
+              }
+            : undefined,
       };
 
       return state;
