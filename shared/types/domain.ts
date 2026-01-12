@@ -595,6 +595,14 @@ export interface TerminalLayout {
   maximizedTerminalId?: string;
 }
 
+/** Focus panel state saved before entering focus mode */
+export interface FocusPanelState {
+  /** Sidebar width before focus mode */
+  sidebarWidth: number;
+  /** Whether diagnostics dock was open */
+  diagnosticsOpen: boolean;
+}
+
 /** Per-project state snapshot */
 export interface ProjectState {
   /** ID of the project this state belongs to */
@@ -607,6 +615,10 @@ export interface ProjectState {
   terminals: TerminalSnapshot[];
   /** Terminal layout metadata */
   terminalLayout?: TerminalLayout;
+  /** Whether focus mode is active (panels collapsed for max terminal space) */
+  focusMode?: boolean;
+  /** Saved panel state before entering focus mode (for restoration) */
+  focusPanelState?: FocusPanelState;
 }
 
 // Terminal Recipe Types

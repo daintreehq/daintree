@@ -18,6 +18,10 @@ export interface HydrationCallbacks {
   setActiveWorktree: (id: string | null) => void;
   loadRecipes: (projectId: string) => Promise<void>;
   openDiagnosticsDock: (tab?: DiagnosticsTab) => void;
+  setFocusMode?: (
+    focusMode: boolean,
+    focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean }
+  ) => void;
 }
 
 export function useAppHydration(callbacks: HydrationCallbacks) {
@@ -47,6 +51,7 @@ export function useAppHydration(callbacks: HydrationCallbacks) {
     callbacks.setActiveWorktree,
     callbacks.loadRecipes,
     callbacks.openDiagnosticsDock,
+    callbacks.setFocusMode,
   ]);
 
   return { isStateLoaded };

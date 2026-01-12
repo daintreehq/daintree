@@ -24,6 +24,7 @@ interface AppLayoutProps {
   onRetry?: (id: string, action: RetryAction, args?: Record<string, unknown>) => void;
   agentAvailability?: CliAvailability;
   agentSettings?: AgentSettings | null;
+  isHydrated?: boolean;
 }
 
 export const MIN_SIDEBAR_WIDTH = 200;
@@ -39,6 +40,7 @@ export function AppLayout({
   onRetry,
   agentAvailability,
   agentSettings,
+  isHydrated = true,
 }: AppLayoutProps) {
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const [isProjectSettingsOpen, setIsProjectSettingsOpen] = useState(false);
@@ -75,26 +77,8 @@ export function AppLayout({
           );
           setSidebarWidth(clampedWidth);
         }
-        if (appState.focusMode) {
-          const legacyState = appState.focusPanelState as
-            | PanelState
-            | { sidebarWidth: number; logsOpen?: boolean; eventInspectorOpen?: boolean }
-            | undefined;
-
-          const savedState: PanelState = legacyState
-            ? {
-                sidebarWidth: legacyState.sidebarWidth,
-                diagnosticsOpen:
-                  "diagnosticsOpen" in legacyState
-                    ? legacyState.diagnosticsOpen
-                    : (legacyState.logsOpen ?? false) || (legacyState.eventInspectorOpen ?? false),
-              }
-            : {
-                sidebarWidth: appState.sidebarWidth ?? DEFAULT_SIDEBAR_WIDTH,
-                diagnosticsOpen: false,
-              };
-          layout.setFocusMode(true, savedState);
-        }
+        // Note: Focus mode is now restored via hydration callback (setFocusMode in HydrationCallbacks)
+        // which reads per-project focus mode state. This ensures each project has its own focus mode.
         // Hydrate dock state with legacy migration and validation
         const validModes: Array<"expanded" | "slim" | "hidden"> = ["expanded", "slim", "hidden"];
         const validBehaviors: Array<"auto" | "manual"> = ["auto", "manual"];
@@ -114,7 +98,7 @@ export function AppLayout({
       }
     };
     restoreState();
-  }, [layout.setFocusMode]);
+  }, []);
 
   useEffect(() => {
     if (layout.isFocusMode) return;
@@ -132,17 +116,44 @@ export function AppLayout({
   }, [sidebarWidth, layout.isFocusMode]);
 
   useEffect(() => {
+    // Gate persistence until hydration completes and project switching ends
+    // to avoid overwriting restored focus mode during initial load or project switches
+    if (!isHydrated || isProjectSwitching) {
+      return;
+    }
+
     const persistFocusMode = async () => {
+      // Persist focus mode to per-project state if a project is active
+      if (!currentProject?.id) {
+        // No project - fall back to global state for backward compatibility
+        try {
+          await appClient.setState({ focusMode: layout.isFocusMode });
+        } catch (error) {
+          console.error("Failed to persist focus mode to global state:", error);
+        }
+        return;
+      }
+
       try {
-        await appClient.setState({ focusMode: layout.isFocusMode });
+        await window.electron.project.setFocusMode(
+          currentProject.id,
+          layout.isFocusMode,
+          layout.savedPanelState as PanelState | undefined
+        );
       } catch (error) {
-        console.error("Failed to persist focus mode:", error);
+        console.error("Failed to persist focus mode to project state:", error);
       }
     };
 
     const timer = setTimeout(persistFocusMode, 100);
     return () => clearTimeout(timer);
-  }, [layout.isFocusMode]);
+  }, [
+    layout.isFocusMode,
+    layout.savedPanelState,
+    currentProject?.id,
+    isHydrated,
+    isProjectSwitching,
+  ]);
 
   const handleToggleFocusMode = useCallback(async () => {
     if (layout.isFocusMode) {
@@ -153,10 +164,20 @@ export function AppLayout({
         sidebarWidth,
         diagnosticsOpen: layout.diagnosticsOpen,
       } as PanelState);
-      try {
-        await appClient.setState({ focusPanelState: undefined });
-      } catch (error) {
-        console.error("Failed to clear focus panel state:", error);
+      // Persist to per-project state
+      if (currentProject?.id) {
+        try {
+          await window.electron.project.setFocusMode(currentProject.id, false, undefined);
+        } catch (error) {
+          console.error("Failed to clear focus panel state:", error);
+        }
+      } else {
+        // Fall back to global state if no project
+        try {
+          await appClient.setState({ focusPanelState: undefined });
+        } catch (error) {
+          console.error("Failed to clear focus panel state:", error);
+        }
       }
     } else {
       const currentPanelState: PanelState = {
@@ -164,10 +185,20 @@ export function AppLayout({
         diagnosticsOpen: layout.diagnosticsOpen,
       };
       layout.toggleFocusMode(currentPanelState);
-      try {
-        await appClient.setState({ focusPanelState: currentPanelState });
-      } catch (error) {
-        console.error("Failed to persist focus panel state:", error);
+      // Persist to per-project state
+      if (currentProject?.id) {
+        try {
+          await window.electron.project.setFocusMode(currentProject.id, true, currentPanelState);
+        } catch (error) {
+          console.error("Failed to persist focus panel state:", error);
+        }
+      } else {
+        // Fall back to global state if no project
+        try {
+          await appClient.setState({ focusPanelState: currentPanelState });
+        } catch (error) {
+          console.error("Failed to persist focus panel state:", error);
+        }
       }
     }
   }, [
@@ -176,6 +207,7 @@ export function AppLayout({
     layout.toggleFocusMode,
     layout.diagnosticsOpen,
     sidebarWidth,
+    currentProject?.id,
   ]);
 
   useEffect(() => {

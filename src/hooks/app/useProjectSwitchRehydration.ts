@@ -70,5 +70,6 @@ export function useProjectSwitchRehydration(callbacks: HydrationCallbacks) {
     callbacks.setActiveWorktree,
     callbacks.loadRecipes,
     callbacks.openDiagnosticsDock,
+    callbacks.setFocusMode,
   ]);
 }

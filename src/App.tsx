@@ -56,6 +56,7 @@ import {
   useProjectStore,
   useErrorStore,
   useDiagnosticsStore,
+  useFocusStore,
   cleanupWorktreeDataStore,
   type RetryAction,
 } from "./store";
@@ -595,6 +596,7 @@ function App() {
 
   const openDiagnosticsDock = useDiagnosticsStore((state) => state.openDock);
   const removeError = useErrorStore((state) => state.removeError);
+  const setFocusMode = useFocusStore((state) => state.setFocusMode);
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
@@ -609,8 +611,9 @@ function App() {
       setActiveWorktree,
       loadRecipes,
       openDiagnosticsDock,
+      setFocusMode,
     }),
-    [addTerminal, setActiveWorktree, loadRecipes, openDiagnosticsDock]
+    [addTerminal, setActiveWorktree, loadRecipes, openDiagnosticsDock, setFocusMode]
   );
 
   // App lifecycle hooks
@@ -806,6 +809,7 @@ function App() {
           onRetry={handleErrorRetry}
           agentAvailability={availability}
           agentSettings={agentSettings}
+          isHydrated={isStateLoaded}
         >
           <ContentGrid
             key={currentProject?.id ?? "no-project"}

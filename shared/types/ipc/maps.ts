@@ -485,6 +485,23 @@ export interface IpcInvokeMap {
     args: [payload: { projectId: string; terminals: TerminalSnapshot[] }];
     result: void;
   };
+  "project:get-focus-mode": {
+    args: [projectId: string];
+    result: {
+      focusMode: boolean;
+      focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean };
+    };
+  };
+  "project:set-focus-mode": {
+    args: [
+      payload: {
+        projectId: string;
+        focusMode: boolean;
+        focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean };
+      },
+    ];
+    result: void;
+  };
 
   // GitHub channels
   "github:get-repo-stats": {

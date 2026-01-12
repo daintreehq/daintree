@@ -597,12 +597,93 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
       sidebarWidth: existingState?.sidebarWidth ?? 350,
       terminals: validTerminals,
       terminalLayout: existingState?.terminalLayout,
+      focusMode: existingState?.focusMode,
+      focusPanelState: existingState?.focusPanelState,
     };
 
     await projectStore.saveProjectState(projectId, newState);
   };
   ipcMain.handle(CHANNELS.PROJECT_SET_TERMINALS, handleProjectSetTerminals);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_SET_TERMINALS));
+
+  const handleProjectGetFocusMode = async (
+    _event: Electron.IpcMainInvokeEvent,
+    projectId: string
+  ): Promise<{
+    focusMode: boolean;
+    focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean };
+  }> => {
+    if (typeof projectId !== "string" || !projectId) {
+      throw new Error("Invalid project ID");
+    }
+    const state = await projectStore.getProjectState(projectId);
+    return {
+      focusMode: state?.focusMode ?? false,
+      focusPanelState: state?.focusPanelState,
+    };
+  };
+  ipcMain.handle(CHANNELS.PROJECT_GET_FOCUS_MODE, handleProjectGetFocusMode);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_GET_FOCUS_MODE));
+
+  const handleProjectSetFocusMode = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: {
+      projectId: string;
+      focusMode: boolean;
+      focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean };
+    }
+  ): Promise<void> => {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid payload");
+    }
+    const { projectId, focusMode, focusPanelState } = payload;
+    if (typeof projectId !== "string" || !projectId) {
+      throw new Error("Invalid project ID");
+    }
+    if (typeof focusMode !== "boolean") {
+      throw new Error("Invalid focusMode value");
+    }
+
+    // Validate focusPanelState if provided (check !== undefined to allow explicit null)
+    let validFocusPanelState: { sidebarWidth: number; diagnosticsOpen: boolean } | undefined;
+    if (focusPanelState !== undefined && focusPanelState !== null) {
+      if (
+        typeof focusPanelState !== "object" ||
+        typeof focusPanelState.sidebarWidth !== "number" ||
+        typeof focusPanelState.diagnosticsOpen !== "boolean"
+      ) {
+        throw new Error("Invalid focusPanelState structure");
+      }
+      // Validate sidebarWidth is finite and in reasonable range
+      if (
+        !Number.isFinite(focusPanelState.sidebarWidth) ||
+        focusPanelState.sidebarWidth < 0 ||
+        focusPanelState.sidebarWidth > 10000
+      ) {
+        throw new Error("Invalid sidebarWidth: must be finite and between 0-10000");
+      }
+      validFocusPanelState = {
+        sidebarWidth: focusPanelState.sidebarWidth,
+        diagnosticsOpen: focusPanelState.diagnosticsOpen,
+      };
+    }
+
+    // Get existing state or create a default one
+    const existingState = await projectStore.getProjectState(projectId);
+    const newState = {
+      projectId,
+      activeWorktreeId: existingState?.activeWorktreeId,
+      sidebarWidth: existingState?.sidebarWidth ?? 350,
+      terminals: existingState?.terminals ?? [],
+      terminalLayout: existingState?.terminalLayout,
+      focusMode,
+      focusPanelState: validFocusPanelState,
+    };
+
+    await projectStore.saveProjectState(projectId, newState);
+  };
+  ipcMain.handle(CHANNELS.PROJECT_SET_FOCUS_MODE, handleProjectSetFocusMode);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_SET_FOCUS_MODE));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

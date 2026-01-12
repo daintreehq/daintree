@@ -239,6 +239,23 @@ export interface ElectronAPI {
      * Used for preserving panel layout when switching away from a project.
      */
     setTerminals(projectId: string, terminals: TerminalSnapshot[]): Promise<void>;
+    /**
+     * Get focus mode state for a project.
+     * Used for restoring focus mode when switching projects.
+     */
+    getFocusMode(projectId: string): Promise<{
+      focusMode: boolean;
+      focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean };
+    }>;
+    /**
+     * Set focus mode state for a project.
+     * Used for persisting focus mode per-project.
+     */
+    setFocusMode(
+      projectId: string,
+      focusMode: boolean,
+      focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean }
+    ): Promise<void>;
   };
   agentSettings: {
     get(): Promise<AgentSettings>;
