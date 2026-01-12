@@ -9,7 +9,8 @@ import {
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import type { TerminalType, AgentState, TerminalKind } from "@/types";
 import { keybindingService } from "@/services/KeybindingService";
-import { isRegisteredAgent } from "@/config/agents";
+import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
+import { generateAgentFlags } from "@shared/types";
 import { normalizeScrollbackLines } from "@shared/config/scrollback";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { panelKindUsesTerminalUi } from "@shared/config/panelKindRegistry";
@@ -53,7 +54,8 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     await useUserAgentRegistryStore.getState().initialize();
 
     // Batch fetch initial state
-    const { appState, terminalConfig, project: currentProject } = await appClient.hydrate();
+    const { appState, terminalConfig, project: currentProject, agentSettings } =
+      await appClient.hydrate();
 
     // Hydrate terminal config (scrollback, performance mode) BEFORE restoring terminals
     try {
@@ -169,10 +171,43 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
                   }
                 }
 
-                if (!panelKindUsesTerminalUi(kind)) {
+                const location = (saved.location === "dock" ? "dock" : "grid") as "grid" | "dock";
+
+                if (panelKindUsesTerminalUi(kind)) {
+                  const effectiveAgentId =
+                    saved.agentId ??
+                    (saved.type && isRegisteredAgent(saved.type) ? saved.type : undefined);
+                  const isAgentPanel = kind === "agent" || Boolean(effectiveAgentId);
+                  const agentId = effectiveAgentId;
+                  let command = saved.command?.trim() || undefined;
+
+                  if (agentId && agentSettings) {
+                    const agentConfig = getAgentConfig(agentId);
+                    const baseCommand = agentConfig?.command || agentId;
+                    const flags = generateAgentFlags(
+                      agentSettings.agents?.[agentId] ?? {},
+                      agentId
+                    );
+                    command = flags.length > 0 ? `${baseCommand} ${flags.join(" ")}` : baseCommand;
+                  }
+
+                  console.log(`[Hydration] Respawning PTY panel: ${saved.id}`);
+
+                  await addTerminal({
+                    kind: isAgentPanel ? "agent" : "terminal",
+                    type: saved.type,
+                    agentId,
+                    title: saved.title,
+                    cwd: saved.cwd || projectRoot || "",
+                    worktreeId: saved.worktreeId,
+                    location,
+                    requestedId: saved.id,
+                    command,
+                    isInputLocked: saved.isInputLocked,
+                  });
+                } else {
                   console.log(`[Hydration] Recreating ${kind} panel: ${saved.id}`);
 
-                  const location = (saved.location === "dock" ? "dock" : "grid") as "grid" | "dock";
                   const devCommandCandidate =
                     kind === "dev-preview" ? saved.devCommand?.trim() : undefined;
                   const devCommand =
@@ -194,10 +229,6 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
                     createdAt: saved.createdAt,
                     devCommand,
                   });
-                } else {
-                  console.log(
-                    `[Hydration] Skipping PTY panel ${saved.id} (no backend process found)`
-                  );
                 }
               }
             } catch (error) {

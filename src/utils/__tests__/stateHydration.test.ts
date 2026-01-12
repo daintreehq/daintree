@@ -206,13 +206,14 @@ describe("hydrateAppState", () => {
     );
   });
 
-  it("skips terminal panels when no backend process exists", async () => {
+  it("rehydrates terminal panels when no backend process exists", async () => {
     appClientMock.hydrate.mockResolvedValue({
       appState: {
         terminals: [
           {
             id: "terminal-1",
             kind: "terminal",
+            type: "terminal",
             title: "Terminal",
             cwd: "/project",
             location: "grid",
@@ -237,6 +238,65 @@ describe("hydrateAppState", () => {
       openDiagnosticsDock,
     });
 
-    expect(addTerminal).not.toHaveBeenCalled();
+    expect(addTerminal).toHaveBeenCalledTimes(1);
+    expect(addTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "terminal",
+        requestedId: "terminal-1",
+        cwd: "/project",
+        location: "grid",
+      })
+    );
+  });
+
+  it("rehydrates agent panels with regenerated commands", async () => {
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "agent-1",
+            kind: "agent",
+            type: "claude",
+            agentId: "claude",
+            title: "Claude",
+            cwd: "/project",
+            location: "grid",
+            command: "claude -p 'Old prompt'",
+          },
+        ],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings: {
+        agents: {
+          claude: {
+            customFlags: "--model sonnet-4",
+          },
+        },
+      },
+    });
+
+    const addTerminal = vi.fn().mockResolvedValue("agent-1");
+    const setActiveWorktree = vi.fn();
+    const loadRecipes = vi.fn().mockResolvedValue(undefined);
+    const openDiagnosticsDock = vi.fn();
+
+    await hydrateAppState({
+      addTerminal,
+      setActiveWorktree,
+      loadRecipes,
+      openDiagnosticsDock,
+    });
+
+    expect(addTerminal).toHaveBeenCalledTimes(1);
+    expect(addTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "agent",
+        agentId: "claude",
+        requestedId: "agent-1",
+        command: "claude --model sonnet-4",
+      })
+    );
   });
 });
