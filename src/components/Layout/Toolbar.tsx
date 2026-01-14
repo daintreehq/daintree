@@ -21,7 +21,6 @@ import {
   Plus,
   Settings2,
   Globe,
-  Clock,
   StickyNote,
   Rocket,
   Circle,
@@ -703,7 +702,6 @@ export function Toolbar({
               >
                 <AlertTriangle className="h-4 w-4" />
                 <span className="text-xs font-medium tabular-nums">{stats.issueCount ?? "?"}</span>
-                {isStale && <Clock className="h-3 w-3" />}
               </Button>
               <FixedDropdown
                 open={issuesOpen}
@@ -745,7 +743,6 @@ export function Toolbar({
               >
                 <GitPullRequest className="h-4 w-4" />
                 <span className="text-xs font-medium tabular-nums">{stats.prCount ?? "?"}</span>
-                {isStale && <Clock className="h-3 w-3" />}
               </Button>
               <FixedDropdown
                 open={prsOpen}
