@@ -702,13 +702,33 @@ export function normalizeKey(key: string): string {
 
 /**
  * Normalize a keyboard event to get the correct key for keybinding matching.
- * This handles Option/Alt modifiers on macOS that change characters (e.g., Option+/ becomes ÷).
+ * This handles Option/Alt modifiers on macOS that change characters (e.g., Option+/ becomes ÷, Option+P becomes π).
  * Use this function in both the keybinding matcher and the shortcut recorder to ensure consistency.
  */
 export function normalizeKeyForBinding(event: KeyboardEvent): string {
+  // Detect macOS
+  const isMac =
+    typeof navigator !== "undefined" &&
+    navigator.platform &&
+    navigator.platform.toUpperCase().indexOf("MAC") >= 0;
+
   // Prefer physical key code for punctuation (handles Option/Alt modifiers)
   if (event.code && CODE_TO_KEY[event.code]) {
     return CODE_TO_KEY[event.code];
+  }
+
+  // Handle letter keys when Alt is pressed on macOS only (Alt+P produces π instead of P)
+  // On Windows/Linux, AltGr (Right Alt) sets both altKey and ctrlKey, and we want to preserve
+  // the produced character for non-US layouts
+  // event.code for letters is like "KeyA", "KeyB", ..., "KeyP", etc.
+  if (isMac && event.altKey && event.code && event.code.startsWith("Key") && event.code.length === 4) {
+    return event.code.charAt(3).toUpperCase();
+  }
+
+  // Handle digit keys when Alt is pressed on macOS (Alt+1 produces ¡ instead of 1)
+  // event.code for digits is like "Digit0", "Digit1", ..., "Digit9"
+  if (isMac && event.altKey && event.code && event.code.startsWith("Digit") && event.code.length === 6) {
+    return event.code.charAt(5);
   }
 
   // Fallback to character-based normalization
@@ -906,15 +926,11 @@ class KeybindingService {
     // On macOS, reject unexpected Ctrl when not explicitly required
     if (isMac && !parsed.ctrl && event.ctrlKey) return false;
 
-    // Check key
-    const eventKey = normalizeKey(event.key);
+    // Check key - use normalizeKeyForBinding to handle Alt-modified characters
+    const eventKey = normalizeKeyForBinding(event);
 
-    // Try exact match on the produced character
+    // Try exact match on the normalized key
     if (eventKey.toLowerCase() === parsed.key.toLowerCase()) return true;
-
-    // Fallback: Try physical key code mapping
-    // This fixes issues where Option/Alt changes the character (e.g., Option+/ becomes ÷ on Mac)
-    if (event.code && CODE_TO_KEY[event.code] === parsed.key) return true;
 
     return false;
   }
@@ -966,7 +982,8 @@ class KeybindingService {
     if (!isMac && event.ctrlKey) parts.push("Cmd");
     if (event.shiftKey) parts.push("Shift");
     if (event.altKey) parts.push("Alt");
-    parts.push(normalizeKey(event.key));
+    // Use normalizeKeyForBinding to handle Alt-modified characters on macOS
+    parts.push(normalizeKeyForBinding(event));
 
     return parts.join("+");
   }
