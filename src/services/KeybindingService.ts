@@ -721,13 +721,25 @@ export function normalizeKeyForBinding(event: KeyboardEvent): string {
   // On Windows/Linux, AltGr (Right Alt) sets both altKey and ctrlKey, and we want to preserve
   // the produced character for non-US layouts
   // event.code for letters is like "KeyA", "KeyB", ..., "KeyP", etc.
-  if (isMac && event.altKey && event.code && event.code.startsWith("Key") && event.code.length === 4) {
+  if (
+    isMac &&
+    event.altKey &&
+    event.code &&
+    event.code.startsWith("Key") &&
+    event.code.length === 4
+  ) {
     return event.code.charAt(3).toUpperCase();
   }
 
   // Handle digit keys when Alt is pressed on macOS (Alt+1 produces ¡ instead of 1)
   // event.code for digits is like "Digit0", "Digit1", ..., "Digit9"
-  if (isMac && event.altKey && event.code && event.code.startsWith("Digit") && event.code.length === 6) {
+  if (
+    isMac &&
+    event.altKey &&
+    event.code &&
+    event.code.startsWith("Digit") &&
+    event.code.length === 6
+  ) {
     return event.code.charAt(5);
   }
 
