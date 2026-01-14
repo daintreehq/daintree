@@ -13,6 +13,7 @@ export const LIST_ISSUES_QUERY = `
   query GetIssues($owner: String!, $repo: String!, $states: [IssueState!], $cursor: String, $limit: Int = 20) {
     repository(owner: $owner, name: $repo) {
       issues(first: $limit, after: $cursor, states: $states, orderBy: {field: UPDATED_AT, direction: DESC}) {
+        totalCount
         pageInfo {
           hasNextPage
           endCursor
@@ -76,6 +77,7 @@ export const LIST_PRS_QUERY = `
   query GetPRs($owner: String!, $repo: String!, $states: [PullRequestState!], $cursor: String, $limit: Int = 20) {
     repository(owner: $owner, name: $repo) {
       pullRequests(first: $limit, after: $cursor, states: $states, orderBy: {field: UPDATED_AT, direction: DESC}) {
+        totalCount
         pageInfo {
           hasNextPage
           endCursor
