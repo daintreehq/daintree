@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useDndMonitor } from "@dnd-kit/core";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { cn } from "@/lib/utils";
+import { cn, getBaseTitle } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import {
   useTerminalInputStore,
@@ -171,6 +171,8 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   const commandText = terminal.activityHeadline || terminal.lastCommand;
   const brandColor = getBrandColorHex(terminal.type);
   const agentState = terminal.agentState;
+  // Use shortened title without command summary for dock items
+  const displayTitle = getBaseTitle(terminal.title);
   // Only show icon for non-idle, non-completed states (reduce noise)
   const showStateIcon = agentState && agentState !== "idle" && agentState !== "completed";
   const StateIcon = showStateIcon ? STATE_ICONS[agentState] : null;
@@ -191,6 +193,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
             )}
             onClick={() => setFocused(terminal.id)}
             title={`${terminal.title} - Click to preview, drag to reorder`}
+            aria-label={`${terminal.title} - Click to preview, drag to reorder`}
           >
             <div
               className={cn(
@@ -206,7 +209,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
               />
             </div>
             <span className="truncate shrink-0 min-w-[60px] max-w-[120px] font-sans font-medium">
-              {terminal.title}
+              {displayTitle}
             </span>
 
             {isActive && commandText && (
