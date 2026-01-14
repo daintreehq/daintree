@@ -34,7 +34,7 @@ export function GitHubStatusIndicator({
   return (
     <div
       className={cn(
-        "absolute bottom-0 left-0 right-0 h-[2px] rounded-b-[var(--radius-md)]",
+        "absolute bottom-0 left-0 right-0 h-[1px] rounded-b-[var(--radius-md)]",
         internalStatus === "loading" && "overflow-hidden github-status-loading",
         internalStatus === "success" && "github-status-success",
         internalStatus === "error" && "github-status-error"
