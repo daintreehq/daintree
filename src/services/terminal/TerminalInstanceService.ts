@@ -844,6 +844,10 @@ class TerminalInstanceService {
         for (const data of deferred) {
           this.writeToTerminal(id, data);
         }
+
+        if (!current.isAltBuffer) {
+          this.scrollToBottom(id);
+        }
       });
       return true;
     } catch (error) {
@@ -920,6 +924,10 @@ class TerminalInstanceService {
 
           for (const data of deferredData) {
             this.writeToTerminal(id, data);
+          }
+
+          if (!managed.isAltBuffer) {
+            this.scrollToBottom(id);
           }
         }
       }

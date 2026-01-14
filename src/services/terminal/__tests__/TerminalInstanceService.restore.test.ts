@@ -103,6 +103,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
           });
         }
       }),
+      scrollToBottom: vi.fn(),
       open: vi.fn(),
       dispose: vi.fn(),
       refresh: vi.fn(),
