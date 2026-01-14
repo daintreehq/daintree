@@ -9,7 +9,7 @@ import {
   Activity,
 } from "lucide-react";
 import type { PanelKind, TerminalType } from "@/types";
-import { cn } from "@/lib/utils";
+import { cn, getBaseTitle } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
@@ -92,6 +92,9 @@ function PanelHeaderComponent({
 
   // Get background activity stats for Zen Mode header
   const { activeCount, workingCount } = useBackgroundPanelStats(id);
+
+  // In dock, show shortened title without command summary for space efficiency
+  const displayTitle = location === "dock" ? getBaseTitle(title) : title;
 
   const handleHeaderDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
@@ -176,7 +179,7 @@ function PanelHeaderComponent({
                 title={onTitleChange ? `${title} — Double-click to edit` : title}
                 aria-label={onTitleChange ? getTitleAriaLabel() : undefined}
               >
-                {title}
+                {displayTitle}
               </span>
             </div>
           )}
