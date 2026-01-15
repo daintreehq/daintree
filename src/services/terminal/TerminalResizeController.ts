@@ -67,7 +67,15 @@ export class TerminalResizeController {
     if (!cellDims) return;
 
     const cols = managed.terminal.cols;
-    const exactWidth = Math.ceil(cols * cellDims.width);
+    const contentWidth = Math.ceil(cols * cellDims.width);
+
+    // Detect scrollbar width by querying the actual viewport element
+    // offsetWidth includes scrollbar, clientWidth excludes it
+    const viewport = managed.hostElement.querySelector(".xterm-viewport") as HTMLElement | null;
+    const scrollbarWidth = viewport ? viewport.offsetWidth - viewport.clientWidth : 0;
+
+    // Include scrollbar in total width to prevent gap
+    const exactWidth = contentWidth + scrollbarWidth;
     managed.hostElement.style.width = `${exactWidth}px`;
   }
 
