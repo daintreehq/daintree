@@ -119,7 +119,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     <AppDialog
       isOpen={isOpen}
       onClose={onClose}
-      size="sm"
+      size="md"
       variant="destructive"
       dismissible={!isDeleting}
     >
