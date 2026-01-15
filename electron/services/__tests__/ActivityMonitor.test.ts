@@ -542,7 +542,7 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
-    it("should enter busy after non-empty input even if prompt stays visible", () => {
+    it("should enter busy immediately after non-empty input (Issue #1638)", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
         getVisibleLines: () => ["> "],
@@ -555,12 +555,7 @@ describe("ActivityMonitor", () => {
       monitor.onInput("ls");
       monitor.onInput("\r");
 
-      vi.advanceTimersByTime(350);
-      expect(onStateChange).not.toHaveBeenCalledWith("test-1", 1000, "busy", {
-        trigger: "input",
-      });
-
-      vi.advanceTimersByTime(200);
+      // Non-empty Enter should immediately transition to busy (Issue #1638)
       expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", {
         trigger: "input",
       });

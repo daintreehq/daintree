@@ -413,11 +413,19 @@ export class ActivityMonitor {
       return;
     }
 
-    this.pendingInputWasNonEmpty = inputHadText;
-    const confirmMs = inputHadText
-      ? Math.min(this.INPUT_CONFIRM_MS, this.INPUT_CONFIRM_ACTIVE_MS)
-      : this.INPUT_CONFIRM_MS;
-    this.pendingInputUntil = now + confirmMs;
+    // For polling-enabled terminals: immediately transition to busy on Enter with non-empty input.
+    // This provides instant feedback when the user submits a command, rather than waiting for
+    // working signals or timeout confirmation. Empty Enter still uses the confirmation window
+    // to avoid false positives when the user presses Enter at a prompt without typing.
+    // Issue #1638
+    if (inputHadText) {
+      this.becomeBusy({ trigger: "input" }, now);
+      return;
+    }
+
+    // Empty input: use confirmation window to check if a prompt appears (no-op)
+    this.pendingInputWasNonEmpty = false;
+    this.pendingInputUntil = now + this.INPUT_CONFIRM_MS;
   }
 
   private splitTrailingEscapeSequence(data: string): {
