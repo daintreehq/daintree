@@ -152,7 +152,6 @@ export class ActivityMonitor {
   private readonly PROMPT_HISTORY_FALLBACK_MS = 3000;
   private readonly WORKING_HOLD_MS = 200;
   private readonly SPINNER_ACTIVE_MS = 1500;
-  private readonly INPUT_CONFIRM_ACTIVE_MS = 400;
   private inBracketedPaste = false;
   private partialEscape = "";
   private pasteStartTime = 0;
