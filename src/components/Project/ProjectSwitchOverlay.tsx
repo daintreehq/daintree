@@ -14,6 +14,7 @@ const MIN_DISPLAY_DURATION = 200;
 export function ProjectSwitchOverlay({ isSwitching, projectName }: ProjectSwitchOverlayProps) {
   const [isVisible, setIsVisible] = useState(false);
   const [shouldRender, setShouldRender] = useState(false);
+  const [cachedProjectName, setCachedProjectName] = useState<string | undefined>(undefined);
   const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const minDurationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rafRef = useRef<number | null>(null);
@@ -23,6 +24,9 @@ export function ProjectSwitchOverlay({ isSwitching, projectName }: ProjectSwitch
   useEffect(() => {
     if (isSwitching) {
       pendingCloseRef.current = false;
+      if (projectName) {
+        setCachedProjectName(projectName);
+      }
       if (closeTimeoutRef.current) {
         clearTimeout(closeTimeoutRef.current);
         closeTimeoutRef.current = null;
@@ -50,10 +54,12 @@ export function ProjectSwitchOverlay({ isSwitching, projectName }: ProjectSwitch
         const duration = getUiAnimationDuration();
         if (duration === 0) {
           setShouldRender(false);
+          setCachedProjectName(undefined);
         } else {
           closeTimeoutRef.current = setTimeout(() => {
             closeTimeoutRef.current = null;
             setShouldRender(false);
+            setCachedProjectName(undefined);
           }, duration);
         }
       };
@@ -86,7 +92,7 @@ export function ProjectSwitchOverlay({ isSwitching, projectName }: ProjectSwitch
         rafRef.current = null;
       }
     };
-  }, [isSwitching]);
+  }, [isSwitching, projectName]);
 
   if (!shouldRender) return null;
 
@@ -116,9 +122,15 @@ export function ProjectSwitchOverlay({ isSwitching, projectName }: ProjectSwitch
           aria-hidden="true"
         />
         <div>
-          <p className="text-sm font-medium text-canopy-text">Switching projects</p>
-          {projectName && (
-            <p className="text-xs text-canopy-text/60 mt-1">Loading {projectName}...</p>
+          {cachedProjectName ? (
+            <>
+              <p className="text-sm font-medium text-canopy-text">
+                Switching to {cachedProjectName}
+              </p>
+              <p className="text-xs text-canopy-text/60 mt-1">Loading workspace...</p>
+            </>
+          ) : (
+            <p className="text-sm font-medium text-canopy-text">Switching projects</p>
           )}
         </div>
       </div>

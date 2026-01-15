@@ -16,6 +16,7 @@ interface ProjectState {
   currentProject: Project | null;
   isLoading: boolean;
   isSwitching: boolean;
+  switchingToProjectName: string | null;
   error: string | null;
 
   loadProjects: () => Promise<void>;
@@ -72,6 +73,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   currentProject: null,
   isLoading: false,
   isSwitching: false,
+  switchingToProjectName: null,
   error: null,
 
   addProjectByPath: async (path) => {
@@ -165,7 +167,13 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   },
 
   switchProject: async (projectId) => {
-    set({ isLoading: true, isSwitching: true, error: null });
+    const targetProject = get().projects.find((p) => p.id === projectId);
+    set({
+      isLoading: true,
+      isSwitching: true,
+      switchingToProjectName: targetProject?.name ?? null,
+      error: null,
+    });
     try {
       const currentProject = get().currentProject;
       const oldProjectId = currentProject?.id;
@@ -261,7 +269,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         message,
         duration: 6000,
       });
-      set({ error: message, isLoading: false, isSwitching: false });
+      set({ error: message, isLoading: false, isSwitching: false, switchingToProjectName: null });
     }
   },
 
@@ -325,14 +333,22 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   },
 
   reopenProject: async (projectId) => {
-    set({ isLoading: true, isSwitching: true, error: null });
+    const targetProject = get().projects.find((p) => p.id === projectId);
+    set({
+      isLoading: true,
+      isSwitching: true,
+      switchingToProjectName: targetProject?.name ?? null,
+      error: null,
+    });
     try {
       const currentProject = get().currentProject;
       const oldProjectId = currentProject?.id;
 
       // Save current project's panel state BEFORE switching (same as switchProject)
       if (oldProjectId) {
+        // Flush any pending persistence and wait for completion
         flushTerminalPersistence();
+        await terminalPersistence.whenIdle();
 
         // Get current terminals from store and save to per-project state
         const currentTerminals = useTerminalStore.getState().terminals;
@@ -407,13 +423,13 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     } catch (error) {
       console.error("Failed to reopen project:", error);
       const message = getProjectOpenErrorMessage(error);
-      set({ error: message, isLoading: false, isSwitching: false });
+      set({ error: message, isLoading: false, isSwitching: false, switchingToProjectName: null });
       throw error;
     }
   },
 
   finishProjectSwitch: () => {
-    set({ isSwitching: false });
+    set({ isSwitching: false, switchingToProjectName: null });
   },
 });
 
