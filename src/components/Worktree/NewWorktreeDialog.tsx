@@ -77,6 +77,7 @@ export function NewWorktreeDialog({
   );
   const githubConfig = useGitHubConfigStore((s) => s.config);
   const initializeGitHubConfig = useGitHubConfigStore((s) => s.initialize);
+  const refreshGitHubConfig = useGitHubConfigStore((s) => s.refresh);
   const addNotification = useNotificationStore((s) => s.addNotification);
   const { recipes, runRecipe, loadRecipes } = useRecipeStore();
   const currentProject = useProjectStore((s) => s.currentProject);
@@ -96,6 +97,13 @@ export function NewWorktreeDialog({
   useEffect(() => {
     initializeGitHubConfig();
   }, [initializeGitHubConfig]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    if (githubConfig?.hasToken && !githubConfig.username) {
+      refreshGitHubConfig();
+    }
+  }, [isOpen, githubConfig?.hasToken, githubConfig?.username, refreshGitHubConfig]);
 
   useEffect(() => {
     if (isOpen && currentProject) {
