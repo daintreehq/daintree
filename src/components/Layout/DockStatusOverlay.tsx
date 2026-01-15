@@ -9,12 +9,14 @@ interface DockStatusOverlayProps {
   waitingCount: number;
   failedCount: number;
   trashedCount: number;
+  shouldFadeForInput?: boolean;
 }
 
 export function DockStatusOverlay({
   waitingCount,
   failedCount,
   trashedCount,
+  shouldFadeForInput = false,
 }: DockStatusOverlayProps) {
   const hasAny = waitingCount > 0 || failedCount > 0 || trashedCount > 0;
 
@@ -43,7 +45,8 @@ export function DockStatusOverlay({
         "border border-[var(--dock-border)]/60",
         "shadow-lg",
         "transition-[opacity,background-color,border-color] duration-200",
-        "opacity-85 hover:opacity-100 focus-within:opacity-100",
+        shouldFadeForInput ? "opacity-30" : "opacity-85",
+        "hover:opacity-100 focus-within:opacity-100",
         "hover:bg-[var(--dock-bg)]/95 hover:border-[var(--dock-border)]",
         "focus-within:bg-[var(--dock-bg)]/95 focus-within:border-[var(--dock-border)]"
       )}

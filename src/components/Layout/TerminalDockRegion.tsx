@@ -17,6 +17,7 @@ export function TerminalDockRegion() {
     waitingCount,
     failedCount,
     trashedCount,
+    shouldFadeForInput,
   } = useDockRenderState();
 
   const setMode = useDockStore((state) => state.setMode);
@@ -44,6 +45,7 @@ export function TerminalDockRegion() {
           waitingCount={waitingCount}
           failedCount={failedCount}
           trashedCount={trashedCount}
+          shouldFadeForInput={shouldFadeForInput}
         />
       )}
 

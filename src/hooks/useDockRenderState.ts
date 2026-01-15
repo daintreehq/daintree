@@ -1,8 +1,10 @@
 import { useMemo, useEffect } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useTerminalStore, useWorktreeSelectionStore, useDockStore } from "@/store";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useIsDragging } from "@/components/DragDrop";
 import { useTerminalNotificationCounts } from "@/hooks/useTerminalSelectors";
+import { isAgentTerminal } from "@/utils/terminalType";
 import type { DockRenderState, DockMode } from "@shared/types";
 
 /**
@@ -18,6 +20,7 @@ export function useDockRenderState(): DockRenderState & {
   waitingCount: number;
   failedCount: number;
   trashedCount: number;
+  shouldFadeForInput: boolean;
 } {
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const isDragging = useIsDragging();
@@ -45,6 +48,17 @@ export function useDockRenderState(): DockRenderState & {
   const trashedCount = useTerminalStore(useShallow((state) => state.trashedTerminals.size));
 
   const { waitingCount, failedCount } = useTerminalNotificationCounts();
+
+  const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
+
+  const shouldFadeForInput = useTerminalStore(
+    useShallow((state) => {
+      if (!hybridInputEnabled) return false;
+      const focusedTerminal = state.terminals.find((t) => t.id === state.focusedId);
+      if (!focusedTerminal) return false;
+      return isAgentTerminal(focusedTerminal.kind ?? focusedTerminal.type, focusedTerminal.agentId);
+    })
+  );
 
   const hasDocked = dockTerminals.length > 0;
   const dockedCount = dockTerminals.length;
@@ -119,5 +133,6 @@ export function useDockRenderState(): DockRenderState & {
     waitingCount,
     failedCount,
     trashedCount,
+    shouldFadeForInput,
   };
 }
