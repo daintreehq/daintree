@@ -600,6 +600,32 @@ function mapIssueStates(state?: string): string[] {
   return ["OPEN"];
 }
 
+function updateRepoStatsCount(cacheKey: string, type: "issue" | "pr", count: number): void {
+  const cached = repoStatsCache.get(cacheKey);
+  if (cached) {
+    const updated: RepoStats = {
+      ...cached,
+      lastUpdated: Date.now(),
+    };
+    if (type === "issue") {
+      updated.issueCount = count;
+    } else {
+      updated.prCount = count;
+    }
+    repoStatsCache.set(cacheKey, updated);
+  } else {
+    const persistentCache = GitHubStatsCache.getInstance();
+    const diskCached = persistentCache.get(cacheKey);
+
+    const newStats: RepoStats = {
+      issueCount: type === "issue" ? count : (diskCached?.issueCount ?? 0),
+      prCount: type === "pr" ? count : (diskCached?.prCount ?? 0),
+      lastUpdated: Date.now(),
+    };
+    repoStatsCache.set(cacheKey, newStats);
+  }
+}
+
 function mapPRStates(state?: string): string[] {
   if (!state || state === "open") return ["OPEN"];
   if (state === "closed") return ["CLOSED"];
@@ -780,6 +806,7 @@ export async function listIssues(
 
       const issues = response?.repository?.issues;
       const nodes = (issues?.nodes ?? []) as Array<Record<string, unknown>>;
+      const totalCount = (issues?.totalCount as number) ?? undefined;
 
       result = {
         items: nodes.filter(Boolean).map(parseIssueNode),
@@ -790,6 +817,30 @@ export async function listIssues(
       };
 
       issueListCache.set(cacheKey, result);
+
+      // Sync totalCount to repoStatsCache when fetching open issues (first page only)
+      if (
+        (!options.state || options.state === "open") &&
+        !options.cursor &&
+        totalCount !== undefined
+      ) {
+        const statsCacheKey = `${context.owner}/${context.repo}`;
+        updateRepoStatsCount(statsCacheKey, "issue", totalCount);
+
+        // Also update persistent cache if we have both counts in memory
+        const memoryStats = repoStatsCache.get(statsCacheKey);
+        if (memoryStats && memoryStats.issueCount > 0 && memoryStats.prCount > 0) {
+          const persistentCache = GitHubStatsCache.getInstance();
+          persistentCache.set(
+            statsCacheKey,
+            {
+              issueCount: memoryStats.issueCount,
+              prCount: memoryStats.prCount,
+            },
+            options.cwd
+          );
+        }
+      }
     }
 
     return result;
@@ -867,6 +918,7 @@ export async function listPullRequests(
 
       const pullRequests = response?.repository?.pullRequests;
       const nodes = (pullRequests?.nodes ?? []) as Array<Record<string, unknown>>;
+      const totalCount = (pullRequests?.totalCount as number) ?? undefined;
 
       result = {
         items: nodes.filter(Boolean).map(parsePRNode),
@@ -877,6 +929,30 @@ export async function listPullRequests(
       };
 
       prListCache.set(cacheKey, result);
+
+      // Sync totalCount to repoStatsCache when fetching open PRs (first page only)
+      if (
+        (!options.state || options.state === "open") &&
+        !options.cursor &&
+        totalCount !== undefined
+      ) {
+        const statsCacheKey = `${context.owner}/${context.repo}`;
+        updateRepoStatsCount(statsCacheKey, "pr", totalCount);
+
+        // Also update persistent cache if we have both counts in memory
+        const memoryStats = repoStatsCache.get(statsCacheKey);
+        if (memoryStats && memoryStats.issueCount > 0 && memoryStats.prCount > 0) {
+          const persistentCache = GitHubStatsCache.getInstance();
+          persistentCache.set(
+            statsCacheKey,
+            {
+              issueCount: memoryStats.issueCount,
+              prCount: memoryStats.prCount,
+            },
+            options.cwd
+          );
+        }
+      }
     }
 
     return result;
