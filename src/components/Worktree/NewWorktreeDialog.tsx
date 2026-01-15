@@ -22,12 +22,7 @@ import { IssueSelector } from "@/components/GitHub/IssueSelector";
 import { generateBranchSlug } from "@/utils/textParsing";
 import { BRANCH_TYPES } from "@shared/config/branchPrefixes";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { toBranchOption, filterBranches, type BranchOption } from "./branchPickerUtils";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -547,434 +542,446 @@ export function NewWorktreeDialog({
                 />
               </div>
 
-            {/* Assignment control - only show when issue is selected and GitHub auth available */}
-            {canAssignIssue && (
-              <div className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border bg-canopy-bg/50 border-canopy-border transition-colors">
-                {currentUserAvatar ? (
-                  <img
-                    src={`${currentUserAvatar}${currentUserAvatar.includes("?") ? "&" : "?"}s=64`}
-                    alt={currentUser}
-                    className="w-8 h-8 rounded-full shrink-0"
-                  />
-                ) : (
-                  <div className="flex items-center justify-center w-8 h-8 rounded-full shrink-0 bg-canopy-accent/10 text-canopy-accent">
-                    <UserPlus className="w-4 h-4" />
-                  </div>
-                )}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-canopy-text">Assign to me</span>
-                    <span className="text-xs text-canopy-text/50 font-mono">@{currentUser}</span>
-                  </div>
-                </div>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={assignWorktreeToSelf}
-                    onChange={(e) => setAssignWorktreeToSelf(e.target.checked)}
-                    disabled={creating}
-                    className="sr-only peer"
-                    aria-label="Assign issue to me when creating worktree"
-                  />
-                  <div
-                    className={cn(
-                      "w-9 h-5 rounded-full transition-colors",
-                      "peer-focus-visible:ring-2 peer-focus-visible:ring-canopy-accent",
-                      "after:content-[''] after:absolute after:top-0.5 after:left-0.5",
-                      "after:bg-white after:rounded-full after:h-4 after:w-4",
-                      "after:transition-transform after:duration-200",
-                      assignWorktreeToSelf
-                        ? "bg-canopy-accent after:translate-x-4"
-                        : "bg-canopy-border after:translate-x-0",
-                      creating && "opacity-50 cursor-not-allowed"
-                    )}
-                  />
-                </label>
-              </div>
-            )}
-
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <label htmlFor="base-branch" className="block text-sm font-medium text-canopy-text">
-                  Base Branch
-                </label>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      className="text-canopy-text/40 hover:text-canopy-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent focus-visible:ring-offset-2"
-                      aria-label="Help for Base Branch field"
-                      disabled={creating}
-                    >
-                      <Info className="w-3.5 h-3.5" aria-hidden="true" />
-                      <span className="sr-only">Help for Base Branch field</span>
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="right">
-                    <p>The branch to create the new worktree from</p>
-                  </TooltipContent>
-                </Tooltip>
-              </div>
-              <Popover open={branchPickerOpen} onOpenChange={setBranchPickerOpen}>
-                <PopoverTrigger asChild>
-                  <Button
-                    id="base-branch"
-                    variant="outline"
-                    role="combobox"
-                    aria-expanded={branchPickerOpen}
-                    aria-haspopup="listbox"
-                    className="w-full justify-between bg-canopy-bg border-canopy-border text-canopy-text hover:bg-canopy-bg hover:text-canopy-text"
-                    disabled={creating}
-                  >
-                    <span className="truncate">
-                      {selectedBranchOption?.labelText || "Select base branch..."}
-                    </span>
-                    <ChevronsUpDown className="h-4 w-4 opacity-50 shrink-0 ml-2" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-[400px] p-0" align="start">
-                  <div className="flex items-center border-b border-canopy-border px-3">
-                    <Search className="mr-2 h-4 w-4 opacity-50 shrink-0" />
-                    <input
-                      ref={branchInputRef}
-                      className="flex h-10 w-full rounded-[var(--radius-md)] bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                      placeholder="Search branches..."
-                      value={branchQuery}
-                      onChange={(e) => setBranchQuery(e.target.value)}
-                      onKeyDown={handleBranchKeyDown}
-                      role="combobox"
-                      aria-label="Search base branches"
-                      aria-autocomplete="list"
-                      aria-controls="branch-list"
-                      aria-expanded={branchPickerOpen}
-                      aria-activedescendant={
-                        filteredBranches.length > 0 && selectedIndex >= 0
-                          ? `branch-option-${selectedIndex}`
-                          : undefined
-                      }
+              {/* Assignment control - only show when issue is selected and GitHub auth available */}
+              {canAssignIssue && (
+                <div className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border bg-canopy-bg/50 border-canopy-border transition-colors">
+                  {currentUserAvatar ? (
+                    <img
+                      src={`${currentUserAvatar}${currentUserAvatar.includes("?") ? "&" : "?"}s=64`}
+                      alt={currentUser}
+                      className="w-8 h-8 rounded-full shrink-0"
                     />
-                  </div>
-                  <div
-                    ref={branchListRef}
-                    id="branch-list"
-                    role="listbox"
-                    className="max-h-[300px] overflow-y-auto p-1"
-                  >
-                    {filteredBranches.length === 0 ? (
-                      <div className="py-6 text-center text-sm text-muted-foreground">
-                        {branchQuery ? "No branches found" : "No branches available"}
-                      </div>
-                    ) : (
-                      filteredBranches.map((option, index) => (
-                        <div
-                          key={option.name}
-                          id={`branch-option-${index}`}
-                          role="option"
-                          aria-selected={option.name === baseBranch}
-                          onClick={() => handleBranchSelect(option)}
-                          className={cn(
-                            "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
-                            option.name === baseBranch && "bg-canopy-border",
-                            index === selectedIndex && "bg-canopy-accent/10"
-                          )}
-                        >
-                          <span className="truncate">{option.labelText}</span>
-                          {option.name === baseBranch && (
-                            <Check className="h-4 w-4 shrink-0 text-canopy-accent" />
-                          )}
-                        </div>
-                      ))
-                    )}
-                  </div>
-                  {!branchQuery && filteredBranches.length >= 200 && (
-                    <div className="border-t border-canopy-border px-3 py-2 text-xs text-canopy-text/60">
-                      Showing first 200 branches. Type to narrow results.
+                  ) : (
+                    <div className="flex items-center justify-center w-8 h-8 rounded-full shrink-0 bg-canopy-accent/10 text-canopy-accent">
+                      <UserPlus className="w-4 h-4" />
                     </div>
                   )}
-                </PopoverContent>
-              </Popover>
-            </div>
-
-            <div className="space-y-2">
-              <label htmlFor="new-branch" className="block text-sm font-medium text-canopy-text">
-                New Branch Name
-              </label>
-              <div className="flex gap-2 items-center">
-                <div className="relative shrink-0">
-                  <select
-                    value={selectedPrefix}
-                    onChange={(e) => setSelectedPrefix(e.target.value)}
-                    className="appearance-none h-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text text-sm focus:outline-none focus:ring-2 focus:ring-canopy-accent pr-8"
-                    disabled={creating}
-                  >
-                    {BRANCH_TYPES.map((type) => (
-                      <option key={type.id} value={type.prefix}>
-                        {type.displayName}
-                      </option>
-                    ))}
-                  </select>
-                  <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-canopy-text/40">
-                    <ChevronDown className="w-4 h-4" />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-canopy-text">Assign to me</span>
+                      <span className="text-xs text-canopy-text/50 font-mono">@{currentUser}</span>
+                    </div>
                   </div>
-                </div>
-
-                <span className="text-canopy-text/40 font-mono">/</span>
-
-                <input
-                  ref={newBranchInputRef}
-                  id="new-branch"
-                  type="text"
-                  value={newBranch}
-                  onChange={(e) => setNewBranch(e.target.value)}
-                  placeholder="my-awesome-feature"
-                  className="flex-1 px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
-                  disabled={creating}
-                  aria-describedby={branchWasAutoResolved ? "branch-resolved-hint" : undefined}
-                />
-              </div>
-              <p className="text-xs text-canopy-text/60">
-                Full branch:{" "}
-                <span className="font-mono text-canopy-accent">
-                  {selectedPrefix}/{newBranch || "..."}
-                </span>
-              </p>
-              {branchWasAutoResolved && (
-                <p
-                  id="branch-resolved-hint"
-                  className="text-xs text-green-500 flex items-center gap-1.5 mt-1"
-                  role="status"
-                  aria-live="polite"
-                >
-                  <Info className="w-3.5 h-3.5" aria-hidden="true" />
-                  Name auto-incremented to avoid conflict with existing branch
-                </p>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <label htmlFor="worktree-path" className="block text-sm font-medium text-canopy-text">
-                  Worktree Path
-                </label>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      className="text-canopy-text/40 hover:text-canopy-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent focus-visible:ring-offset-2"
-                      aria-label="Help for Worktree Path field"
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={assignWorktreeToSelf}
+                      onChange={(e) => setAssignWorktreeToSelf(e.target.checked)}
                       disabled={creating}
-                    >
-                      <Info className="w-3.5 h-3.5" aria-hidden="true" />
-                      <span className="sr-only">Help for Worktree Path field</span>
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="right">
-                    <p>Directory where the worktree will be created</p>
-                  </TooltipContent>
-                </Tooltip>
-              </div>
-              <div className="flex gap-2 items-center">
-                <input
-                  id="worktree-path"
-                  type="text"
-                  value={worktreePath}
-                  onChange={(e) => setWorktreePath(e.target.value)}
-                  placeholder="/path/to/worktree"
-                  className="flex-1 px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
-                  disabled={creating}
-                />
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={async () => {
-                    try {
-                      const result = await actionService.dispatch("project.openDialog", undefined, {
-                        source: "user",
-                      });
-                      if (result.ok && result.result) {
-                        setWorktreePath(result.result as string);
-                        setError(null);
-                      }
-                    } catch (err: unknown) {
-                      console.error("Failed to open directory picker:", err);
-                      const message = err instanceof Error ? err.message : "Unknown error";
-                      setError(`Failed to open directory picker: ${message}`);
-                    }
-                  }}
-                  disabled={creating}
-                >
-                  <FolderOpen className="w-4 h-4" />
-                </Button>
-              </div>
-              {pathWasAutoResolved && (
-                <p
-                  className="text-xs text-green-500 flex items-center gap-1.5 mt-1"
-                  role="status"
-                  aria-live="polite"
-                >
-                  <Info className="w-3.5 h-3.5" aria-hidden="true" />
-                  Path auto-incremented to avoid conflict with existing directory
-                </p>
+                      className="sr-only peer"
+                      aria-label="Assign issue to me when creating worktree"
+                    />
+                    <div
+                      className={cn(
+                        "w-9 h-5 rounded-full transition-colors",
+                        "peer-focus-visible:ring-2 peer-focus-visible:ring-canopy-accent",
+                        "after:content-[''] after:absolute after:top-0.5 after:left-0.5",
+                        "after:bg-white after:rounded-full after:h-4 after:w-4",
+                        "after:transition-transform after:duration-200",
+                        assignWorktreeToSelf
+                          ? "bg-canopy-accent after:translate-x-4"
+                          : "bg-canopy-border after:translate-x-0",
+                        creating && "opacity-50 cursor-not-allowed"
+                      )}
+                    />
+                  </label>
+                </div>
               )}
-            </div>
 
-            <div className="flex items-center gap-2">
-              <input
-                id="from-remote"
-                type="checkbox"
-                checked={fromRemote}
-                onChange={(e) => setFromRemote(e.target.checked)}
-                className="rounded border-canopy-border text-canopy-accent focus:ring-canopy-accent"
-                disabled={creating}
-              />
-              <label htmlFor="from-remote" className="text-sm text-canopy-text select-none">
-                Create from remote branch
-              </label>
-            </div>
-
-            {globalRecipes.length > 0 && (
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
                   <label
-                    htmlFor="recipe-selector"
+                    htmlFor="base-branch"
                     className="block text-sm font-medium text-canopy-text"
                   >
-                    Run Recipe (Optional)
+                    Base Branch
                   </label>
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <button
                         type="button"
                         className="text-canopy-text/40 hover:text-canopy-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent focus-visible:ring-offset-2"
-                        aria-label="Help for Run Recipe field"
+                        aria-label="Help for Base Branch field"
                         disabled={creating}
                       >
                         <Info className="w-3.5 h-3.5" aria-hidden="true" />
-                        <span className="sr-only">Help for Run Recipe field</span>
+                        <span className="sr-only">Help for Base Branch field</span>
                       </button>
                     </TooltipTrigger>
                     <TooltipContent side="right">
-                      <p>Select a recipe to run after creating the worktree</p>
+                      <p>The branch to create the new worktree from</p>
                     </TooltipContent>
                   </Tooltip>
                 </div>
-                <Popover open={recipePickerOpen} onOpenChange={setRecipePickerOpen}>
+                <Popover open={branchPickerOpen} onOpenChange={setBranchPickerOpen}>
                   <PopoverTrigger asChild>
                     <Button
-                      id="recipe-selector"
+                      id="base-branch"
                       variant="outline"
                       role="combobox"
-                      aria-expanded={recipePickerOpen}
+                      aria-expanded={branchPickerOpen}
                       aria-haspopup="listbox"
-                      aria-controls="recipe-list"
                       className="w-full justify-between bg-canopy-bg border-canopy-border text-canopy-text hover:bg-canopy-bg hover:text-canopy-text"
                       disabled={creating}
                     >
-                      <span className="flex items-center gap-2 truncate">
-                        <Play className="w-4 h-4 shrink-0 text-canopy-accent" />
-                        {selectedRecipe ? (
-                          <>
-                            <span>{selectedRecipe.name}</span>
-                            <span className="text-xs text-canopy-text/50">
-                              ({selectedRecipe.terminals.length} terminal
-                              {selectedRecipe.terminals.length !== 1 ? "s" : ""})
-                            </span>
-                          </>
-                        ) : (
-                          <span className="text-canopy-text/60">No recipe</span>
-                        )}
+                      <span className="truncate">
+                        {selectedBranchOption?.labelText || "Select base branch..."}
                       </span>
                       <ChevronsUpDown className="h-4 w-4 opacity-50 shrink-0 ml-2" />
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className="w-[400px] p-0" align="start">
+                    <div className="flex items-center border-b border-canopy-border px-3">
+                      <Search className="mr-2 h-4 w-4 opacity-50 shrink-0" />
+                      <input
+                        ref={branchInputRef}
+                        className="flex h-10 w-full rounded-[var(--radius-md)] bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                        placeholder="Search branches..."
+                        value={branchQuery}
+                        onChange={(e) => setBranchQuery(e.target.value)}
+                        onKeyDown={handleBranchKeyDown}
+                        role="combobox"
+                        aria-label="Search base branches"
+                        aria-autocomplete="list"
+                        aria-controls="branch-list"
+                        aria-expanded={branchPickerOpen}
+                        aria-activedescendant={
+                          filteredBranches.length > 0 && selectedIndex >= 0
+                            ? `branch-option-${selectedIndex}`
+                            : undefined
+                        }
+                      />
+                    </div>
                     <div
-                      id="recipe-list"
+                      ref={branchListRef}
+                      id="branch-list"
                       role="listbox"
                       className="max-h-[300px] overflow-y-auto p-1"
                     >
-                      <div
-                        role="option"
-                        aria-selected={selectedRecipeId === null}
-                        tabIndex={0}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" || event.key === " ") {
-                            event.preventDefault();
-                            recipeSelectionTouchedRef.current = true;
-                            setSelectedRecipeId(null);
-                            setLastSelectedWorktreeRecipeId(null);
-                            setRecipePickerOpen(false);
-                          }
-                        }}
-                        onClick={() => {
-                          recipeSelectionTouchedRef.current = true;
-                          setSelectedRecipeId(null);
-                          setLastSelectedWorktreeRecipeId(null);
-                          setRecipePickerOpen(false);
-                        }}
-                        className={cn(
-                          "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
-                          selectedRecipeId === null && "bg-canopy-border"
-                        )}
-                      >
-                        <span className="text-canopy-text/60">No recipe</span>
-                        {selectedRecipeId === null && (
-                          <Check className="h-4 w-4 shrink-0 text-canopy-accent" />
-                        )}
+                      {filteredBranches.length === 0 ? (
+                        <div className="py-6 text-center text-sm text-muted-foreground">
+                          {branchQuery ? "No branches found" : "No branches available"}
+                        </div>
+                      ) : (
+                        filteredBranches.map((option, index) => (
+                          <div
+                            key={option.name}
+                            id={`branch-option-${index}`}
+                            role="option"
+                            aria-selected={option.name === baseBranch}
+                            onClick={() => handleBranchSelect(option)}
+                            className={cn(
+                              "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
+                              option.name === baseBranch && "bg-canopy-border",
+                              index === selectedIndex && "bg-canopy-accent/10"
+                            )}
+                          >
+                            <span className="truncate">{option.labelText}</span>
+                            {option.name === baseBranch && (
+                              <Check className="h-4 w-4 shrink-0 text-canopy-accent" />
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                    {!branchQuery && filteredBranches.length >= 200 && (
+                      <div className="border-t border-canopy-border px-3 py-2 text-xs text-canopy-text/60">
+                        Showing first 200 branches. Type to narrow results.
                       </div>
-                      {globalRecipes.map((recipe) => (
+                    )}
+                  </PopoverContent>
+                </Popover>
+              </div>
+
+              <div className="space-y-2">
+                <label htmlFor="new-branch" className="block text-sm font-medium text-canopy-text">
+                  New Branch Name
+                </label>
+                <div className="flex gap-2 items-center">
+                  <div className="relative shrink-0">
+                    <select
+                      value={selectedPrefix}
+                      onChange={(e) => setSelectedPrefix(e.target.value)}
+                      className="appearance-none h-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text text-sm focus:outline-none focus:ring-2 focus:ring-canopy-accent pr-8"
+                      disabled={creating}
+                    >
+                      {BRANCH_TYPES.map((type) => (
+                        <option key={type.id} value={type.prefix}>
+                          {type.displayName}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-canopy-text/40">
+                      <ChevronDown className="w-4 h-4" />
+                    </div>
+                  </div>
+
+                  <span className="text-canopy-text/40 font-mono">/</span>
+
+                  <input
+                    ref={newBranchInputRef}
+                    id="new-branch"
+                    type="text"
+                    value={newBranch}
+                    onChange={(e) => setNewBranch(e.target.value)}
+                    placeholder="my-awesome-feature"
+                    className="flex-1 px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
+                    disabled={creating}
+                    aria-describedby={branchWasAutoResolved ? "branch-resolved-hint" : undefined}
+                  />
+                </div>
+                <p className="text-xs text-canopy-text/60">
+                  Full branch:{" "}
+                  <span className="font-mono text-canopy-accent">
+                    {selectedPrefix}/{newBranch || "..."}
+                  </span>
+                </p>
+                {branchWasAutoResolved && (
+                  <p
+                    id="branch-resolved-hint"
+                    className="text-xs text-green-500 flex items-center gap-1.5 mt-1"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    <Info className="w-3.5 h-3.5" aria-hidden="true" />
+                    Name auto-incremented to avoid conflict with existing branch
+                  </p>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <label
+                    htmlFor="worktree-path"
+                    className="block text-sm font-medium text-canopy-text"
+                  >
+                    Worktree Path
+                  </label>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className="text-canopy-text/40 hover:text-canopy-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent focus-visible:ring-offset-2"
+                        aria-label="Help for Worktree Path field"
+                        disabled={creating}
+                      >
+                        <Info className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span className="sr-only">Help for Worktree Path field</span>
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="right">
+                      <p>Directory where the worktree will be created</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+                <div className="flex gap-2 items-center">
+                  <input
+                    id="worktree-path"
+                    type="text"
+                    value={worktreePath}
+                    onChange={(e) => setWorktreePath(e.target.value)}
+                    placeholder="/path/to/worktree"
+                    className="flex-1 px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
+                    disabled={creating}
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={async () => {
+                      try {
+                        const result = await actionService.dispatch(
+                          "project.openDialog",
+                          undefined,
+                          {
+                            source: "user",
+                          }
+                        );
+                        if (result.ok && result.result) {
+                          setWorktreePath(result.result as string);
+                          setError(null);
+                        }
+                      } catch (err: unknown) {
+                        console.error("Failed to open directory picker:", err);
+                        const message = err instanceof Error ? err.message : "Unknown error";
+                        setError(`Failed to open directory picker: ${message}`);
+                      }
+                    }}
+                    disabled={creating}
+                  >
+                    <FolderOpen className="w-4 h-4" />
+                  </Button>
+                </div>
+                {pathWasAutoResolved && (
+                  <p
+                    className="text-xs text-green-500 flex items-center gap-1.5 mt-1"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    <Info className="w-3.5 h-3.5" aria-hidden="true" />
+                    Path auto-incremented to avoid conflict with existing directory
+                  </p>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2">
+                <input
+                  id="from-remote"
+                  type="checkbox"
+                  checked={fromRemote}
+                  onChange={(e) => setFromRemote(e.target.checked)}
+                  className="rounded border-canopy-border text-canopy-accent focus:ring-canopy-accent"
+                  disabled={creating}
+                />
+                <label htmlFor="from-remote" className="text-sm text-canopy-text select-none">
+                  Create from remote branch
+                </label>
+              </div>
+
+              {globalRecipes.length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <label
+                      htmlFor="recipe-selector"
+                      className="block text-sm font-medium text-canopy-text"
+                    >
+                      Run Recipe (Optional)
+                    </label>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          className="text-canopy-text/40 hover:text-canopy-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent focus-visible:ring-offset-2"
+                          aria-label="Help for Run Recipe field"
+                          disabled={creating}
+                        >
+                          <Info className="w-3.5 h-3.5" aria-hidden="true" />
+                          <span className="sr-only">Help for Run Recipe field</span>
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="right">
+                        <p>Select a recipe to run after creating the worktree</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                  <Popover open={recipePickerOpen} onOpenChange={setRecipePickerOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        id="recipe-selector"
+                        variant="outline"
+                        role="combobox"
+                        aria-expanded={recipePickerOpen}
+                        aria-haspopup="listbox"
+                        aria-controls="recipe-list"
+                        className="w-full justify-between bg-canopy-bg border-canopy-border text-canopy-text hover:bg-canopy-bg hover:text-canopy-text"
+                        disabled={creating}
+                      >
+                        <span className="flex items-center gap-2 truncate">
+                          <Play className="w-4 h-4 shrink-0 text-canopy-accent" />
+                          {selectedRecipe ? (
+                            <>
+                              <span>{selectedRecipe.name}</span>
+                              <span className="text-xs text-canopy-text/50">
+                                ({selectedRecipe.terminals.length} terminal
+                                {selectedRecipe.terminals.length !== 1 ? "s" : ""})
+                              </span>
+                            </>
+                          ) : (
+                            <span className="text-canopy-text/60">No recipe</span>
+                          )}
+                        </span>
+                        <ChevronsUpDown className="h-4 w-4 opacity-50 shrink-0 ml-2" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[400px] p-0" align="start">
+                      <div
+                        id="recipe-list"
+                        role="listbox"
+                        className="max-h-[300px] overflow-y-auto p-1"
+                      >
                         <div
-                          key={recipe.id}
                           role="option"
-                          aria-selected={recipe.id === selectedRecipeId}
+                          aria-selected={selectedRecipeId === null}
                           tabIndex={0}
                           onKeyDown={(event) => {
                             if (event.key === "Enter" || event.key === " ") {
                               event.preventDefault();
                               recipeSelectionTouchedRef.current = true;
-                              setSelectedRecipeId(recipe.id);
-                              setLastSelectedWorktreeRecipeId(recipe.id);
+                              setSelectedRecipeId(null);
+                              setLastSelectedWorktreeRecipeId(null);
                               setRecipePickerOpen(false);
                             }
                           }}
                           onClick={() => {
                             recipeSelectionTouchedRef.current = true;
-                            setSelectedRecipeId(recipe.id);
-                            setLastSelectedWorktreeRecipeId(recipe.id);
+                            setSelectedRecipeId(null);
+                            setLastSelectedWorktreeRecipeId(null);
                             setRecipePickerOpen(false);
                           }}
                           className={cn(
                             "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
-                            recipe.id === selectedRecipeId && "bg-canopy-border"
+                            selectedRecipeId === null && "bg-canopy-border"
                           )}
                         >
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span className="truncate">{recipe.name}</span>
-                            <span className="text-xs text-canopy-text/50 shrink-0">
-                              {recipe.terminals.length} terminal
-                              {recipe.terminals.length !== 1 ? "s" : ""}
-                            </span>
-                            {recipe.id === defaultRecipeId && (
-                              <span className="text-xs text-canopy-accent shrink-0">(default)</span>
-                            )}
-                          </div>
-                          {recipe.id === selectedRecipeId && (
+                          <span className="text-canopy-text/60">No recipe</span>
+                          {selectedRecipeId === null && (
                             <Check className="h-4 w-4 shrink-0 text-canopy-accent" />
                           )}
                         </div>
-                      ))}
-                    </div>
-                  </PopoverContent>
-                </Popover>
-              </div>
-            )}
+                        {globalRecipes.map((recipe) => (
+                          <div
+                            key={recipe.id}
+                            role="option"
+                            aria-selected={recipe.id === selectedRecipeId}
+                            tabIndex={0}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                recipeSelectionTouchedRef.current = true;
+                                setSelectedRecipeId(recipe.id);
+                                setLastSelectedWorktreeRecipeId(recipe.id);
+                                setRecipePickerOpen(false);
+                              }
+                            }}
+                            onClick={() => {
+                              recipeSelectionTouchedRef.current = true;
+                              setSelectedRecipeId(recipe.id);
+                              setLastSelectedWorktreeRecipeId(recipe.id);
+                              setRecipePickerOpen(false);
+                            }}
+                            className={cn(
+                              "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
+                              recipe.id === selectedRecipeId && "bg-canopy-border"
+                            )}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="truncate">{recipe.name}</span>
+                              <span className="text-xs text-canopy-text/50 shrink-0">
+                                {recipe.terminals.length} terminal
+                                {recipe.terminals.length !== 1 ? "s" : ""}
+                              </span>
+                              {recipe.id === defaultRecipeId && (
+                                <span className="text-xs text-canopy-accent shrink-0">
+                                  (default)
+                                </span>
+                              )}
+                            </div>
+                            {recipe.id === selectedRecipeId && (
+                              <Check className="h-4 w-4 shrink-0 text-canopy-accent" />
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                </div>
+              )}
 
-            {error && (
-              <div className="flex items-start gap-2 p-3 bg-red-500/10 border border-red-500/20 rounded-[var(--radius-md)]">
-                <AlertCircle className="w-4 h-4 text-[var(--color-status-error)] mt-0.5 flex-shrink-0" />
-                <p className="text-sm text-[var(--color-status-error)]">{error}</p>
-              </div>
-            )}
+              {error && (
+                <div className="flex items-start gap-2 p-3 bg-red-500/10 border border-red-500/20 rounded-[var(--radius-md)]">
+                  <AlertCircle className="w-4 h-4 text-[var(--color-status-error)] mt-0.5 flex-shrink-0" />
+                  <p className="text-sm text-[var(--color-status-error)]">{error}</p>
+                </div>
+              )}
             </div>
           </TooltipProvider>
         )}
