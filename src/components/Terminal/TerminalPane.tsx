@@ -156,15 +156,21 @@ function TerminalPaneComponent({
   const updateLastCommand = useTerminalStore((state) => state.updateLastCommand);
   const backendStatus = useTerminalStore((state) => state.backendStatus);
   const lastCrashType = useTerminalStore((state) => state.lastCrashType);
-  const isInputLocked = useTerminalStore(
-    (state) => state.terminals.find((t) => t.id === id)?.isInputLocked ?? false
+
+  // Consolidate terminal state selectors to avoid multiple scans and ensure consistent snapshots
+  const terminalState = useTerminalStore(
+    useShallow((state) => {
+      const terminal = state.terminals.find((t) => t.id === id);
+      return {
+        isInputLocked: terminal?.isInputLocked ?? false,
+        stateChangeTrigger: terminal?.stateChangeTrigger,
+        stateChangeConfidence: terminal?.stateChangeConfidence,
+        isRestarting: terminal?.isRestarting ?? false,
+      };
+    })
   );
-  const stateChangeTrigger = useTerminalStore(
-    (state) => state.terminals.find((t) => t.id === id)?.stateChangeTrigger
-  );
-  const isRestarting = useTerminalStore(
-    (state) => state.terminals.find((t) => t.id === id)?.isRestarting ?? false
-  );
+
+  const { isInputLocked, stateChangeTrigger, stateChangeConfidence, isRestarting } = terminalState;
 
   const isBackendDisconnected = backendStatus === "disconnected";
   const isBackendRecovering = backendStatus === "recovering";
@@ -442,6 +448,8 @@ function TerminalPaneComponent({
       lastCommand={lastCommand}
       queueCount={queueCount}
       flowStatus={flowStatus}
+      stateChangeTrigger={stateChangeTrigger}
+      stateChangeConfidence={stateChangeConfidence}
       isPinged={isPinged}
       wasJustSelected={wasJustSelected}
       className={cn(

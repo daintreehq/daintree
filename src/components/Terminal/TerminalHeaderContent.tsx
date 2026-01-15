@@ -1,10 +1,35 @@
 import React from "react";
 import { Pause, Lock } from "lucide-react";
-import type { TerminalType, AgentState, PanelKind } from "@/types";
+import type { TerminalType, AgentState, PanelKind, AgentStateChangeTrigger } from "@/types";
 import { cn } from "@/lib/utils";
 import { STATE_ICONS, STATE_COLORS } from "@/components/Worktree/terminalStateConfig";
 import type { ActivityState } from "./TerminalPane";
 import { useTerminalStore } from "@/store";
+
+/**
+ * Format agent state change trigger into user-friendly text.
+ * Uses semantic, non-technical language.
+ */
+function formatStateTransitionReason(trigger: AgentStateChangeTrigger): string {
+  switch (trigger) {
+    case "input":
+      return "user input submitted";
+    case "output":
+      return "new output appeared";
+    case "heuristic":
+      return "recognized a known pattern";
+    case "ai-classification":
+      return "AI inferred the state";
+    case "timeout":
+      return "no activity for a while";
+    case "exit":
+      return "process exited";
+    case "activity":
+      return "activity detected";
+    default:
+      return "state change";
+  }
+}
 
 export interface TerminalHeaderContentProps {
   id: string;
@@ -17,6 +42,8 @@ export interface TerminalHeaderContentProps {
   exitCode?: number | null;
   queueCount?: number;
   flowStatus?: "running" | "paused-backpressure" | "paused-user" | "suspended";
+  stateChangeTrigger?: AgentStateChangeTrigger;
+  stateChangeConfidence?: number;
 }
 
 function TerminalHeaderContentComponent({
@@ -30,10 +57,12 @@ function TerminalHeaderContentComponent({
   exitCode = null,
   queueCount = 0,
   flowStatus,
+  stateChangeTrigger,
+  stateChangeConfidence,
 }: TerminalHeaderContentProps) {
-  const isInputLocked = useTerminalStore((state) =>
-    state.terminals.find((t) => t.id === id)
-  )?.isInputLocked;
+  const isInputLocked = useTerminalStore(
+    (state) => state.terminals.find((t) => t.id === id)?.isInputLocked ?? false
+  );
 
   // Show command pill only for plain terminals (not agent terminals)
   // Use kind to distinguish - agent panels have kind="agent"
@@ -57,7 +86,29 @@ function TerminalHeaderContentComponent({
             ? "bg-[color-mix(in_oklab,var(--color-status-info)_15%,transparent)] border-[var(--color-status-info)]/40"
             : "bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] border-[var(--color-status-error)]/40";
 
-    const tooltip = activity?.headline ? activity.headline : `Agent ${agentState}`;
+    // Build detailed tooltip - use single line with separators for browser compatibility
+    const tooltipParts: string[] = [];
+
+    // Primary content: activity headline or fallback to agent state
+    if (activity?.headline) {
+      tooltipParts.push(activity.headline);
+    } else {
+      tooltipParts.push(`Agent ${agentState}`);
+    }
+
+    // Add transition reason if available
+    if (stateChangeTrigger) {
+      const reason = formatStateTransitionReason(stateChangeTrigger);
+      tooltipParts.push(`Transitioned to ${agentState}: ${reason}`);
+    }
+
+    // Show confidence warning for low-confidence detections (independent of trigger)
+    if (stateChangeConfidence !== undefined && stateChangeConfidence < 0.7) {
+      const confidencePct = Math.floor(stateChangeConfidence * 100);
+      tooltipParts.push(`(confidence: ${confidencePct}%)`);
+    }
+
+    const tooltip = tooltipParts.join(" • ");
 
     return (
       <div
