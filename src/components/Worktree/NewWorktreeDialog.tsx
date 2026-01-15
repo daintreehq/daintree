@@ -22,6 +22,12 @@ import { IssueSelector } from "@/components/GitHub/IssueSelector";
 import { generateBranchSlug } from "@/utils/textParsing";
 import { BRANCH_TYPES } from "@shared/config/branchPrefixes";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { toBranchOption, filterBranches, type BranchOption } from "./branchPickerUtils";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -509,21 +515,37 @@ export function NewWorktreeDialog({
             <span className="ml-2 text-sm text-canopy-text/60">Loading branches...</span>
           </div>
         ) : (
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <label className="block text-sm font-medium text-canopy-text">
-                Link Issue (Optional)
-              </label>
-              <IssueSelector
-                projectPath={rootPath}
-                selectedIssue={selectedIssue}
-                onSelect={setSelectedIssue}
-                disabled={creating}
-              />
-              <p className="text-xs text-canopy-text/60">
-                Select an issue to auto-generate a branch name
-              </p>
-            </div>
+          <TooltipProvider>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <label className="block text-sm font-medium text-canopy-text">
+                    Link Issue (Optional)
+                  </label>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className="text-canopy-text/40 hover:text-canopy-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent focus-visible:ring-offset-2"
+                        aria-label="Help for Link Issue field"
+                        disabled={creating}
+                      >
+                        <Info className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span className="sr-only">Help for Link Issue field</span>
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="right">
+                      <p>Select an issue to auto-generate a branch name</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+                <IssueSelector
+                  projectPath={rootPath}
+                  selectedIssue={selectedIssue}
+                  onSelect={setSelectedIssue}
+                  disabled={creating}
+                />
+              </div>
 
             {/* Assignment control - only show when issue is selected and GitHub auth available */}
             {canAssignIssue && (
@@ -572,9 +594,27 @@ export function NewWorktreeDialog({
             )}
 
             <div className="space-y-2">
-              <label htmlFor="base-branch" className="block text-sm font-medium text-canopy-text">
-                Base Branch
-              </label>
+              <div className="flex items-center gap-2">
+                <label htmlFor="base-branch" className="block text-sm font-medium text-canopy-text">
+                  Base Branch
+                </label>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      className="text-canopy-text/40 hover:text-canopy-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent focus-visible:ring-offset-2"
+                      aria-label="Help for Base Branch field"
+                      disabled={creating}
+                    >
+                      <Info className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span className="sr-only">Help for Base Branch field</span>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right">
+                    <p>The branch to create the new worktree from</p>
+                  </TooltipContent>
+                </Tooltip>
+              </div>
               <Popover open={branchPickerOpen} onOpenChange={setBranchPickerOpen}>
                 <PopoverTrigger asChild>
                   <Button
@@ -653,9 +693,6 @@ export function NewWorktreeDialog({
                   )}
                 </PopoverContent>
               </Popover>
-              <p className="text-xs text-canopy-text/60">
-                The branch to create the new worktree from
-              </p>
             </div>
 
             <div className="space-y-2">
@@ -715,9 +752,27 @@ export function NewWorktreeDialog({
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="worktree-path" className="block text-sm font-medium text-canopy-text">
-                Worktree Path
-              </label>
+              <div className="flex items-center gap-2">
+                <label htmlFor="worktree-path" className="block text-sm font-medium text-canopy-text">
+                  Worktree Path
+                </label>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      className="text-canopy-text/40 hover:text-canopy-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent focus-visible:ring-offset-2"
+                      aria-label="Help for Worktree Path field"
+                      disabled={creating}
+                    >
+                      <Info className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span className="sr-only">Help for Worktree Path field</span>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right">
+                    <p>Directory where the worktree will be created</p>
+                  </TooltipContent>
+                </Tooltip>
+              </div>
               <div className="flex gap-2 items-center">
                 <input
                   id="worktree-path"
@@ -751,9 +806,6 @@ export function NewWorktreeDialog({
                   <FolderOpen className="w-4 h-4" />
                 </Button>
               </div>
-              <p className="text-xs text-canopy-text/60">
-                Directory where the worktree will be created
-              </p>
               {pathWasAutoResolved && (
                 <p
                   className="text-xs text-green-500 flex items-center gap-1.5 mt-1"
@@ -782,12 +834,30 @@ export function NewWorktreeDialog({
 
             {globalRecipes.length > 0 && (
               <div className="space-y-2">
-                <label
-                  htmlFor="recipe-selector"
-                  className="block text-sm font-medium text-canopy-text"
-                >
-                  Run Recipe (Optional)
-                </label>
+                <div className="flex items-center gap-2">
+                  <label
+                    htmlFor="recipe-selector"
+                    className="block text-sm font-medium text-canopy-text"
+                  >
+                    Run Recipe (Optional)
+                  </label>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className="text-canopy-text/40 hover:text-canopy-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent focus-visible:ring-offset-2"
+                        aria-label="Help for Run Recipe field"
+                        disabled={creating}
+                      >
+                        <Info className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span className="sr-only">Help for Run Recipe field</span>
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="right">
+                      <p>Select a recipe to run after creating the worktree</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
                 <Popover open={recipePickerOpen} onOpenChange={setRecipePickerOpen}>
                   <PopoverTrigger asChild>
                     <Button
@@ -896,9 +966,6 @@ export function NewWorktreeDialog({
                     </div>
                   </PopoverContent>
                 </Popover>
-                <p className="text-xs text-canopy-text/60">
-                  Select a recipe to run after creating the worktree
-                </p>
               </div>
             )}
 
@@ -908,7 +975,8 @@ export function NewWorktreeDialog({
                 <p className="text-sm text-[var(--color-status-error)]">{error}</p>
               </div>
             )}
-          </div>
+            </div>
+          </TooltipProvider>
         )}
       </AppDialog.Body>
 
