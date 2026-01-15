@@ -81,6 +81,7 @@ export function TerminalContextMenu({
 
     const isBrowser = terminal.kind === "browser";
     const isNotes = terminal.kind === "notes";
+    const isDevPreview = terminal.kind === "dev-preview";
 
     // Layout section: worktree navigation first (most common workflow), then positioning
     const layoutItems: MenuItemOption[] = [];
@@ -155,6 +156,43 @@ export function TerminalContextMenu({
         ...layoutItems,
         { type: "separator" },
         ...notesManagementItems,
+        { type: "separator" },
+        ...destructiveItems,
+      ];
+    }
+
+    // Dev Preview-specific actions (hybrid: browser view + dev server PTY)
+    if (isDevPreview) {
+      const hasUrl = Boolean(terminal.browserUrl && isValidBrowserUrl(terminal.browserUrl));
+
+      const browserActions: MenuItemOption[] = [
+        { id: "reload-browser", label: "Reload Preview" },
+        { id: "open-external", label: "Open in Browser", enabled: hasUrl },
+        { id: "copy-url", label: "Copy URL", enabled: hasUrl },
+      ];
+
+      const serverActions: MenuItemOption[] = [
+        { id: "restart", label: "Restart Dev Server" },
+      ];
+
+      const managementItems: MenuItemOption[] = [
+        { id: "duplicate", label: "Duplicate Dev Preview" },
+        { id: "rename", label: "Rename Dev Preview" },
+      ];
+
+      const destructiveItems: MenuItemOption[] = [
+        { id: "trash", label: "Close Dev Preview" },
+        { id: "kill", label: "Stop Dev Server" },
+      ];
+
+      return [
+        ...layoutItems,
+        { type: "separator" },
+        ...browserActions,
+        { type: "separator" },
+        ...serverActions,
+        { type: "separator" },
+        ...managementItems,
         { type: "separator" },
         ...destructiveItems,
       ];
