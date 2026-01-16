@@ -343,6 +343,7 @@ export class DevPreviewService extends EventEmitter {
       message,
       timestamp: Date.now(),
       error: status === "error" ? message : undefined,
+      ptyId: session?.ptyId ?? "",
     });
   }
 

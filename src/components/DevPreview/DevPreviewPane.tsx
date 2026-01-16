@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { RotateCw } from "lucide-react";
+import { Globe, RotateCw, Terminal } from "lucide-react";
 import { BrowserToolbar } from "@/components/Browser/BrowserToolbar";
+import { XtermAdapter } from "@/components/Terminal/XtermAdapter";
 import { isValidBrowserUrl, normalizeBrowserUrl } from "@/components/Browser/browserUtils";
 import { useIsDragging } from "@/components/DragDrop";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
@@ -75,6 +76,8 @@ export function DevPreviewPane({
   const [error, setError] = useState<string | undefined>(undefined);
   const [isRestarting, setIsRestarting] = useState(false);
   const [isBrowserOnly, setIsBrowserOnly] = useState(false);
+  const [ptyId, setPtyId] = useState<string>("");
+  const [showTerminal, setShowTerminal] = useState(false);
   const [history, setHistory] = useState<BrowserHistory>(() => ({
     past: [],
     present: "",
@@ -285,6 +288,7 @@ export function DevPreviewPane({
       setMessage(payload.message);
       setError(payload.status === "error" ? (payload.error ?? payload.message) : undefined);
       setIsBrowserOnly((prev) => prev || payload.message.includes("Browser-only mode"));
+      setPtyId(payload.ptyId);
       if (
         payload.status === "running" ||
         payload.status === "error" ||
@@ -442,6 +446,8 @@ export function DevPreviewPane({
     setMessage("Starting dev server...");
     setIsRestarting(false);
     setIsBrowserOnly(false);
+    setPtyId("");
+    setShowTerminal(false);
     setHasLoaded(false);
     setIsLoading(false);
     setWebviewLoadError(null);
@@ -555,6 +561,8 @@ export function DevPreviewPane({
     setMessage("Restarting dev server...");
     setIsRestarting(true);
     setIsBrowserOnly(false);
+    setPtyId("");
+    setShowTerminal(false);
     setHasLoaded(false);
     setIsLoading(false);
     setWebviewLoadError(null);
@@ -579,6 +587,13 @@ export function DevPreviewPane({
   const loadingMessage =
     status === "starting" || status === "installing" ? message : "Loading preview...";
   const showRestartSpinner = isRestarting || status === "starting" || status === "installing";
+  const hasTerminal = ptyId.length > 0;
+  const canToggleTerminal = hasTerminal && !isBrowserOnly;
+
+  const handleToggleView = useCallback(() => {
+    if (!canToggleTerminal) return;
+    setShowTerminal((prev) => !prev);
+  }, [canToggleTerminal]);
 
   const devPreviewToolbar = (
     <BrowserToolbar
@@ -636,56 +651,73 @@ export function DevPreviewPane({
     >
       <div className="flex flex-1 min-h-0 flex-col">
         <div className="relative flex-1 min-h-0 bg-white">
-          {hasValidUrl ? (
-            <>
-              {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
-              {showLoadingOverlay && (
-                <div className="absolute inset-0 flex items-center justify-center bg-canopy-bg z-10">
-                  <div className="text-center max-w-md space-y-1 px-4">
-                    <div className="text-sm font-medium text-canopy-text">Dev Preview</div>
-                    <div className="text-xs text-canopy-text/60">{loadingMessage}</div>
-                  </div>
-                </div>
-              )}
-              {webviewLoadError && (
-                <div className="absolute inset-0 flex items-center justify-center bg-canopy-bg z-10">
-                  <div className="text-center max-w-md space-y-2 px-4">
-                    <div className="text-sm font-medium text-[var(--color-status-error)]">
-                      Webview Load Error
-                    </div>
-                    <div className="text-xs text-canopy-text/60">{webviewLoadError}</div>
-                  </div>
-                </div>
-              )}
-              <webview
-                ref={webviewRef}
-                src={currentUrl}
-                partition="persist:dev-preview"
-                className={cn(
-                  "w-full h-full border-0",
-                  isDragging && "invisible pointer-events-none"
-                )}
+          {/* Terminal View */}
+          {showTerminal && hasTerminal && (
+            <div className="absolute inset-0 bg-canopy-bg">
+              <XtermAdapter
+                terminalId={ptyId}
+                terminalType="terminal"
+                isInputLocked={true}
+                className="w-full h-full"
               />
-            </>
-          ) : isBrowserOnly ? (
-            <div className="absolute inset-0 flex items-center justify-center bg-canopy-bg">
-              <div className="text-center max-w-md space-y-2 px-4">
-                <div className="text-sm font-medium text-canopy-text">Browser-Only Mode</div>
-                <div className="text-xs text-canopy-text/60">
-                  No dev command configured. Enter a localhost URL in the address bar above.
-                </div>
-                {error && <div className="text-xs text-[var(--color-status-error)]">{error}</div>}
-              </div>
-            </div>
-          ) : (
-            <div className="absolute inset-0 flex items-center justify-center bg-canopy-bg">
-              <div className="text-center max-w-md space-y-1 px-4">
-                <div className="text-sm font-medium text-canopy-text">Dev Preview</div>
-                <div className="text-xs text-canopy-text/60">{message}</div>
-                {error && <div className="text-xs text-[var(--color-status-error)]">{error}</div>}
-              </div>
             </div>
           )}
+          {/* Browser View - use visibility:hidden instead of unmounting to preserve state */}
+          <div
+            className={cn("absolute inset-0", showTerminal && hasTerminal && "invisible")}
+            style={{ display: showTerminal && hasTerminal ? "none" : undefined }}
+          >
+            {hasValidUrl ? (
+              <>
+                {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
+                {showLoadingOverlay && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-canopy-bg z-10">
+                    <div className="text-center max-w-md space-y-1 px-4">
+                      <div className="text-sm font-medium text-canopy-text">Dev Preview</div>
+                      <div className="text-xs text-canopy-text/60">{loadingMessage}</div>
+                    </div>
+                  </div>
+                )}
+                {webviewLoadError && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-canopy-bg z-10">
+                    <div className="text-center max-w-md space-y-2 px-4">
+                      <div className="text-sm font-medium text-[var(--color-status-error)]">
+                        Webview Load Error
+                      </div>
+                      <div className="text-xs text-canopy-text/60">{webviewLoadError}</div>
+                    </div>
+                  </div>
+                )}
+                <webview
+                  ref={webviewRef}
+                  src={currentUrl}
+                  partition="persist:dev-preview"
+                  className={cn(
+                    "w-full h-full border-0",
+                    isDragging && "invisible pointer-events-none"
+                  )}
+                />
+              </>
+            ) : isBrowserOnly ? (
+              <div className="absolute inset-0 flex items-center justify-center bg-canopy-bg">
+                <div className="text-center max-w-md space-y-2 px-4">
+                  <div className="text-sm font-medium text-canopy-text">Browser-Only Mode</div>
+                  <div className="text-xs text-canopy-text/60">
+                    No dev command configured. Enter a localhost URL in the address bar above.
+                  </div>
+                  {error && <div className="text-xs text-[var(--color-status-error)]">{error}</div>}
+                </div>
+              </div>
+            ) : (
+              <div className="absolute inset-0 flex items-center justify-center bg-canopy-bg">
+                <div className="text-center max-w-md space-y-1 px-4">
+                  <div className="text-sm font-medium text-canopy-text">Dev Preview</div>
+                  <div className="text-xs text-canopy-text/60">{message}</div>
+                  {error && <div className="text-xs text-[var(--color-status-error)]">{error}</div>}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
         <div className="flex items-center justify-between gap-3 px-3 py-1.5 border-t border-canopy-border bg-[color-mix(in_oklab,var(--color-surface)_92%,transparent)] text-xs text-canopy-text/70">
           <div className="flex items-center gap-2 min-w-0" role="status" aria-live="polite">
@@ -694,10 +726,22 @@ export function DevPreviewPane({
             <span className="truncate">{message}</span>
           </div>
           <div className="flex items-center gap-2 min-w-0">
-            {hasValidUrl && (
+            {hasValidUrl && !showTerminal && (
               <span className="font-mono text-canopy-text/50 truncate max-w-[45%]">
                 {currentUrl}
               </span>
+            )}
+            {canToggleTerminal && (
+              <button
+                type="button"
+                onClick={handleToggleView}
+                className={cn(buttonClass, showTerminal && "bg-white/10")}
+                title={showTerminal ? "Show browser preview" : "Show terminal output"}
+                aria-label={showTerminal ? "Show browser preview" : "Show terminal output"}
+                aria-pressed={showTerminal}
+              >
+                {showTerminal ? <Globe className="w-4 h-4" /> : <Terminal className="w-4 h-4" />}
+              </button>
             )}
             <button
               type="button"
