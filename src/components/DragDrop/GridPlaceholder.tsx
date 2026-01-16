@@ -3,6 +3,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { cn } from "@/lib/utils";
 import { useDndPlaceholder, GRID_PLACEHOLDER_ID } from "./DndProvider";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
+import { PlaceholderContent } from "./PlaceholderContent";
 
 interface GridPlaceholderProps {
   className?: string;
@@ -41,8 +42,10 @@ export function GridPlaceholder({ className }: GridPlaceholderProps) {
         <span className="font-medium text-canopy-accent/80 truncate opacity-80">{title}</span>
       </div>
 
-      {/* Empty Body */}
-      <div className="flex-1 w-full bg-transparent" />
+      {/* Panel-specific placeholder body */}
+      <div className="flex-1 w-full p-3">
+        <PlaceholderContent kind={kind ?? "terminal"} agentId={agentId} />
+      </div>
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { cn } from "@/lib/utils";
 import { useDndPlaceholder } from "./DndProvider";
+import { PlaceholderContent } from "./PlaceholderContent";
 
 interface DockPlaceholderProps {
   className?: string;
@@ -13,18 +14,31 @@ export function DockPlaceholder({ className }: DockPlaceholderProps) {
   const { activeTerminal } = useDndPlaceholder();
 
   if (!activeTerminal) {
-    return null;
+    return (
+      <div
+        className={cn(
+          "min-w-[120px] h-full rounded",
+          "border border-canopy-accent/30 bg-canopy-accent/5",
+          className
+        )}
+        aria-hidden="true"
+      />
+    );
   }
+
+  const { kind, agentId } = activeTerminal;
 
   return (
     <div
       className={cn(
-        "flex items-center justify-center gap-2 px-4 py-1 min-w-[120px] h-full",
-        "rounded",
+        "flex flex-col gap-1 px-3 py-2 min-w-[120px] h-full",
+        "rounded border border-canopy-accent/30 bg-canopy-accent/5",
         className
       )}
       aria-hidden="true"
-    />
+    >
+      <PlaceholderContent kind={kind ?? "terminal"} agentId={agentId} compact />
+    </div>
   );
 }
 

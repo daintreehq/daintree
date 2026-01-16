@@ -1,14 +1,14 @@
 import { Loader2 } from "lucide-react";
-import { getBrandColorHex } from "@/lib/colorUtils";
 import type { TerminalInstance } from "@/store";
+import { PlaceholderContent } from "./PlaceholderContent";
+import { getPanelKindColor } from "@shared/config/panelKindRegistry";
 
 interface TerminalDragPreviewProps {
   terminal: TerminalInstance;
 }
 
 export function TerminalDragPreview({ terminal }: TerminalDragPreviewProps) {
-  // Browser panes get blue, agents get their brand color
-  const brandColor = terminal.kind === "browser" ? "#3b82f6" : getBrandColorHex(terminal.type);
+  const brandColor = getPanelKindColor(terminal.kind ?? "terminal", terminal.agentId);
   const isWorking = terminal.agentState === "working";
 
   return (
@@ -76,41 +76,16 @@ export function TerminalDragPreview({ terminal }: TerminalDragPreviewProps) {
         )}
       </div>
 
-      {/* Terminal body (ghost content) */}
+      {/* Panel body (ghost content) */}
       <div
         style={{
           flex: 1,
           padding: 8,
           display: "flex",
           flexDirection: "column",
-          gap: 4,
         }}
       >
-        {/* Ghost lines to simulate terminal content */}
-        <div
-          style={{
-            height: 6,
-            width: "70%",
-            backgroundColor: "color-mix(in srgb, var(--color-canopy-text) 6%, transparent)",
-            borderRadius: "var(--radius-sm)",
-          }}
-        />
-        <div
-          style={{
-            height: 6,
-            width: "50%",
-            backgroundColor: "color-mix(in srgb, var(--color-canopy-text) 6%, transparent)",
-            borderRadius: "var(--radius-sm)",
-          }}
-        />
-        <div
-          style={{
-            height: 6,
-            width: "40%",
-            backgroundColor: "color-mix(in srgb, var(--color-canopy-text) 6%, transparent)",
-            borderRadius: "var(--radius-sm)",
-          }}
-        />
+        <PlaceholderContent kind={terminal.kind ?? "terminal"} agentId={terminal.agentId} />
       </div>
     </div>
   );
