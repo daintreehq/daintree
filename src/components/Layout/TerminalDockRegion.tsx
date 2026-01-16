@@ -4,6 +4,7 @@ import { useDockStore } from "@/store";
 import { ContentDock } from "./ContentDock";
 import { DockHandleOverlay } from "./DockHandleOverlay";
 import { DockStatusOverlay } from "./DockStatusOverlay";
+import { DockPanelOffscreenContainer } from "./DockPanelOffscreenContainer";
 
 export function TerminalDockRegion() {
   const {
@@ -28,7 +29,7 @@ export function TerminalDockRegion() {
   }
 
   return (
-    <>
+    <DockPanelOffscreenContainer>
       {/* ContentDock in layout when visible */}
       {shouldShowInLayout && (
         <ErrorBoundary variant="section" componentName="ContentDock">
@@ -61,6 +62,6 @@ export function TerminalDockRegion() {
           aria-label={`Show ${dockedCount} hidden terminal${dockedCount > 1 ? "s" : ""}`}
         />
       )}
-    </>
+    </DockPanelOffscreenContainer>
   );
 }
