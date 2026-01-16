@@ -10,7 +10,6 @@ import {
   useSidecarStore,
   type TerminalInstance,
 } from "@/store";
-import { DockedPanel } from "@/components/Terminal/DockedPanel";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { getTerminalFocusTarget } from "@/components/Terminal/terminalFocus";
@@ -18,6 +17,7 @@ import { STATE_ICONS, STATE_COLORS } from "@/components/Worktree/terminalStateCo
 import { TerminalRefreshTier } from "@/types";
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { useDockPanelPortal } from "./DockPanelOffscreenContainer";
 
 interface DockedTerminalItemProps {
   terminal: TerminalInstance;
@@ -145,9 +145,22 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     },
   });
 
-  const handlePopoverClose = useCallback(() => {
-    closeDockTerminal();
-  }, [closeDockTerminal]);
+  const portalTarget = useDockPanelPortal();
+  const portalContainerRef = useRef<HTMLDivElement>(null);
+
+  // Register/unregister portal target when popover opens/closes
+  useEffect(() => {
+    if (isOpen && portalContainerRef.current) {
+      portalTarget(terminal.id, portalContainerRef.current);
+    } else {
+      portalTarget(terminal.id, null);
+    }
+
+    // Cleanup on unmount to prevent portaling into detached nodes
+    return () => {
+      portalTarget(terminal.id, null);
+    };
+  }, [isOpen, terminal.id, portalTarget]);
 
   const handleOpenChange = useCallback(
     (open: boolean) => {
@@ -269,7 +282,12 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
           setTimeout(() => terminalInstanceService.focus(terminal.id), 50);
         }}
       >
-        <DockedPanel terminal={terminal} onPopoverClose={handlePopoverClose} />
+        {/* Portal target - content is rendered in DockPanelOffscreenContainer and portaled here */}
+        <div
+          ref={portalContainerRef}
+          className="w-full h-full flex flex-col"
+          data-dock-portal-target={terminal.id}
+        />
       </PopoverContent>
     </Popover>
   );
