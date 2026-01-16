@@ -136,6 +136,14 @@ export class TerminalRendererPolicy {
    * allowing proper wake behavior when transitioning back to active.
    */
   initializeBackendTier(id: string, tier: "active" | "background"): void {
+    // Validate tier value for defensive programming
+    if (tier !== "active" && tier !== "background") {
+      console.warn(
+        `[TerminalRendererPolicy] Invalid tier "${tier}" for terminal ${id}, defaulting to "active"`
+      );
+      tier = "active";
+    }
+
     this.lastBackendTier.set(id, tier);
 
     // If initializing to background, set needsWake to ensure wake happens on next activation

@@ -487,7 +487,10 @@ export class PtyManager extends EventEmitter {
    * Uses tiered monitoring: active terminals poll at 50ms, background at 500ms.
    * This keeps agent state accurate across all projects while reducing CPU for background terminals.
    */
-  onProjectSwitch(newProjectId: string): void {
+  onProjectSwitch(
+    newProjectId: string,
+    onTierChange?: (id: string, tier: "active" | "background") => void
+  ): void {
     console.log(`[PtyManager] Switching to project: ${newProjectId}`);
 
     let backgrounded = 0;
@@ -513,6 +516,8 @@ export class PtyManager extends EventEmitter {
 
         // Keep monitors running but reduce polling frequency for background terminals
         terminalProcess.setActivityMonitorTier(BACKGROUND_POLLING_MS);
+        // Notify caller to sync backpressure tier
+        onTierChange?.(id, "background");
         // Process detector remains active to detect new agents
       } else {
         foregrounded++;
@@ -524,6 +529,8 @@ export class PtyManager extends EventEmitter {
 
         // Active terminals get full-speed polling
         terminalProcess.setActivityMonitorTier(ACTIVE_POLLING_MS);
+        // Notify caller to sync backpressure tier
+        onTierChange?.(id, "active");
         // Ensure process detector is running
         terminalProcess.startProcessDetector();
       }

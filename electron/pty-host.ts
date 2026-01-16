@@ -720,7 +720,9 @@ port.on("message", async (rawMsg: any) => {
       }
 
       case "project-switch": {
-        ptyManager.onProjectSwitch(msg.projectId);
+        ptyManager.onProjectSwitch(msg.projectId, (id, tier) => {
+          backpressureManager.setActivityTier(id, tier);
+        });
         ptyManager.setActiveProject(msg.projectId);
         break;
       }

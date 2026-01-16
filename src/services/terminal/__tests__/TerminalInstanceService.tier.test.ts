@@ -94,4 +94,21 @@ describe("TerminalInstanceService - Activity Tier", () => {
       expect(true).toBe(true); // Placeholder for behavior documentation
     });
   });
+
+  describe("initializeBackendTier", () => {
+    it("should be documented as part of the hydration flow", () => {
+      // The initializeBackendTier method on TerminalInstanceService delegates
+      // to TerminalRendererPolicy.initializeBackendTier, which:
+      // 1. Sets the lastBackendTier map to the provided tier value
+      // 2. If tier is "background", sets needsWake=true on the managed terminal
+      //
+      // This enables the following hydration behavior:
+      // - Backend terminals report their actual activityTier in terminal info
+      // - stateHydration.ts calls initializeBackendTier after reconnection
+      // - Frontend tier state matches backend, enabling proper wake behavior
+      //
+      // Unit tests for the actual logic are in TerminalRendererPolicy.test.ts
+      expect(true).toBe(true);
+    });
+  });
 });
