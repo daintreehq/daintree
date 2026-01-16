@@ -3,7 +3,7 @@ import { useDockStore, useTerminalStore, type TerminalInstance } from "@/store";
 import { getTerminalAnimationDuration } from "@/lib/animationUtils";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { getPanelComponent, type PanelComponentProps } from "@/registry";
-import { ContentPanel } from "@/components/Panel";
+import { ContentPanel, triggerPanelTransition } from "@/components/Panel";
 
 export interface GridPanelProps {
   terminal: TerminalInstance;
@@ -82,6 +82,35 @@ export function GridPanel({
   );
 
   const handleMinimize = useCallback(() => {
+    // Capture panel position before state change using data-panel-id attribute
+    const panelElement = document.querySelector(`[data-panel-id="${terminal.id}"]`);
+    if (panelElement) {
+      const sourceRect = panelElement.getBoundingClientRect();
+      // Find the dock container as target
+      const dockElement = document.querySelector("[data-dock-density]");
+      if (dockElement) {
+        const dockRect = dockElement.getBoundingClientRect();
+        // Target a small area in the dock center
+        const targetRect = {
+          x: dockRect.x + dockRect.width / 2 - 50,
+          y: dockRect.y + dockRect.height / 2 - 16,
+          width: 100,
+          height: 32,
+        };
+        triggerPanelTransition(
+          terminal.id,
+          "minimize",
+          {
+            x: sourceRect.x,
+            y: sourceRect.y,
+            width: sourceRect.width,
+            height: sourceRect.height,
+          },
+          targetRect
+        );
+      }
+    }
+
     moveTerminalToDock(terminal.id);
     if (dockBehavior === "manual" && dockMode !== "expanded") {
       setDockMode("expanded");

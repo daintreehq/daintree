@@ -3,7 +3,7 @@ import { useTerminalStore, type TerminalInstance } from "@/store";
 import { getTerminalAnimationDuration } from "@/lib/animationUtils";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { getPanelComponent, type PanelComponentProps } from "@/registry";
-import { ContentPanel } from "@/components/Panel";
+import { ContentPanel, triggerPanelTransition } from "@/components/Panel";
 
 export interface DockedPanelProps {
   terminal: TerminalInstance;
@@ -61,8 +61,45 @@ export function DockedPanel({ terminal, onPopoverClose }: DockedPanelProps) {
   );
 
   const handleRestore = useCallback(() => {
+    // Try to move terminal to grid first - check if successful
+    const moveSucceeded = moveTerminalToGrid(terminal.id);
+
+    // Only animate and close popover if move succeeded
+    if (!moveSucceeded) {
+      // Grid is full - don't animate or close
+      return;
+    }
+
+    // Capture dock element position before closing popover
+    const dockElement = document.querySelector("[data-dock-density]");
+
+    if (dockElement) {
+      const dockRect = dockElement.getBoundingClientRect();
+      // Source is a small rect in the dock where the item was
+      const sourceRect = {
+        x: dockRect.x + dockRect.width / 2 - 50,
+        y: dockRect.y + dockRect.height / 2 - 16,
+        width: 100,
+        height: 32,
+      };
+
+      // Target is the grid area (main content area)
+      const gridElement = document.querySelector('[data-grid-container="true"]');
+      if (gridElement) {
+        const gridRect = gridElement.getBoundingClientRect();
+        // Target a panel-sized area in the grid center
+        const targetRect = {
+          x: gridRect.x + gridRect.width * 0.1,
+          y: gridRect.y + gridRect.height * 0.1,
+          width: gridRect.width * 0.8,
+          height: gridRect.height * 0.8,
+        };
+
+        triggerPanelTransition(terminal.id, "restore", sourceRect, targetRect);
+      }
+    }
+
     onPopoverClose?.();
-    moveTerminalToGrid(terminal.id);
   }, [moveTerminalToGrid, terminal.id, onPopoverClose]);
 
   const handleMinimize = useCallback(() => {
