@@ -114,6 +114,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         for (const terminal of result.value) {
           if (!panelKindHasPty(terminal.kind ?? "terminal")) continue;
           if (terminal.kind === "dev-preview") continue;
+          if (terminal.hasPty === false) continue; // Skip orphaned terminals without active PTY
 
           const isAgent = isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId);
           if (!isAgent) continue;

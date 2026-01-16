@@ -159,6 +159,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
             isTrashed: terminal.isTrashed,
             trashExpiresAt: terminal.trashExpiresAt,
             activityTier: terminal.activityTier,
+            hasPty: terminal.hasPty,
           });
         }
       }
@@ -201,6 +202,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
         agentState: terminal.agentState,
         lastStateChange: terminal.lastStateChange,
         activityTier: terminal.activityTier,
+        hasPty: terminal.hasPty,
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);

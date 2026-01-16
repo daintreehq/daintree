@@ -1066,6 +1066,7 @@ port.on("message", async (rawMsg: any) => {
                 isTrashed: terminal.isTrashed,
                 trashExpiresAt: terminal.trashExpiresAt,
                 activityTier: ptyManager.getActivityTier(msg.id),
+                hasPty: terminal.hasPty,
               }
             : null,
         });

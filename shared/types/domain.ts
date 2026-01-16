@@ -494,6 +494,8 @@ export interface TerminalInstance {
   devCommand?: string;
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely */
   exitBehavior?: PanelExitBehavior;
+  /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */
+  hasPty?: boolean;
 }
 
 /** Options for spawning a new PTY process */

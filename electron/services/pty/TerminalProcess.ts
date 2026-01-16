@@ -484,6 +484,8 @@ export class TerminalProcess {
 
   getPublicState(): TerminalPublicState {
     const t = this.terminalInfo;
+    // Terminal has a PTY when it hasn't been killed and hasn't exited
+    const hasPty = !t.wasKilled && !t.isExited;
     return {
       id: t.id,
       projectId: t.projectId,
@@ -508,6 +510,7 @@ export class TerminalProcess {
       detectedAgentType: t.detectedAgentType,
       restartCount: t.restartCount,
       activityTier: this._activityTier,
+      hasPty,
     };
   }
 

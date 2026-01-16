@@ -76,6 +76,7 @@ export function useTerminalPalette(): UseTerminalPaletteReturn {
   const searchableTerminals = useMemo<SearchableTerminal[]>(() => {
     return terminals
       .filter((t) => t.location !== "trash")
+      .filter((t) => t.hasPty !== false) // Exclude orphaned terminals without active PTY processes
       .map((t) => ({
         id: t.id,
         title: t.title,

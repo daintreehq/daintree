@@ -117,6 +117,8 @@ export interface BackendTerminalInfo {
   trashExpiresAt?: number;
   /** Current activity tier: "active" (foreground) or "background" (project switched away) */
   activityTier?: "active" | "background";
+  /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */
+  hasPty?: boolean;
 }
 
 /** Result from terminal reconnect operation */
@@ -129,6 +131,7 @@ export interface TerminalReconnectResult {
   agentState?: AgentState;
   lastStateChange?: number;
   activityTier?: "active" | "background";
+  hasPty?: boolean;
   error?: string;
 }
 
@@ -150,6 +153,8 @@ export interface TerminalInfoPayload {
   outputBufferSize: number;
   semanticBufferLines: number;
   restartCount: number;
+  /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */
+  hasPty?: boolean;
 }
 
 import type { TerminalActivityPayload } from "../terminal.js";

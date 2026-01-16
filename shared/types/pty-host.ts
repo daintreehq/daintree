@@ -206,6 +206,8 @@ export interface PtyHostTerminalInfo {
   trashExpiresAt?: number;
   /** Current activity tier: "active" (foreground) or "background" (project switched away) */
   activityTier?: "active" | "background";
+  /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */
+  hasPty?: boolean;
 }
 
 /** Payload for agent:spawned event */

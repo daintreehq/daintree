@@ -76,6 +76,7 @@ export function ProjectSwitcher() {
         for (const terminal of terminalsResult.value) {
           if (!panelKindHasPty(terminal.kind ?? "terminal")) continue;
           if (terminal.kind === "dev-preview") continue;
+          if (terminal.hasPty === false) continue; // Skip orphaned terminals without active PTY
 
           const agentState = terminal.agentState;
           const isAgent = isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId);
@@ -174,6 +175,7 @@ export function ProjectSwitcher() {
         for (const terminal of result.value) {
           if (!panelKindHasPty(terminal.kind ?? "terminal")) continue;
           if (terminal.kind === "dev-preview") continue;
+          if (terminal.hasPty === false) continue; // Skip orphaned terminals without active PTY
 
           const agentState = terminal.agentState;
           const isAgent = isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId);

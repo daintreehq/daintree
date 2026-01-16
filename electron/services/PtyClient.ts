@@ -65,6 +65,8 @@ interface TerminalInfoResponse {
   isTrashed?: boolean;
   trashExpiresAt?: number;
   activityTier?: "active" | "background";
+  /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */
+  hasPty?: boolean;
 }
 
 export interface PtyClientConfig {
