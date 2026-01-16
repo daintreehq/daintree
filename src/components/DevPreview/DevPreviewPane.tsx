@@ -287,7 +287,9 @@ export function DevPreviewPane({
       setStatus(payload.status);
       setMessage(payload.message);
       setError(
-        payload.status === "error" ? (payload.error?.trim() || payload.message || undefined) : undefined
+        payload.status === "error"
+          ? payload.error?.trim() || payload.message || undefined
+          : undefined
       );
       setIsBrowserOnly((prev) => prev || payload.message.includes("Browser-only mode"));
       setPtyId(payload.ptyId);
