@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useDndMonitor } from "@dnd-kit/core";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -8,6 +8,7 @@ import {
   useTerminalInputStore,
   useTerminalStore,
   useSidecarStore,
+  useDockStore,
   type TerminalInstance,
 } from "@/store";
 import { DockedPanel } from "@/components/Terminal/DockedPanel";
@@ -18,6 +19,7 @@ import { STATE_ICONS, STATE_COLORS } from "@/components/Worktree/terminalStateCo
 import { TerminalRefreshTier } from "@/types";
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { POPOVER_MIN_HEIGHT, POPOVER_MAX_HEIGHT_RATIO } from "@/store/dockStore";
 
 interface DockedTerminalItemProps {
   terminal: TerminalInstance;
@@ -56,6 +58,72 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   const { isOpen: sidecarOpen, width: sidecarWidth } = useSidecarStore(
     useShallow((s) => ({ isOpen: s.isOpen, width: s.width }))
   );
+
+  const popoverHeight = useDockStore((s) => s.popoverHeight);
+  const setPopoverHeight = useDockStore((s) => s.setPopoverHeight);
+
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeStartY = useRef(0);
+  const resizeStartHeight = useRef(0);
+  const RESIZE_STEP = 10;
+
+  const handleResizeStart = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsResizing(true);
+      resizeStartY.current = e.clientY;
+      resizeStartHeight.current = popoverHeight;
+    },
+    [popoverHeight]
+  );
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        const maxHeight = window.innerHeight * POPOVER_MAX_HEIGHT_RATIO;
+        const newHeight = Math.min(popoverHeight + RESIZE_STEP, maxHeight);
+        setPopoverHeight(newHeight);
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        const newHeight = Math.max(popoverHeight - RESIZE_STEP, POPOVER_MIN_HEIGHT);
+        setPopoverHeight(newHeight);
+      }
+    },
+    [popoverHeight, setPopoverHeight]
+  );
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const deltaY = resizeStartY.current - e.clientY;
+      const newHeight = resizeStartHeight.current + deltaY;
+      setPopoverHeight(newHeight);
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+      requestAnimationFrame(() => {
+        terminalInstanceService.fit(terminal.id);
+      });
+    };
+
+    const handleBlur = () => {
+      setIsResizing(false);
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+    window.addEventListener("blur", handleBlur);
+
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+      window.removeEventListener("blur", handleBlur);
+    };
+  }, [isResizing, terminal.id, setPopoverHeight]);
 
   const collisionPadding = useMemo(() => {
     const basePadding = 32;
@@ -246,7 +314,11 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
       </TerminalContextMenu>
 
       <PopoverContent
-        className="w-[700px] max-w-[90vw] h-[500px] max-h-[80vh] p-0 bg-canopy-bg/95 backdrop-blur-sm border border-[var(--border-overlay)] shadow-[var(--shadow-dock-popover)] rounded-[var(--radius-lg)] overflow-hidden"
+        className={cn(
+          "w-[700px] max-w-[90vw] p-0 bg-canopy-bg/95 backdrop-blur-sm border border-[var(--border-overlay)] shadow-[var(--shadow-dock-popover)] rounded-[var(--radius-lg)] overflow-hidden",
+          isResizing && "select-none"
+        )}
+        style={{ height: popoverHeight }}
         side="top"
         align="start"
         sideOffset={10}
@@ -269,6 +341,31 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
           setTimeout(() => terminalInstanceService.focus(terminal.id), 50);
         }}
       >
+        <div
+          className={cn(
+            "absolute top-0 left-0 right-0 h-2 cursor-ns-resize z-10 group flex items-center justify-center transition-colors",
+            "hover:bg-white/[0.03] focus-visible:outline-none focus-visible:bg-white/[0.04] focus-visible:ring-1 focus-visible:ring-canopy-accent/50",
+            isResizing && "bg-canopy-accent/20"
+          )}
+          onMouseDown={handleResizeStart}
+          onKeyDown={handleKeyDown}
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize docked terminal popover"
+          aria-valuenow={Math.round(popoverHeight)}
+          aria-valuemin={POPOVER_MIN_HEIGHT}
+          aria-valuemax={Math.round(window.innerHeight * POPOVER_MAX_HEIGHT_RATIO)}
+          tabIndex={0}
+        >
+          <div
+            className={cn(
+              "w-10 h-0.5 rounded-full transition-colors",
+              "bg-canopy-text/15",
+              "group-hover:bg-canopy-text/30 group-focus-visible:bg-canopy-accent",
+              isResizing && "bg-canopy-accent"
+            )}
+          />
+        </div>
         <DockedPanel terminal={terminal} onPopoverClose={handlePopoverClose} />
       </PopoverContent>
     </Popover>

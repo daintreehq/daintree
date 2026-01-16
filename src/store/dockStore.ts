@@ -8,6 +8,7 @@ interface DockState {
   autoHideWhenEmpty: boolean;
   peek: boolean;
   isHydrated: boolean;
+  popoverHeight: number;
 
   setMode: (mode: DockMode) => void;
   setBehavior: (behavior: DockBehavior) => void;
@@ -15,8 +16,15 @@ interface DockState {
   toggleExpanded: () => void;
   setAutoHideWhenEmpty: (enabled: boolean) => void;
   setPeek: (peek: boolean) => void;
-  hydrate: (state: Partial<Pick<DockState, "mode" | "behavior" | "autoHideWhenEmpty">>) => void;
+  setPopoverHeight: (height: number) => void;
+  hydrate: (
+    state: Partial<Pick<DockState, "mode" | "behavior" | "autoHideWhenEmpty" | "popoverHeight">>
+  ) => void;
 }
+
+const POPOVER_DEFAULT_HEIGHT = 500;
+const POPOVER_MIN_HEIGHT = 300;
+const POPOVER_MAX_HEIGHT_RATIO = 0.8;
 
 const MODE_CYCLE: DockMode[] = ["expanded", "hidden"];
 
@@ -26,6 +34,7 @@ export const useDockStore = create<DockState>()((set, get) => ({
   autoHideWhenEmpty: false,
   peek: false,
   isHydrated: false,
+  popoverHeight: POPOVER_DEFAULT_HEIGHT,
 
   setMode: (mode) => {
     const normalizedMode: DockMode = mode === "slim" ? "hidden" : mode;
@@ -96,8 +105,27 @@ export const useDockStore = create<DockState>()((set, get) => ({
 
   setPeek: (peek) => set({ peek }),
 
+  setPopoverHeight: (height) => {
+    const clampedHeight = Math.min(
+      Math.max(height, POPOVER_MIN_HEIGHT),
+      window.innerHeight * POPOVER_MAX_HEIGHT_RATIO
+    );
+    set({ popoverHeight: clampedHeight });
+    void persistPopoverHeight(clampedHeight);
+  },
+
   hydrate: (state) => set({ ...state, isHydrated: true }),
 }));
+
+async function persistPopoverHeight(height: number): Promise<void> {
+  try {
+    await appClient.setState({ dockedPopoverHeight: height });
+  } catch (error) {
+    console.error("Failed to persist docked popover height:", error);
+  }
+}
+
+export { POPOVER_DEFAULT_HEIGHT, POPOVER_MIN_HEIGHT, POPOVER_MAX_HEIGHT_RATIO };
 
 async function persistDockState(state: {
   mode: DockMode;

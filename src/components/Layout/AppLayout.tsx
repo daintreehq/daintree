@@ -93,6 +93,7 @@ export function AppLayout({
           mode: dockMode,
           behavior: dockBehavior,
           autoHideWhenEmpty: Boolean(appState.dockAutoHideWhenEmpty),
+          popoverHeight: appState.dockedPopoverHeight,
         });
       } catch (error) {
         console.error("Failed to restore app state:", error);
