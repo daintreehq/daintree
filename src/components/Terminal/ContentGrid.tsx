@@ -22,7 +22,7 @@ import {
   GRID_PLACEHOLDER_ID,
   SortableGridPlaceholder,
 } from "@/components/DragDrop";
-import { AlertTriangle, Settings, Play, Pin } from "lucide-react";
+import { AlertTriangle, Settings, Play, Pin, BookOpen } from "lucide-react";
 import { CanopyIcon } from "@/components/icons";
 import { ProjectPulseCard } from "@/components/Pulse";
 import { Kbd } from "@/components/ui/Kbd";
@@ -35,6 +35,9 @@ import { actionService } from "@/services/ActionService";
 import type { CliAvailability } from "@shared/types";
 import type { MenuItemOption } from "@/types";
 import { getRecipeGridClasses, getRecipeTerminalSummary } from "./utils/recipeUtils";
+import { PROJECT_EXPLANATION_PROMPT, getDefaultAgentId } from "@/lib/projectExplanationPrompt";
+import { cliAvailabilityClient } from "@/clients";
+import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 
 export interface ContentGridProps {
   className?: string;
@@ -49,6 +52,7 @@ function EmptyState({
   showProjectPulse,
   projectIconSvg,
   defaultCwd,
+  agentAvailability,
 }: {
   hasActiveWorktree: boolean;
   activeWorktreeName?: string | null;
@@ -56,6 +60,7 @@ function EmptyState({
   showProjectPulse: boolean;
   projectIconSvg?: string;
   defaultCwd?: string;
+  agentAvailability?: CliAvailability;
 }) {
   const allRecipes = useRecipeStore((state) => state.recipes);
   const runRecipe = useRecipeStore((state) => state.runRecipe);
@@ -105,6 +110,37 @@ function EmptyState({
       await runRecipe(recipeId, defaultCwd, activeWorktreeId ?? undefined);
     } catch (error) {
       console.error("Failed to run recipe:", error);
+    }
+  };
+
+  const defaultSelection = useToolbarPreferencesStore((state) => state.launcher.defaultSelection);
+
+  const handleExplainProject = async () => {
+    if (!defaultCwd) return;
+
+    try {
+      const availability = agentAvailability ?? (await cliAvailabilityClient.get());
+      const agentId = getDefaultAgentId(defaultSelection, availability);
+
+      if (!agentId) {
+        console.error("No available agent to explain project");
+        return;
+      }
+
+      void actionService.dispatch(
+        "agent.launch",
+        {
+          agentId,
+          location: "grid",
+          cwd: defaultCwd,
+          worktreeId: activeWorktreeId ?? undefined,
+          prompt: PROJECT_EXPLANATION_PROMPT,
+          interactive: true,
+        },
+        { source: "user" }
+      );
+    } catch (error) {
+      console.error("Failed to launch project explanation:", error);
     }
   };
 
@@ -217,10 +253,28 @@ function EmptyState({
 
         <div className="flex flex-col items-center gap-4 mt-4">
           {hasActiveWorktree && (
-            <p className="text-xs text-canopy-text/60 text-center">
-              Tip: Press <Kbd>⌘P</Kbd> to open the command palette or <Kbd>⌘T</Kbd> for a new
-              terminal
-            </p>
+            <>
+              <p className="text-xs text-canopy-text/60 text-center">
+                Tip: Press <Kbd>⌘P</Kbd> to open the command palette or <Kbd>⌘T</Kbd> for a new
+                terminal
+              </p>
+
+              <button
+                type="button"
+                onClick={handleExplainProject}
+                disabled={!defaultCwd}
+                className="flex items-center gap-3 p-2 pr-4 rounded-full hover:bg-white/5 transition-all group text-left border border-transparent hover:border-white/5 disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
+              >
+                <div className="w-8 h-8 bg-white/10 rounded-full flex items-center justify-center group-hover:bg-canopy-accent/20 transition-colors">
+                  <BookOpen className="h-4 w-4 text-white/70 group-hover:text-canopy-accent transition-colors" />
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-xs font-medium text-canopy-text/60 group-hover:text-canopy-text transition-colors">
+                    What's This Project?
+                  </span>
+                </div>
+              </button>
+            </>
           )}
 
           <button
@@ -571,6 +625,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
                   showProjectPulse={showProjectPulse}
                   projectIconSvg={projectIconSvg}
                   defaultCwd={defaultCwd}
+                  agentAvailability={agentAvailability}
                 />
               </div>
             ) : (
