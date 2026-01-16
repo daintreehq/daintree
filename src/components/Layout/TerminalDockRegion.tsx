@@ -10,8 +10,6 @@ export function TerminalDockRegion() {
   const {
     shouldShowInLayout,
     showStatusOverlay,
-    effectiveMode,
-    hasDocked,
     dockedCount,
     density,
     isHydrated,
@@ -40,26 +38,15 @@ export function TerminalDockRegion() {
       {/* Handle overlay is always visible at bottom edge for discoverability */}
       <DockHandleOverlay />
 
-      {/* Status overlay when dock is hidden but has status counts */}
+      {/* Status overlay when dock is hidden but has status counts or docked panels */}
       {showStatusOverlay && (
         <DockStatusOverlay
           waitingCount={waitingCount}
           failedCount={failedCount}
           trashedCount={trashedCount}
+          dockedCount={dockedCount}
+          onExpandDock={() => setMode("expanded")}
           shouldFadeForInput={shouldFadeForInput}
-        />
-      )}
-
-      {/* Peek indicator bar when dock is hidden with docked terminals */}
-      {effectiveMode === "hidden" && hasDocked && !shouldShowInLayout && (
-        <button
-          type="button"
-          className="absolute bottom-0 left-0 right-0 h-1 bg-canopy-accent/60
-                     cursor-pointer hover:h-2 focus-visible:h-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent
-                     transition-[height,background-color,outline] duration-200 z-40"
-          onClick={() => setMode("expanded")}
-          title={`${dockedCount} terminal${dockedCount > 1 ? "s" : ""} in dock`}
-          aria-label={`Show ${dockedCount} hidden terminal${dockedCount > 1 ? "s" : ""}`}
         />
       )}
     </DockPanelOffscreenContainer>

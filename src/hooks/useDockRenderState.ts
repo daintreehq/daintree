@@ -111,10 +111,10 @@ export function useDockRenderState(): DockRenderState & {
   // Compute density for ContentDock
   const density: DockRenderState["density"] = "normal";
 
-  // Show status overlay when dock is hidden and there are status indicators
+  // Show status overlay when dock is hidden and there are status indicators or docked panels
   // CRITICAL: Must be mutually exclusive with shouldShowInLayout
   const showStatusOverlay =
-    isHydrated && effectiveMode === "hidden" && hasStatus && !shouldShowInLayout;
+    isHydrated && effectiveMode === "hidden" && (hasStatus || hasDocked) && !shouldShowInLayout;
 
   // Whether the dock handle should indicate visible/hidden state
   const isHandleVisible = effectiveMode === "expanded";

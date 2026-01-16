@@ -4,11 +4,14 @@ import { useTerminalStore } from "@/store/terminalStore";
 import { WaitingContainer } from "./WaitingContainer";
 import { FailedContainer } from "./FailedContainer";
 import { TrashContainer } from "./TrashContainer";
+import { DockedContainer } from "./DockedContainer";
 
 interface DockStatusOverlayProps {
   waitingCount: number;
   failedCount: number;
   trashedCount: number;
+  dockedCount: number;
+  onExpandDock: () => void;
   shouldFadeForInput?: boolean;
 }
 
@@ -16,9 +19,11 @@ export function DockStatusOverlay({
   waitingCount,
   failedCount,
   trashedCount,
+  dockedCount,
+  onExpandDock,
   shouldFadeForInput = false,
 }: DockStatusOverlayProps) {
-  const hasAny = waitingCount > 0 || failedCount > 0 || trashedCount > 0;
+  const hasAny = waitingCount > 0 || failedCount > 0 || trashedCount > 0 || dockedCount > 0;
 
   const terminals = useTerminalStore((state) => state.terminals);
   const trashedTerminals = useTerminalStore(useShallow((state) => state.trashedTerminals));
@@ -53,6 +58,7 @@ export function DockStatusOverlay({
       aria-live="polite"
       aria-label="Dock status indicators"
     >
+      <DockedContainer dockedCount={dockedCount} onClick={onExpandDock} compact />
       <WaitingContainer compact />
       <FailedContainer compact />
       <TrashContainer trashedTerminals={trashedItems} compact />
