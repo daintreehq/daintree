@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getAtFileContext, getSlashCommandContext } from "../hybridInputParsing";
+import { getAtFileContext, getSlashCommandContext, getLeadingSlashCommand } from "../hybridInputParsing";
 
 describe("getAtFileContext", () => {
   it("detects an @ token at the caret", () => {
@@ -49,5 +49,65 @@ describe("getSlashCommandContext", () => {
     expect(ctx?.start).toBe(0);
     expect(ctx?.tokenEnd).toBe("/cl".length);
     expect(ctx?.query).toBe("/cl");
+  });
+});
+
+describe("getLeadingSlashCommand", () => {
+  it("detects a leading slash command", () => {
+    const token = getLeadingSlashCommand("/help");
+    expect(token).not.toBeNull();
+    expect(token?.start).toBe(0);
+    expect(token?.end).toBe(5);
+    expect(token?.command).toBe("/help");
+  });
+
+  it("detects command with arguments", () => {
+    const token = getLeadingSlashCommand("/review @src/file.ts");
+    expect(token).not.toBeNull();
+    expect(token?.command).toBe("/review");
+    expect(token?.end).toBe(7);
+  });
+
+  it("returns null for text not starting with slash", () => {
+    expect(getLeadingSlashCommand("echo /help")).toBeNull();
+    expect(getLeadingSlashCommand("  /help")).toBeNull();
+  });
+
+  it("returns null for slash-only input", () => {
+    expect(getLeadingSlashCommand("/")).toBeNull();
+  });
+
+  it("handles mixed input with @file references", () => {
+    const text = "/compact @src/App.tsx some text";
+    const slashToken = getLeadingSlashCommand(text);
+    const atContext = getAtFileContext(text, text.indexOf("@") + 1);
+
+    expect(slashToken?.command).toBe("/compact");
+    expect(atContext).not.toBeNull();
+    expect(atContext?.atStart).toBe(9);
+  });
+
+  it("only treats first slash as command", () => {
+    const token = getLeadingSlashCommand("/help /other");
+    expect(token?.command).toBe("/help");
+    expect(token?.end).toBe(5);
+  });
+
+  it("handles tab-delimited commands", () => {
+    const token = getLeadingSlashCommand("/review\t@file.ts");
+    expect(token?.command).toBe("/review");
+    expect(token?.end).toBe(7);
+  });
+
+  it("handles newline-delimited commands", () => {
+    const token = getLeadingSlashCommand("/help\nmore text");
+    expect(token?.command).toBe("/help");
+    expect(token?.end).toBe(5);
+  });
+
+  it("handles CRLF-delimited commands", () => {
+    const token = getLeadingSlashCommand("/compact\r\nmore");
+    expect(token?.command).toBe("/compact");
+    expect(token?.end).toBe(8);
   });
 });

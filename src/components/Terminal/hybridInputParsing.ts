@@ -44,9 +44,30 @@ export function getSlashCommandContext(text: string, caret: number): SlashComman
   if (!text.startsWith("/")) return null;
   if (caret < 1) return null;
 
-  const firstSpaceIndex = text.indexOf(" ");
-  const tokenEnd = firstSpaceIndex === -1 ? text.length : firstSpaceIndex;
+  const whitespaceMatch = text.slice(1).match(/\s/);
+  const tokenEnd = whitespaceMatch ? whitespaceMatch.index! + 1 : text.length;
   if (caret > tokenEnd) return null;
 
   return { start: 0, tokenEnd, query: text.slice(0, caret) };
+}
+
+export interface SlashCommandToken {
+  start: number;
+  end: number;
+  command: string;
+}
+
+export function getLeadingSlashCommand(text: string): SlashCommandToken | null {
+  if (!text.startsWith("/")) return null;
+
+  const whitespaceMatch = text.slice(1).match(/\s/);
+  const tokenEnd = whitespaceMatch ? whitespaceMatch.index! + 1 : text.length;
+
+  if (tokenEnd <= 1) return null;
+
+  return {
+    start: 0,
+    end: tokenEnd,
+    command: text.slice(0, tokenEnd),
+  };
 }
