@@ -20,11 +20,7 @@ import { actionService } from "@/services/ActionService";
 import { IssueSelector } from "@/components/GitHub/IssueSelector";
 import { generateBranchSlug } from "@/utils/textParsing";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import {
-  parseBranchInput,
-  suggestPrefixes,
-  detectPrefixFromIssue,
-} from "./branchPrefixUtils";
+import { parseBranchInput, suggestPrefixes, detectPrefixFromIssue } from "./branchPrefixUtils";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { toBranchOption, filterBranches, type BranchOption } from "./branchPickerUtils";
@@ -287,7 +283,9 @@ export function NewWorktreeDialog({
         break;
       case "ArrowUp":
         e.preventDefault();
-        setPrefixSelectedIndex((prev) => (prev - 1 + prefixSuggestions.length) % prefixSuggestions.length);
+        setPrefixSelectedIndex(
+          (prev) => (prev - 1 + prefixSuggestions.length) % prefixSuggestions.length
+        );
         break;
       case "Enter":
         e.preventDefault();
@@ -435,7 +433,11 @@ export function NewWorktreeDialog({
         return;
       }
     } else {
-      if (/[\s.]$/.test(trimmedInput) || /^[.-]/.test(trimmedInput) || /[/\\:]/.test(trimmedInput)) {
+      if (
+        /[\s.]$/.test(trimmedInput) ||
+        /^[.-]/.test(trimmedInput) ||
+        /[/\\:]/.test(trimmedInput)
+      ) {
         return;
       }
     }
@@ -520,7 +522,11 @@ export function NewWorktreeDialog({
       }
 
       // Validate prefix component for invalid git ref characters
-      if (/[\s.:]/.test(parsed.prefix) || /^[.-]/.test(parsed.prefix) || parsed.prefix.includes("..")) {
+      if (
+        /[\s.:]/.test(parsed.prefix) ||
+        /^[.-]/.test(parsed.prefix) ||
+        parsed.prefix.includes("..")
+      ) {
         setError("Branch prefix contains invalid characters");
         return;
       }
@@ -839,7 +845,9 @@ export function NewWorktreeDialog({
                         placeholder="feature/my-awesome-feature"
                         className="w-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent font-mono text-sm"
                         disabled={creating}
-                        aria-describedby={branchWasAutoResolved ? "branch-resolved-hint" : undefined}
+                        aria-describedby={
+                          branchWasAutoResolved ? "branch-resolved-hint" : undefined
+                        }
                         role="combobox"
                         aria-autocomplete="list"
                         aria-controls="prefix-list"
@@ -877,7 +885,9 @@ export function NewWorktreeDialog({
                             <span className="font-mono text-canopy-accent">
                               {suggestion.type.prefix}/
                             </span>
-                            <span className="text-canopy-text/60">{suggestion.type.displayName}</span>
+                            <span className="text-canopy-text/60">
+                              {suggestion.type.displayName}
+                            </span>
                           </div>
                         ))
                       )}
