@@ -7,7 +7,6 @@ import {
   Check,
   AlertCircle,
   Loader2,
-  ChevronDown,
   ChevronsUpDown,
   Search,
   UserPlus,
@@ -20,8 +19,12 @@ import { worktreeClient, githubClient, projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { IssueSelector } from "@/components/GitHub/IssueSelector";
 import { generateBranchSlug } from "@/utils/textParsing";
-import { BRANCH_TYPES } from "@shared/config/branchPrefixes";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  parseBranchInput,
+  suggestPrefixes,
+  detectPrefixFromIssue,
+} from "./branchPrefixUtils";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { toBranchOption, filterBranches, type BranchOption } from "./branchPickerUtils";
@@ -53,11 +56,10 @@ export function NewWorktreeDialog({
   const [error, setError] = useState<string | null>(null);
 
   const [baseBranch, setBaseBranch] = useState("");
-  const [newBranch, setNewBranch] = useState("");
+  const [branchInput, setBranchInput] = useState("");
   const [worktreePath, setWorktreePath] = useState("");
   const [fromRemote, setFromRemote] = useState(false);
   const [selectedIssue, setSelectedIssue] = useState<GitHubIssue | null>(null);
-  const [selectedPrefix, setSelectedPrefix] = useState(BRANCH_TYPES[0].prefix);
   const [branchWasAutoResolved, setBranchWasAutoResolved] = useState(false);
   const [pathWasAutoResolved, setPathWasAutoResolved] = useState(false);
 
@@ -69,6 +71,10 @@ export function NewWorktreeDialog({
   const [selectedRecipeId, setSelectedRecipeId] = useState<string | null>(null);
   const [recipePickerOpen, setRecipePickerOpen] = useState(false);
   const recipeSelectionTouchedRef = useRef(false);
+
+  const [prefixPickerOpen, setPrefixPickerOpen] = useState(false);
+  const [prefixSelectedIndex, setPrefixSelectedIndex] = useState(0);
+  const branchInputTouchedRef = useRef(false);
 
   const assignWorktreeToSelf = usePreferencesStore((s) => s.assignWorktreeToSelf);
   const setAssignWorktreeToSelf = usePreferencesStore((s) => s.setAssignWorktreeToSelf);
@@ -170,6 +176,7 @@ export function NewWorktreeDialog({
   const newBranchInputRef = useRef<HTMLInputElement>(null);
   const branchInputRef = useRef<HTMLInputElement>(null);
   const branchListRef = useRef<HTMLDivElement>(null);
+  const prefixListRef = useRef<HTMLDivElement>(null);
 
   const branchOptions = useMemo(() => branches.map(toBranchOption), [branches]);
 
@@ -183,6 +190,19 @@ export function NewWorktreeDialog({
     [branchOptions, baseBranch]
   );
 
+  const parsedBranch = useMemo(() => parseBranchInput(branchInput), [branchInput]);
+
+  const prefixSuggestions = useMemo(() => {
+    // Only show suggestions if typing at the beginning (no slash yet or cursor at prefix)
+    const slashIndex = branchInput.indexOf("/");
+    if (slashIndex === -1) {
+      // No slash yet - show prefix suggestions based on current input
+      return suggestPrefixes(branchInput);
+    }
+    // Already has slash - don't show prefix suggestions
+    return [];
+  }, [branchInput]);
+
   useEffect(() => {
     if (branchPickerOpen && branchInputRef.current) {
       requestAnimationFrame(() => {
@@ -195,6 +215,19 @@ export function NewWorktreeDialog({
     setBranchQuery("");
     setSelectedIndex(0);
   }, [branchPickerOpen]);
+
+  useEffect(() => {
+    setPrefixSelectedIndex(0);
+  }, [prefixPickerOpen]);
+
+  useEffect(() => {
+    // Open prefix picker when typing if suggestions are available, no slash yet, and user has typed something
+    const hasTyped = branchInput.trim().length > 0;
+    const hasNoSlash = branchInput.indexOf("/") === -1;
+    const hasSuggestions = prefixSuggestions.length > 0 && prefixSuggestions.length < 12; // Don't show all 12 for empty input
+    const shouldShowPrefixPicker = hasTyped && hasNoSlash && hasSuggestions;
+    setPrefixPickerOpen(shouldShowPrefixPicker);
+  }, [prefixSuggestions, branchInput]);
 
   useEffect(() => {
     setSelectedIndex(0);
@@ -244,6 +277,61 @@ export function NewWorktreeDialog({
     }
   };
 
+  const handlePrefixKeyDown = (e: React.KeyboardEvent) => {
+    if (!prefixPickerOpen || prefixSuggestions.length === 0) return;
+
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        setPrefixSelectedIndex((prev) => (prev + 1) % prefixSuggestions.length);
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        setPrefixSelectedIndex((prev) => (prev - 1 + prefixSuggestions.length) % prefixSuggestions.length);
+        break;
+      case "Enter":
+        e.preventDefault();
+        if (prefixSuggestions[prefixSelectedIndex]) {
+          handlePrefixSelect(prefixSuggestions[prefixSelectedIndex].type.prefix);
+        }
+        break;
+      case "Tab":
+        // Only capture Tab if user has typed something or navigated suggestions
+        // This allows Tab to move focus when just opening the field
+        if (branchInput.trim().length > 0 || prefixSelectedIndex !== 0) {
+          e.preventDefault();
+          if (prefixSuggestions[prefixSelectedIndex]) {
+            handlePrefixSelect(prefixSuggestions[prefixSelectedIndex].type.prefix);
+          }
+        }
+        break;
+      case "Escape":
+        e.preventDefault();
+        setPrefixPickerOpen(false);
+        break;
+    }
+  };
+
+  const handlePrefixSelect = (prefix: string) => {
+    const currentInput = branchInput.trim();
+    const slashIndex = currentInput.indexOf("/");
+
+    if (slashIndex === -1) {
+      // No slash yet - replace entire input with prefix/
+      setBranchInput(`${prefix}/`);
+    } else {
+      // Has slash - replace prefix part
+      const slug = currentInput.slice(slashIndex + 1);
+      setBranchInput(`${prefix}/${slug}`);
+    }
+
+    setPrefixPickerOpen(false);
+    branchInputTouchedRef.current = true;
+
+    // Keep focus on input
+    setTimeout(() => newBranchInputRef.current?.focus(), 0);
+  };
+
   useEffect(() => {
     if (!isOpen) return;
 
@@ -255,11 +343,13 @@ export function NewWorktreeDialog({
     setBaseBranch("");
     setFromRemote(false);
     setSelectedIssue(initialIssue ?? null);
-    setNewBranch("");
+    setBranchInput("");
     setWorktreePath("");
-    setSelectedPrefix(BRANCH_TYPES[0].prefix);
     setProjectSettings(null);
     recipeSelectionTouchedRef.current = false;
+    branchInputTouchedRef.current = false;
+    setPrefixPickerOpen(false);
+    setPrefixSelectedIndex(0);
 
     let isCurrent = true;
 
@@ -304,39 +394,52 @@ export function NewWorktreeDialog({
   }, [isOpen, loading]);
 
   useEffect(() => {
-    if (selectedIssue) {
+    if (selectedIssue && !branchInputTouchedRef.current) {
       const slug = generateBranchSlug(selectedIssue.title, 30);
-      const suggestedBranch = slug
+      const suggestedSlug = slug
         ? `issue-${selectedIssue.number}-${slug}`
         : `issue-${selectedIssue.number}`;
-      setNewBranch(suggestedBranch);
 
-      const labels = selectedIssue.labels || [];
-      const isBug = labels.some((l) => {
-        const name = l.name.toLowerCase();
-        return /\b(bug|bugfix|hotfix)\b/.test(name);
-      });
-      setSelectedPrefix(isBug ? "bugfix" : "feature");
+      const detectedPrefix = detectPrefixFromIssue(selectedIssue);
+      const prefix = detectedPrefix || "feature";
+
+      setBranchInput(`${prefix}/${suggestedSlug}`);
     }
   }, [selectedIssue]);
 
   // Auto-resolve branch name and path conflicts (debounced)
   useEffect(() => {
-    const trimmedName = newBranch.trim();
+    const trimmedInput = branchInput.trim();
 
     // Validate input before calling IPC
-    if (!trimmedName || !rootPath) {
+    if (!trimmedInput || !rootPath) {
       setBranchWasAutoResolved(false);
       setPathWasAutoResolved(false);
       return;
     }
 
-    // Check for invalid characters
-    if (/[\s.]$/.test(trimmedName) || /^[.-]/.test(trimmedName) || /[/\\:]/.test(trimmedName)) {
+    // Parse the input to get full branch name
+    const parsed = parseBranchInput(trimmedInput);
+    const fullBranchName = parsed.fullBranchName;
+
+    // Skip auto-resolve if slug is empty (e.g., "feature/")
+    if (parsed.hasPrefix && (!parsed.slug || !parsed.slug.trim())) {
+      setBranchWasAutoResolved(false);
+      setPathWasAutoResolved(false);
       return;
     }
 
-    const fullBranchName = `${selectedPrefix}/${trimmedName}`;
+    // Check for invalid characters in the slug part
+    if (parsed.hasPrefix) {
+      if (/[\s.]$/.test(parsed.slug) || /^[.-]/.test(parsed.slug) || /[\\:]/.test(parsed.slug)) {
+        return;
+      }
+    } else {
+      if (/[\s.]$/.test(trimmedInput) || /^[.-]/.test(trimmedInput) || /[/\\:]/.test(trimmedInput)) {
+        return;
+      }
+    }
+
     const abortController = new AbortController();
 
     // Debounce to avoid IPC calls on every keystroke (300ms)
@@ -357,11 +460,9 @@ export function NewWorktreeDialog({
           const branchResolved = availableBranch !== fullBranchName;
           setBranchWasAutoResolved(branchResolved);
 
-          // If branch was auto-resolved, update the branch name in the UI
+          // If branch was auto-resolved, update the branch input
           if (branchResolved) {
-            const resolvedBranchParts = availableBranch.split("/");
-            const branchNameWithoutPrefix = resolvedBranchParts.slice(1).join("/");
-            setNewBranch(branchNameWithoutPrefix);
+            setBranchInput(availableBranch);
           }
         } else {
           console.error("Failed to get available branch:", branchResult.reason);
@@ -394,7 +495,7 @@ export function NewWorktreeDialog({
       clearTimeout(timeoutId);
       abortController.abort();
     };
-  }, [newBranch, selectedPrefix, rootPath]);
+  }, [branchInput, rootPath]);
 
   const handleCreate = async () => {
     if (!baseBranch) {
@@ -402,20 +503,46 @@ export function NewWorktreeDialog({
       return;
     }
 
-    const trimmedName = newBranch.trim();
-    if (!trimmedName) {
+    const trimmedInput = branchInput.trim();
+    if (!trimmedInput) {
       setError("Please enter a branch name");
       return;
     }
 
-    if (/[\s.]$/.test(trimmedName) || /^[.-]/.test(trimmedName)) {
-      setError("Branch name cannot start with '.', '-' or end with space or '.'");
-      return;
-    }
+    const parsed = parseBranchInput(trimmedInput);
 
-    if (/[/\\:]/.test(trimmedName) || trimmedName.includes("..")) {
-      setError("Branch name contains invalid characters");
-      return;
+    // Validate the prefix and slug parts
+    if (parsed.hasPrefix) {
+      // Require non-empty slug when prefix is present
+      if (!parsed.slug || !parsed.slug.trim()) {
+        setError("Please enter a branch name after the prefix");
+        return;
+      }
+
+      // Validate prefix component for invalid git ref characters
+      if (/[\s.:]/.test(parsed.prefix) || /^[.-]/.test(parsed.prefix) || parsed.prefix.includes("..")) {
+        setError("Branch prefix contains invalid characters");
+        return;
+      }
+
+      // Validate slug part
+      if (/[\s.]$/.test(parsed.slug) || /^[.-]/.test(parsed.slug)) {
+        setError("Branch name cannot start with '.', '-' or end with space or '.'");
+        return;
+      }
+      if (/[\\:]/.test(parsed.slug) || parsed.slug.includes("..")) {
+        setError("Branch name contains invalid characters");
+        return;
+      }
+    } else {
+      if (/[\s.]$/.test(trimmedInput) || /^[.-]/.test(trimmedInput)) {
+        setError("Branch name cannot start with '.', '-' or end with space or '.'");
+        return;
+      }
+      if (/[/\\:]/.test(trimmedInput) || trimmedInput.includes("..")) {
+        setError("Branch name contains invalid characters");
+        return;
+      }
     }
 
     if (!worktreePath.trim()) {
@@ -423,7 +550,7 @@ export function NewWorktreeDialog({
       return;
     }
 
-    const fullBranchName = `${selectedPrefix}/${trimmedName}`;
+    const fullBranchName = parsed.fullBranchName;
 
     setCreating(true);
     setError(null);
@@ -482,10 +609,9 @@ export function NewWorktreeDialog({
       onWorktreeCreated?.();
       onClose();
 
-      setNewBranch("");
+      setBranchInput("");
       setWorktreePath("");
       setFromRemote(false);
-      setSelectedPrefix(BRANCH_TYPES[0].prefix);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Failed to create worktree";
       setError(message);
@@ -697,44 +823,76 @@ export function NewWorktreeDialog({
                 <label htmlFor="new-branch" className="block text-sm font-medium text-canopy-text">
                   New Branch Name
                 </label>
-                <div className="flex gap-2 items-center">
-                  <div className="relative shrink-0">
-                    <select
-                      value={selectedPrefix}
-                      onChange={(e) => setSelectedPrefix(e.target.value)}
-                      className="appearance-none h-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text text-sm focus:outline-none focus:ring-2 focus:ring-canopy-accent pr-8"
-                      disabled={creating}
-                    >
-                      {BRANCH_TYPES.map((type) => (
-                        <option key={type.id} value={type.prefix}>
-                          {type.displayName}
-                        </option>
-                      ))}
-                    </select>
-                    <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-canopy-text/40">
-                      <ChevronDown className="w-4 h-4" />
+                <Popover open={prefixPickerOpen} onOpenChange={setPrefixPickerOpen}>
+                  <PopoverTrigger asChild>
+                    <div className="relative">
+                      <input
+                        ref={newBranchInputRef}
+                        id="new-branch"
+                        type="text"
+                        value={branchInput}
+                        onChange={(e) => {
+                          setBranchInput(e.target.value);
+                          branchInputTouchedRef.current = true;
+                        }}
+                        onKeyDown={handlePrefixKeyDown}
+                        placeholder="feature/my-awesome-feature"
+                        className="w-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent font-mono text-sm"
+                        disabled={creating}
+                        aria-describedby={branchWasAutoResolved ? "branch-resolved-hint" : undefined}
+                        role="combobox"
+                        aria-autocomplete="list"
+                        aria-controls="prefix-list"
+                        aria-expanded={prefixPickerOpen}
+                      />
                     </div>
-                  </div>
-
-                  <span className="text-canopy-text/40 font-mono">/</span>
-
-                  <input
-                    ref={newBranchInputRef}
-                    id="new-branch"
-                    type="text"
-                    value={newBranch}
-                    onChange={(e) => setNewBranch(e.target.value)}
-                    placeholder="my-awesome-feature"
-                    className="flex-1 px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
-                    disabled={creating}
-                    aria-describedby={branchWasAutoResolved ? "branch-resolved-hint" : undefined}
-                  />
-                </div>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    align="start"
+                    className="w-[var(--radix-popover-trigger-width)] p-0 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] shadow-lg"
+                    onOpenAutoFocus={(e) => e.preventDefault()}
+                  >
+                    <div
+                      ref={prefixListRef}
+                      id="prefix-list"
+                      role="listbox"
+                      className="max-h-[240px] overflow-y-auto p-1"
+                    >
+                      {prefixSuggestions.length === 0 ? (
+                        <div className="py-4 text-center text-sm text-canopy-text/60">
+                          No matching prefixes
+                        </div>
+                      ) : (
+                        prefixSuggestions.map((suggestion, index) => (
+                          <div
+                            key={suggestion.type.prefix}
+                            role="option"
+                            aria-selected={index === prefixSelectedIndex}
+                            onClick={() => handlePrefixSelect(suggestion.type.prefix)}
+                            className={cn(
+                              "flex items-center gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
+                              index === prefixSelectedIndex && "bg-canopy-accent/10"
+                            )}
+                          >
+                            <span className="font-mono text-canopy-accent">
+                              {suggestion.type.prefix}/
+                            </span>
+                            <span className="text-canopy-text/60">{suggestion.type.displayName}</span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </PopoverContent>
+                </Popover>
                 <p className="text-xs text-canopy-text/60">
-                  Full branch:{" "}
-                  <span className="font-mono text-canopy-accent">
-                    {selectedPrefix}/{newBranch || "..."}
-                  </span>
+                  {parsedBranch.hasPrefix ? (
+                    <>
+                      <span className="font-mono text-canopy-accent">{parsedBranch.prefix}/</span>
+                      <span className="font-mono">{parsedBranch.slug || "..."}</span>
+                    </>
+                  ) : (
+                    <span className="font-mono">{parsedBranch.fullBranchName || "..."}</span>
+                  )}
                 </p>
                 {branchWasAutoResolved && (
                   <p
