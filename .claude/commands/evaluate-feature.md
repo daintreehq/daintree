@@ -31,7 +31,7 @@ It is where you _direct_ work, not necessarily where you _do_ the work. It exist
 
 ### Core Pillars
 
-1. **Terminal Grid** - Manage multiple terminal sessions running AI agents in parallel
+1. **Panel Grid** - Manage multiple panel sessions running AI agents in parallel
 2. **Worktree Dashboard** - Visual monitoring of git worktrees with real-time status
 3. **Agent State Tracking** - Know when agents are working, waiting for you, or completed
 4. **Context Injection** - Generate and inject codebase context into agents via CopyTree

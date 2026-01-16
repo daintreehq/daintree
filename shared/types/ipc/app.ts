@@ -74,8 +74,8 @@ export interface AppState {
     /** Focus events tab when diagnostics opens (requires autoOpenDiagnostics) */
     focusEventsTab: boolean;
   };
-  /** Terminal grid layout configuration */
-  terminalGridConfig?: import("../config.js").TerminalGridConfig;
+  /** Panel grid layout configuration */
+  panelGridConfig?: import("../config.js").PanelGridConfig;
   /** Whether the terminal dock is collapsed */
   dockCollapsed?: boolean;
   /** Dock display mode: expanded (full) or hidden (slim is legacy) */

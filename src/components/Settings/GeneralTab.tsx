@@ -408,7 +408,7 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
             <div className="text-left">
               <div className="text-sm font-medium">Project Pulse</div>
               <div className="text-xs opacity-70">
-                Show activity heatmap on the empty terminal grid
+                Show activity heatmap on the empty panel grid
               </div>
             </div>
           </div>

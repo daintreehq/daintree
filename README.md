@@ -18,7 +18,7 @@ Instead of juggling multiple terminal windows and manually copying context, Cano
 
 ### Agent Orchestration
 
-- **Smart Terminals**: Integrated terminal grid capable of running standard shells or AI agents
+- **Smart Terminals**: Integrated panel grid capable of running standard shells or AI agents
 - **Lifecycle Tracking**: Automatically detects agent states (`idle`, `working`, `waiting`, `completed`, `failed`) via output heuristics
 - **Waiting For You**: A dedicated notification strip that alerts you when an agent needs human input
 - **Activity Monitoring**: Semantic analysis of terminal output with human-readable status headlines
@@ -31,7 +31,7 @@ Instead of juggling multiple terminal windows and manually copying context, Cano
 
 ### Multi-Panel Terminal Environment
 
-- **Drag-and-Drop Layout**: Reorderable terminal grid with dnd-kit integration
+- **Drag-and-Drop Layout**: Reorderable panel grid with dnd-kit integration
 - **Resizable Panels**: Dock and trash system for terminal organization
 - **Performance Modes**: Optimized rendering for handling dozens of terminals
 - **Hybrid Input Bar**: Command submission without typing directly in terminal

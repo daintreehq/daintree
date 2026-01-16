@@ -50,7 +50,7 @@ The **Actions System** is the central orchestration layer for all UI operations.
 
 ### Panel Architecture
 
-Panels are the visual units in the terminal grid and dock. The system uses discriminated union types for type safety:
+Panels are the visual units in the panel grid and dock. The system uses discriminated union types for type safety:
 
 - `PanelInstance = PtyPanelData | BrowserPanelData`
 - Built-in panel kinds: `"terminal"` | `"agent"` | `"browser"`

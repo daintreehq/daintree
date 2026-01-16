@@ -653,7 +653,7 @@ export function SidecarSettingsTab() {
         {layoutModePreference === "push" && (
           <p className="text-xs text-amber-500/80 flex items-center gap-1.5 mt-3">
             <AlertTriangle className="w-3 h-3" />
-            Forcing push mode on small windows may make the terminal grid unusable.
+            Forcing push mode on small windows may make the panel grid unusable.
           </p>
         )}
       </section>

@@ -356,8 +356,13 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
       openDiagnosticsDock(tab);
     }
 
-    if (appState.terminalGridConfig) {
-      useLayoutConfigStore.getState().setLayoutConfig(appState.terminalGridConfig);
+    // Migration: read from new key, fallback to old key for backward compatibility
+    const layoutConfig =
+      appState.panelGridConfig ??
+      (appState as unknown as { terminalGridConfig?: typeof appState.panelGridConfig })
+        .terminalGridConfig;
+    if (layoutConfig) {
+      useLayoutConfigStore.getState().setLayoutConfig(layoutConfig);
     }
 
     // Restore focus mode from per-project state (hydrate returns per-project focus mode)

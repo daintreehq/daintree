@@ -1,10 +1,6 @@
 import Store from "electron-store";
 import type { Project } from "./types/index.js";
-import type {
-  AgentSettings,
-  TerminalGridConfig,
-  UserAgentRegistry,
-} from "../shared/types/index.js";
+import type { AgentSettings, PanelGridConfig, UserAgentRegistry } from "../shared/types/index.js";
 import { DEFAULT_AGENT_SETTINGS } from "../shared/types/index.js";
 
 export interface StoreSchema {
@@ -78,7 +74,7 @@ export interface StoreSchema {
       showInEmptyState?: boolean;
       lastUsedAt?: number;
     }>;
-    terminalGridConfig?: TerminalGridConfig;
+    panelGridConfig?: PanelGridConfig;
     dockCollapsed?: boolean;
     dockMode?: "expanded" | "slim" | "hidden";
     dockBehavior?: "auto" | "manual";
@@ -127,7 +123,7 @@ const storeOptions = {
       terminals: [],
       recipes: [],
       hasSeenWelcome: false,
-      terminalGridConfig: { strategy: "automatic" as const, value: 3 },
+      panelGridConfig: { strategy: "automatic" as const, value: 3 },
       dockCollapsed: false,
       dockMode: "hidden" as const,
       dockBehavior: "auto" as const,

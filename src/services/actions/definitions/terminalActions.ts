@@ -753,7 +753,7 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
   actions.set("terminal.gridLayout.setStrategy", () => ({
     id: "terminal.gridLayout.setStrategy",
     title: "Set Grid Layout Strategy",
-    description: "Set the terminal grid layout strategy",
+    description: "Set the panel grid layout strategy",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -770,7 +770,7 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
       const next = { ...previous, strategy };
       state.setLayoutConfig(next);
       try {
-        await appClient.setState({ terminalGridConfig: next as any });
+        await appClient.setState({ panelGridConfig: next as any });
       } catch (error) {
         state.setLayoutConfig(previous);
         throw error;
@@ -781,7 +781,7 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
   actions.set("terminal.gridLayout.setValue", () => ({
     id: "terminal.gridLayout.setValue",
     title: "Set Grid Layout Value",
-    description: "Set the terminal grid layout value (columns/rows count)",
+    description: "Set the panel grid layout value (columns/rows count)",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -794,7 +794,7 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
       const next = { ...previous, value };
       state.setLayoutConfig(next);
       try {
-        await appClient.setState({ terminalGridConfig: next as any });
+        await appClient.setState({ panelGridConfig: next as any });
       } catch (error) {
         state.setLayoutConfig(previous);
         throw error;

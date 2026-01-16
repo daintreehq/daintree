@@ -336,8 +336,8 @@ export function registerAppStateHandlers(): () => void {
         }
       }
 
-      if ("terminalGridConfig" in partialState) {
-        const gridConfig = partialState.terminalGridConfig;
+      if ("panelGridConfig" in partialState) {
+        const gridConfig = partialState.panelGridConfig;
         if (gridConfig && typeof gridConfig === "object") {
           const strategy = gridConfig.strategy;
           const value = Number(gridConfig.value);
@@ -349,7 +349,7 @@ export function registerAppStateHandlers(): () => void {
             value >= 1 &&
             value <= 10
           ) {
-            updates.terminalGridConfig = {
+            updates.panelGridConfig = {
               strategy,
               value,
             };

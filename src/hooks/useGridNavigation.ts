@@ -49,7 +49,7 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
 
   const directionCache = useRef(new Map<string, string | null>());
 
-  // Track container width for responsive layout (mirrors TerminalGrid)
+  // Track container width for responsive layout (mirrors ContentGrid)
   const [gridWidth, setGridWidth] = useState<number | null>(null);
 
   useEffect(() => {
@@ -80,7 +80,7 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
     return () => observer.disconnect();
   }, [containerSelector]);
 
-  // Compute gridCols using the same logic as TerminalGrid
+  // Compute gridCols using the same logic as ContentGrid
   const gridCols = useMemo(() => {
     const { strategy, value } = layoutConfig;
     return computeGridColumns(gridTerminals.length, gridWidth, strategy, value);

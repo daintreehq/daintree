@@ -177,9 +177,9 @@ export type {
 
 // Config types - application configuration
 export type {
-  // Terminal grid layout config
-  TerminalLayoutStrategy,
-  TerminalGridConfig,
+  // Panel grid layout config
+  PanelLayoutStrategy,
+  PanelGridConfig,
   // Opener config
   OpenerConfig,
   OpenersConfig,

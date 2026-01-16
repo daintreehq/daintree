@@ -63,7 +63,7 @@ export function getTerminalRefreshTier(
 
 export type BackendStatus = "connected" | "disconnected" | "recovering";
 
-export interface TerminalGridState
+export interface PanelGridState
   extends
     TerminalRegistrySlice,
     TerminalFocusSlice,
@@ -78,7 +78,7 @@ export interface TerminalGridState
   restoreLastTrashed: () => void;
 }
 
-export const useTerminalStore = create<TerminalGridState>()((set, get, api) => {
+export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
   const getTerminals = () => get().terminals;
   const getTerminal = (id: string) => get().terminals.find((t) => t.id === id);
 
@@ -139,7 +139,7 @@ export const useTerminalStore = create<TerminalGridState>()((set, get, api) => {
       const state = get();
       registrySlice.moveTerminalToDock(id);
 
-      const updates: Partial<TerminalGridState> = {};
+      const updates: Partial<PanelGridState> = {};
 
       if (state.focusedId === id) {
         const gridTerminals = state.terminals.filter((t) => t.id !== id && t.location === "grid");
@@ -167,7 +167,7 @@ export const useTerminalStore = create<TerminalGridState>()((set, get, api) => {
       const state = get();
       registrySlice.trashTerminal(id);
 
-      const updates: Partial<TerminalGridState> = {};
+      const updates: Partial<PanelGridState> = {};
 
       if (state.focusedId === id) {
         const gridTerminals = state.terminals.filter((t) => t.id !== id && t.location === "grid");
@@ -416,7 +416,7 @@ export function setupTerminalStoreListeners() {
     const originalLocation: "dock" | "grid" = terminal?.location === "dock" ? "dock" : "grid";
     state.markAsTrashed(id, expiresAt, originalLocation);
 
-    const updates: Partial<TerminalGridState> = {};
+    const updates: Partial<PanelGridState> = {};
     if (state.focusedId === id) {
       const gridTerminals = state.terminals.filter((t) => t.id !== id && t.location === "grid");
       updates.focusedId = gridTerminals[0]?.id ?? null;

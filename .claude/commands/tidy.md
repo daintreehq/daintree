@@ -135,7 +135,7 @@ Curate comments in these files:
 1. src/components/Layout/AppLayout.tsx
 2. src/components/Layout/Sidebar.tsx
 3. src/components/Layout/Toolbar.tsx
-4. src/components/Terminal/TerminalGrid.tsx
+4. src/components/Terminal/ContentGrid.tsx
 5. src/components/Terminal/TerminalPane.tsx
 
 For each file:

@@ -1,4 +1,7 @@
-import type { TerminalLayoutStrategy } from "@shared/types";
+import type { PanelLayoutStrategy } from "@shared/types";
+
+// Type alias for backward compatibility
+type TerminalLayoutStrategy = PanelLayoutStrategy;
 
 /**
  * Minimum terminal width in pixels for readability.
@@ -19,17 +22,17 @@ export const MIN_TERMINAL_HEIGHT_PX = 200;
 export const ABSOLUTE_MAX_GRID_TERMINALS = 16;
 
 /**
- * Calculate the maximum number of terminals that can fit in the grid
+ * Calculate the maximum number of panels that can fit in the grid
  * while maintaining readable dimensions.
  *
  * Examples:
- * - 15" laptop (~1200x700 usable): 3 cols × 3 rows = 9 terminals
- * - 27" monitor (~1800x1000 usable): 4 cols × 5 rows = 16 terminals (capped)
- * - 32" monitor (~2200x1200 usable): 5 cols × 6 rows = 16 terminals (capped)
+ * - 15" laptop (~1200x700 usable): 3 cols × 3 rows = 9 panels
+ * - 27" monitor (~1800x1000 usable): 4 cols × 5 rows = 16 panels (capped)
+ * - 32" monitor (~2200x1200 usable): 5 cols × 6 rows = 16 panels (capped)
  *
  * @param width - Grid container width in pixels
  * @param height - Grid container height in pixels
- * @returns Maximum number of terminals that fit with readable dimensions
+ * @returns Maximum number of panels that fit with readable dimensions
  */
 export function getMaxGridCapacity(width: number | null, height: number | null): number {
   if (!width || !height) return ABSOLUTE_MAX_GRID_TERMINALS;
@@ -99,7 +102,7 @@ export function getAutoGridCols(count: number, width: number | null): number {
  * Single source of truth for grid column calculation across all layout strategies.
  * Enforces the 2-pane invariant: exactly 2 panes should ALWAYS be 2x1 layout.
  *
- * This function is used by both TerminalGrid.tsx (for rendering) and
+ * This function is used by both ContentGrid.tsx (for rendering) and
  * useGridNavigation.ts (for keyboard navigation) to ensure consistency.
  */
 export function computeGridColumns(

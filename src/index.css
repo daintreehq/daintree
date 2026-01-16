@@ -430,7 +430,7 @@ body,
   will-change: transform, opacity;
 }
 
-/* Slower spinner to reduce "chaos" in dense terminal grids */
+/* Slower spinner to reduce "chaos" in dense panel grids */
 @keyframes spin-slow {
   to {
     transform: rotate(360deg);

@@ -83,7 +83,7 @@ export function SettingsDialog({
   const tabTitles: Record<SettingsTab, string> = {
     general: "General",
     keyboard: "Keyboard Shortcuts",
-    terminal: "Terminal Grid",
+    terminal: "Panel Grid",
     terminalAppearance: "Appearance",
     worktree: "Worktree Paths",
     agents: "Agent Settings",

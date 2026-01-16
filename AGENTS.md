@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Electron-based IDE for orchestrating AI coding agents. Features terminal grid, worktree dashboard, and context injection.
+Electron-based IDE for orchestrating AI coding agents. Features panel grid, worktree dashboard, and context injection.
 
 ## Project Structure
 

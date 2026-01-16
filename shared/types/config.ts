@@ -1,14 +1,14 @@
 import type { KeyMapConfig } from "./keymap.js";
 
-// Terminal Grid Layout Configuration
+// Panel Grid Layout Configuration
 
-/** Layout strategy for terminal grid */
-export type TerminalLayoutStrategy = "automatic" | "fixed-columns" | "fixed-rows";
+/** Layout strategy for panel grid */
+export type PanelLayoutStrategy = "automatic" | "fixed-columns" | "fixed-rows";
 
-/** Configuration for terminal grid layout */
-export interface TerminalGridConfig {
+/** Configuration for panel grid layout */
+export interface PanelGridConfig {
   /** Layout strategy to use */
-  strategy: TerminalLayoutStrategy;
+  strategy: PanelLayoutStrategy;
   /** Constraint value for fixed-columns/fixed-rows strategies */
   value: number;
 }

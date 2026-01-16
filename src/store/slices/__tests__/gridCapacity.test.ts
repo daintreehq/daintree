@@ -1,6 +1,6 @@
 /**
- * Tests for terminal grid capacity enforcement
- * Verifies that the 16-terminal limit is enforced for programmatic moves
+ * Tests for panel grid capacity enforcement
+ * Verifies that the 16-panel limit is enforced for programmatic moves
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";

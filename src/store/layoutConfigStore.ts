@@ -1,8 +1,8 @@
 import { create } from "zustand";
-import type { TerminalGridConfig } from "@/types";
+import type { PanelGridConfig } from "@/types";
 import { getMaxGridCapacity, ABSOLUTE_MAX_GRID_TERMINALS } from "@/lib/terminalLayout";
 
-const DEFAULT_LAYOUT_CONFIG: TerminalGridConfig = {
+const DEFAULT_LAYOUT_CONFIG: PanelGridConfig = {
   strategy: "automatic",
   value: 3,
 };
@@ -13,8 +13,8 @@ interface GridDimensions {
 }
 
 interface LayoutConfigState {
-  layoutConfig: TerminalGridConfig;
-  setLayoutConfig: (config: TerminalGridConfig) => void;
+  layoutConfig: PanelGridConfig;
+  setLayoutConfig: (config: PanelGridConfig) => void;
 
   // Grid dimensions for dynamic capacity calculation
   gridDimensions: GridDimensions | null;

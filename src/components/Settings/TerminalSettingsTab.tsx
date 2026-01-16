@@ -17,7 +17,7 @@ import {
   useScrollbackStore,
   useTerminalInputStore,
 } from "@/store";
-import type { TerminalLayoutStrategy, TerminalType } from "@/types";
+import type { PanelLayoutStrategy, TerminalType } from "@/types";
 import {
   getScrollbackForType,
   estimateMemoryUsage,
@@ -27,7 +27,7 @@ import {
 import { actionService } from "@/services/ActionService";
 
 const STRATEGIES: Array<{
-  id: TerminalLayoutStrategy;
+  id: PanelLayoutStrategy;
   label: string;
   description: string;
   icon: typeof LayoutGrid;
@@ -112,7 +112,7 @@ export function TerminalSettingsTab() {
     }
   };
 
-  const handleStrategyChange = (strategy: TerminalLayoutStrategy) => {
+  const handleStrategyChange = (strategy: PanelLayoutStrategy) => {
     void actionService.dispatch(
       "terminal.gridLayout.setStrategy",
       { strategy },
@@ -447,7 +447,7 @@ export function TerminalSettingsTab() {
       <div className="pt-4 border-t border-canopy-border">
         <h4 className="text-sm font-medium text-canopy-text mb-2">Grid Layout Strategy</h4>
         <p className="text-xs text-canopy-text/50 mb-4">
-          Control how terminals arrange in the grid as you add more.
+          Control how panels arrange in the grid as you add more.
         </p>
       </div>
 

@@ -65,14 +65,14 @@ Main Process (electron/)     Renderer (src/)
 
 **Key Stores:**
 
-| Store                | State                           |
-| -------------------- | ------------------------------- |
-| `terminalStore`      | Terminal instances, grid layout |
-| `terminalInputStore` | Hybrid input bar state          |
-| `worktreeStore`      | Active worktree, selection      |
-| `worktreeDataStore`  | Worktree list, git status       |
-| `projectStore`       | Current project, project list   |
-| `sidecarStore`       | Sidecar tabs, visibility        |
+| Store                | State                         |
+| -------------------- | ----------------------------- |
+| `terminalStore`      | Panel instances, grid layout  |
+| `terminalInputStore` | Hybrid input bar state        |
+| `worktreeStore`      | Active worktree, selection    |
+| `worktreeDataStore`  | Worktree list, git status     |
+| `projectStore`       | Current project, project list |
+| `sidecarStore`       | Sidecar tabs, visibility      |
 
 ### Shared Types (`shared/types/ipc/`)
 

@@ -37,7 +37,7 @@ import { parseAccordionDragId } from "./SortableWorktreeTerminal";
 // Placeholder ID used when dragging from dock to grid
 export const GRID_PLACEHOLDER_ID = "__grid-placeholder__";
 
-// Context to share placeholder state with TerminalGrid
+// Context to share placeholder state with ContentGrid
 interface DndPlaceholderContextValue {
   placeholderIndex: number | null;
   sourceContainer: "grid" | "dock" | null;
@@ -268,7 +268,7 @@ export function DndProvider({ children }: DndProviderProps) {
 
       if (!isAccordionDrag && sourceContainer === "dock" && detectedContainer === "grid") {
         const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
-        // Find grid terminals to calculate insertion index (match TerminalGrid filter)
+        // Find grid terminals to calculate insertion index (match ContentGrid filter)
         const gridTerminals = terminals.filter(
           (t) =>
             (t.location === "grid" || t.location === undefined) &&
@@ -495,7 +495,7 @@ export function DndProvider({ children }: DndProviderProps) {
         const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
 
         // Only stabilize grid terminals in the ACTIVE worktree
-        // Use nullish coalescing to handle null/undefined mismatch (matches TerminalGrid filter)
+        // Use nullish coalescing to handle null/undefined mismatch (matches ContentGrid filter)
         const gridTerminalsList = currentTerminals.filter(
           (t) =>
             (t.location === "grid" || t.location === undefined) &&
