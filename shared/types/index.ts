@@ -72,6 +72,7 @@ export type {
   // Project settings types
   RunCommand,
   ProjectSettings,
+  CopyTreeSettings,
   // Panel exit behavior
   PanelExitBehavior,
 } from "./domain.js";
@@ -95,6 +96,8 @@ export type {
   CopyTreeInjectPayload,
   CopyTreeCancelPayload,
   CopyTreeGetFileTreePayload,
+  CopyTreeTestConfigPayload,
+  CopyTreeTestConfigResult,
   CopyTreeResult,
   CopyTreeProgress,
   FileTreeNode,

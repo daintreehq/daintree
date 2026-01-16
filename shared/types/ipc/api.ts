@@ -145,6 +145,10 @@ export interface ElectronAPI {
     isAvailable(): Promise<boolean>;
     cancel(injectionId?: string): Promise<void>;
     getFileTree(worktreeId: string, dirPath?: string): Promise<FileTreeNode[]>;
+    testConfig(
+      worktreeId: string,
+      options?: CopyTreeOptions
+    ): Promise<import("./copyTree.js").CopyTreeTestConfigResult>;
     onProgress(callback: (progress: CopyTreeProgress) => void): () => void;
   };
   system: {

@@ -24,6 +24,9 @@ export interface CopyTreeOptions {
   /** Formatting */
   withLineNumbers?: boolean;
   charLimit?: number;
+
+  /** Sorting strategy for file selection when limits are exceeded */
+  sort?: "path" | "size" | "modified" | "name" | "extension" | "depth";
 }
 
 export interface CopyTreeGeneratePayload {
@@ -49,6 +52,33 @@ export interface CopyTreeInjectPayload {
 export interface CopyTreeCancelPayload {
   /** If provided, only cancel this specific injection. If omitted, cancels all. */
   injectionId?: string;
+}
+
+/** Payload for testing CopyTree configuration (dry run) */
+export interface CopyTreeTestConfigPayload {
+  worktreeId: string;
+  options?: CopyTreeOptions;
+}
+
+/** Result from CopyTree dry run test */
+export interface CopyTreeTestConfigResult {
+  /** Number of files that would be included */
+  includedFiles: number;
+  /** Total size of included files in bytes */
+  includedSize: number;
+  /** Number of files excluded (broken down by reason) */
+  excluded: {
+    /** Files excluded by age/size truncation */
+    byTruncation: number;
+    /** Files excluded by size limit */
+    bySize: number;
+    /** Files excluded by patterns */
+    byPattern: number;
+  };
+  /** Optional list of included file paths (for detailed preview) */
+  files?: Array<{ path: string; size: number }>;
+  /** Error message if dry run failed */
+  error?: string;
 }
 
 /** Payload for getting file tree */

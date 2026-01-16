@@ -87,6 +87,7 @@ class CopyTreeService {
         maxFileSize: options.maxFileSize,
         maxTotalSize: options.maxTotalSize,
         maxFileCount: options.maxFileCount,
+        sort: options.sort,
 
         onProgress: onProgress
           ? (event: ProgressEvent) => {
@@ -122,6 +123,85 @@ class CopyTreeService {
       return this.handleError(error);
     } finally {
       this.activeOperations.delete(opId);
+    }
+  }
+
+  async testConfig(
+    rootPath: string,
+    options: CopyTreeOptions = {}
+  ): Promise<import("../../shared/types/index.js").CopyTreeTestConfigResult> {
+    try {
+      if (!path.isAbsolute(rootPath)) {
+        return {
+          includedFiles: 0,
+          includedSize: 0,
+          excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
+          error: "rootPath must be an absolute path",
+        };
+      }
+
+      try {
+        await fs.access(rootPath);
+      } catch {
+        return {
+          includedFiles: 0,
+          includedSize: 0,
+          excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
+          error: `Path does not exist or is not accessible: ${rootPath}`,
+        };
+      }
+
+      let config;
+      try {
+        config = await ConfigManager.create();
+      } catch (error) {
+        console.warn(
+          "[CopyTreeService] Failed to load default config (likely missing configuration files in bundle), proceeding with defaults:",
+          error
+        );
+      }
+
+      const sdkOptions: SdkCopyOptions = {
+        config: config,
+        display: false,
+        clipboard: false,
+        format: options.format || "xml",
+        dryRun: true,
+
+        filter: options.includePaths || options.filter || undefined,
+        exclude: options.exclude || undefined,
+        always: options.always,
+
+        modified: options.modified,
+        changed: options.changed,
+
+        charLimit: options.charLimit,
+        addLineNumbers: options.withLineNumbers,
+        maxFileSize: options.maxFileSize,
+        maxTotalSize: options.maxTotalSize,
+        maxFileCount: options.maxFileCount,
+        sort: options.sort,
+      };
+
+      const result: CopyResult = await copy(rootPath, sdkOptions);
+
+      return {
+        includedFiles: result.stats.totalFiles,
+        includedSize: result.stats.totalSize,
+        excluded: {
+          byTruncation: 0,
+          bySize: 0,
+          byPattern: 0,
+        },
+        files: undefined,
+      };
+    } catch (error: unknown) {
+      return {
+        includedFiles: 0,
+        includedSize: 0,
+        excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
+        error: error instanceof Error ? error.message : "Unknown error",
+      };
     }
   }
 

@@ -60,6 +60,7 @@ export const CHANNELS = {
   COPYTREE_PROGRESS: "copytree:progress",
   COPYTREE_CANCEL: "copytree:cancel",
   COPYTREE_GET_FILE_TREE: "copytree:get-file-tree",
+  COPYTREE_TEST_CONFIG: "copytree:test-config",
 
   SYSTEM_OPEN_EXTERNAL: "system:open-external",
   SYSTEM_OPEN_PATH: "system:open-path",

@@ -440,6 +440,10 @@ export class ProjectStore {
             : undefined,
         devServerCommand:
           typeof parsed.devServerCommand === "string" ? parsed.devServerCommand : undefined,
+        copyTreeSettings:
+          parsed.copyTreeSettings && typeof parsed.copyTreeSettings === "object"
+            ? parsed.copyTreeSettings
+            : undefined,
       };
 
       return settings;

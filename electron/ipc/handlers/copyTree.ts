@@ -36,7 +36,52 @@ import {
   CopyTreeGetFileTreePayloadSchema,
   CopyTreeCancelPayloadSchema,
 } from "../../schemas/ipc.js";
-import type { CopyTreeCancelPayload } from "../../types/index.js";
+import type { CopyTreeCancelPayload, CopyTreeSettings } from "../../types/index.js";
+
+/**
+ * Merge project-level CopyTree settings with runtime options.
+ * Runtime options take precedence over project settings.
+ */
+function mergeCopyTreeOptions(
+  projectSettings: CopyTreeSettings | undefined,
+  runtimeOptions: CopyTreeOptions | undefined
+): CopyTreeOptions {
+  if (!projectSettings) {
+    return runtimeOptions || {};
+  }
+
+  const merged: CopyTreeOptions = {
+    ...runtimeOptions,
+  };
+
+  if (projectSettings.maxContextSize !== undefined && merged.maxTotalSize === undefined) {
+    merged.maxTotalSize = projectSettings.maxContextSize;
+  }
+
+  if (projectSettings.maxFileSize !== undefined && merged.maxFileSize === undefined) {
+    merged.maxFileSize = projectSettings.maxFileSize;
+  }
+
+  if (projectSettings.charLimit !== undefined && merged.charLimit === undefined) {
+    merged.charLimit = projectSettings.charLimit;
+  }
+
+  if (projectSettings.strategy && merged.sort === undefined) {
+    merged.sort = projectSettings.strategy === "modified" ? "modified" : undefined;
+  }
+
+  if (projectSettings.alwaysInclude && (!merged.always || merged.always.length === 0)) {
+    merged.always = projectSettings.alwaysInclude;
+  }
+
+  if (projectSettings.alwaysExclude) {
+    const existing = merged.exclude ? (Array.isArray(merged.exclude) ? merged.exclude : [merged.exclude]) : [];
+    const additional = projectSettings.alwaysExclude;
+    merged.exclude = [...existing, ...additional];
+  }
+
+  return merged;
+}
 
 export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void {
   const { mainWindow, worktreeService: workspaceClient, ptyClient } = deps;
@@ -396,6 +441,53 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
   };
   ipcMain.handle(CHANNELS.COPYTREE_GET_FILE_TREE, handleCopyTreeGetFileTree);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.COPYTREE_GET_FILE_TREE));
+
+  const handleCopyTreeTestConfig = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: import("../../types/index.js").CopyTreeTestConfigPayload
+  ): Promise<import("../../types/index.js").CopyTreeTestConfigResult> => {
+    const traceId = crypto.randomUUID();
+    console.log(`[${traceId}] CopyTree test-config started for worktree ${payload.worktreeId}`);
+
+    const { CopyTreeTestConfigPayloadSchema } = await import("../../schemas/ipc.js");
+    const parseResult = CopyTreeTestConfigPayloadSchema.safeParse(payload);
+    if (!parseResult.success) {
+      console.error(`[${traceId}] Invalid CopyTree test-config payload:`, parseResult.error.format());
+      return {
+        includedFiles: 0,
+        includedSize: 0,
+        excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
+        error: `Invalid payload: ${parseResult.error.message}`,
+      };
+    }
+
+    const validated = parseResult.data;
+
+    if (!workspaceClient) {
+      return {
+        includedFiles: 0,
+        includedSize: 0,
+        excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
+        error: "Workspace client not initialized",
+      };
+    }
+
+    const states = await workspaceClient.getAllStatesAsync();
+    const worktree = states.find((wt) => wt.id === validated.worktreeId);
+
+    if (!worktree) {
+      return {
+        includedFiles: 0,
+        includedSize: 0,
+        excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
+        error: `Worktree not found: ${validated.worktreeId}`,
+      };
+    }
+
+    return workspaceClient.testConfig(worktree.path, validated.options);
+  };
+  ipcMain.handle(CHANNELS.COPYTREE_TEST_CONFIG, handleCopyTreeTestConfig);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.COPYTREE_TEST_CONFIG));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

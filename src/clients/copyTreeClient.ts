@@ -2,6 +2,7 @@ import type {
   CopyTreeOptions,
   CopyTreeResult,
   CopyTreeProgress,
+  CopyTreeTestConfigResult,
   FileTreeNode,
 } from "@shared/types";
 
@@ -33,6 +34,10 @@ export const copyTreeClient = {
 
   getFileTree: (worktreeId: string, dirPath?: string): Promise<FileTreeNode[]> => {
     return window.electron.copyTree.getFileTree(worktreeId, dirPath);
+  },
+
+  testConfig: (worktreeId: string, options?: CopyTreeOptions): Promise<CopyTreeTestConfigResult> => {
+    return window.electron.copyTree.testConfig(worktreeId, options);
   },
 
   onProgress: (callback: (progress: CopyTreeProgress) => void): (() => void) => {

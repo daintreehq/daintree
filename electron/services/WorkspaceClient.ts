@@ -415,6 +415,10 @@ export class WorkspaceClient extends EventEmitter {
         });
         break;
 
+      case "copytree:test-config-result":
+        this.handleRequestResult(this.toResult(event, true));
+        break;
+
       // File tree events
       case "file-tree-result":
         this.handleRequestResult(this.toResult(event));
@@ -736,6 +740,36 @@ export class WorkspaceClient extends EventEmitter {
 
     this.copyTreeProgressCallbacks.delete(operationId);
     this.activeCopyTreeOperations.delete(operationId);
+  }
+
+  async testConfig(
+    rootPath: string,
+    options?: CopyTreeOptions
+  ): Promise<import("../../shared/types/index.js").CopyTreeTestConfigResult> {
+    const requestId = this.generateRequestId();
+
+    try {
+      const result = await this.sendWithResponse<{
+        result: import("../../shared/types/index.js").CopyTreeTestConfigResult;
+      }>(
+        {
+          type: "copytree:test-config",
+          requestId,
+          rootPath,
+          options,
+        },
+        120000
+      );
+
+      return result.result;
+    } catch (error) {
+      return {
+        includedFiles: 0,
+        includedSize: 0,
+        excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
+        error: error instanceof Error ? error.message : "Unknown error",
+      };
+    }
   }
 
   cancelAllContext(): void {

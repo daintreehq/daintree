@@ -224,6 +224,7 @@ export const CopyTreeOptionsSchema = z
     maxFileCount: z.number().int().positive().optional(),
     withLineNumbers: z.boolean().optional(),
     charLimit: z.number().int().positive().optional(),
+    sort: z.enum(["path", "size", "modified", "name", "extension", "depth"]).optional(),
   })
   .optional();
 
@@ -246,6 +247,11 @@ export const CopyTreeInjectPayloadSchema = z.object({
 
 export const CopyTreeCancelPayloadSchema = z.object({
   injectionId: z.string().min(1).optional(),
+});
+
+export const CopyTreeTestConfigPayloadSchema = z.object({
+  worktreeId: z.string().min(1),
+  options: CopyTreeOptionsSchema,
 });
 
 export const CopyTreeProgressSchema = z.object({
