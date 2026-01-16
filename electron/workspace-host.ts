@@ -217,6 +217,32 @@ port.on("message", async (rawMsg: any) => {
         copyTreeService.cancel(request.operationId);
         break;
 
+      case "copytree:test-config": {
+        const { requestId, rootPath, options } = request;
+        console.log(`[WorkspaceHost] CopyTree test-config started`);
+
+        try {
+          const result = await copyTreeService.testConfig(rootPath, options || {});
+          sendEvent({
+            type: "copytree:test-config-result",
+            requestId,
+            result,
+          });
+        } catch (error) {
+          sendEvent({
+            type: "copytree:test-config-result",
+            requestId,
+            result: {
+              includedFiles: 0,
+              includedSize: 0,
+              excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
+              error: (error as Error).message,
+            },
+          });
+        }
+        break;
+      }
+
       case "update-github-token":
         workspaceService.updateGitHubToken(request.token);
         break;

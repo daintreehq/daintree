@@ -689,6 +689,22 @@ export interface RunCommand {
   description?: string;
 }
 
+/** CopyTree context generation settings */
+export interface CopyTreeSettings {
+  /** Maximum total context size in bytes (e.g., 1MB, 5MB, 10MB). Undefined = unlimited */
+  maxContextSize?: number;
+  /** Maximum individual file size in bytes. Files larger are skipped */
+  maxFileSize?: number;
+  /** Character limit per file for truncation. Files exceeding this will be truncated */
+  charLimit?: number;
+  /** Truncation strategy: "all" (no truncation) or "modified" (newest first when limits hit) */
+  strategy?: "all" | "modified";
+  /** Glob patterns to always include, even if old */
+  alwaysInclude?: string[];
+  /** Glob patterns to always exclude from context */
+  alwaysExclude?: string[];
+}
+
 /** Project-level settings that persist per repository */
 export interface ProjectSettings {
   /** List of custom run commands for this project */
@@ -703,6 +719,8 @@ export interface ProjectSettings {
   defaultWorktreeRecipeId?: string;
   /** Dev server command (e.g., "npm run dev") for the toolbar button */
   devServerCommand?: string;
+  /** CopyTree context generation configuration */
+  copyTreeSettings?: CopyTreeSettings;
 }
 
 // Toolbar Customization Types

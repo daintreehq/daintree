@@ -44,6 +44,8 @@ import type {
   CopyTreeInjectPayload,
   CopyTreeCancelPayload,
   CopyTreeGetFileTreePayload,
+  CopyTreeTestConfigPayload,
+  CopyTreeTestConfigResult,
   FileTreeNode,
   CopyTreeProgress,
 } from "./copyTree.js";
@@ -243,6 +245,10 @@ export interface IpcInvokeMap {
   "copytree:get-file-tree": {
     args: [payload: CopyTreeGetFileTreePayload];
     result: FileTreeNode[];
+  };
+  "copytree:test-config": {
+    args: [payload: CopyTreeTestConfigPayload];
+    result: CopyTreeTestConfigResult;
   };
 
   // System channels

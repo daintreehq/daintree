@@ -12,7 +12,13 @@
  */
 
 import type { Worktree, WorktreeChanges, FileChangeDetail, WorktreeMood } from "./domain.js";
-import type { CopyTreeOptions, CopyTreeProgress, CopyTreeResult, FileTreeNode } from "./ipc.js";
+import type {
+  CopyTreeOptions,
+  CopyTreeProgress,
+  CopyTreeResult,
+  CopyTreeTestConfigResult,
+  FileTreeNode,
+} from "./ipc.js";
 import type { ProjectPulse, PulseRangeDays } from "./pulse.js";
 
 /** Options for creating a new worktree */
@@ -148,6 +154,12 @@ export type WorkspaceHostRequest =
       options?: CopyTreeOptions;
     }
   | { type: "copytree:cancel"; operationId: string }
+  | {
+      type: "copytree:test-config";
+      requestId: string;
+      rootPath: string;
+      options?: CopyTreeOptions;
+    }
   // GitHub token propagation
   | { type: "update-github-token"; token: string | null }
   // File tree operations
@@ -235,6 +247,11 @@ export type WorkspaceHostEvent =
       result: CopyTreeResult;
     }
   | { type: "copytree:error"; requestId: string; operationId: string; error: string }
+  | {
+      type: "copytree:test-config-result";
+      requestId: string;
+      result: CopyTreeTestConfigResult;
+    }
   // File tree events
   | {
       type: "file-tree-result";

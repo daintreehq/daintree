@@ -190,6 +190,7 @@ const CHANNELS = {
   COPYTREE_PROGRESS: "copytree:progress",
   COPYTREE_CANCEL: "copytree:cancel",
   COPYTREE_GET_FILE_TREE: "copytree:get-file-tree",
+  COPYTREE_TEST_CONFIG: "copytree:test-config",
 
   // System channels
   SYSTEM_OPEN_EXTERNAL: "system:open-external",
@@ -596,6 +597,9 @@ const api: ElectronAPI = {
 
     getFileTree: (worktreeId: string, dirPath?: string) =>
       _typedInvoke(CHANNELS.COPYTREE_GET_FILE_TREE, { worktreeId, dirPath }),
+
+    testConfig: (worktreeId: string, options?: CopyTreeOptions) =>
+      _typedInvoke(CHANNELS.COPYTREE_TEST_CONFIG, { worktreeId, options }),
 
     onProgress: (callback: (progress: CopyTreeProgress) => void) =>
       _typedOn(CHANNELS.COPYTREE_PROGRESS, callback),
