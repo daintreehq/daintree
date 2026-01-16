@@ -8,3 +8,5 @@ export {
   useTitleEditingOptional,
 } from "./TitleEditingContext";
 export type { TitleEditingContextValue, TitleEditingProviderProps } from "./TitleEditingContext";
+export { PanelTransitionOverlay, triggerPanelTransition } from "./PanelTransitionOverlay";
+export type { TransitionDirection, TransitionRect } from "./PanelTransitionOverlay";

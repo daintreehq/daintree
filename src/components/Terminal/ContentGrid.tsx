@@ -560,6 +560,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
             role="grid"
             id="terminal-grid"
             aria-label="Panel grid"
+            data-grid-container="true"
           >
             {isEmpty && !showPlaceholder ? (
               <div className="col-span-full row-span-full">

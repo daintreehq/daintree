@@ -32,6 +32,7 @@ import {
 } from "./hooks/app";
 import { AppLayout } from "./components/Layout";
 import { ContentGrid } from "./components/Terminal";
+import { PanelTransitionOverlay } from "./components/Panel";
 import {
   WorktreeCard,
   WorktreePalette,
@@ -916,6 +917,8 @@ function App() {
       <ShortcutReferenceDialog isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
 
       <TerminalInfoDialogHost />
+
+      <PanelTransitionOverlay />
 
       <Toaster />
     </ErrorBoundary>
