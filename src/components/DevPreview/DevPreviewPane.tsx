@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Globe, Server, Power, Terminal } from "lucide-react";
+import { Globe, Server, Power, Terminal, RotateCw } from "lucide-react";
 import { BrowserToolbar } from "@/components/Browser/BrowserToolbar";
 import { XtermAdapter } from "@/components/Terminal/XtermAdapter";
 import { isValidBrowserUrl, normalizeBrowserUrl } from "@/components/Browser/browserUtils";
@@ -239,6 +239,7 @@ export function DevPreviewPane({
     setHasLoaded(false);
     autoReloadAttemptsRef.current = 0;
     clearAutoReload();
+    lastUrlSetAtRef.current = Date.now();
     const webview = webviewRef.current;
     if (webview && isWebviewReady) {
       webview.reload();
@@ -558,7 +559,7 @@ export function DevPreviewPane({
     return () => controller.abort();
   }, [handleBack, handleForward, handleNavigate, handleReload, id]);
 
-  const handleRestart = useCallback(() => {
+  const handleRestartServer = useCallback(() => {
     setHistory({ past: [], present: "", future: [] });
     setError(undefined);
     setStatus("starting");
@@ -585,6 +586,11 @@ export function DevPreviewPane({
     }, 10000);
     void window.electron.devPreview.restart(id);
   }, [clearAutoReload, id]);
+
+  const handleReloadBrowser = useCallback(() => {
+    if (!hasValidUrl || !isWebviewReady) return;
+    handleReload();
+  }, [handleReload, hasValidUrl, isWebviewReady]);
 
   const statusStyle = STATUS_STYLES[status];
   const showLoadingOverlay = hasValidUrl && !hasLoaded && !webviewLoadError;
@@ -650,7 +656,7 @@ export function DevPreviewPane({
       onTitleChange={onTitleChange}
       onMinimize={onMinimize}
       onRestore={onRestore}
-      onRestart={handleRestart}
+      onRestart={handleReloadBrowser}
       toolbar={devPreviewToolbar}
     >
       <div className="flex flex-1 min-h-0 flex-col">
@@ -754,15 +760,28 @@ export function DevPreviewPane({
             )}
             <button
               type="button"
-              onClick={handleRestart}
-              disabled={showRestartSpinner}
-              className={cn(buttonClass, showRestartSpinner && "animate-pulse")}
-              title="Restart dev server"
-              aria-label="Restart dev server"
-              aria-busy={showRestartSpinner}
+              onClick={handleReloadBrowser}
+              disabled={!hasValidUrl || !isWebviewReady || isLoading}
+              className={cn(buttonClass, isLoading && "animate-pulse")}
+              title="Reload browser"
+              aria-label="Reload browser"
+              aria-busy={isLoading}
             >
-              <Power className="w-4 h-4" />
+              <RotateCw className="w-4 h-4" />
             </button>
+            {!isBrowserOnly && (
+              <button
+                type="button"
+                onClick={handleRestartServer}
+                disabled={showRestartSpinner}
+                className={cn(buttonClass, showRestartSpinner && "animate-pulse")}
+                title="Restart dev server"
+                aria-label="Restart dev server"
+                aria-busy={showRestartSpinner}
+              >
+                <Power className="w-4 h-4" />
+              </button>
+            )}
           </div>
         </div>
       </div>
