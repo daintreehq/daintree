@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Globe, RotateCw, Terminal } from "lucide-react";
+import { Globe, Server, Power, Terminal } from "lucide-react";
 import { BrowserToolbar } from "@/components/Browser/BrowserToolbar";
 import { XtermAdapter } from "@/components/Terminal/XtermAdapter";
 import { isValidBrowserUrl, normalizeBrowserUrl } from "@/components/Browser/browserUtils";
@@ -286,7 +286,9 @@ export function DevPreviewPane({
       if (payload.panelId !== id) return;
       setStatus(payload.status);
       setMessage(payload.message);
-      setError(payload.status === "error" ? (payload.error ?? payload.message) : undefined);
+      setError(
+        payload.status === "error" ? (payload.error?.trim() || payload.message || undefined) : undefined
+      );
       setIsBrowserOnly((prev) => prev || payload.message.includes("Browser-only mode"));
       setPtyId(payload.ptyId);
       if (
@@ -721,16 +723,21 @@ export function DevPreviewPane({
         </div>
         <div className="flex items-center justify-between gap-3 px-3 py-1.5 border-t border-canopy-border bg-[color-mix(in_oklab,var(--color-surface)_92%,transparent)] text-xs text-canopy-text/70">
           <div className="flex items-center gap-2 min-w-0" role="status" aria-live="polite">
+            <Server className="w-3.5 h-3.5 text-canopy-text/40 shrink-0" />
             <span className={cn("h-2 w-2 rounded-full shrink-0", statusStyle.dot)} />
-            <span className={cn("font-medium", statusStyle.text)}>{statusStyle.label}</span>
-            <span className="truncate">{message}</span>
-          </div>
-          <div className="flex items-center gap-2 min-w-0">
-            {hasValidUrl && !showTerminal && (
-              <span className="font-mono text-canopy-text/50 truncate max-w-[45%]">
-                {currentUrl}
+            {status === "running" && !isBrowserOnly ? (
+              <span className={cn("font-medium", statusStyle.text)}>{statusStyle.label}</span>
+            ) : status === "error" && error ? (
+              <span className={cn("truncate", statusStyle.text)} title={error}>
+                {error}
+              </span>
+            ) : (
+              <span className="truncate text-canopy-text/60" title={message}>
+                {message}
               </span>
             )}
+          </div>
+          <div className="flex items-center gap-2 min-w-0">
             {canToggleTerminal && (
               <button
                 type="button"
@@ -747,12 +754,12 @@ export function DevPreviewPane({
               type="button"
               onClick={handleRestart}
               disabled={showRestartSpinner}
-              className={cn(buttonClass, showRestartSpinner && "animate-spin")}
+              className={cn(buttonClass, showRestartSpinner && "animate-pulse")}
               title="Restart dev server"
               aria-label="Restart dev server"
               aria-busy={showRestartSpinner}
             >
-              <RotateCw className="w-4 h-4" />
+              <Power className="w-4 h-4" />
             </button>
           </div>
         </div>
