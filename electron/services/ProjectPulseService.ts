@@ -90,10 +90,23 @@ export class ProjectPulseService {
     }
 
     const promise = (async () => {
-      const { pulse, headSha } = await this.computePulse(options);
-      this.cache.set(cacheKey, { pulse, headSha, timestamp: Date.now() });
-      this.pruneCache();
-      return pulse;
+      try {
+        const { pulse, headSha } = await this.computePulse(options);
+        this.cache.set(cacheKey, { pulse, headSha, timestamp: Date.now() });
+        this.pruneCache();
+        return pulse;
+      } catch (error) {
+        logError("ProjectPulse computation failed", {
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
+          worktreeId: options.worktreeId,
+          worktreePath: options.worktreePath,
+          mainBranch: options.mainBranch,
+          rangeDays: options.rangeDays,
+          pathExists: existsSync(options.worktreePath),
+        });
+        throw error;
+      }
     })();
 
     this.inFlight.set(cacheKey, promise);
@@ -131,9 +144,26 @@ export class ProjectPulseService {
 
     let headSha: string | undefined;
     try {
-      headSha = (await git.raw(["rev-parse", "HEAD"])).trim() || undefined;
-    } catch {
-      headSha = undefined;
+      headSha = (await git.raw(["rev-parse", "--verify", "HEAD"])).trim() || undefined;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (
+        errorMessage.includes("fatal: ambiguous argument 'HEAD'") ||
+        errorMessage.includes("unknown revision") ||
+        errorMessage.includes("needed a single revision")
+      ) {
+        logDebug("Repository has no commits, returning empty pulse", { worktreeId });
+        return {
+          pulse: this.createEmptyPulse(options),
+          headSha: undefined,
+        };
+      }
+      logError("Failed to get HEAD revision", {
+        error: errorMessage,
+        worktreeId,
+        worktreePath,
+      });
+      throw new Error(`Failed to read git HEAD: ${errorMessage}`);
     }
 
     let branch: string | undefined;
@@ -307,6 +337,23 @@ export class ProjectPulseService {
     }
 
     return cells;
+  }
+
+  private createEmptyPulse(options: GetProjectPulseOptions): ProjectPulse {
+    return {
+      worktreeId: options.worktreeId,
+      worktreePath: options.worktreePath,
+      branch: undefined,
+      mainBranch: options.mainBranch,
+      rangeDays: options.rangeDays,
+      generatedAt: Date.now(),
+      heatmap: this.createEmptyHeatmap(options.rangeDays),
+      commitsInRange: 0,
+      activeDays: 0,
+      projectAgeDays: 0,
+      currentStreakDays: 0,
+      recentCommits: [],
+    };
   }
 
   private async getRecentCommits(git: SimpleGit, count: number): Promise<CommitItem[]> {
