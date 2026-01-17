@@ -103,10 +103,11 @@ export class TerminalRendererPolicy {
             if (!current) return;
             current.needsWake = ok ? false : true;
 
-            // Force a refresh even on success to ensure xterm.js renderer is in sync.
-            // This addresses intermittent freeze issues where the terminal stops displaying
-            // output despite receiving data from the backend.
             current.terminal.refresh(0, current.terminal.rows - 1);
+
+            if (ok && !current.isAltBuffer && current.latestWasAtBottom && current.isVisible) {
+              current.terminal.scrollToBottom();
+            }
           })
           .catch(() => {
             const current = this.deps.getInstance(id);
