@@ -1,7 +1,7 @@
 import { EditorView, Decoration, hoverTooltip, keymap, placeholder } from "@codemirror/view";
 import { StateField, Prec, Extension, Compartment } from "@codemirror/state";
 import { insertNewline } from "@codemirror/commands";
-import { createRoot, Root } from "react-dom/client";
+import { createRoot } from "react-dom/client";
 import type { SlashCommand } from "@shared/types";
 import { getLeadingSlashCommand } from "./hybridInputParsing";
 import { SlashCommandTooltipContent } from "./SlashCommandTooltip";

@@ -255,7 +255,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         activeMode === "file"
           ? atContext?.atStart
           : activeMode === "command"
-            ? slashContext?.start ?? 0
+            ? (slashContext?.start ?? 0)
             : null;
       if (anchorIndex === null || anchorIndex === undefined) return;
 
@@ -383,7 +383,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         latest.addToHistory(latest.terminalId, text);
         latest.resetHistoryIndex(latest.terminalId);
 
-        applyEditorValue("", { selection: EditorSelection.cursor(0) });
+        applyEditorValue("", { selection: EditorSelection.create([EditorSelection.cursor(0)]) });
         latest.clearDraftInput(latest.terminalId);
         setAtContext(null);
         setSlashContext(null);
@@ -437,7 +437,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
         if (result !== null) {
           applyEditorValue(result, {
-            selection: EditorSelection.cursor(result.length),
+            selection: EditorSelection.create([EditorSelection.cursor(result.length)]),
             focus: true,
           });
           return true;
@@ -480,7 +480,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           }
 
           applyEditorValue(nextValue, {
-            selection: EditorSelection.cursor(nextCaret),
+            selection: EditorSelection.create([EditorSelection.cursor(nextCaret)]),
             focus: true,
           });
           setAtContext(null);
@@ -511,7 +511,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           }
 
           applyEditorValue(nextValue, {
-            selection: EditorSelection.cursor(nextCaret),
+            selection: EditorSelection.create([EditorSelection.cursor(nextCaret)]),
             focus: true,
           });
           setAtContext(null);
@@ -985,11 +985,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             <div className="relative flex-1">
               <div
                 ref={editorHostRef}
-                className={cn(
-                  "w-full",
-                  "text-canopy-text",
-                  disabled && "pointer-events-none"
-                )}
+                className={cn("w-full", "text-canopy-text", disabled && "pointer-events-none")}
               />
             </div>
           </div>
