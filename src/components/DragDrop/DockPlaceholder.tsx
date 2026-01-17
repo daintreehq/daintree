@@ -11,19 +11,12 @@ interface DockPlaceholderProps {
 export const DOCK_PLACEHOLDER_ID = "__dock-placeholder__";
 
 export function DockPlaceholder({ className }: DockPlaceholderProps) {
-  const { activeTerminal } = useDndPlaceholder();
+  const { activeTerminal, isDragging } = useDndPlaceholder();
 
-  if (!activeTerminal) {
-    return (
-      <div
-        className={cn(
-          "min-w-[120px] h-full rounded",
-          "border border-canopy-accent/30 bg-canopy-accent/5",
-          className
-        )}
-        aria-hidden="true"
-      />
-    );
+  // When not dragging, render an invisible placeholder that still takes space
+  // This maintains the drop target for drag operations without showing a visible artifact
+  if (!isDragging || !activeTerminal) {
+    return <div className={cn("min-w-[100px] h-full", className)} aria-hidden="true" />;
   }
 
   const { kind, agentId } = activeTerminal;
