@@ -264,7 +264,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
         <PopoverTrigger asChild>
           <button
             className={cn(
-              "flex items-center gap-2.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition-all duration-150 max-w-[280px]",
+              "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition-all duration-150 max-w-[280px]",
               "bg-white/[0.02] border-divider text-canopy-text/70",
               "hover:text-canopy-text hover:bg-white/[0.04]",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
@@ -289,7 +289,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                 brandColor={brandColor}
               />
             </div>
-            <span className="truncate shrink-0 min-w-[60px] max-w-[120px] font-sans font-medium">
+            <span className="truncate min-w-[48px] max-w-[140px] font-sans font-medium">
               {displayTitle}
             </span>
 
@@ -305,10 +305,10 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
               </>
             )}
 
-            {/* State icon on the right (reduced noise: hide idle + completed) */}
+            {/* State icon (compact spacing from title) */}
             {showStateIcon && StateIcon && (
               <div
-                className={cn("flex items-center ml-auto shrink-0", STATE_COLORS[agentState])}
+                className={cn("flex items-center shrink-0", STATE_COLORS[agentState])}
                 title={`Agent ${agentState}`}
               >
                 <StateIcon
