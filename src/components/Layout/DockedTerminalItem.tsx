@@ -26,7 +26,6 @@ interface DockedTerminalItemProps {
 }
 
 export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
-  const setFocused = useTerminalStore((s) => s.setFocused);
   const activeDockTerminalId = useTerminalStore((s) => s.activeDockTerminalId);
   const openDockTerminal = useTerminalStore((s) => s.openDockTerminal);
   const closeDockTerminal = useTerminalStore((s) => s.closeDockTerminal);
@@ -272,7 +271,18 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
               isOpen &&
                 "bg-white/[0.08] text-canopy-text border-canopy-accent/40 ring-1 ring-inset ring-canopy-accent/30"
             )}
-            onClick={() => setFocused(terminal.id)}
+            onClick={(e) => {
+              // Explicitly toggle popover state on click
+              // This ensures the click always works, even if dnd-kit listeners
+              // interfere with Radix Popover's default trigger behavior
+              e.preventDefault();
+              e.stopPropagation();
+              if (isOpen) {
+                closeDockTerminal();
+              } else {
+                openDockTerminal(terminal.id);
+              }
+            }}
             title={`${terminal.title} - Click to preview, drag to reorder`}
             aria-label={`${terminal.title} - Click to preview, drag to reorder`}
           >
