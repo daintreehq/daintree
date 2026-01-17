@@ -45,18 +45,22 @@ function getCoachLine(pulse: ProjectPulse): string {
   return "Make a tiny win: ship one small change today.";
 }
 
+const MAX_RETRIES = 3;
+
 export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProps) {
   const projectName = useProjectStore((s) => s.currentProject?.name);
-  const { pulse, isLoading, error, rangeDays, fetchPulse, setRangeDays } = usePulseStore(
-    useShallow((state) => ({
-      pulse: state.getPulse(worktreeId),
-      isLoading: state.isLoading(worktreeId),
-      error: state.getError(worktreeId),
-      rangeDays: state.rangeDays,
-      fetchPulse: state.fetchPulse,
-      setRangeDays: state.setRangeDays,
-    }))
-  );
+  const { pulse, isLoading, error, rangeDays, retryCount, fetchPulse, setRangeDays } =
+    usePulseStore(
+      useShallow((state) => ({
+        pulse: state.getPulse(worktreeId),
+        isLoading: state.isLoading(worktreeId),
+        error: state.getError(worktreeId),
+        rangeDays: state.rangeDays,
+        retryCount: state.getRetryCount(worktreeId),
+        fetchPulse: state.fetchPulse,
+        setRangeDays: state.setRangeDays,
+      }))
+    );
 
   const title = projectName ? `${projectName} Project Pulse` : "Project Pulse";
 
@@ -89,8 +93,12 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
           className
         )}
       >
-        <div className="flex items-center gap-2 text-canopy-text/50">
-          <Loader2 className="w-4 h-4 animate-spin" />
+        <div
+          className="flex items-center gap-2 text-canopy-text/50"
+          role="status"
+          aria-live="polite"
+        >
+          <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
           <span className="text-xs">Loading activity data...</span>
         </div>
       </div>
@@ -98,6 +106,8 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
   }
 
   if (error && !pulse) {
+    const isRetrying = retryCount > 0 && retryCount < MAX_RETRIES;
+
     return (
       <div
         className={cn(
@@ -105,16 +115,30 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
           className
         )}
       >
-        <div className="flex items-center gap-2 text-canopy-text/50">
-          <AlertCircle className="w-4 h-4 text-canopy-error/70" />
-          <span className="text-xs">{error}</span>
-          <button
-            onClick={handleRefresh}
-            className="ml-auto p-1 hover:bg-[var(--color-surface-highlight)] rounded transition-colors"
-            aria-label="Retry"
-          >
-            <RefreshCw className="w-3 h-3" />
-          </button>
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center gap-2 text-canopy-text/50" role="alert">
+            <AlertCircle className="w-4 h-4 text-canopy-error/70" aria-hidden="true" />
+            <span className="text-xs">{error}</span>
+            <button
+              onClick={handleRefresh}
+              className="ml-auto p-1 hover:bg-[var(--color-surface-highlight)] rounded transition-colors"
+              aria-label="Retry now"
+            >
+              <RefreshCw className="w-3 h-3" aria-hidden="true" />
+            </button>
+          </div>
+          {isRetrying && (
+            <div
+              className="flex items-center gap-2 text-canopy-text/40"
+              role="status"
+              aria-live="polite"
+            >
+              <Loader2 className="w-3 h-3 animate-spin" aria-hidden="true" />
+              <span className="text-xs">
+                Retrying ({retryCount}/{MAX_RETRIES})...
+              </span>
+            </div>
+          )}
         </div>
       </div>
     );

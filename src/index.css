@@ -204,7 +204,10 @@
   --popover: var(--color-surface-highlight);
   --popover-foreground: var(--color-canopy-text);
 
-  /* Primary actions - aligned with brand accent (emerald) */
+  /* Primary actions - aligned with brand accent (emerald)
+   * Dark background color on emerald provides WCAG AAA contrast (>7:1)
+   * Note: White text on emerald-500 fails WCAG AA (2.54:1)
+   */
   --primary: var(--color-canopy-accent);
   --primary-foreground: var(--color-canopy-bg);
 
@@ -220,7 +223,10 @@
   --accent: var(--color-surface-highlight);
   --accent-foreground: var(--color-canopy-text);
 
-  /* Destructive actions - sourced from Canopy status */
+  /* Destructive actions - sourced from Canopy status
+   * Dark background color on red provides better contrast
+   * Note: White text on red-400 fails WCAG AA (2.77:1)
+   */
   --destructive: var(--color-status-error);
   --destructive-foreground: var(--color-canopy-bg);
 

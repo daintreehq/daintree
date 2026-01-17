@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback } from "react";
 import {
   DndContext,
   closestCenter,
@@ -17,7 +17,6 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import {
   GripVertical,
-  PanelLeft,
   Terminal,
   Globe,
   Monitor,
@@ -26,23 +25,14 @@ import {
   Copy,
   Settings,
   AlertCircle,
-  PanelRight,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { useToolbarPreferencesStore } from "@/store";
 import type { ToolbarButtonId } from "@/../../shared/types/domain";
 import { Bot } from "lucide-react";
 
-const BUTTON_METADATA: Record<
-  ToolbarButtonId,
-  { label: string; icon: React.ReactNode; description: string; fixed?: boolean }
-> = {
-  "sidebar-toggle": {
-    label: "Sidebar Toggle",
-    icon: <PanelLeft className="h-4 w-4" />,
-    description: "Toggle sidebar visibility",
-    fixed: true,
-  },
+type ButtonMetadata = { label: string; icon: React.ReactNode; description: string };
+
+const BUTTON_METADATA: Partial<Record<ToolbarButtonId, ButtonMetadata>> = {
   claude: {
     label: "Claude Agent",
     icon: <Bot className="h-4 w-4" />,
@@ -103,12 +93,6 @@ const BUTTON_METADATA: Record<
     icon: <AlertCircle className="h-4 w-4" />,
     description: "Show problems panel",
   },
-  "sidecar-toggle": {
-    label: "Sidecar Toggle",
-    icon: <PanelRight className="h-4 w-4" />,
-    description: "Toggle sidecar panel",
-    fixed: true,
-  },
 };
 
 interface SortableButtonItemProps {
@@ -121,7 +105,6 @@ function SortableButtonItem({ buttonId, isVisible, onToggle }: SortableButtonIte
   const metadata = BUTTON_METADATA[buttonId];
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: buttonId,
-    disabled: metadata.fixed,
   });
 
   const style = {
@@ -130,21 +113,17 @@ function SortableButtonItem({ buttonId, isVisible, onToggle }: SortableButtonIte
     opacity: isDragging ? 0.5 : 1,
   };
 
+  if (!metadata) return null;
+
   return (
     <div
       ref={setNodeRef}
       style={style}
-      className={cn(
-        "flex items-center gap-3 p-3 rounded-lg border border-divider bg-canopy-sidebar/30",
-        metadata.fixed && "opacity-60"
-      )}
+      className="flex items-center gap-3 p-3 rounded-lg border border-divider bg-canopy-sidebar/30"
     >
-      {!metadata.fixed && (
-        <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing">
-          <GripVertical className="h-4 w-4 text-muted-foreground" />
-        </div>
-      )}
-      {metadata.fixed && <div className="w-4" />}
+      <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing">
+        <GripVertical className="h-4 w-4 text-muted-foreground" />
+      </div>
       <div className="flex items-center gap-2 flex-1">
         <div className="text-canopy-text">{metadata.icon}</div>
         <div className="flex-1">
@@ -152,16 +131,13 @@ function SortableButtonItem({ buttonId, isVisible, onToggle }: SortableButtonIte
           <div className="text-xs text-muted-foreground">{metadata.description}</div>
         </div>
       </div>
-      {!metadata.fixed && (
-        <input
-          type="checkbox"
-          checked={isVisible}
-          onChange={() => onToggle(buttonId)}
-          aria-label={`Toggle ${metadata.label} visibility`}
-          className="w-4 h-4 rounded border-divider bg-canopy-sidebar text-canopy-accent focus:ring-canopy-accent focus:ring-2"
-        />
-      )}
-      {metadata.fixed && <div className="text-xs text-muted-foreground">Always visible</div>}
+      <input
+        type="checkbox"
+        checked={isVisible}
+        onChange={() => onToggle(buttonId)}
+        aria-label={`Toggle ${metadata.label} visibility`}
+        className="w-4 h-4 rounded border-divider bg-canopy-sidebar text-canopy-accent focus:ring-canopy-accent focus:ring-2"
+      />
     </div>
   );
 }
@@ -183,16 +159,6 @@ export function ToolbarSettingsTab() {
     useSensor(KeyboardSensor, {
       coordinateGetter: sortableKeyboardCoordinates,
     })
-  );
-
-  const leftButtonsWithFixed = useMemo(
-    () => ["sidebar-toggle" as ToolbarButtonId, ...layout.leftButtons],
-    [layout.leftButtons]
-  );
-
-  const rightButtonsWithFixed = useMemo(
-    () => [...layout.rightButtons, "sidecar-toggle" as ToolbarButtonId],
-    [layout.rightButtons]
   );
 
   const handleLeftDragEnd = useCallback(
@@ -262,7 +228,7 @@ export function ToolbarSettingsTab() {
           <div className="flex items-center justify-between mb-3">
             <label className="text-sm font-medium text-canopy-text">Left Side Buttons</label>
             <span className="text-xs text-muted-foreground">
-              {layout.leftButtons.length + 1} buttons
+              {layout.leftButtons.length} buttons
             </span>
           </div>
           <DndContext
@@ -270,15 +236,13 @@ export function ToolbarSettingsTab() {
             collisionDetection={closestCenter}
             onDragEnd={handleLeftDragEnd}
           >
-            <SortableContext items={leftButtonsWithFixed} strategy={verticalListSortingStrategy}>
+            <SortableContext items={layout.leftButtons} strategy={verticalListSortingStrategy}>
               <div className="space-y-2">
-                {leftButtonsWithFixed.map((buttonId) => (
+                {layout.leftButtons.map((buttonId) => (
                   <SortableButtonItem
                     key={buttonId}
                     buttonId={buttonId}
-                    isVisible={
-                      buttonId === "sidebar-toggle" || layout.leftButtons.includes(buttonId)
-                    }
+                    isVisible={layout.leftButtons.includes(buttonId)}
                     onToggle={handleToggleLeft}
                   />
                 ))}
@@ -291,7 +255,7 @@ export function ToolbarSettingsTab() {
           <div className="flex items-center justify-between mb-3">
             <label className="text-sm font-medium text-canopy-text">Right Side Buttons</label>
             <span className="text-xs text-muted-foreground">
-              {layout.rightButtons.length + 1} buttons
+              {layout.rightButtons.length} buttons
             </span>
           </div>
           <DndContext
@@ -299,15 +263,13 @@ export function ToolbarSettingsTab() {
             collisionDetection={closestCenter}
             onDragEnd={handleRightDragEnd}
           >
-            <SortableContext items={rightButtonsWithFixed} strategy={verticalListSortingStrategy}>
+            <SortableContext items={layout.rightButtons} strategy={verticalListSortingStrategy}>
               <div className="space-y-2">
-                {rightButtonsWithFixed.map((buttonId) => (
+                {layout.rightButtons.map((buttonId) => (
                   <SortableButtonItem
                     key={buttonId}
                     buttonId={buttonId}
-                    isVisible={
-                      buttonId === "sidecar-toggle" || layout.rightButtons.includes(buttonId)
-                    }
+                    isVisible={layout.rightButtons.includes(buttonId)}
                     onToggle={handleToggleRight}
                   />
                 ))}

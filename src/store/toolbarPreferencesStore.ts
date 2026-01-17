@@ -51,6 +51,12 @@ const DEFAULT_PREFERENCES: ToolbarPreferences = {
   },
 };
 
+const FIXED_BUTTON_IDS: ToolbarButtonId[] = ["sidebar-toggle", "sidecar-toggle"];
+
+function sanitizeButtonList(buttons: ToolbarButtonId[]): ToolbarButtonId[] {
+  return buttons.filter((id) => !FIXED_BUTTON_IDS.includes(id));
+}
+
 interface ToolbarPreferencesState extends ToolbarPreferences {
   setLeftButtons: (buttons: ToolbarButtonId[]) => void;
   setRightButtons: (buttons: ToolbarButtonId[]) => void;
@@ -72,11 +78,11 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
       ...DEFAULT_PREFERENCES,
       setLeftButtons: (buttons) =>
         set((state) => ({
-          layout: { ...state.layout, leftButtons: buttons },
+          layout: { ...state.layout, leftButtons: sanitizeButtonList(buttons) },
         })),
       setRightButtons: (buttons) =>
         set((state) => ({
-          layout: { ...state.layout, rightButtons: buttons },
+          layout: { ...state.layout, rightButtons: sanitizeButtonList(buttons) },
         })),
       moveButton: (buttonId, from, to, toIndex) =>
         set((state) => {
@@ -130,6 +136,21 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
     {
       name: "canopy-toolbar-preferences",
       storage: createJSONStorage(() => getSafeStorage()),
+      merge: (persistedState, currentState) => {
+        const persisted = persistedState as Partial<ToolbarPreferencesState>;
+        return {
+          ...currentState,
+          ...persisted,
+          layout: {
+            leftButtons: sanitizeButtonList(
+              persisted.layout?.leftButtons ?? currentState.layout.leftButtons
+            ),
+            rightButtons: sanitizeButtonList(
+              persisted.layout?.rightButtons ?? currentState.layout.rightButtons
+            ),
+          },
+        };
+      },
     }
   )
 );
