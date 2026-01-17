@@ -503,8 +503,14 @@ export class WorkspaceClient extends EventEmitter {
   private sendToRenderer(channel: string, ...args: unknown[]): void {
     const windows = BrowserWindow.getAllWindows();
     for (const win of windows) {
-      if (win && !win.isDestroyed()) {
-        win.webContents.send(channel, ...args);
+      if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+        try {
+          win.webContents.send(channel, ...args);
+        } catch {
+          // Silently ignore send failures during window initialization/disposal.
+          // The render frame may be in a transitional state where it exists but
+          // cannot receive messages (e.g., during startup or reload).
+        }
       }
     }
   }
