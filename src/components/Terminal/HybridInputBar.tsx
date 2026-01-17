@@ -1,5 +1,4 @@
 import {
-  type KeyboardEvent,
   forwardRef,
   useCallback,
   useEffect,
@@ -9,6 +8,8 @@ import {
   useRef,
   useState,
 } from "react";
+import { EditorView } from "@codemirror/view";
+import { Compartment, EditorSelection, EditorState } from "@codemirror/state";
 import type { LegacyAgentType } from "@shared/types";
 import { getAgentConfig } from "@/config/agents";
 import { cn } from "@/lib/utils";
@@ -18,7 +19,6 @@ import { useSlashCommandAutocomplete } from "@/hooks/useSlashCommandAutocomplete
 import { useSlashCommandList } from "@/hooks/useSlashCommandList";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { AutocompleteMenu, type AutocompleteItem } from "./AutocompleteMenu";
-import { isEnterLikeLineBreakInputEvent } from "./hybridInputEvents";
 import {
   formatAtFileToken,
   getAtFileContext,
@@ -26,9 +26,16 @@ import {
   type AtFileContext,
   type SlashCommandContext,
 } from "./hybridInputParsing";
-import { SlashCommandOverlay } from "./SlashCommandOverlay";
-
-const MAX_TEXTAREA_HEIGHT_PX = 160;
+import { isEnterLikeLineBreakInputEvent } from "./hybridInputEvents";
+import {
+  inputTheme,
+  createContentAttributes,
+  createPlaceholder,
+  createSlashChipField,
+  createSlashTooltip,
+  createCustomKeymap,
+  createAutoSize,
+} from "./inputEditorExtensions";
 
 export interface HybridInputBarHandle {
   focus: () => void;
@@ -48,49 +55,28 @@ export interface HybridInputBarProps {
   className?: string;
 }
 
-function getTextOffsetLeftPx(textarea: HTMLTextAreaElement, charIndex: number): number {
-  const style = window.getComputedStyle(textarea);
-  const mirror = document.createElement("div");
-
-  mirror.style.position = "absolute";
-  mirror.style.top = "0";
-  mirror.style.left = "0";
-  mirror.style.visibility = "hidden";
-  mirror.style.pointerEvents = "none";
-  mirror.style.whiteSpace = "pre-wrap";
-  mirror.style.wordWrap = "break-word";
-  mirror.style.overflowWrap = "break-word";
-  mirror.style.boxSizing = "border-box";
-
-  mirror.style.fontFamily = style.fontFamily;
-  mirror.style.fontSize = style.fontSize;
-  mirror.style.fontWeight = style.fontWeight;
-  mirror.style.fontStyle = style.fontStyle;
-  mirror.style.letterSpacing = style.letterSpacing;
-  mirror.style.lineHeight = style.lineHeight;
-
-  mirror.style.paddingTop = style.paddingTop;
-  mirror.style.paddingRight = style.paddingRight;
-  mirror.style.paddingBottom = style.paddingBottom;
-  mirror.style.paddingLeft = style.paddingLeft;
-
-  mirror.style.width = `${textarea.clientWidth}px`;
-
-  const text = textarea.value.slice(0, Math.max(0, Math.min(charIndex, textarea.value.length)));
-  mirror.textContent = text;
-
-  const marker = document.createElement("span");
-  marker.textContent = "\u200b";
-  mirror.appendChild(marker);
-
-  document.body.appendChild(mirror);
-
-  const markerRect = marker.getBoundingClientRect();
-  const mirrorRect = mirror.getBoundingClientRect();
-
-  document.body.removeChild(mirror);
-
-  return markerRect.left - mirrorRect.left - textarea.scrollLeft;
+interface LatestState {
+  terminalId: string;
+  disabled: boolean;
+  isInitializing: boolean;
+  isInHistoryMode: boolean;
+  activeMode: "command" | "file" | null;
+  isAutocompleteOpen: boolean;
+  autocompleteItems: AutocompleteItem[];
+  selectedIndex: number;
+  value: string;
+  atContext: AtFileContext | null;
+  slashContext: SlashCommandContext | null;
+  onSend: HybridInputBarProps["onSend"];
+  onSendKey?: HybridInputBarProps["onSendKey"];
+  addToHistory: (terminalId: string, command: string) => void;
+  resetHistoryIndex: (terminalId: string) => void;
+  clearDraftInput: (terminalId: string) => void;
+  navigateHistory: (
+    terminalId: string,
+    direction: "up" | "down",
+    currentInput: string
+  ) => string | null;
 }
 
 export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarProps>(
@@ -119,15 +105,24 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       (s) => (s.historyIndex.get(terminalId) ?? -1) !== -1
     );
     const [value, setValue] = useState(() => getDraftInput(terminalId));
+    const submitAfterCompositionRef = useRef(false);
+    const isComposingRef = useRef(false);
+    const sendRafRef = useRef<number | null>(null);
+    const editorHostRef = useRef<HTMLDivElement | null>(null);
+    const editorViewRef = useRef<EditorView | null>(null);
+    const placeholderCompartmentRef = useRef(new Compartment());
+    const keymapCompartmentRef = useRef(new Compartment());
+    const editableCompartmentRef = useRef(new Compartment());
+    const chipCompartmentRef = useRef(new Compartment());
+    const tooltipCompartmentRef = useRef(new Compartment());
+    const isApplyingExternalValueRef = useRef(false);
     const allowNextLineBreakRef = useRef(false);
     const handledEnterRef = useRef(false);
-    const submitAfterCompositionRef = useRef(false);
-    const sendRafRef = useRef<number | null>(null);
-    const textareaRef = useRef<HTMLTextAreaElement | null>(null);
     const inputShellRef = useRef<HTMLDivElement | null>(null);
     const menuRef = useRef<HTMLDivElement | null>(null);
     const rootRef = useRef<HTMLDivElement | null>(null);
     const barContentRef = useRef<HTMLDivElement | null>(null);
+    const lastEmittedValueRef = useRef<string>(value);
     const [atContext, setAtContext] = useState<AtFileContext | null>(null);
     const [slashContext, setSlashContext] = useState<SlashCommandContext | null>(null);
     const [selectedIndex, setSelectedIndex] = useState(0);
@@ -137,6 +132,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const [initializationState, setInitializationState] = useState<"initializing" | "initialized">(
       "initializing"
     );
+    const latestRef = useRef<LatestState | null>(null);
 
     const isAgentTerminal = agentId !== undefined;
 
@@ -165,13 +161,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     }, [terminalId, value, setDraftInput]);
 
     useEffect(() => {
-      return () => {
-        if (sendRafRef.current !== null) {
-          cancelAnimationFrame(sendRafRef.current);
-          sendRafRef.current = null;
-        }
-      };
-    }, []);
+      lastEmittedValueRef.current = value;
+    }, [value]);
 
     const placeholder = useMemo(() => {
       const agentName = agentId ? getAgentConfig(agentId)?.name : null;
@@ -221,16 +212,25 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           ? isCommandsLoading
           : false;
 
-    const resizeTextarea = useCallback((textarea: HTMLTextAreaElement | null) => {
-      if (!textarea) return;
-      textarea.style.height = "auto";
-      const nextHeight = Math.min(textarea.scrollHeight, MAX_TEXTAREA_HEIGHT_PX);
-      textarea.style.height = `${nextHeight}px`;
-    }, []);
-
-    useLayoutEffect(() => {
-      resizeTextarea(textareaRef.current);
-    }, [resizeTextarea, value]);
+    latestRef.current = {
+      terminalId,
+      disabled,
+      isInitializing,
+      isInHistoryMode,
+      activeMode,
+      isAutocompleteOpen,
+      autocompleteItems,
+      selectedIndex,
+      value,
+      atContext,
+      slashContext,
+      onSend,
+      onSendKey,
+      addToHistory,
+      resetHistoryIndex,
+      clearDraftInput,
+      navigateHistory,
+    };
 
     useLayoutEffect(() => {
       if (collapsedHeightPx !== null) return;
@@ -247,25 +247,31 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     useLayoutEffect(() => {
       if (!isAutocompleteOpen) return;
-      const textarea = textareaRef.current;
+      const view = editorViewRef.current;
       const shell = inputShellRef.current;
-      if (!textarea || !shell) return;
+      if (!view || !shell) return;
 
       const anchorIndex =
-        activeMode === "file" ? atContext?.atStart : activeMode === "command" ? 0 : null;
+        activeMode === "file"
+          ? atContext?.atStart
+          : activeMode === "command"
+            ? slashContext?.start ?? 0
+            : null;
       if (anchorIndex === null || anchorIndex === undefined) return;
 
       const compute = () => {
         const shellRect = shell.getBoundingClientRect();
-        const textareaRect = textarea.getBoundingClientRect();
-        const textareaOffsetLeft = textareaRect.left - shellRect.left;
-        const markerLeft = getTextOffsetLeftPx(textarea, anchorIndex);
+        const coords = view.coordsAtPos(anchorIndex);
+        if (!coords) return;
 
-        const rawLeft = textareaOffsetLeft + markerLeft;
+        const rawLeft = coords.left - shellRect.left;
         const menuWidth = menuRef.current?.offsetWidth ?? 420;
-        const maxLeft = Math.max(0, shell.clientWidth - menuWidth);
-        const clampedLeft = Math.max(0, Math.min(rawLeft, maxLeft));
-        setMenuLeftPx(clampedLeft);
+        const viewportRight = window.innerWidth;
+        const menuAbsoluteLeft = shellRect.left + rawLeft;
+        const maxAbsoluteLeft = viewportRight - menuWidth;
+        const clampedAbsoluteLeft = Math.max(0, Math.min(menuAbsoluteLeft, maxAbsoluteLeft));
+        const clampedLeft = clampedAbsoluteLeft - shellRect.left;
+        setMenuLeftPx(Math.max(0, clampedLeft));
       };
 
       compute();
@@ -274,13 +280,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       window.addEventListener("resize", onResize);
       const ro = new ResizeObserver(() => compute());
       ro.observe(shell);
-      ro.observe(textarea);
+      ro.observe(view.dom);
 
       return () => {
         window.removeEventListener("resize", onResize);
         ro.disconnect();
       };
-    }, [activeMode, atContext?.atStart, isAutocompleteOpen]);
+    }, [activeMode, atContext?.atStart, isAutocompleteOpen, slashContext?.start]);
 
     useEffect(() => {
       const activeQuery =
@@ -322,218 +328,139 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       setSelectedIndex((prev) => Math.max(0, Math.min(prev, autocompleteItems.length - 1)));
     }, [autocompleteItems.length, isAutocompleteOpen]);
 
-    const sendFromTextarea = useCallback(() => {
-      if (disabled || isInitializing) return;
-      const text = textareaRef.current?.value ?? value;
-      if (text.trim().length === 0) return;
-      const payload = buildTerminalSendPayload(text);
-      onSend({ data: payload.data, trackerData: payload.trackerData, text });
-      addToHistory(terminalId, text);
-      resetHistoryIndex(terminalId);
-      setValue("");
-      clearDraftInput(terminalId);
-      setAtContext(null);
-      setSlashContext(null);
-      requestAnimationFrame(() => resizeTextarea(textareaRef.current));
-    }, [
-      addToHistory,
-      disabled,
-      isInitializing,
-      onSend,
-      resizeTextarea,
-      resetHistoryIndex,
-      value,
-      clearDraftInput,
-      terminalId,
-    ]);
+    const applyEditorValue = useCallback(
+      (
+        nextValue: string,
+        options?: {
+          selection?: EditorSelection;
+          focus?: boolean;
+        }
+      ) => {
+        if (lastEmittedValueRef.current !== nextValue) {
+          lastEmittedValueRef.current = nextValue;
+          setValue(nextValue);
+        }
+
+        const view = editorViewRef.current;
+        if (!view) return;
+
+        const current = view.state.doc.toString();
+        const shouldChangeDoc = current !== nextValue;
+        const shouldChangeSelection = options?.selection !== undefined;
+
+        if (!shouldChangeDoc && !shouldChangeSelection) {
+          if (options?.focus) view.focus();
+          return;
+        }
+
+        if (shouldChangeDoc) {
+          isApplyingExternalValueRef.current = true;
+        }
+
+        const transaction = {
+          ...(shouldChangeDoc
+            ? { changes: { from: 0, to: view.state.doc.length, insert: nextValue } }
+            : {}),
+          ...(shouldChangeSelection ? { selection: options?.selection } : {}),
+          scrollIntoView: true,
+        };
+
+        view.dispatch(transaction);
+
+        if (options?.focus) view.focus();
+      },
+      []
+    );
+
+    const sendText = useCallback(
+      (text: string) => {
+        const latest = latestRef.current;
+        if (!latest || latest.disabled || latest.isInitializing) return;
+        if (text.trim().length === 0) return;
+
+        const payload = buildTerminalSendPayload(text);
+        latest.onSend({ data: payload.data, trackerData: payload.trackerData, text });
+        latest.addToHistory(latest.terminalId, text);
+        latest.resetHistoryIndex(latest.terminalId);
+
+        applyEditorValue("", { selection: EditorSelection.cursor(0) });
+        latest.clearDraftInput(latest.terminalId);
+        setAtContext(null);
+        setSlashContext(null);
+      },
+      [applyEditorValue]
+    );
+
+    const sendFromEditor = useCallback(() => {
+      const view = editorViewRef.current;
+      const latest = latestRef.current;
+      const text = view?.state.doc.toString() ?? latest?.value ?? "";
+      sendText(text);
+    }, [sendText]);
 
     const queueSend = useCallback(() => {
       if (sendRafRef.current !== null) return;
       sendRafRef.current = requestAnimationFrame(() => {
         sendRafRef.current = null;
-        sendFromTextarea();
+        sendFromEditor();
       });
-    }, [sendFromTextarea]);
+    }, [sendFromEditor]);
 
-    const focusTextarea = useCallback(() => {
-      const textarea = textareaRef.current;
-      if (!textarea) return;
-      textarea.focus();
-      requestAnimationFrame(() => textarea.focus());
+    const focusEditor = useCallback(() => {
+      const view = editorViewRef.current;
+      if (!view) return;
+      view.focus();
+      requestAnimationFrame(() => view.focus());
     }, []);
 
-    const focusTextareaWithCursorAtEnd = useCallback(() => {
-      const textarea = textareaRef.current;
-      if (!textarea) return;
-      textarea.focus();
+    const focusEditorWithCursorAtEnd = useCallback(() => {
+      const view = editorViewRef.current;
+      if (!view) return;
       requestAnimationFrame(() => {
-        // Verify element is still mounted and is the same instance
-        if (textareaRef.current !== textarea || !textarea.isConnected) return;
-
-        textarea.focus();
-        const len = textarea.value.length;
-        textarea.setSelectionRange(len, len);
-
-        // For long multi-line drafts, ensure caret is visible
-        if (textarea.scrollHeight > textarea.clientHeight) {
-          textarea.scrollTop = textarea.scrollHeight;
-        }
+        if (!editorViewRef.current) return;
+        view.dispatch({
+          selection: EditorSelection.cursor(view.state.doc.length),
+          scrollIntoView: true,
+        });
+        view.focus();
       });
     }, []);
 
     const handleHistoryNavigation = useCallback(
       (direction: "up" | "down"): boolean => {
-        const result = navigateHistory(terminalId, direction, value);
+        const latest = latestRef.current;
+        if (!latest) return false;
+
+        const view = editorViewRef.current;
+        const currentValue = view?.state.doc.toString() ?? latest.value;
+        const result = latest.navigateHistory(latest.terminalId, direction, currentValue);
+
         if (result !== null) {
-          setValue(result);
-          requestAnimationFrame(() => {
-            const textarea = textareaRef.current;
-            if (textarea) {
-              textarea.setSelectionRange(result.length, result.length);
-              resizeTextarea(textarea);
-            }
+          applyEditorValue(result, {
+            selection: EditorSelection.cursor(result.length),
+            focus: true,
           });
           return true;
         }
-        return false;
-      },
-      [navigateHistory, terminalId, value, resizeTextarea]
-    );
-
-    useImperativeHandle(
-      ref,
-      () => ({ focus: focusTextarea, focusWithCursorAtEnd: focusTextareaWithCursorAtEnd }),
-      [focusTextarea, focusTextareaWithCursorAtEnd]
-    );
-
-    const handleKeyPassthrough = useCallback(
-      (event: KeyboardEvent<HTMLTextAreaElement>): boolean => {
-        if (!onSendKey) return false;
-        if (disabled) return false;
-        if (isInitializing) return false;
-        if (event.nativeEvent.isComposing) return false;
-
-        const isEmpty = value.trim().length === 0;
-
-        if (event.key === "Escape" && !isAutocompleteOpen) {
-          event.preventDefault();
-          event.stopPropagation();
-          onSendKey("escape");
-          return true;
-        }
-
-        const canNavigateHistory = isEmpty || isInHistoryMode;
-
-        if (canNavigateHistory && event.key === "ArrowUp") {
-          if (handleHistoryNavigation("up")) {
-            event.preventDefault();
-            event.stopPropagation();
-            return true;
-          }
-          if (isEmpty) {
-            event.preventDefault();
-            event.stopPropagation();
-            onSendKey("up");
-            return true;
-          }
-        }
-
-        if (canNavigateHistory && event.key === "ArrowDown") {
-          if (handleHistoryNavigation("down")) {
-            event.preventDefault();
-            event.stopPropagation();
-            return true;
-          }
-          if (isEmpty) {
-            event.preventDefault();
-            event.stopPropagation();
-            onSendKey("down");
-            return true;
-          }
-        }
-
-        if (isEmpty) {
-          if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-            event.preventDefault();
-            event.stopPropagation();
-            onSendKey(event.key === "ArrowLeft" ? "left" : "right");
-            return true;
-          }
-
-          const isEnter =
-            event.key === "Enter" ||
-            event.key === "Return" ||
-            event.code === "Enter" ||
-            event.code === "NumpadEnter";
-          if (isEnter && !event.shiftKey) {
-            event.preventDefault();
-            event.stopPropagation();
-            onSendKey("enter");
-            return true;
-          }
-        }
-
-        if (
-          (event.key === "c" || event.key === "C") &&
-          event.ctrlKey &&
-          !event.metaKey &&
-          !event.altKey
-        ) {
-          const textarea = textareaRef.current;
-          const hasSelection =
-            textarea && textarea.selectionStart !== null && textarea.selectionEnd !== null
-              ? textarea.selectionStart !== textarea.selectionEnd
-              : false;
-
-          // Preserve copy when user has selected text inside the textarea.
-          if (hasSelection) return false;
-
-          event.preventDefault();
-          event.stopPropagation();
-          onSendKey("ctrl+c");
-          return true;
-        }
 
         return false;
       },
-      [
-        disabled,
-        handleHistoryNavigation,
-        isInHistoryMode,
-        isInitializing,
-        isAutocompleteOpen,
-        onSendKey,
-        value,
-      ]
+      [applyEditorValue]
     );
-
-    const refreshContextsFromTextarea = useCallback(() => {
-      const textarea = textareaRef.current;
-      if (!textarea) return;
-      const caret = textarea.selectionStart ?? textarea.value.length;
-      const text = textarea.value;
-
-      const slash = getSlashCommandContext(text, caret);
-      if (slash) {
-        setSlashContext(slash);
-        setAtContext(null);
-        return;
-      }
-
-      setSlashContext(null);
-      setAtContext(getAtFileContext(text, caret));
-    }, []);
 
     const applyAutocompleteItem = useCallback(
       (item: AutocompleteItem, action: "insert" | "execute") => {
-        const textarea = textareaRef.current;
-        if (!textarea) return;
+        const view = editorViewRef.current;
+        if (!view) return;
 
-        const currentValue = textarea.value;
-        const caret = textarea.selectionStart ?? currentValue.length;
-        const slashCtx = getSlashCommandContext(currentValue, caret) ?? slashContext;
+        const latest = latestRef.current;
+        if (!latest) return;
 
-        if (activeMode === "file") {
+        const currentValue = view.state.doc.toString();
+        const caret = view.state.selection.main.head;
+        const slashCtx = getSlashCommandContext(currentValue, caret) ?? latest.slashContext;
+
+        if (latest.activeMode === "file") {
           const ctx = getAtFileContext(currentValue, caret);
           if (!ctx) return;
 
@@ -544,37 +471,28 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           const nextCaret = before.length + token.length;
 
           if (action === "execute") {
-            const payload = buildTerminalSendPayload(nextValue);
-            onSend({ data: payload.data, trackerData: payload.trackerData, text: nextValue });
-            addToHistory(terminalId, nextValue);
-            resetHistoryIndex(terminalId);
-            setValue("");
+            sendText(nextValue);
             setAtContext(null);
             setSlashContext(null);
             setSelectedIndex(0);
             lastQueryRef.current = "";
-            requestAnimationFrame(() => resizeTextarea(textareaRef.current));
             return;
           }
 
-          setValue(nextValue);
+          applyEditorValue(nextValue, {
+            selection: EditorSelection.cursor(nextCaret),
+            focus: true,
+          });
           setAtContext(null);
           setSlashContext(null);
           setSelectedIndex(0);
           lastQueryRef.current = "";
-
-          requestAnimationFrame(() => {
-            textarea.focus();
-            textarea.setSelectionRange(nextCaret, nextCaret);
-            resizeTextarea(textarea);
-          });
           return;
         }
 
-        if (activeMode === "command" && slashCtx) {
+        if (latest.activeMode === "command" && slashCtx) {
           const before = currentValue.slice(0, slashCtx.start);
-          const replaceEnd = Math.min(caret, slashCtx.tokenEnd);
-          const after = currentValue.slice(replaceEnd);
+          const after = currentValue.slice(slashCtx.tokenEnd);
 
           const hasLeadingSpace = after.startsWith(" ");
           const shouldAppendSpace = action === "insert" && !hasLeadingSpace;
@@ -584,41 +502,39 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             before.length + token.length + (action === "insert" && hasLeadingSpace ? 1 : 0);
 
           if (action === "execute") {
-            const payload = buildTerminalSendPayload(nextValue);
-            onSend({ data: payload.data, trackerData: payload.trackerData, text: nextValue });
-            addToHistory(terminalId, nextValue);
-            resetHistoryIndex(terminalId);
-            setValue("");
+            sendText(nextValue);
             setAtContext(null);
             setSlashContext(null);
             setSelectedIndex(0);
             lastQueryRef.current = "";
-            requestAnimationFrame(() => resizeTextarea(textareaRef.current));
             return;
           }
 
-          setValue(nextValue);
+          applyEditorValue(nextValue, {
+            selection: EditorSelection.cursor(nextCaret),
+            focus: true,
+          });
           setAtContext(null);
           setSlashContext(null);
           setSelectedIndex(0);
           lastQueryRef.current = "";
-
-          requestAnimationFrame(() => {
-            textarea.focus();
-            textarea.setSelectionRange(nextCaret, nextCaret);
-            resizeTextarea(textarea);
-          });
         }
       },
-      [
-        activeMode,
-        addToHistory,
-        onSend,
-        resizeTextarea,
-        resetHistoryIndex,
-        slashContext,
-        terminalId,
-      ]
+      [applyEditorValue, sendText]
+    );
+
+    const applyAutocompleteSelection = useCallback(
+      (action: "insert" | "execute") => {
+        const latest = latestRef.current;
+        if (!latest) return false;
+
+        const item = latest.autocompleteItems[latest.selectedIndex];
+        if (!item) return false;
+
+        applyAutocompleteItem(item, action);
+        return true;
+      },
+      [applyAutocompleteItem]
     );
 
     const handleAutocompleteSelect = useCallback(
@@ -627,6 +543,414 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       },
       [applyAutocompleteItem]
     );
+
+    useImperativeHandle(
+      ref,
+      () => ({ focus: focusEditor, focusWithCursorAtEnd: focusEditorWithCursorAtEnd }),
+      [focusEditor, focusEditorWithCursorAtEnd]
+    );
+
+    const editorUpdateListener = useMemo(
+      () =>
+        EditorView.updateListener.of((update) => {
+          if (update.docChanged) {
+            const nextValue = update.state.doc.toString();
+            if (nextValue !== lastEmittedValueRef.current) {
+              lastEmittedValueRef.current = nextValue;
+              setValue(nextValue);
+            }
+
+            if (isApplyingExternalValueRef.current) {
+              isApplyingExternalValueRef.current = false;
+            } else {
+              const latest = latestRef.current;
+              if (latest?.isInHistoryMode) {
+                latest.resetHistoryIndex(latest.terminalId);
+              }
+            }
+          }
+
+          if (update.docChanged || update.selectionSet) {
+            const caret = update.state.selection.main.head;
+            const text = update.state.doc.toString();
+
+            const slash = getSlashCommandContext(text, caret);
+            if (slash) {
+              setSlashContext(slash);
+              setAtContext(null);
+              return;
+            }
+
+            setSlashContext(null);
+            setAtContext(getAtFileContext(text, caret));
+          }
+        }),
+      []
+    );
+
+    const domEventHandlers = useMemo(
+      () =>
+        EditorView.domEventHandlers({
+          beforeinput: (event) => {
+            const latest = latestRef.current;
+            if (!latest) return false;
+            if (latest.disabled) {
+              event.preventDefault();
+              return true;
+            }
+
+            const nativeEvent = event as InputEvent;
+            if (!isEnterLikeLineBreakInputEvent(nativeEvent)) return false;
+
+            if (handledEnterRef.current) {
+              handledEnterRef.current = false;
+              event.preventDefault();
+              return true;
+            }
+
+            if (allowNextLineBreakRef.current) {
+              allowNextLineBreakRef.current = false;
+              return false;
+            }
+
+            if (latest.isInitializing) {
+              event.preventDefault();
+              return true;
+            }
+
+            if (latest.isAutocompleteOpen && latest.autocompleteItems[latest.selectedIndex]) {
+              event.preventDefault();
+              const action = latest.activeMode === "command" ? "execute" : "insert";
+              if (action === "execute" && latest.isInitializing) {
+                return true;
+              }
+              applyAutocompleteSelection(action);
+              return true;
+            }
+
+            event.preventDefault();
+
+            if (nativeEvent.isComposing) {
+              submitAfterCompositionRef.current = true;
+              return true;
+            }
+
+            queueSend();
+            return true;
+          },
+          compositionstart: () => {
+            isComposingRef.current = true;
+            submitAfterCompositionRef.current = false;
+            return false;
+          },
+          compositionend: () => {
+            isComposingRef.current = false;
+            if (!submitAfterCompositionRef.current) return false;
+            submitAfterCompositionRef.current = false;
+            queueSend();
+            return false;
+          },
+          keydown: (event) => {
+            const isEnter =
+              event.key === "Enter" ||
+              event.key === "Return" ||
+              event.code === "Enter" ||
+              event.code === "NumpadEnter";
+
+            if (isEnter) {
+              allowNextLineBreakRef.current = event.shiftKey;
+            }
+
+            if (event.isComposing) {
+              if (isEnter && !event.shiftKey) {
+                submitAfterCompositionRef.current = true;
+              }
+              return false;
+            }
+
+            return false;
+          },
+          blur: (event) => {
+            const nextTarget = event.relatedTarget as HTMLElement | null;
+            const root = rootRef.current;
+            if (root && nextTarget && root.contains(nextTarget)) return false;
+
+            setAtContext(null);
+            setSlashContext(null);
+            allowNextLineBreakRef.current = false;
+            handledEnterRef.current = false;
+            submitAfterCompositionRef.current = false;
+
+            if (sendRafRef.current !== null) {
+              cancelAnimationFrame(sendRafRef.current);
+              sendRafRef.current = null;
+            }
+
+            return false;
+          },
+        }),
+      [applyAutocompleteSelection, queueSend]
+    );
+
+    const keymapExtension = useMemo(
+      () =>
+        createCustomKeymap({
+          onEnter: () => {
+            const latest = latestRef.current;
+            if (!latest) return false;
+            if (isComposingRef.current) return false;
+
+            if (latest.isAutocompleteOpen && latest.autocompleteItems[latest.selectedIndex]) {
+              const action = latest.activeMode === "command" ? "execute" : "insert";
+              if (action === "execute" && latest.isInitializing) return true;
+
+              handledEnterRef.current = true;
+              setTimeout(() => {
+                handledEnterRef.current = false;
+              }, 0);
+
+              applyAutocompleteSelection(action);
+              return true;
+            }
+
+            if (latest.disabled) return true;
+            if (latest.isInitializing) return true;
+
+            handledEnterRef.current = true;
+            setTimeout(() => {
+              handledEnterRef.current = false;
+            }, 0);
+
+            queueSend();
+            return true;
+          },
+          onEscape: () => {
+            const latest = latestRef.current;
+            if (!latest) return false;
+            if (isComposingRef.current) return false;
+
+            if (latest.isAutocompleteOpen) {
+              setAtContext(null);
+              setSlashContext(null);
+              return true;
+            }
+
+            if (latest.disabled || latest.isInitializing) return false;
+            if (!latest.onSendKey) return false;
+
+            latest.onSendKey("escape");
+            return true;
+          },
+          onArrowUp: () => {
+            const latest = latestRef.current;
+            if (!latest) return false;
+            if (isComposingRef.current) return false;
+            if (latest.disabled) return false;
+
+            const resultsCount = latest.autocompleteItems.length;
+            if (latest.isAutocompleteOpen && resultsCount > 0) {
+              setSelectedIndex((prev) => {
+                if (resultsCount === 0) return 0;
+                return (prev - 1 + resultsCount) % resultsCount;
+              });
+              return true;
+            }
+
+            if (latest.isInitializing) return false;
+
+            const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
+            const isEmpty = text.trim().length === 0;
+            const canNavigateHistory = isEmpty || latest.isInHistoryMode;
+
+            if (canNavigateHistory) {
+              if (handleHistoryNavigation("up")) return true;
+              if (isEmpty && latest.onSendKey) {
+                latest.onSendKey("up");
+                return true;
+              }
+            }
+
+            return false;
+          },
+          onArrowDown: () => {
+            const latest = latestRef.current;
+            if (!latest) return false;
+            if (isComposingRef.current) return false;
+            if (latest.disabled) return false;
+
+            const resultsCount = latest.autocompleteItems.length;
+            if (latest.isAutocompleteOpen && resultsCount > 0) {
+              setSelectedIndex((prev) => {
+                if (resultsCount === 0) return 0;
+                return (prev + 1) % resultsCount;
+              });
+              return true;
+            }
+
+            if (latest.isInitializing) return false;
+
+            const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
+            const isEmpty = text.trim().length === 0;
+            const canNavigateHistory = isEmpty || latest.isInHistoryMode;
+
+            if (canNavigateHistory) {
+              if (handleHistoryNavigation("down")) return true;
+              if (isEmpty && latest.onSendKey) {
+                latest.onSendKey("down");
+                return true;
+              }
+            }
+
+            return false;
+          },
+          onArrowLeft: () => {
+            const latest = latestRef.current;
+            if (!latest) return false;
+            if (isComposingRef.current) return false;
+            if (latest.disabled || latest.isInitializing) return false;
+
+            const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
+            if (text.trim().length !== 0) return false;
+
+            if (!latest.onSendKey) return false;
+            latest.onSendKey("left");
+            return true;
+          },
+          onArrowRight: () => {
+            const latest = latestRef.current;
+            if (!latest) return false;
+            if (isComposingRef.current) return false;
+            if (latest.disabled || latest.isInitializing) return false;
+
+            const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
+            if (text.trim().length !== 0) return false;
+
+            if (!latest.onSendKey) return false;
+            latest.onSendKey("right");
+            return true;
+          },
+          onTab: () => {
+            const latest = latestRef.current;
+            if (!latest) return false;
+            if (isComposingRef.current) return false;
+
+            if (latest.isAutocompleteOpen && latest.autocompleteItems[latest.selectedIndex]) {
+              applyAutocompleteSelection("insert");
+              return true;
+            }
+
+            return false;
+          },
+          onCtrlC: (hasSelection) => {
+            const latest = latestRef.current;
+            if (!latest) return false;
+            if (isComposingRef.current) return false;
+            if (latest.disabled || latest.isInitializing) return false;
+            if (!latest.onSendKey) return false;
+            if (hasSelection) return false;
+
+            latest.onSendKey("ctrl+c");
+            return true;
+          },
+        }),
+      [applyAutocompleteSelection, handleHistoryNavigation, queueSend]
+    );
+
+    useLayoutEffect(() => {
+      const host = editorHostRef.current;
+      if (!host || editorViewRef.current) return;
+
+      const state = EditorState.create({
+        doc: value,
+        extensions: [
+          inputTheme,
+          EditorView.lineWrapping,
+          createContentAttributes(),
+          createAutoSize(),
+          placeholderCompartmentRef.current.of(createPlaceholder(placeholder)),
+          editableCompartmentRef.current.of(EditorView.editable.of(!disabled)),
+          chipCompartmentRef.current.of(createSlashChipField({ commandMap })),
+          tooltipCompartmentRef.current.of(
+            !disabled && !isInitializing ? createSlashTooltip(commandMap) : []
+          ),
+          keymapCompartmentRef.current.of(keymapExtension),
+          editorUpdateListener,
+          domEventHandlers,
+        ],
+      });
+
+      const view = new EditorView({
+        state,
+        parent: host,
+      });
+
+      editorViewRef.current = view;
+
+      return () => {
+        view.destroy();
+        editorViewRef.current = null;
+      };
+    }, [
+      commandMap,
+      disabled,
+      domEventHandlers,
+      editorUpdateListener,
+      isInitializing,
+      keymapExtension,
+      placeholder,
+      value,
+    ]);
+
+    useEffect(() => {
+      const view = editorViewRef.current;
+      if (!view) return;
+
+      view.dispatch({
+        effects: placeholderCompartmentRef.current.reconfigure(createPlaceholder(placeholder)),
+      });
+    }, [placeholder]);
+
+    useEffect(() => {
+      const view = editorViewRef.current;
+      if (!view) return;
+
+      view.dispatch({
+        effects: editableCompartmentRef.current.reconfigure(EditorView.editable.of(!disabled)),
+      });
+    }, [disabled]);
+
+    useEffect(() => {
+      const view = editorViewRef.current;
+      if (!view) return;
+
+      view.dispatch({
+        effects: chipCompartmentRef.current.reconfigure(createSlashChipField({ commandMap })),
+      });
+    }, [commandMap]);
+
+    useEffect(() => {
+      const view = editorViewRef.current;
+      if (!view) return;
+
+      view.dispatch({
+        effects: tooltipCompartmentRef.current.reconfigure(
+          !disabled && !isInitializing ? createSlashTooltip(commandMap) : []
+        ),
+      });
+    }, [commandMap, disabled, isInitializing]);
+
+    useEffect(() => {
+      const view = editorViewRef.current;
+      if (!view) return;
+
+      const current = view.state.doc.toString();
+      if (value === current) return;
+
+      isApplyingExternalValueRef.current = true;
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: value },
+      });
+    }, [value]);
 
     const barContent = (
       <div ref={barContentRef} className="group cursor-text bg-canopy-bg px-4 pb-5 pt-4">
@@ -659,202 +983,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             </div>
 
             <div className="relative flex-1">
-              <SlashCommandOverlay
-                value={value}
-                commandMap={commandMap}
-                textareaRef={textareaRef as React.RefObject<HTMLTextAreaElement>}
-                disabled={disabled || isInitializing}
-              />
-
-              <textarea
-                ref={textareaRef}
-                value={value}
-                onChange={(e) => {
-                  setValue(e.target.value);
-                  resizeTextarea(e.target);
-
-                  if (isInHistoryMode) {
-                    resetHistoryIndex(terminalId);
-                  }
-
-                  const caret = e.target.selectionStart ?? e.target.value.length;
-                  const text = e.target.value;
-
-                  const slash = getSlashCommandContext(text, caret);
-                  if (slash) {
-                    setSlashContext(slash);
-                    setAtContext(null);
-                    return;
-                  }
-
-                  setSlashContext(null);
-                  setAtContext(getAtFileContext(text, caret));
-                }}
-                onCompositionStart={() => {
-                  submitAfterCompositionRef.current = false;
-                }}
-                onCompositionEnd={() => {
-                  if (!submitAfterCompositionRef.current) return;
-                  submitAfterCompositionRef.current = false;
-                  queueSend();
-                }}
-                placeholder={placeholder}
-                rows={1}
-                spellCheck={false}
+              <div
+                ref={editorHostRef}
                 className={cn(
-                  "w-full resize-none bg-transparent pr-1 font-mono text-xs leading-5 text-canopy-text",
-                  "placeholder:text-canopy-text/25 focus:outline-none disabled:opacity-50",
-                  "max-h-40 overflow-y-auto"
+                  "w-full",
+                  "text-canopy-text",
+                  disabled && "pointer-events-none"
                 )}
-                disabled={disabled}
-                onBlurCapture={(e) => {
-                  const nextTarget = e.relatedTarget as HTMLElement | null;
-                  const root = rootRef.current;
-                  if (root && nextTarget && root.contains(nextTarget)) return;
-                  setAtContext(null);
-                  setSlashContext(null);
-                  allowNextLineBreakRef.current = false;
-                  handledEnterRef.current = false;
-                  submitAfterCompositionRef.current = false;
-                  if (sendRafRef.current !== null) {
-                    cancelAnimationFrame(sendRafRef.current);
-                    sendRafRef.current = null;
-                  }
-                }}
-                onBeforeInput={(e) => {
-                  if (disabled) return;
-                  const nativeEvent = e.nativeEvent as InputEvent;
-                  if (!isEnterLikeLineBreakInputEvent(nativeEvent)) return;
-
-                  if (handledEnterRef.current) {
-                    handledEnterRef.current = false;
-                    e.preventDefault();
-                    e.stopPropagation();
-                    return;
-                  }
-
-                  if (allowNextLineBreakRef.current) {
-                    allowNextLineBreakRef.current = false;
-                    return;
-                  }
-
-                  if (isInitializing) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    return;
-                  }
-
-                  if (isAutocompleteOpen && autocompleteItems[selectedIndex]) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const action =
-                      activeMode === "command" ? ("execute" as const) : ("insert" as const);
-                    if (action === "execute" && isInitializing) {
-                      return;
-                    }
-                    applyAutocompleteItem(autocompleteItems[selectedIndex], action);
-                    return;
-                  }
-
-                  e.preventDefault();
-                  e.stopPropagation();
-                  if (nativeEvent.isComposing) {
-                    submitAfterCompositionRef.current = true;
-                    return;
-                  }
-                  queueSend();
-                }}
-                onKeyDownCapture={(e) => {
-                  if (disabled) return;
-                  const isEnter =
-                    e.key === "Enter" ||
-                    e.key === "Return" ||
-                    e.code === "Enter" ||
-                    e.code === "NumpadEnter";
-                  if (isEnter) {
-                    allowNextLineBreakRef.current = e.shiftKey;
-                  }
-
-                  if (e.nativeEvent.isComposing) {
-                    if (isEnter && !e.shiftKey) {
-                      submitAfterCompositionRef.current = true;
-                    }
-                    return;
-                  }
-
-                  if (isAutocompleteOpen) {
-                    const resultsCount = autocompleteItems.length;
-                    if (e.key === "Escape") {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setAtContext(null);
-                      setSlashContext(null);
-                      return;
-                    }
-
-                    if (resultsCount > 0 && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setSelectedIndex((prev) => {
-                        if (resultsCount === 0) return 0;
-                        if (e.key === "ArrowDown") return (prev + 1) % resultsCount;
-                        return (prev - 1 + resultsCount) % resultsCount;
-                      });
-                      return;
-                    }
-
-                    if (resultsCount > 0 && e.key === "Tab") {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      applyAutocompleteItem(autocompleteItems[selectedIndex], "insert");
-                      return;
-                    }
-
-                    if (resultsCount > 0 && e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      handledEnterRef.current = true;
-                      setTimeout(() => {
-                        handledEnterRef.current = false;
-                      }, 0);
-                      const action =
-                        activeMode === "command" ? ("execute" as const) : ("insert" as const);
-                      if (action === "execute" && isInitializing) {
-                        return;
-                      }
-                      applyAutocompleteItem(autocompleteItems[selectedIndex], action);
-                      return;
-                    }
-                  }
-
-                  if (handleKeyPassthrough(e)) {
-                    return;
-                  }
-
-                  if (isEnter) {
-                    if (e.shiftKey) return;
-                    if (isInitializing) {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      return;
-                    }
-                    e.preventDefault();
-                    e.stopPropagation();
-                    handledEnterRef.current = true;
-                    setTimeout(() => {
-                      handledEnterRef.current = false;
-                    }, 0);
-                    queueSend();
-                  }
-                }}
-                onKeyUpCapture={() => {
-                  if (disabled) return;
-                  refreshContextsFromTextarea();
-                }}
-                onClick={() => {
-                  if (disabled) return;
-                  refreshContextsFromTextarea();
-                }}
               />
             </div>
           </div>
@@ -872,18 +1007,18 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           if (disabled) return;
           if (e.button !== 0) return;
           onActivate?.();
-          focusTextarea();
+          focusEditor();
         }}
         onMouseDownCapture={(e) => {
           if (disabled) return;
           if (e.button !== 0) return;
           onActivate?.();
-          focusTextarea();
+          focusEditor();
         }}
         onClick={() => {
           if (disabled) return;
           onActivate?.();
-          focusTextarea();
+          focusEditor();
         }}
       >
         {isOverlayMode ? (

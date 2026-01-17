@@ -1,5 +1,5 @@
 import { EditorView, Decoration, hoverTooltip, keymap, placeholder } from "@codemirror/view";
-import { StateField, Prec, Extension } from "@codemirror/state";
+import { StateField, Prec, Extension, Compartment } from "@codemirror/state";
 import { insertNewline } from "@codemirror/commands";
 import { createRoot, Root } from "react-dom/client";
 import type { SlashCommand } from "@shared/types";
@@ -86,11 +86,9 @@ export function createSlashChipField(config: SlashChipFieldConfig) {
 }
 
 export function createSlashTooltip(commandMap: Map<string, SlashCommand>) {
-  let currentRoot: Root | null = null;
-
   return hoverTooltip((view, pos) => {
     const token = getLeadingSlashCommand(view.state.doc.toString());
-    if (!token || pos < token.start || pos > token.end) return null;
+    if (!token || pos < token.start || pos >= token.end) return null;
 
     const command = commandMap.get(token.command);
     if (!command) return null;
@@ -104,16 +102,13 @@ export function createSlashTooltip(commandMap: Map<string, SlashCommand>) {
         dom.className =
           "overflow-hidden rounded-[var(--radius-md)] surface-overlay shadow-overlay px-3 py-1.5 text-xs text-canopy-text";
 
-        currentRoot = createRoot(dom);
-        currentRoot.render(<SlashCommandTooltipContent command={command} />);
+        const root = createRoot(dom);
+        root.render(<SlashCommandTooltipContent command={command} />);
 
         return {
           dom,
           destroy() {
-            if (currentRoot) {
-              currentRoot.unmount();
-              currentRoot = null;
-            }
+            root.unmount();
           },
         };
       },
@@ -216,4 +211,12 @@ export function createContentAttributes(): Extension {
     autocapitalize: "off",
     autocomplete: "off",
   });
+}
+
+export function createSlashChipCompartment() {
+  return new Compartment();
+}
+
+export function createSlashTooltipCompartment() {
+  return new Compartment();
 }
