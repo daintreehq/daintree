@@ -8,6 +8,9 @@ import {
   ChevronDown,
   MessageSquare,
   MousePointerClick,
+  SplitSquareHorizontal,
+  Monitor,
+  RotateCcw,
 } from "lucide-react";
 import { useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
@@ -16,6 +19,7 @@ import {
   usePerformanceModeStore,
   useScrollbackStore,
   useTerminalInputStore,
+  useTwoPaneSplitStore,
 } from "@/store";
 import type { PanelLayoutStrategy, TerminalType } from "@/types";
 import {
@@ -75,6 +79,12 @@ export function TerminalSettingsTab() {
 
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
   const hybridInputAutoFocus = useTerminalInputStore((state) => state.hybridInputAutoFocus);
+
+  const twoPaneSplitConfig = useTwoPaneSplitStore((state) => state.config);
+  const setTwoPaneSplitEnabled = useTwoPaneSplitStore((state) => state.setEnabled);
+  const setPreferPreview = useTwoPaneSplitStore((state) => state.setPreferPreview);
+  const setDefaultRatio = useTwoPaneSplitStore((state) => state.setDefaultRatio);
+  const resetAllWorktreeRatios = useTwoPaneSplitStore((state) => state.resetAllWorktreeRatios);
 
   const [showMemoryDetails, setShowMemoryDetails] = useState(false);
 
@@ -348,6 +358,152 @@ export function TerminalSettingsTab() {
               />
             </div>
           </button>
+        )}
+      </div>
+
+      <div className="pt-4 border-t border-canopy-border space-y-4">
+        <div>
+          <h4 className="text-sm font-medium text-canopy-text mb-2 flex items-center gap-2">
+            <SplitSquareHorizontal className="w-4 h-4 text-canopy-accent" />
+            Two-Pane Split Layout
+          </h4>
+          <p className="text-xs text-canopy-text/50 mb-4">
+            When exactly two panels are open, display them with a resizable divider instead of equal
+            columns. The split ratio is remembered per worktree.
+          </p>
+        </div>
+
+        <button
+          onClick={() => setTwoPaneSplitEnabled(!twoPaneSplitConfig.enabled)}
+          role="switch"
+          aria-checked={twoPaneSplitConfig.enabled}
+          aria-label="Two-Pane Split Toggle"
+          className={cn(
+            "w-full flex items-center justify-between p-4 rounded-[var(--radius-lg)] border transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
+            twoPaneSplitConfig.enabled
+              ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
+              : "border-canopy-border hover:bg-white/5 text-canopy-text/70"
+          )}
+        >
+          <div className="flex items-center gap-3">
+            <SplitSquareHorizontal
+              className={cn(
+                "w-5 h-5",
+                twoPaneSplitConfig.enabled ? "text-canopy-accent" : "text-canopy-text/50"
+              )}
+            />
+            <div className="text-left">
+              <div className="text-sm font-medium">
+                {twoPaneSplitConfig.enabled
+                  ? "Two-Pane Split Enabled"
+                  : "Enable Two-Pane Split"}
+              </div>
+              <div className="text-xs opacity-70">
+                {twoPaneSplitConfig.enabled
+                  ? "Drag divider to resize, double-click to reset"
+                  : "Use equal-width grid for two panels"}
+              </div>
+            </div>
+          </div>
+          <div
+            className={cn(
+              "w-11 h-6 rounded-full relative transition-colors",
+              twoPaneSplitConfig.enabled ? "bg-canopy-accent" : "bg-canopy-border"
+            )}
+            aria-hidden="true"
+          >
+            <div
+              className={cn(
+                "absolute top-1 w-4 h-4 rounded-full bg-white transition-transform",
+                twoPaneSplitConfig.enabled ? "translate-x-6" : "translate-x-1"
+              )}
+            />
+          </div>
+        </button>
+
+        {twoPaneSplitConfig.enabled && (
+          <>
+            <button
+              onClick={() => setPreferPreview(!twoPaneSplitConfig.preferPreview)}
+              role="switch"
+              aria-checked={twoPaneSplitConfig.preferPreview}
+              aria-label="Prefer Preview Toggle"
+              className={cn(
+                "w-full flex items-center justify-between p-4 rounded-[var(--radius-lg)] border transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
+                twoPaneSplitConfig.preferPreview
+                  ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
+                  : "border-canopy-border hover:bg-white/5 text-canopy-text/70"
+              )}
+            >
+              <div className="flex items-center gap-3">
+                <Monitor
+                  className={cn(
+                    "w-5 h-5",
+                    twoPaneSplitConfig.preferPreview ? "text-canopy-accent" : "text-canopy-text/50"
+                  )}
+                />
+                <div className="text-left">
+                  <div className="text-sm font-medium">
+                    {twoPaneSplitConfig.preferPreview
+                      ? "Preview-Focused Layout"
+                      : "Balanced Layout"}
+                  </div>
+                  <div className="text-xs opacity-70">
+                    {twoPaneSplitConfig.preferPreview
+                      ? "Give more space to browser/dev-preview panels (65/35)"
+                      : "Start with equal space for both panels (50/50)"}
+                  </div>
+                </div>
+              </div>
+              <div
+                className={cn(
+                  "w-11 h-6 rounded-full relative transition-colors",
+                  twoPaneSplitConfig.preferPreview ? "bg-canopy-accent" : "bg-canopy-border"
+                )}
+                aria-hidden="true"
+              >
+                <div
+                  className={cn(
+                    "absolute top-1 w-4 h-4 rounded-full bg-white transition-transform",
+                    twoPaneSplitConfig.preferPreview ? "translate-x-6" : "translate-x-1"
+                  )}
+                />
+              </div>
+            </button>
+
+            <div className="space-y-2">
+              <label htmlFor="default-ratio-slider" className="text-sm text-canopy-text/70">
+                Default Ratio
+              </label>
+              <div className="flex items-center gap-4">
+                <input
+                  id="default-ratio-slider"
+                  type="range"
+                  min="20"
+                  max="80"
+                  value={Math.round(twoPaneSplitConfig.defaultRatio * 100)}
+                  onChange={(e) => setDefaultRatio(Number(e.target.value) / 100)}
+                  aria-valuetext={`${Math.round(twoPaneSplitConfig.defaultRatio * 100)} percent left, ${Math.round((1 - twoPaneSplitConfig.defaultRatio) * 100)} percent right`}
+                  className="flex-1 accent-canopy-accent"
+                />
+                <span className="text-xs text-canopy-text/70 font-mono w-16 text-right" aria-hidden="true">
+                  {Math.round(twoPaneSplitConfig.defaultRatio * 100)}/
+                  {Math.round((1 - twoPaneSplitConfig.defaultRatio) * 100)}
+                </span>
+              </div>
+              <p className="text-xs text-canopy-text/40">
+                Default split ratio when no worktree-specific ratio is saved.
+              </p>
+            </div>
+
+            <button
+              onClick={resetAllWorktreeRatios}
+              className="flex items-center gap-2 text-xs text-canopy-text/50 hover:text-canopy-text/70 transition-colors"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>Reset all worktree split ratios</span>
+            </button>
+          </>
         )}
       </div>
 

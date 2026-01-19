@@ -69,3 +69,6 @@ export { useBrowserStateStore } from "./browserStateStore";
 export type { BrowserPanelState, BrowserHistory } from "./browserStateStore";
 
 export { useDockStore } from "./dockStore";
+
+export { useTwoPaneSplitStore } from "./twoPaneSplitStore";
+export type { TwoPaneSplitConfig } from "./twoPaneSplitStore";

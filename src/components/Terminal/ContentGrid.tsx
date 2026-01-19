@@ -8,6 +8,7 @@ import {
   useLayoutConfigStore,
   useWorktreeSelectionStore,
   usePreferencesStore,
+  useTwoPaneSplitStore,
   type TerminalInstance,
 } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
@@ -15,6 +16,7 @@ import { useRecipeStore } from "@/store/recipeStore";
 import { GridPanel } from "./GridPanel";
 import { TerminalCountWarning } from "./TerminalCountWarning";
 import { GridFullOverlay } from "./GridFullOverlay";
+import { TwoPaneSplitLayout } from "./TwoPaneSplitLayout";
 import {
   SortableTerminal,
   useDndPlaceholder,
@@ -439,6 +441,9 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
 
   const isInTrash = useTerminalStore((state) => state.isInTrash);
 
+  // Two-pane split mode settings
+  const twoPaneSplitEnabled = useTwoPaneSplitStore((state) => state.config.enabled);
+
   const gridTerminals = useMemo(
     () =>
       terminals.filter(
@@ -698,6 +703,41 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
   }
 
   const isEmpty = gridTerminals.length === 0;
+
+  // Two-pane split mode detection - only disable during dock-to-grid placeholder drags
+  const useTwoPaneSplitMode =
+    twoPaneSplitEnabled &&
+    gridTerminals.length === 2 &&
+    !maximizedId &&
+    !showPlaceholder;
+
+  // Render two-pane split layout when eligible
+  if (useTwoPaneSplitMode) {
+    return (
+      <div className={cn("h-full flex flex-col", className)}>
+        <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
+        <div
+          ref={(node) => {
+            setNodeRef(node);
+            gridContainerRef.current = node;
+          }}
+          onContextMenu={handleGridContextMenu}
+          className={cn(
+            "relative flex-1 min-h-0",
+            isOver && "ring-2 ring-canopy-accent/30 ring-inset"
+          )}
+        >
+          <TwoPaneSplitLayout
+            terminals={gridTerminals as [TerminalInstance, TerminalInstance]}
+            focusedId={focusedId}
+            activeWorktreeId={activeWorktreeId}
+            isInTrash={isInTrash}
+          />
+          <GridFullOverlay maxTerminals={maxGridCapacity} show={showGridFullOverlay} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={cn("h-full flex flex-col", className)}>
