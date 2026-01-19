@@ -157,6 +157,23 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const isInitializing = isAgentTerminal && initializationState === "initializing";
 
     useEffect(() => {
+      const draft = getDraftInput(terminalId);
+      setValue(draft);
+      lastEmittedValueRef.current = draft;
+      setAtContext(null);
+      setSlashContext(null);
+      setSelectedIndex(0);
+      lastQueryRef.current = "";
+
+      const view = editorViewRef.current;
+      if (view && view.state.doc.toString() !== draft) {
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: draft },
+        });
+      }
+    }, [terminalId, getDraftInput]);
+
+    useEffect(() => {
       setDraftInput(terminalId, value);
     }, [terminalId, value, setDraftInput]);
 
@@ -858,7 +875,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     useLayoutEffect(() => {
       const host = editorHostRef.current;
-      if (!host || editorViewRef.current) return;
+      if (!host) return;
+
+      // Editor already exists - don't recreate it. This guard is critical because
+      // React's effect cleanup runs BEFORE the effect body on dependency changes,
+      // which would destroy the editor then immediately recreate it, causing focus loss.
+      // Dynamic values (placeholder, disabled, commandMap, etc.) are updated via
+      // compartment reconfigure effects, not by recreating the entire editor.
+      if (editorViewRef.current) return;
 
       const state = EditorState.create({
         doc: value,
@@ -890,16 +914,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         view.destroy();
         editorViewRef.current = null;
       };
-    }, [
-      commandMap,
-      disabled,
-      domEventHandlers,
-      editorUpdateListener,
-      isInitializing,
-      keymapExtension,
-      placeholder,
-      value,
-    ]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Editor created once, updated via compartments
+    }, [terminalId]);
 
     useEffect(() => {
       const view = editorViewRef.current;
@@ -1017,14 +1033,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           focusEditor();
         }}
       >
-        {isOverlayMode ? (
-          <>
-            <div aria-hidden="true" style={{ height: `${collapsedHeightPx}px` }} />
-            <div className="absolute inset-x-0 bottom-0 z-10">{barContent}</div>
-          </>
-        ) : (
-          barContent
+        {isOverlayMode && (
+          <div aria-hidden="true" style={{ height: `${collapsedHeightPx}px` }} />
         )}
+        <div className={cn(isOverlayMode && "absolute inset-x-0 bottom-0 z-10")}>
+          {barContent}
+        </div>
       </div>
     );
   }
