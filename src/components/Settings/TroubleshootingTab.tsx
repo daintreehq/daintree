@@ -172,7 +172,7 @@ export function TroubleshootingTab() {
               }
               className="text-canopy-text border-canopy-border hover:bg-canopy-border hover:text-canopy-text"
             >
-              <FileText className="w-4 h-4 mr-2" />
+              <FileText />
               Open Log File
             </Button>
             <Button
@@ -181,7 +181,7 @@ export function TroubleshootingTab() {
               onClick={handleClearLogs}
               className="text-[var(--color-status-error)] border-canopy-border hover:bg-red-900/20 hover:text-red-300 hover:border-red-900/30"
             >
-              <Trash2 className="w-4 h-4 mr-2" />
+              <Trash2 />
               Clear Logs
             </Button>
           </div>

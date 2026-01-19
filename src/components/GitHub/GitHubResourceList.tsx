@@ -229,7 +229,7 @@ export function GitHubResourceList({
         onClick={handleRetry}
         className="mt-2 text-[var(--color-status-error)] hover:brightness-110"
       >
-        <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+        <RefreshCw />
         Retry
       </Button>
     </div>
@@ -339,7 +339,7 @@ export function GitHubResourceList({
                 >
                   {loadingMore ? (
                     <>
-                      <RefreshCw className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                      <RefreshCw className="animate-spin" />
                       Loading...
                     </>
                   ) : (

@@ -280,7 +280,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
                       }
                     }}
                   >
-                    <ExternalLink size={14} className="mr-1.5" />
+                    <ExternalLink size={14} />
                     View Usage
                   </Button>
                 )}
@@ -293,7 +293,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
                     onSettingsChange?.();
                   }}
                 >
-                  <RotateCcw size={14} className="mr-1.5" />
+                  <RotateCcw size={14} />
                   Reset
                 </Button>
               </div>
@@ -514,7 +514,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
                         }}
                         className="text-canopy-accent hover:text-canopy-accent/80"
                       >
-                        <ExternalLink size={14} className="mr-1.5" />
+                        <ExternalLink size={14} />
                         Open Install Docs
                       </Button>
                     </div>
@@ -538,7 +538,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
                       }}
                       className="w-full text-canopy-text/50 hover:text-canopy-text"
                     >
-                      <ExternalLink size={14} className="mr-1.5" />
+                      <ExternalLink size={14} />
                       View Official Documentation
                     </Button>
                   )}

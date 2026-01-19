@@ -170,7 +170,7 @@ export function AgentHelpOutput({ agentId, agentName, usageUrl }: AgentHelpOutpu
               disabled={isLoading}
               className="text-canopy-text/50 hover:text-canopy-text"
             >
-              <RefreshCw size={14} className="mr-1.5" />
+              <RefreshCw size={14} />
               {helpResult ? "Refresh" : "Load"}
             </Button>
 
@@ -182,7 +182,7 @@ export function AgentHelpOutput({ agentId, agentName, usageUrl }: AgentHelpOutpu
                 disabled={isLoading}
                 className="text-canopy-text/50 hover:text-canopy-text"
               >
-                <Copy size={14} className="mr-1.5" />
+                <Copy size={14} />
                 {isCopied ? "Copied!" : "Copy"}
               </Button>
             )}
