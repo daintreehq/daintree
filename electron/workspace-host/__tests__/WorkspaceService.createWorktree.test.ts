@@ -2,116 +2,110 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
 import type { WorkspaceService } from "../WorkspaceService.js";
 
-vi.mock("simple-git");
-vi.mock("../../utils/fs.js");
-vi.mock("../../utils/git.js");
-vi.mock("../../utils/gitUtils.js");
-vi.mock("../../services/worktree/mood.js");
-vi.mock("../../services/issueExtractor.js");
-vi.mock("../../services/worktree/index.js");
-vi.mock("../../services/github/GitHubAuth.js");
-vi.mock("../../services/PullRequestService.js");
-vi.mock("../../services/events.js");
-vi.mock("fs/promises");
+// Mocks need to be hoisted or defined in vi.mock
+const mockSimpleGit = {
+  raw: vi.fn().mockResolvedValue(undefined),
+  branch: vi.fn().mockResolvedValue({ current: "main" }),
+};
 
-describe("WorkspaceService.createWorktree", () => {
-  let service: WorkspaceService;
-  let simpleGit: any;
-  let waitForPathExists: any;
-  let ensureNoteFileSpy: any;
+vi.mock("simple-git", () => ({
+  simpleGit: vi.fn(() => mockSimpleGit),
+}));
 
-  beforeEach(async () => {
-    // Reset mocks
-    vi.resetModules();
-    vi.clearAllMocks();
+vi.mock("../../utils/fs.js", () => ({
+  waitForPathExists: vi.fn().mockResolvedValue(undefined),
+}));
 
-    // Mock simple-git
-    const gitModule = await import("simple-git");
-    simpleGit = vi.mocked(gitModule.simpleGit);
-    const mockGit = {
-      raw: vi.fn().mockResolvedValue(undefined),
-      branch: vi.fn().mockResolvedValue({ current: "main" }),
-    };
-    simpleGit.mockReturnValue(mockGit);
+vi.mock("../../utils/git.js", () => ({
+  invalidateGitStatusCache: vi.fn(),
+  getWorktreeChangesWithStats: vi.fn().mockResolvedValue({
+    head: "abc123",
+    isDirty: false,
+    stagedFileCount: 0,
+    unstagedFileCount: 0,
+    untrackedFileCount: 0,
+    conflictedFileCount: 0,
+    changedFileCount: 0,
+    changes: [],
+  }),
+}));
 
-    // Mock waitForPathExists
-    const fsModule = await import("../../utils/fs.js");
-    waitForPathExists = vi.mocked(fsModule.waitForPathExists);
-    waitForPathExists.mockResolvedValue(undefined);
+vi.mock("../../utils/gitUtils.js", () => ({
+  getGitDir: vi.fn().mockReturnValue("/test/worktree/.git"),
+  clearGitDirCache: vi.fn(),
+}));
 
-    // Mock other dependencies
-    const gitUtilsModule = await import("../../utils/gitUtils.js");
-    vi.mocked(gitUtilsModule.getGitDir).mockReturnValue("/test/worktree/.git");
-    vi.mocked(gitUtilsModule.clearGitDirCache).mockReturnValue(undefined);
+vi.mock("../../services/worktree/mood.js", () => ({
+  categorizeWorktree: vi.fn().mockReturnValue("stable"),
+}));
 
-    const gitModule2 = await import("../../utils/git.js");
-    vi.mocked(gitModule2.invalidateGitStatusCache).mockReturnValue(undefined);
-    vi.mocked(gitModule2.getWorktreeChangesWithStats).mockResolvedValue({
-      branch: "test-branch",
-      head: "abc123",
-      isDirty: false,
-      stagedFileCount: 0,
-      unstagedFileCount: 0,
-      untrackedFileCount: 0,
-      conflictedFileCount: 0,
-      changedFileCount: 0,
-    });
+vi.mock("../../services/issueExtractor.js", () => ({
+  extractIssueNumberSync: vi.fn().mockReturnValue(null),
+  extractIssueNumber: vi.fn().mockResolvedValue(null),
+}));
 
-    const moodModule = await import("../../services/worktree/mood.js");
-    vi.mocked(moodModule.categorizeWorktree).mockReturnValue({
-      category: "ready",
-      reason: "Clean working tree",
-    });
-
-    const issueExtractorModule = await import("../../services/issueExtractor.js");
-    vi.mocked(issueExtractorModule.extractIssueNumberSync).mockReturnValue(null);
-    vi.mocked(issueExtractorModule.extractIssueNumber).mockResolvedValue(null);
-
-    const worktreeIndexModule = await import("../../services/worktree/index.js");
-    const MockAdaptivePollingStrategy = vi.fn().mockImplementation(() => ({
+vi.mock("../../services/worktree/index.js", () => ({
+  AdaptivePollingStrategy: vi.fn(function () {
+    return {
       getCurrentInterval: vi.fn().mockReturnValue(2000),
       updateInterval: vi.fn(),
       reportActivity: vi.fn(),
-    }));
-    const MockNoteFileReader = vi.fn().mockImplementation(() => ({
+      updateConfig: vi.fn(),
+      isCircuitBreakerTripped: vi.fn().mockReturnValue(false),
+      reset: vi.fn(),
+      setBaseInterval: vi.fn(),
+      calculateNextInterval: vi.fn().mockReturnValue(2000),
+      recordSuccess: vi.fn(),
+      recordFailure: vi.fn(),
+    };
+  }),
+  NoteFileReader: vi.fn(function () {
+    return {
       read: vi.fn().mockResolvedValue({}),
-    }));
-    vi.mocked(worktreeIndexModule.AdaptivePollingStrategy).mockImplementation(
-      MockAdaptivePollingStrategy as any
-    );
-    vi.mocked(worktreeIndexModule.NoteFileReader).mockImplementation(MockNoteFileReader as any);
+    };
+  }),
+}));
 
-    const githubAuthModule = await import("../../services/github/GitHubAuth.js");
-    vi.mocked(githubAuthModule.GitHubAuth).mockImplementation(
-      vi.fn().mockImplementation(() => ({
-        getToken: vi.fn().mockResolvedValue(null),
-      })) as any
-    );
+vi.mock("../../services/github/GitHubAuth.js", () => ({
+  GitHubAuth: vi.fn().mockImplementation(() => ({
+    getToken: vi.fn().mockResolvedValue(null),
+  })),
+}));
 
-    const prServiceModule = await import("../../services/PullRequestService.js");
-    vi.mocked(prServiceModule.pullRequestService).mockReturnValue({
-      start: vi.fn(),
-      stop: vi.fn(),
-      getStatus: vi.fn().mockReturnValue({ state: "idle" }),
-    } as any);
+vi.mock("../../services/PullRequestService.js", () => ({
+  pullRequestService: {
+    start: vi.fn(),
+    stop: vi.fn(),
+    getStatus: vi.fn().mockReturnValue({ state: "idle" }),
+  },
+}));
 
-    const eventsModule = await import("../../services/events.js");
-    vi.mocked(eventsModule.events).mockReturnValue(new EventEmitter() as any);
+vi.mock("../../services/events.js", () => ({
+  events: new EventEmitter(),
+}));
 
-    // Mock fs/promises for ensureNoteFile
-    const fsPromisesModule = await import("fs/promises");
-    vi.mocked(fsPromisesModule.stat).mockRejectedValue(new Error("ENOENT"));
-    vi.mocked(fsPromisesModule.mkdir).mockResolvedValue(undefined);
-    vi.mocked(fsPromisesModule.writeFile).mockResolvedValue(undefined);
+vi.mock("fs/promises", () => ({
+  stat: vi.fn().mockRejectedValue(new Error("ENOENT")),
+  mkdir: vi.fn().mockResolvedValue(undefined),
+  writeFile: vi.fn().mockResolvedValue(undefined),
+  access: vi.fn().mockResolvedValue(undefined),
+}));
 
-    // Import and create service
+describe("WorkspaceService.createWorktree", () => {
+  let service: WorkspaceService;
+  let waitForPathExists: any;
+  let mockSendEvent: any;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+
+    const fsModule = await import("../../utils/fs.js");
+    waitForPathExists = vi.mocked(fsModule.waitForPathExists);
+
+    mockSendEvent = vi.fn();
+
     const WorkspaceServiceModule = await import("../WorkspaceService.js");
-    service = new WorkspaceServiceModule.WorkspaceService(
-      "/test/root",
-      "main",
-      "/test/root",
-      "test-project"
-    );
+    service = new WorkspaceServiceModule.WorkspaceService(mockSendEvent);
   });
 
   afterEach(() => {
@@ -119,7 +113,6 @@ describe("WorkspaceService.createWorktree", () => {
   });
 
   it("should call waitForPathExists after git worktree add", async () => {
-    const mockGit = simpleGit();
     const requestId = "test-request-123";
     const options = {
       baseBranch: "main",
@@ -127,13 +120,6 @@ describe("WorkspaceService.createWorktree", () => {
       path: "/test/worktree",
     };
 
-    // Capture the event
-    const events: any[] = [];
-    service["sendEvent"] = vi.fn((event) => {
-      events.push(event);
-    });
-
-    // Mock listWorktreesFromGit to return the created worktree
     service["listWorktreesFromGit"] = vi.fn().mockResolvedValue([
       {
         path: "/test/worktree",
@@ -146,8 +132,7 @@ describe("WorkspaceService.createWorktree", () => {
 
     await service.createWorktree(requestId, "/test/root", options);
 
-    // Verify git.raw was called with correct arguments
-    expect(mockGit.raw).toHaveBeenCalledWith([
+    expect(mockSimpleGit.raw).toHaveBeenCalledWith([
       "worktree",
       "add",
       "-b",
@@ -156,30 +141,27 @@ describe("WorkspaceService.createWorktree", () => {
       "main",
     ]);
 
-    // Verify waitForPathExists was called after git.raw
     expect(waitForPathExists).toHaveBeenCalledWith("/test/worktree", {
       timeoutMs: 5000,
       initialRetryDelayMs: 50,
       maxRetryDelayMs: 800,
     });
 
-    // Verify call order: git.raw must be called before waitForPathExists
-    const gitCallOrder = mockGit.raw.mock.invocationCallOrder[0];
+    const gitCallOrder = mockSimpleGit.raw.mock.invocationCallOrder[0];
     const waitCallOrder = waitForPathExists.mock.invocationCallOrder[0];
     expect(gitCallOrder).toBeLessThan(waitCallOrder);
 
-    // Verify success event was sent
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      type: "create-worktree-result",
-      requestId: "test-request-123",
-      success: true,
-      worktreeId: "/test/worktree",
-    });
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create-worktree-result",
+        requestId: "test-request-123",
+        success: true,
+        worktreeId: "/test/worktree",
+      })
+    );
   });
 
   it("should call waitForPathExists for useExistingBranch flow", async () => {
-    const mockGit = simpleGit();
     const requestId = "test-request-456";
     const options = {
       baseBranch: "main",
@@ -188,7 +170,6 @@ describe("WorkspaceService.createWorktree", () => {
       useExistingBranch: true,
     };
 
-    service["sendEvent"] = vi.fn();
     service["listWorktreesFromGit"] = vi.fn().mockResolvedValue([
       {
         path: "/test/worktree2",
@@ -201,7 +182,7 @@ describe("WorkspaceService.createWorktree", () => {
 
     await service.createWorktree(requestId, "/test/root", options);
 
-    expect(mockGit.raw).toHaveBeenCalledWith([
+    expect(mockSimpleGit.raw).toHaveBeenCalledWith([
       "worktree",
       "add",
       "/test/worktree2",
@@ -211,7 +192,6 @@ describe("WorkspaceService.createWorktree", () => {
   });
 
   it("should call waitForPathExists for fromRemote flow", async () => {
-    const mockGit = simpleGit();
     const requestId = "test-request-789";
     const options = {
       baseBranch: "origin/main",
@@ -220,7 +200,6 @@ describe("WorkspaceService.createWorktree", () => {
       fromRemote: true,
     };
 
-    service["sendEvent"] = vi.fn();
     service["listWorktreesFromGit"] = vi.fn().mockResolvedValue([
       {
         path: "/test/worktree3",
@@ -233,7 +212,7 @@ describe("WorkspaceService.createWorktree", () => {
 
     await service.createWorktree(requestId, "/test/root", options);
 
-    expect(mockGit.raw).toHaveBeenCalledWith([
+    expect(mockSimpleGit.raw).toHaveBeenCalledWith([
       "worktree",
       "add",
       "-b",
@@ -253,30 +232,23 @@ describe("WorkspaceService.createWorktree", () => {
       path: "/test/worktree-timeout",
     };
 
-    // Make waitForPathExists fail with timeout
     waitForPathExists.mockRejectedValueOnce(
       new Error("Timeout waiting for path to exist: /test/worktree-timeout (waited 5000ms)")
     );
 
-    const events: any[] = [];
-    service["sendEvent"] = vi.fn((event) => {
-      events.push(event);
-    });
-
     await service.createWorktree(requestId, "/test/root", options);
 
-    // Verify error event was sent
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      type: "create-worktree-result",
-      requestId: "test-request-timeout",
-      success: false,
-      error: expect.stringContaining("Timeout waiting for path to exist"),
-    });
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create-worktree-result",
+        requestId: "test-request-timeout",
+        success: false,
+        error: expect.stringContaining("Timeout waiting for path to exist"),
+      })
+    );
   });
 
   it("should handle delayed directory creation", async () => {
-    const mockGit = simpleGit();
     const requestId = "test-request-delayed";
     const options = {
       baseBranch: "main",
@@ -284,17 +256,14 @@ describe("WorkspaceService.createWorktree", () => {
       path: "/test/worktree-delayed",
     };
 
-    // Use fake timers for deterministic testing
     vi.useFakeTimers();
 
-    // Simulate delayed path existence with a deferred promise
     let resolveWait: (() => void) | undefined;
     const waitPromise = new Promise<void>((resolve) => {
       resolveWait = resolve;
     });
     waitForPathExists.mockReturnValue(waitPromise);
 
-    service["sendEvent"] = vi.fn();
     service["listWorktreesFromGit"] = vi.fn().mockResolvedValue([
       {
         path: "/test/worktree-delayed",
@@ -307,14 +276,10 @@ describe("WorkspaceService.createWorktree", () => {
 
     const createPromise = service.createWorktree(requestId, "/test/root", options);
 
-    // Verify git.raw was called
     await vi.runAllTimersAsync();
-    expect(mockGit.raw).toHaveBeenCalled();
-
-    // Verify waitForPathExists was called
+    expect(mockSimpleGit.raw).toHaveBeenCalled();
     expect(waitForPathExists).toHaveBeenCalledTimes(1);
 
-    // Resolve the wait after a simulated delay
     resolveWait!();
     await createPromise;
 
@@ -329,15 +294,8 @@ describe("WorkspaceService.createWorktree", () => {
       path: "/test/worktree-fail",
     };
 
-    // Make waitForPathExists fail
     waitForPathExists.mockRejectedValueOnce(new Error("Path does not exist"));
 
-    const events: any[] = [];
-    service["sendEvent"] = vi.fn((event) => {
-      events.push(event);
-    });
-
-    // Mock fs.stat to track if ensureNoteFile is called
     const fsPromisesModule = await import("fs/promises");
     const statSpy = vi.mocked(fsPromisesModule.stat);
     const mkdirSpy = vi.mocked(fsPromisesModule.mkdir);
@@ -346,21 +304,21 @@ describe("WorkspaceService.createWorktree", () => {
     mkdirSpy.mockClear();
     writeFileSpy.mockClear();
 
-    // Also mock listWorktreesFromGit to track if it's called
     const listWorktreesSpy = vi.spyOn(service as any, "listWorktreesFromGit");
     listWorktreesSpy.mockClear();
 
     await service.createWorktree(requestId, "/test/root", options);
 
-    // Verify error event was sent
-    expect(events[0].success).toBe(false);
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+      })
+    );
 
-    // ensureNoteFile should not be reached - verify its fs operations not called
     expect(statSpy).not.toHaveBeenCalled();
     expect(mkdirSpy).not.toHaveBeenCalled();
     expect(writeFileSpy).not.toHaveBeenCalled();
 
-    // listWorktreesFromGit should also not be called
     expect(listWorktreesSpy).not.toHaveBeenCalled();
   });
 });
