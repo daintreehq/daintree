@@ -145,7 +145,7 @@ export function createAutoSize() {
 
     const view = update.view;
     // Snap to line-height increments to prevent subpixel jitter
-    const lines = Math.max(1, Math.ceil(view.contentHeight / LINE_HEIGHT_PX));
+    const lines = Math.max(1, Math.round(view.contentHeight / LINE_HEIGHT_PX));
     const snapped = lines * LINE_HEIGHT_PX;
     const next = Math.min(snapped, MAX_TEXTAREA_HEIGHT_PX);
 
