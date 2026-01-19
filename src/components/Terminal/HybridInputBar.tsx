@@ -33,6 +33,8 @@ import {
   createPlaceholder,
   createSlashChipField,
   createSlashTooltip,
+  createFileChipField,
+  createFileChipTooltip,
   createCustomKeymap,
   createAutoSize,
 } from "./inputEditorExtensions";
@@ -115,6 +117,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const editableCompartmentRef = useRef(new Compartment());
     const chipCompartmentRef = useRef(new Compartment());
     const tooltipCompartmentRef = useRef(new Compartment());
+    const fileChipTooltipCompartmentRef = useRef(new Compartment());
     const isApplyingExternalValueRef = useRef(false);
     const allowNextLineBreakRef = useRef(false);
     const handledEnterRef = useRef(false);
@@ -567,6 +570,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       [focusEditor, focusEditorWithCursorAtEnd]
     );
 
+    const lastSlashContextRef = useRef<SlashCommandContext | null>(null);
+    const lastAtContextRef = useRef<AtFileContext | null>(null);
+
     const editorUpdateListener = useMemo(
       () =>
         EditorView.updateListener.of((update) => {
@@ -593,13 +599,42 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
             const slash = getSlashCommandContext(text, caret);
             if (slash) {
-              setSlashContext(slash);
-              setAtContext(null);
+              // Only update if context actually changed
+              const prev = lastSlashContextRef.current;
+              if (
+                !prev ||
+                prev.start !== slash.start ||
+                prev.tokenEnd !== slash.tokenEnd ||
+                prev.query !== slash.query
+              ) {
+                lastSlashContextRef.current = slash;
+                setSlashContext(slash);
+              }
+              if (lastAtContextRef.current !== null) {
+                lastAtContextRef.current = null;
+                setAtContext(null);
+              }
               return;
             }
 
-            setSlashContext(null);
-            setAtContext(getAtFileContext(text, caret));
+            const atCtx = getAtFileContext(text, caret);
+            // Only update if context actually changed
+            const prevAt = lastAtContextRef.current;
+            if (
+              (atCtx &&
+                (!prevAt ||
+                  prevAt.atStart !== atCtx.atStart ||
+                  prevAt.tokenEnd !== atCtx.tokenEnd ||
+                  prevAt.queryRaw !== atCtx.queryRaw)) ||
+              (!atCtx && prevAt)
+            ) {
+              lastAtContextRef.current = atCtx;
+              setAtContext(atCtx);
+            }
+            if (lastSlashContextRef.current !== null) {
+              lastSlashContextRef.current = null;
+              setSlashContext(null);
+            }
           }
         }),
       []
@@ -897,6 +932,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           tooltipCompartmentRef.current.of(
             !disabled && !isInitializing ? createSlashTooltip(commandMap) : []
           ),
+          createFileChipField(),
+          fileChipTooltipCompartmentRef.current.of(
+            !disabled && !isInitializing ? createFileChipTooltip() : []
+          ),
           keymapCompartmentRef.current.of(keymapExtension),
           editorUpdateListener,
           domEventHandlers,
@@ -954,6 +993,17 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         ),
       });
     }, [commandMap, disabled, isInitializing]);
+
+    useEffect(() => {
+      const view = editorViewRef.current;
+      if (!view) return;
+
+      view.dispatch({
+        effects: fileChipTooltipCompartmentRef.current.reconfigure(
+          !disabled && !isInitializing ? createFileChipTooltip() : []
+        ),
+      });
+    }, [disabled, isInitializing]);
 
     useEffect(() => {
       const view = editorViewRef.current;

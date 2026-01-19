@@ -2,7 +2,7 @@ import { EditorView, Decoration, hoverTooltip, keymap, placeholder } from "@code
 import { StateField, Prec, Extension, Compartment } from "@codemirror/state";
 import { insertNewline } from "@codemirror/commands";
 import type { SlashCommand } from "@shared/types";
-import { getLeadingSlashCommand } from "./hybridInputParsing";
+import { getLeadingSlashCommand, getAllAtFileTokens, type AtFileToken } from "./hybridInputParsing";
 
 const MAX_TEXTAREA_HEIGHT_PX = 160;
 const LINE_HEIGHT_PX = 20;
@@ -47,6 +47,21 @@ export const inputTheme = EditorView.theme({
     backgroundColor: "rgba(239, 68, 68, 0.2)",
     color: "rgb(248, 113, 113)",
     border: "1px solid rgba(239, 68, 68, 0.3)",
+  },
+  ".cm-file-chip": {
+    display: "inline-block",
+    boxSizing: "border-box",
+    height: "20px",
+    lineHeight: "18px",
+    borderRadius: "2px",
+    padding: "0 6px",
+    fontFamily: "var(--font-mono, monospace)",
+    fontSize: "12px",
+    fontWeight: 500,
+    verticalAlign: "baseline",
+    backgroundColor: "rgba(96, 165, 250, 0.15)",
+    color: "rgb(147, 197, 253)",
+    border: "1px solid rgba(96, 165, 250, 0.25)",
   },
   ".cm-tooltip": {
     background: "transparent",
@@ -130,6 +145,80 @@ export function createSlashTooltip(commandMap: Map<string, SlashCommand>) {
         `;
 
         dom.appendChild(createTooltipContent(command));
+
+        return { dom };
+      },
+    };
+  });
+}
+
+const fileChipMark = Decoration.mark({ class: "cm-file-chip" });
+
+interface FileChipState {
+  decorations: ReturnType<typeof Decoration.set>;
+  tokens: AtFileToken[];
+}
+
+function buildFileChipState(text: string): FileChipState {
+  const tokens = getAllAtFileTokens(text);
+  if (tokens.length === 0) {
+    return { decorations: Decoration.none, tokens: [] };
+  }
+
+  const decorations = tokens.map((token) => fileChipMark.range(token.start, token.end));
+  return { decorations: Decoration.set(decorations), tokens };
+}
+
+const fileChipStateField = StateField.define<FileChipState>({
+  create(state) {
+    return buildFileChipState(state.doc.toString());
+  },
+  update(value, tr) {
+    if (!tr.docChanged) return value;
+    return buildFileChipState(tr.state.doc.toString());
+  },
+  provide: (f) => EditorView.decorations.from(f, (state) => state.decorations),
+});
+
+export function createFileChipField() {
+  return fileChipStateField;
+}
+
+function createFileTooltipContent(token: AtFileToken): HTMLElement {
+  const container = document.createElement("div");
+  container.className = "max-w-[300px]";
+
+  const pathEl = document.createElement("p");
+  pathEl.className = "text-[11px] text-canopy-text/90 leading-snug font-mono break-all";
+  pathEl.textContent = token.path;
+  container.appendChild(pathEl);
+
+  return container;
+}
+
+export function createFileChipTooltip() {
+  return hoverTooltip((view, pos) => {
+    // Reuse cached tokens from the state field instead of re-parsing
+    const chipState = view.state.field(fileChipStateField, false);
+    if (!chipState) return null;
+
+    const token = chipState.tokens.find((t) => pos >= t.start && pos < t.end);
+    if (!token) return null;
+
+    return {
+      pos: token.start,
+      end: token.end,
+      above: true,
+      create() {
+        const dom = document.createElement("div");
+        dom.className = "px-2 py-1 text-xs";
+        dom.style.cssText = `
+          background: rgba(24, 24, 27, 0.95);
+          border-radius: 4px;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        `;
+
+        dom.appendChild(createFileTooltipContent(token));
 
         return { dom };
       },
