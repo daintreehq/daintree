@@ -41,6 +41,13 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   const [isStale, setIsStale] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
 
+  // Preserve last known non-zero counts to prevent empty state flash during refresh
+  const lastKnownCountsRef = useRef<{
+    issueCount: number | null;
+    prCount: number | null;
+    projectPath: string | null;
+  }>({ issueCount: null, prCount: null, projectPath: null });
+
   const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isVisibleRef = useRef(!document.hidden);
   const mountedRef = useRef(true);
@@ -72,7 +79,56 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       const repoStats = await githubClient.getRepoStats(project.path, force);
 
       if (mountedRef.current) {
-        setStats(repoStats);
+        // Ignore results from previous project (race condition protection)
+        if (
+          lastKnownCountsRef.current.projectPath !== null &&
+          lastKnownCountsRef.current.projectPath !== project.path
+        ) {
+          return;
+        }
+
+        // Track current project to detect stale fetches
+        lastKnownCountsRef.current.projectPath = project.path;
+
+        // Only preserve counts when data is stale or errored (not on successful fresh fetch)
+        const shouldPreserve = repoStats.stale === true || repoStats.ghError !== undefined;
+
+        if (shouldPreserve) {
+          // Preserve last known counts during transient failures/stale data
+          // Don't update preserved counts - keep the last good values
+        } else {
+          // Fresh successful data - update preserved counts and accept genuine 0s
+          if (repoStats.issueCount !== null && repoStats.issueCount > 0) {
+            lastKnownCountsRef.current.issueCount = repoStats.issueCount;
+          } else if (repoStats.issueCount === 0) {
+            // Clear preserved count on confirmed 0 from successful fetch
+            lastKnownCountsRef.current.issueCount = null;
+          }
+
+          if (repoStats.prCount !== null && repoStats.prCount > 0) {
+            lastKnownCountsRef.current.prCount = repoStats.prCount;
+          } else if (repoStats.prCount === 0) {
+            // Clear preserved count on confirmed 0 from successful fetch
+            lastKnownCountsRef.current.prCount = null;
+          }
+        }
+
+        // Apply preservation: use preserved counts only when data is stale/errored
+        const preservedStats: RepositoryStats = {
+          ...repoStats,
+          issueCount:
+            shouldPreserve &&
+            repoStats.issueCount === 0 &&
+            lastKnownCountsRef.current.issueCount !== null
+              ? lastKnownCountsRef.current.issueCount
+              : repoStats.issueCount,
+          prCount:
+            shouldPreserve && repoStats.prCount === 0 && lastKnownCountsRef.current.prCount !== null
+              ? lastKnownCountsRef.current.prCount
+              : repoStats.prCount,
+        };
+
+        setStats(preservedStats);
         setIsStale(repoStats.stale ?? false);
         setLastUpdated(repoStats.lastUpdated ?? null);
 
@@ -185,6 +241,9 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
         clearTimeout(pollTimerRef.current);
         pollTimerRef.current = null;
       }
+
+      // Clear preserved counts on project switch to prevent cross-contamination
+      lastKnownCountsRef.current = { issueCount: null, prCount: null, projectPath: null };
 
       fetchStats().then(() => {
         if (mountedRef.current) {

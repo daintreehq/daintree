@@ -294,11 +294,9 @@ export function GitHubResourceList({
 
       <div className="overflow-y-auto flex-1 min-h-0">
         {loading && !data.length ? (
-          initialCount === 0 ? (
-            renderEmpty()
-          ) : (
-            renderSkeleton(initialCount ?? MAX_SKELETON_ITEMS)
-          )
+          // Always show skeleton during initial load - never show empty state based on initialCount
+          // Empty state should only appear after API confirms there are no results
+          renderSkeleton(initialCount && initialCount > 0 ? initialCount : MAX_SKELETON_ITEMS)
         ) : error ? (
           renderError()
         ) : data.length === 0 ? (
