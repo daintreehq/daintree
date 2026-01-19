@@ -155,7 +155,8 @@ export function createAutoSize() {
       view.dom.style.height = `${next}px`;
     }
 
-    view.scrollDOM.style.overflowY = view.contentHeight > MAX_TEXTAREA_HEIGHT_PX ? "auto" : "hidden";
+    view.scrollDOM.style.overflowY =
+      view.contentHeight > MAX_TEXTAREA_HEIGHT_PX ? "auto" : "hidden";
   });
 }
 

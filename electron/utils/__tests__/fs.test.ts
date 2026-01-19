@@ -97,9 +97,9 @@ describe("waitForPathExists", () => {
     });
 
     // Advance past timeout
-    await vi.advanceTimersByTimeAsync(600);
-
+    const advance = vi.advanceTimersByTimeAsync(600);
     await expect(promise).rejects.toThrow(/Timeout waiting for path to exist/);
+    await advance;
   });
 
   it("should use default options when none provided", async () => {
@@ -150,7 +150,7 @@ describe("waitForPathExists", () => {
 
     expect(mockAccess).toHaveBeenCalledTimes(2);
 
-    await vi.advanceTimersByTimeAsync(100); // Total 500. Sleep done?
+    const advance = vi.advanceTimersByTimeAsync(100); // Total 500. Sleep done?
     // It wakes up. Check checkExists? No.
     // Logic:
     // await sleep(actualDelay);
@@ -159,6 +159,7 @@ describe("waitForPathExists", () => {
     // if (elapsed >= timeoutMs) throw.
 
     await expect(promise).rejects.toThrow(/Timeout waiting for path to exist/);
+    await advance;
   });
 
   it("should clean up pending timers on success", async () => {
@@ -242,9 +243,10 @@ describe("waitForPathExists", () => {
       timeoutMs: 500,
     });
 
-    await vi.advanceTimersByTimeAsync(1000);
+    const advance = vi.advanceTimersByTimeAsync(1000);
     await expect(promise).rejects.toThrow(/Timeout waiting for path to exist/);
     expect(mockAccess).toHaveBeenCalledTimes(0);
+    await advance;
   });
 
   it("should timeout immediately when timeoutMs is 0", async () => {
