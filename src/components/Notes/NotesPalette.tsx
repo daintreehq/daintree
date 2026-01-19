@@ -835,6 +835,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                       <button
                         type="button"
                         onClick={handleOpenAsPanel}
+                        tabIndex={-1}
                         className="px-2.5 py-1.5 rounded-[var(--radius-md)] text-xs text-canopy-text/60 hover:text-canopy-text hover:bg-white/5 transition-colors flex items-center gap-1.5 shrink-0"
                         title="Open as panel (Shift+Enter)"
                       >

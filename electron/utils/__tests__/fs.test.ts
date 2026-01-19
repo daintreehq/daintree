@@ -22,7 +22,7 @@ describe("waitForPathExists", () => {
     mockAccess.mockResolvedValueOnce(undefined);
 
     const promise = waitForPathExists("/test/path");
-    
+
     // We expect it to resolve without time advancement because it's immediate
     await expect(promise).resolves.toBeUndefined();
 
@@ -44,16 +44,16 @@ describe("waitForPathExists", () => {
 
     // It should check immediately (0ms elapsed) and fail.
     // Then sleep(50).
-    
+
     // We advance time to trigger the first retry.
     await vi.advanceTimersByTimeAsync(50);
     // Now it should have checked again (2nd call). And failed.
     // Next delay: 50 * 2 = 100.
     // sleeps 100.
-    
+
     await vi.advanceTimersByTimeAsync(100);
     // Now it should have checked again (3rd call). And succeeded.
-    
+
     await expect(promise).resolves.toBeUndefined();
     expect(mockAccess).toHaveBeenCalledTimes(3);
   });
@@ -76,10 +76,10 @@ describe("waitForPathExists", () => {
     // 1st call: fails. sleep 50.
     await vi.advanceTimersByTimeAsync(50);
     // 2nd call: fails. next=100. sleep 100.
-    
+
     await vi.advanceTimersByTimeAsync(100);
     // 3rd call: fails. next=200. cap=120. sleep 120.
-    
+
     await vi.advanceTimersByTimeAsync(120);
     // 4th call: succeeds.
 
@@ -122,7 +122,7 @@ describe("waitForPathExists", () => {
 
     // Advance time
     await vi.advanceTimersByTimeAsync(100);
-    
+
     // Should call access now
     await expect(promise).resolves.toBeUndefined();
     expect(mockAccess).toHaveBeenCalledTimes(1);
@@ -140,16 +140,16 @@ describe("waitForPathExists", () => {
 
     // 1st call fails. Sleep 200.
     await vi.advanceTimersByTimeAsync(200); // 2nd call
-    
+
     // 2nd fails. next=400. Sleep 400?
     // remaining = 500 - 200 = 300.
     // actualDelay = min(400, 300) = 300.
-    
+
     await vi.advanceTimersByTimeAsync(200); // Only 200 elapsed. Total 400.
     // Still sleeping (need 100 more).
-    
-    expect(mockAccess).toHaveBeenCalledTimes(2); 
-    
+
+    expect(mockAccess).toHaveBeenCalledTimes(2);
+
     await vi.advanceTimersByTimeAsync(100); // Total 500. Sleep done?
     // It wakes up. Check checkExists? No.
     // Logic:
@@ -157,12 +157,13 @@ describe("waitForPathExists", () => {
     // loop continues.
     // elapsed = 500.
     // if (elapsed >= timeoutMs) throw.
-    
+
     await expect(promise).rejects.toThrow(/Timeout waiting for path to exist/);
   });
 
   it("should clean up pending timers on success", async () => {
-    mockAccess.mockRejectedValueOnce(Object.assign(new Error("ENOENT"), { code: "ENOENT" }))
+    mockAccess
+      .mockRejectedValueOnce(Object.assign(new Error("ENOENT"), { code: "ENOENT" }))
       .mockResolvedValueOnce(undefined);
 
     const promise = waitForPathExists("/test/path", {

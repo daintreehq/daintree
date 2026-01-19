@@ -914,7 +914,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         view.destroy();
         editorViewRef.current = null;
       };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- Editor created once, updated via compartments
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- Editor created once, updated via compartments
     }, [terminalId]);
 
     useEffect(() => {
@@ -1033,12 +1033,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           focusEditor();
         }}
       >
-        {isOverlayMode && (
-          <div aria-hidden="true" style={{ height: `${collapsedHeightPx}px` }} />
-        )}
-        <div className={cn(isOverlayMode && "absolute inset-x-0 bottom-0 z-10")}>
-          {barContent}
-        </div>
+        {isOverlayMode && <div aria-hidden="true" style={{ height: `${collapsedHeightPx}px` }} />}
+        <div className={cn(isOverlayMode && "absolute inset-x-0 bottom-0 z-10")}>{barContent}</div>
       </div>
     );
   }
