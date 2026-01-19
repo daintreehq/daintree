@@ -318,7 +318,7 @@ AppDialog.Footer = function AppDialogFooter({
           disabled={secondaryAction.disabled || secondaryAction.loading}
           className="text-canopy-text/70 hover:text-canopy-text"
         >
-          {secondaryAction.loading && <Loader2 className="h-4 w-4 animate-spin" />}
+          {secondaryAction.loading && <Loader2 className="animate-spin" />}
           {secondaryAction.label}
         </Button>
       )}
@@ -328,7 +328,7 @@ AppDialog.Footer = function AppDialogFooter({
           onClick={primaryAction.onClick}
           disabled={primaryAction.disabled || primaryAction.loading}
         >
-          {primaryAction.loading && <Loader2 className="h-4 w-4 animate-spin" />}
+          {primaryAction.loading && <Loader2 className="animate-spin" />}
           {primaryAction.label}
         </Button>
       )}

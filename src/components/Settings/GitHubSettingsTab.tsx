@@ -200,10 +200,10 @@ export function GitHubSettingsTab() {
             className="min-w-[70px] text-canopy-text border-canopy-border hover:bg-canopy-border"
           >
             {isTesting ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
+              <Loader2 className="animate-spin" />
             ) : (
               <>
-                <FlaskConical className="w-4 h-4 mr-1" />
+                <FlaskConical />
                 Test
               </>
             )}
@@ -214,7 +214,7 @@ export function GitHubSettingsTab() {
             size="sm"
             className="min-w-[70px]"
           >
-            {isValidating ? <Loader2 className="w-4 h-4 animate-spin" /> : "Save"}
+            {isValidating ? <Loader2 className="animate-spin" /> : "Save"}
           </Button>
           {githubConfig?.hasToken && (
             <Button
@@ -271,7 +271,7 @@ export function GitHubSettingsTab() {
           size="sm"
           className="text-canopy-text border-canopy-border hover:bg-canopy-border"
         >
-          <ExternalLink className="w-4 h-4 mr-2" />
+          <ExternalLink />
           Create Token on GitHub
         </Button>
         <div className="mt-2 space-y-1">

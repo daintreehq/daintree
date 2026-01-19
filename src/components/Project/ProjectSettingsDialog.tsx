@@ -576,11 +576,11 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                               size="sm"
                               onClick={() => fileInputRef.current?.click()}
                             >
-                              <Upload className="h-4 w-4 mr-1" />
+                              <Upload />
                               Replace
                             </Button>
                             <Button variant="ghost" size="sm" onClick={handleRemoveIcon}>
-                              <X className="h-4 w-4" />
+                              <X />
                             </Button>
                           </div>
                         </div>
@@ -670,7 +670,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                           }}
                           className="w-full"
                         >
-                          <Plus className="h-4 w-4 mr-2" />
+                          <Plus />
                           Add Path Pattern
                         </Button>
                       </div>
@@ -800,7 +800,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                           }}
                           className="w-full"
                         >
-                          <Plus className="h-4 w-4 mr-2" />
+                          <Plus />
                           Add Variable
                         </Button>
                       </div>
@@ -938,7 +938,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                           }}
                           className="w-full"
                         >
-                          <Plus className="h-4 w-4 mr-2" />
+                          <Plus />
                           Add Command
                         </Button>
                       </div>
@@ -1088,7 +1088,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                                         title="Edit recipe"
                                         aria-label={`Edit recipe ${recipe.name}`}
                                       >
-                                        <Edit3 className="h-3.5 w-3.5" />
+                                        <Edit3 />
                                       </Button>
                                       <Button
                                         variant="ghost"
@@ -1103,9 +1103,9 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                                         }
                                       >
                                         {exported ? (
-                                          <Check className="h-3.5 w-3.5 text-[var(--color-status-success)]" />
+                                          <Check className="text-[var(--color-status-success)]" />
                                         ) : (
-                                          <Download className="h-3.5 w-3.5" />
+                                          <Download />
                                         )}
                                       </Button>
                                       <Button
@@ -1116,7 +1116,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                                         title="Delete recipe"
                                         aria-label={`Delete recipe ${recipe.name}`}
                                       >
-                                        <Trash2 className="h-3.5 w-3.5 text-[var(--color-status-error)]" />
+                                        <Trash2 className="text-[var(--color-status-error)]" />
                                       </Button>
                                     </div>
                                   </div>
@@ -1135,11 +1135,11 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                         )}
                         <div className="flex gap-2">
                           <Button variant="outline" onClick={handleAddRecipe} className="flex-1">
-                            <Plus className="h-4 w-4 mr-2" />
+                            <Plus />
                             Add Recipe
                           </Button>
                           <Button variant="outline" onClick={() => setShowImportDialog(true)}>
-                            <FileDown className="h-4 w-4 mr-2" />
+                            <FileDown />
                             Import Recipe
                           </Button>
                         </div>

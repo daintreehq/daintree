@@ -759,7 +759,7 @@ export function NewWorktreeDialog({
                       <span className="truncate">
                         {selectedBranchOption?.labelText || "Select base branch..."}
                       </span>
-                      <ChevronsUpDown className="h-4 w-4 opacity-50 shrink-0 ml-2" />
+                      <ChevronsUpDown className="opacity-50 shrink-0" />
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className="w-[400px] p-0" align="start">
@@ -976,7 +976,7 @@ export function NewWorktreeDialog({
                     }}
                     disabled={creating}
                   >
-                    <FolderOpen className="w-4 h-4" />
+                    <FolderOpen />
                   </Button>
                 </div>
                 {pathWasAutoResolved && (
@@ -1044,7 +1044,7 @@ export function NewWorktreeDialog({
                         disabled={creating}
                       >
                         <span className="flex items-center gap-2 truncate">
-                          <Play className="w-4 h-4 shrink-0 text-canopy-accent" />
+                          <Play className="shrink-0 text-canopy-accent" />
                           {selectedRecipe ? (
                             <>
                               <span>{selectedRecipe.name}</span>
@@ -1057,7 +1057,7 @@ export function NewWorktreeDialog({
                             <span className="text-canopy-text/60">No recipe</span>
                           )}
                         </span>
-                        <ChevronsUpDown className="h-4 w-4 opacity-50 shrink-0 ml-2" />
+                        <ChevronsUpDown className="opacity-50 shrink-0" />
                       </Button>
                     </PopoverTrigger>
                     <PopoverContent className="w-[400px] p-0" align="start">
@@ -1162,12 +1162,12 @@ export function NewWorktreeDialog({
         <Button onClick={handleCreate} disabled={creating || loading} className="min-w-[100px]">
           {creating ? (
             <>
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              <Loader2 className="animate-spin" />
               Creating...
             </>
           ) : (
             <>
-              <Check className="w-4 h-4 mr-2" />
+              <Check />
               Create
             </>
           )}

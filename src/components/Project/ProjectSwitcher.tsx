@@ -591,7 +591,7 @@ export function ProjectSwitcher() {
                 disabled={isLoading}
               >
                 <span>Select Project...</span>
-                <ChevronsUpDown className="h-4 w-4 opacity-50" />
+                <ChevronsUpDown className="opacity-50" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
@@ -623,7 +623,7 @@ export function ProjectSwitcher() {
           onClick={addProject}
           disabled={isLoading}
         >
-          <Plus className="mr-2 h-4 w-4" />
+          <Plus />
           Open Project...
         </Button>
       </>
@@ -666,7 +666,7 @@ export function ProjectSwitcher() {
                       </span>
                     </div>
                   </div>
-                  <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 text-muted-foreground/40 group-hover:text-muted-foreground/70 transition-colors" />
+                  <ChevronsUpDown className="shrink-0 text-muted-foreground/40 group-hover:text-muted-foreground/70 transition-colors" />
                 </Button>
               </DropdownMenuTrigger>
             </TooltipTrigger>
