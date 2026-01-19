@@ -842,7 +842,7 @@ export function NewWorktreeDialog({
                           branchInputTouchedRef.current = true;
                         }}
                         onKeyDown={handlePrefixKeyDown}
-                        placeholder="feature/my-awesome-feature"
+                        placeholder="feature/add-user-auth"
                         className="w-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent font-mono text-sm"
                         disabled={creating}
                         aria-describedby={
