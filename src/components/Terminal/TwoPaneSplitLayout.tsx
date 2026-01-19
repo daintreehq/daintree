@@ -36,6 +36,24 @@ export function TwoPaneSplitLayout({
 
   const worktreeRatio = activeWorktreeId ? ratioByWorktreeId[activeWorktreeId] : undefined;
 
+  // Track terminal order to detect swaps and invert ratio accordingly
+  const prevTerminalIdsRef = useRef<[string, string] | null>(null);
+
+  useEffect(() => {
+    const currentIds: [string, string] = [terminals[0].id, terminals[1].id];
+    const prevIds = prevTerminalIdsRef.current;
+
+    // Detect if terminals were swapped (same IDs but reversed order)
+    if (prevIds && prevIds[0] === currentIds[1] && prevIds[1] === currentIds[0]) {
+      // Terminals were swapped - invert the ratio so panels keep their sizes
+      if (activeWorktreeId && worktreeRatio !== undefined) {
+        setWorktreeRatio(activeWorktreeId, 1 - worktreeRatio);
+      }
+    }
+
+    prevTerminalIdsRef.current = currentIds;
+  }, [terminals, activeWorktreeId, worktreeRatio, setWorktreeRatio]);
+
   const computeDefaultRatio = useCallback(() => {
     if (!preferPreview) return defaultRatio;
 
