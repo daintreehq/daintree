@@ -6,6 +6,7 @@
 import { ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
 import { commandService } from "../../services/CommandService.js";
+import { githubWorkIssueCommand } from "../../services/commands/githubWorkIssue.js";
 import type {
   CommandContext,
   CommandExecutePayload,
@@ -14,6 +15,9 @@ import type {
   CommandResult,
   CanopyCommand,
 } from "../../../shared/types/commands.js";
+
+// Register all commands
+commandService.register(githubWorkIssueCommand);
 
 export function registerCommandHandlers(): () => void {
   const handlers: Array<() => void> = [];
