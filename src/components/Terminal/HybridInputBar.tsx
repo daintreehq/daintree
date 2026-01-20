@@ -26,6 +26,9 @@ import {
   type AtFileContext,
   type SlashCommandContext,
 } from "./hybridInputParsing";
+import { CommandPickerButton, CommandPickerHost } from "@/components/Commands";
+import { useCommandStore } from "@/store/commandStore";
+import type { CommandContext } from "@shared/types/commands";
 import { isEnterLikeLineBreakInputEvent } from "./hybridInputEvents";
 import {
   inputTheme,
@@ -136,6 +139,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       "initializing"
     );
     const latestRef = useRef<LatestState | null>(null);
+
+    const openPicker = useCommandStore((s) => s.openPicker);
+
+    const commandContext = useMemo((): CommandContext => ({
+      terminalId,
+      cwd,
+    }), [terminalId, cwd]);
 
     const isAgentTerminal = agentId !== undefined;
 
@@ -1054,6 +1064,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 className={cn("w-full", "text-canopy-text", disabled && "pointer-events-none")}
               />
             </div>
+
+            <div className="self-center pr-2">
+              <CommandPickerButton
+                onClick={openPicker}
+                disabled={disabled || isInitializing}
+              />
+            </div>
           </div>
         </div>
       </div>
@@ -1062,30 +1079,33 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const isOverlayMode = collapsedHeightPx !== null;
 
     return (
-      <div
-        ref={rootRef}
-        className={cn("relative w-full shrink-0", disabled && "pointer-events-none", className)}
-        onPointerDownCapture={(e) => {
-          if (disabled) return;
-          if (e.button !== 0) return;
-          onActivate?.();
-          focusEditor();
-        }}
-        onMouseDownCapture={(e) => {
-          if (disabled) return;
-          if (e.button !== 0) return;
-          onActivate?.();
-          focusEditor();
-        }}
-        onClick={() => {
-          if (disabled) return;
-          onActivate?.();
-          focusEditor();
-        }}
-      >
-        {isOverlayMode && <div aria-hidden="true" style={{ height: `${collapsedHeightPx}px` }} />}
-        <div className={cn(isOverlayMode && "absolute inset-x-0 bottom-0 z-10")}>{barContent}</div>
-      </div>
+      <>
+        <div
+          ref={rootRef}
+          className={cn("relative w-full shrink-0", disabled && "pointer-events-none", className)}
+          onPointerDownCapture={(e) => {
+            if (disabled) return;
+            if (e.button !== 0) return;
+            onActivate?.();
+            focusEditor();
+          }}
+          onMouseDownCapture={(e) => {
+            if (disabled) return;
+            if (e.button !== 0) return;
+            onActivate?.();
+            focusEditor();
+          }}
+          onClick={() => {
+            if (disabled) return;
+            onActivate?.();
+            focusEditor();
+          }}
+        >
+          {isOverlayMode && <div aria-hidden="true" style={{ height: `${collapsedHeightPx}px` }} />}
+          <div className={cn(isOverlayMode && "absolute inset-x-0 bottom-0 z-10")}>{barContent}</div>
+        </div>
+        <CommandPickerHost context={commandContext} />
+      </>
     );
   }
 );
