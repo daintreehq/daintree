@@ -160,26 +160,33 @@ async function detectBaseBranch(
 export const githubWorkIssueCommand: CanopyCommand<GitHubWorkIssueArgs, GitHubWorkIssueResult> = {
   id: "github:work-issue",
   label: "/github:work-issue",
-  description: "Create a worktree for a GitHub issue",
+  description:
+    "Start working on a GitHub issue by creating an isolated worktree. " +
+    "Fetches issue details, generates a branch name, creates a worktree, and switches to it. " +
+    "Perfect for parallel development without stashing changes.",
   category: "github",
 
   args: [
     {
       name: "issueNumber",
       type: "number",
-      description: "GitHub issue number",
+      description:
+        "GitHub issue number to work on. Can be extracted from issue URL or entered directly.",
       required: true,
     },
     {
       name: "branchName",
       type: "string",
-      description: "Custom branch name (auto-generated if not provided)",
+      description:
+        "Custom branch name. If not provided, auto-generates as 'issue-{number}-{slugified-title}'.",
       required: false,
     },
     {
       name: "baseBranch",
       type: "string",
-      description: "Base branch to branch from (defaults to main or develop)",
+      description:
+        "Base branch to branch from. Auto-detects: prefers 'develop' if exists, otherwise tries 'main', then 'master'. " +
+        "For hotfixes, use 'main' explicitly.",
       required: false,
     },
   ],
@@ -188,43 +195,50 @@ export const githubWorkIssueCommand: CanopyCommand<GitHubWorkIssueArgs, GitHubWo
     steps: [
       {
         id: "issue",
-        title: "Select Issue",
-        description: "Enter the GitHub issue number to work on",
+        title: "Work on GitHub Issue",
+        description:
+          "Create an isolated worktree for the issue. By default, the worktree is created in a sibling " +
+          "directory, allowing you to work on multiple issues simultaneously without conflicts.",
         fields: [
           {
             name: "issueNumber",
             label: "Issue Number",
             type: "number",
-            placeholder: "123",
+            placeholder: "1234",
             required: true,
             validation: {
               min: 1,
               message: "Issue number must be a positive integer",
             },
-            helpText: "The GitHub issue number (e.g., 123)",
+            helpText:
+              "Enter the issue number from the GitHub URL (e.g., 1234 from github.com/org/repo/issues/1234)",
           },
           {
             name: "branchName",
-            label: "Branch Name",
+            label: "Branch Name (Optional)",
             type: "text",
-            placeholder: "Auto-generated from issue title",
+            placeholder: "issue-1234-add-dark-mode",
             required: false,
-            helpText: "Optional custom branch name. If not provided, will be auto-generated.",
+            helpText:
+              "Leave empty to auto-generate from issue title. Format: issue-{number}-{slugified-title}. " +
+              "If the branch already exists, a suffix will be added automatically.",
           },
           {
             name: "baseBranch",
-            label: "Base Branch",
+            label: "Base Branch (Optional)",
             type: "text",
-            placeholder: "main",
+            placeholder: "develop",
             required: false,
-            helpText: "Branch to base off. Defaults to develop (if exists) or main.",
+            helpText:
+              "Branch to start from. Auto-detects: uses 'develop' if it exists, otherwise tries 'main', then 'master'. " +
+              "Override for hotfixes (use 'main') or feature branches (use specific branch).",
           },
         ],
       },
     ],
   },
 
-  keywords: ["github", "issue", "worktree", "branch", "work"],
+  keywords: ["github", "issue", "worktree", "branch", "work", "parallel", "isolate"],
 
   isEnabled: () => hasGitHubToken(),
 
