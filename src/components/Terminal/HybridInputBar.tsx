@@ -142,10 +142,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     const openPicker = useCommandStore((s) => s.openPicker);
 
-    const commandContext = useMemo((): CommandContext => ({
-      terminalId,
-      cwd,
-    }), [terminalId, cwd]);
+    const commandContext = useMemo(
+      (): CommandContext => ({
+        terminalId,
+        cwd,
+      }),
+      [terminalId, cwd]
+    );
 
     const isAgentTerminal = agentId !== undefined;
 
@@ -1066,10 +1069,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             </div>
 
             <div className="self-center pr-2">
-              <CommandPickerButton
-                onClick={openPicker}
-                disabled={disabled || isInitializing}
-              />
+              <CommandPickerButton onClick={openPicker} disabled={disabled || isInitializing} />
             </div>
           </div>
         </div>
@@ -1102,7 +1102,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           }}
         >
           {isOverlayMode && <div aria-hidden="true" style={{ height: `${collapsedHeightPx}px` }} />}
-          <div className={cn(isOverlayMode && "absolute inset-x-0 bottom-0 z-10")}>{barContent}</div>
+          <div className={cn(isOverlayMode && "absolute inset-x-0 bottom-0 z-10")}>
+            {barContent}
+          </div>
         </div>
         <CommandPickerHost context={commandContext} />
       </>

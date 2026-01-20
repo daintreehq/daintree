@@ -114,9 +114,7 @@ function BuilderTextField({
             : "border-canopy-border focus:border-canopy-accent focus:ring-canopy-accent"
         )}
       />
-      {field.helpText && !error && (
-        <p className="text-xs text-canopy-text/50">{field.helpText}</p>
-      )}
+      {field.helpText && !error && <p className="text-xs text-canopy-text/50">{field.helpText}</p>}
       {error && (
         <p className="text-xs text-[var(--color-status-error)] flex items-center gap-1">
           <AlertCircle className="h-3 w-3" />
@@ -158,9 +156,7 @@ function BuilderTextareaField({
             : "border-canopy-border focus:border-canopy-accent focus:ring-canopy-accent"
         )}
       />
-      {field.helpText && !error && (
-        <p className="text-xs text-canopy-text/50">{field.helpText}</p>
-      )}
+      {field.helpText && !error && <p className="text-xs text-canopy-text/50">{field.helpText}</p>}
       {error && (
         <p className="text-xs text-[var(--color-status-error)] flex items-center gap-1">
           <AlertCircle className="h-3 w-3" />
@@ -207,9 +203,7 @@ function BuilderSelectField({
           </option>
         ))}
       </select>
-      {field.helpText && !error && (
-        <p className="text-xs text-canopy-text/50">{field.helpText}</p>
-      )}
+      {field.helpText && !error && <p className="text-xs text-canopy-text/50">{field.helpText}</p>}
       {error && (
         <p className="text-xs text-[var(--color-status-error)] flex items-center gap-1">
           <AlertCircle className="h-3 w-3" />
@@ -292,13 +286,7 @@ function BuilderFieldRenderer({
         />
       );
     case "checkbox":
-      return (
-        <BuilderCheckboxField
-          field={field}
-          value={Boolean(value)}
-          onChange={onChange}
-        />
-      );
+      return <BuilderCheckboxField field={field} value={Boolean(value)} onChange={onChange} />;
     default:
       return null;
   }
@@ -346,18 +334,21 @@ export function CommandBuilder({
     return Object.keys(errors).length === 0;
   }, [currentStep, formData]);
 
-  const handleFieldChange = useCallback((fieldName: string, value: unknown, field?: BuilderField) => {
-    let coercedValue = value;
-    if (field?.type === "number" && typeof value === "string" && value !== "") {
-      coercedValue = Number(value);
-    }
-    setFormData((prev) => ({ ...prev, [fieldName]: coercedValue }));
-    setFieldErrors((prev) => {
-      const next = { ...prev };
-      delete next[fieldName];
-      return next;
-    });
-  }, []);
+  const handleFieldChange = useCallback(
+    (fieldName: string, value: unknown, field?: BuilderField) => {
+      let coercedValue = value;
+      if (field?.type === "number" && typeof value === "string" && value !== "") {
+        coercedValue = Number(value);
+      }
+      setFormData((prev) => ({ ...prev, [fieldName]: coercedValue }));
+      setFieldErrors((prev) => {
+        const next = { ...prev };
+        delete next[fieldName];
+        return next;
+      });
+    },
+    []
+  );
 
   const handleBack = useCallback(() => {
     if (!isFirstStep) {

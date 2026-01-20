@@ -53,7 +53,7 @@ export const useCommandStore = create<CommandStore>()((set, get) => ({
       activeCommandId: command.id,
       builderContext: context,
       builderSteps: null,
-      executionError: null
+      executionError: null,
     });
 
     if (command.hasBuilder) {
