@@ -340,3 +340,20 @@ export type {
   ActionDispatchOptions,
   ActionDispatchPayload,
 } from "./actions.js";
+
+// Command system types - global command registry and execution
+export type {
+  CommandCategory,
+  CommandArgumentType,
+  CommandArgument,
+  CommandContext,
+  CommandResult,
+  BuilderFieldType,
+  BuilderFieldValidation,
+  BuilderField,
+  BuilderStep,
+  CanopyCommand,
+  CommandManifestEntry,
+  CommandExecutePayload,
+  CommandGetPayload,
+} from "./commands.js";

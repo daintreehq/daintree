@@ -385,6 +385,12 @@ const CHANNELS = {
   // Gemini channels
   GEMINI_GET_STATUS: "gemini:get-status",
   GEMINI_ENABLE_ALTERNATE_BUFFER: "gemini:enable-alternate-buffer",
+
+  // Commands channels
+  COMMANDS_LIST: "commands:list",
+  COMMANDS_GET: "commands:get",
+  COMMANDS_EXECUTE: "commands:execute",
+  COMMANDS_GET_BUILDER: "commands:get-builder",
 } as const;
 
 const api: ElectronAPI = {
@@ -1096,6 +1102,42 @@ const api: ElectronAPI = {
     getStatus: () => _typedInvoke(CHANNELS.GEMINI_GET_STATUS),
 
     enableAlternateBuffer: () => _typedInvoke(CHANNELS.GEMINI_ENABLE_ALTERNATE_BUFFER),
+  },
+
+  // Commands API
+  commands: {
+    list: (context?: {
+      terminalId?: string;
+      worktreeId?: string;
+      projectId?: string;
+      cwd?: string;
+      agentId?: string;
+    }) => ipcRenderer.invoke(CHANNELS.COMMANDS_LIST, context),
+
+    get: (payload: {
+      commandId: string;
+      context?: {
+        terminalId?: string;
+        worktreeId?: string;
+        projectId?: string;
+        cwd?: string;
+        agentId?: string;
+      };
+    }) => ipcRenderer.invoke(CHANNELS.COMMANDS_GET, payload),
+
+    execute: (payload: {
+      commandId: string;
+      context: {
+        terminalId?: string;
+        worktreeId?: string;
+        projectId?: string;
+        cwd?: string;
+        agentId?: string;
+      };
+      args?: Record<string, unknown>;
+    }) => ipcRenderer.invoke(CHANNELS.COMMANDS_EXECUTE, payload),
+
+    getBuilder: (commandId: string) => ipcRenderer.invoke(CHANNELS.COMMANDS_GET_BUILDER, commandId),
   },
 };
 

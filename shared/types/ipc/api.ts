@@ -60,6 +60,14 @@ import type { ShowContextMenuPayload } from "../menu.js";
 import type { FileSearchPayload, FileSearchResult } from "./files.js";
 import type { SlashCommand, SlashCommandListRequest } from "../slashCommands.js";
 import type { DevPreviewStatusPayload, DevPreviewUrlPayload } from "./devPreview.js";
+import type {
+  CommandContext,
+  CommandManifestEntry,
+  CommandResult,
+  CommandExecutePayload,
+  CommandGetPayload,
+  BuilderStep,
+} from "../commands.js";
 
 // ElectronAPI Type (exposed via preload)
 
@@ -514,5 +522,15 @@ export interface ElectronAPI {
     getStatus(): Promise<{ exists: boolean; alternateBufferEnabled: boolean; error?: string }>;
     /** Enable alternate buffer in Gemini settings */
     enableAlternateBuffer(): Promise<{ success: boolean }>;
+  };
+  commands: {
+    /** List all registered commands */
+    list(context?: CommandContext): Promise<CommandManifestEntry[]>;
+    /** Get a specific command by ID */
+    get(payload: CommandGetPayload): Promise<CommandManifestEntry | null>;
+    /** Execute a command */
+    execute(payload: CommandExecutePayload): Promise<CommandResult>;
+    /** Get builder configuration for a command */
+    getBuilder(commandId: string): Promise<{ steps: BuilderStep[] } | null>;
   };
 }
