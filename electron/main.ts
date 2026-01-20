@@ -49,10 +49,6 @@ import { EventBuffer } from "./services/EventBuffer.js";
 import { CHANNELS } from "./ipc/channels.js";
 import { createApplicationMenu } from "./menu.js";
 import { resolveAppUrlToDistPath, getMimeType, buildHeaders } from "./utils/appProtocol.js";
-
-// Initialize logger early with userData path
-initializeLogger(app.getPath("userData"));
-
 import { projectStore } from "./services/ProjectStore.js";
 import { store } from "./store.js";
 import { MigrationRunner } from "./services/StoreMigrations.js";
@@ -65,6 +61,13 @@ import {
   getSystemSleepService,
 } from "./services/SystemSleepService.js";
 import { notificationService } from "./services/NotificationService.js";
+import { registerCommands } from "./services/commands/index.js";
+
+// Initialize logger early with userData path
+initializeLogger(app.getPath("userData"));
+
+// Register commands early so they're available when IPC handlers start
+registerCommands();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
