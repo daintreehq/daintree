@@ -233,6 +233,11 @@ export const CHANNELS = {
   DEV_PREVIEW_SET_URL: "dev-preview:set-url",
   DEV_PREVIEW_STATUS: "dev-preview:status",
   DEV_PREVIEW_URL: "dev-preview:url",
+
+  COMMANDS_LIST: "commands:list",
+  COMMANDS_GET: "commands:get",
+  COMMANDS_EXECUTE: "commands:execute",
+  COMMANDS_GET_BUILDER: "commands:get-builder",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

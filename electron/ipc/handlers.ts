@@ -25,6 +25,7 @@ import { registerGeminiHandlers } from "./handlers/gemini.js";
 import { registerEventsHandlers } from "./handlers/events.js";
 import { registerNotesHandlers } from "./handlers/notes.js";
 import { registerDevPreviewHandlers } from "./handlers/devPreview.js";
+import { registerCommandHandlers } from "./handlers/commands.js";
 import { events } from "../services/events.js";
 import { typedHandle, typedSend, sendToRenderer } from "./utils.js";
 
@@ -69,6 +70,7 @@ export function registerIpcHandlers(
     registerEventsHandlers(deps),
     registerNotesHandlers(deps),
     registerDevPreviewHandlers(deps),
+    registerCommandHandlers(),
   ];
 
   return () => {
