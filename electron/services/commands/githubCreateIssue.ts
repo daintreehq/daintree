@@ -2,8 +2,8 @@ import type { CanopyCommand, CommandResult } from "../../../shared/types/command
 import { getGitHubToken, getRepoContext, clearGitHubCaches } from "../GitHubService.js";
 
 interface CreateIssueArgs {
-  title: string;
-  body: string;
+  title?: string;
+  body?: string;
   labels?: string;
 }
 
@@ -27,16 +27,15 @@ export const githubCreateIssueCommand: CanopyCommand<CreateIssueArgs, CreateIssu
       name: "title",
       type: "string",
       description:
-        "Concise title describing what needs to be done (e.g., 'Add dark mode toggle to settings')",
-      required: true,
+        "Concise title describing what needs to be done (e.g., 'Add dark mode toggle to settings') (optional - agent can generate)",
+      required: false,
     },
     {
       name: "body",
       type: "string",
       description:
-        "Structured issue body with sections: Summary, Current Behavior, Expected Behavior, " +
-        "Deliverables, Files to Modify, and Acceptance Criteria. Include file links and code references.",
-      required: true,
+        "Issue explanation or structured body. The agent will interpret natural language input. (optional)",
+      required: false,
     },
     {
       name: "labels",
@@ -58,37 +57,22 @@ export const githubCreateIssueCommand: CanopyCommand<CreateIssueArgs, CreateIssu
             name: "title",
             label: "Issue Title",
             type: "text",
-            placeholder: "Add dark mode toggle to application settings",
-            required: true,
-            validation: {
-              min: 10,
-              message: "Title must be at least 10 characters",
-            },
-            helpText:
-              "A clear, action-oriented title. Start with a verb: Add, Fix, Update, Implement, Refactor",
+            placeholder: "Optional - agent can generate from your explanation",
+            helpText: "Leave empty to let the agent generate a title from your explanation",
           },
           {
             name: "body",
-            label: "Issue Body",
+            label: "Explanation",
             type: "textarea",
-            placeholder:
-              "## Summary\nBrief description of what needs to be done.\n\n" +
-              "## Current Behavior\nWhat currently happens (if applicable).\n\n" +
-              "## Expected Behavior\nWhat should happen after this is implemented.\n\n" +
-              "## Deliverables\n- [ ] Task 1\n- [ ] Task 2\n\n" +
-              "## Files to Modify\n- `src/path/to/file.ts` - Description of changes\n\n" +
-              "## Acceptance Criteria\n- [ ] Criterion 1\n- [ ] Criterion 2",
-            required: true,
+            placeholder: "Explain what you want to create an issue about...",
             helpText:
-              "Use markdown sections. Include file paths as links, code blocks for examples, " +
-              "and checkbox lists for tasks. The more context, the better for autonomous implementation.",
+              "Describe the issue in natural language. The agent will interpret and format appropriately.",
           },
           {
             name: "labels",
             label: "Labels",
             type: "text",
             placeholder: "enhancement, ui",
-            required: false,
             helpText:
               "Common labels: bug, enhancement, documentation, refactor, testing, ui, api, performance",
           },
@@ -143,36 +127,31 @@ export const githubCreateIssueCommand: CanopyCommand<CreateIssueArgs, CreateIssu
     }
 
     const { owner, repo } = repoContext;
-    let { title, body } = args;
     const { labels } = args;
 
-    // Validate and trim title and body to match builder requirements
-    title = title.trim();
-    body = body.trim();
+    // Trim values if provided
+    const title = args.title?.trim() || "";
+    const body = args.body?.trim() || "";
 
-    if (!title || title.length < 10) {
+    // If no title and no body provided, return message for agent interpretation
+    // The agent in the terminal will handle generating appropriate content
+    if (!title && !body) {
       return {
         success: false,
         error: {
-          code: "INVALID_TITLE",
-          message: "Title must be at least 10 characters",
+          code: "NO_INPUT",
+          message: "Please provide a title or explanation for the issue",
         },
       };
     }
 
-    if (!body) {
-      return {
-        success: false,
-        error: {
-          code: "INVALID_BODY",
-          message: "Description is required",
-        },
-      };
-    }
+    // Use body as title if title is missing (agent-style behavior)
+    const issueTitle = title || body.split("\n")[0].slice(0, 100);
+    const issueBody = body || title;
 
     const requestBody: Record<string, unknown> = {
-      title,
-      body,
+      title: issueTitle,
+      body: issueBody,
     };
 
     if (labels) {

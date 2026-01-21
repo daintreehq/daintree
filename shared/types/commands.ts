@@ -81,8 +81,8 @@ export interface BuilderField {
   type: BuilderFieldType;
   /** Placeholder text */
   placeholder?: string;
-  /** Whether field is required */
-  required: boolean;
+  /** Whether field is required (deprecated - all fields are now optional) */
+  required?: boolean;
   /** Validation rules */
   validation?: BuilderFieldValidation;
   /** Options for select fields */

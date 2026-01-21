@@ -171,8 +171,8 @@ export const githubWorkIssueCommand: CanopyCommand<GitHubWorkIssueArgs, GitHubWo
       name: "issueNumber",
       type: "number",
       description:
-        "GitHub issue number to work on. Can be extracted from issue URL or entered directly.",
-      required: true,
+        "GitHub issue number to work on. Can be extracted from issue URL or entered directly. (optional - agent can detect from context)",
+      required: false,
     },
     {
       name: "branchName",
@@ -204,21 +204,18 @@ export const githubWorkIssueCommand: CanopyCommand<GitHubWorkIssueArgs, GitHubWo
             name: "issueNumber",
             label: "Issue Number",
             type: "number",
-            placeholder: "1234",
-            required: true,
+            placeholder: "e.g., 123",
             validation: {
               min: 1,
               message: "Issue number must be a positive integer",
             },
-            helpText:
-              "Enter the issue number from the GitHub URL (e.g., 1234 from github.com/org/repo/issues/1234)",
+            helpText: "The GitHub issue number. Leave empty to let the agent help you find one.",
           },
           {
             name: "branchName",
             label: "Branch Name (Optional)",
             type: "text",
             placeholder: "issue-1234-add-dark-mode",
-            required: false,
             helpText:
               "Leave empty to auto-generate from issue title. Format: issue-{number}-{slugified-title}. " +
               "If the branch already exists, a suffix will be added automatically.",
@@ -228,7 +225,6 @@ export const githubWorkIssueCommand: CanopyCommand<GitHubWorkIssueArgs, GitHubWo
             label: "Base Branch (Optional)",
             type: "text",
             placeholder: "develop",
-            required: false,
             helpText:
               "Branch to start from. Auto-detects: uses 'develop' if it exists, otherwise tries 'main', then 'master'. " +
               "Override for hotfixes (use 'main') or feature branches (use specific branch).",

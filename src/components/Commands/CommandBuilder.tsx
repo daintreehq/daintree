@@ -26,18 +26,12 @@ interface FieldErrors {
 }
 
 function validateField(field: BuilderField, value: unknown): string | null {
-  if (field.type === "checkbox") {
-    if (field.required && !value) {
-      return `${field.label} must be checked`;
-    }
-    return null;
-  }
+  // No required field validation - all fields are optional
+  // The agent will interpret user intent from whatever is provided
 
-  if (field.required && (value === undefined || value === null || value === "")) {
-    return `${field.label} is required`;
-  }
-
-  if (value === undefined || value === null || value === "") {
+  // Treat whitespace-only input as empty
+  const stringValue = typeof value === "string" ? value.trim() : value;
+  if (stringValue === undefined || stringValue === null || stringValue === "") {
     return null;
   }
 
@@ -45,7 +39,8 @@ function validateField(field: BuilderField, value: unknown): string | null {
   if (!validation) return null;
 
   if (field.type === "text" || field.type === "textarea") {
-    const strValue = String(value);
+    const strValue = String(stringValue);
+    // Only validate min/max if value is provided
     if (validation.min !== undefined && strValue.length < validation.min) {
       return validation.message ?? `Minimum ${validation.min} characters required`;
     }
@@ -65,7 +60,7 @@ function validateField(field: BuilderField, value: unknown): string | null {
   }
 
   if (field.type === "number") {
-    const numValue = Number(value);
+    const numValue = Number(stringValue);
     if (isNaN(numValue)) {
       return "Must be a valid number";
     }
@@ -95,10 +90,7 @@ function BuilderTextField({
 
   return (
     <div className="space-y-1.5">
-      <label className="block text-sm font-medium text-canopy-text">
-        {field.label}
-        {field.required && <span className="text-[var(--color-status-error)] ml-1">*</span>}
-      </label>
+      <label className="block text-sm font-medium text-canopy-text">{field.label}</label>
       <input
         ref={inputRef}
         type={field.type === "number" ? "number" : "text"}
@@ -138,10 +130,7 @@ function BuilderTextareaField({
 }) {
   return (
     <div className="space-y-1.5">
-      <label className="block text-sm font-medium text-canopy-text">
-        {field.label}
-        {field.required && <span className="text-[var(--color-status-error)] ml-1">*</span>}
-      </label>
+      <label className="block text-sm font-medium text-canopy-text">{field.label}</label>
       <textarea
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -180,10 +169,7 @@ function BuilderSelectField({
 }) {
   return (
     <div className="space-y-1.5">
-      <label className="block text-sm font-medium text-canopy-text">
-        {field.label}
-        {field.required && <span className="text-[var(--color-status-error)] ml-1">*</span>}
-      </label>
+      <label className="block text-sm font-medium text-canopy-text">{field.label}</label>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -314,10 +300,19 @@ export function CommandBuilder({
 
   useEffect(() => {
     setCurrentStepIndex(0);
-    setFormData({});
+    // Initialize checkbox fields to false to ensure explicit boolean values
+    const initialData: Record<string, unknown> = {};
+    for (const step of steps) {
+      for (const field of step.fields) {
+        if (field.type === "checkbox") {
+          initialData[field.name] = false;
+        }
+      }
+    }
+    setFormData(initialData);
     setFieldErrors({});
     setExecutionResult(null);
-  }, [command.id]);
+  }, [command.id, steps]);
 
   const validateCurrentStep = useCallback((): boolean => {
     if (!currentStep) return true;
@@ -371,7 +366,20 @@ export function CommandBuilder({
   const handleExecute = useCallback(async () => {
     if (!validateCurrentStep()) return;
 
-    const result = await onExecute(formData);
+    // Normalize empty strings to undefined so agents see "unset" rather than "provided empty"
+    const normalizedData: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(formData)) {
+      if (typeof value === "string") {
+        const trimmed = value.trim();
+        if (trimmed !== "") {
+          normalizedData[key] = trimmed;
+        }
+      } else if (value !== undefined && value !== null && value !== "") {
+        normalizedData[key] = value;
+      }
+    }
+
+    const result = await onExecute(normalizedData);
     setExecutionResult(result);
   }, [formData, onExecute, validateCurrentStep]);
 
