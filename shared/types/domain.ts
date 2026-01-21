@@ -231,7 +231,7 @@ export type PanelLocation = "grid" | "dock" | "trash";
 export type TerminalLocation = PanelLocation;
 
 /** Dock display mode (slim is legacy and treated as hidden) */
-export type DockMode = "expanded" | "slim" | "hidden";
+export type DockMode = "expanded" | "compact" | "slim" | "hidden";
 
 /**
  * Dock behavior controls how the dock mode is determined:

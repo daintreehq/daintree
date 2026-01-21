@@ -2,12 +2,14 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useDockRenderState } from "@/hooks/useDockRenderState";
 import { useDockStore } from "@/store";
 import { ContentDock } from "./ContentDock";
+import { CompactDock } from "./CompactDock";
 import { DockHandleOverlay } from "./DockHandleOverlay";
 import { DockStatusOverlay } from "./DockStatusOverlay";
 import { DockPanelOffscreenContainer } from "./DockPanelOffscreenContainer";
 
 export function TerminalDockRegion() {
   const {
+    effectiveMode,
     shouldShowInLayout,
     showStatusOverlay,
     dockedCount,
@@ -26,16 +28,25 @@ export function TerminalDockRegion() {
     return <DockHandleOverlay />;
   }
 
+  const isCompactMode = effectiveMode === "compact";
+
   return (
     <DockPanelOffscreenContainer>
-      {/* ContentDock in layout when visible */}
-      {shouldShowInLayout && (
+      {/* CompactDock for compact mode - minimal bar with inline status */}
+      {isCompactMode && shouldShowInLayout && (
+        <ErrorBoundary variant="section" componentName="CompactDock">
+          <CompactDock dockedCount={dockedCount} />
+        </ErrorBoundary>
+      )}
+
+      {/* ContentDock for expanded mode - full dock with all features */}
+      {!isCompactMode && shouldShowInLayout && (
         <ErrorBoundary variant="section" componentName="ContentDock">
           <ContentDock density={density} />
         </ErrorBoundary>
       )}
 
-      {/* Handle overlay is always visible at bottom edge for discoverability */}
+      {/* Handle overlay is visible in expanded and hidden modes (compact has its own expand button) */}
       <DockHandleOverlay />
 
       {/* Status overlay when dock is hidden but has status counts or docked panels */}

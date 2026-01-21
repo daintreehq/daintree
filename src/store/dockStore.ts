@@ -26,7 +26,7 @@ const POPOVER_DEFAULT_HEIGHT = 500;
 const POPOVER_MIN_HEIGHT = 300;
 const POPOVER_MAX_HEIGHT_RATIO = 0.8;
 
-const MODE_CYCLE: DockMode[] = ["expanded", "hidden"];
+const MODE_CYCLE: DockMode[] = ["expanded", "compact", "hidden"];
 
 export const useDockStore = create<DockState>()((set, get) => ({
   mode: "hidden",
@@ -83,7 +83,8 @@ export const useDockStore = create<DockState>()((set, get) => ({
     if (behavior === "auto") {
       set({ behavior: "manual" });
     }
-    const nextMode: DockMode = mode === "expanded" ? "hidden" : "expanded";
+    // Toggle between expanded and hidden, treating compact as expanded for toggle purposes
+    const nextMode: DockMode = mode === "expanded" || mode === "compact" ? "hidden" : "expanded";
     set({ mode: nextMode });
     const state = get();
     void persistDockState({

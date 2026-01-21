@@ -76,8 +76,9 @@ export function useDockRenderState(): DockRenderState & {
       // Auto mode: hidden by default, expanded when there are docked terminals
       return hasDocked ? "expanded" : "hidden";
     }
-    // Manual mode: use the stored mode
-    return mode === "slim" ? "hidden" : mode;
+    // Manual mode: use the stored mode (slim is legacy, maps to hidden)
+    if (mode === "slim") return "hidden";
+    return mode;
   }, [isHydrated, behavior, mode, hasDocked]);
 
   // Determine if we should show dock in layout (takes up space)
@@ -91,6 +92,10 @@ export function useDockRenderState(): DockRenderState & {
 
     // Hidden mode never shows in layout
     if (effectiveMode === "hidden") return false;
+
+    // Compact and expanded modes take up layout space
+    // For expanded mode, auto-hide when empty can hide it
+    if (effectiveMode === "compact") return true;
 
     // Expanded mode shows unless auto-hide is on and empty
     if (autoHideWhenEmpty && !hasContent) return false;
@@ -108,8 +113,8 @@ export function useDockRenderState(): DockRenderState & {
     }
   }, [isDragging, effectiveMode, peek, setPeek]);
 
-  // Compute density for ContentDock
-  const density: DockRenderState["density"] = "normal";
+  // Compute density for ContentDock - compact mode uses compact density
+  const density: DockRenderState["density"] = effectiveMode === "compact" ? "compact" : "normal";
 
   // Show status overlay when dock is hidden and there are status indicators or docked panels
   // CRITICAL: Must be mutually exclusive with shouldShowInLayout
@@ -117,7 +122,8 @@ export function useDockRenderState(): DockRenderState & {
     isHydrated && effectiveMode === "hidden" && (hasStatus || hasDocked) && !shouldShowInLayout;
 
   // Whether the dock handle should indicate visible/hidden state
-  const isHandleVisible = effectiveMode === "expanded";
+  // Both expanded and compact modes are "visible" states
+  const isHandleVisible = effectiveMode === "expanded" || effectiveMode === "compact";
 
   return {
     effectiveMode,

@@ -10,6 +10,11 @@ export function DockHandleOverlay() {
 
   const toggleShortcut = useKeybindingDisplay("panel.toggleDock");
 
+  // Hide the floating overlay when dock is in compact mode (compact mode has its own expand button)
+  if (effectiveMode === "compact") {
+    return null;
+  }
+
   const Icon = isHandleVisible ? ChevronDown : ChevronUp;
 
   const tooltipParts = [
