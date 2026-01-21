@@ -16,27 +16,32 @@ interface CreateIssueResult {
 export const githubCreateIssueCommand: CanopyCommand<CreateIssueArgs, CreateIssueResult> = {
   id: "github:create-issue",
   label: "/github:create-issue",
-  description: "Create a new GitHub issue in the current repository",
+  description:
+    "Create a GitHub issue in the current repository. " +
+    "Use structured sections, file links, and task lists to make issues self-contained for autonomous work.",
   category: "github",
-  keywords: ["issue", "create", "new", "bug", "feature", "ticket"],
+  keywords: ["issue", "create", "new", "bug", "feature", "ticket", "task", "request"],
 
   args: [
     {
       name: "title",
       type: "string",
-      description: "Issue title",
+      description:
+        "Concise title describing what needs to be done (e.g., 'Add dark mode toggle to settings')",
       required: true,
     },
     {
       name: "body",
       type: "string",
-      description: "Issue description/body",
+      description:
+        "Structured issue body with sections: Summary, Current Behavior, Expected Behavior, " +
+        "Deliverables, Files to Modify, and Acceptance Criteria. Include file links and code references.",
       required: true,
     },
     {
       name: "labels",
       type: "string",
-      description: "Comma-separated labels (e.g., 'bug,ui')",
+      description: "Comma-separated labels (e.g., 'enhancement,ui' or 'bug,critical')",
       required: false,
     },
   ],
@@ -45,36 +50,47 @@ export const githubCreateIssueCommand: CanopyCommand<CreateIssueArgs, CreateIssu
     steps: [
       {
         id: "issue-details",
-        title: "Issue Details",
-        description: "Enter the details for the new GitHub issue",
+        title: "Create GitHub Issue",
+        description:
+          "Create a well-structured issue that provides enough context for developers or AI agents to implement autonomously",
         fields: [
           {
             name: "title",
-            label: "Title",
+            label: "Issue Title",
             type: "text",
-            placeholder: "Brief description of the issue",
+            placeholder: "Add dark mode toggle to application settings",
             required: true,
             validation: {
               min: 10,
               message: "Title must be at least 10 characters",
             },
-            helpText: "A clear, concise title describing the issue",
+            helpText:
+              "A clear, action-oriented title. Start with a verb: Add, Fix, Update, Implement, Refactor",
           },
           {
             name: "body",
-            label: "Description",
+            label: "Issue Body",
             type: "textarea",
-            placeholder: "Detailed description of the issue...",
+            placeholder:
+              "## Summary\nBrief description of what needs to be done.\n\n" +
+              "## Current Behavior\nWhat currently happens (if applicable).\n\n" +
+              "## Expected Behavior\nWhat should happen after this is implemented.\n\n" +
+              "## Deliverables\n- [ ] Task 1\n- [ ] Task 2\n\n" +
+              "## Files to Modify\n- `src/path/to/file.ts` - Description of changes\n\n" +
+              "## Acceptance Criteria\n- [ ] Criterion 1\n- [ ] Criterion 2",
             required: true,
-            helpText: "Provide context, steps to reproduce, expected behavior, etc.",
+            helpText:
+              "Use markdown sections. Include file paths as links, code blocks for examples, " +
+              "and checkbox lists for tasks. The more context, the better for autonomous implementation.",
           },
           {
             name: "labels",
             label: "Labels",
             type: "text",
-            placeholder: "bug, enhancement, documentation",
+            placeholder: "enhancement, ui",
             required: false,
-            helpText: "Comma-separated labels to apply (optional)",
+            helpText:
+              "Common labels: bug, enhancement, documentation, refactor, testing, ui, api, performance",
           },
         ],
       },
@@ -87,7 +103,7 @@ export const githubCreateIssueCommand: CanopyCommand<CreateIssueArgs, CreateIssu
 
   disabledReason: () => {
     if (!getGitHubToken()) {
-      return "GitHub token not configured. Set it in Settings > GitHub.";
+      return "GitHub token not configured. Set it in Settings.";
     }
     return undefined;
   },
@@ -99,7 +115,7 @@ export const githubCreateIssueCommand: CanopyCommand<CreateIssueArgs, CreateIssu
         success: false,
         error: {
           code: "NO_TOKEN",
-          message: "GitHub token not configured. Set it in Settings > GitHub.",
+          message: "GitHub token not configured. Set it in Settings.",
         },
       };
     }
