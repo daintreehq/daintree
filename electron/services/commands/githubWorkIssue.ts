@@ -167,8 +167,8 @@ export const githubWorkIssueCommand: CanopyCommand<GitHubWorkIssueArgs, GitHubWo
     {
       name: "issueNumber",
       type: "number",
-      description: "GitHub issue number",
-      required: true,
+      description: "GitHub issue number (optional - agent can detect from context)",
+      required: false,
     },
     {
       name: "branchName",
@@ -189,26 +189,24 @@ export const githubWorkIssueCommand: CanopyCommand<GitHubWorkIssueArgs, GitHubWo
       {
         id: "issue",
         title: "Select Issue",
-        description: "Enter the GitHub issue number to work on",
+        description: "Specify the issue to work on - the agent can help if you're unsure",
         fields: [
           {
             name: "issueNumber",
             label: "Issue Number",
             type: "number",
-            placeholder: "123",
-            required: true,
+            placeholder: "e.g., 123",
             validation: {
               min: 1,
               message: "Issue number must be a positive integer",
             },
-            helpText: "The GitHub issue number (e.g., 123)",
+            helpText: "The GitHub issue number. Leave empty to let the agent help you find one.",
           },
           {
             name: "branchName",
             label: "Branch Name",
             type: "text",
             placeholder: "Auto-generated from issue title",
-            required: false,
             helpText: "Optional custom branch name. If not provided, will be auto-generated.",
           },
           {
@@ -216,7 +214,6 @@ export const githubWorkIssueCommand: CanopyCommand<GitHubWorkIssueArgs, GitHubWo
             label: "Base Branch",
             type: "text",
             placeholder: "main",
-            required: false,
             helpText: "Branch to base off. Defaults to develop (if exists) or main.",
           },
         ],

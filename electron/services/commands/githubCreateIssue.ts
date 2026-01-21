@@ -2,8 +2,8 @@ import type { CanopyCommand, CommandResult } from "../../../shared/types/command
 import { getGitHubToken, getRepoContext, clearGitHubCaches } from "../GitHubService.js";
 
 interface CreateIssueArgs {
-  title: string;
-  body: string;
+  title?: string;
+  body?: string;
   labels?: string;
 }
 
@@ -24,14 +24,14 @@ export const githubCreateIssueCommand: CanopyCommand<CreateIssueArgs, CreateIssu
     {
       name: "title",
       type: "string",
-      description: "Issue title",
-      required: true,
+      description: "Issue title (optional - agent can generate)",
+      required: false,
     },
     {
       name: "body",
       type: "string",
-      description: "Issue description/body",
-      required: true,
+      description: "Issue explanation/description (optional - agent interprets)",
+      required: false,
     },
     {
       name: "labels",
@@ -46,34 +46,28 @@ export const githubCreateIssueCommand: CanopyCommand<CreateIssueArgs, CreateIssu
       {
         id: "issue-details",
         title: "Issue Details",
-        description: "Enter the details for the new GitHub issue",
+        description: "Describe the issue you want to create - the agent will interpret your intent",
         fields: [
           {
             name: "title",
             label: "Title",
             type: "text",
-            placeholder: "Brief description of the issue",
-            required: true,
-            validation: {
-              min: 10,
-              message: "Title must be at least 10 characters",
-            },
-            helpText: "A clear, concise title describing the issue",
+            placeholder: "Optional - agent can generate from your explanation",
+            helpText: "Leave empty to let the agent generate a title from your explanation",
           },
           {
             name: "body",
-            label: "Description",
+            label: "Explanation",
             type: "textarea",
-            placeholder: "Detailed description of the issue...",
-            required: true,
-            helpText: "Provide context, steps to reproduce, expected behavior, etc.",
+            placeholder: "Explain what you want to create an issue about...",
+            helpText:
+              "Describe the issue in natural language. The agent will interpret and format appropriately.",
           },
           {
             name: "labels",
             label: "Labels",
             type: "text",
             placeholder: "bug, enhancement, documentation",
-            required: false,
             helpText: "Comma-separated labels to apply (optional)",
           },
         ],
@@ -127,36 +121,31 @@ export const githubCreateIssueCommand: CanopyCommand<CreateIssueArgs, CreateIssu
     }
 
     const { owner, repo } = repoContext;
-    let { title, body } = args;
     const { labels } = args;
 
-    // Validate and trim title and body to match builder requirements
-    title = title.trim();
-    body = body.trim();
+    // Trim values if provided
+    const title = args.title?.trim() || "";
+    const body = args.body?.trim() || "";
 
-    if (!title || title.length < 10) {
+    // If no title and no body provided, return message for agent interpretation
+    // The agent in the terminal will handle generating appropriate content
+    if (!title && !body) {
       return {
         success: false,
         error: {
-          code: "INVALID_TITLE",
-          message: "Title must be at least 10 characters",
+          code: "NO_INPUT",
+          message: "Please provide a title or explanation for the issue",
         },
       };
     }
 
-    if (!body) {
-      return {
-        success: false,
-        error: {
-          code: "INVALID_BODY",
-          message: "Description is required",
-        },
-      };
-    }
+    // Use body as title if title is missing (agent-style behavior)
+    const issueTitle = title || body.split("\n")[0].slice(0, 100);
+    const issueBody = body || title;
 
     const requestBody: Record<string, unknown> = {
-      title,
-      body,
+      title: issueTitle,
+      body: issueBody,
     };
 
     if (labels) {
