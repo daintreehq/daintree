@@ -35,7 +35,7 @@ export function TerminalDockRegion() {
       {/* CompactDock for compact mode - minimal bar with inline status */}
       {isCompactMode && shouldShowInLayout && (
         <ErrorBoundary variant="section" componentName="CompactDock">
-          <CompactDock dockedCount={dockedCount} />
+          <CompactDock dockedCount={dockedCount} shouldFadeForInput={shouldFadeForInput} />
         </ErrorBoundary>
       )}
 

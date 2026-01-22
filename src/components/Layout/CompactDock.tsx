@@ -37,9 +37,10 @@ const AGENT_OPTIONS = [
 
 interface CompactDockProps {
   dockedCount: number;
+  shouldFadeForInput?: boolean;
 }
 
-export function CompactDock({ dockedCount }: CompactDockProps) {
+export function CompactDock({ dockedCount, shouldFadeForInput = false }: CompactDockProps) {
   const { showMenu } = useNativeContextMenu();
   const setMode = useDockStore((state) => state.setMode);
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
@@ -144,65 +145,67 @@ export function CompactDock({ dockedCount }: CompactDockProps) {
     <div
       onContextMenu={handleContextMenu}
       className={cn(
-        "bg-[var(--dock-bg)]/95 backdrop-blur-sm",
-        "border-t border-[var(--dock-border)]",
-        "shadow-[var(--dock-shadow)]",
-        "flex items-center h-10 px-2 gap-2",
-        "z-40 shrink-0"
+        "bg-[var(--dock-bg)]/90 backdrop-blur-sm",
+        "border-t border-[var(--dock-border)]/50",
+        "shadow-sm",
+        "flex items-center h-7 px-1.5 gap-1.5",
+        "z-40 shrink-0",
+        "transition-opacity duration-200",
+        shouldFadeForInput ? "opacity-25 hover:opacity-90" : "opacity-100"
       )}
       data-dock-mode="compact"
       data-dock-density="compact"
     >
       {/* Left: Expand button + docked count */}
-      <div className="flex items-center gap-1.5 shrink-0">
+      <div className="flex items-center gap-1 shrink-0">
         <button
           type="button"
           onClick={handleExpandClick}
           className={cn(
             "flex items-center justify-center",
-            "w-7 h-7 rounded-[var(--radius-md)]",
+            "w-5 h-5 rounded",
             "bg-white/[0.03] hover:bg-white/[0.06]",
-            "border border-white/[0.06] hover:border-white/[0.1]",
-            "text-canopy-text/50 hover:text-canopy-text/80",
+            "border border-white/[0.04] hover:border-white/[0.08]",
+            "text-canopy-text/40 hover:text-canopy-text/70",
             "transition-colors duration-150",
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
           )}
           title={expandTooltip}
           aria-label={expandTooltip}
         >
-          <ChevronUp className="w-3.5 h-3.5" aria-hidden="true" />
+          <ChevronUp className="w-3 h-3" aria-hidden="true" />
         </button>
 
         {dockedCount > 0 && (
           <div
-            className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/[0.04] text-canopy-text/50"
+            className="flex items-center gap-0.5 px-1 py-0.5 rounded bg-white/[0.03] text-canopy-text/40"
             title={`${dockedCount} docked panel${dockedCount === 1 ? "" : "s"}`}
           >
-            <Layers className="w-3 h-3" aria-hidden="true" />
-            <span className="text-[11px] font-medium tabular-nums">{dockedCount}</span>
+            <Layers className="w-2.5 h-2.5" aria-hidden="true" />
+            <span className="text-[10px] font-medium tabular-nums">{dockedCount}</span>
           </div>
         )}
       </div>
 
       {/* Separator */}
-      {dockTerminals.length > 0 && <div className="w-px h-5 bg-[var(--dock-border)] shrink-0" />}
+      {dockTerminals.length > 0 && <div className="w-px h-4 bg-[var(--dock-border)]/50 shrink-0" />}
 
       {/* Center: Panel icons (scrollable) */}
       <div className="relative flex-1 min-w-0">
         {canScrollLeft && (
-          <div className="absolute left-0 top-1/2 -translate-y-1/2 z-10 pointer-events-none bg-gradient-to-r from-[var(--dock-bg)] via-[var(--dock-bg)]/90 to-transparent pr-2">
+          <div className="absolute left-0 top-1/2 -translate-y-1/2 z-10 pointer-events-none bg-gradient-to-r from-[var(--dock-bg)] via-[var(--dock-bg)]/90 to-transparent pr-1">
             <button
               type="button"
               onClick={scrollLeft}
               className={cn(
-                "pointer-events-auto p-1 text-canopy-text/60 hover:text-canopy-text",
+                "pointer-events-auto p-0.5 text-canopy-text/50 hover:text-canopy-text",
                 "rounded transition-colors",
                 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
               )}
               aria-label="Scroll left"
               title="Scroll left"
             >
-              <ChevronLeft className="w-3.5 h-3.5" />
+              <ChevronLeft className="w-3 h-3" />
             </button>
           </div>
         )}
@@ -210,9 +213,9 @@ export function CompactDock({ dockedCount }: CompactDockProps) {
         <div
           ref={combinedRef}
           className={cn(
-            "flex items-center gap-1 overflow-x-auto flex-1 min-h-7 no-scrollbar scroll-smooth px-0.5",
+            "flex items-center gap-0.5 overflow-x-auto flex-1 min-h-5 no-scrollbar scroll-smooth px-0.5",
             isOver &&
-              "bg-white/[0.03] ring-2 ring-canopy-accent/30 ring-inset rounded-[var(--radius-md)]"
+              "bg-white/[0.03] ring-1 ring-canopy-accent/30 ring-inset rounded"
           )}
         >
           <SortableContext
@@ -220,7 +223,7 @@ export function CompactDock({ dockedCount }: CompactDockProps) {
             items={terminalIds}
             strategy={horizontalListSortingStrategy}
           >
-            <div className="flex items-center gap-1 min-w-[60px] min-h-6">
+            <div className="flex items-center gap-0.5 min-w-[40px] min-h-5">
               {dockTerminals.length === 0 ? (
                 <SortableDockPlaceholder />
               ) : (
@@ -242,29 +245,29 @@ export function CompactDock({ dockedCount }: CompactDockProps) {
         </div>
 
         {canScrollRight && (
-          <div className="absolute right-0 top-1/2 -translate-y-1/2 z-10 pointer-events-none bg-gradient-to-l from-[var(--dock-bg)] via-[var(--dock-bg)]/90 to-transparent pl-2">
+          <div className="absolute right-0 top-1/2 -translate-y-1/2 z-10 pointer-events-none bg-gradient-to-l from-[var(--dock-bg)] via-[var(--dock-bg)]/90 to-transparent pl-1">
             <button
               type="button"
               onClick={scrollRight}
               className={cn(
-                "pointer-events-auto p-1 text-canopy-text/60 hover:text-canopy-text",
+                "pointer-events-auto p-0.5 text-canopy-text/50 hover:text-canopy-text",
                 "rounded transition-colors",
                 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
               )}
               aria-label="Scroll right"
               title="Scroll right"
             >
-              <ChevronRight className="w-3.5 h-3.5" />
+              <ChevronRight className="w-3 h-3" />
             </button>
           </div>
         )}
       </div>
 
       {/* Separator before status */}
-      <div className="w-px h-5 bg-[var(--dock-border)] shrink-0" />
+      <div className="w-px h-4 bg-[var(--dock-border)]/50 shrink-0" />
 
       {/* Right: Status indicators */}
-      <div className="shrink-0 flex items-center gap-1.5">
+      <div className="shrink-0 flex items-center gap-1">
         <WaitingContainer compact />
         <FailedContainer compact />
         <TrashContainer trashedTerminals={trashedItems} compact />
@@ -309,14 +312,14 @@ function CompactTerminalIcon({ terminal, onClick, onDoubleClick }: CompactTermin
       type="button"
       className={cn(
         "flex items-center justify-center",
-        "w-7 h-7 rounded-[var(--radius-md)]",
-        "bg-white/[0.02] hover:bg-white/[0.06]",
-        "border border-transparent hover:border-white/[0.1]",
+        "w-5 h-5 rounded",
+        "bg-white/[0.02] hover:bg-white/[0.05]",
+        "border border-transparent hover:border-white/[0.08]",
         "transition-all duration-150",
         "cursor-grab active:cursor-grabbing",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
-        isActive && "ring-1 ring-canopy-accent/40",
-        isWaiting && "ring-1 ring-amber-400/40"
+        isActive && "ring-1 ring-canopy-accent/30",
+        isWaiting && "ring-1 ring-amber-400/30"
       )}
       onClick={(e) => {
         e.stopPropagation();
@@ -327,14 +330,14 @@ function CompactTerminalIcon({ terminal, onClick, onDoubleClick }: CompactTermin
         onDoubleClick();
       }}
       onKeyDown={handleKeyDown}
-      title={`${displayTitle} - Click to expand and preview, double-click to restore, Shift+Enter to restore`}
+      title={`${displayTitle} - Click to expand and preview, double-click to restore`}
       aria-label={`${displayTitle} - Press Enter to expand and preview, Shift+Enter to restore to grid`}
     >
       <TerminalIcon
         type={terminal.type}
         kind={terminal.kind}
         agentId={terminal.agentId}
-        className={cn("w-4 h-4", isActive && "animate-pulse motion-reduce:animate-none")}
+        className={cn("w-3 h-3", isActive && "animate-pulse motion-reduce:animate-none")}
         brandColor={brandColor}
       />
     </button>
