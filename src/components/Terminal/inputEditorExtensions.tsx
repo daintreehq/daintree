@@ -208,26 +208,54 @@ export function createFileChipTooltip() {
   });
 }
 
-export function createAutoSize() {
+export interface AutoSizeConfig {
+  lineHeightPx?: number;
+  maxHeightPx?: number;
+}
+
+export function computeAutoSize(
+  contentHeight: number,
+  lineHeightPx: number,
+  maxHeightPx: number
+) {
+  // Guard against invalid configuration
+  if (lineHeightPx <= 0) {
+    return { next: maxHeightPx, shouldScroll: false };
+  }
+
+  // Use Math.ceil to avoid clipping the last line when content isn't an exact multiple
+  const lines = Math.max(1, Math.ceil(contentHeight / lineHeightPx));
+  const snapped = lines * lineHeightPx;
+  const next = Math.min(snapped, maxHeightPx);
+  return { next, shouldScroll: contentHeight > maxHeightPx };
+}
+
+export function createAutoSize(config: AutoSizeConfig = {}) {
+  const lineHeightPx = config.lineHeightPx ?? LINE_HEIGHT_PX;
+  const maxHeightPx = config.maxHeightPx ?? MAX_TEXTAREA_HEIGHT_PX;
   let lastHeight = 0;
 
   return EditorView.updateListener.of((update) => {
-    if (!update.docChanged && !update.viewportChanged) return;
+    if (!update.docChanged && !update.viewportChanged && !update.geometryChanged) return;
 
     const view = update.view;
-    // Snap to line-height increments to prevent subpixel jitter
-    const lines = Math.max(1, Math.round(view.contentHeight / LINE_HEIGHT_PX));
-    const snapped = lines * LINE_HEIGHT_PX;
-    const next = Math.min(snapped, MAX_TEXTAREA_HEIGHT_PX);
 
-    // Only update if the computed height actually changed
-    if (next !== lastHeight) {
-      lastHeight = next;
-      view.dom.style.height = `${next}px`;
-    }
+    // Use requestMeasure to ensure we read contentHeight after CodeMirror's layout pass
+    view.requestMeasure({
+      read() {
+        // Read phase: measure contentHeight after layout is complete
+        return computeAutoSize(view.contentHeight, lineHeightPx, maxHeightPx);
+      },
+      write(measured) {
+        // Write phase: apply DOM updates
+        if (measured.next !== lastHeight) {
+          lastHeight = measured.next;
+          view.dom.style.height = `${measured.next}px`;
+        }
 
-    view.scrollDOM.style.overflowY =
-      view.contentHeight > MAX_TEXTAREA_HEIGHT_PX ? "auto" : "hidden";
+        view.scrollDOM.style.overflowY = measured.shouldScroll ? "auto" : "hidden";
+      },
+    });
   });
 }
 
