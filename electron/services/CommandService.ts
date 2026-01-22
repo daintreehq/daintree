@@ -129,7 +129,10 @@ class CommandServiceImpl {
   /**
    * List commands filtered by category.
    */
-  async listByCategory(category: string, context?: CommandContext): Promise<CommandManifestEntry[]> {
+  async listByCategory(
+    category: string,
+    context?: CommandContext
+  ): Promise<CommandManifestEntry[]> {
     const commands = await this.list(context);
     return commands.filter((cmd) => cmd.category === category);
   }
@@ -234,9 +237,7 @@ class CommandServiceImpl {
     if (override?.defaults) {
       for (const [key, value] of Object.entries(override.defaults)) {
         // Only apply override default if not provided by caller
-        const hasArg =
-          Object.prototype.hasOwnProperty.call(args, key) &&
-          args[key] != null;
+        const hasArg = Object.prototype.hasOwnProperty.call(args, key) && args[key] != null;
         if (!hasArg) {
           effectiveArgs[key] = value;
         }
@@ -282,7 +283,10 @@ class CommandServiceImpl {
   /**
    * Get manifest entry for a single command.
    */
-  async getManifest(id: string, context?: CommandContext): Promise<CommandManifestEntry | undefined> {
+  async getManifest(
+    id: string,
+    context?: CommandContext
+  ): Promise<CommandManifestEntry | undefined> {
     const command = this.commands.get(id);
     if (!command) return undefined;
 

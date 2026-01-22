@@ -49,11 +49,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
   const updateOverride = (commandId: string, updates: Partial<CommandOverride>) => {
     const existing = getOverride(commandId);
     if (existing) {
-      onChange(
-        overrides.map((o) =>
-          o.commandId === commandId ? { ...o, ...updates } : o
-        )
-      );
+      onChange(overrides.map((o) => (o.commandId === commandId ? { ...o, ...updates } : o)));
     } else {
       onChange([...overrides, { commandId, ...updates }]);
     }
@@ -113,33 +109,29 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
 
   const hasOverride = (commandId: string): boolean => {
     const override = getOverride(commandId);
-    return override !== undefined && (override.disabled || (override.defaults && Object.keys(override.defaults).length > 0));
+    return !!(
+      override &&
+      (override.disabled || (override.defaults && Object.keys(override.defaults).length > 0))
+    );
   };
 
   if (isLoading) {
-    return (
-      <div className="text-sm text-canopy-text/60 text-center py-8">
-        Loading commands...
-      </div>
-    );
+    return <div className="text-sm text-canopy-text/60 text-center py-8">Loading commands...</div>;
   }
 
   if (commands.length === 0) {
     return (
-      <div className="text-sm text-canopy-text/60 text-center py-8">
-        No commands available
-      </div>
+      <div className="text-sm text-canopy-text/60 text-center py-8">No commands available</div>
     );
   }
 
   return (
     <div className="space-y-2">
       <div className="mb-4">
-        <h3 className="text-sm font-semibold text-canopy-text/80 mb-2">
-          Command Overrides
-        </h3>
+        <h3 className="text-sm font-semibold text-canopy-text/80 mb-2">Command Overrides</h3>
         <p className="text-xs text-canopy-text/60">
-          Customize command behavior for this project. Set default argument values or disable commands entirely.
+          Customize command behavior for this project. Set default argument values or disable
+          commands entirely.
         </p>
       </div>
 
@@ -225,11 +217,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                     )}
                     title={isDisabled ? "Command disabled for this project" : "Command enabled"}
                   >
-                    {isDisabled ? (
-                      <PowerOff className="h-4 w-4" />
-                    ) : (
-                      <Power className="h-4 w-4" />
-                    )}
+                    {isDisabled ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
                   </button>
                 </div>
               </div>
@@ -252,9 +240,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                               className="text-xs font-medium text-canopy-text/80"
                             >
                               {arg.name}
-                              {arg.required && (
-                                <span className="text-red-500 ml-1">*</span>
-                              )}
+                              {arg.required && <span className="text-red-500 ml-1">*</span>}
                             </label>
                             {hasDefaultValue && (
                               <span className="text-[10px] text-canopy-accent bg-canopy-accent/10 px-1.5 py-0.5 rounded">
@@ -268,7 +254,9 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                             value={currentValue}
                             onChange={(e) => updateDefault(command.id, arg.name, e.target.value)}
                             className="w-full bg-canopy-sidebar border border-canopy-border rounded px-2 py-1.5 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
-                            placeholder={arg.default ? `Default: ${arg.default}` : `Enter ${arg.name}`}
+                            placeholder={
+                              arg.default ? `Default: ${arg.default}` : `Enter ${arg.name}`
+                            }
                           />
                           {arg.description && (
                             <p className="text-xs text-canopy-text/50">{arg.description}</p>

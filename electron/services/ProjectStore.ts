@@ -438,7 +438,11 @@ export class ProjectStore {
             const o = override as Record<string, unknown>;
             if (typeof o.commandId !== "string") return false;
             // Reject null defaults explicitly (typeof null === "object")
-            if (o.defaults !== undefined && (o.defaults === null || typeof o.defaults !== "object" || Array.isArray(o.defaults))) return false;
+            if (
+              o.defaults !== undefined &&
+              (o.defaults === null || typeof o.defaults !== "object" || Array.isArray(o.defaults))
+            )
+              return false;
             if (o.disabled !== undefined && typeof o.disabled !== "boolean") return false;
             return true;
           })
@@ -467,7 +471,10 @@ export class ProjectStore {
           parsed.copyTreeSettings && typeof parsed.copyTreeSettings === "object"
             ? parsed.copyTreeSettings
             : undefined,
-        commandOverrides: sanitizedCommandOverrides && sanitizedCommandOverrides.length > 0 ? sanitizedCommandOverrides : undefined,
+        commandOverrides:
+          sanitizedCommandOverrides && sanitizedCommandOverrides.length > 0
+            ? sanitizedCommandOverrides
+            : undefined,
       };
 
       return settings;
@@ -526,7 +533,12 @@ export class ProjectStore {
         if (!override || typeof override !== "object") return false;
         if (typeof override.commandId !== "string") return false;
         // Reject null defaults explicitly
-        if (override.defaults !== undefined && (override.defaults === null || typeof override.defaults !== "object" || Array.isArray(override.defaults))) {
+        if (
+          override.defaults !== undefined &&
+          (override.defaults === null ||
+            typeof override.defaults !== "object" ||
+            Array.isArray(override.defaults))
+        ) {
           console.warn(
             `[ProjectStore] Dropping invalid commandOverride for ${override.commandId} in project ${projectId}`
           );
@@ -535,7 +547,10 @@ export class ProjectStore {
         if (override.disabled !== undefined && typeof override.disabled !== "boolean") return false;
         return true;
       });
-      sanitizedSettings = { ...sanitizedSettings, commandOverrides: validOverrides.length > 0 ? validOverrides : undefined };
+      sanitizedSettings = {
+        ...sanitizedSettings,
+        commandOverrides: validOverrides.length > 0 ? validOverrides : undefined,
+      };
     }
 
     const tempFilePath = `${filePath}.tmp`;

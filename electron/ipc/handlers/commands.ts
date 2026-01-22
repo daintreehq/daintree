@@ -41,7 +41,7 @@ export function registerCommandHandlers(): () => void {
       console.warn("[CommandHandlers] Invalid commands:get payload", payload);
       return null;
     }
-    return commandService.getManifest(payload.commandId, payload.context) ?? null;
+    return (await commandService.getManifest(payload.commandId, payload.context)) ?? null;
   };
   ipcMain.handle(CHANNELS.COMMANDS_GET, handleCommandsGet);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.COMMANDS_GET));
