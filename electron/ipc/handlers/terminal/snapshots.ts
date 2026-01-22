@@ -197,10 +197,16 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       return {
         exists: true,
         id: terminal.id,
+        projectId: terminal.projectId,
+        kind: terminal.kind,
         type: terminal.type,
+        agentId: terminal.agentId,
+        title: terminal.title,
         cwd: terminal.cwd,
+        worktreeId: terminal.worktreeId,
         agentState: terminal.agentState,
         lastStateChange: terminal.lastStateChange,
+        spawnedAt: terminal.spawnedAt,
         activityTier: terminal.activityTier,
         hasPty: terminal.hasPty,
       };

@@ -125,11 +125,16 @@ export interface BackendTerminalInfo {
 export interface TerminalReconnectResult {
   exists: boolean;
   id?: string;
+  projectId?: string;
   kind?: TerminalKind;
   type?: TerminalType;
+  agentId?: AgentId;
+  title?: string;
   cwd?: string;
+  worktreeId?: string;
   agentState?: AgentState;
   lastStateChange?: number;
+  spawnedAt?: number;
   activityTier?: "active" | "background";
   hasPty?: boolean;
   error?: string;
