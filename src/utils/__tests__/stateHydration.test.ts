@@ -7,6 +7,7 @@ const appClientMock = {
 
 const terminalClientMock = {
   getForProject: vi.fn(),
+  reconnect: vi.fn(),
 };
 
 const worktreeClientMock = {
@@ -77,9 +78,12 @@ vi.mock("@/services/KeybindingService", () => ({
   },
 }));
 
+const initializeBackendTierMock = vi.fn();
+
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     fetchAndRestore: fetchAndRestoreMock,
+    initializeBackendTier: initializeBackendTierMock,
   },
 }));
 
@@ -93,6 +97,7 @@ describe("hydrateAppState", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     terminalClientMock.getForProject.mockResolvedValue([]);
+    terminalClientMock.reconnect.mockResolvedValue({ exists: false });
     worktreeClientMock.getAll.mockResolvedValue([]);
   });
 
@@ -298,5 +303,92 @@ describe("hydrateAppState", () => {
         command: "claude --model sonnet-4",
       })
     );
+  });
+
+  it("reconnects via fallback when getForProject misses the terminal but reconnect finds it", async () => {
+    // This test verifies the reconnect fallback path - when getForProject doesn't
+    // return a terminal (e.g., due to project ID mismatch), but the terminal
+    // still exists in the backend and can be reconnected via direct ID lookup.
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "agent-1",
+            kind: "agent",
+            type: "claude",
+            agentId: "claude",
+            title: "Claude Agent",
+            cwd: "/project",
+            location: "grid",
+            command: "claude",
+          },
+        ],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+
+    // getForProject returns empty (simulating project ID mismatch)
+    terminalClientMock.getForProject.mockResolvedValue([]);
+
+    // But reconnect finds the terminal in the backend
+    terminalClientMock.reconnect.mockResolvedValue({
+      exists: true,
+      id: "agent-1",
+      projectId: "project-1",
+      kind: "agent",
+      type: "claude",
+      agentId: "claude",
+      title: "Claude Agent",
+      cwd: "/project",
+      worktreeId: undefined,
+      agentState: "waiting",
+      lastStateChange: 123456789,
+      spawnedAt: 123456000,
+      activityTier: "background",
+      hasPty: true,
+    });
+
+    const addTerminal = vi.fn().mockResolvedValue("agent-1");
+    const setActiveWorktree = vi.fn();
+    const loadRecipes = vi.fn().mockResolvedValue(undefined);
+    const openDiagnosticsDock = vi.fn();
+
+    await hydrateAppState({
+      addTerminal,
+      setActiveWorktree,
+      loadRecipes,
+      openDiagnosticsDock,
+    });
+
+    // Should have called reconnect for the agent panel
+    expect(terminalClientMock.reconnect).toHaveBeenCalledWith("agent-1");
+
+    // Should reconnect with existingId, not respawn with requestedId
+    expect(addTerminal).toHaveBeenCalledTimes(1);
+    expect(addTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "agent",
+        agentId: "claude",
+        existingId: "agent-1", // reconnect path uses existingId
+        agentState: "waiting",
+        lastStateChange: 123456789,
+      })
+    );
+
+    // Should NOT have requestedId (that's the respawn path)
+    expect(addTerminal).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestedId: "agent-1",
+      })
+    );
+
+    // Should initialize backend tier from reconnect result
+    expect(initializeBackendTierMock).toHaveBeenCalledWith("agent-1", "background");
+
+    // Should restore terminal content
+    expect(fetchAndRestoreMock).toHaveBeenCalledWith("agent-1");
   });
 });

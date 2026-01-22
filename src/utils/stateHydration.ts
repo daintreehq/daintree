@@ -192,37 +192,108 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
                 const location = (saved.location === "dock" ? "dock" : "grid") as "grid" | "dock";
 
                 if (panelKindUsesTerminalUi(kind)) {
-                  const effectiveAgentId =
-                    saved.agentId ??
-                    (saved.type && isRegisteredAgent(saved.type) ? saved.type : undefined);
-                  const isAgentPanel = kind === "agent" || Boolean(effectiveAgentId);
-                  const agentId = effectiveAgentId;
-                  let command = saved.command?.trim() || undefined;
+                  // RECONNECT FALLBACK: Before respawning, try to reconnect directly by ID.
+                  // This handles cases where getForProject missed the terminal due to project
+                  // ID mismatch or stale project association. The terminal may still be running
+                  // in the backend but wasn't returned by getForProject.
+                  let reconnectedTerminal: Awaited<
+                    ReturnType<typeof terminalClient.reconnect>
+                  > | null = null;
 
-                  if (agentId && agentSettings) {
-                    const agentConfig = getAgentConfig(agentId);
-                    const baseCommand = agentConfig?.command || agentId;
-                    const flags = generateAgentFlags(
-                      agentSettings.agents?.[agentId] ?? {},
-                      agentId
+                  try {
+                    reconnectedTerminal = await terminalClient.reconnect(saved.id);
+                    if (reconnectedTerminal?.exists && reconnectedTerminal.hasPty) {
+                      console.log(
+                        `[Hydration] Reconnect fallback succeeded for ${saved.id} - terminal exists in backend but was missed by getForProject`
+                      );
+                    }
+                  } catch (reconnectError) {
+                    console.warn(
+                      `[Hydration] Reconnect fallback failed for ${saved.id}:`,
+                      reconnectError
                     );
-                    command = flags.length > 0 ? `${baseCommand} ${flags.join(" ")}` : baseCommand;
+                    reconnectedTerminal = null;
                   }
 
-                  console.log(`[Hydration] Respawning PTY panel: ${saved.id}`);
+                  if (reconnectedTerminal?.exists && reconnectedTerminal.hasPty) {
+                    // Terminal exists in backend - reconnect instead of respawning
+                    const cwd = reconnectedTerminal.cwd || saved.cwd || projectRoot || "";
+                    const currentAgentState = reconnectedTerminal.agentState;
+                    const backendLastStateChange = reconnectedTerminal.lastStateChange;
+                    const agentId =
+                      reconnectedTerminal.agentId ??
+                      saved.agentId ??
+                      (reconnectedTerminal.type && isRegisteredAgent(reconnectedTerminal.type)
+                        ? reconnectedTerminal.type
+                        : saved.type && isRegisteredAgent(saved.type)
+                          ? saved.type
+                          : undefined);
 
-                  await addTerminal({
-                    kind: isAgentPanel ? "agent" : "terminal",
-                    type: saved.type,
-                    agentId,
-                    title: saved.title,
-                    cwd: saved.cwd || projectRoot || "",
-                    worktreeId: saved.worktreeId,
-                    location,
-                    requestedId: saved.id,
-                    command,
-                    isInputLocked: saved.isInputLocked,
-                  });
+                    await addTerminal({
+                      kind: reconnectedTerminal.kind ?? (agentId ? "agent" : "terminal"),
+                      type: reconnectedTerminal.type ?? saved.type,
+                      agentId,
+                      title: reconnectedTerminal.title ?? saved.title,
+                      cwd,
+                      worktreeId: reconnectedTerminal.worktreeId ?? saved.worktreeId,
+                      location,
+                      existingId: reconnectedTerminal.id,
+                      agentState: currentAgentState,
+                      lastStateChange: backendLastStateChange,
+                    });
+
+                    // Initialize frontend tier state from backend
+                    if (reconnectedTerminal.activityTier) {
+                      terminalInstanceService.initializeBackendTier(
+                        reconnectedTerminal.id!,
+                        reconnectedTerminal.activityTier
+                      );
+                    }
+
+                    // Restore terminal content from backend headless state
+                    try {
+                      await terminalInstanceService.fetchAndRestore(reconnectedTerminal.id!);
+                    } catch (snapshotError) {
+                      console.warn(
+                        `[Hydration] Serialized state restore failed for ${saved.id}:`,
+                        snapshotError
+                      );
+                    }
+                  } else {
+                    // Terminal truly doesn't exist in backend - respawn
+                    const effectiveAgentId =
+                      saved.agentId ??
+                      (saved.type && isRegisteredAgent(saved.type) ? saved.type : undefined);
+                    const isAgentPanel = kind === "agent" || Boolean(effectiveAgentId);
+                    const agentId = effectiveAgentId;
+                    let command = saved.command?.trim() || undefined;
+
+                    if (agentId && agentSettings) {
+                      const agentConfig = getAgentConfig(agentId);
+                      const baseCommand = agentConfig?.command || agentId;
+                      const flags = generateAgentFlags(
+                        agentSettings.agents?.[agentId] ?? {},
+                        agentId
+                      );
+                      command =
+                        flags.length > 0 ? `${baseCommand} ${flags.join(" ")}` : baseCommand;
+                    }
+
+                    console.log(`[Hydration] Respawning PTY panel: ${saved.id}`);
+
+                    await addTerminal({
+                      kind: isAgentPanel ? "agent" : "terminal",
+                      type: saved.type,
+                      agentId,
+                      title: saved.title,
+                      cwd: saved.cwd || projectRoot || "",
+                      worktreeId: saved.worktreeId,
+                      location,
+                      requestedId: saved.id,
+                      command,
+                      isInputLocked: saved.isInputLocked,
+                    });
+                  }
                 } else {
                   console.log(`[Hydration] Recreating ${kind} panel: ${saved.id}`);
 
