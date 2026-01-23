@@ -39,7 +39,7 @@ import type { MenuItemOption } from "@/types";
 import { getRecipeGridClasses, getRecipeTerminalSummary } from "./utils/recipeUtils";
 import { PROJECT_EXPLANATION_PROMPT, getDefaultAgentId } from "@/lib/projectExplanationPrompt";
 import { buildWhatsNextPrompt } from "@/lib/whatsNextPrompt";
-import { cliAvailabilityClient, githubClient, copyTreeClient } from "@/clients";
+import { cliAvailabilityClient } from "@/clients";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 
 export interface ContentGridProps {
@@ -147,86 +147,30 @@ function EmptyState({
     }
   };
 
-  const [isLoadingWhatsNext, setIsLoadingWhatsNext] = React.useState(false);
-  const whatsNextAbortRef = React.useRef<AbortController | null>(null);
+  const [isLaunchingWhatsNext, setIsLaunchingWhatsNext] = React.useState(false);
 
   const handleWhatsNext = async () => {
-    if (!defaultCwd || !activeWorktreeId) return;
+    if (!defaultCwd || !activeWorktreeId || isLaunchingWhatsNext) return;
 
-    if (whatsNextAbortRef.current) {
-      whatsNextAbortRef.current.abort();
-    }
-    const abortController = new AbortController();
-    whatsNextAbortRef.current = abortController;
-
-    const capturedWorktreeId = activeWorktreeId;
-    const capturedCwd = defaultCwd;
-
-    setIsLoadingWhatsNext(true);
-
+    setIsLaunchingWhatsNext(true);
     try {
       const availability = agentAvailability ?? (await cliAvailabilityClient.get());
       const agentId = getDefaultAgentId(defaultAgent, defaultSelection, availability);
 
       if (!agentId) {
         console.error("No available agent for What's Next workflow");
-        setIsLoadingWhatsNext(false);
         return;
       }
 
-      const githubConfig = await githubClient.getConfig();
-      if (!githubConfig.hasToken) {
-        console.warn("GitHub token not configured. Opening settings...");
-        window.dispatchEvent(new CustomEvent("canopy:open-project-settings"));
-        setIsLoadingWhatsNext(false);
-        return;
-      }
-
-      let issuesResponse;
-      let issuesFetchError = false;
-
-      try {
-        issuesResponse = await githubClient.listIssues({
-          cwd: capturedCwd,
-          state: "open",
-        });
-      } catch (error) {
-        console.error("Failed to fetch GitHub issues:", error);
-        issuesFetchError = true;
-        setIsLoadingWhatsNext(false);
-        return;
-      }
-
-      if (abortController.signal.aborted) return;
-
-      const fileTree = await copyTreeClient.getFileTree(capturedWorktreeId).catch((error) => {
-        console.error("Failed to fetch file tree:", error);
-        return undefined;
-      });
-
-      if (abortController.signal.aborted) return;
-
-      if (issuesResponse.items.length === 0 && !issuesFetchError) {
-        console.warn("No open issues found");
-        setIsLoadingWhatsNext(false);
-        return;
-      }
-
-      if (activeWorktreeId !== capturedWorktreeId) {
-        console.warn("Worktree changed during fetch, aborting");
-        setIsLoadingWhatsNext(false);
-        return;
-      }
-
-      const prompt = buildWhatsNextPrompt(issuesResponse.items, fileTree);
+      const prompt = buildWhatsNextPrompt();
 
       void actionService.dispatch(
         "agent.launch",
         {
           agentId,
           location: "grid",
-          cwd: capturedCwd,
-          worktreeId: capturedWorktreeId,
+          cwd: defaultCwd,
+          worktreeId: activeWorktreeId,
           prompt,
           interactive: true,
         },
@@ -235,9 +179,7 @@ function EmptyState({
     } catch (error) {
       console.error("Failed to launch What's Next workflow:", error);
     } finally {
-      if (!abortController.signal.aborted) {
-        setIsLoadingWhatsNext(false);
-      }
+      setTimeout(() => setIsLaunchingWhatsNext(false), 1000);
     }
   };
 
@@ -376,18 +318,19 @@ function EmptyState({
                 <button
                   type="button"
                   onClick={handleWhatsNext}
-                  disabled={!defaultCwd || isLoadingWhatsNext}
-                  aria-busy={isLoadingWhatsNext}
+                  disabled={!defaultCwd || isLaunchingWhatsNext}
+                  aria-busy={isLaunchingWhatsNext}
                   className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
                 >
                   <Sparkles
                     className={cn(
                       "h-3.5 w-3.5 text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors",
-                      isLoadingWhatsNext && "animate-pulse"
+                      isLaunchingWhatsNext && "animate-pulse"
                     )}
                   />
                   <span className="text-xs text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors">
-                    {isLoadingWhatsNext ? "Analyzing..." : "What's Next?"}
+                    What's Next?
+                  </span>
                   </span>
                 </button>
 
