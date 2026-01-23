@@ -131,15 +131,15 @@ export function DockColorStrip({ onExpandDock }: DockColorStripProps) {
           "px-[var(--dock-padding-x)] gap-[var(--dock-gap)]",
           "bg-[var(--dock-bg)]/30 backdrop-blur-sm",
           "border-t border-[var(--dock-border)]/30",
-          "transition-all duration-200",
-          "hover:h-2 hover:bg-[var(--dock-bg)]/50"
+          "transition-colors duration-200",
+          "hover:bg-[var(--dock-bg)]/50"
         )}
         style={{ minHeight: "6px" }}
         data-dock-variant="strip"
       >
         {/* Left: Terminals area */}
         <div className="relative flex-1 min-w-0">
-          <div className="flex items-stretch gap-[2px] h-full px-1">
+          <div className="flex items-stretch gap-1 h-full px-1">
             {dockTerminals.map((terminal) => (
               <TerminalSegment
                 key={terminal.id}
@@ -160,7 +160,7 @@ export function DockColorStrip({ onExpandDock }: DockColorStripProps) {
         )}
 
         {/* Right: Status segments */}
-        <div className="shrink-0 flex items-stretch gap-[2px]">
+        <div className="shrink-0 flex items-stretch gap-1">
           {waitingCount > 0 && (
             <StatusSegment
               type="waiting"
@@ -226,9 +226,7 @@ function TerminalSegment({ terminal, onClick, onDoubleClick }: TerminalSegmentPr
             "transition-all duration-150 ease-out",
             "hover:brightness-110",
             "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-canopy-accent",
-            "cursor-pointer",
-            isActive && "animate-pulse motion-reduce:animate-none",
-            isWaiting && "animate-breathe motion-reduce:animate-none"
+            "cursor-pointer"
           )}
           style={{
             backgroundColor: segmentColor,
@@ -301,8 +299,8 @@ function StatusSegment({ type, count, onClick }: StatusSegmentProps) {
   const config = STATUS_CONFIG[type];
   const Icon = config.icon;
 
-  // Width scales with count, capped at a reasonable max
-  const baseWidth = Math.max(16, Math.min(count * 8, 40));
+  // Width scales with count, capped at a reasonable max (wider for better visibility)
+  const baseWidth = Math.max(24, Math.min(count * 12, 60));
 
   return (
     <Tooltip>
@@ -317,8 +315,7 @@ function StatusSegment({ type, count, onClick }: StatusSegmentProps) {
             "transition-all duration-150 ease-out",
             "hover:brightness-110",
             "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-canopy-accent",
-            "cursor-pointer",
-            type === "waiting" && "animate-breathe motion-reduce:animate-none"
+            "cursor-pointer"
           )}
           style={{
             backgroundColor: isHovered ? config.hoverColor : config.color,
