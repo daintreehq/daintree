@@ -40,76 +40,110 @@ export function getDefaultShellArgs(shell: string, _options?: ShellArgsOptions):
 }
 
 /**
+ * Agent-specific environment variable exclusions.
+ * Some CLI tools are sensitive to certain environment variables that break their
+ * interactive mode or initialization process.
+ *
+ * Gemini CLI: Uses the `ink` React framework for terminal UI, which depends on
+ * `is-in-ci` to detect CI environments. When CI=1 is set, ink enters non-interactive
+ * mode and the CLI fails to display its input prompt.
+ * See: https://github.com/google-gemini/gemini-cli/issues/1563
+ */
+const AGENT_ENV_EXCLUSIONS: Record<string, string[]> = {
+  gemini: ["CI", "NONINTERACTIVE"],
+};
+
+/**
  * Build environment variables that suppress interactive prompts during shell initialization.
  * Used for agent terminals where predictable, non-interactive startup is required.
+ *
+ * @param baseEnv - Base environment to extend
+ * @param _shell - Shell being used (currently unused but available for shell-specific logic)
+ * @param agentId - Optional agent ID to apply agent-specific exclusions
  */
 export function buildNonInteractiveEnv(
   baseEnv: Record<string, string | undefined>,
-  _shell: string
+  _shell: string,
+  agentId?: string
 ): Record<string, string> {
+  // Get agent-specific exclusions (converted to Set for O(1) lookup)
+  // Normalize agentId to lowercase for case-insensitive matching
+  const normalizedAgentId = agentId?.toLowerCase();
+  const exclusions = new Set(
+    normalizedAgentId ? (AGENT_ENV_EXCLUSIONS[normalizedAgentId] ?? []) : []
+  );
   const env: Record<string, string> = {};
 
-  // Copy base environment, filtering out undefined values
+  // Helper to conditionally set env var (skips if in exclusion list)
+  const setEnv = (key: string, value: string): void => {
+    if (!exclusions.has(key)) {
+      env[key] = value;
+    }
+  };
+
+  // Copy base environment, filtering out undefined values AND excluded variables
+  // This ensures agent-specific exclusions apply even when vars are in the base environment
   for (const [key, value] of Object.entries(baseEnv)) {
-    if (value !== undefined) {
+    if (value !== undefined && !exclusions.has(key)) {
       env[key] = value;
     }
   }
 
   // oh-my-zsh and similar frameworks
   // Disables automatic update checks that show interactive prompts
-  env.DISABLE_AUTO_UPDATE = "true";
-  env.DISABLE_UPDATE_PROMPT = "true";
+  setEnv("DISABLE_AUTO_UPDATE", "true");
+  setEnv("DISABLE_UPDATE_PROMPT", "true");
 
   // Zsh completion verification
-  env.ZSH_DISABLE_COMPFIX = "true";
+  setEnv("ZSH_DISABLE_COMPFIX", "true");
 
   // Homebrew
   // Prevents "brew update" from running automatically during shell startup
-  env.HOMEBREW_NO_AUTO_UPDATE = "1";
+  setEnv("HOMEBREW_NO_AUTO_UPDATE", "1");
 
   // Debian/Ubuntu package managers
   // Prevents dpkg/apt from asking configuration questions
-  env.DEBIAN_FRONTEND = "noninteractive";
+  setEnv("DEBIAN_FRONTEND", "noninteractive");
 
   // Generic non-interactive flag
   // Many shell tools check this to disable interactive behavior
-  env.NONINTERACTIVE = "1";
+  // Note: Excluded for Gemini CLI which uses ink framework (is-in-ci detection)
+  setEnv("NONINTERACTIVE", "1");
 
   // Suppress pagers (less, more, etc.) that would block command output
   // Use empty string instead of "cat" to avoid dependency on external commands
-  env.PAGER = "";
+  setEnv("PAGER", "");
 
   // GIT_PAGER: Suppress git's pager for diff, log, etc.
-  env.GIT_PAGER = "";
+  setEnv("GIT_PAGER", "");
 
   // CI flag: Many tools detect CI environments and disable prompts
   // Only set if not already defined to avoid overriding explicit values
-  // Note: This can change tool behavior (e.g., warnings-as-errors)
-  if (!env.CI) {
+  // Note: Excluded for Gemini CLI which uses ink framework (is-in-ci detection)
+  if (!env.CI && !exclusions.has("CI")) {
     env.CI = "1";
   }
 
   // Force color output: Many CLI tools (chalk, supports-color, etc.) disable
   // colors when they detect CI=1. Override this since our xterm.js terminal
   // fully supports ANSI colors. FORCE_COLOR=3 enables 256-color support.
-  env.FORCE_COLOR = "3";
-  env.COLORTERM = "truecolor";
+  setEnv("FORCE_COLOR", "3");
+  setEnv("COLORTERM", "truecolor");
 
   // Git credential prompts
-  env.GIT_TERMINAL_PROMPT = "0";
+  setEnv("GIT_TERMINAL_PROMPT", "0");
 
   // NVM (Node Version Manager)
   // Suppress "NVM is out of date" messages
-  env.NVM_DIR_SILENT = "1";
+  setEnv("NVM_DIR_SILENT", "1");
 
   // Pyenv
   // Suppress shell initialization warnings
-  env.PYENV_VIRTUALENV_DISABLE_PROMPT = "1";
+  setEnv("PYENV_VIRTUALENV_DISABLE_PROMPT", "1");
 
   // RVM (Ruby Version Manager)
   // Suppress rvm auto-update prompts
-  env.rvm_silence_path_mismatch_check_flag = "1";
+  setEnv("rvm_silence_path_mismatch_check_flag", "1");
 
   return env;
 }

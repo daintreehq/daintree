@@ -248,8 +248,9 @@ export class TerminalProcess {
 
     // For agent terminals, use non-interactive environment to suppress prompts
     // (oh-my-zsh updates, Homebrew notifications, etc.)
+    // Pass agentId for agent-specific exclusions (e.g., Gemini CLI is sensitive to CI=1)
     const env = this.isAgentTerminal
-      ? buildNonInteractiveEnv(mergedEnv, shell)
+      ? buildNonInteractiveEnv(mergedEnv, shell, agentId)
       : (Object.fromEntries(
           Object.entries(mergedEnv).filter(([_, value]) => value !== undefined)
         ) as Record<string, string>);

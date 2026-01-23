@@ -172,5 +172,66 @@ describe("terminalShell", () => {
       expect(result.PAGER).toBe("");
       expect(result.GIT_PAGER).toBe("");
     });
+
+    describe("agent-specific exclusions", () => {
+      it("should exclude CI and NONINTERACTIVE for gemini agent", () => {
+        const result = buildNonInteractiveEnv({}, "/bin/zsh", "gemini");
+
+        // CI and NONINTERACTIVE should NOT be set for Gemini (ink framework compatibility)
+        expect("CI" in result).toBe(false);
+        expect("NONINTERACTIVE" in result).toBe(false);
+
+        // Other non-interactive env vars should still be set
+        expect(result.DISABLE_AUTO_UPDATE).toBe("true");
+        expect(result.HOMEBREW_NO_AUTO_UPDATE).toBe("1");
+        expect(result.PAGER).toBe("");
+        expect(result.FORCE_COLOR).toBe("3");
+      });
+
+      it("should set CI for non-gemini agents", () => {
+        const claudeResult = buildNonInteractiveEnv({}, "/bin/zsh", "claude");
+        expect(claudeResult.CI).toBe("1");
+        expect(claudeResult.NONINTERACTIVE).toBe("1");
+
+        const codexResult = buildNonInteractiveEnv({}, "/bin/zsh", "codex");
+        expect(codexResult.CI).toBe("1");
+        expect(codexResult.NONINTERACTIVE).toBe("1");
+      });
+
+      it("should set CI when no agentId is provided", () => {
+        const result = buildNonInteractiveEnv({}, "/bin/zsh");
+        expect(result.CI).toBe("1");
+        expect(result.NONINTERACTIVE).toBe("1");
+      });
+
+      it("should set CI when agentId is unknown", () => {
+        const result = buildNonInteractiveEnv({}, "/bin/zsh", "unknown-agent");
+        expect(result.CI).toBe("1");
+        expect(result.NONINTERACTIVE).toBe("1");
+      });
+
+      it("should exclude base env CI and NONINTERACTIVE for gemini even if explicitly set", () => {
+        // Exclusions apply to base env too, ensuring Gemini works even in CI environments
+        const baseEnv = { CI: "1", NONINTERACTIVE: "1", OTHER_VAR: "preserved" };
+        const result = buildNonInteractiveEnv(baseEnv, "/bin/zsh", "gemini");
+
+        // CI and NONINTERACTIVE are filtered out even from base env
+        expect("CI" in result).toBe(false);
+        expect("NONINTERACTIVE" in result).toBe(false);
+        // Other vars are preserved
+        expect(result.OTHER_VAR).toBe("preserved");
+      });
+
+      it("should be case-insensitive for agentId", () => {
+        // Test various casings of "gemini"
+        const testCases = ["gemini", "Gemini", "GEMINI", "GeMiNi"];
+
+        for (const agentId of testCases) {
+          const result = buildNonInteractiveEnv({}, "/bin/zsh", agentId);
+          expect("CI" in result).toBe(false);
+          expect("NONINTERACTIVE" in result).toBe(false);
+        }
+      });
+    });
   });
 });
