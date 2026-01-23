@@ -356,59 +356,71 @@ function EmptyState({
                 terminal
               </p>
 
-              <button
-                type="button"
-                onClick={handleExplainProject}
-                disabled={!defaultCwd}
-                className="flex items-center gap-3 p-2 pr-4 rounded-full hover:bg-white/5 transition-all group text-left border border-transparent hover:border-white/5 disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
-              >
-                <div className="w-8 h-8 bg-white/10 rounded-full flex items-center justify-center group-hover:bg-canopy-accent/20 transition-colors">
-                  <BookOpen className="h-4 w-4 text-white/70 group-hover:text-canopy-accent transition-colors" />
-                </div>
-                <div className="flex flex-col">
-                  <span className="text-xs font-medium text-canopy-text/60 group-hover:text-canopy-text transition-colors">
+              <div className="flex flex-wrap items-center justify-center gap-x-1 gap-y-2">
+                <button
+                  type="button"
+                  onClick={handleExplainProject}
+                  disabled={!defaultCwd}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
+                >
+                  <BookOpen className="h-3.5 w-3.5 text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors" />
+                  <span className="text-xs text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors">
                     What's This Project?
                   </span>
-                </div>
-              </button>
+                </button>
 
-              <button
-                type="button"
-                onClick={handleWhatsNext}
-                disabled={!defaultCwd || isLoadingWhatsNext}
-                className="flex items-center gap-3 p-2 pr-4 rounded-full hover:bg-white/5 transition-all group text-left border border-transparent hover:border-white/5 disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
-              >
-                <div className="w-8 h-8 bg-white/10 rounded-full flex items-center justify-center group-hover:bg-canopy-accent/20 transition-colors">
+                <span className="text-canopy-text/20" aria-hidden="true">
+                  ·
+                </span>
+
+                <button
+                  type="button"
+                  onClick={handleWhatsNext}
+                  disabled={!defaultCwd || isLoadingWhatsNext}
+                  aria-busy={isLoadingWhatsNext}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
+                >
                   <Sparkles
                     className={cn(
-                      "h-4 w-4 text-white/70 group-hover:text-canopy-accent transition-colors",
+                      "h-3.5 w-3.5 text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors",
                       isLoadingWhatsNext && "animate-pulse"
                     )}
                   />
-                </div>
-                <div className="flex flex-col">
-                  <span className="text-xs font-medium text-canopy-text/60 group-hover:text-canopy-text transition-colors">
+                  <span className="text-xs text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors">
                     {isLoadingWhatsNext ? "Analyzing..." : "What's Next?"}
                   </span>
-                </div>
-              </button>
+                </button>
+
+                <span className="text-canopy-text/20" aria-hidden="true">
+                  ·
+                </span>
+
+                <button
+                  type="button"
+                  onClick={handleOpenHelp}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
+                >
+                  <div className="w-0 h-0 border-t-[2.5px] border-t-transparent border-l-[5px] border-l-canopy-text/50 border-b-[2.5px] border-b-transparent group-hover:border-l-canopy-text/70 transition-colors" />
+                  <span className="text-xs text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors">
+                    Docs
+                  </span>
+                </button>
+              </div>
             </>
           )}
 
-          <button
-            type="button"
-            onClick={handleOpenHelp}
-            className="flex items-center gap-3 p-2 pr-4 rounded-full hover:bg-white/5 transition-all group text-left border border-transparent hover:border-white/5"
-          >
-            <div className="w-8 h-8 bg-white/10 rounded-full flex items-center justify-center group-hover:bg-canopy-accent/20 transition-colors">
-              <div className="w-0 h-0 border-t-[3px] border-t-transparent border-l-[6px] border-l-white/70 border-b-[3px] border-b-transparent ml-0.5 group-hover:border-l-canopy-accent transition-colors" />
-            </div>
-            <div className="flex flex-col">
-              <span className="text-xs font-medium text-canopy-text/60 group-hover:text-canopy-text transition-colors">
+          {!hasActiveWorktree && (
+            <button
+              type="button"
+              onClick={handleOpenHelp}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
+            >
+              <div className="w-0 h-0 border-t-[2.5px] border-t-transparent border-l-[5px] border-l-canopy-text/50 border-b-[2.5px] border-b-transparent group-hover:border-l-canopy-text/70 transition-colors" />
+              <span className="text-xs text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors">
                 View documentation
               </span>
-            </div>
-          </button>
+            </button>
+          )}
         </div>
       </div>
     </div>
