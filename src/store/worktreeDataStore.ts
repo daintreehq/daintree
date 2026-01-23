@@ -4,6 +4,7 @@ import { worktreeClient, githubClient } from "@/clients";
 import { useWorktreeSelectionStore } from "./worktreeStore";
 import { useTerminalStore } from "./terminalStore";
 import { useNotificationStore } from "./notificationStore";
+import { usePulseStore } from "./pulseStore";
 
 interface WorktreeDataState {
   worktrees: Map<string, WorktreeState>;
@@ -76,6 +77,9 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
                 });
                 return prev;
               }
+
+              // Cancel pulse store retries after confirming worktree will be removed
+              usePulseStore.getState().invalidate(worktreeId);
 
               const next = new Map(prev.worktrees);
               next.delete(worktreeId);
@@ -262,6 +266,8 @@ export function cleanupWorktreeDataStore() {
     cleanupListeners = null;
   }
   initPromise = null;
+  // Clear pulse store to cancel all retry timers
+  usePulseStore.getState().invalidateAll();
   // Clear worktrees but keep isInitialized: true to prevent
   // auto-reinitialization race during project switch.
   // The store will be properly reinitialized when forceReinitialize() is called.
@@ -278,6 +284,8 @@ export function forceReinitializeWorktreeDataStore() {
   cleanupListeners?.();
   cleanupListeners = null;
   initPromise = null;
+  // Clear pulse store to cancel all retry timers
+  usePulseStore.getState().invalidateAll();
   useWorktreeDataStore.setState({
     worktrees: new Map(),
     isLoading: true,
