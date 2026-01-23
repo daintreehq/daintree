@@ -534,7 +534,9 @@ export class ProjectStore {
     // Sanitize commandOverrides
     if (settings.commandOverrides !== undefined) {
       if (!Array.isArray(settings.commandOverrides)) {
-        console.warn(`[ProjectStore] Coercing non-array commandOverrides to undefined in project ${projectId}`);
+        console.warn(
+          `[ProjectStore] Coercing non-array commandOverrides to undefined in project ${projectId}`
+        );
         sanitizedSettings = {
           ...sanitizedSettings,
           commandOverrides: undefined,
