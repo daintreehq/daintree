@@ -17,7 +17,13 @@ import {
 import type { TerminalSnapshot } from "../../types/index.js";
 
 export function registerProjectHandlers(deps: HandlerDependencies): () => void {
-  const { mainWindow, worktreeService, cliAvailabilityService, agentVersionService, agentUpdateHandler } = deps;
+  const {
+    mainWindow,
+    worktreeService,
+    cliAvailabilityService,
+    agentVersionService,
+    agentUpdateHandler,
+  } = deps;
   const handlers: Array<() => void> = [];
 
   const projectSwitchService = new ProjectSwitchService({

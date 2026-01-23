@@ -1,7 +1,10 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
 import * as semver from "semver";
-import { getEffectiveAgentConfig, getEffectiveAgentIds } from "../../shared/config/agentRegistry.js";
+import {
+  getEffectiveAgentConfig,
+  getEffectiveAgentIds,
+} from "../../shared/config/agentRegistry.js";
 import type { AgentVersionInfo } from "../../shared/types/ipc/system.js";
 import type { AgentId } from "../../shared/types/domain.js";
 import { CliAvailabilityService } from "./CliAvailabilityService.js";
@@ -180,9 +183,14 @@ export class AgentVersionService {
         if (githubVersion) {
           return githubVersion;
         }
-        console.warn(`[AgentVersionService] GitHub API returned null for ${agentId}, falling back to npm`);
+        console.warn(
+          `[AgentVersionService] GitHub API returned null for ${agentId}, falling back to npm`
+        );
       } catch (error: any) {
-        console.warn(`[AgentVersionService] GitHub API failed for ${agentId}, falling back to npm:`, error.message);
+        console.warn(
+          `[AgentVersionService] GitHub API failed for ${agentId}, falling back to npm:`,
+          error.message
+        );
       }
     }
 

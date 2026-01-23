@@ -2,7 +2,10 @@ import crypto from "crypto";
 import os from "os";
 import { getEffectiveAgentConfig } from "../../shared/config/agentRegistry.js";
 import type { AgentId } from "../../shared/types/domain.js";
-import type { StartAgentUpdatePayload, StartAgentUpdateResult } from "../../shared/types/ipc/system.js";
+import type {
+  StartAgentUpdatePayload,
+  StartAgentUpdateResult,
+} from "../../shared/types/ipc/system.js";
 import type { PtyClient } from "./PtyClient.js";
 import { AgentVersionService } from "./AgentVersionService.js";
 import { CliAvailabilityService } from "./CliAvailabilityService.js";
@@ -28,7 +31,9 @@ export class AgentUpdateHandler {
 
     const updateCommand = this.getUpdateCommand(agentId, method);
     if (!updateCommand) {
-      throw new Error(`No update command available for ${agentId} with method: ${method || "default"}`);
+      throw new Error(
+        `No update command available for ${agentId} with method: ${method || "default"}`
+      );
     }
 
     const terminalId = crypto.randomUUID();

@@ -483,7 +483,11 @@ async function createWindow(): Promise<void> {
 
   // Initialize agent version and update services after ptyClient is available
   agentVersionService = new AgentVersionService(cliAvailabilityService);
-  agentUpdateHandler = new AgentUpdateHandler(ptyClient, agentVersionService, cliAvailabilityService);
+  agentUpdateHandler = new AgentUpdateHandler(
+    ptyClient,
+    agentVersionService,
+    cliAvailabilityService
+  );
 
   // Attach crash listeners immediately to avoid race conditions
   ptyClient.on("host-crash-details", (details) => {
