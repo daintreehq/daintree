@@ -41,6 +41,8 @@ import {
   WorkspaceClient,
 } from "./services/WorkspaceClient.js";
 import { CliAvailabilityService } from "./services/CliAvailabilityService.js";
+import { AgentVersionService } from "./services/AgentVersionService.js";
+import { AgentUpdateHandler } from "./services/AgentUpdateHandler.js";
 import { SidecarManager } from "./services/SidecarManager.js";
 import { createWindowWithState } from "./windowState.js";
 import { setLoggerWindow, initializeLogger } from "./utils/logger.js";
@@ -84,6 +86,8 @@ let mainWindow: BrowserWindow | null = null;
 let ptyClient: PtyClient | null = null;
 let workspaceClient: WorkspaceClient | null = null;
 let cliAvailabilityService: CliAvailabilityService | null = null;
+let agentVersionService: AgentVersionService | null = null;
+let agentUpdateHandler: AgentUpdateHandler | null = null;
 let sidecarManager: SidecarManager | null = null;
 let cleanupIpcHandlers: (() => void) | null = null;
 let cleanupErrorHandlers: (() => void) | null = null;
@@ -477,6 +481,10 @@ async function createWindow(): Promise<void> {
     showCrashDialog: true,
   });
 
+  // Initialize agent version and update services after ptyClient is available
+  agentVersionService = new AgentVersionService(cliAvailabilityService);
+  agentUpdateHandler = new AgentUpdateHandler(ptyClient, agentVersionService, cliAvailabilityService);
+
   // Attach crash listeners immediately to avoid race conditions
   ptyClient.on("host-crash-details", (details) => {
     console.error(`[MAIN] Pty Host crashed:`, details);
@@ -530,6 +538,8 @@ async function createWindow(): Promise<void> {
     workspaceClient,
     eventBuffer,
     cliAvailabilityService,
+    agentVersionService,
+    agentUpdateHandler,
     sidecarManager
   );
   cleanupErrorHandlers = registerErrorHandlers(mainWindow, workspaceClient, ptyClient);

@@ -54,6 +54,10 @@ import type {
   SystemOpenPathPayload,
   SystemWakePayload,
   CliAvailability,
+  AgentVersionInfo,
+  AgentUpdateSettings,
+  StartAgentUpdatePayload,
+  StartAgentUpdateResult,
 } from "./system.js";
 import type { AppState, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
@@ -279,6 +283,26 @@ export interface IpcInvokeMap {
   "system:refresh-cli-availability": {
     args: [];
     result: CliAvailability;
+  };
+  "system:get-agent-versions": {
+    args: [];
+    result: AgentVersionInfo[];
+  };
+  "system:refresh-agent-versions": {
+    args: [];
+    result: AgentVersionInfo[];
+  };
+  "system:get-agent-update-settings": {
+    args: [];
+    result: AgentUpdateSettings;
+  };
+  "system:set-agent-update-settings": {
+    args: [AgentUpdateSettings];
+    result: void;
+  };
+  "system:start-agent-update": {
+    args: [StartAgentUpdatePayload];
+    result: StartAgentUpdateResult;
   };
 
   // App state channels

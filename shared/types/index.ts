@@ -109,6 +109,10 @@ export type {
   SystemOpenExternalPayload,
   SystemOpenPathPayload,
   CliAvailability,
+  AgentVersionInfo,
+  AgentUpdateSettings,
+  StartAgentUpdatePayload,
+  StartAgentUpdateResult,
   // PR detection IPC types
   PRDetectedPayload,
   PRClearedPayload,

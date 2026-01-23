@@ -111,6 +111,30 @@ export interface AgentConfig {
    * If not specified, built-in patterns for the agent ID are used.
    */
   detection?: AgentDetectionConfig;
+  /**
+   * Version detection configuration.
+   */
+  version?: {
+    /** Command arguments to get version (e.g., ["--version"]) */
+    args: string[];
+    /** npm package name for version lookup (e.g., "@anthropic-ai/claude-code") */
+    npmPackage?: string;
+    /** GitHub repository for version lookup (e.g., "owner/repo") */
+    githubRepo?: string;
+    /** Release notes URL template (use {version} placeholder) */
+    releaseNotesUrl?: string;
+  };
+  /**
+   * Update command configuration.
+   */
+  update?: {
+    /** Update command for npm-based installs */
+    npm?: string;
+    /** Update command for Homebrew */
+    brew?: string;
+    /** Update command for other package managers or scripts */
+    other?: Record<string, string>;
+  };
 }
 
 export const AGENT_REGISTRY: Record<string, AgentConfig> = {
@@ -123,6 +147,15 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     supportsContextInjection: true,
     shortcut: "Cmd/Ctrl+Alt+C",
     usageUrl: "https://claude.ai/settings/usage",
+    version: {
+      args: ["--version"],
+      githubRepo: "anthropics/claude-code",
+      npmPackage: "@anthropic-ai/claude-code",
+      releaseNotesUrl: "https://github.com/anthropics/claude-code/releases/tag/v{version}",
+    },
+    update: {
+      npm: "npm install -g @anthropic-ai/claude-code@latest",
+    },
     install: {
       docsUrl: "https://github.com/anthropics/claude-code",
       byOs: {
@@ -188,6 +221,15 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     supportsContextInjection: true,
     shortcut: "Cmd/Ctrl+Alt+G",
     tooltip: "quick exploration",
+    version: {
+      args: ["--version"],
+      githubRepo: "google/generative-ai-cli",
+      npmPackage: "@google/generative-ai-cli",
+      releaseNotesUrl: "https://github.com/google/generative-ai-cli/releases",
+    },
+    update: {
+      npm: "npm install -g @google/generative-ai-cli@latest",
+    },
     install: {
       docsUrl: "https://ai.google.dev/gemini-api/docs/cli",
       byOs: {
@@ -251,6 +293,15 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     shortcut: "Cmd/Ctrl+Alt+X",
     tooltip: "careful, methodical runs",
     usageUrl: "https://chatgpt.com/codex/settings/usage",
+    version: {
+      args: ["--version"],
+      githubRepo: "openai/codex",
+      npmPackage: "@openai/codex",
+      releaseNotesUrl: "https://github.com/openai/codex/releases/tag/v{version}",
+    },
+    update: {
+      npm: "npm install -g @openai/codex@latest",
+    },
     install: {
       docsUrl: "https://github.com/openai/codex",
       byOs: {
@@ -314,6 +365,19 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     shortcut: "Cmd/Ctrl+Alt+O",
     tooltip: "provider-agnostic, open source",
     usageUrl: "https://opencode.ai/",
+    version: {
+      args: ["--version"],
+      githubRepo: "opencode-ai/opencode",
+      npmPackage: "opencode-ai",
+      releaseNotesUrl: "https://github.com/opencode-ai/opencode/releases",
+    },
+    update: {
+      npm: "npm install -g opencode-ai@latest",
+      brew: "brew upgrade opencode",
+      other: {
+        curl: "curl -fsSL https://opencode.ai/install | bash",
+      },
+    },
     install: {
       docsUrl: "https://opencode.ai/docs/",
       byOs: {

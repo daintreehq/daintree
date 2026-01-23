@@ -17,7 +17,7 @@ import {
 import type { TerminalSnapshot } from "../../types/index.js";
 
 export function registerProjectHandlers(deps: HandlerDependencies): () => void {
-  const { mainWindow, worktreeService, cliAvailabilityService } = deps;
+  const { mainWindow, worktreeService, cliAvailabilityService, agentVersionService, agentUpdateHandler } = deps;
   const handlers: Array<() => void> = [];
 
   const projectSwitchService = new ProjectSwitchService({
@@ -160,6 +160,84 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
   };
   ipcMain.handle(CHANNELS.SYSTEM_REFRESH_CLI_AVAILABILITY, handleSystemRefreshCliAvailability);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_REFRESH_CLI_AVAILABILITY));
+
+  const handleSystemGetAgentVersions = async () => {
+    if (!agentVersionService) {
+      console.warn("[IPC] AgentVersionService not available");
+      return [];
+    }
+
+    return await agentVersionService.getVersions();
+  };
+  ipcMain.handle(CHANNELS.SYSTEM_GET_AGENT_VERSIONS, handleSystemGetAgentVersions);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_GET_AGENT_VERSIONS));
+
+  const handleSystemRefreshAgentVersions = async () => {
+    if (!agentVersionService) {
+      console.warn("[IPC] AgentVersionService not available");
+      return [];
+    }
+
+    return await agentVersionService.getVersions(true);
+  };
+  ipcMain.handle(CHANNELS.SYSTEM_REFRESH_AGENT_VERSIONS, handleSystemRefreshAgentVersions);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_REFRESH_AGENT_VERSIONS));
+
+  const handleSystemGetAgentUpdateSettings = async () => {
+    const { store } = await import("../../store.js");
+    return store.get("agentUpdateSettings", {
+      autoCheck: true,
+      checkFrequencyHours: 24,
+      lastAutoCheck: null,
+    });
+  };
+  ipcMain.handle(CHANNELS.SYSTEM_GET_AGENT_UPDATE_SETTINGS, handleSystemGetAgentUpdateSettings);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_GET_AGENT_UPDATE_SETTINGS));
+
+  const handleSystemSetAgentUpdateSettings = async (
+    _event: Electron.IpcMainInvokeEvent,
+    settings: import("../../types/index.js").AgentUpdateSettings
+  ) => {
+    if (
+      !settings ||
+      typeof settings.autoCheck !== "boolean" ||
+      typeof settings.checkFrequencyHours !== "number" ||
+      !Number.isFinite(settings.checkFrequencyHours) ||
+      settings.checkFrequencyHours < 1 ||
+      settings.checkFrequencyHours > 168 ||
+      (settings.lastAutoCheck !== null &&
+        (typeof settings.lastAutoCheck !== "number" || !Number.isFinite(settings.lastAutoCheck)))
+    ) {
+      throw new Error("Invalid AgentUpdateSettings");
+    }
+
+    const { store } = await import("../../store.js");
+    store.set("agentUpdateSettings", settings);
+  };
+  ipcMain.handle(CHANNELS.SYSTEM_SET_AGENT_UPDATE_SETTINGS, handleSystemSetAgentUpdateSettings);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_SET_AGENT_UPDATE_SETTINGS));
+
+  const handleSystemStartAgentUpdate = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: import("../../types/index.js").StartAgentUpdatePayload
+  ) => {
+    if (!agentUpdateHandler) {
+      throw new Error("AgentUpdateHandler not available");
+    }
+
+    if (
+      !payload ||
+      !payload.agentId ||
+      typeof payload.agentId !== "string" ||
+      (payload.method !== undefined && typeof payload.method !== "string")
+    ) {
+      throw new Error("Invalid StartAgentUpdatePayload");
+    }
+
+    return await agentUpdateHandler.startUpdate(payload);
+  };
+  ipcMain.handle(CHANNELS.SYSTEM_START_AGENT_UPDATE, handleSystemStartAgentUpdate);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_START_AGENT_UPDATE));
 
   const handleProjectGetAll = async () => {
     return projectStore.getAllProjects();

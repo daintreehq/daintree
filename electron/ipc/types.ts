@@ -5,6 +5,8 @@ import type { EventBuffer } from "../services/EventBuffer.js";
 import type { CliAvailabilityService } from "../services/CliAvailabilityService.js";
 import type { SidecarManager } from "../services/SidecarManager.js";
 import type { TypedEventBus } from "../services/events.js";
+import type { AgentVersionService } from "../services/AgentVersionService.js";
+import type { AgentUpdateHandler } from "../services/AgentUpdateHandler.js";
 
 export interface HandlerDependencies {
   mainWindow: BrowserWindow;
@@ -14,4 +16,6 @@ export interface HandlerDependencies {
   cliAvailabilityService?: CliAvailabilityService;
   sidecarManager?: SidecarManager;
   events?: TypedEventBus;
+  agentVersionService?: AgentVersionService;
+  agentUpdateHandler?: AgentUpdateHandler;
 }

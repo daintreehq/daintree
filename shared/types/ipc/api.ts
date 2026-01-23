@@ -36,7 +36,14 @@ import type {
   FileTreeNode,
   CopyTreeProgress,
 } from "./copyTree.js";
-import type { SystemWakePayload, CliAvailability } from "./system.js";
+import type {
+  SystemWakePayload,
+  CliAvailability,
+  AgentVersionInfo,
+  AgentUpdateSettings,
+  StartAgentUpdatePayload,
+  StartAgentUpdateResult,
+} from "./system.js";
 import type { AppState, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
 import type { RetryAction, AppError } from "./errors.js";
@@ -167,6 +174,11 @@ export interface ElectronAPI {
     getHomeDir(): Promise<string>;
     getCliAvailability(): Promise<CliAvailability>;
     refreshCliAvailability(): Promise<CliAvailability>;
+    getAgentVersions(): Promise<AgentVersionInfo[]>;
+    refreshAgentVersions(): Promise<AgentVersionInfo[]>;
+    getAgentUpdateSettings(): Promise<AgentUpdateSettings>;
+    setAgentUpdateSettings(settings: AgentUpdateSettings): Promise<void>;
+    startAgentUpdate(payload: StartAgentUpdatePayload): Promise<StartAgentUpdateResult>;
     onWake(callback: (data: SystemWakePayload) => void): () => void;
   };
   app: {

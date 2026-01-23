@@ -200,6 +200,11 @@ const CHANNELS = {
   SYSTEM_GET_HOME_DIR: "system:get-home-dir",
   SYSTEM_GET_CLI_AVAILABILITY: "system:get-cli-availability",
   SYSTEM_REFRESH_CLI_AVAILABILITY: "system:refresh-cli-availability",
+  SYSTEM_GET_AGENT_VERSIONS: "system:get-agent-versions",
+  SYSTEM_REFRESH_AGENT_VERSIONS: "system:refresh-agent-versions",
+  SYSTEM_GET_AGENT_UPDATE_SETTINGS: "system:get-agent-update-settings",
+  SYSTEM_SET_AGENT_UPDATE_SETTINGS: "system:set-agent-update-settings",
+  SYSTEM_START_AGENT_UPDATE: "system:start-agent-update",
   SYSTEM_WAKE: "system:wake",
 
   // PR detection channels
@@ -626,6 +631,21 @@ const api: ElectronAPI = {
     getCliAvailability: () => _typedInvoke(CHANNELS.SYSTEM_GET_CLI_AVAILABILITY),
 
     refreshCliAvailability: () => _typedInvoke(CHANNELS.SYSTEM_REFRESH_CLI_AVAILABILITY),
+
+    getAgentVersions: () => _typedInvoke(CHANNELS.SYSTEM_GET_AGENT_VERSIONS),
+
+    refreshAgentVersions: () => _typedInvoke(CHANNELS.SYSTEM_REFRESH_AGENT_VERSIONS),
+
+    getAgentUpdateSettings: () => _typedInvoke(CHANNELS.SYSTEM_GET_AGENT_UPDATE_SETTINGS),
+
+    setAgentUpdateSettings: (settings: {
+      autoCheck: boolean;
+      checkFrequencyHours: number;
+      lastAutoCheck: number | null;
+    }) => _typedInvoke(CHANNELS.SYSTEM_SET_AGENT_UPDATE_SETTINGS, settings),
+
+    startAgentUpdate: (payload: { agentId: string; method?: string }) =>
+      _typedInvoke(CHANNELS.SYSTEM_START_AGENT_UPDATE, payload),
 
     onWake: (callback: (data: { sleepDuration: number; timestamp: number }) => void) => {
       const handler = (

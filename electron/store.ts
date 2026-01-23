@@ -1,6 +1,11 @@
 import Store from "electron-store";
 import type { Project } from "./types/index.js";
-import type { AgentSettings, PanelGridConfig, UserAgentRegistry } from "../shared/types/index.js";
+import type {
+  AgentSettings,
+  PanelGridConfig,
+  UserAgentRegistry,
+  AgentUpdateSettings,
+} from "../shared/types/index.js";
 import { DEFAULT_AGENT_SETTINGS } from "../shared/types/index.js";
 
 export interface StoreSchema {
@@ -93,6 +98,7 @@ export interface StoreSchema {
   };
   agentSettings: AgentSettings;
   userAgentRegistry: UserAgentRegistry;
+  agentUpdateSettings: AgentUpdateSettings;
   keybindingOverrides: {
     overrides: Record<string, string[]>;
   };
@@ -140,6 +146,11 @@ const storeOptions = {
     },
     agentSettings: DEFAULT_AGENT_SETTINGS,
     userAgentRegistry: {},
+    agentUpdateSettings: {
+      autoCheck: true,
+      checkFrequencyHours: 24,
+      lastAutoCheck: null,
+    },
     keybindingOverrides: {
       overrides: {},
     },
