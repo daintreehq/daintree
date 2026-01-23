@@ -179,7 +179,9 @@ export class PtyManager extends EventEmitter {
       );
       this.kill(id);
     }
-    console.log(`[PtyManager] Spawning terminal ${id} (kind: ${options.kind}, type: ${options.type})`);
+    console.log(
+      `[PtyManager] Spawning terminal ${id} (kind: ${options.kind}, type: ${options.type})`
+    );
 
     const terminalProcess = new TerminalProcess(
       id,

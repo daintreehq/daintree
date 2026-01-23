@@ -315,6 +315,8 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
 
                     // Preserve the original kind (dev-preview, terminal, etc.) unless it's an agent
                     const respawnKind = isAgentPanel ? "agent" : kind;
+                    const isDevPreview = kind === "dev-preview";
+                    
                     await addTerminal({
                       kind: respawnKind,
                       type: saved.type,
@@ -326,6 +328,8 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
                       requestedId: saved.id,
                       command,
                       isInputLocked: saved.isInputLocked,
+                      devCommand: isDevPreview ? command : undefined,
+                      browserUrl: isDevPreview ? saved.browserUrl : undefined,
                     });
                   }
                 } else {
