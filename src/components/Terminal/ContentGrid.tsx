@@ -9,6 +9,7 @@ import {
   useWorktreeSelectionStore,
   usePreferencesStore,
   useTwoPaneSplitStore,
+  useSidecarStore,
   type TerminalInstance,
 } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
@@ -398,6 +399,10 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
   // Two-pane split mode settings
   const twoPaneSplitEnabled = useTwoPaneSplitStore((state) => state.config.enabled);
 
+  // Sidecar state - used to trigger terminal re-fit when sidecar visibility changes
+  const sidecarOpen = useSidecarStore((state) => state.isOpen);
+  const sidecarLayoutMode = useSidecarStore((state) => state.layoutMode);
+
   const gridTerminals = useMemo(
     () =>
       terminals.filter(
@@ -639,7 +644,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
       cancelled = true;
       clearTimeout(timeoutId);
     };
-  }, [gridCols, terminalIds, gridTerminals]);
+  }, [gridCols, terminalIds, gridTerminals, sidecarOpen, sidecarLayoutMode]);
 
   // Show "grid full" overlay when trying to drag from dock to a full grid
   const showGridFullOverlay = sourceContainer === "dock" && isGridFull;
