@@ -6,6 +6,7 @@ import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
 import type { HandlerDependencies } from "../../types.js";
 import { TerminalReplayHistoryPayloadSchema } from "../../../schemas/index.js";
+import { logDebug, logInfo, logWarn, logError } from "../../../utils/logger.js";
 
 export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
@@ -40,8 +41,8 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       const serializedState = await ptyClient.getSerializedStateAsync(terminalId);
 
       if (process.env.CANOPY_VERBOSE) {
-        console.log(
-          `[IPC] terminal:getSerializedState(${terminalId}): ${serializedState ? `${serializedState.length} bytes` : "null"}`
+        logDebug(
+          `terminal:getSerializedState(${terminalId}): ${serializedState ? `${serializedState.length} bytes` : "null"}`
         );
       }
       return serializedState;
@@ -84,7 +85,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
     try {
       return ptyClient.getSharedBuffers();
     } catch (error) {
-      console.warn("[IPC] Failed to get shared buffers:", error);
+      logWarn("Failed to get shared buffers", { error });
       return { visualBuffers: [], signalBuffer: null };
     }
   };
@@ -95,7 +96,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
     try {
       return ptyClient.getAnalysisBuffer();
     } catch (error) {
-      console.warn("[IPC] Failed to get analysis buffer:", error);
+      logWarn("Failed to get analysis buffer", { error });
       return null;
     }
   };
@@ -108,7 +109,9 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
   ) => {
     const parseResult = TerminalReplayHistoryPayloadSchema.safeParse(payload);
     if (!parseResult.success) {
-      console.error("[IPC] terminal:replayHistory validation failed:", parseResult.error.format());
+      logError("terminal:replayHistory validation failed", undefined, {
+        error: parseResult.error.format(),
+      });
       throw new Error(`Invalid payload: ${parseResult.error.message}`);
     }
 
@@ -117,7 +120,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
     try {
       const replayed = await ptyClient.replayHistoryAsync(terminalId, maxLines);
 
-      console.log(`[IPC] terminal:replayHistory(${terminalId}): replayed ${replayed} lines`);
+      logInfo(`terminal:replayHistory(${terminalId}): replayed ${replayed} lines`);
       return { replayed };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -164,13 +167,15 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
         }
       }
 
-      console.log(
-        `[IPC] terminal:getForProject(${projectId.slice(0, 8)}): found ${terminals.length} terminals`,
-        terminals.map((t) => ({
-          id: t.id.slice(0, 12),
-          kind: t.kind,
-          projectId: t.projectId?.slice(0, 8),
-        }))
+      logInfo(
+        `terminal:getForProject(${projectId.slice(0, 8)}): found ${terminals.length} terminals`,
+        {
+          terminals: terminals.map((t) => ({
+            id: t.id.slice(0, 12),
+            kind: t.kind,
+            projectId: t.projectId?.slice(0, 8),
+          })),
+        }
       );
       return terminals;
     } catch (error) {
@@ -193,11 +198,11 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       const terminal = await ptyClient.getTerminalAsync(terminalId);
 
       if (!terminal) {
-        console.warn(`[IPC] terminal:reconnect: Terminal ${terminalId} not found`);
+        logWarn(`terminal:reconnect: Terminal ${terminalId} not found`);
         return { exists: false, error: "Terminal not found in backend" };
       }
 
-      console.log(`[IPC] terminal:reconnect: Reconnecting to ${terminalId}`);
+      logInfo(`terminal:reconnect: Reconnecting to ${terminalId}`);
 
       return {
         exists: true,

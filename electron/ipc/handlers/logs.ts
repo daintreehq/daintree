@@ -5,7 +5,11 @@ import {
   setVerboseLogging,
   isVerboseLogging,
   logInfo,
+  logDebug,
+  logWarn,
+  logError,
   getLogFilePath,
+  type LogLevel,
 } from "../../utils/logger.js";
 import type { FilterOptions as LogFilterOptions } from "../../services/LogBuffer.js";
 
@@ -72,7 +76,7 @@ export function registerLogsHandlers(): () => void {
 
   const handleLogsSetVerbose = async (_event: Electron.IpcMainInvokeEvent, enabled: boolean) => {
     if (typeof enabled !== "boolean") {
-      console.error("Invalid verbose logging payload:", enabled);
+      logError("Invalid verbose logging payload", undefined, { payload: enabled });
       return { success: false };
     }
     setVerboseLogging(enabled);
@@ -87,6 +91,30 @@ export function registerLogsHandlers(): () => void {
   };
   ipcMain.handle(CHANNELS.LOGS_GET_VERBOSE, handleLogsGetVerbose);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.LOGS_GET_VERBOSE));
+
+  const handleLogsWrite = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: { level: LogLevel; message: string; context?: Record<string, unknown> }
+  ) => {
+    const { level, message, context } = payload;
+    const contextWithSource = { ...context, source: "Renderer" };
+    switch (level) {
+      case "debug":
+        logDebug(message, contextWithSource);
+        break;
+      case "info":
+        logInfo(message, contextWithSource);
+        break;
+      case "warn":
+        logWarn(message, contextWithSource);
+        break;
+      case "error":
+        logError(message, context?.error, contextWithSource);
+        break;
+    }
+  };
+  ipcMain.handle(CHANNELS.LOGS_WRITE, handleLogsWrite);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.LOGS_WRITE));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

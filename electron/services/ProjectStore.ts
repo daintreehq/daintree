@@ -15,6 +15,7 @@ import { GitService } from "./GitService.js";
 import { isCanopyError } from "../utils/errorTypes.js";
 import { sanitizeSvg } from "../../shared/utils/svgSanitizer.js";
 import { TerminalSnapshotSchema, filterValidTerminalEntries } from "../schemas/ipc.js";
+import { logError } from "../utils/logger.js";
 
 const SETTINGS_FILENAME = "settings.json";
 const RECIPES_FILENAME = "recipes.json";
@@ -126,7 +127,7 @@ export class ProjectStore {
       try {
         await fs.rm(stateDir, { recursive: true, force: true });
       } catch (error) {
-        console.error(`[ProjectStore] Failed to remove state directory for ${projectId}:`, error);
+        logError(`Failed to remove state directory for ${projectId}`, error);
       }
     }
 

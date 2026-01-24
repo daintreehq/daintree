@@ -266,6 +266,7 @@ const CHANNELS = {
   LOGS_OPEN_FILE: "logs:open-file",
   LOGS_SET_VERBOSE: "logs:set-verbose",
   LOGS_GET_VERBOSE: "logs:get-verbose",
+  LOGS_WRITE: "logs:write",
 
   // Error channels
   ERROR_NOTIFY: "error:notify",
@@ -706,6 +707,12 @@ const api: ElectronAPI = {
     },
 
     onBatch: (callback: (entries: LogEntry[]) => void) => _typedOn(CHANNELS.LOGS_BATCH, callback),
+
+    write: (
+      level: "debug" | "info" | "warn" | "error",
+      message: string,
+      context?: Record<string, unknown>
+    ) => _typedInvoke(CHANNELS.LOGS_WRITE, { level, message, context }),
   },
 
   // Error API

@@ -202,6 +202,11 @@ export interface ElectronAPI {
     getVerbose(): Promise<boolean>;
     onEntry(callback: (entry: LogEntry) => void): () => void;
     onBatch(callback: (entries: LogEntry[]) => void): () => void;
+    write(
+      level: "debug" | "info" | "warn" | "error",
+      message: string,
+      context?: Record<string, unknown>
+    ): Promise<void>;
   };
   errors: {
     onError(callback: (error: AppError) => void): () => void;

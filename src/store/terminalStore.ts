@@ -25,6 +25,7 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useTerminalInputStore } from "./terminalInputStore";
 import type { CrashType } from "@shared/types/pty-host";
 import { isAgentTerminal } from "@/utils/terminalType";
+import { logInfo, logWarn, logError } from "@/utils/logger";
 
 export type { TerminalInstance, AddTerminalOptions, QueuedCommand, CrashType };
 export { isAgentReady };
@@ -226,13 +227,13 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
         try {
           terminalInstanceService.destroy(terminal.id);
         } catch (error) {
-          console.warn(`Failed to destroy terminal instance ${terminal.id}:`, error);
+          logWarn(`Failed to destroy terminal instance ${terminal.id}`, { error });
         }
       }
 
       const killPromises = state.terminals.map((terminal) =>
         terminalClient.kill(terminal.id).catch((error) => {
-          console.error(`Failed to kill terminal ${terminal.id}:`, error);
+          logError(`Failed to kill terminal ${terminal.id}`, error);
         })
       );
 
@@ -263,14 +264,12 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
         try {
           terminalInstanceService.destroy(terminal.id);
         } catch (error) {
-          console.warn(`Failed to destroy terminal instance ${terminal.id}:`, error);
+          logWarn(`Failed to destroy terminal instance ${terminal.id}`, { error });
         }
       }
 
       // DO NOT send kill commands to backend - processes stay alive from Phase 1
-      console.log(
-        `[TerminalStore] Reset UI state for ${state.terminals.length} terminals (processes preserved)`
-      );
+      logInfo(`Reset UI state for ${state.terminals.length} terminals (processes preserved)`);
 
       useTerminalInputStore.getState().clearAllDraftInputs();
 
@@ -366,12 +365,12 @@ export function setupTerminalStoreListeners() {
     const { terminalId, state, timestamp, trigger, confidence } = data;
 
     if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) {
-      console.warn(`Invalid timestamp in agent state event:`, data);
+      logWarn("Invalid timestamp in agent state event", { data });
       return;
     }
 
     if (!terminalId) {
-      console.warn(`Missing terminalId in agent state event:`, data);
+      logWarn("Missing terminalId in agent state event", { data });
       return;
     }
 
@@ -503,7 +502,7 @@ export function setupTerminalStoreListeners() {
   });
 
   backendCrashedUnsubscribe = terminalClient.onBackendCrashed((details) => {
-    console.error("[TerminalStore] Backend crashed:", details);
+    logError("Backend crashed", undefined, { details });
 
     // Cancel any pending recovery timer
     if (recoveryTimer) {
@@ -518,7 +517,7 @@ export function setupTerminalStoreListeners() {
   });
 
   backendReadyUnsubscribe = terminalClient.onBackendReady(() => {
-    console.log("[TerminalStore] Backend recovered, resetting renderers...");
+    logInfo("Backend recovered, resetting renderers...");
 
     // Cancel any pending recovery timer from previous crash
     if (recoveryTimer) {
@@ -541,11 +540,11 @@ export function setupTerminalStoreListeners() {
   spawnResultUnsubscribe = terminalClient.onSpawnResult((id, result) => {
     if (!result.success) {
       if (result.error) {
-        console.error(`[TerminalStore] Spawn failed for terminal ${id}:`, result.error);
+        logError(`Spawn failed for terminal ${id}`, undefined, { error: result.error });
         useTerminalStore.getState().setSpawnError(id, result.error);
       } else {
         // Spawn failed but no error details provided - set generic error
-        console.error(`[TerminalStore] Spawn failed for terminal ${id} with no error details`);
+        logError(`Spawn failed for terminal ${id} with no error details`);
         useTerminalStore.getState().setSpawnError(id, {
           code: "UNKNOWN",
           message: "Failed to start terminal process",

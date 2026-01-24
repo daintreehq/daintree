@@ -9,6 +9,7 @@ import type {
   ActionSource,
   ActionError,
 } from "../../shared/types/actions.js";
+import { logWarn } from "@/utils/logger";
 
 /** Fields that should be redacted from event payloads to prevent secret leakage */
 const SENSITIVE_ARG_FIELDS = new Set(["token", "password", "secret", "key", "auth", "credential"]);
@@ -26,7 +27,7 @@ export class ActionService {
 
   register<Args = unknown, Result = unknown>(definition: ActionDefinition<Args, Result>): void {
     if (this.registry.has(definition.id)) {
-      console.warn(`[ActionService] Action "${definition.id}" already registered. Overwriting.`);
+      logWarn(`Action "${definition.id}" already registered. Overwriting.`);
     }
     this.registry.set(definition.id, definition as ActionDefinition<unknown, unknown>);
   }
@@ -166,7 +167,7 @@ export class ActionService {
       try {
         return this.contextProvider();
       } catch (err) {
-        console.warn("[ActionService] Context provider threw an error:", err);
+        logWarn("Context provider threw an error", { error: err });
         return {};
       }
     }
@@ -236,7 +237,7 @@ export class ActionService {
         timestamp: payload.timestamp,
       });
     } catch (err) {
-      console.warn("[ActionService] Failed to emit action:dispatched event:", err);
+      logWarn("Failed to emit action:dispatched event", { error: err });
     }
   }
 }

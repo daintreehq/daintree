@@ -17,6 +17,7 @@ import { TerminalLinkHandler } from "./TerminalLinkHandler";
 import { TerminalResizeController } from "./TerminalResizeController";
 import { TerminalRendererPolicy } from "./TerminalRendererPolicy";
 import { TerminalWakeManager } from "./TerminalWakeManager";
+import { logDebug, logWarn, logError } from "@/utils/logger";
 
 class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
@@ -335,7 +336,7 @@ class TerminalInstanceService {
           try {
             callback(true);
           } catch (err) {
-            console.error("[TerminalInstanceService] Alt buffer callback error:", err);
+            logError("Alt buffer callback error", err);
           }
         }
       }
@@ -528,7 +529,7 @@ class TerminalInstanceService {
       try {
         callback(state);
       } catch (err) {
-        console.error("[TerminalInstanceService] Agent state callback error:", err);
+        logError("Agent state callback error", err);
       }
     }
   }
@@ -541,7 +542,7 @@ class TerminalInstanceService {
       try {
         callback(isAltBuffer);
       } catch (err) {
-        console.error("[TerminalInstanceService] Alt buffer callback error:", err);
+        logError("Alt buffer callback error", err);
       }
     }
 
@@ -566,7 +567,7 @@ class TerminalInstanceService {
       try {
         callback(managed.isAltBuffer);
       } catch (err) {
-        console.error("[TerminalInstanceService] Alt buffer callback error:", err);
+        logError("Alt buffer callback error", err);
       }
     }
 
@@ -595,7 +596,7 @@ class TerminalInstanceService {
       try {
         callback(managed.agentState);
       } catch (err) {
-        console.error("[TerminalInstanceService] Agent state callback error:", err);
+        logError("Agent state callback error", err);
       }
     }
 
@@ -623,17 +624,17 @@ class TerminalInstanceService {
 
     try {
       if (!managed.hostElement.isConnected) {
-        console.log(`[TERM_DEBUG] resetRenderer skipped for ${id}: not connected`);
+        logDebug(`resetRenderer skipped for ${id}: not connected`);
         return;
       }
       if (managed.hostElement.clientWidth < 50 || managed.hostElement.clientHeight < 50) {
-        console.log(
-          `[TERM_DEBUG] resetRenderer skipped for ${id}: too small (${managed.hostElement.clientWidth}x${managed.hostElement.clientHeight})`
+        logDebug(
+          `resetRenderer skipped for ${id}: too small (${managed.hostElement.clientWidth}x${managed.hostElement.clientHeight})`
         );
         return;
       }
 
-      console.log(`[TERM_DEBUG] resetRenderer running for ${id}`);
+      logDebug(`resetRenderer running for ${id}`);
 
       managed.terminal.clearTextureAtlas();
       managed.terminal.refresh(0, managed.terminal.rows - 1);
@@ -643,7 +644,7 @@ class TerminalInstanceService {
         terminalClient.resize(id, dims.cols, dims.rows);
       }
     } catch (error) {
-      console.error(`[TerminalInstanceService] resetRenderer failed for ${id}:`, error);
+      logError(`resetRenderer failed for ${id}`, error);
     }
   }
 
@@ -661,7 +662,7 @@ class TerminalInstanceService {
           `\r\n\x1b[33m[${timestamp}] Terminal backend reconnected\x1b[0m\r\n`
         );
       } catch (error) {
-        console.error(`[TerminalInstanceService] Failed to recover terminal ${id}:`, error);
+        logError(`Failed to recover terminal ${id}`, error);
       }
     });
   }
@@ -752,7 +753,7 @@ class TerminalInstanceService {
       try {
         unsub();
       } catch (error) {
-        console.warn("[TerminalInstanceService] Error unsubscribing listener:", error);
+        logWarn("Error unsubscribing listener", { error });
       }
     }
     managed.listeners.length = 0;
@@ -784,7 +785,7 @@ class TerminalInstanceService {
     try {
       managed.fileLinksDisposable?.dispose();
     } catch (error) {
-      console.warn("[TerminalInstanceService] Error disposing file links:", error);
+      logWarn("Error disposing file links", { error });
     }
 
     managed.terminal.dispose();
@@ -812,7 +813,7 @@ class TerminalInstanceService {
     try {
       const serializedState = await terminalClient.getSerializedState(id);
       if (!serializedState) {
-        console.warn(`[TerminalInstanceService] No serialized state for terminal ${id}`);
+        logWarn(`No serialized state for terminal ${id}`);
         return false;
       }
 
@@ -822,7 +823,7 @@ class TerminalInstanceService {
 
       return this.restoreFromSerialized(id, serializedState);
     } catch (error) {
-      console.error(`[TerminalInstanceService] Failed to fetch state for terminal ${id}:`, error);
+      logError(`Failed to fetch state for terminal ${id}`, error);
       return false;
     }
   }
@@ -830,7 +831,7 @@ class TerminalInstanceService {
   restoreFromSerialized(id: string, serializedState: string): boolean {
     const managed = this.instances.get(id);
     if (!managed) {
-      console.warn(`[TerminalInstanceService] Cannot restore: terminal ${id} not found`);
+      logWarn(`Cannot restore: terminal ${id} not found`);
       return false;
     }
 
@@ -872,7 +873,7 @@ class TerminalInstanceService {
       return true;
     } catch (error) {
       managed.isSerializedRestoreInProgress = false;
-      console.error(`[TerminalInstanceService] Failed to restore terminal ${id}:`, error);
+      logError(`Failed to restore terminal ${id}`, error);
       return false;
     }
   }
@@ -883,7 +884,7 @@ class TerminalInstanceService {
   ): Promise<boolean> {
     const managed = this.instances.get(id);
     if (!managed) {
-      console.warn(`[TerminalInstanceService] Cannot restore: terminal ${id} not found`);
+      logWarn(`Cannot restore: terminal ${id} not found`);
       return false;
     }
 
@@ -934,7 +935,7 @@ class TerminalInstanceService {
 
         return true;
       } catch (error) {
-        console.error(`[TerminalInstanceService] Incremental restore failed for ${id}:`, error);
+        logError(`Incremental restore failed for ${id}`, error);
         return false;
       } finally {
         if (this.instances.get(id) === managed && managed.restoreGeneration === restoreGeneration) {
@@ -964,7 +965,7 @@ class TerminalInstanceService {
     };
 
     const writePromise = managed.writeChain.then(task).catch((err) => {
-      console.error(`[TerminalInstanceService] Write chain error for ${id}:`, err);
+      logError(`Write chain error for ${id}`, err);
       return false;
     });
 

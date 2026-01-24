@@ -3,6 +3,7 @@ import type { CopyResult, CopyOptions as SdkCopyOptions, ProgressEvent } from "c
 import * as path from "path";
 import * as fs from "fs/promises";
 import type { CopyTreeOptions, CopyTreeResult, CopyTreeProgress } from "../types/index.js";
+import { logWarn } from "../utils/logger.js";
 
 export type { CopyTreeOptions, CopyTreeResult, CopyTreeProgress };
 
@@ -62,9 +63,9 @@ class CopyTreeService {
       try {
         config = await ConfigManager.create();
       } catch (error) {
-        console.warn(
-          "[CopyTreeService] Failed to load default config (likely missing configuration files in bundle), proceeding with defaults:",
-          error
+        logWarn(
+          "Failed to load default config (likely missing configuration files in bundle), proceeding with defaults",
+          { error }
         );
       }
 
@@ -155,9 +156,9 @@ class CopyTreeService {
       try {
         config = await ConfigManager.create();
       } catch (error) {
-        console.warn(
-          "[CopyTreeService] Failed to load default config (likely missing configuration files in bundle), proceeding with defaults:",
-          error
+        logWarn(
+          "Failed to load default config (likely missing configuration files in bundle), proceeding with defaults",
+          { error }
         );
       }
 

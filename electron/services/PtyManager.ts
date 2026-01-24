@@ -4,6 +4,7 @@ import type { AgentEvent } from "./AgentStateMachine.js";
 import type { AgentStateChangeTrigger } from "../schemas/agent.js";
 import type { PtyPool } from "./PtyPool.js";
 import type { ProcessTreeCache } from "./ProcessTreeCache.js";
+import { logDebug, logInfo, logWarn, logError } from "../utils/logger.js";
 
 import {
   TerminalRegistry,
@@ -69,7 +70,7 @@ export class PtyManager extends EventEmitter {
       terminal.setSabModeEnabled(enabled);
     }
     if (process.env.CANOPY_VERBOSE) {
-      console.log(`[PtyManager] SAB mode ${enabled ? "enabled" : "disabled"}`);
+      logDebug(`SAB mode ${enabled ? "enabled" : "disabled"}`);
     }
   }
 
@@ -88,9 +89,7 @@ export class PtyManager extends EventEmitter {
     this.activeProjectId = projectId;
 
     if (process.env.CANOPY_VERBOSE) {
-      console.log(
-        `[PtyManager] Active project changed: ${previousProjectId || "none"} → ${projectId || "none"}`
-      );
+      logDebug(`Active project changed: ${previousProjectId || "none"} → ${projectId || "none"}`);
     }
   }
 
@@ -133,7 +132,7 @@ export class PtyManager extends EventEmitter {
     const replayed = terminal.replayHistory(maxLines);
 
     if (process.env.CANOPY_VERBOSE && replayed > 0) {
-      console.log(`[PtyManager] Replayed ${replayed} lines for terminal ${terminalId}`);
+      logDebug(`Replayed ${replayed} lines for terminal ${terminalId}`);
     }
 
     return replayed;
@@ -154,7 +153,7 @@ export class PtyManager extends EventEmitter {
     }
 
     if (process.env.CANOPY_VERBOSE) {
-      console.log(`[PtyManager] Replayed history for ${count} terminals in project ${projectId}`);
+      logDebug(`Replayed history for ${count} terminals in project ${projectId}`);
     }
 
     return count;
@@ -174,14 +173,12 @@ export class PtyManager extends EventEmitter {
     if (this.registry.has(id)) {
       const existing = this.registry.get(id);
       const existingInfo = existing?.getInfo();
-      console.warn(
-        `[PtyManager] Terminal ${id} already exists (projectId: ${existingInfo?.projectId?.slice(0, 8)}), killing to respawn with new projectId`
+      logWarn(
+        `Terminal ${id} already exists (projectId: ${existingInfo?.projectId?.slice(0, 8)}), killing to respawn with new projectId`
       );
       this.kill(id);
     }
-    console.log(
-      `[PtyManager] Spawning terminal ${id} (kind: ${options.kind}, type: ${options.type})`
-    );
+    logInfo(`Spawning terminal ${id} (kind: ${options.kind}, type: ${options.type})`);
 
     const terminalProcess = new TerminalProcess(
       id,
@@ -216,7 +213,7 @@ export class PtyManager extends EventEmitter {
   write(id: string, data: string, traceId?: string): void {
     const terminal = this.registry.get(id);
     if (!terminal) {
-      console.warn(`Terminal ${id} not found, cannot write data`);
+      logWarn(`Terminal ${id} not found, cannot write data`);
       return;
     }
     terminal.write(data, traceId);
@@ -229,7 +226,7 @@ export class PtyManager extends EventEmitter {
   submit(id: string, text: string): void {
     const terminal = this.registry.get(id);
     if (!terminal) {
-      console.warn(`Terminal ${id} not found, cannot submit`);
+      logWarn(`Terminal ${id} not found, cannot submit`);
       return;
     }
     terminal.submit(text);
@@ -243,7 +240,7 @@ export class PtyManager extends EventEmitter {
     if (terminal) {
       terminal.resize(cols, rows);
     } else {
-      console.warn(`Terminal ${id} not found, cannot resize`);
+      logWarn(`Terminal ${id} not found, cannot resize`);
     }
   }
 
@@ -469,11 +466,11 @@ export class PtyManager extends EventEmitter {
     const terminalIds = this.registry.getForProject(projectId);
 
     if (terminalIds.length === 0) {
-      console.log(`[PtyManager] No terminals to kill for project ${projectId}`);
+      logDebug(`No terminals to kill for project ${projectId}`);
       return 0;
     }
 
-    console.log(`[PtyManager] Killing ${terminalIds.length} terminal(s) for project ${projectId}`);
+    logInfo(`Killing ${terminalIds.length} terminal(s) for project ${projectId}`);
 
     let killed = 0;
     for (const terminalId of terminalIds) {
@@ -481,11 +478,11 @@ export class PtyManager extends EventEmitter {
         this.kill(terminalId, "project-closed");
         killed++;
       } catch (error) {
-        console.error(`[PtyManager] Failed to kill terminal ${terminalId}:`, error);
+        logError(`Failed to kill terminal ${terminalId}`, error);
       }
     }
 
-    console.log(`[PtyManager] Killed ${killed}/${terminalIds.length} terminals`);
+    logInfo(`Killed ${killed}/${terminalIds.length} terminals`);
     return killed;
   }
 
@@ -498,7 +495,7 @@ export class PtyManager extends EventEmitter {
     newProjectId: string,
     onTierChange?: (id: string, tier: "active" | "background") => void
   ): void {
-    console.log(`[PtyManager] Switching to project: ${newProjectId}`);
+    logInfo(`Switching to project: ${newProjectId}`);
 
     let backgrounded = 0;
     let foregrounded = 0;
@@ -545,9 +542,7 @@ export class PtyManager extends EventEmitter {
 
     this.registry.setLastKnownProjectId(newProjectId);
 
-    console.log(
-      `[PtyManager] Project switch complete: ${foregrounded} foregrounded, ${backgrounded} backgrounded`
-    );
+    logInfo(`Project switch complete: ${foregrounded} foregrounded, ${backgrounded} backgrounded`);
   }
 
   /**

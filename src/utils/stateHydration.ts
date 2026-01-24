@@ -14,6 +14,7 @@ import { generateAgentFlags } from "@shared/types";
 import { normalizeScrollbackLines } from "@shared/config/scrollback";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { logDebug, logInfo, logWarn, logError } from "@/utils/logger";
 
 export interface HydrationOptions {
   addTerminal: (options: {
@@ -72,11 +73,9 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
         const normalizedScrollback = normalizeScrollbackLines(scrollbackLines);
 
         if (normalizedScrollback !== scrollbackLines) {
-          console.log(
-            `[Hydration] Normalizing scrollback from ${scrollbackLines} to ${normalizedScrollback}`
-          );
+          logInfo(`Normalizing scrollback from ${scrollbackLines} to ${normalizedScrollback}`);
           terminalConfigClient.setScrollback(normalizedScrollback).catch((err) => {
-            console.warn("[Hydration] Failed to persist scrollback normalization:", err);
+            logWarn("Failed to persist scrollback normalization", { error: err });
           });
         }
 
@@ -94,11 +93,11 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
           .setHybridInputAutoFocus(terminalConfig.hybridInputAutoFocus ?? true);
       }
     } catch (error) {
-      console.warn("Failed to hydrate terminal config:", error);
+      logWarn("Failed to hydrate terminal config", { error });
     }
 
     if (!appState) {
-      console.warn("App state returned undefined during hydration, using defaults");
+      logWarn("App state returned undefined during hydration, using defaults");
       return;
     }
 
@@ -110,8 +109,8 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     if (currentProjectId) {
       try {
         const backendTerminals = await terminalClient.getForProject(currentProjectId);
-        console.log(
-          `[Hydration] Found ${backendTerminals.length} running terminals for project ${currentProjectId}`
+        logInfo(
+          `Found ${backendTerminals.length} running terminals for project ${currentProjectId}`
         );
 
         if (
@@ -119,20 +118,15 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
           typeof process.env !== "undefined" &&
           process.env.CANOPY_VERBOSE === "1"
         ) {
-          console.log("[Hydration] Project:", currentProjectId.slice(0, 8));
-          console.log(
-            "[Hydration] Backend terminals:",
-            JSON.stringify(
-              backendTerminals.map((t) => ({
-                id: t.id.slice(0, 8),
-                kind: t.kind,
-                agentId: t.agentId,
-                projectId: t.projectId?.slice(0, 8),
-              })),
-              null,
-              2
-            )
-          );
+          logDebug(`Project: ${currentProjectId.slice(0, 8)}`);
+          logDebug("Backend terminals", {
+            terminals: backendTerminals.map((t) => ({
+              id: t.id.slice(0, 8),
+              kind: t.kind,
+              agentId: t.agentId,
+              projectId: t.projectId?.slice(0, 8),
+            })),
+          });
         }
 
         // Build a map of backend terminals by ID for quick lookup
@@ -140,7 +134,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
 
         // Restore all panels in saved order (mix of PTY reconnects and non-PTY recreations)
         if (appState.terminals && appState.terminals.length > 0) {
-          console.log(`[Hydration] Restoring ${appState.terminals.length} saved panel(s)`);
+          logInfo(`Restoring ${appState.terminals.length} saved panel(s)`);
 
           for (const saved of appState.terminals) {
             try {
@@ -148,7 +142,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
 
               if (backendTerminal) {
                 // PTY terminal - reconnect to existing backend process
-                console.log(`[Hydration] Reconnecting to terminal: ${saved.id}`);
+                logInfo(`Reconnecting to terminal: ${saved.id}`);
 
                 const cwd = backendTerminal.cwd || projectRoot || "";
                 const currentAgentState = backendTerminal.agentState;
@@ -188,10 +182,9 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
                 try {
                   await terminalInstanceService.fetchAndRestore(backendTerminal.id);
                 } catch (snapshotError) {
-                  console.warn(
-                    `[Hydration] Serialized state restore failed for ${saved.id}:`,
-                    snapshotError
-                  );
+                  logWarn(`Serialized state restore failed for ${saved.id}`, {
+                    error: snapshotError,
+                  });
                 }
 
                 // Mark as restored
@@ -226,24 +219,19 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
 
                   try {
                     // Always log reconnect attempts to help diagnose project switch issues
-                    console.log(
-                      `[Hydration] Trying reconnect fallback for ${saved.id} (kind: ${kind})`
-                    );
+                    logInfo(`Trying reconnect fallback for ${saved.id} (kind: ${kind})`);
                     reconnectedTerminal = await terminalClient.reconnect(saved.id);
                     if (reconnectedTerminal?.exists && reconnectedTerminal.hasPty) {
-                      console.log(
-                        `[Hydration] Reconnect fallback succeeded for ${saved.id} - terminal exists in backend but was missed by getForProject`
+                      logInfo(
+                        `Reconnect fallback succeeded for ${saved.id} - terminal exists in backend but was missed by getForProject`
                       );
                     } else {
-                      console.log(
-                        `[Hydration] Reconnect fallback: terminal ${saved.id} not found (exists=${reconnectedTerminal?.exists}, hasPty=${reconnectedTerminal?.hasPty})`
+                      logInfo(
+                        `Reconnect fallback: terminal ${saved.id} not found (exists=${reconnectedTerminal?.exists}, hasPty=${reconnectedTerminal?.hasPty})`
                       );
                     }
                   } catch (reconnectError) {
-                    console.warn(
-                      `[Hydration] Reconnect fallback failed for ${saved.id}:`,
-                      reconnectError
-                    );
+                    logWarn(`Reconnect fallback failed for ${saved.id}`, { error: reconnectError });
                     reconnectedTerminal = null;
                   }
 
@@ -286,10 +274,9 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
                     try {
                       await terminalInstanceService.fetchAndRestore(reconnectedTerminal.id!);
                     } catch (snapshotError) {
-                      console.warn(
-                        `[Hydration] Serialized state restore failed for ${saved.id}:`,
-                        snapshotError
-                      );
+                      logWarn(`Serialized state restore failed for ${saved.id}`, {
+                        error: snapshotError,
+                      });
                     }
                   } else {
                     // Terminal truly doesn't exist in backend - respawn
@@ -311,7 +298,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
                         flags.length > 0 ? `${baseCommand} ${flags.join(" ")}` : baseCommand;
                     }
 
-                    console.log(`[Hydration] Respawning PTY panel: ${saved.id}`);
+                    logInfo(`Respawning PTY panel: ${saved.id}`);
 
                     // Preserve the original kind (dev-preview, terminal, etc.) unless it's an agent
                     const respawnKind = isAgentPanel ? "agent" : kind;
@@ -333,7 +320,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
                     });
                   }
                 } else {
-                  console.log(`[Hydration] Recreating ${kind} panel: ${saved.id}`);
+                  logInfo(`Recreating ${kind} panel: ${saved.id}`);
 
                   const devCommandCandidate =
                     kind === "dev-preview" ? saved.devCommand?.trim() : undefined;
@@ -359,7 +346,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
                 }
               }
             } catch (error) {
-              console.warn(`Failed to restore panel ${saved.id}:`, error);
+              logWarn(`Failed to restore panel ${saved.id}`, { error });
             }
           }
         }
@@ -367,13 +354,13 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
         // Restore any orphaned backend terminals not in saved state (append at end)
         const orphanedTerminals = Array.from(backendTerminalMap.values());
         if (orphanedTerminals.length > 0) {
-          console.log(
-            `[Hydration] ${orphanedTerminals.length} orphaned terminal(s) not in saved order, appending at end`
+          logInfo(
+            `${orphanedTerminals.length} orphaned terminal(s) not in saved order, appending at end`
           );
 
           for (const terminal of orphanedTerminals) {
             try {
-              console.log(`[Hydration] Reconnecting to orphaned terminal: ${terminal.id}`);
+              logInfo(`Reconnecting to orphaned terminal: ${terminal.id}`);
 
               const cwd = terminal.cwd || projectRoot || "";
               const currentAgentState = terminal.agentState;
@@ -404,18 +391,17 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
               try {
                 await terminalInstanceService.fetchAndRestore(terminal.id);
               } catch (snapshotError) {
-                console.warn(
-                  `[Hydration] Serialized state restore failed for ${terminal.id}:`,
-                  snapshotError
-                );
+                logWarn(`Serialized state restore failed for ${terminal.id}`, {
+                  error: snapshotError,
+                });
               }
             } catch (error) {
-              console.warn(`Failed to reconnect to orphaned terminal ${terminal.id}:`, error);
+              logWarn(`Failed to reconnect to orphaned terminal ${terminal.id}`, { error });
             }
           }
         }
       } catch (error) {
-        console.warn("Failed to query backend terminals:", error);
+        logWarn("Failed to query backend terminals", { error });
       }
     }
 
@@ -440,15 +426,15 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
             return a.name.localeCompare(b.name);
           });
           const fallbackWorktree = sortedWorktrees[0];
-          console.log(
-            `[Hydration] Active worktree ${savedActiveId ?? "(none)"} not found, falling back to: ${fallbackWorktree.name}`
+          logInfo(
+            `Active worktree ${savedActiveId ?? "(none)"} not found, falling back to: ${fallbackWorktree.name}`
           );
           setActiveWorktree(fallbackWorktree.id);
         }
       }
       // If no worktrees exist, we don't set any active worktree (handled gracefully)
     } catch (error) {
-      console.warn("[Hydration] Failed to validate active worktree:", error);
+      logWarn("Failed to validate active worktree", { error });
       // On error, still try to use the saved ID if present
       if (appState.activeWorktreeId) {
         setActiveWorktree(appState.activeWorktreeId);
@@ -479,7 +465,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
       options.setFocusMode(appState.focusMode, appState.focusPanelState);
     }
   } catch (error) {
-    console.error("Failed to hydrate app state:", error);
+    logError("Failed to hydrate app state", error);
     throw error;
   }
 }

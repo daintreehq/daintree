@@ -394,6 +394,16 @@ export interface IpcInvokeMap {
     args: [];
     result: boolean;
   };
+  "logs:write": {
+    args: [
+      payload: {
+        level: "debug" | "info" | "warn" | "error";
+        message: string;
+        context?: Record<string, unknown>;
+      },
+    ];
+    result: void;
+  };
 
   // Error channels
   "error:retry": {
