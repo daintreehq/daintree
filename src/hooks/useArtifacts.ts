@@ -8,6 +8,7 @@ import type {
 } from "@shared/types";
 import { artifactClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
+import { logErrorWithContext } from "@/utils/errorContext";
 
 const artifactStore = new Map<string, Artifact[]>();
 const listeners = new Set<(terminalId: string, artifacts: Artifact[]) => void>();
@@ -93,8 +94,13 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
     };
   }, [terminalId]);
   const copyToClipboard = useCallback(async (artifact: Artifact) => {
-    if (!navigator.clipboard) {
-      console.error("Clipboard API not available");
+    if (typeof navigator === "undefined" || !navigator.clipboard) {
+      logErrorWithContext(new Error("Clipboard API not available"), {
+        operation: "copy_to_clipboard",
+        component: "useArtifacts",
+        errorType: "validation",
+        details: { artifactId: artifact.id, terminalId },
+      });
       return false;
     }
 
@@ -103,12 +109,16 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
       await navigator.clipboard.writeText(artifact.content);
       return true;
     } catch (error) {
-      console.error("Failed to copy to clipboard:", error);
+      logErrorWithContext(error, {
+        operation: "copy_to_clipboard",
+        component: "useArtifacts",
+        details: { artifactId: artifact.id, artifactType: artifact.type, terminalId },
+      });
       return false;
     } finally {
       setActionInProgress(null);
     }
-  }, []);
+  }, [terminalId]);
 
   const saveToFile = useCallback(
     async (artifact: Artifact) => {
@@ -135,22 +145,44 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
 
         return result;
       } catch (error) {
-        console.error("Failed to save artifact:", error);
+        logErrorWithContext(error, {
+          operation: "save_artifact_to_file",
+          component: "useArtifacts",
+          details: {
+            artifactId: artifact.id,
+            filename: artifact.filename,
+            cwd,
+            terminalId,
+            worktreeId,
+          },
+        });
         return null;
       } finally {
         setActionInProgress(null);
       }
     },
-    [cwd]
+    [cwd, terminalId, worktreeId]
   );
 
   const applyPatch = useCallback(
     async (artifact: Artifact) => {
       if (!isElectronAvailable() || artifact.type !== "patch") {
+        logErrorWithContext(new Error("Invalid artifact type or Electron not available"), {
+          operation: "apply_patch",
+          component: "useArtifacts",
+          errorType: "validation",
+          details: { artifactId: artifact.id, artifactType: artifact.type, terminalId, worktreeId },
+        });
         return { success: false, error: "Invalid artifact type or Electron not available" };
       }
 
       if (!worktreeId || !cwd) {
+        logErrorWithContext(new Error("No worktree context available"), {
+          operation: "apply_patch",
+          component: "useArtifacts",
+          errorType: "validation",
+          details: { artifactId: artifact.id, terminalId, worktreeId, cwd },
+        });
         return { success: false, error: "No worktree context available" };
       }
 
@@ -169,7 +201,11 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
 
         return result;
       } catch (error) {
-        console.error("Failed to apply patch:", error);
+        logErrorWithContext(error, {
+          operation: "apply_patch",
+          component: "useArtifacts",
+          details: { artifactId: artifact.id, worktreeId, cwd, terminalId },
+        });
         return {
           success: false,
           error: error instanceof Error ? error.message : String(error),
@@ -178,7 +214,7 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
         setActionInProgress(null);
       }
     },
-    [worktreeId, cwd]
+    [worktreeId, cwd, terminalId]
   );
 
   const clearArtifacts = useCallback(() => {
@@ -274,11 +310,20 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
 
           if (saveResult?.success) {
             result.succeeded++;
+          } else if (saveResult === null) {
+            // Treat null as user cancellation - skip remaining saves
+            console.log(`[useArtifacts] Save cancelled by user, stopping bulk save`);
+            break;
           } else {
             result.failed++;
             result.failures.push({ artifact, error: "Save operation returned false" });
           }
         } catch (error) {
+          logErrorWithContext(error, {
+            operation: "bulk_save_artifact",
+            component: "useArtifacts",
+            details: { artifactId: artifact.id, filename: artifact.filename, cwd, terminalId },
+          });
           result.failed++;
           result.failures.push({
             artifact,
@@ -291,7 +336,7 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
     }
 
     return result;
-  }, [artifacts, cwd]);
+  }, [artifacts, cwd, terminalId]);
 
   const applyAllPatches = useCallback(async (): Promise<BulkResult> => {
     if (!isElectronAvailable() || !worktreeId || !cwd) {
@@ -333,6 +378,14 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
               applyResult.modifiedFiles.forEach((f) => modifiedFilesSet.add(f));
             }
           } else {
+            logErrorWithContext(
+              new Error(applyResult.error || "Patch application failed"),
+              {
+                operation: "bulk_apply_patch",
+                component: "useArtifacts",
+                details: { artifactId: artifact.id, worktreeId, cwd, terminalId },
+              }
+            );
             result.failed++;
             result.failures.push({
               artifact,
@@ -340,6 +393,11 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
             });
           }
         } catch (error) {
+          logErrorWithContext(error, {
+            operation: "bulk_apply_patch",
+            component: "useArtifacts",
+            details: { artifactId: artifact.id, worktreeId, cwd, terminalId },
+          });
           result.failed++;
           result.failures.push({
             artifact,
@@ -353,7 +411,7 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
 
     result.modifiedFiles = Array.from(modifiedFilesSet);
     return result;
-  }, [artifacts, worktreeId, cwd]);
+  }, [artifacts, worktreeId, cwd, terminalId]);
 
   return {
     artifacts,

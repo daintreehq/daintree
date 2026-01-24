@@ -4,6 +4,7 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@shared/types/domain";
 import type { GitHubIssue } from "@shared/types/github";
 import { useFocusStore } from "@/store/focusStore";
+import { logErrorWithContext } from "@/utils/errorContext";
 
 interface CreateDialogState {
   isOpen: boolean;
@@ -60,7 +61,12 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     set(updates);
 
     appClient.setState({ activeWorktreeId: id ?? undefined }).catch((error) => {
-      console.error("Failed to persist active worktree:", error);
+      logErrorWithContext(error, {
+        operation: "persist_active_worktree",
+        component: "worktreeStore",
+        errorType: "filesystem",
+        details: { worktreeId: id },
+      });
     });
 
     applyWorktreeTerminalPolicy(get, set, id, generation);
@@ -84,7 +90,12 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     });
 
     appClient.setState({ activeWorktreeId: id }).catch((error) => {
-      console.error("Failed to persist active worktree:", error);
+      logErrorWithContext(error, {
+        operation: "persist_active_worktree",
+        component: "worktreeStore",
+        errorType: "filesystem",
+        details: { worktreeId: id },
+      });
     });
 
     applyWorktreeTerminalPolicy(get, set, id, generation);
@@ -92,20 +103,28 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     // Restore the last focused terminal for this worktree
     const lastFocusedTerminalId = get().lastFocusedTerminalByWorktree.get(id);
     if (lastFocusedTerminalId) {
-      void import("@/store/terminalStore").then(({ useTerminalStore }) => {
-        // Check generation to ensure we're not applying stale focus from a previous switch
-        if (get()._policyGeneration !== generation) return;
-        // Verify the worktree hasn't changed
-        if (get().activeWorktreeId !== id) return;
+      void import("@/store/terminalStore")
+        .then(({ useTerminalStore }) => {
+          // Check generation to ensure we're not applying stale focus from a previous switch
+          if (get()._policyGeneration !== generation) return;
+          // Verify the worktree hasn't changed
+          if (get().activeWorktreeId !== id) return;
 
-        const terminals = useTerminalStore.getState().terminals;
-        const terminal = terminals.find((t) => t.id === lastFocusedTerminalId);
+          const terminals = useTerminalStore.getState().terminals;
+          const terminal = terminals.find((t) => t.id === lastFocusedTerminalId);
 
-        // Validate terminal still exists, belongs to this worktree, and isn't in trash
-        if (terminal && terminal.worktreeId === id && terminal.location !== "trash") {
-          useTerminalStore.getState().setFocused(lastFocusedTerminalId);
-        }
-      });
+          // Validate terminal still exists, belongs to this worktree, and isn't in trash
+          if (terminal && terminal.worktreeId === id && terminal.location !== "trash") {
+            useTerminalStore.getState().setFocused(lastFocusedTerminalId);
+          }
+        })
+        .catch((error) => {
+          logErrorWithContext(error, {
+            operation: "import_terminal_store_for_focus_restore",
+            component: "worktreeStore",
+            details: { worktreeId: id, lastFocusedTerminalId },
+          });
+        });
     }
   },
 
@@ -203,24 +222,31 @@ export function setupWorktreeFocusTracking() {
     };
   }
 
-  void import("@/store/terminalStore").then(({ useTerminalStore }) => {
-    let previousFocusedId: string | null = null;
+  void import("@/store/terminalStore")
+    .then(({ useTerminalStore }) => {
+      let previousFocusedId: string | null = null;
 
-    focusTrackingUnsubscribe = useTerminalStore.subscribe((state) => {
-      const focusedId = state.focusedId;
+      focusTrackingUnsubscribe = useTerminalStore.subscribe((state) => {
+        const focusedId = state.focusedId;
 
-      // Only track when focus changes
-      if (focusedId === previousFocusedId) return;
-      previousFocusedId = focusedId;
+        // Only track when focus changes
+        if (focusedId === previousFocusedId) return;
+        previousFocusedId = focusedId;
 
-      if (!focusedId) return;
+        if (!focusedId) return;
 
-      const terminal = state.terminals.find((t) => t.id === focusedId);
-      if (terminal?.worktreeId) {
-        useWorktreeSelectionStore.getState().trackTerminalFocus(terminal.worktreeId, focusedId);
-      }
+        const terminal = state.terminals.find((t) => t.id === focusedId);
+        if (terminal?.worktreeId) {
+          useWorktreeSelectionStore.getState().trackTerminalFocus(terminal.worktreeId, focusedId);
+        }
+      });
+    })
+    .catch((error) => {
+      logErrorWithContext(error, {
+        operation: "import_terminal_store_for_focus_tracking",
+        component: "worktreeStore",
+      });
     });
-  });
 
   return () => {
     focusTrackingUnsubscribe?.();
@@ -278,6 +304,11 @@ function applyWorktreeTerminalPolicy(
       }
     })
     .catch((error) => {
-      console.warn("[WorktreeStore] Failed to apply terminal streaming policy:", error);
+      logErrorWithContext(error, {
+        operation: "apply_terminal_streaming_policy",
+        component: "worktreeStore",
+        errorType: "process",
+        details: { targetWorktreeId, generation },
+      });
     });
 }

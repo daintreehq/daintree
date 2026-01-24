@@ -10,6 +10,7 @@ import { useNotificationStore } from "./notificationStore";
 import { useTerminalStore } from "./terminalStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { useProjectSettingsStore } from "./projectSettingsStore";
+import { logErrorWithContext } from "@/utils/errorContext";
 
 interface ProjectState {
   projects: Project[];
@@ -78,8 +79,9 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
 
   addProjectByPath: async (path) => {
     set({ isLoading: true, error: null });
+    let resolvedPath: string | undefined | null;
     try {
-      const resolvedPath = path.trim() || (await projectClient.openDialog());
+      resolvedPath = path.trim() || (await projectClient.openDialog());
       if (!resolvedPath) {
         set({ isLoading: false });
         return;
@@ -90,7 +92,11 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       await get().loadProjects();
       await get().switchProject(newProject.id);
     } catch (error) {
-      console.error("Failed to add project:", error);
+      logErrorWithContext(error, {
+        operation: "add_project",
+        component: "projectStore",
+        details: { path: resolvedPath || path },
+      });
       const errorMessage = error instanceof Error ? error.message : String(error);
 
       if (errorMessage.includes("Not a git repository")) {
@@ -108,7 +114,11 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
                   await projectClient.initGit(resolvedPath);
                   await get().addProjectByPath(resolvedPath);
                 } catch (initError) {
-                  console.error("Failed to initialize git:", initError);
+                  logErrorWithContext(initError, {
+                    operation: "initialize_git",
+                    component: "projectStore",
+                    details: { path: resolvedPath },
+                  });
                   useNotificationStore.getState().addNotification({
                     type: "error",
                     title: "Failed to initialize Git",
@@ -142,7 +152,11 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       const projects = await projectClient.getAll();
       set({ projects, isLoading: false });
     } catch (error) {
-      console.error("Failed to load projects:", error);
+      logErrorWithContext(error, {
+        operation: "load_projects",
+        component: "projectStore",
+        errorType: "filesystem",
+      });
       set({ error: "Failed to load projects", isLoading: false });
     }
   },
@@ -153,7 +167,11 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       const currentProject = await projectClient.getCurrent();
       set({ currentProject, isLoading: false });
     } catch (error) {
-      console.error("Failed to get current project:", error);
+      logErrorWithContext(error, {
+        operation: "get_current_project",
+        component: "projectStore",
+        errorType: "filesystem",
+      });
       set({
         error: "Failed to get current project",
         currentProject: null,
@@ -236,7 +254,12 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         try {
           await projectClient.setTerminals(oldProjectId, terminalsToSave);
         } catch (saveError) {
-          console.warn("[ProjectSwitch] Failed to save per-project panel state:", saveError);
+          logErrorWithContext(saveError, {
+            operation: "save_panel_state_before_switch",
+            component: "projectStore",
+            errorType: "filesystem",
+            details: { oldProjectId, terminalCount: terminalsToSave.length },
+          });
         }
       }
 
@@ -262,7 +285,11 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       // which is handled in useProjectSwitchRehydration. We don't dispatch
       // project-switched here to avoid duplicate hydration.
     } catch (error) {
-      console.error("Failed to switch project:", error);
+      logErrorWithContext(error, {
+        operation: "switch_project",
+        component: "projectStore",
+        details: { projectId, targetProjectName: targetProject?.name },
+      });
       const message = getProjectOpenErrorMessage(error);
       useNotificationStore.getState().addNotification({
         type: "error",
@@ -284,7 +311,11 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       }
       set({ isLoading: false });
     } catch (error) {
-      console.error("Failed to update project:", error);
+      logErrorWithContext(error, {
+        operation: "update_project",
+        component: "projectStore",
+        details: { projectId: id, updates },
+      });
       set({ error: "Failed to update project", isLoading: false });
       throw error;
     }
@@ -300,7 +331,11 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       }
       set({ isLoading: false });
     } catch (error) {
-      console.error("Failed to remove project:", error);
+      logErrorWithContext(error, {
+        operation: "remove_project",
+        component: "projectStore",
+        details: { projectId: id },
+      });
       set({ error: "Failed to remove project", isLoading: false });
     }
   },
@@ -328,7 +363,11 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
 
       return result;
     } catch (error) {
-      console.error(`[ProjectStore] Failed to close project ${projectId}:`, error);
+      logErrorWithContext(error, {
+        operation: "close_project",
+        component: "projectStore",
+        details: { projectId, killTerminals: options?.killTerminals },
+      });
       throw error;
     }
   },
@@ -401,7 +440,12 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         try {
           await projectClient.setTerminals(oldProjectId, terminalsToSave);
         } catch (saveError) {
-          console.warn("[ProjectStore] Failed to save per-project panel state:", saveError);
+          logErrorWithContext(saveError, {
+            operation: "save_panel_state_before_reopen",
+            component: "projectStore",
+            errorType: "filesystem",
+            details: { oldProjectId, terminalCount: terminalsToSave.length },
+          });
         }
       }
 
@@ -423,8 +467,18 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       // which is handled in useProjectSwitchRehydration. We don't dispatch
       // project-switched here to avoid duplicate hydration.
     } catch (error) {
-      console.error("Failed to reopen project:", error);
+      logErrorWithContext(error, {
+        operation: "reopen_project",
+        component: "projectStore",
+        details: { projectId, targetProjectName: targetProject?.name },
+      });
       const message = getProjectOpenErrorMessage(error);
+      useNotificationStore.getState().addNotification({
+        type: "error",
+        title: "Failed to reopen project",
+        message,
+        duration: 6000,
+      });
       set({ error: message, isLoading: false, isSwitching: false, switchingToProjectName: null });
       throw error;
     }

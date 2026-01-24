@@ -2,6 +2,7 @@ import { useEffect, useCallback, useRef } from "react";
 import { useErrorStore, type AppError, type RetryAction } from "@/store";
 import { isElectronAvailable } from "./useElectron";
 import { errorsClient } from "@/clients";
+import { logErrorWithContext } from "@/utils/errorContext";
 
 let ipcListenerAttached = false;
 export function useErrors() {
@@ -54,7 +55,11 @@ export function useErrors() {
         await errorsClient.retry(errorId, action, args);
         removeError(errorId);
       } catch (error) {
-        console.error("Retry failed:", error);
+        logErrorWithContext(error, {
+          operation: "retry_error_action",
+          component: "useErrors",
+          details: { errorId, action, args },
+        });
       }
     },
     [removeError]
