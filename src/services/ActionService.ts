@@ -1,4 +1,6 @@
 import { zodToJsonSchema } from "zod-to-json-schema";
+import type { ZodSchema } from "zod/v3";
+import type { z } from "zod";
 import type {
   ActionId,
   ActionDefinition,
@@ -18,7 +20,22 @@ const SENSITIVE_ARG_FIELDS = new Set(["token", "password", "secret", "key", "aut
 const MAX_ARG_PAYLOAD_SIZE = 1024;
 
 function isElectronApiAvailable(): boolean {
-  return typeof window !== "undefined" && !!(window as any).electron;
+  return typeof window !== "undefined" && !!window.electron;
+}
+
+/**
+ * Converts a zod schema to JSON Schema format.
+ * Uses `unknown` intermediate cast because zod v4 (used by this project) and
+ * zod-to-json-schema (which uses zod/v3 types) have incompatible type definitions
+ * despite runtime compatibility.
+ */
+function zodSchemaToJsonSchema(schema: z.ZodType): Record<string, unknown> | undefined {
+  try {
+    return zodToJsonSchema(schema as unknown as ZodSchema) as Record<string, unknown>;
+  } catch (err) {
+    console.warn("[ActionService] Failed to convert zod schema to JSON Schema:", err);
+    return undefined;
+  }
 }
 
 export class ActionService {
@@ -151,11 +168,9 @@ export class ActionService {
       category: definition.category,
       kind: definition.kind,
       danger: definition.danger,
-      inputSchema: definition.argsSchema
-        ? (zodToJsonSchema(definition.argsSchema as any) as Record<string, unknown>)
-        : undefined,
+      inputSchema: definition.argsSchema ? zodSchemaToJsonSchema(definition.argsSchema) : undefined,
       outputSchema: definition.resultSchema
-        ? (zodToJsonSchema(definition.resultSchema as any) as Record<string, unknown>)
+        ? zodSchemaToJsonSchema(definition.resultSchema)
         : undefined,
       enabled,
       disabledReason,
@@ -226,10 +241,7 @@ export class ActionService {
     if (!isElectronApiAvailable()) return;
 
     try {
-      const electron = window.electron as typeof window.electron & {
-        events?: { emit: (eventType: string, payload: unknown) => Promise<void> };
-      };
-      await electron.events?.emit("action:dispatched", {
+      await window.electron.events.emit("action:dispatched", {
         actionId: payload.actionId,
         args: payload.args,
         source: payload.source,
