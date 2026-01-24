@@ -1,7 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { AlertTriangle, Loader2 } from "lucide-react";
-import type { TerminalType, TerminalRestartError, SpawnError } from "@/types";
+import type {
+  TerminalType,
+  TerminalRestartError,
+  SpawnError,
+  TerminalReconnectError,
+} from "@/types";
 import { cn } from "@/lib/utils";
 import { XtermAdapter } from "./XtermAdapter";
 import { ArtifactOverlay } from "./ArtifactOverlay";
@@ -9,6 +14,7 @@ import { TerminalSearchBar } from "./TerminalSearchBar";
 import { TerminalRestartBanner } from "./TerminalRestartBanner";
 import { TerminalErrorBanner } from "./TerminalErrorBanner";
 import { SpawnErrorBanner } from "./SpawnErrorBanner";
+import { ReconnectErrorBanner } from "./ReconnectErrorBanner";
 import { GeminiAlternateBufferBanner } from "./GeminiAlternateBufferBanner";
 import { UpdateCwdDialog } from "./UpdateCwdDialog";
 import { ErrorBanner } from "../Errors/ErrorBanner";
@@ -62,6 +68,7 @@ export interface TerminalPaneProps {
   restartKey?: number;
   isTrashing?: boolean;
   restartError?: TerminalRestartError;
+  reconnectError?: TerminalReconnectError;
   spawnError?: SpawnError;
   gridPanelCount?: number;
 }
@@ -89,6 +96,7 @@ function TerminalPaneComponent({
   restartKey = 0,
   isTrashing = false,
   restartError,
+  reconnectError,
   spawnError,
   gridPanelCount,
 }: TerminalPaneProps) {
@@ -156,6 +164,7 @@ function TerminalPaneComponent({
   const updateLastCommand = useTerminalStore((state) => state.updateLastCommand);
   const backendStatus = useTerminalStore((state) => state.backendStatus);
   const lastCrashType = useTerminalStore((state) => state.lastCrashType);
+  const clearReconnectError = useTerminalStore((state) => state.clearReconnectError);
 
   // Consolidate terminal state selectors to avoid multiple scans and ensure consistent snapshots
   const terminalState = useTerminalStore(
@@ -375,6 +384,10 @@ function TerminalPaneComponent({
     trashTerminal(id);
   }, [trashTerminal, id]);
 
+  const handleDismissReconnectError = useCallback(() => {
+    clearReconnectError(id);
+  }, [clearReconnectError, id]);
+
   useEffect(() => {
     terminalInstanceService.setFocused(id, isFocused);
 
@@ -512,6 +525,15 @@ function TerminalPaneComponent({
           onUpdateCwd={handleUpdateCwd}
           onRetry={handleRestart}
           onTrash={handleTrash}
+        />
+      )}
+
+      {reconnectError && !restartError && !spawnError && (
+        <ReconnectErrorBanner
+          terminalId={id}
+          error={reconnectError}
+          onDismiss={handleDismissReconnectError}
+          onRestart={handleRestart}
         />
       )}
 

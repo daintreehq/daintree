@@ -461,10 +461,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 }
 
 function App() {
-  const { focusedId, addTerminal } = useTerminalStore(
+  const { focusedId, addTerminal, setReconnectError } = useTerminalStore(
     useShallow((state) => ({
       focusedId: state.focusedId,
       addTerminal: state.addTerminal,
+      setReconnectError: state.setReconnectError,
     }))
   );
 
@@ -617,8 +618,16 @@ function App() {
       loadRecipes,
       openDiagnosticsDock,
       setFocusMode,
+      setReconnectError,
     }),
-    [addTerminal, setActiveWorktree, loadRecipes, openDiagnosticsDock, setFocusMode]
+    [
+      addTerminal,
+      setActiveWorktree,
+      loadRecipes,
+      openDiagnosticsDock,
+      setFocusMode,
+      setReconnectError,
+    ]
   );
 
   // App lifecycle hooks

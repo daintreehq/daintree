@@ -8,7 +8,7 @@ import {
   useTerminalStore,
 } from "@/store";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
-import type { TerminalType, AgentState, TerminalKind, SpawnError } from "@/types";
+import type { TerminalType, AgentState, TerminalKind, SpawnError, TerminalReconnectError } from "@/types";
 import { keybindingService } from "@/services/KeybindingService";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { generateAgentFlags } from "@shared/types";
@@ -16,6 +16,8 @@ import { normalizeScrollbackLines } from "@shared/config/scrollback";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { logDebug, logInfo, logWarn, logError } from "@/utils/logger";
+
+const RECONNECT_TIMEOUT_MS = 10000;
 
 export interface HydrationOptions {
   addTerminal: (options: {
@@ -47,6 +49,7 @@ export interface HydrationOptions {
     focusMode: boolean,
     focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean }
   ) => void;
+  setReconnectError?: (id: string, error: TerminalReconnectError) => void;
 }
 
 export async function hydrateAppState(
@@ -232,11 +235,23 @@ export async function hydrateAppState(
                   let reconnectedTerminal: Awaited<
                     ReturnType<typeof terminalClient.reconnect>
                   > | null = null;
+                  let reconnectTimedOut = false;
 
                   try {
                     // Always log reconnect attempts to help diagnose project switch issues
                     logInfo(`Trying reconnect fallback for ${saved.id} (kind: ${kind})`);
-                    reconnectedTerminal = await terminalClient.reconnect(saved.id);
+
+                    // Race reconnect against timeout to prevent indefinite waiting
+                    const reconnectPromise = terminalClient.reconnect(saved.id);
+                    const timeoutPromise = new Promise<null>((_, reject) =>
+                      setTimeout(
+                        () => reject(new Error("Reconnection timeout")),
+                        RECONNECT_TIMEOUT_MS
+                      )
+                    );
+
+                    reconnectedTerminal = await Promise.race([reconnectPromise, timeoutPromise]);
+
                     if (reconnectedTerminal?.exists && reconnectedTerminal.hasPty) {
                       logInfo(
                         `Reconnect fallback succeeded for ${saved.id} - terminal exists in backend but was missed by getForProject`
@@ -247,7 +262,20 @@ export async function hydrateAppState(
                       );
                     }
                   } catch (reconnectError) {
-                    logWarn(`Reconnect fallback failed for ${saved.id}`, { error: reconnectError });
+                    const isTimeout =
+                      reconnectError instanceof Error &&
+                      reconnectError.message === "Reconnection timeout";
+                    reconnectTimedOut = isTimeout;
+
+                    if (isTimeout) {
+                      logWarn(
+                        `Reconnect timed out for ${saved.id} after ${RECONNECT_TIMEOUT_MS}ms`
+                      );
+                    } else {
+                      logWarn(`Reconnect fallback failed for ${saved.id}`, {
+                        error: reconnectError,
+                      });
+                    }
                     reconnectedTerminal = null;
                   }
 
@@ -295,7 +323,7 @@ export async function hydrateAppState(
                       });
                     }
                   } else {
-                    // Terminal truly doesn't exist in backend
+                    // Terminal doesn't exist in backend or timed out - respawn
                     const effectiveAgentId =
                       saved.agentId ??
                       (saved.type && isRegisteredAgent(saved.type) ? saved.type : undefined);
@@ -349,7 +377,7 @@ export async function hydrateAppState(
                       // For regular terminals, respawn as before
                       logInfo(`Respawning PTY panel: ${saved.id}`);
 
-                      await addTerminal({
+                      const respawnedId = await addTerminal({
                         kind: respawnKind,
                         type: saved.type,
                         agentId,
@@ -357,12 +385,40 @@ export async function hydrateAppState(
                         cwd: saved.cwd || projectRoot || "",
                         worktreeId: saved.worktreeId,
                         location,
-                        requestedId: saved.id,
+                        // Don't reuse ID on timeout - could kill a slow-to-respond live session
+                        requestedId: reconnectTimedOut ? undefined : saved.id,
                         command,
                         isInputLocked: saved.isInputLocked,
                         devCommand: isDevPreview ? command : undefined,
                         browserUrl: isDevPreview ? saved.browserUrl : undefined,
                       });
+
+                      // Set error state on the respawned terminal based on what happened
+                      if (options.setReconnectError) {
+                        if (reconnectTimedOut) {
+                          options.setReconnectError(respawnedId, {
+                            message: `Terminal reconnection timed out after ${RECONNECT_TIMEOUT_MS / 1000}s. A new session was started.`,
+                            type: "timeout",
+                            timestamp: Date.now(),
+                            context: {
+                              terminalId: saved.id,
+                              timeoutMs: RECONNECT_TIMEOUT_MS,
+                            },
+                          });
+                        } else if (reconnectedTerminal && !reconnectedTerminal.exists) {
+                          // Terminal doesn't exist in backend - not found
+                          options.setReconnectError(respawnedId, {
+                            message:
+                              reconnectedTerminal.error ||
+                              "Previous terminal session not found. A new session was started.",
+                            type: "not_found",
+                            timestamp: Date.now(),
+                            context: {
+                              terminalId: saved.id,
+                            },
+                          });
+                        }
+                      }
                     }
                   }
                 } else {

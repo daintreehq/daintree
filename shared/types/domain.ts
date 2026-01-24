@@ -332,6 +332,25 @@ export interface TerminalRestartError {
   };
 }
 
+/** Structured error state for terminal reconnection failures during project switch */
+export interface TerminalReconnectError {
+  /** Human-readable error message */
+  message: string;
+  /** Error type: timeout, not_found, or other */
+  type: "timeout" | "not_found" | "error";
+  /** Timestamp when error occurred (milliseconds since epoch) */
+  timestamp: number;
+  /** Additional context for debugging */
+  context?: {
+    /** The terminal ID that failed to reconnect */
+    terminalId?: string;
+    /** Timeout duration in ms (for timeout errors) */
+    timeoutMs?: number;
+    /** Any additional metadata */
+    [key: string]: unknown;
+  };
+}
+
 interface BasePanelData {
   /** Unique identifier for this panel */
   id: string;
@@ -393,6 +412,8 @@ interface PtyPanelData extends BasePanelData {
   isRestarting?: boolean;
   /** Restart failure error - set when restart fails, cleared on success or manual action */
   restartError?: TerminalRestartError;
+  /** Reconnection failure error - set when reconnection fails during project switch */
+  reconnectError?: TerminalReconnectError;
   /** Flow control status - indicates if terminal is paused/suspended due to backpressure or safety policy */
   flowStatus?: TerminalFlowStatus;
   /** Combined lifecycle status for UI + diagnostics */
@@ -479,6 +500,8 @@ export interface TerminalInstance {
   restartKey?: number;
   isRestarting?: boolean;
   restartError?: TerminalRestartError;
+  /** Error that occurred during reconnection (e.g., timeout, not found) */
+  reconnectError?: TerminalReconnectError;
   /** Error that occurred when spawning the PTY process */
   spawnError?: import("./pty-host.js").SpawnError;
   flowStatus?: TerminalFlowStatus;

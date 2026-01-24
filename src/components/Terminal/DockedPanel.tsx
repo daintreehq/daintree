@@ -156,6 +156,7 @@ export function DockedPanel({ terminal, onPopoverClose }: DockedPanelProps) {
       flowStatus: terminal.flowStatus,
       restartKey: terminal.restartKey,
       restartError: terminal.restartError,
+      reconnectError: terminal.reconnectError,
       spawnError: terminal.spawnError,
 
       // Browser-specific

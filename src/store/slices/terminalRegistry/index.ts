@@ -890,7 +890,13 @@ export const createTerminalRegistrySlice =
         set((state) => ({
           terminals: state.terminals.map((t) =>
             t.id === id
-              ? { ...t, restartError: undefined, spawnError: undefined, isRestarting: true }
+              ? {
+                  ...t,
+                  restartError: undefined,
+                  reconnectError: undefined,
+                  spawnError: undefined,
+                  isRestarting: true,
+                }
               : t
           ),
         }));
@@ -1507,6 +1513,32 @@ export const createTerminalRegistrySlice =
 
           const newTerminals = state.terminals.map((t) =>
             t.id === id ? { ...t, spawnError: undefined, runtimeStatus: undefined } : t
+          );
+
+          return { terminals: newTerminals };
+        });
+      },
+
+      setReconnectError: (id, error) => {
+        set((state) => {
+          const terminal = state.terminals.find((t) => t.id === id);
+          if (!terminal) return state;
+
+          const newTerminals = state.terminals.map((t) =>
+            t.id === id ? { ...t, reconnectError: error, runtimeStatus: "error" as const } : t
+          );
+
+          return { terminals: newTerminals };
+        });
+      },
+
+      clearReconnectError: (id) => {
+        set((state) => {
+          const terminal = state.terminals.find((t) => t.id === id);
+          if (!terminal) return state;
+
+          const newTerminals = state.terminals.map((t) =>
+            t.id === id ? { ...t, reconnectError: undefined, runtimeStatus: undefined } : t
           );
 
           return { terminals: newTerminals };

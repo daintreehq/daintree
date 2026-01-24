@@ -9,6 +9,7 @@ import type {
   TerminalRuntimeStatus,
   SpawnError,
   PanelExitBehavior,
+  TerminalReconnectError,
 } from "@/types";
 import type { PanelKind } from "@/types";
 
@@ -121,6 +122,8 @@ export interface TerminalRegistrySlice {
   setBrowserUrl: (id: string, url: string) => void;
   setSpawnError: (id: string, error: SpawnError) => void;
   clearSpawnError: (id: string) => void;
+  setReconnectError: (id: string, error: TerminalReconnectError) => void;
+  clearReconnectError: (id: string) => void;
 }
 
 export type TerminalRegistryMiddleware = {

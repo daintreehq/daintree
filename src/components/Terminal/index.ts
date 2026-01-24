@@ -15,6 +15,8 @@ export { TerminalHeaderContent } from "./TerminalHeaderContent";
 export type { TerminalHeaderContentProps } from "./TerminalHeaderContent";
 export { TerminalRestartBanner } from "./TerminalRestartBanner";
 export type { TerminalRestartBannerProps } from "./TerminalRestartBanner";
+export { ReconnectErrorBanner } from "./ReconnectErrorBanner";
+export type { ReconnectErrorBannerProps } from "./ReconnectErrorBanner";
 export { GridPanel } from "./GridPanel";
 export type { GridPanelProps } from "./GridPanel";
 export { DockedPanel } from "./DockedPanel";
