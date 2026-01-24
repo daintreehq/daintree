@@ -322,9 +322,7 @@ export async function hydrateAppState(
                       // For agent terminals, don't auto-respawn as it could re-execute commands.
                       // Instead, create a placeholder terminal with DISCONNECTED error state.
                       // User can manually retry to start a fresh session.
-                      logWarn(
-                        `Agent terminal ${saved.id} disconnected - showing error state`
-                      );
+                      logWarn(`Agent terminal ${saved.id} disconnected - showing error state`);
 
                       // Add terminal with existingId to create entry without spawning
                       await addTerminal({
