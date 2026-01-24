@@ -16,12 +16,19 @@ interface BrowserStateState {
   panelStates: Record<string, BrowserPanelState>;
 }
 
+function makeScopedKey(panelId: string, worktreeId?: string): string {
+  if (worktreeId !== undefined && worktreeId !== null && worktreeId !== "") {
+    return `${worktreeId}:${panelId}`;
+  }
+  return panelId;
+}
+
 interface BrowserStateActions {
-  getState: (panelId: string) => BrowserPanelState | undefined;
-  setState: (panelId: string, state: BrowserPanelState) => void;
-  updateUrl: (panelId: string, url: string, history: BrowserHistory) => void;
-  updateZoomFactor: (panelId: string, zoomFactor: number) => void;
-  clearState: (panelId: string) => void;
+  getState: (panelId: string, worktreeId?: string) => BrowserPanelState | undefined;
+  setState: (panelId: string, state: BrowserPanelState, worktreeId?: string) => void;
+  updateUrl: (panelId: string, url: string, history: BrowserHistory, worktreeId?: string) => void;
+  updateZoomFactor: (panelId: string, zoomFactor: number, worktreeId?: string) => void;
+  clearState: (panelId: string, worktreeId?: string) => void;
   reset: () => void;
 }
 
@@ -35,46 +42,57 @@ const createBrowserStateStore: StateCreator<BrowserStateState & BrowserStateActi
 ) => ({
   ...initialState,
 
-  getState: (panelId) => get().panelStates[panelId],
+  getState: (panelId, worktreeId) => {
+    const key = makeScopedKey(panelId, worktreeId);
+    return get().panelStates[key];
+  },
 
-  setState: (panelId, state) =>
+  setState: (panelId, state, worktreeId) => {
+    const key = makeScopedKey(panelId, worktreeId);
     set((s) => ({
       panelStates: {
         ...s.panelStates,
-        [panelId]: state,
+        [key]: state,
       },
-    })),
+    }));
+  },
 
-  updateUrl: (panelId, url, history) =>
+  updateUrl: (panelId, url, history, worktreeId) => {
+    const key = makeScopedKey(panelId, worktreeId);
     set((s) => ({
       panelStates: {
         ...s.panelStates,
-        [panelId]: {
-          ...s.panelStates[panelId],
+        [key]: {
+          ...s.panelStates[key],
           url,
           history,
         },
       },
-    })),
+    }));
+  },
 
-  updateZoomFactor: (panelId, zoomFactor) =>
+  updateZoomFactor: (panelId, zoomFactor, worktreeId) => {
+    const key = makeScopedKey(panelId, worktreeId);
     set((s) => ({
       panelStates: {
         ...s.panelStates,
-        [panelId]: {
-          ...s.panelStates[panelId],
-          url: s.panelStates[panelId]?.url ?? "",
-          history: s.panelStates[panelId]?.history ?? { past: [], future: [] },
+        [key]: {
+          ...s.panelStates[key],
+          url: s.panelStates[key]?.url ?? "",
+          history: s.panelStates[key]?.history ?? { past: [], future: [] },
           zoomFactor,
         },
       },
-    })),
+    }));
+  },
 
-  clearState: (panelId) =>
+  clearState: (panelId, worktreeId) => {
+    const key = makeScopedKey(panelId, worktreeId);
     set((s) => {
-      const { [panelId]: _, ...rest } = s.panelStates;
+      const { [key]: _, ...rest } = s.panelStates;
       return { panelStates: rest };
-    }),
+    });
+  },
 
   reset: () => set(initialState),
 });

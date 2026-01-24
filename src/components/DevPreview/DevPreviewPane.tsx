@@ -7,7 +7,12 @@ import { useIsDragging } from "@/components/DragDrop";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
-import { useBrowserStateStore, useProjectStore, useTerminalStore } from "@/store";
+import {
+  useBrowserStateStore,
+  useProjectStore,
+  useTerminalStore,
+  useWorktreeSelectionStore,
+} from "@/store";
 import { panelKindKeepsAliveOnProjectSwitch } from "@shared/config/panelKindRegistry";
 import type { DevPreviewStatus } from "@shared/types/ipc/devPreview";
 
@@ -53,12 +58,14 @@ const AUTO_RELOAD_ERROR_CODES = new Set([-102, -105, -106, -118]);
 
 export interface DevPreviewPaneProps extends BasePanelProps {
   cwd: string;
+  worktreeId?: string;
 }
 
 export function DevPreviewPane({
   id,
   title,
   cwd,
+  worktreeId,
   isFocused,
   isMaximized = false,
   location = "grid",
@@ -78,13 +85,18 @@ export function DevPreviewPane({
   const [isBrowserOnly, setIsBrowserOnly] = useState(false);
   const [ptyId, setPtyId] = useState<string>("");
   const [showTerminal, setShowTerminal] = useState(false);
-  const [history, setHistory] = useState<BrowserHistory>(() => ({
-    past: [],
-    present: "",
-    future: [],
-  }));
+  const [history, setHistory] = useState<BrowserHistory>(() => {
+    const savedState = useBrowserStateStore.getState().getState(id, worktreeId);
+    return (
+      savedState?.history ?? {
+        past: [],
+        present: "",
+        future: [],
+      }
+    );
+  });
   const [zoomFactor, setZoomFactor] = useState<number>(() => {
-    const savedState = useBrowserStateStore.getState().getState(id);
+    const savedState = useBrowserStateStore.getState().getState(id, worktreeId);
     const savedZoom = savedState?.zoomFactor ?? 1.0;
     return Number.isFinite(savedZoom) ? Math.max(0.25, Math.min(2.0, savedZoom)) : 1.0;
   });
@@ -92,6 +104,7 @@ export function DevPreviewPane({
   const [isLoading, setIsLoading] = useState(false);
   const [webviewLoadError, setWebviewLoadError] = useState<string | null>(null);
   const [isWebviewReady, setIsWebviewReady] = useState(false);
+  const [wasInactive, setWasInactive] = useState(false);
   const restartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const webviewRef = useRef<Electron.WebviewTag>(null);
   const pendingUrlRef = useRef<string | null>(null);
@@ -104,11 +117,39 @@ export function DevPreviewPane({
   const isDragging = useIsDragging();
   const setBrowserUrl = useTerminalStore((state) => state.setBrowserUrl);
   const updateBrowserZoomFactor = useBrowserStateStore((state) => state.updateZoomFactor);
+  const updateBrowserUrl = useBrowserStateStore((state) => state.updateUrl);
+  const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
 
   const currentUrl = history.present;
   const canGoBack = history.past.length > 0;
   const canGoForward = history.future.length > 0;
   const hasValidUrl = isValidBrowserUrl(currentUrl);
+
+  // Sync history to browser state store
+  useEffect(() => {
+    updateBrowserUrl(id, currentUrl, history, worktreeId);
+  }, [currentUrl, history, id, updateBrowserUrl, worktreeId]);
+
+  // Reload state when worktreeId changes (for shared component instances)
+  useEffect(() => {
+    const savedState = useBrowserStateStore.getState().getState(id, worktreeId);
+    if (savedState) {
+      if (savedState.history) {
+        setHistory(savedState.history);
+        lastSetUrlRef.current = savedState.history.present;
+      }
+      if (savedState.zoomFactor !== undefined) {
+        const savedZoom = savedState.zoomFactor;
+        setZoomFactor(
+          Number.isFinite(savedZoom) ? Math.max(0.25, Math.min(2.0, savedZoom)) : 1.0
+        );
+      }
+    } else {
+      // Reset to defaults if no state saved for this worktree
+      setHistory({ past: [], present: "", future: [] });
+      setZoomFactor(1.0);
+    }
+  }, [id, worktreeId]);
 
   const clearAutoReload = useCallback(() => {
     if (autoReloadTimeoutRef.current) {
@@ -417,8 +458,37 @@ export function DevPreviewPane({
   }, [currentUrl, hasValidUrl, id, setBrowserUrl]);
 
   useEffect(() => {
-    updateBrowserZoomFactor(id, zoomFactor);
-  }, [id, updateBrowserZoomFactor, zoomFactor]);
+    updateBrowserZoomFactor(id, zoomFactor, worktreeId);
+  }, [id, updateBrowserZoomFactor, zoomFactor, worktreeId]);
+
+  // Track when this panel becomes inactive (different worktree selected)
+  useEffect(() => {
+    const isCurrentlyActive = (worktreeId ?? undefined) === (activeWorktreeId ?? undefined);
+    if (!isCurrentlyActive) {
+      setWasInactive(true);
+    }
+  }, [worktreeId, activeWorktreeId]);
+
+  // Reload when panel becomes active after being backgrounded
+  useEffect(() => {
+    const isInActiveWorktree = (worktreeId ?? undefined) === (activeWorktreeId ?? undefined);
+
+    if (wasInactive && isInActiveWorktree && isWebviewReady && currentUrl) {
+      setWasInactive(false);
+      setIsLoading(true);
+      setWebviewLoadError(null);
+      hasLoadedRef.current = false;
+      setHasLoaded(false);
+      autoReloadAttemptsRef.current = 0;
+      clearAutoReload();
+      lastUrlSetAtRef.current = Date.now();
+
+      const webview = webviewRef.current;
+      if (webview) {
+        webview.loadURL(currentUrl);
+      }
+    }
+  }, [wasInactive, worktreeId, activeWorktreeId, isWebviewReady, currentUrl, clearAutoReload]);
 
   useEffect(() => {
     const webview = webviewRef.current;
