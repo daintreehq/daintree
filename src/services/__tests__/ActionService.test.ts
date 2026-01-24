@@ -48,7 +48,8 @@ describe("ActionService", () => {
       service.register(action);
 
       expect(consoleWarn).toHaveBeenCalledWith(
-        '[ActionService] Action "actions.list" already registered. Overwriting.'
+        '[WARN] Action "actions.list" already registered. Overwriting.',
+        ""
       );
 
       consoleWarn.mockRestore();
