@@ -5,9 +5,10 @@ import {
   useScrollbackStore,
   usePerformanceModeStore,
   useTerminalInputStore,
+  useTerminalStore,
 } from "@/store";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
-import type { TerminalType, AgentState, TerminalKind } from "@/types";
+import type { TerminalType, AgentState, TerminalKind, SpawnError } from "@/types";
 import { keybindingService } from "@/services/KeybindingService";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { generateAgentFlags } from "@shared/types";
@@ -48,15 +49,27 @@ export interface HydrationOptions {
   ) => void;
 }
 
-export async function hydrateAppState(options: HydrationOptions): Promise<void> {
+export async function hydrateAppState(
+  options: HydrationOptions,
+  _switchId?: string,
+  isCurrent?: () => boolean
+): Promise<void> {
   const { addTerminal, setActiveWorktree, loadRecipes, openDiagnosticsDock } = options;
+
+  // Helper to check if this hydration is still current (not superseded by newer switch)
+  const checkCurrent = (): boolean => {
+    if (!isCurrent) return true;
+    return isCurrent();
+  };
 
   try {
     await keybindingService.loadOverrides();
+    if (!checkCurrent()) return;
 
     // Initialize user agent registry for existing user-defined agents
     // (no UI exposure, but allows existing agents to function)
     await useUserAgentRegistryStore.getState().initialize();
+    if (!checkCurrent()) return;
 
     // Batch fetch initial state
     const {
@@ -65,6 +78,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
       project: currentProject,
       agentSettings,
     } = await appClient.hydrate();
+    if (!checkCurrent()) return;
 
     // Hydrate terminal config (scrollback, performance mode) BEFORE restoring terminals
     try {
@@ -109,6 +123,8 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     if (currentProjectId) {
       try {
         const backendTerminals = await terminalClient.getForProject(currentProjectId);
+        if (!checkCurrent()) return;
+
         logInfo(
           `Found ${backendTerminals.length} running terminals for project ${currentProjectId}`
         );
@@ -279,7 +295,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
                       });
                     }
                   } else {
-                    // Terminal truly doesn't exist in backend - respawn
+                    // Terminal truly doesn't exist in backend
                     const effectiveAgentId =
                       saved.agentId ??
                       (saved.type && isRegisteredAgent(saved.type) ? saved.type : undefined);
@@ -298,26 +314,58 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
                         flags.length > 0 ? `${baseCommand} ${flags.join(" ")}` : baseCommand;
                     }
 
-                    logInfo(`Respawning PTY panel: ${saved.id}`);
-
                     // Preserve the original kind (dev-preview, terminal, etc.) unless it's an agent
                     const respawnKind = isAgentPanel ? "agent" : kind;
                     const isDevPreview = kind === "dev-preview";
 
-                    await addTerminal({
-                      kind: respawnKind,
-                      type: saved.type,
-                      agentId,
-                      title: saved.title,
-                      cwd: saved.cwd || projectRoot || "",
-                      worktreeId: saved.worktreeId,
-                      location,
-                      requestedId: saved.id,
-                      command,
-                      isInputLocked: saved.isInputLocked,
-                      devCommand: isDevPreview ? command : undefined,
-                      browserUrl: isDevPreview ? saved.browserUrl : undefined,
-                    });
+                    if (isAgentPanel) {
+                      // For agent terminals, don't auto-respawn as it could re-execute commands.
+                      // Instead, create a placeholder terminal with DISCONNECTED error state.
+                      // User can manually retry to start a fresh session.
+                      logWarn(
+                        `Agent terminal ${saved.id} disconnected - showing error state`
+                      );
+
+                      // Add terminal with existingId to create entry without spawning
+                      await addTerminal({
+                        kind: respawnKind,
+                        type: saved.type,
+                        agentId,
+                        title: saved.title,
+                        cwd: saved.cwd || projectRoot || "",
+                        worktreeId: saved.worktreeId,
+                        location,
+                        existingId: saved.id,
+                        command,
+                        isInputLocked: saved.isInputLocked,
+                      });
+
+                      // Set the DISCONNECTED error to show error UI
+                      const disconnectedError: SpawnError = {
+                        code: "DISCONNECTED",
+                        message:
+                          "Agent session was lost during project switch. Click Retry to start a new session.",
+                      };
+                      useTerminalStore.getState().setSpawnError(saved.id, disconnectedError);
+                    } else {
+                      // For regular terminals, respawn as before
+                      logInfo(`Respawning PTY panel: ${saved.id}`);
+
+                      await addTerminal({
+                        kind: respawnKind,
+                        type: saved.type,
+                        agentId,
+                        title: saved.title,
+                        cwd: saved.cwd || projectRoot || "",
+                        worktreeId: saved.worktreeId,
+                        location,
+                        requestedId: saved.id,
+                        command,
+                        isInputLocked: saved.isInputLocked,
+                        devCommand: isDevPreview ? command : undefined,
+                        browserUrl: isDevPreview ? saved.browserUrl : undefined,
+                      });
+                    }
                   }
                 } else {
                   logInfo(`Recreating ${kind} panel: ${saved.id}`);

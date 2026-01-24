@@ -7,6 +7,7 @@ import { projectStore } from "./ProjectStore.js";
 import { logBuffer } from "./LogBuffer.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { sendToRenderer } from "../ipc/utils.js";
+import { randomUUID } from "crypto";
 
 export interface ProjectSwitchDependencies {
   mainWindow: BrowserWindow;
@@ -56,9 +57,13 @@ export class ProjectSwitchService {
 
       await this.loadNewProject(project);
 
-      sendToRenderer(this.deps.mainWindow, CHANNELS.PROJECT_ON_SWITCH, updatedProject);
+      const switchId = randomUUID();
+      sendToRenderer(this.deps.mainWindow, CHANNELS.PROJECT_ON_SWITCH, {
+        project: updatedProject,
+        switchId,
+      });
 
-      console.log("[ProjectSwitch] Project switch complete");
+      console.log("[ProjectSwitch] Project switch complete, switchId:", switchId);
       return updatedProject;
     } catch (error) {
       console.error("[ProjectSwitch] Project switch failed, rolling back:", error);

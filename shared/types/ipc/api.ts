@@ -232,7 +232,7 @@ export interface ElectronAPI {
     update(projectId: string, updates: Partial<Project>): Promise<Project>;
     switch(projectId: string): Promise<Project>;
     openDialog(): Promise<string | null>;
-    onSwitch(callback: (project: Project) => void): () => void;
+    onSwitch(callback: (payload: { project: Project; switchId: string }) => void): () => void;
     getSettings(projectId: string): Promise<ProjectSettings>;
     saveSettings(projectId: string, settings: ProjectSettings): Promise<void>;
     detectRunners(projectId: string): Promise<RunCommand[]>;

@@ -764,7 +764,7 @@ const api: ElectronAPI = {
 
     openDialog: () => _typedInvoke(CHANNELS.PROJECT_OPEN_DIALOG),
 
-    onSwitch: (callback: (project: Project) => void) =>
+    onSwitch: (callback: (payload: { project: Project; switchId: string }) => void) =>
       _typedOn(CHANNELS.PROJECT_ON_SWITCH, callback),
 
     getSettings: (projectId: string) => _typedInvoke(CHANNELS.PROJECT_GET_SETTINGS, projectId),

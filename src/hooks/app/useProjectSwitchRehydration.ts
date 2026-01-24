@@ -2,36 +2,66 @@
  * useProjectSwitchRehydration - Handles state re-hydration on project switch.
  *
  * Extracts project switch re-hydration logic from App.tsx.
+ * Uses switchId to prevent stale hydrations from overlapping switches.
  */
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { hydrateAppState } from "../../utils/stateHydration";
 import { isElectronAvailable } from "../useElectron";
 import { projectClient } from "@/clients";
 import { useProjectStore, useTerminalStore } from "@/store";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { panelKindUsesTerminalUi } from "@shared/config/panelKindRegistry";
 import type { HydrationCallbacks } from "./useAppHydration";
 import { useBrowserStateStore } from "@/store/browserStateStore";
 
+interface ProjectSwitchedEventDetail {
+  switchId: string;
+}
+
 export function useProjectSwitchRehydration(callbacks: HydrationCallbacks) {
+  // Track the current switchId to prevent stale hydrations
+  const currentSwitchIdRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (!isElectronAvailable()) {
       return;
     }
 
-    const handleProjectSwitch = async () => {
+    const handleProjectSwitch = async (event: Event) => {
+      const customEvent = event as CustomEvent<ProjectSwitchedEventDetail>;
+      const switchId = customEvent.detail?.switchId;
+
+      // Update the current switchId - any previous hydration is now stale
+      currentSwitchIdRef.current = switchId;
+
       console.log(
-        "[useProjectSwitchRehydration] Received project-switched event, re-hydrating state..."
+        `[useProjectSwitchRehydration] Received project-switched event (switchId: ${switchId}), re-hydrating state...`
       );
+
       try {
-        await hydrateAppState(callbacks);
+        await hydrateAppState(callbacks, switchId, () => currentSwitchIdRef.current === switchId);
+
+        // Check if this hydration is still current before waking terminals
+        if (currentSwitchIdRef.current !== switchId) {
+          console.log(
+            `[useProjectSwitchRehydration] Skipping wake - hydration superseded by newer switch (current: ${currentSwitchIdRef.current}, this: ${switchId})`
+          );
+          return;
+        }
+
         const { terminals, activeDockTerminalId } = useTerminalStore.getState();
         const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId ?? null;
 
         for (const terminal of terminals) {
-          if (!panelKindHasPty(terminal.kind ?? "terminal")) {
+          // Check staleness before each wake to handle rapid switches
+          if (currentSwitchIdRef.current !== switchId) {
+            console.log(`[useProjectSwitchRehydration] Aborting wake loop - switch superseded`);
+            break;
+          }
+
+          if (!panelKindUsesTerminalUi(terminal.kind ?? "terminal")) {
             continue;
           }
 
@@ -42,27 +72,38 @@ export function useProjectSwitchRehydration(callbacks: HydrationCallbacks) {
             terminalInstanceService.wake(terminal.id);
           }
         }
-        console.log("[useProjectSwitchRehydration] State re-hydration complete");
+
+        if (currentSwitchIdRef.current === switchId) {
+          console.log("[useProjectSwitchRehydration] State re-hydration complete");
+        }
       } catch (error) {
         console.error(
           "[useProjectSwitchRehydration] Failed to re-hydrate state after project switch:",
           error
         );
       } finally {
-        useProjectStore.getState().finishProjectSwitch();
+        // Only finish if this is still the current switch
+        if (currentSwitchIdRef.current === switchId) {
+          useProjectStore.getState().finishProjectSwitch();
+        }
       }
     };
 
     window.addEventListener("project-switched", handleProjectSwitch);
 
-    const cleanup = projectClient.onSwitch(() => {
+    const cleanup = projectClient.onSwitch((payload) => {
+      const { project, switchId } = payload;
       console.log(
-        "[useProjectSwitchRehydration] Received PROJECT_ON_SWITCH from main process, re-hydrating..."
+        `[useProjectSwitchRehydration] Received PROJECT_ON_SWITCH from main process (project: ${project.name}, switchId: ${switchId}), re-hydrating...`
       );
       // Clear browser state before hydration for menu-driven switches
       // (renderer-driven switches already reset via resetAllStoresForProjectSwitch)
       useBrowserStateStore.getState().reset();
-      window.dispatchEvent(new CustomEvent("project-switched"));
+      window.dispatchEvent(
+        new CustomEvent<ProjectSwitchedEventDetail>("project-switched", {
+          detail: { switchId },
+        })
+      );
     });
 
     return () => {

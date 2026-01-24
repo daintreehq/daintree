@@ -23,6 +23,8 @@ function getErrorTitle(code: SpawnError["code"]): string {
       return "Invalid Working Directory";
     case "EIO":
       return "PTY Allocation Failed";
+    case "DISCONNECTED":
+      return "Terminal Disconnected";
     default:
       return "Failed to Start Terminal";
   }
@@ -41,6 +43,8 @@ function getErrorDescription(error: SpawnError, cwd?: string): string {
       return `The working directory is not valid: ${cwd || "(unknown)"}`;
     case "EIO":
       return "Failed to allocate a pseudo-terminal. The system may be running low on resources.";
+    case "DISCONNECTED":
+      return "The terminal process is no longer running. Click Retry to start a new session.";
     default:
       return error.message;
   }

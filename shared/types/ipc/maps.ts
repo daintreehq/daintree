@@ -63,7 +63,7 @@ import type { AppState, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
 import type { RetryAction, AppError } from "./errors.js";
 import type { EventRecord, EventFilterOptions } from "./events.js";
-import type { ProjectCloseResult, ProjectStats } from "./project.js";
+import type { ProjectCloseResult, ProjectStats, ProjectSwitchPayload } from "./project.js";
 import type {
   RepositoryStats,
   GitHubCliStatus,
@@ -476,12 +476,12 @@ export interface IpcInvokeMap {
     result: RunCommand[];
   };
   "project:close": {
-    args: [projectId: string];
+    args: [projectId: string, options?: { killTerminals?: boolean }];
     result: ProjectCloseResult;
   };
   "project:reopen": {
     args: [projectId: string];
-    result: void;
+    result: Project;
   };
   "project:get-stats": {
     args: [projectId: string];
@@ -967,7 +967,7 @@ export interface IpcEventMap {
   "event-inspector:event": EventRecord;
 
   // Project events
-  "project:on-switch": Project;
+  "project:on-switch": ProjectSwitchPayload;
 
   // System events
   "system:wake": SystemWakePayload;

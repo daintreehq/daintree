@@ -1,4 +1,5 @@
 import { Menu, dialog, BrowserWindow, shell, app } from "electron";
+import { randomUUID } from "crypto";
 import { projectStore } from "./services/ProjectStore.js";
 import { getWorkspaceClient } from "./services/WorkspaceClient.js";
 import { CHANNELS } from "./ipc/channels.js";
@@ -277,7 +278,11 @@ async function handleDirectoryOpen(
 
     if (!mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
       try {
-        mainWindow.webContents.send(CHANNELS.PROJECT_ON_SWITCH, updatedProject);
+        const switchId = randomUUID();
+        mainWindow.webContents.send(CHANNELS.PROJECT_ON_SWITCH, {
+          project: updatedProject,
+          switchId,
+        });
       } catch {
         // Silently ignore send failures during window disposal.
       }

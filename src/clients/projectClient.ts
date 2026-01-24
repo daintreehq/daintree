@@ -14,7 +14,7 @@ import type {
  * import { projectClient } from "@/clients/projectClient";
  *
  * const projects = await projectClient.getAll();
- * const cleanup = projectClient.onSwitch((project) => console.log(project));
+ * const cleanup = projectClient.onSwitch(({ project, switchId }) => console.log(project, switchId));
  * ```
  */
 export const projectClient = {
@@ -46,7 +46,7 @@ export const projectClient = {
     return window.electron.project.openDialog();
   },
 
-  onSwitch: (callback: (project: Project) => void): (() => void) => {
+  onSwitch: (callback: (payload: { project: Project; switchId: string }) => void): (() => void) => {
     return window.electron.project.onSwitch(callback);
   },
 

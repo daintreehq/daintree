@@ -1,3 +1,13 @@
+import type { Project } from "../domain.js";
+
+/** Payload for project:on-switch event with cancellation token */
+export interface ProjectSwitchPayload {
+  /** The project being switched to */
+  project: Project;
+  /** Unique identifier for this switch operation */
+  switchId: string;
+}
+
 /** Result from project:close operation */
 export interface ProjectCloseResult {
   /** Whether the operation succeeded */

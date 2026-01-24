@@ -3,6 +3,8 @@ import type { ManagedTerminal } from "./types";
 import { INCREMENTAL_RESTORE_CONFIG } from "./types";
 
 const WAKE_RATE_LIMIT_MS = 1000;
+const WAKE_RETRY_DELAY_MS = 100;
+const WAKE_MAX_RETRIES = 10;
 
 export interface WakeManagerDeps {
   getInstance: (id: string) => ManagedTerminal | undefined;
@@ -13,6 +15,7 @@ export interface WakeManagerDeps {
 
 export class TerminalWakeManager {
   private lastWakeTime = new Map<string, number>();
+  private pendingWakes = new Map<string, { retries: number; timeoutId: NodeJS.Timeout }>();
   private deps: WakeManagerDeps;
 
   constructor(deps: WakeManagerDeps) {
@@ -39,7 +42,16 @@ export class TerminalWakeManager {
   }
 
   wake(id: string): void {
+    // Clear any pending retry for this terminal
+    const pending = this.pendingWakes.get(id);
+    if (pending) {
+      clearTimeout(pending.timeoutId);
+      this.pendingWakes.delete(id);
+    }
+
     if (!this.deps.hasInstance(id)) {
+      // Instance doesn't exist yet - schedule a retry
+      this.scheduleWakeRetry(id, 0);
       return;
     }
 
@@ -54,11 +66,50 @@ export class TerminalWakeManager {
     void this.wakeAndRestore(id);
   }
 
+  private scheduleWakeRetry(id: string, retryCount: number): void {
+    if (retryCount >= WAKE_MAX_RETRIES) {
+      console.warn(`[TerminalWakeManager] Giving up on wake for ${id} after ${retryCount} retries`);
+      return;
+    }
+
+    const timeoutId = setTimeout(() => {
+      this.pendingWakes.delete(id);
+
+      if (this.deps.hasInstance(id)) {
+        // Instance now exists, proceed with wake
+        const now = Date.now();
+        const lastWake = this.lastWakeTime.get(id) ?? 0;
+
+        if (now - lastWake >= WAKE_RATE_LIMIT_MS) {
+          this.lastWakeTime.set(id, now);
+          void this.wakeAndRestore(id);
+        }
+      } else {
+        // Still no instance, schedule another retry
+        this.scheduleWakeRetry(id, retryCount + 1);
+      }
+    }, WAKE_RETRY_DELAY_MS);
+
+    this.pendingWakes.set(id, { retries: retryCount, timeoutId });
+  }
+
   clearWakeState(id: string): void {
     this.lastWakeTime.delete(id);
+
+    const pending = this.pendingWakes.get(id);
+    if (pending) {
+      clearTimeout(pending.timeoutId);
+      this.pendingWakes.delete(id);
+    }
   }
 
   dispose(): void {
     this.lastWakeTime.clear();
+
+    // Clear all pending wake retries
+    for (const [, pending] of this.pendingWakes) {
+      clearTimeout(pending.timeoutId);
+    }
+    this.pendingWakes.clear();
   }
 }
