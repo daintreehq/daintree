@@ -14,9 +14,11 @@ export interface GridPanelProps {
   gridCols?: number;
   // Tab support
   tabs?: TabInfo[];
+  groupId?: string;
   onTabClick?: (tabId: string) => void;
   onTabClose?: (tabId: string) => void;
   onAddTab?: () => void;
+  onTabReorder?: (newOrder: string[]) => void;
 }
 
 export function GridPanel({
@@ -26,9 +28,11 @@ export function GridPanel({
   gridPanelCount,
   gridCols,
   tabs,
+  groupId,
   onTabClick,
   onTabClose,
   onAddTab,
+  onTabReorder,
 }: GridPanelProps) {
   const setFocused = useTerminalStore((state) => state.setFocused);
   const trashTerminal = useTerminalStore((state) => state.trashTerminal);
@@ -183,9 +187,11 @@ export function GridPanel({
 
       // Tab support
       tabs,
+      groupId,
       onTabClick,
       onTabClose,
       onAddTab,
+      onTabReorder,
     }),
     [
       terminal,
@@ -199,9 +205,11 @@ export function GridPanel({
       handleTitleChange,
       handleMinimize,
       tabs,
+      groupId,
       onTabClick,
       onTabClose,
       onAddTab,
+      onTabReorder,
     ]
   );
 
@@ -221,9 +229,11 @@ export function GridPanel({
         onTitleChange={handleTitleChange}
         onMinimize={handleMinimize}
         tabs={tabs}
+        groupId={groupId}
         onTabClick={onTabClick}
         onTabClose={onTabClose}
         onAddTab={onAddTab}
+        onTabReorder={onTabReorder}
       >
         <div className="flex flex-1 items-center justify-center bg-canopy-bg-secondary text-canopy-text-muted">
           <div className="text-center">

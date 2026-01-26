@@ -2,6 +2,10 @@ export { ContentPanel } from "./ContentPanel";
 export type { ContentPanelProps, BasePanelProps } from "./ContentPanel";
 export { PanelHeader } from "./PanelHeader";
 export type { PanelHeaderProps } from "./PanelHeader";
+export { TabButton } from "./TabButton";
+export type { TabInfo, TabButtonProps } from "./TabButton";
+export { SortableTabButton } from "./SortableTabButton";
+export type { SortableTabButtonProps } from "./SortableTabButton";
 export {
   TitleEditingProvider,
   useTitleEditing,

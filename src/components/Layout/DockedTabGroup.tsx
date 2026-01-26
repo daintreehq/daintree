@@ -1,6 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { useDndMonitor } from "@dnd-kit/core";
+import {
+  DndContext,
+  useDndMonitor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  PointerSensor,
+  TouchSensor,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import { SortableContext, horizontalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
+import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn, getBaseTitle } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
@@ -19,6 +30,7 @@ import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useDockPanelPortal } from "./DockPanelOffscreenContainer";
 import { TabButton } from "@/components/Panel/TabButton";
+import { SortableTabButton } from "@/components/Panel/SortableTabButton";
 import type { TabGroup } from "@/types";
 
 interface DockedTabGroupProps {
@@ -37,6 +49,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const removePanelFromGroup = useTerminalStore((s) => s.removePanelFromGroup);
   const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
   const hybridInputAutoFocus = useTerminalInputStore((s) => s.hybridInputAutoFocus);
+  const reorderPanelsInGroup = useTerminalStore((s) => s.reorderPanelsInGroup);
 
   // Subscribe to stored active tab for this group
   const storedActiveTabId = useTerminalStore(
@@ -220,6 +233,40 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     [activeTabId, panels, group.id, setActiveTab, setFocused, removePanelFromGroup, trashTerminal]
   );
 
+  // Sensors for tab drag-and-drop (require small distance to differentiate from clicks)
+  const tabSensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 5 },
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 150, tolerance: 5 },
+    })
+  );
+
+  // Tab IDs for sortable context
+  const tabIds = useMemo(() => panels.map((p) => p.id), [panels]);
+
+  // Handle tab reorder drag end
+  const handleTabDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+
+      const oldIndex = panels.findIndex((p) => p.id === active.id);
+      const newIndex = panels.findIndex((p) => p.id === over.id);
+
+      if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
+        const newOrder = arrayMove(
+          panels.map((p) => p.id),
+          oldIndex,
+          newIndex
+        );
+        reorderPanelsInGroup(group.id, newOrder);
+      }
+    },
+    [panels, group.id, reorderPanelsInGroup]
+  );
+
   if (!activePanel || panels.length === 0) {
     return null;
   }
@@ -337,26 +384,35 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
         }}
       >
         {/* Tab bar at top of popover */}
-        <div
-          className="flex items-center border-b border-divider bg-canopy-sidebar shrink-0"
-          role="tablist"
-          aria-label="Dock panel tabs"
+        <DndContext
+          sensors={tabSensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleTabDragEnd}
+          modifiers={[restrictToHorizontalAxis, restrictToParentElement]}
         >
-          {panels.map((panel) => (
-            <TabButton
-              key={panel.id}
-              id={panel.id}
-              title={getBaseTitle(panel.title)}
-              type={panel.type}
-              agentId={panel.agentId}
-              kind={panel.kind ?? "terminal"}
-              agentState={panel.agentState}
-              isActive={panel.id === activeTabId}
-              onClick={() => handleTabClick(panel.id)}
-              onClose={() => handleTabClose(panel.id)}
-            />
-          ))}
-        </div>
+          <SortableContext items={tabIds} strategy={horizontalListSortingStrategy}>
+            <div
+              className="flex items-center border-b border-divider bg-canopy-sidebar shrink-0"
+              role="tablist"
+              aria-label="Dock panel tabs"
+            >
+              {panels.map((panel) => (
+                <SortableTabButton
+                  key={panel.id}
+                  id={panel.id}
+                  title={getBaseTitle(panel.title)}
+                  type={panel.type}
+                  agentId={panel.agentId}
+                  kind={panel.kind ?? "terminal"}
+                  agentState={panel.agentState}
+                  isActive={panel.id === activeTabId}
+                  onClick={() => handleTabClick(panel.id)}
+                  onClose={() => handleTabClose(panel.id)}
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
 
         {/* Portal target - content is rendered in DockPanelOffscreenContainer and portaled here */}
         <div

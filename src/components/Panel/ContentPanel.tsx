@@ -65,9 +65,11 @@ export interface ContentPanelProps extends BasePanelProps {
 
   // Tab support
   tabs?: TabInfo[];
+  groupId?: string;
   onTabClick?: (tabId: string) => void;
   onTabClose?: (tabId: string) => void;
   onAddTab?: () => void;
+  onTabReorder?: (newOrder: string[]) => void;
 }
 
 const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function ContentPanelInner(
@@ -112,9 +114,11 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     isPinged,
     wasJustSelected,
     tabs,
+    groupId,
     onTabClick,
     onTabClose,
     onAddTab,
+    onTabReorder,
   },
   ref
 ) {
@@ -274,9 +278,11 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         headerContent={resolvedHeaderContent}
         headerActions={headerActions}
         tabs={tabs}
+        groupId={groupId}
         onTabClick={onTabClick}
         onTabClose={onTabClose}
         onAddTab={onAddTab}
+        onTabReorder={onTabReorder}
       />
 
       {toolbar}

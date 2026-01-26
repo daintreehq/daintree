@@ -28,6 +28,7 @@ export function GridTabGroup({
   const removePanelFromGroup = useTerminalStore((state) => state.removePanelFromGroup);
   const addTerminal = useTerminalStore((state) => state.addTerminal);
   const addPanelToGroup = useTerminalStore((state) => state.addPanelToGroup);
+  const reorderPanelsInGroup = useTerminalStore((state) => state.reorderPanelsInGroup);
 
   // Subscribe to activeTabByGroup for reactive updates
   const storedActiveTabId = useTerminalStore(
@@ -100,6 +101,14 @@ export function GridTabGroup({
       trashTerminal(tabId);
     },
     [activeTabId, panels, group.id, setActiveTab, setFocused, removePanelFromGroup, trashTerminal]
+  );
+
+  // Handle tab reorder - update group panel order
+  const handleTabReorder = useCallback(
+    (newOrder: string[]) => {
+      reorderPanelsInGroup(group.id, newOrder);
+    },
+    [group.id, reorderPanelsInGroup]
   );
 
   // Handle add tab - duplicate the current panel as a new tab
@@ -189,9 +198,11 @@ export function GridTabGroup({
       gridPanelCount={gridPanelCount}
       gridCols={gridCols}
       tabs={tabs}
+      groupId={group.id}
       onTabClick={handleTabClick}
       onTabClose={handleTabClose}
       onAddTab={handleAddTab}
+      onTabReorder={handleTabReorder}
     />
   );
 }

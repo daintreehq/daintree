@@ -1,4 +1,5 @@
-import React, { useCallback } from "react";
+import React, { useCallback, forwardRef } from "react";
+import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
 import { X } from "lucide-react";
 import type { PanelKind, TerminalType, AgentState } from "@/types";
 import { cn } from "@/lib/utils";
@@ -26,19 +27,26 @@ export interface TabButtonProps {
   isActive: boolean;
   onClick: () => void;
   onClose: () => void;
+  sortableListeners?: DraggableSyntheticListeners;
+  sortableAttributes?: DraggableAttributes;
 }
 
-function TabButtonComponent({
-  id,
-  title,
-  type,
-  agentId,
-  kind,
-  agentState,
-  isActive,
-  onClick,
-  onClose,
-}: TabButtonProps) {
+const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function TabButtonComponent(
+  {
+    id,
+    title,
+    type,
+    agentId,
+    kind,
+    agentState,
+    isActive,
+    onClick,
+    onClose,
+    sortableListeners,
+    sortableAttributes,
+  },
+  ref
+) {
   const handleClose = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
@@ -57,10 +65,21 @@ function TabButtonComponent({
     [onClick]
   );
 
-  const handlePointerDown = useCallback((e: React.PointerEvent) => {
-    // Stop propagation to prevent drag handle from capturing tab interactions
-    e.stopPropagation();
-  }, []);
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      // Stop propagation to prevent panel drag handle from capturing tab interactions
+      // This keeps tab clicks/drags separate from panel drags
+      e.stopPropagation();
+    },
+    []
+  );
+
+  // For sortable tabs, merge attributes but filter out conflicting role/tabIndex
+  const mergedAttributes = sortableAttributes
+    ? Object.fromEntries(
+        Object.entries(sortableAttributes).filter(([key]) => key !== "role" && key !== "tabIndex")
+      )
+    : {};
 
   const handleCloseKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -78,6 +97,7 @@ function TabButtonComponent({
 
   return (
     <div
+      ref={ref}
       role="tab"
       aria-selected={isActive}
       tabIndex={isActive ? 0 : -1}
@@ -94,6 +114,8 @@ function TabButtonComponent({
       )}
       title={title}
       data-tab-id={id}
+      {...mergedAttributes}
+      {...sortableListeners}
     >
       <span className="shrink-0 flex items-center justify-center w-3.5 h-3.5">
         <TerminalIcon
@@ -139,6 +161,6 @@ function TabButtonComponent({
       </button>
     </div>
   );
-}
+});
 
 export const TabButton = React.memo(TabButtonComponent);

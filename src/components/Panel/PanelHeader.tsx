@@ -9,6 +9,17 @@ import {
   Activity,
   Plus,
 } from "lucide-react";
+import {
+  DndContext,
+  closestCenter,
+  useSensor,
+  useSensors,
+  PointerSensor,
+  TouchSensor,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import { SortableContext, horizontalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
+import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import type { PanelKind, TerminalType } from "@/types";
 import { cn, getBaseTitle } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
@@ -17,6 +28,7 @@ import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { useBackgroundPanelStats } from "@/hooks";
 import { TabButton, type TabInfo } from "./TabButton";
+import { SortableTabButton } from "./SortableTabButton";
 
 export interface PanelHeaderProps {
   id: string;
@@ -57,9 +69,11 @@ export interface PanelHeaderProps {
 
   // Tab support
   tabs?: TabInfo[];
+  groupId?: string;
   onTabClick?: (tabId: string) => void;
   onTabClose?: (tabId: string) => void;
   onAddTab?: () => void;
+  onTabReorder?: (newOrder: string[]) => void;
 }
 
 function PanelHeaderComponent({
@@ -91,9 +105,11 @@ function PanelHeaderComponent({
   headerContent,
   headerActions,
   tabs,
+  groupId,
   onTabClick,
   onTabClose,
   onAddTab,
+  onTabReorder,
 }: PanelHeaderProps) {
   const isBrowser = kind === "browser";
   const dragHandle = useDragHandle();
@@ -134,6 +150,39 @@ function PanelHeaderComponent({
 
   const hasTabs = tabs && tabs.length > 1;
   const tabListRef = useRef<HTMLDivElement>(null);
+  const canReorderTabs = hasTabs && !!onTabReorder && !!groupId;
+  const tabIds = tabs?.map((t) => t.id) ?? [];
+
+  // Sensors for tab drag-and-drop (require small distance to differentiate from clicks)
+  const tabSensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 5 },
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 150, tolerance: 5 },
+    })
+  );
+
+  // Handle tab reorder drag end
+  const handleTabDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id || !tabs || !onTabReorder) return;
+
+      const oldIndex = tabs.findIndex((t) => t.id === active.id);
+      const newIndex = tabs.findIndex((t) => t.id === over.id);
+
+      if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
+        const newOrder = arrayMove(
+          tabs.map((t) => t.id),
+          oldIndex,
+          newIndex
+        );
+        onTabReorder(newOrder);
+      }
+    },
+    [tabs, onTabReorder]
+  );
 
   // Arrow key navigation for tabs (standard tablist behavior)
   const handleTabListKeyDown = useCallback(
@@ -195,43 +244,92 @@ function PanelHeaderComponent({
       >
         {/* Tab bar - shown when there are multiple tabs */}
         {hasTabs ? (
-          <div
-            ref={tabListRef}
-            className="flex items-center min-w-0 flex-1 overflow-x-auto scrollbar-none"
-            role="tablist"
-            aria-label="Panel tabs"
-            onKeyDown={handleTabListKeyDown}
-          >
-            {tabs.map((tab) => (
-              <TabButton
-                key={tab.id}
-                id={tab.id}
-                title={getBaseTitle(tab.title)}
-                type={tab.type}
-                agentId={tab.agentId}
-                kind={tab.kind}
-                agentState={tab.agentState}
-                isActive={tab.isActive}
-                onClick={() => onTabClick?.(tab.id)}
-                onClose={() => onTabClose?.(tab.id)}
-              />
-            ))}
-            {onAddTab && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onAddTab();
-                }}
-                onPointerDown={(e) => e.stopPropagation()}
-                className="shrink-0 p-1.5 hover:bg-canopy-text/10 text-canopy-text/40 hover:text-canopy-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
-                title="Duplicate panel as new tab"
-                aria-label="Duplicate panel as new tab"
-                type="button"
-              >
-                <Plus className="w-3 h-3" aria-hidden="true" />
-              </button>
-            )}
-          </div>
+          canReorderTabs ? (
+            <DndContext
+              sensors={tabSensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleTabDragEnd}
+              modifiers={[restrictToHorizontalAxis, restrictToParentElement]}
+            >
+              <SortableContext items={tabIds} strategy={horizontalListSortingStrategy}>
+                <div
+                  ref={tabListRef}
+                  className="flex items-center min-w-0 flex-1 overflow-x-auto scrollbar-none"
+                  role="tablist"
+                  aria-label="Panel tabs"
+                  onKeyDown={handleTabListKeyDown}
+                >
+                  {tabs.map((tab) => (
+                    <SortableTabButton
+                      key={tab.id}
+                      id={tab.id}
+                      title={getBaseTitle(tab.title)}
+                      type={tab.type}
+                      agentId={tab.agentId}
+                      kind={tab.kind}
+                      agentState={tab.agentState}
+                      isActive={tab.isActive}
+                      onClick={() => onTabClick?.(tab.id)}
+                      onClose={() => onTabClose?.(tab.id)}
+                    />
+                  ))}
+                  {onAddTab && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onAddTab();
+                      }}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      className="shrink-0 p-1.5 hover:bg-canopy-text/10 text-canopy-text/40 hover:text-canopy-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
+                      title="Duplicate panel as new tab"
+                      aria-label="Duplicate panel as new tab"
+                      type="button"
+                    >
+                      <Plus className="w-3 h-3" aria-hidden="true" />
+                    </button>
+                  )}
+                </div>
+              </SortableContext>
+            </DndContext>
+          ) : (
+            <div
+              ref={tabListRef}
+              className="flex items-center min-w-0 flex-1 overflow-x-auto scrollbar-none"
+              role="tablist"
+              aria-label="Panel tabs"
+              onKeyDown={handleTabListKeyDown}
+            >
+              {tabs.map((tab) => (
+                <TabButton
+                  key={tab.id}
+                  id={tab.id}
+                  title={getBaseTitle(tab.title)}
+                  type={tab.type}
+                  agentId={tab.agentId}
+                  kind={tab.kind}
+                  agentState={tab.agentState}
+                  isActive={tab.isActive}
+                  onClick={() => onTabClick?.(tab.id)}
+                  onClose={() => onTabClose?.(tab.id)}
+                />
+              ))}
+              {onAddTab && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onAddTab();
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  className="shrink-0 p-1.5 hover:bg-canopy-text/10 text-canopy-text/40 hover:text-canopy-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
+                  title="Duplicate panel as new tab"
+                  aria-label="Duplicate panel as new tab"
+                  type="button"
+                >
+                  <Plus className="w-3 h-3" aria-hidden="true" />
+                </button>
+              )}
+            </div>
+          )
         ) : (
           <div className="flex items-center gap-2 min-w-0">
             <span className="shrink-0 flex items-center justify-center w-3.5 h-3.5 text-canopy-text">
