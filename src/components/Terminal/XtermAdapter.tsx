@@ -163,6 +163,11 @@ function XtermAdapterComponent({
     const container = containerRef.current;
     if (!container) return;
 
+    console.log(`[XtermAdapter] useLayoutEffect running for ${terminalId}`, {
+      containerRect: container.getBoundingClientRect(),
+      containerClientSize: { width: container.clientWidth, height: container.clientHeight },
+    });
+
     const managed = terminalInstanceService.getOrCreate(
       terminalId,
       terminalType,
@@ -172,9 +177,12 @@ function XtermAdapterComponent({
       cwd ? () => cwd : undefined
     );
 
+    console.log(`[XtermAdapter] Got managed instance for ${terminalId}, attaching...`);
+
     terminalInstanceService.setInputLocked(terminalId, !!isInputLocked);
 
     terminalInstanceService.attach(terminalId, container);
+    console.log(`[XtermAdapter] Attached ${terminalId} to container`);
 
     // Force visibility immediately on mount - don't wait for IntersectionObserver.
     // This prevents data from being dropped during the brief window before the observer fires.
@@ -247,6 +255,7 @@ function XtermAdapterComponent({
     onReady?.();
 
     return () => {
+      console.log(`[XtermAdapter] Cleanup/unmount for ${terminalId}`);
       terminalInstanceService.setVisible(terminalId, false);
 
       // Flush pending resizes before unmount

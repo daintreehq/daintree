@@ -193,6 +193,15 @@ export async function hydrateAppState(
 
                 const location = (saved.location === "dock" ? "dock" : "grid") as "grid" | "dock";
 
+                logInfo(`[HYDRATION] Adding terminal from backend:`, {
+                  id: backendTerminal.id,
+                  kind: backendTerminal.kind ?? (agentId ? "agent" : "terminal"),
+                  agentId,
+                  location,
+                  worktreeId: backendTerminal.worktreeId,
+                  title: backendTerminal.title,
+                });
+
                 await addTerminal({
                   kind: backendTerminal.kind ?? (agentId ? "agent" : "terminal"),
                   type: backendTerminal.type,

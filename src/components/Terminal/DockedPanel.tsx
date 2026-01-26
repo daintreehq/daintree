@@ -5,6 +5,13 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { getPanelComponent, type PanelComponentProps } from "@/registry";
 import { ContentPanel, triggerPanelTransition } from "@/components/Panel";
 
+const DEBUG_DOCK = true;
+function dockedPanelLog(message: string, ...args: unknown[]) {
+  if (DEBUG_DOCK) {
+    console.log(`[DockedPanel] ${message}`, ...args);
+  }
+}
+
 export interface DockedPanelProps {
   terminal: TerminalInstance;
   onPopoverClose?: () => void;
@@ -119,6 +126,15 @@ export function DockedPanel({ terminal, onPopoverClose }: DockedPanelProps) {
   // Get the registered component for this panel kind
   const kind = terminal.kind ?? "terminal";
   const registration = getPanelComponent(kind);
+
+  dockedPanelLog("Rendering DockedPanel:", {
+    terminalId: terminal.id,
+    kind,
+    agentId: terminal.agentId,
+    type: terminal.type,
+    title: terminal.title,
+    hasRegistration: !!registration,
+  });
 
   // Build props for the panel component
   const panelProps: PanelComponentProps = useMemo(

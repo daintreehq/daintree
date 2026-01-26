@@ -19,6 +19,13 @@ import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useDockPanelPortal } from "./DockPanelOffscreenContainer";
 
+const DEBUG_DOCK = true;
+function dockItemLog(message: string, ...args: unknown[]) {
+  if (DEBUG_DOCK) {
+    console.log(`[DockedItem] ${message}`, ...args);
+  }
+}
+
 interface DockedTerminalItemProps {
   terminal: TerminalInstance;
 }
@@ -149,18 +156,28 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
 
   // Use callback ref to capture the DOM element when it mounts
   const portalContainerRef = useCallback((node: HTMLDivElement | null) => {
+    dockItemLog("Callback ref called:", { terminalId: terminal.id, hasNode: !!node });
     setPortalContainer(node);
-  }, []);
+  }, [terminal.id]);
 
   // Register/unregister portal target when popover opens and container is available
   useEffect(() => {
+    dockItemLog("Portal registration effect:", {
+      terminalId: terminal.id,
+      isOpen,
+      hasPortalContainer: !!portalContainer,
+    });
+
     if (isOpen && portalContainer) {
+      dockItemLog("Registering portal target for:", terminal.id);
       portalTarget(terminal.id, portalContainer);
     } else {
+      dockItemLog("Unregistering portal target for:", terminal.id, { isOpen, hasContainer: !!portalContainer });
       portalTarget(terminal.id, null);
     }
 
     return () => {
+      dockItemLog("Cleanup: unregistering portal target for:", terminal.id);
       portalTarget(terminal.id, null);
     };
   }, [isOpen, portalContainer, terminal.id, portalTarget]);
