@@ -65,14 +65,11 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
     [onClick]
   );
 
-  const handlePointerDown = useCallback(
-    (e: React.PointerEvent) => {
-      // Stop propagation to prevent panel drag handle from capturing tab interactions
-      // This keeps tab clicks/drags separate from panel drags
-      e.stopPropagation();
-    },
-    []
-  );
+  const handlePointerDown = useCallback((e: React.PointerEvent) => {
+    // Stop propagation to prevent panel drag handle from capturing tab interactions
+    // This keeps tab clicks/drags separate from panel drags
+    e.stopPropagation();
+  }, []);
 
   // For sortable tabs, merge attributes but filter out conflicting role/tabIndex
   const mergedAttributes = sortableAttributes

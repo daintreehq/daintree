@@ -15,11 +15,18 @@ function SortableTabButtonComponent({
   onClose,
   ...tabButtonProps
 }: SortableTabButtonProps) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging, setActivatorNodeRef } =
-    useSortable({
-      id,
-      disabled,
-    });
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+    setActivatorNodeRef,
+  } = useSortable({
+    id,
+    disabled,
+  });
 
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
@@ -29,16 +36,16 @@ function SortableTabButtonComponent({
 
   // Wrap handlers to prevent activation of sortable when clicking or closing
   const handleClick = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation();
+    (e?: React.MouseEvent) => {
+      e?.stopPropagation();
       onClick();
     },
     [onClick]
   );
 
   const handleClose = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation();
+    (e?: React.MouseEvent) => {
+      e?.stopPropagation();
       onClose();
     },
     [onClose]

@@ -29,7 +29,6 @@ import { TerminalRefreshTier } from "@/types";
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useDockPanelPortal } from "./DockPanelOffscreenContainer";
-import { TabButton } from "@/components/Panel/TabButton";
 import { SortableTabButton } from "@/components/Panel/SortableTabButton";
 import type { TabGroup } from "@/types";
 
