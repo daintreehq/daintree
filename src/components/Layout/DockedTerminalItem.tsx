@@ -10,7 +10,6 @@ import {
   useSidecarStore,
   type TerminalInstance,
 } from "@/store";
-import { DockedPanel } from "@/components/Terminal/DockedPanel";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { getTerminalFocusTarget } from "@/components/Terminal/terminalFocus";
@@ -18,6 +17,7 @@ import { STATE_ICONS, STATE_COLORS } from "@/components/Worktree/terminalStateCo
 import { TerminalRefreshTier } from "@/types";
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { useDockPanelPortal } from "./DockPanelOffscreenContainer";
 
 interface DockedTerminalItemProps {
   terminal: TerminalInstance;
@@ -144,6 +144,27 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     },
   });
 
+  const portalTarget = useDockPanelPortal();
+
+  // Use callback ref to avoid race conditions with popover mount timing
+  const portalContainerRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      if (node && isOpen) {
+        portalTarget(terminal.id, node);
+      } else if (!isOpen) {
+        portalTarget(terminal.id, null);
+      }
+    },
+    [isOpen, terminal.id, portalTarget]
+  );
+
+  // Cleanup on unmount to prevent portaling into detached nodes
+  useEffect(() => {
+    return () => {
+      portalTarget(terminal.id, null);
+    };
+  }, [terminal.id, portalTarget]);
+
   const handleOpenChange = useCallback(
     (open: boolean) => {
       if (open) {
@@ -158,10 +179,6 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     },
     [terminal.id, openDockTerminal, closeDockTerminal]
   );
-
-  const handlePopoverClose = useCallback(() => {
-    closeDockTerminal();
-  }, [closeDockTerminal]);
 
   const isWorking = terminal.agentState === "working";
   const isRunning = terminal.agentState === "running";
@@ -279,7 +296,12 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
           setTimeout(() => terminalInstanceService.focus(terminal.id), 50);
         }}
       >
-        <DockedPanel terminal={terminal} onPopoverClose={handlePopoverClose} />
+        {/* Portal target - content is rendered in DockPanelOffscreenContainer and portaled here */}
+        <div
+          ref={portalContainerRef}
+          className="w-full h-full flex flex-col"
+          data-dock-portal-target={terminal.id}
+        />
       </PopoverContent>
     </Popover>
   );

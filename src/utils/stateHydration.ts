@@ -171,7 +171,8 @@ export async function hydrateAppState(
                     ? backendTerminal.type
                     : undefined);
 
-                // If kind is "agent" but agentId is missing, infer from title
+                // If kind is "agent" but agentId is missing, try to infer from title
+                // Only set a default if we can confidently match, otherwise leave undefined
                 if (!agentId && backendTerminal.kind === "agent") {
                   const titleLower = (backendTerminal.title ?? "").toLowerCase();
                   if (titleLower.includes("claude")) {
@@ -183,9 +184,9 @@ export async function hydrateAppState(
                   } else if (titleLower.includes("opencode")) {
                     agentId = "opencode";
                   } else {
-                    agentId = "claude"; // Default
-                    logInfo(
-                      `Backend agent terminal ${backendTerminal.id} missing agentId, defaulting to claude`
+                    // Don't force a default - leave undefined if we can't match
+                    logWarn(
+                      `Backend agent terminal ${backendTerminal.id} missing agentId and title doesn't match known agents: "${backendTerminal.title}"`
                     );
                   }
                 }
@@ -311,7 +312,8 @@ export async function hydrateAppState(
                           ? saved.type
                           : undefined);
 
-                    // If kind is "agent" but agentId is missing, infer from title
+                    // If kind is "agent" but agentId is missing, try to infer from title
+                    // Only set if we can confidently match, otherwise leave undefined
                     const reconnectedKind = reconnectedTerminal.kind ?? saved.kind;
                     if (!agentId && reconnectedKind === "agent") {
                       const title = reconnectedTerminal.title ?? saved.title ?? "";
@@ -325,9 +327,9 @@ export async function hydrateAppState(
                       } else if (titleLower.includes("opencode")) {
                         agentId = "opencode";
                       } else {
-                        agentId = "claude"; // Default
-                        logInfo(
-                          `Reconnected agent panel ${saved.id} missing agentId, defaulting to claude`
+                        // Don't force a default - leave undefined if we can't match
+                        logWarn(
+                          `Reconnected agent panel ${saved.id} missing agentId and title doesn't match known agents: "${title}"`
                         );
                       }
                     }
@@ -369,6 +371,8 @@ export async function hydrateAppState(
 
                     // If kind is "agent" but we couldn't determine agentId, try to infer from title
                     // This handles cases where agentId wasn't persisted (legacy data or bug)
+                    // WARNING: For respawn path, only set agentId if we can confidently match
+                    // Otherwise we'll regenerate the wrong command
                     if (!effectiveAgentId && kind === "agent") {
                       const titleLower = (saved.title ?? "").toLowerCase();
                       if (titleLower.includes("claude")) {
@@ -380,10 +384,10 @@ export async function hydrateAppState(
                       } else if (titleLower.includes("opencode")) {
                         effectiveAgentId = "opencode";
                       } else {
-                        // Default to claude as most common agent
-                        effectiveAgentId = "claude";
-                        logInfo(
-                          `Agent panel ${saved.id} missing agentId, defaulting to claude`
+                        // Don't force a default for respawn - we'll generate wrong command
+                        // Keep kind as "terminal" instead
+                        logWarn(
+                          `Agent panel ${saved.id} missing agentId and title doesn't match known agents: "${saved.title}" - respawning as terminal`
                         );
                       }
                     }
@@ -480,7 +484,8 @@ export async function hydrateAppState(
                 terminal.agentId ??
                 (terminal.type && isRegisteredAgent(terminal.type) ? terminal.type : undefined);
 
-              // If kind is "agent" but agentId is missing, infer from title
+              // If kind is "agent" but agentId is missing, try to infer from title
+              // Only set if we can confidently match, otherwise leave undefined
               if (!agentId && terminal.kind === "agent") {
                 const titleLower = (terminal.title ?? "").toLowerCase();
                 if (titleLower.includes("claude")) {
@@ -492,9 +497,9 @@ export async function hydrateAppState(
                 } else if (titleLower.includes("opencode")) {
                   agentId = "opencode";
                 } else {
-                  agentId = "claude"; // Default
-                  logInfo(
-                    `Orphaned agent terminal ${terminal.id} missing agentId, defaulting to claude`
+                  // Don't force a default - leave undefined if we can't match
+                  logWarn(
+                    `Orphaned agent terminal ${terminal.id} missing agentId and title doesn't match known agents: "${terminal.title}"`
                   );
                 }
               }
