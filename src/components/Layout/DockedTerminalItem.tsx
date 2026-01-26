@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useDndMonitor } from "@dnd-kit/core";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -145,25 +145,25 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   });
 
   const portalTarget = useDockPanelPortal();
+  const [portalContainer, setPortalContainer] = useState<HTMLDivElement | null>(null);
 
-  // Use callback ref to avoid race conditions with popover mount timing
-  const portalContainerRef = useCallback(
-    (node: HTMLDivElement | null) => {
-      if (node && isOpen) {
-        portalTarget(terminal.id, node);
-      } else if (!isOpen) {
-        portalTarget(terminal.id, null);
-      }
-    },
-    [isOpen, terminal.id, portalTarget]
-  );
+  // Use callback ref to capture the DOM element when it mounts
+  const portalContainerRef = useCallback((node: HTMLDivElement | null) => {
+    setPortalContainer(node);
+  }, []);
 
-  // Cleanup on unmount to prevent portaling into detached nodes
+  // Register/unregister portal target when popover opens and container is available
   useEffect(() => {
+    if (isOpen && portalContainer) {
+      portalTarget(terminal.id, portalContainer);
+    } else {
+      portalTarget(terminal.id, null);
+    }
+
     return () => {
       portalTarget(terminal.id, null);
     };
-  }, [terminal.id, portalTarget]);
+  }, [isOpen, portalContainer, terminal.id, portalTarget]);
 
   const handleOpenChange = useCallback(
     (open: boolean) => {

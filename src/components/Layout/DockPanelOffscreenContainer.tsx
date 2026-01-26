@@ -1,4 +1,12 @@
-import { useEffect, createContext, useContext, useCallback, useState, useRef } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  createContext,
+  useContext,
+  useCallback,
+  useState,
+  useRef,
+} from "react";
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { useTerminalStore, useWorktreeSelectionStore } from "@/store";
@@ -23,7 +31,11 @@ interface DockPanelOffscreenContainerProps {
 }
 
 export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenContainerProps) {
-  const portalTargetsRef = useRef(new Map<string, HTMLElement>());
+  // Track portal targets (popover containers) for each terminal
+  const [portalTargets, setPortalTargets] = useState<Map<string, HTMLElement>>(new Map());
+  // Track offscreen slots (stable DOM elements in the hidden container)
+  const offscreenSlotsRef = useRef<Map<string, HTMLElement>>(new Map());
+  const offscreenContainerRef = useRef<HTMLDivElement>(null);
   const [, forceUpdate] = useState(0);
 
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
@@ -44,42 +56,68 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
     closeDockTerminal();
   }, [closeDockTerminal]);
 
-  const offscreenContainerRef = useRef<HTMLDivElement>(null);
+  // Create offscreen slots eagerly after container mounts
+  // This ensures slots exist before terminals try to portal to them
+  useLayoutEffect(() => {
+    if (!offscreenContainerRef.current) return;
 
-  // Cleanup portal targets and DOM nodes for removed terminals
+    const container = offscreenContainerRef.current;
+    const currentIds = new Set(dockTerminals.map((t) => t.id));
+
+    // Create slots for new terminals
+    for (const terminal of dockTerminals) {
+      if (!offscreenSlotsRef.current.has(terminal.id)) {
+        const slot = document.createElement("div");
+        slot.setAttribute("data-offscreen-slot", terminal.id);
+        slot.className = "offscreen-panel-slot";
+        slot.style.width = "100%";
+        slot.style.height = "100%";
+        container.appendChild(slot);
+        offscreenSlotsRef.current.set(terminal.id, slot);
+      }
+    }
+
+    // Remove slots for removed terminals
+    for (const [id, slot] of offscreenSlotsRef.current) {
+      if (!currentIds.has(id)) {
+        slot.remove();
+        offscreenSlotsRef.current.delete(id);
+      }
+    }
+
+    // Force update to ensure portals render with new slots
+    forceUpdate((n) => n + 1);
+  }, [dockTerminals]);
+
+  // Cleanup portal targets for removed terminals
   useEffect(() => {
     const currentIds = new Set(dockTerminals.map((t) => t.id));
-    const targetsToRemove: string[] = [];
-
-    portalTargetsRef.current.forEach((_, id) => {
-      if (!currentIds.has(id)) {
-        targetsToRemove.push(id);
-      }
-    });
-
-    if (targetsToRemove.length > 0) {
-      targetsToRemove.forEach((id) => {
-        portalTargetsRef.current.delete(id);
-        // Also remove the offscreen slot DOM node
-        const slot = document.querySelector(`[data-offscreen-slot="${id}"]`);
-        if (slot) {
-          slot.remove();
+    setPortalTargets((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const id of prev.keys()) {
+        if (!currentIds.has(id)) {
+          next.delete(id);
+          changed = true;
         }
-      });
-      forceUpdate((n) => n + 1);
-    }
+      }
+      return changed ? next : prev;
+    });
   }, [dockTerminals]);
 
   const portalTarget = useCallback((terminalId: string, target: HTMLElement | null) => {
-    const prev = portalTargetsRef.current.get(terminalId);
-    if (prev === target) return;
+    setPortalTargets((prev) => {
+      const prevTarget = prev.get(terminalId);
+      if (prevTarget === target) return prev;
 
-    if (target) {
-      portalTargetsRef.current.set(terminalId, target);
-    } else {
-      portalTargetsRef.current.delete(terminalId);
-    }
-    forceUpdate((n) => n + 1);
+      const next = new Map(prev);
+      if (target) {
+        next.set(terminalId, target);
+      } else {
+        next.delete(terminalId);
+      }
+      return next;
+    });
   }, []);
 
   const contextValue: DockPanelContextValue = {
@@ -106,47 +144,36 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
           visibility: "hidden",
         }}
         aria-hidden="true"
-      >
-        {dockTerminals.map((terminal) => {
-          const target = portalTargetsRef.current.get(terminal.id);
+      />
 
-          // Always use portal to avoid remounting when switching between offscreen and popover
-          // If no target is set, portal to a stable slot in the offscreen container
-          const portalContainer =
-            target ||
-            (() => {
-              // Create or get stable offscreen slot for this terminal
-              let slot = document.querySelector(`[data-offscreen-slot="${terminal.id}"]`);
-              if (!slot && offscreenContainerRef.current) {
-                slot = document.createElement("div");
-                slot.setAttribute("data-offscreen-slot", terminal.id);
-                slot.className = "offscreen-panel-slot";
-                offscreenContainerRef.current.appendChild(slot);
-              }
-              return slot;
-            })();
+      {/* Render panels via portal - ALWAYS use portal to avoid unmount/remount */}
+      {dockTerminals.map((terminal) => {
+        // Use popover target if available, otherwise use offscreen slot
+        const target = portalTargets.get(terminal.id);
+        const offscreenSlot = offscreenSlotsRef.current.get(terminal.id);
+        const portalContainer = target || offscreenSlot;
 
-          const content = (
-            <div
-              key={terminal.id}
-              data-dock-panel-id={terminal.id}
-              className="dock-panel-slot"
-              style={{
-                width: "100%",
-                height: "100%",
-                display: "flex",
-                flexDirection: "column",
-              }}
-            >
-              <DockedPanel terminal={terminal} onPopoverClose={handlePopoverClose} />
-            </div>
-          );
+        // Skip if no container yet (will render on next update after slots are created)
+        if (!portalContainer) return null;
 
-          return portalContainer
-            ? createPortal(content, portalContainer, `dock-panel-${terminal.id}`)
-            : null;
-        })}
-      </div>
+        const content = (
+          <div
+            data-dock-panel-id={terminal.id}
+            className="dock-panel-slot"
+            style={{
+              width: "100%",
+              height: "100%",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            <DockedPanel terminal={terminal} onPopoverClose={handlePopoverClose} />
+          </div>
+        );
+
+        // Always use createPortal with same key to prevent unmount/remount
+        return createPortal(content, portalContainer, `dock-panel-${terminal.id}`);
+      })}
     </DockPanelContext.Provider>
   );
 }
