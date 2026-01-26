@@ -73,6 +73,9 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     };
   }, [sidecarOpen, sidecarWidth]);
 
+  // Track if we've executed the pending command for this terminal
+  const commandExecutedRef = useRef(false);
+
   // Toggle buffering based on popover open state
   useEffect(() => {
     let cancelled = false;
@@ -130,6 +133,27 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
 
             dockItemLog("Applying VISIBLE renderer policy for:", terminal.id);
             terminalInstanceService.applyRendererPolicy(terminal.id, TerminalRefreshTier.VISIBLE);
+
+            // Execute pending command for agent terminals that haven't started yet
+            // This handles the case where docked agents skip command execution during hydration
+            if (
+              !commandExecutedRef.current &&
+              terminal.kind === "agent" &&
+              terminal.command &&
+              (!terminal.agentState || terminal.agentState === "idle")
+            ) {
+              dockItemLog("Executing pending command for:", terminal.id, terminal.command);
+              commandExecutedRef.current = true;
+              // Small delay to ensure terminal is ready to receive input
+              await new Promise((resolve) => setTimeout(resolve, 100));
+              if (cancelled) return;
+              try {
+                await terminalClient.write(terminal.id, `${terminal.command}\r`);
+                dockItemLog("Command executed successfully for:", terminal.id);
+              } catch (writeError) {
+                console.warn(`Failed to execute command for terminal ${terminal.id}:`, writeError);
+              }
+            }
           }
         } else {
           if (!cancelled) {
@@ -150,7 +174,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     return () => {
       cancelled = true;
     };
-  }, [isOpen, terminal.id]);
+  }, [isOpen, terminal.id, terminal.kind, terminal.command, terminal.agentState]);
 
   // Auto-close popover when drag starts for this terminal
   useDndMonitor({

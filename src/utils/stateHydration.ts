@@ -447,7 +447,9 @@ export async function hydrateAppState(
                       // Don't reuse ID on timeout - could kill a slow-to-respond live session
                       requestedId: reconnectTimedOut ? undefined : saved.id,
                       command: isAgentPanel ? command : undefined,
-                      skipCommandExecution: isAgentPanel, // Don't auto-execute agent commands
+                      // Only skip command execution for docked agents (saves resources)
+                      // Grid agents should start immediately so user sees them running
+                      skipCommandExecution: isAgentPanel && location === "dock",
                       isInputLocked: saved.isInputLocked,
                       devCommand: isDevPreview ? command : undefined,
                       browserUrl: isDevPreview ? saved.browserUrl : undefined,
