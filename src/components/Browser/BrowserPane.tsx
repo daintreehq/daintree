@@ -1,18 +1,12 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { AlertTriangle, ExternalLink, Home } from "lucide-react";
-import { useTerminalStore, useBrowserStateStore } from "@/store";
+import { useTerminalStore, useBrowserStateStore, type BrowserHistory } from "@/store";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { BrowserToolbar } from "./BrowserToolbar";
 import { normalizeBrowserUrl, extractHostPort, isValidBrowserUrl } from "./browserUtils";
 import { actionService } from "@/services/ActionService";
 import { useIsDragging } from "@/components/DragDrop";
 import { cn } from "@/lib/utils";
-
-interface BrowserHistory {
-  past: string[];
-  present: string;
-  future: string[];
-}
 
 export interface BrowserPaneProps extends BasePanelProps {
   initialUrl: string;
@@ -43,10 +37,12 @@ export function BrowserPane({
   // Initialize history from persisted state or initialUrl
   const [history, setHistory] = useState<BrowserHistory>(() => {
     const savedState = useBrowserStateStore.getState().getState(id);
-    if (savedState) {
+    if (savedState?.history) {
+      // Use stored history.present if available, otherwise fall back to url
+      const present = savedState.history.present || savedState.url || initialUrl;
       return {
         past: savedState.history.past,
-        present: savedState.url,
+        present,
         future: savedState.history.future,
       };
     }
@@ -86,13 +82,10 @@ export function BrowserPane({
   // Persist state changes (debounced via effect cleanup)
   useEffect(() => {
     const timeoutId = setTimeout(() => {
-      updateBrowserUrl(id, currentUrl, {
-        past: history.past,
-        future: history.future,
-      });
+      updateBrowserUrl(id, currentUrl, history);
     }, 300);
     return () => clearTimeout(timeoutId);
-  }, [id, currentUrl, history.past, history.future, updateBrowserUrl]);
+  }, [id, currentUrl, history, updateBrowserUrl]);
 
   // Apply zoom level when it changes or webview becomes ready
   useEffect(() => {

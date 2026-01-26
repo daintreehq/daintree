@@ -3,6 +3,7 @@ import { persist, createJSONStorage } from "zustand/middleware";
 
 export interface BrowserHistory {
   past: string[];
+  present: string;
   future: string[];
 }
 
@@ -79,7 +80,7 @@ const createBrowserStateStore: StateCreator<BrowserStateState & BrowserStateActi
         [key]: {
           ...s.panelStates[key],
           url: s.panelStates[key]?.url ?? "",
-          history: s.panelStates[key]?.history ?? { past: [], future: [] },
+          history: s.panelStates[key]?.history ?? { past: [], present: "", future: [] },
           zoomFactor,
         },
       },

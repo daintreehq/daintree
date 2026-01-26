@@ -262,10 +262,10 @@ describe("hydrateAppState", () => {
     );
   });
 
-  it("rehydrates agent panels with disconnected error when not found in backend", async () => {
+  it("silently respawns agent panels when not found in backend", async () => {
     // When an agent terminal can't be reconnected (not found in backend),
-    // we don't auto-respawn to avoid re-executing commands.
-    // Instead, we create a placeholder with DISCONNECTED error state.
+    // we silently respawn it with a fresh session instead of showing errors.
+    // The command is regenerated from current agent settings (no old prompt).
     appClientMock.hydrate.mockResolvedValue({
       appState: {
         terminals: [
@@ -305,25 +305,25 @@ describe("hydrateAppState", () => {
       openDiagnosticsDock,
     });
 
-    // Agent terminals use existingId (no spawn) and get DISCONNECTED error
+    // Agent terminals respawn with requestedId (fresh session)
     expect(addTerminal).toHaveBeenCalledTimes(1);
     const callArgs = addTerminal.mock.calls[0][0];
 
-    // Assert existingId is used (placeholder mode)
-    expect(callArgs).toHaveProperty("existingId", "agent-1");
-    // Assert requestedId is NOT used (no respawn)
-    expect(callArgs).not.toHaveProperty("requestedId");
+    // Assert requestedId is used (respawn mode)
+    expect(callArgs).toHaveProperty("requestedId", "agent-1");
+    // Assert existingId is NOT used (not reconnecting)
+    expect(callArgs).not.toHaveProperty("existingId");
 
-    // Verify command is regenerated (doesn't include old prompt)
+    // Verify command is regenerated from settings (doesn't include old prompt)
     expect(callArgs.command).toBe("claude --model sonnet-4");
     expect(callArgs.command).not.toContain("-p");
     expect(callArgs.command).not.toContain("Old prompt");
 
-    // Verify DISCONNECTED error was set
-    expect(setSpawnErrorMock).toHaveBeenCalledWith("agent-1", {
-      code: "DISCONNECTED",
-      message: expect.stringContaining("Agent session was lost"),
-    });
+    // Verify skipCommandExecution is set (agent commands not auto-executed)
+    expect(callArgs.skipCommandExecution).toBe(true);
+
+    // Verify NO DISCONNECTED error was set (silent respawn)
+    expect(setSpawnErrorMock).not.toHaveBeenCalled();
   });
 
   it("reconnects via fallback when getForProject misses the terminal but reconnect finds it", async () => {

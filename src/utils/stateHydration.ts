@@ -5,16 +5,9 @@ import {
   useScrollbackStore,
   usePerformanceModeStore,
   useTerminalInputStore,
-  useTerminalStore,
 } from "@/store";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
-import type {
-  TerminalType,
-  AgentState,
-  TerminalKind,
-  SpawnError,
-  TerminalReconnectError,
-} from "@/types";
+import type { TerminalType, AgentState, TerminalKind, TerminalReconnectError } from "@/types";
 import { keybindingService } from "@/services/KeybindingService";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { generateAgentFlags } from "@shared/types";
@@ -172,11 +165,30 @@ export async function hydrateAppState(
                 const cwd = backendTerminal.cwd || projectRoot || "";
                 const currentAgentState = backendTerminal.agentState;
                 const backendLastStateChange = backendTerminal.lastStateChange;
-                const agentId =
+                let agentId =
                   backendTerminal.agentId ??
                   (backendTerminal.type && isRegisteredAgent(backendTerminal.type)
                     ? backendTerminal.type
                     : undefined);
+
+                // If kind is "agent" but agentId is missing, infer from title
+                if (!agentId && backendTerminal.kind === "agent") {
+                  const titleLower = (backendTerminal.title ?? "").toLowerCase();
+                  if (titleLower.includes("claude")) {
+                    agentId = "claude";
+                  } else if (titleLower.includes("gemini")) {
+                    agentId = "gemini";
+                  } else if (titleLower.includes("codex")) {
+                    agentId = "codex";
+                  } else if (titleLower.includes("opencode")) {
+                    agentId = "opencode";
+                  } else {
+                    agentId = "claude"; // Default
+                    logInfo(
+                      `Backend agent terminal ${backendTerminal.id} missing agentId, defaulting to claude`
+                    );
+                  }
+                }
 
                 const location = (saved.location === "dock" ? "dock" : "grid") as "grid" | "dock";
 
@@ -290,7 +302,7 @@ export async function hydrateAppState(
                     const cwd = reconnectedTerminal.cwd || saved.cwd || projectRoot || "";
                     const currentAgentState = reconnectedTerminal.agentState;
                     const backendLastStateChange = reconnectedTerminal.lastStateChange;
-                    const agentId =
+                    let agentId =
                       reconnectedTerminal.agentId ??
                       saved.agentId ??
                       (reconnectedTerminal.type && isRegisteredAgent(reconnectedTerminal.type)
@@ -299,8 +311,29 @@ export async function hydrateAppState(
                           ? saved.type
                           : undefined);
 
+                    // If kind is "agent" but agentId is missing, infer from title
+                    const reconnectedKind = reconnectedTerminal.kind ?? saved.kind;
+                    if (!agentId && reconnectedKind === "agent") {
+                      const title = reconnectedTerminal.title ?? saved.title ?? "";
+                      const titleLower = title.toLowerCase();
+                      if (titleLower.includes("claude")) {
+                        agentId = "claude";
+                      } else if (titleLower.includes("gemini")) {
+                        agentId = "gemini";
+                      } else if (titleLower.includes("codex")) {
+                        agentId = "codex";
+                      } else if (titleLower.includes("opencode")) {
+                        agentId = "opencode";
+                      } else {
+                        agentId = "claude"; // Default
+                        logInfo(
+                          `Reconnected agent panel ${saved.id} missing agentId, defaulting to claude`
+                        );
+                      }
+                    }
+
                     await addTerminal({
-                      kind: reconnectedTerminal.kind ?? (agentId ? "agent" : "terminal"),
+                      kind: reconnectedKind ?? (agentId ? "agent" : "terminal"),
                       type: reconnectedTerminal.type ?? saved.type,
                       agentId,
                       title: reconnectedTerminal.title ?? saved.title,
@@ -330,9 +363,31 @@ export async function hydrateAppState(
                     }
                   } else {
                     // Terminal doesn't exist in backend or timed out - respawn
-                    const effectiveAgentId =
+                    let effectiveAgentId =
                       saved.agentId ??
                       (saved.type && isRegisteredAgent(saved.type) ? saved.type : undefined);
+
+                    // If kind is "agent" but we couldn't determine agentId, try to infer from title
+                    // This handles cases where agentId wasn't persisted (legacy data or bug)
+                    if (!effectiveAgentId && kind === "agent") {
+                      const titleLower = (saved.title ?? "").toLowerCase();
+                      if (titleLower.includes("claude")) {
+                        effectiveAgentId = "claude";
+                      } else if (titleLower.includes("gemini")) {
+                        effectiveAgentId = "gemini";
+                      } else if (titleLower.includes("codex")) {
+                        effectiveAgentId = "codex";
+                      } else if (titleLower.includes("opencode")) {
+                        effectiveAgentId = "opencode";
+                      } else {
+                        // Default to claude as most common agent
+                        effectiveAgentId = "claude";
+                        logInfo(
+                          `Agent panel ${saved.id} missing agentId, defaulting to claude`
+                        );
+                      }
+                    }
+
                     const isAgentPanel = kind === "agent" || Boolean(effectiveAgentId);
                     const agentId = effectiveAgentId;
                     let command = saved.command?.trim() || undefined;
@@ -352,80 +407,28 @@ export async function hydrateAppState(
                     const respawnKind = isAgentPanel ? "agent" : kind;
                     const isDevPreview = kind === "dev-preview";
 
-                    if (isAgentPanel) {
-                      // For agent terminals, don't auto-respawn as it could re-execute commands.
-                      // Instead, create a placeholder terminal with DISCONNECTED error state.
-                      // User can manually retry to start a fresh session.
-                      logWarn(`Agent terminal ${saved.id} disconnected - showing error state`);
+                    // Silently spawn a fresh session for all terminal types
+                    // No error messages - just start fresh
+                    logInfo(
+                      `Respawning PTY panel: ${saved.id} (${isAgentPanel ? "agent" : "terminal"})`
+                    );
 
-                      // Add terminal with existingId to create entry without spawning
-                      await addTerminal({
-                        kind: respawnKind,
-                        type: saved.type,
-                        agentId,
-                        title: saved.title,
-                        cwd: saved.cwd || projectRoot || "",
-                        worktreeId: saved.worktreeId,
-                        location,
-                        existingId: saved.id,
-                        command,
-                        isInputLocked: saved.isInputLocked,
-                      });
-
-                      // Set the DISCONNECTED error to show error UI
-                      const disconnectedError: SpawnError = {
-                        code: "DISCONNECTED",
-                        message:
-                          "Agent session was lost during project switch. Click Retry to start a new session.",
-                      };
-                      useTerminalStore.getState().setSpawnError(saved.id, disconnectedError);
-                    } else {
-                      // For regular terminals, respawn as before
-                      logInfo(`Respawning PTY panel: ${saved.id}`);
-
-                      const respawnedId = await addTerminal({
-                        kind: respawnKind,
-                        type: saved.type,
-                        agentId,
-                        title: saved.title,
-                        cwd: saved.cwd || projectRoot || "",
-                        worktreeId: saved.worktreeId,
-                        location,
-                        // Don't reuse ID on timeout - could kill a slow-to-respond live session
-                        requestedId: reconnectTimedOut ? undefined : saved.id,
-                        command,
-                        isInputLocked: saved.isInputLocked,
-                        devCommand: isDevPreview ? command : undefined,
-                        browserUrl: isDevPreview ? saved.browserUrl : undefined,
-                      });
-
-                      // Set error state on the respawned terminal based on what happened
-                      if (options.setReconnectError) {
-                        if (reconnectTimedOut) {
-                          options.setReconnectError(respawnedId, {
-                            message: `Terminal reconnection timed out after ${RECONNECT_TIMEOUT_MS / 1000}s. A new session was started.`,
-                            type: "timeout",
-                            timestamp: Date.now(),
-                            context: {
-                              terminalId: saved.id,
-                              timeoutMs: RECONNECT_TIMEOUT_MS,
-                            },
-                          });
-                        } else if (reconnectedTerminal && !reconnectedTerminal.exists) {
-                          // Terminal doesn't exist in backend - not found
-                          options.setReconnectError(respawnedId, {
-                            message:
-                              reconnectedTerminal.error ||
-                              "Previous terminal session not found. A new session was started.",
-                            type: "not_found",
-                            timestamp: Date.now(),
-                            context: {
-                              terminalId: saved.id,
-                            },
-                          });
-                        }
-                      }
-                    }
+                    await addTerminal({
+                      kind: respawnKind,
+                      type: saved.type,
+                      agentId,
+                      title: saved.title,
+                      cwd: saved.cwd || projectRoot || "",
+                      worktreeId: saved.worktreeId,
+                      location,
+                      // Don't reuse ID on timeout - could kill a slow-to-respond live session
+                      requestedId: reconnectTimedOut ? undefined : saved.id,
+                      command: isAgentPanel ? command : undefined,
+                      skipCommandExecution: isAgentPanel, // Don't auto-execute agent commands
+                      isInputLocked: saved.isInputLocked,
+                      devCommand: isDevPreview ? command : undefined,
+                      browserUrl: isDevPreview ? saved.browserUrl : undefined,
+                    });
                   }
                 } else {
                   logInfo(`Recreating ${kind} panel: ${saved.id}`);
@@ -473,9 +476,28 @@ export async function hydrateAppState(
               const cwd = terminal.cwd || projectRoot || "";
               const currentAgentState = terminal.agentState;
               const backendLastStateChange = terminal.lastStateChange;
-              const agentId =
+              let agentId =
                 terminal.agentId ??
                 (terminal.type && isRegisteredAgent(terminal.type) ? terminal.type : undefined);
+
+              // If kind is "agent" but agentId is missing, infer from title
+              if (!agentId && terminal.kind === "agent") {
+                const titleLower = (terminal.title ?? "").toLowerCase();
+                if (titleLower.includes("claude")) {
+                  agentId = "claude";
+                } else if (titleLower.includes("gemini")) {
+                  agentId = "gemini";
+                } else if (titleLower.includes("codex")) {
+                  agentId = "codex";
+                } else if (titleLower.includes("opencode")) {
+                  agentId = "opencode";
+                } else {
+                  agentId = "claude"; // Default
+                  logInfo(
+                    `Orphaned agent terminal ${terminal.id} missing agentId, defaulting to claude`
+                  );
+                }
+              }
 
               await addTerminal({
                 kind: terminal.kind ?? (agentId ? "agent" : "terminal"),

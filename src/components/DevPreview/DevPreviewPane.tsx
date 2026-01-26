@@ -12,15 +12,10 @@ import {
   useProjectStore,
   useTerminalStore,
   useWorktreeSelectionStore,
+  type BrowserHistory,
 } from "@/store";
 import { panelKindKeepsAliveOnProjectSwitch } from "@shared/config/panelKindRegistry";
 import type { DevPreviewStatus } from "@shared/types/ipc/devPreview";
-
-interface BrowserHistory {
-  past: string[];
-  present: string;
-  future: string[];
-}
 
 const STATUS_STYLES: Record<DevPreviewStatus, { label: string; dot: string; text: string }> = {
   installing: {
@@ -140,9 +135,7 @@ export function DevPreviewPane({
       }
       if (savedState.zoomFactor !== undefined) {
         const savedZoom = savedState.zoomFactor;
-        setZoomFactor(
-          Number.isFinite(savedZoom) ? Math.max(0.25, Math.min(2.0, savedZoom)) : 1.0
-        );
+        setZoomFactor(Number.isFinite(savedZoom) ? Math.max(0.25, Math.min(2.0, savedZoom)) : 1.0);
       }
     } else {
       // Reset to defaults if no state saved for this worktree
