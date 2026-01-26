@@ -5,7 +5,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { getPanelComponent, type PanelComponentProps } from "@/registry";
 import { ContentPanel, triggerPanelTransition } from "@/components/Panel";
 
-const DEBUG_DOCK = true;
+const DEBUG_DOCK = false;
 function dockedPanelLog(message: string, ...args: unknown[]) {
   if (DEBUG_DOCK) {
     console.log(`[DockedPanel] ${message}`, ...args);

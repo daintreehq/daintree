@@ -19,7 +19,7 @@ import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useDockPanelPortal } from "./DockPanelOffscreenContainer";
 
-const DEBUG_DOCK = true;
+const DEBUG_DOCK = false;
 function dockItemLog(message: string, ...args: unknown[]) {
   if (DEBUG_DOCK) {
     console.log(`[DockedItem] ${message}`, ...args);
@@ -154,8 +154,8 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
 
             if (shouldExecuteCommand) {
               dockItemLog("Executing pending command for:", terminal.id, terminal.command);
-              // Small delay to ensure terminal is ready to receive input
-              await new Promise((resolve) => setTimeout(resolve, 100));
+              // Brief delay to ensure terminal is ready to receive input
+              await new Promise((resolve) => setTimeout(resolve, 50));
               if (cancelled) return;
               try {
                 await terminalClient.write(terminal.id, `${terminal.command}\r`);

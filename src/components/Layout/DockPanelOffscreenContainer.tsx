@@ -12,7 +12,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useTerminalStore, useWorktreeSelectionStore } from "@/store";
 import { DockedPanel } from "@/components/Terminal/DockedPanel";
 
-const DEBUG_DOCK = true;
+const DEBUG_DOCK = false;
 function dockLog(message: string, ...args: unknown[]) {
   if (DEBUG_DOCK) {
     console.log(`[DockOffscreen] ${message}`, ...args);

@@ -7,7 +7,7 @@ import { useTerminalNotificationCounts } from "@/hooks/useTerminalSelectors";
 import { isAgentTerminal } from "@/utils/terminalType";
 import type { DockRenderState, DockMode } from "@shared/types";
 
-const DEBUG_DOCK = true;
+const DEBUG_DOCK = false;
 function dockStateLog(message: string, ...args: unknown[]) {
   if (DEBUG_DOCK) {
     console.log(`[DockRenderState] ${message}`, ...args);
