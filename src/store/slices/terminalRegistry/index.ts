@@ -690,8 +690,35 @@ export const createTerminalRegistrySlice =
           const newTrashed = new Map(state.trashedTerminals);
           // Use placeholder expiresAt - will be updated when IPC event arrives
           newTrashed.set(id, { id, expiresAt, originalLocation });
+
+          // Remove panel from tab group (auto-delete group if ≤1 panels remain)
+          // Panel membership is unique (enforced by addPanelToGroup), so break after first match
+          let newTabGroups = state.tabGroups;
+          for (const group of state.tabGroups.values()) {
+            if (group.panelIds.includes(id)) {
+              newTabGroups = new Map(state.tabGroups);
+              const newPanelIds = group.panelIds.filter((pid) => pid !== id);
+
+              if (newPanelIds.length <= 1) {
+                // Group has 0 or 1 panels remaining - delete the group
+                newTabGroups.delete(group.id);
+              } else {
+                // Update the group with remaining panels
+                const newActiveTabId =
+                  group.activeTabId === id ? (newPanelIds[0] ?? "") : group.activeTabId;
+                newTabGroups.set(group.id, {
+                  ...group,
+                  panelIds: newPanelIds,
+                  activeTabId: newActiveTabId,
+                });
+              }
+              saveTabGroups(newTabGroups);
+              break;
+            }
+          }
+
           saveTerminals(newTerminals);
-          return { terminals: newTerminals, trashedTerminals: newTrashed };
+          return { terminals: newTerminals, trashedTerminals: newTrashed, tabGroups: newTabGroups };
         });
 
         scheduleTrashExpiry(id, expiresAt);
