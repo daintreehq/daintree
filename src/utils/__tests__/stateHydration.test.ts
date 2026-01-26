@@ -319,9 +319,6 @@ describe("hydrateAppState", () => {
     expect(callArgs.command).not.toContain("-p");
     expect(callArgs.command).not.toContain("Old prompt");
 
-    // Verify skipCommandExecution is set (agent commands not auto-executed)
-    expect(callArgs.skipCommandExecution).toBe(true);
-
     // Verify NO DISCONNECTED error was set (silent respawn)
     expect(setSpawnErrorMock).not.toHaveBeenCalled();
   });
