@@ -28,6 +28,7 @@ export function GridTabGroup({
   const removePanelFromGroup = useTerminalStore((state) => state.removePanelFromGroup);
   const addTerminal = useTerminalStore((state) => state.addTerminal);
   const addPanelToGroup = useTerminalStore((state) => state.addPanelToGroup);
+  const updateTitle = useTerminalStore((state) => state.updateTitle);
 
   // Subscribe to activeTabByGroup for reactive updates
   const storedActiveTabId = useTerminalStore(
@@ -73,13 +74,28 @@ export function GridTabGroup({
     }));
   }, [panels, activeTabId]);
 
-  // Handle tab click - switch to that tab and focus it
+  // Check if this group is currently focused
+  const isGroupFocused = panels.some((p) => p.id === focusedId);
+
+  // Handle tab click - switch to that tab, only focus if group already focused
   const handleTabClick = useCallback(
     (tabId: string) => {
       setActiveTab(group.id, tabId);
-      setFocused(tabId);
+      // Only set focus if the group is already focused
+      // This prevents single-click from activating focus/maximize mode
+      if (isGroupFocused) {
+        setFocused(tabId);
+      }
     },
-    [group.id, setActiveTab, setFocused]
+    [group.id, setActiveTab, setFocused, isGroupFocused]
+  );
+
+  // Handle tab rename
+  const handleTabRename = useCallback(
+    (tabId: string, newTitle: string) => {
+      updateTitle(tabId, newTitle);
+    },
+    [updateTitle]
   );
 
   // Handle tab close - move to trash and remove from group
@@ -191,6 +207,7 @@ export function GridTabGroup({
       tabs={tabs}
       onTabClick={handleTabClick}
       onTabClose={handleTabClose}
+      onTabRename={handleTabRename}
       onAddTab={handleAddTab}
     />
   );

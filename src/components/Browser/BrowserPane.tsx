@@ -14,6 +14,7 @@ export interface BrowserPaneProps extends BasePanelProps {
   tabs?: import("@/components/Panel/TabButton").TabInfo[];
   onTabClick?: (tabId: string) => void;
   onTabClose?: (tabId: string) => void;
+  onTabRename?: (tabId: string, newTitle: string) => void;
   onAddTab?: () => void;
 }
 
@@ -35,6 +36,7 @@ export function BrowserPane({
   tabs,
   onTabClick,
   onTabClose,
+  onTabRename,
   onAddTab,
 }: BrowserPaneProps) {
   const webviewRef = useRef<Electron.WebviewTag>(null);
@@ -390,6 +392,7 @@ export function BrowserPane({
       tabs={tabs}
       onTabClick={onTabClick}
       onTabClose={onTabClose}
+      onTabRename={onTabRename}
       onAddTab={onAddTab}
     >
       <div className="relative flex-1 min-h-0 bg-white">

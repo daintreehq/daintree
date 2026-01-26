@@ -16,6 +16,7 @@ export interface GridPanelProps {
   tabs?: TabInfo[];
   onTabClick?: (tabId: string) => void;
   onTabClose?: (tabId: string) => void;
+  onTabRename?: (tabId: string, newTitle: string) => void;
   onAddTab?: () => void;
 }
 
@@ -28,6 +29,7 @@ export function GridPanel({
   tabs,
   onTabClick,
   onTabClose,
+  onTabRename,
   onAddTab,
 }: GridPanelProps) {
   const setFocused = useTerminalStore((state) => state.setFocused);
@@ -185,6 +187,7 @@ export function GridPanel({
       tabs,
       onTabClick,
       onTabClose,
+      onTabRename,
       onAddTab,
     }),
     [
@@ -201,6 +204,7 @@ export function GridPanel({
       tabs,
       onTabClick,
       onTabClose,
+      onTabRename,
       onAddTab,
     ]
   );
@@ -223,6 +227,7 @@ export function GridPanel({
         tabs={tabs}
         onTabClick={onTabClick}
         onTabClose={onTabClose}
+        onTabRename={onTabRename}
         onAddTab={onAddTab}
       >
         <div className="flex flex-1 items-center justify-center bg-canopy-bg-secondary text-canopy-text-muted">

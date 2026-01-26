@@ -59,6 +59,7 @@ export interface PanelHeaderProps {
   tabs?: TabInfo[];
   onTabClick?: (tabId: string) => void;
   onTabClose?: (tabId: string) => void;
+  onTabRename?: (tabId: string, newTitle: string) => void;
   onAddTab?: () => void;
 }
 
@@ -93,6 +94,7 @@ function PanelHeaderComponent({
   tabs,
   onTabClick,
   onTabClose,
+  onTabRename,
   onAddTab,
 }: PanelHeaderProps) {
   const isBrowser = kind === "browser";
@@ -214,6 +216,7 @@ function PanelHeaderComponent({
                 isActive={tab.isActive}
                 onClick={() => onTabClick?.(tab.id)}
                 onClose={() => onTabClose?.(tab.id)}
+                onRename={onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined}
               />
             ))}
             {onAddTab && (

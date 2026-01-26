@@ -67,6 +67,7 @@ export interface ContentPanelProps extends BasePanelProps {
   tabs?: TabInfo[];
   onTabClick?: (tabId: string) => void;
   onTabClose?: (tabId: string) => void;
+  onTabRename?: (tabId: string, newTitle: string) => void;
   onAddTab?: () => void;
 }
 
@@ -114,6 +115,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     tabs,
     onTabClick,
     onTabClose,
+    onTabRename,
     onAddTab,
   },
   ref
@@ -276,6 +278,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         tabs={tabs}
         onTabClick={onTabClick}
         onTabClose={onTabClose}
+        onTabRename={onTabRename}
         onAddTab={onAddTab}
       />
 

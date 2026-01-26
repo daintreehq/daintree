@@ -75,6 +75,7 @@ export interface TerminalPaneProps {
   tabs?: import("@/components/Panel/TabButton").TabInfo[];
   onTabClick?: (tabId: string) => void;
   onTabClose?: (tabId: string) => void;
+  onTabRename?: (tabId: string, newTitle: string) => void;
   onAddTab?: () => void;
 }
 
@@ -107,6 +108,7 @@ function TerminalPaneComponent({
   tabs,
   onTabClick,
   onTabClose,
+  onTabRename,
   onAddTab,
 }: TerminalPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -477,6 +479,7 @@ function TerminalPaneComponent({
       tabs={tabs}
       onTabClick={onTabClick}
       onTabClose={onTabClose}
+      onTabRename={onTabRename}
       onAddTab={onAddTab}
       className={cn(
         "terminal-pane",
