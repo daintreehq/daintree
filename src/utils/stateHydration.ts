@@ -7,7 +7,13 @@ import {
   useTerminalInputStore,
 } from "@/store";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
-import type { TerminalType, AgentState, TerminalKind, TerminalReconnectError, TabGroup } from "@/types";
+import type {
+  TerminalType,
+  AgentState,
+  TerminalKind,
+  TerminalReconnectError,
+  TabGroup,
+} from "@/types";
 import { keybindingService } from "@/services/KeybindingService";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { generateAgentFlags } from "@shared/types";
