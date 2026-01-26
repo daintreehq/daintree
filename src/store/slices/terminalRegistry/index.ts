@@ -448,7 +448,7 @@ export const createTerminalRegistrySlice =
               } else {
                 // Update group without this panel
                 const newActiveTabId =
-                  group.activeTabId === id ? filteredPanelIds[0] ?? "" : group.activeTabId;
+                  group.activeTabId === id ? (filteredPanelIds[0] ?? "") : group.activeTabId;
                 newTabGroups.set(groupId, {
                   ...group,
                   panelIds: filteredPanelIds,
@@ -1658,7 +1658,7 @@ export const createTerminalRegistrySlice =
           }
 
           // CRITICAL: Enforce unique membership - remove from any existing group first
-          let newTabGroups = new Map(state.tabGroups);
+          const newTabGroups = new Map(state.tabGroups);
           for (const [existingGroupId, existingGroup] of newTabGroups) {
             if (existingGroup.panelIds.includes(panelId)) {
               const filteredPanelIds = existingGroup.panelIds.filter((id) => id !== panelId);
@@ -1669,7 +1669,7 @@ export const createTerminalRegistrySlice =
                 // Update group without this panel
                 const newActiveTabId =
                   existingGroup.activeTabId === panelId
-                    ? filteredPanelIds[0] ?? ""
+                    ? (filteredPanelIds[0] ?? "")
                     : existingGroup.activeTabId;
                 newTabGroups.set(existingGroupId, {
                   ...existingGroup,

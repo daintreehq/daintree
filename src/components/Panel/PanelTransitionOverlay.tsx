@@ -24,7 +24,7 @@ interface PanelTransitionOverlayProps {
   onTransitionComplete?: (id: string) => void;
 }
 
-const ANIMATION_DURATION = 250; // ms
+const ANIMATION_DURATION = 180; // ms - faster to minimize distortion visibility
 
 // Singleton event system for triggering transitions
 type TransitionListener = (transition: TransitionState) => void;
@@ -87,19 +87,18 @@ export function PanelTransitionOverlay({ onTransitionComplete }: PanelTransition
 
   // Clean up completed transitions
   const handleAnimationEnd = useCallback(
-    (uniqueKey: string) => {
-      if (completedRef.current.has(uniqueKey)) return;
-      completedRef.current.add(uniqueKey);
+    (transition: TransitionState) => {
+      if (completedRef.current.has(transition.uniqueKey)) return;
+      completedRef.current.add(transition.uniqueKey);
 
-      setTransitions((prev) => prev.filter((t) => t.uniqueKey !== uniqueKey));
+      setTransitions((prev) => prev.filter((t) => t.uniqueKey !== transition.uniqueKey));
 
-      // Extract id from uniqueKey for callback
-      const id = uniqueKey.split("-")[0];
-      onTransitionComplete?.(id);
+      // Use the actual transition ID instead of parsing uniqueKey
+      onTransitionComplete?.(transition.id);
 
       // Clean up ref after a short delay
       setTimeout(() => {
-        completedRef.current.delete(uniqueKey);
+        completedRef.current.delete(transition.uniqueKey);
       }, 100);
     },
     [onTransitionComplete]
@@ -113,7 +112,7 @@ export function PanelTransitionOverlay({ onTransitionComplete }: PanelTransition
         <TransitionGhost
           key={transition.uniqueKey}
           transition={transition}
-          onComplete={() => handleAnimationEnd(transition.uniqueKey)}
+          onComplete={() => handleAnimationEnd(transition)}
         />
       ))}
     </div>,
@@ -134,29 +133,25 @@ function TransitionGhost({ transition, onComplete }: TransitionGhostProps) {
     const element = elementRef.current;
     if (!element) return;
 
-    // Start from source position
+    // Start from source position and size
     element.style.left = `${sourceRect.x}px`;
     element.style.top = `${sourceRect.y}px`;
     element.style.width = `${sourceRect.width}px`;
     element.style.height = `${sourceRect.height}px`;
-    element.style.opacity = "1";
+    element.style.opacity = direction === "restore" ? "0.8" : "1";
+    element.style.transform = "none";
 
     // Force reflow to ensure initial styles are applied
     void element.offsetHeight;
 
-    // Calculate scale factors for the target size
-    const scaleX = targetRect.width / sourceRect.width;
-    const scaleY = targetRect.height / sourceRect.height;
-
-    // Calculate translation to center of target
-    const translateX = targetRect.x + targetRect.width / 2 - (sourceRect.x + sourceRect.width / 2);
-    const translateY =
-      targetRect.y + targetRect.height / 2 - (sourceRect.y + sourceRect.height / 2);
-
-    // Apply transform to animate
+    // Animate to target using width/height changes instead of scale
+    // This prevents distortion of rounded corners
     requestAnimationFrame(() => {
-      element.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scaleX}, ${scaleY})`;
-      element.style.opacity = direction === "minimize" ? "0.3" : "0";
+      element.style.left = `${targetRect.x}px`;
+      element.style.top = `${targetRect.y}px`;
+      element.style.width = `${targetRect.width}px`;
+      element.style.height = `${targetRect.height}px`;
+      element.style.opacity = "0";
     });
 
     const timer = setTimeout(onComplete, ANIMATION_DURATION);
@@ -167,16 +162,19 @@ function TransitionGhost({ transition, onComplete }: TransitionGhostProps) {
     <div
       ref={elementRef}
       className={cn(
-        "absolute rounded border-2 transition-all ease-out",
+        "absolute border-2",
         direction === "minimize"
           ? "border-canopy-accent/60 bg-canopy-accent/10"
           : "border-canopy-accent/40 bg-canopy-accent/5"
       )}
       style={{
         transitionDuration: `${ANIMATION_DURATION}ms`,
-        transitionProperty: "transform, opacity",
-        transformOrigin: "center center",
-        willChange: "transform, opacity",
+        transitionProperty: "left, top, width, height, opacity",
+        // Use expo ease-out for snappy, natural feel
+        transitionTimingFunction: "cubic-bezier(0.16, 1, 0.3, 1)",
+        willChange: "left, top, width, height, opacity",
+        // Use a consistent border-radius that doesn't scale
+        borderRadius: "6px",
       }}
     />
   );
