@@ -680,6 +680,7 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
       activeWorktreeId: existingState?.activeWorktreeId,
       sidebarWidth: existingState?.sidebarWidth ?? 350,
       terminals: validTerminals,
+      tabGroups: existingState?.tabGroups ?? [], // Preserve existing tab groups
       terminalLayout: existingState?.terminalLayout,
       focusMode: existingState?.focusMode,
       focusPanelState: existingState?.focusPanelState,

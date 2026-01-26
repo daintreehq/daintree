@@ -25,6 +25,7 @@ export function GridTabGroup({
   const setFocused = useTerminalStore((state) => state.setFocused);
   const setActiveTab = useTerminalStore((state) => state.setActiveTab);
   const trashTerminal = useTerminalStore((state) => state.trashTerminal);
+  const removePanelFromGroup = useTerminalStore((state) => state.removePanelFromGroup);
   const addTerminal = useTerminalStore((state) => state.addTerminal);
   const addPanelToGroup = useTerminalStore((state) => state.addPanelToGroup);
 
@@ -81,7 +82,7 @@ export function GridTabGroup({
     [group.id, setActiveTab, setFocused]
   );
 
-  // Handle tab close - move to trash
+  // Handle tab close - move to trash and remove from group
   const handleTabClose = useCallback(
     (tabId: string) => {
       // If closing the active tab, switch to another tab first
@@ -93,9 +94,12 @@ export function GridTabGroup({
           setFocused(nextPanel.id);
         }
       }
+      // Remove from group (this will auto-delete group if ≤1 panels remain)
+      removePanelFromGroup(tabId);
+      // Then trash the terminal
       trashTerminal(tabId);
     },
-    [activeTabId, panels, group.id, setActiveTab, setFocused, trashTerminal]
+    [activeTabId, panels, group.id, setActiveTab, setFocused, removePanelFromGroup, trashTerminal]
   );
 
   // Handle add tab - duplicate the current panel as a new tab

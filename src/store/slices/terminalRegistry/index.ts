@@ -437,8 +437,31 @@ export const createTerminalRegistrySlice =
           const newTrashed = new Map(state.trashedTerminals);
           newTrashed.delete(id);
 
+          // Remove panel from any tab group on permanent deletion
+          const newTabGroups = new Map(state.tabGroups);
+          for (const [groupId, group] of newTabGroups) {
+            if (group.panelIds.includes(id)) {
+              const filteredPanelIds = group.panelIds.filter((panelId) => panelId !== id);
+              if (filteredPanelIds.length <= 1) {
+                // Group has 0 or 1 panels remaining - delete it
+                newTabGroups.delete(groupId);
+              } else {
+                // Update group without this panel
+                const newActiveTabId =
+                  group.activeTabId === id ? filteredPanelIds[0] ?? "" : group.activeTabId;
+                newTabGroups.set(groupId, {
+                  ...group,
+                  panelIds: filteredPanelIds,
+                  activeTabId: newActiveTabId,
+                });
+              }
+              break;
+            }
+          }
+
           saveTerminals(newTerminals);
-          return { terminals: newTerminals, trashedTerminals: newTrashed };
+          saveTabGroups(newTabGroups);
+          return { terminals: newTerminals, trashedTerminals: newTrashed, tabGroups: newTabGroups };
         });
 
         const remainingTerminals = get().terminals;
@@ -1629,21 +1652,50 @@ export const createTerminalRegistrySlice =
             return state;
           }
 
-          // Don't add if already in group
+          // Don't add if already in this group
           if (group.panelIds.includes(panelId)) {
             return state;
           }
 
-          const newPanelIds = [...group.panelIds];
+          // CRITICAL: Enforce unique membership - remove from any existing group first
+          let newTabGroups = new Map(state.tabGroups);
+          for (const [existingGroupId, existingGroup] of newTabGroups) {
+            if (existingGroup.panelIds.includes(panelId)) {
+              const filteredPanelIds = existingGroup.panelIds.filter((id) => id !== panelId);
+              if (filteredPanelIds.length <= 1) {
+                // Group has 0 or 1 panels remaining - delete it
+                newTabGroups.delete(existingGroupId);
+              } else {
+                // Update group without this panel
+                const newActiveTabId =
+                  existingGroup.activeTabId === panelId
+                    ? filteredPanelIds[0] ?? ""
+                    : existingGroup.activeTabId;
+                newTabGroups.set(existingGroupId, {
+                  ...existingGroup,
+                  panelIds: filteredPanelIds,
+                  activeTabId: newActiveTabId,
+                });
+              }
+              break; // Panel can only be in one group
+            }
+          }
+
+          // Now add to the target group
+          const targetGroup = newTabGroups.get(groupId);
+          if (!targetGroup) {
+            console.warn(`[TabGroup] Target group ${groupId} was deleted during cleanup`);
+            return state;
+          }
+
+          const newPanelIds = [...targetGroup.panelIds];
           if (index !== undefined && index >= 0 && index <= newPanelIds.length) {
             newPanelIds.splice(index, 0, panelId);
           } else {
             newPanelIds.push(panelId);
           }
 
-          const newGroup: TabGroup = { ...group, panelIds: newPanelIds };
-          const newTabGroups = new Map(state.tabGroups);
-          newTabGroups.set(groupId, newGroup);
+          newTabGroups.set(groupId, { ...targetGroup, panelIds: newPanelIds });
           saveTabGroups(newTabGroups);
           return { tabGroups: newTabGroups };
         });

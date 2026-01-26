@@ -34,6 +34,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const setActiveTab = useTerminalStore((s) => s.setActiveTab);
   const setFocused = useTerminalStore((s) => s.setFocused);
   const trashTerminal = useTerminalStore((s) => s.trashTerminal);
+  const removePanelFromGroup = useTerminalStore((s) => s.removePanelFromGroup);
   const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
   const hybridInputAutoFocus = useTerminalInputStore((s) => s.hybridInputAutoFocus);
 
@@ -213,9 +214,10 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
           setFocused(nextPanel.id);
         }
       }
+      removePanelFromGroup(tabId);
       trashTerminal(tabId);
     },
-    [activeTabId, panels, group.id, setActiveTab, setFocused, trashTerminal]
+    [activeTabId, panels, group.id, setActiveTab, setFocused, removePanelFromGroup, trashTerminal]
   );
 
   if (!activePanel || panels.length === 0) {
