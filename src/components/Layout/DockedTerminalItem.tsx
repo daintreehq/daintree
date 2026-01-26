@@ -77,10 +77,13 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   useEffect(() => {
     let cancelled = false;
 
+    dockItemLog("Buffering state effect running:", { terminalId: terminal.id, isOpen });
+
     const applyBufferingState = async () => {
       try {
         if (isOpen) {
           if (!cancelled) {
+            dockItemLog("Popover is open, starting fit loop for:", terminal.id);
             // Wait for Popover DOM to be fully mounted and XtermAdapter to attach the terminal.
             // A single RAF is not enough - React needs multiple frames to mount the component tree.
             // We retry fitting until the terminal is attached to a visible container.
@@ -94,7 +97,9 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
               if (cancelled) return;
 
               // Try to fit - will return null if terminal is still in offscreen container
+              dockItemLog(`Fit attempt ${attempt + 1}/${MAX_RETRIES} for:`, terminal.id);
               dims = terminalInstanceService.fit(terminal.id);
+              dockItemLog(`Fit result for ${terminal.id}:`, dims);
               if (dims) break;
 
               // If fit failed (terminal still offscreen), wait a bit and retry
@@ -106,9 +111,12 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
             if (cancelled) return;
 
             if (!dims) {
+              dockItemLog("Fit failed after all retries for:", terminal.id);
               // Terminal never became visible - this can happen if popover closed quickly
               return;
             }
+
+            dockItemLog("Fit succeeded, resizing PTY for:", terminal.id, dims);
 
             // Synchronize PTY to match the exact frontend dimensions
             try {
@@ -120,10 +128,12 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
 
             if (cancelled) return;
 
+            dockItemLog("Applying VISIBLE renderer policy for:", terminal.id);
             terminalInstanceService.applyRendererPolicy(terminal.id, TerminalRefreshTier.VISIBLE);
           }
         } else {
           if (!cancelled) {
+            dockItemLog("Popover closed, applying BACKGROUND policy for:", terminal.id);
             terminalInstanceService.applyRendererPolicy(
               terminal.id,
               TerminalRefreshTier.BACKGROUND
