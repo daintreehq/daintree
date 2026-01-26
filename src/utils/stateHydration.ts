@@ -426,6 +426,16 @@ export async function hydrateAppState(
                       `Respawning PTY panel: ${saved.id} (${isAgentPanel ? "agent" : "terminal"})`
                     );
 
+                    logInfo(`[HYDRATION-RESPAWN] Adding terminal:`, {
+                      id: saved.id,
+                      kind: respawnKind,
+                      agentId,
+                      location,
+                      savedLocation: saved.location,
+                      worktreeId: saved.worktreeId,
+                      title: saved.title,
+                    });
+
                     await addTerminal({
                       kind: respawnKind,
                       type: saved.type,

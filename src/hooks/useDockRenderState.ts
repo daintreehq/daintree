@@ -7,6 +7,13 @@ import { useTerminalNotificationCounts } from "@/hooks/useTerminalSelectors";
 import { isAgentTerminal } from "@/utils/terminalType";
 import type { DockRenderState, DockMode } from "@shared/types";
 
+const DEBUG_DOCK = true;
+function dockStateLog(message: string, ...args: unknown[]) {
+  if (DEBUG_DOCK) {
+    console.log(`[DockRenderState] ${message}`, ...args);
+  }
+}
+
 /**
  * Centralized hook for dock render state.
  * All dock-related components should use this hook instead of computing derived state independently.
@@ -39,6 +46,7 @@ export function useDockRenderState(): DockRenderState & {
       }))
     );
 
+  const allTerminals = useTerminalStore((state) => state.terminals);
   const dockTerminals = useTerminalStore(
     useShallow((state) =>
       state.terminals.filter(
@@ -49,6 +57,20 @@ export function useDockRenderState(): DockRenderState & {
       )
     )
   );
+
+  // Log terminal state for debugging
+  useEffect(() => {
+    dockStateLog("Terminal store state:", {
+      totalTerminals: allTerminals.length,
+      allLocations: allTerminals.map((t) => ({ id: t.id, location: t.location, kind: t.kind })),
+      dockTerminalCount: dockTerminals.length,
+      dockTerminals: dockTerminals.map((t) => ({ id: t.id, kind: t.kind, title: t.title })),
+      activeWorktreeId,
+      dockStoreHydrated: isHydrated,
+      mode,
+      behavior,
+    });
+  }, [allTerminals, dockTerminals, activeWorktreeId, isHydrated, mode, behavior]);
 
   const trashedCount = useTerminalStore(useShallow((state) => state.trashedTerminals.size));
 
