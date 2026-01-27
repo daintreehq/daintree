@@ -45,7 +45,6 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const setActiveTab = useTerminalStore((s) => s.setActiveTab);
   const setFocused = useTerminalStore((s) => s.setFocused);
   const trashTerminal = useTerminalStore((s) => s.trashTerminal);
-  const removePanelFromGroup = useTerminalStore((s) => s.removePanelFromGroup);
   const updateTitle = useTerminalStore((s) => s.updateTitle);
   const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
   const hybridInputAutoFocus = useTerminalInputStore((s) => s.hybridInputAutoFocus);

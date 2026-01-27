@@ -248,10 +248,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
         />
       ) : (
         <span
-          className={cn(
-            "truncate max-w-[100px]",
-            onRename && "cursor-text"
-          )}
+          className={cn("truncate max-w-[100px]", onRename && "cursor-text")}
           onDoubleClick={handleDoubleClick}
           title={onRename ? `${title} — Double-click to rename` : title}
         >
