@@ -13,6 +13,7 @@ import {
   SystemOpenPathPayloadSchema,
   TerminalSnapshotSchema,
   filterValidTerminalEntries,
+  sanitizeTabGroups,
 } from "../../schemas/index.js";
 import type { TerminalSnapshot } from "../../types/index.js";
 
@@ -720,15 +721,8 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
       throw new Error("Invalid tabGroups array");
     }
 
-    // Basic validation of tab groups
-    const validTabGroups = tabGroups.filter(
-      (g) =>
-        g &&
-        typeof g === "object" &&
-        typeof g.id === "string" &&
-        typeof g.location === "string" &&
-        Array.isArray(g.panelIds)
-    );
+    // Schema-validate and sanitize tab groups
+    const sanitizedTabGroups = sanitizeTabGroups(tabGroups, projectId);
 
     const existingState = await projectStore.getProjectState(projectId);
     const newState = {
@@ -736,7 +730,7 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
       activeWorktreeId: existingState?.activeWorktreeId,
       sidebarWidth: existingState?.sidebarWidth ?? 350,
       terminals: existingState?.terminals ?? [],
-      tabGroups: validTabGroups,
+      tabGroups: sanitizedTabGroups,
       terminalLayout: existingState?.terminalLayout,
       focusMode: existingState?.focusMode,
       focusPanelState: existingState?.focusPanelState,

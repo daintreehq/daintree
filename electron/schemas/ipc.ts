@@ -332,6 +332,129 @@ export const WorktreeCreatePayloadSchema = z.object({
   }),
 });
 
+// ============================================================================
+// Tab Group Validation Schemas
+// ============================================================================
+
+/**
+ * Schema for TabGroupLocation - grid or dock only (excludes trash).
+ */
+export const TabGroupLocationSchema = z.enum(["grid", "dock"]);
+
+/**
+ * Schema for TabGroup input validation.
+ * Uses passthrough() to preserve unknown fields for forward compatibility.
+ */
+export const TabGroupInputSchema = z
+  .object({
+    id: z.string().min(1),
+    location: TabGroupLocationSchema,
+    worktreeId: z.string().optional(),
+    activeTabId: z.string().optional(),
+    panelIds: z.array(z.string()),
+  })
+  .passthrough();
+
+export type TabGroupInput = z.infer<typeof TabGroupInputSchema>;
+
+/**
+ * Sanitizes an array of tab groups to ensure valid state before persistence.
+ * Applies deterministic repairs and filters invalid groups.
+ *
+ * Sanitization rules (aligned with hydrateTabGroups):
+ * 1. Validates id is non-empty string
+ * 2. Validates location is "grid" or "dock" (coerces invalid to "grid")
+ * 3. Filters panelIds to only strings, removes empty strings
+ * 4. Deduplicates panelIds (preserves first occurrence)
+ * 5. Drops groups with <= 1 panel (single-panel groups are virtual)
+ * 6. Ensures activeTabId is in panelIds (fallback to first if invalid)
+ *
+ * @param tabGroups - Raw tab groups array to sanitize
+ * @param context - Context string for logging (e.g., projectId)
+ * @returns Array of sanitized valid tab groups
+ */
+export function sanitizeTabGroups(
+  tabGroups: unknown[] | null | undefined,
+  context: string
+): TabGroupInput[] {
+  if (!Array.isArray(tabGroups)) {
+    if (tabGroups !== undefined && tabGroups !== null) {
+      console.warn(`[TabGroups:${context}] Expected array but received ${typeof tabGroups}`);
+    }
+    return [];
+  }
+
+  const validGroups: TabGroupInput[] = [];
+  let droppedCount = 0;
+
+  for (let i = 0; i < tabGroups.length; i++) {
+    const group = tabGroups[i];
+    const result = TabGroupInputSchema.safeParse(group);
+
+    if (!result.success) {
+      const groupId =
+        group &&
+        typeof group === "object" &&
+        "id" in group &&
+        typeof group.id === "string" &&
+        group.id.length > 0
+          ? group.id
+          : `index-${i}`;
+
+      const flattened = result.error.flatten();
+      const errorDetails =
+        Object.keys(flattened.fieldErrors).length > 0
+          ? flattened.fieldErrors
+          : flattened.formErrors.length > 0
+            ? { _errors: flattened.formErrors }
+            : { type: typeof group };
+
+      console.warn(`[TabGroups:${context}] Dropping invalid group ${groupId}:`, errorDetails);
+      droppedCount++;
+      continue;
+    }
+
+    const validatedGroup = result.data;
+
+    // Filter panelIds to only valid strings (non-empty)
+    const stringPanelIds = validatedGroup.panelIds.filter(
+      (id) => typeof id === "string" && id.length > 0
+    );
+
+    // Deduplicate panelIds (preserve first occurrence)
+    const uniquePanelIds = Array.from(new Set(stringPanelIds));
+
+    // Drop groups with <= 1 panel (single-panel groups are virtual/unnecessary)
+    if (uniquePanelIds.length <= 1) {
+      console.log(
+        `[TabGroups:${context}] Dropping group ${validatedGroup.id} with ${uniquePanelIds.length} valid unique panel(s)`
+      );
+      droppedCount++;
+      continue;
+    }
+
+    // Ensure activeTabId is in panelIds, fallback to first if invalid or missing
+    const activeTabId =
+      validatedGroup.activeTabId && uniquePanelIds.includes(validatedGroup.activeTabId)
+        ? validatedGroup.activeTabId
+        : uniquePanelIds[0];
+
+    validGroups.push({
+      ...validatedGroup,
+      panelIds: uniquePanelIds,
+      activeTabId,
+    });
+  }
+
+  if (droppedCount > 0) {
+    console.log(
+      `[TabGroups:${context}] Sanitization summary: ${validGroups.length} valid, ${droppedCount} dropped`
+    );
+  }
+
+  return validGroups;
+}
+
 export type TerminalSpawnOptions = z.infer<typeof TerminalSpawnOptionsSchema>;
 export type TerminalResizePayload = z.infer<typeof TerminalResizePayloadSchema>;
 export type FileSearchPayload = z.infer<typeof FileSearchPayloadSchema>;

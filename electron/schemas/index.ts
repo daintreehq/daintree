@@ -31,6 +31,9 @@ export {
   DevPreviewStartPayloadSchema,
   WorktreeSetActivePayloadSchema,
   WorktreeCreatePayloadSchema,
+  TabGroupLocationSchema,
+  TabGroupInputSchema,
+  sanitizeTabGroups,
   TerminalSnapshotSchema,
   filterValidTerminalEntries,
   type TerminalSpawnOptions as ValidatedTerminalSpawnOptions,
@@ -45,6 +48,7 @@ export {
   type DevPreviewStartPayload as ValidatedDevPreviewStartPayload,
   type WorktreeSetActivePayload as ValidatedWorktreeSetActivePayload,
   type WorktreeCreatePayload as ValidatedWorktreeCreatePayload,
+  type TabGroupInput,
   type TerminalSnapshotEntry,
 } from "./ipc.js";
 
