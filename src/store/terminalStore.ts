@@ -230,6 +230,42 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       set({ focusedId: id, activeDockTerminalId: null });
     },
 
+    restoreTrashedGroup: (groupRestoreId: string, targetWorktreeId?: string) => {
+      const trashedTerminals = get().trashedTerminals;
+
+      // Find anchor panel to determine what to focus after restore
+      let anchorPanel: ReturnType<typeof trashedTerminals.get> | undefined;
+      const groupPanelIds: string[] = [];
+      for (const [id, trashed] of trashedTerminals.entries()) {
+        if (trashed.groupRestoreId === groupRestoreId) {
+          groupPanelIds.push(id);
+          if (trashed.groupMetadata) {
+            anchorPanel = trashed;
+          }
+        }
+      }
+
+      if (groupPanelIds.length === 0) {
+        return;
+      }
+
+      registrySlice.restoreTrashedGroup(groupRestoreId, targetWorktreeId);
+
+      // Focus the active tab from the restored group
+      const focusId =
+        anchorPanel?.groupMetadata?.activeTabId &&
+        groupPanelIds.includes(anchorPanel.groupMetadata.activeTabId)
+          ? anchorPanel.groupMetadata.activeTabId
+          : groupPanelIds[0];
+      set({ focusedId: focusId, activeDockTerminalId: null });
+
+      // Seed activeTabByGroup for dock groups to preserve active tab state
+      const group = get().getPanelGroup(focusId);
+      if (group) {
+        focusSlice.setActiveTab(group.id, focusId);
+      }
+    },
+
     restoreLastTrashed: () => {
       const trashedTerminals = get().trashedTerminals;
       const trashedIds = Array.from(trashedTerminals.keys());
@@ -242,53 +278,8 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
 
       // Check if this panel was part of a group
       if (lastTrashed?.groupRestoreId) {
-        // Find all panels with the same groupRestoreId
-        const groupPanels: Array<{ id: string; trashed: typeof lastTrashed }> = [];
-        let anchorPanel: typeof lastTrashed | undefined;
-
-        for (const [id, trashed] of trashedTerminals.entries()) {
-          if (trashed.groupRestoreId === lastTrashed.groupRestoreId) {
-            groupPanels.push({ id, trashed });
-            if (trashed.groupMetadata) {
-              anchorPanel = trashed;
-            }
-          }
-        }
-
-        // Restore all panels in the group
-        const restoredPanelIds: string[] = [];
-        for (const { id } of groupPanels) {
-          registrySlice.restoreTerminal(id);
-          restoredPanelIds.push(id);
-        }
-
-        // Recreate the tab group if we have metadata
-        if (anchorPanel?.groupMetadata && restoredPanelIds.length > 1) {
-          const { panelIds, activeTabId, location, worktreeId } = anchorPanel.groupMetadata;
-          // Filter to only include panels that were actually restored and exist in the original order
-          const validPanelIds = panelIds.filter((id) => restoredPanelIds.includes(id));
-          if (validPanelIds.length > 1) {
-            const validActiveTabId = validPanelIds.includes(activeTabId)
-              ? activeTabId
-              : validPanelIds[0];
-            const groupId = registrySlice.createTabGroup(
-              location,
-              worktreeId ?? undefined,
-              validPanelIds,
-              validActiveTabId
-            );
-            // Seed activeTabByGroup for proper UI state
-            focusSlice.setActiveTab(groupId, validActiveTabId);
-          }
-        }
-
-        // Focus the active tab from the restored group
-        const focusId =
-          anchorPanel?.groupMetadata?.activeTabId &&
-          restoredPanelIds.includes(anchorPanel.groupMetadata.activeTabId)
-            ? anchorPanel.groupMetadata.activeTabId
-            : restoredPanelIds[0];
-        set({ focusedId: focusId, activeDockTerminalId: null });
+        // Use the group restore method
+        get().restoreTrashedGroup(lastTrashed.groupRestoreId);
       } else {
         // Single panel restore (existing behavior)
         get().restoreTerminal(lastId);

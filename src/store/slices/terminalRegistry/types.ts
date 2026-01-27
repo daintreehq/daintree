@@ -111,6 +111,8 @@ export interface TerminalRegistrySlice {
   /** Trash all panels in a group together, storing group metadata for restoration */
   trashPanelGroup: (panelId: string) => void;
   restoreTerminal: (id: string, targetWorktreeId?: string) => void;
+  /** Restore all panels with the given groupRestoreId, recreating the tab group */
+  restoreTrashedGroup: (groupRestoreId: string, targetWorktreeId?: string) => void;
   markAsTrashed: (id: string, expiresAt: number, originalLocation: "dock" | "grid") => void;
   markAsRestored: (id: string) => void;
   isInTrash: (id: string) => boolean;

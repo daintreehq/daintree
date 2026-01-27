@@ -35,6 +35,7 @@ export type {
   TerminalInstance,
   AddTerminalOptions,
   TrashedTerminal,
+  TrashedTerminalGroupMetadata,
   TerminalRegistrySlice,
   TerminalRegistryMiddleware,
   TerminalRegistryStoreApi,
@@ -874,6 +875,121 @@ export const createTerminalRegistrySlice =
             optimizeForDock(id);
           } else {
             terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+          }
+        }
+      },
+
+      restoreTrashedGroup: (groupRestoreId, targetWorktreeId) => {
+        const trashedTerminals = get().trashedTerminals;
+
+        // Find all panels with the same groupRestoreId
+        const groupPanels: Array<{
+          id: string;
+          trashed: ReturnType<typeof trashedTerminals.get>;
+        }> = [];
+        let anchorPanel: ReturnType<typeof trashedTerminals.get> | undefined;
+
+        for (const [id, trashed] of trashedTerminals.entries()) {
+          if (trashed.groupRestoreId === groupRestoreId) {
+            groupPanels.push({ id, trashed });
+            if (trashed.groupMetadata) {
+              anchorPanel = trashed;
+            }
+          }
+        }
+
+        if (groupPanels.length === 0) {
+          return;
+        }
+
+        // Clear expiry timers and restore PTY processes for all panels
+        for (const { id } of groupPanels) {
+          clearTrashExpiryTimer(id);
+          const terminal = get().terminals.find((t) => t.id === id);
+          if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
+            terminalClient.restore(id).catch((error) => {
+              console.error("Failed to restore terminal:", error);
+            });
+          }
+        }
+
+        // Determine restore location - prefer metadata, fallback to originalLocation from any panel
+        const restoreLocation =
+          anchorPanel?.groupMetadata?.location ??
+          groupPanels[0]?.trashed?.originalLocation ??
+          "grid";
+        const worktreeId =
+          targetWorktreeId !== undefined
+            ? targetWorktreeId
+            : (anchorPanel?.groupMetadata?.worktreeId ?? undefined);
+
+        // Restore all panels in the group
+        set((state) => {
+          const panelIdsInGroup = new Set(groupPanels.map(({ id }) => id));
+          const newTerminals = state.terminals.map((t) =>
+            panelIdsInGroup.has(t.id)
+              ? {
+                  ...t,
+                  location: restoreLocation as "dock" | "grid",
+                  worktreeId: worktreeId ?? t.worktreeId,
+                }
+              : t
+          );
+
+          const newTrashed = new Map(state.trashedTerminals);
+          for (const { id } of groupPanels) {
+            newTrashed.delete(id);
+          }
+
+          saveTerminals(newTerminals);
+          return { terminals: newTerminals, trashedTerminals: newTrashed };
+        });
+
+        // Recreate the tab group if we have multiple panels (best-effort even without metadata)
+        const restoredPanelIds = groupPanels.map(({ id }) => id);
+        // Filter to only include panels that actually exist in state.terminals
+        const existingIds = new Set(get().terminals.map((t) => t.id));
+        const validPanelIds = restoredPanelIds.filter((id) => existingIds.has(id));
+
+        if (validPanelIds.length > 1) {
+          let orderedPanelIds = validPanelIds;
+          let activeTabId = validPanelIds[0];
+
+          // If we have metadata, use its order and active tab
+          if (anchorPanel?.groupMetadata) {
+            const { panelIds, activeTabId: metadataActiveTabId } = anchorPanel.groupMetadata;
+            // Preserve original order from metadata
+            orderedPanelIds = panelIds.filter((id) => validPanelIds.includes(id));
+            // Add any panels not in metadata (shouldn't happen, but be safe)
+            for (const id of validPanelIds) {
+              if (!orderedPanelIds.includes(id)) {
+                orderedPanelIds.push(id);
+              }
+            }
+            activeTabId = orderedPanelIds.includes(metadataActiveTabId)
+              ? metadataActiveTabId
+              : orderedPanelIds[0];
+          }
+
+          if (orderedPanelIds.length > 1) {
+            get().createTabGroup(
+              restoreLocation as "dock" | "grid",
+              worktreeId,
+              orderedPanelIds,
+              activeTabId
+            );
+          }
+        }
+
+        // Apply renderer policies for PTY-backed panels
+        for (const { id } of groupPanels) {
+          const terminal = get().terminals.find((t) => t.id === id);
+          if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
+            if (restoreLocation === "dock") {
+              optimizeForDock(id);
+            } else {
+              terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+            }
           }
         }
       },

@@ -6,6 +6,7 @@ export {
   type AddTerminalOptions,
   type TerminalRegistryMiddleware,
   type TrashedTerminal,
+  type TrashedTerminalGroupMetadata,
 } from "./terminalRegistrySlice";
 
 export {

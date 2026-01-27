@@ -11,6 +11,7 @@ export type {
   TerminalInstance,
   AddTerminalOptions,
   TrashedTerminal,
+  TrashedTerminalGroupMetadata,
   TerminalRegistrySlice,
   TerminalRegistryMiddleware,
   TerminalRegistryStoreApi,
