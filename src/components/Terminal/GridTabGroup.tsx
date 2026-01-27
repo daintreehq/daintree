@@ -13,6 +13,7 @@ export interface GridTabGroupProps {
   focusedId: string | null;
   gridPanelCount?: number;
   gridCols?: number;
+  isMaximized?: boolean;
 }
 
 export function GridTabGroup({
@@ -21,9 +22,11 @@ export function GridTabGroup({
   focusedId,
   gridPanelCount,
   gridCols,
+  isMaximized = false,
 }: GridTabGroupProps) {
   const setFocused = useTerminalStore((state) => state.setFocused);
   const setActiveTab = useTerminalStore((state) => state.setActiveTab);
+  const setMaximizedId = useTerminalStore((state) => state.setMaximizedId);
   const trashTerminal = useTerminalStore((state) => state.trashTerminal);
   const addTerminal = useTerminalStore((state) => state.addTerminal);
   const addPanelToGroup = useTerminalStore((state) => state.addPanelToGroup);
@@ -86,8 +89,13 @@ export function GridTabGroup({
       if (isGroupFocused) {
         setFocused(tabId);
       }
+      // If this group is maximized, update maximizedId to the new tab
+      // so "Exit Focus" works correctly
+      if (isMaximized) {
+        setMaximizedId(tabId);
+      }
     },
-    [group.id, setActiveTab, setFocused, isGroupFocused]
+    [group.id, setActiveTab, setFocused, isGroupFocused, isMaximized, setMaximizedId]
   );
 
   // Handle tab rename
@@ -208,6 +216,7 @@ export function GridTabGroup({
     <GridPanel
       terminal={activePanel}
       isFocused={isFocused}
+      isMaximized={isMaximized}
       gridPanelCount={gridPanelCount}
       gridCols={gridCols}
       tabs={tabs}

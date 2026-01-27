@@ -776,6 +776,30 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
   if (maximizedId) {
     const terminal = gridTerminals.find((t: TerminalInstance) => t.id === maximizedId);
     if (terminal) {
+      // Check if the maximized panel is part of a tab group
+      const group = getPanelGroup(maximizedId);
+
+      if (group) {
+        // Get filtered panels (excludes trashed, scoped to location/worktree)
+        const groupPanels = getTabGroupPanels(group.id, "grid");
+
+        if (groupPanels.length > 1) {
+          // Multi-panel group - render with tabs
+          return (
+            <div className={cn("h-full relative bg-canopy-bg", className)}>
+              <GridTabGroup
+                group={group}
+                panels={groupPanels}
+                focusedId={focusedId}
+                gridPanelCount={gridItemCount}
+                isMaximized={true}
+              />
+            </div>
+          );
+        }
+      }
+
+      // Single panel or ungrouped - render GridPanel directly
       return (
         <div className={cn("h-full relative bg-canopy-bg", className)}>
           <GridPanel

@@ -41,6 +41,7 @@ export interface TerminalFocusSlice {
   setFocused: (id: string | null, shouldPing?: boolean) => void;
   pingTerminal: (id: string) => void;
   toggleMaximize: (id: string, currentGridCols?: number, currentGridItemCount?: number) => void;
+  setMaximizedId: (id: string | null) => void;
   clearPreMaximizeLayout: () => void;
   focusNext: () => void;
   focusPrevious: () => void;
@@ -148,6 +149,11 @@ export const createTerminalFocusSlice =
               maximizedId: null,
             };
           }
+        }),
+
+      setMaximizedId: (id) =>
+        set({
+          maximizedId: id,
         }),
 
       clearPreMaximizeLayout: () =>

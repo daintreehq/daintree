@@ -272,6 +272,12 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
       const state = useTerminalStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
+        // Check if moving a group that contains the maximized panel
+        const group = state.getPanelGroup(targetId);
+        if (group && state.maximizedId && group.panelIds.includes(state.maximizedId)) {
+          // Clear maximize state before moving to dock
+          state.setMaximizedId(null);
+        }
         state.moveTerminalToDock(targetId);
         // Reveal dock if hidden so the terminal is visible
         revealDockIfHidden();
