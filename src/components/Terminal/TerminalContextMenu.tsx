@@ -26,7 +26,21 @@ export function TerminalContextMenu({
 }: TerminalContextMenuProps) {
   const { showMenu } = useNativeContextMenu();
   const terminal = useTerminalStore((state) => state.terminals.find((t) => t.id === terminalId));
-  const isMaximized = useTerminalStore((s) => s.maximizedId === terminalId);
+  const maximizeTarget = useTerminalStore((s) => s.maximizeTarget);
+  const getPanelGroup = useTerminalStore((s) => s.getPanelGroup);
+
+  // Check if this terminal is maximized (either directly or as part of a maximized group)
+  const isMaximized = useMemo(() => {
+    if (!maximizeTarget) return false;
+    if (maximizeTarget.type === "panel") {
+      return maximizeTarget.id === terminalId;
+    } else {
+      // Check if terminal is in the maximized group
+      const group = getPanelGroup(terminalId);
+      return group?.id === maximizeTarget.id;
+    }
+  }, [maximizeTarget, terminalId, getPanelGroup]);
+
   const { worktrees } = useWorktrees();
 
   const isPaused = terminal?.flowStatus === "paused-backpressure";

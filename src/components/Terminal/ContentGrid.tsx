@@ -375,16 +375,29 @@ function EmptyState({
 
 export function ContentGrid({ className, defaultCwd, agentAvailability }: ContentGridProps) {
   const { showMenu } = useNativeContextMenu();
-  const { terminals, focusedId, maximizedId, preMaximizeLayout, clearPreMaximizeLayout } =
-    useTerminalStore(
-      useShallow((state) => ({
-        terminals: state.terminals,
-        focusedId: state.focusedId,
-        maximizedId: state.maximizedId,
-        preMaximizeLayout: state.preMaximizeLayout,
-        clearPreMaximizeLayout: state.clearPreMaximizeLayout,
-      }))
-    );
+  const {
+    terminals,
+    focusedId,
+    maximizedId,
+    maximizeTarget,
+    preMaximizeLayout,
+    clearPreMaximizeLayout,
+    validateMaximizeTarget,
+    getTerminal,
+    setFocused,
+  } = useTerminalStore(
+    useShallow((state) => ({
+      terminals: state.terminals,
+      focusedId: state.focusedId,
+      maximizedId: state.maximizedId,
+      maximizeTarget: state.maximizeTarget,
+      preMaximizeLayout: state.preMaximizeLayout,
+      clearPreMaximizeLayout: state.clearPreMaximizeLayout,
+      validateMaximizeTarget: state.validateMaximizeTarget,
+      getTerminal: state.getTerminal,
+      setFocused: state.setFocused,
+    }))
+  );
 
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const showProjectPulse = usePreferencesStore((state) => state.showProjectPulse);
@@ -772,20 +785,63 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
   // Show "grid full" overlay when trying to drag from dock to a full grid
   const showGridFullOverlay = sourceContainer === "dock" && isGridFull;
 
-  // Maximized terminal takes full screen
-  if (maximizedId) {
-    const terminal = gridTerminals.find((t: TerminalInstance) => t.id === maximizedId);
-    if (terminal) {
-      return (
-        <div className={cn("h-full relative bg-canopy-bg", className)}>
-          <GridPanel
-            terminal={terminal}
-            isFocused={true}
-            isMaximized={true}
-            gridPanelCount={gridItemCount}
-          />
-        </div>
-      );
+  // Validate maximize target before rendering
+  useEffect(() => {
+    if (maximizedId && maximizeTarget) {
+      validateMaximizeTarget(getPanelGroup, getTerminal);
+    }
+  }, [maximizedId, maximizeTarget, validateMaximizeTarget, getPanelGroup, getTerminal, terminals]);
+
+  // Maximized terminal or group takes full screen
+  if (maximizedId && maximizeTarget) {
+    if (maximizeTarget.type === "group") {
+      // Find the group and render it maximized with tab bar
+      const group = tabGroups.find((g) => g.id === maximizeTarget.id);
+      if (group) {
+        const groupPanels = getTabGroupPanels(group.id, "grid");
+        if (groupPanels.length > 0) {
+          // Ensure focus is set on a panel in the maximized group
+          if (!focusedId || !groupPanels.some((p) => p.id === focusedId)) {
+            const activeTabId = useTerminalStore.getState().getActiveTabId(group.id);
+            const panelToFocus = groupPanels.find((p) => p.id === activeTabId) || groupPanels[0];
+            if (panelToFocus) {
+              setFocused(panelToFocus.id);
+            }
+          }
+
+          return (
+            <div className={cn("h-full relative bg-canopy-bg", className)}>
+              <GridTabGroup
+                group={group}
+                panels={groupPanels}
+                focusedId={focusedId}
+                gridPanelCount={1}
+                gridCols={1}
+                isMaximized={true}
+              />
+            </div>
+          );
+        }
+      }
+      // Group not found - validation will clean this up on next render
+      return null;
+    } else {
+      // Single panel maximize (panel not in a group)
+      const terminal = gridTerminals.find((t: TerminalInstance) => t.id === maximizedId);
+      if (terminal) {
+        return (
+          <div className={cn("h-full relative bg-canopy-bg", className)}>
+            <GridPanel
+              terminal={terminal}
+              isFocused={true}
+              isMaximized={true}
+              gridPanelCount={gridItemCount}
+            />
+          </div>
+        );
+      }
+      // Terminal not found - validation will clean this up on next render
+      return null;
     }
   }
 

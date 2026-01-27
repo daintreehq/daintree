@@ -335,7 +335,7 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
   actions.set("terminal.toggleMaximize", () => ({
     id: "terminal.toggleMaximize",
     title: "Toggle Maximize",
-    description: "Toggle terminal maximize state",
+    description: "Toggle terminal maximize state (maximizes entire tab group if panel is grouped)",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -346,7 +346,8 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
       const state = useTerminalStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
-        state.toggleMaximize(targetId);
+        // Pass getPanelGroup to enable group-aware maximize
+        state.toggleMaximize(targetId, undefined, undefined, state.getPanelGroup);
       }
     },
   }));
@@ -354,7 +355,7 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
   actions.set("terminal.maximize", () => ({
     id: "terminal.maximize",
     title: "Maximize Terminal",
-    description: "Toggle terminal maximize state",
+    description: "Toggle terminal maximize state (maximizes entire tab group if panel is grouped)",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -362,7 +363,8 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
     run: async () => {
       const state = useTerminalStore.getState();
       if (state.focusedId) {
-        state.toggleMaximize(state.focusedId);
+        // Pass getPanelGroup to enable group-aware maximize
+        state.toggleMaximize(state.focusedId, undefined, undefined, state.getPanelGroup);
       }
     },
   }));

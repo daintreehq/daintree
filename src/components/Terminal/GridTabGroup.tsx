@@ -13,6 +13,7 @@ export interface GridTabGroupProps {
   focusedId: string | null;
   gridPanelCount?: number;
   gridCols?: number;
+  isMaximized?: boolean;
 }
 
 export function GridTabGroup({
@@ -21,6 +22,7 @@ export function GridTabGroup({
   focusedId,
   gridPanelCount,
   gridCols,
+  isMaximized,
 }: GridTabGroupProps) {
   const setFocused = useTerminalStore((state) => state.setFocused);
   const setActiveTab = useTerminalStore((state) => state.setActiveTab);
@@ -208,6 +210,7 @@ export function GridTabGroup({
     <GridPanel
       terminal={activePanel}
       isFocused={isFocused}
+      isMaximized={isMaximized}
       gridPanelCount={gridPanelCount}
       gridCols={gridCols}
       tabs={tabs}
