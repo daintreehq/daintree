@@ -223,6 +223,71 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       }
     },
 
+    // Override setActiveTab to update both activeTabByGroup (focus slice) and TabGroup.activeTabId (registry)
+    // This ensures the active tab selection is persisted and survives restart
+    setActiveTab: (groupId: string, panelId: string) => {
+      // First validate that this is a real group with the panel as a member
+      const group = get().tabGroups.get(groupId);
+      const isValidGroupMember = group && group.panelIds.includes(panelId);
+
+      // Only update focus map if panel is in the group (prevents split-brain state)
+      if (isValidGroupMember) {
+        focusSlice.setActiveTab(groupId, panelId);
+      } else {
+        // For virtual groups (no explicit TabGroup), still update focus map for UI
+        if (!group) {
+          focusSlice.setActiveTab(groupId, panelId);
+        }
+        // If group exists but panel not in it, skip focus update to maintain consistency
+        return;
+      }
+
+      // Also update the TabGroup.activeTabId in the registry for persistence
+      set((state) => {
+        const currentGroup = state.tabGroups.get(groupId);
+        if (!currentGroup) {
+          // Not an explicit tab group (virtual single-panel group)
+          return state;
+        }
+
+        // Only update if the panel is actually in this group
+        if (!currentGroup.panelIds.includes(panelId)) {
+          return state;
+        }
+
+        // Update the group's activeTabId
+        const newTabGroups = new Map(state.tabGroups);
+        newTabGroups.set(groupId, { ...currentGroup, activeTabId: panelId });
+
+        // Persist synchronously from latest state to avoid race conditions
+        // Use get() to ensure we persist the most recent tabGroups, not a stale snapshot
+        import("./slices/terminalRegistry/persistence").then(({ saveTabGroups }) => {
+          saveTabGroups(get().tabGroups);
+        });
+
+        return { tabGroups: newTabGroups };
+      });
+    },
+
+    // Override hydrateTabGroups to also seed activeTabByGroup from persisted TabGroup.activeTabId
+    // This ensures the active tab state is restored after restart
+    hydrateTabGroups: (tabGroups) => {
+      // First, call the registry's hydrateTabGroups to sanitize and store the groups
+      registrySlice.hydrateTabGroups(tabGroups);
+
+      // Then seed activeTabByGroup from the hydrated TabGroup.activeTabId values
+      const hydratedGroups = get().tabGroups;
+      const newActiveTabByGroup = new Map<string, string>();
+      for (const [groupId, group] of hydratedGroups) {
+        if (group.activeTabId) {
+          newActiveTabByGroup.set(groupId, group.activeTabId);
+        }
+      }
+
+      // Update the focus slice's activeTabByGroup map
+      set({ activeTabByGroup: newActiveTabByGroup });
+    },
+
     reset: async () => {
       const state = get();
 
