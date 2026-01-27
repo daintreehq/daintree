@@ -130,4 +130,40 @@ describe("moveTerminalToWorktree", () => {
       TerminalRefreshTier.VISIBLE
     );
   });
+
+  it("moves entire group when terminal belongs to a group", () => {
+    const t1 = createMockTerminal("t1", "wt-a", "grid");
+    const t2 = createMockTerminal("t2", "wt-a", "grid");
+    const t3 = createMockTerminal("t3", "wt-a", "grid");
+
+    const group = {
+      id: "g1",
+      location: "grid" as const,
+      worktreeId: "wt-a",
+      activeTabId: "t1",
+      panelIds: ["t1", "t2", "t3"],
+    };
+
+    useTerminalStore.setState({
+      terminals: [t1, t2, t3],
+      tabGroups: new Map([["g1", group]]),
+    });
+
+    useTerminalStore.getState().moveTerminalToWorktree("t1", "wt-b");
+
+    const state = useTerminalStore.getState();
+
+    const movedT1 = state.terminals.find((t) => t.id === "t1");
+    const movedT2 = state.terminals.find((t) => t.id === "t2");
+    const movedT3 = state.terminals.find((t) => t.id === "t3");
+
+    expect(movedT1?.worktreeId).toBe("wt-b");
+    expect(movedT2?.worktreeId).toBe("wt-b");
+    expect(movedT3?.worktreeId).toBe("wt-b");
+
+    const movedGroup = state.tabGroups.get("g1");
+    expect(movedGroup?.worktreeId).toBe("wt-b");
+
+    expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledTimes(3);
+  });
 });

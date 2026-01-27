@@ -228,7 +228,12 @@ export type PanelLocation = "grid" | "dock" | "trash";
 /** Tab group location (subset of PanelLocation, excludes trash) */
 export type TabGroupLocation = "grid" | "dock";
 
-/** Tab group - a collection of panels displayed as tabs */
+/**
+ * Tab group - a collection of panels displayed as tabs
+ *
+ * INVARIANT: All panels in a group must have the same worktreeId as the group.
+ * Cross-worktree groups are not permitted.
+ */
 export interface TabGroup {
   /** Unique identifier for this tab group */
   id: string;
