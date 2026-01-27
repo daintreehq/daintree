@@ -271,7 +271,9 @@ export function WorktreeHeader({
     <div className="space-y-1">
       <div className="flex items-center gap-2 min-h-[22px]">
         <div className="flex items-center gap-2 min-w-0 flex-1">
-          {isMainWorktree && <Shield className="w-3.5 h-3.5 text-canopy-text/30 shrink-0" />}
+          {isMainWorktree && (
+            <Shield className="w-3.5 h-3.5 text-canopy-text/30 shrink-0" aria-label="Main worktree" />
+          )}
           {isPinned && !isMainWorktree && (
             <Pin className="w-3 h-3 text-canopy-text/40 shrink-0" aria-label="Pinned" />
           )}

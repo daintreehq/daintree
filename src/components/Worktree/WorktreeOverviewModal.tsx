@@ -88,6 +88,10 @@ export function WorktreeOverviewModal({
   // Error store for derived metadata
   const getWorktreeErrors = useErrorStore((state) => state.getWorktreeErrors);
 
+  // Filter store: hide main worktree preference
+  const hideMainWorktree = useWorktreeFilterStore((state) => state.hideMainWorktree);
+  const setHideMainWorktree = useWorktreeFilterStore((state) => state.setHideMainWorktree);
+
   // Compute derived metadata for each worktree
   const derivedMetaMap = useMemo(() => {
     const map = new Map<string, DerivedWorktreeMeta>();
@@ -108,6 +112,45 @@ export function WorktreeOverviewModal({
     }
     return map;
   }, [worktrees, terminals, getWorktreeErrors]);
+
+  // Compute aggregate statistics from derivedMetaMap
+  const aggregateStats = useMemo(() => {
+    let workingCount = 0;
+    let waitingCount = 0;
+    let failedCount = 0;
+
+    // Count worktrees (not terminals) with specific agent states
+    // Use same visibility logic as filtered list to keep stats in sync
+    for (const worktree of worktrees) {
+      const derived = derivedMetaMap.get(worktree.id);
+      if (!derived) continue;
+      const isActive = worktree.id === activeWorktreeId;
+
+      // Apply same filtering logic as the main list
+      if (hideMainWorktree && worktree.isMainWorktree) {
+        // Still count if it's active and alwaysShowActive is enabled
+        if (!(alwaysShowActive && isActive)) {
+          continue;
+        }
+      }
+
+      if (derived.hasWorkingAgent || derived.hasRunningAgent) workingCount++;
+      if (derived.hasWaitingAgent) waitingCount++;
+      if (derived.hasFailedAgent) failedCount++;
+    }
+
+    return { workingCount, waitingCount, failedCount };
+  }, [worktrees, derivedMetaMap, hideMainWorktree, activeWorktreeId, alwaysShowActive]);
+
+  // Check if only main worktree exists (to hide the filter toggle)
+  const hasOnlyMainWorktree = useMemo(() => {
+    return worktrees.length === 1 && worktrees[0]?.isMainWorktree === true;
+  }, [worktrees]);
+
+  // Check if there are any non-main worktrees
+  const hasNonMainWorktrees = useMemo(() => {
+    return worktrees.some((w) => !w.isMainWorktree);
+  }, [worktrees]);
 
   // Apply filters and sorting
   const { filteredWorktrees, groupedSections } = useMemo(() => {
@@ -132,6 +175,14 @@ export function WorktreeOverviewModal({
         hasCompletedAgent: false,
       };
       const isActive = worktree.id === activeWorktreeId;
+
+      // Hide main worktree if filter is enabled (unless it's the active worktree and alwaysShowActive is on)
+      if (hideMainWorktree && worktree.isMainWorktree) {
+        // Still show if it's active and alwaysShowActive is enabled
+        if (!(alwaysShowActive && isActive)) {
+          return false;
+        }
+      }
 
       // Always show active worktree if setting is enabled
       if (alwaysShowActive && isActive) {
@@ -171,6 +222,7 @@ export function WorktreeOverviewModal({
     pinnedWorktrees,
     derivedMetaMap,
     activeWorktreeId,
+    hideMainWorktree,
   ]);
 
   const handleKeyDown = useCallback(
@@ -254,8 +306,52 @@ export function WorktreeOverviewModal({
               ({filteredWorktrees.length}
               {filteredWorktrees.length !== worktrees.length && ` of ${worktrees.length}`})
             </span>
+            {/* Aggregate activity statistics */}
+            {(aggregateStats.workingCount > 0 ||
+              aggregateStats.waitingCount > 0 ||
+              aggregateStats.failedCount > 0) && (
+              <div
+                className="flex items-center gap-2 ml-2 pl-3 border-l border-divider"
+                role="status"
+                aria-label="Agent activity statistics"
+              >
+                {aggregateStats.workingCount > 0 && (
+                  <span className="flex items-center gap-1 text-xs text-emerald-400">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 motion-safe:animate-pulse motion-reduce:bg-emerald-500" />
+                    {aggregateStats.workingCount} working
+                  </span>
+                )}
+                {aggregateStats.waitingCount > 0 && (
+                  <span className="flex items-center gap-1 text-xs text-amber-400">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                    {aggregateStats.waitingCount} waiting
+                  </span>
+                )}
+                {aggregateStats.failedCount > 0 && (
+                  <span className="flex items-center gap-1 text-xs text-red-400">
+                    <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
+                    {aggregateStats.failedCount} failed
+                  </span>
+                )}
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-2">
+            {/* Hide main worktree toggle - show if there are non-main worktrees OR if filter is active (to allow recovery) */}
+            {(hasNonMainWorktrees || hideMainWorktree) && !hasOnlyMainWorktree && (
+              <label
+                className="flex items-center gap-1.5 text-xs text-canopy-text/60 cursor-pointer hover:text-canopy-text/80 transition-colors"
+                title={hideMainWorktree ? "Show main worktree" : "Hide main worktree"}
+              >
+                <input
+                  type="checkbox"
+                  checked={hideMainWorktree}
+                  onChange={(e) => setHideMainWorktree(e.target.checked)}
+                  className="w-3 h-3 rounded border-canopy-border text-canopy-accent focus:ring-canopy-accent focus:ring-offset-0 bg-canopy-bg cursor-pointer"
+                />
+                <span>Hide main</span>
+              </label>
+            )}
             {/* Filter Popover */}
             <WorktreeFilterPopover />
             {/* Clear Filters Button - only shown when filters are active */}
