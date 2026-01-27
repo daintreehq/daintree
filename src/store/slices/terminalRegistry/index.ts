@@ -744,6 +744,101 @@ export const createTerminalRegistrySlice =
         }
       },
 
+      trashPanelGroup: (panelId) => {
+        // Find the group this panel belongs to
+        const group = get().getPanelGroup(panelId);
+
+        // If no group, fall back to single panel trash
+        if (!group) {
+          get().trashTerminal(panelId);
+          return;
+        }
+
+        const expiresAt = Date.now() + 120000;
+        const groupRestoreId = `group-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+        const panelIds = [...group.panelIds];
+        const activeTabId = group.activeTabId ?? panelIds[0] ?? "";
+        const terminals = get().terminals;
+
+        // Filter to existing panels and validate at least one exists
+        const existingPanelIds = panelIds.filter((id) => terminals.some((t) => t.id === id));
+        if (existingPanelIds.length === 0) {
+          // No panels exist, just delete the group
+          set((state) => {
+            const newTabGroups = new Map(state.tabGroups);
+            newTabGroups.delete(group.id);
+            saveTabGroups(newTabGroups);
+            return { tabGroups: newTabGroups };
+          });
+          return;
+        }
+
+        // Use group's location and worktreeId as canonical source
+        const originalLocation: "dock" | "grid" = group.location === "dock" ? "dock" : "grid";
+        const worktreeId = group.worktreeId ?? null;
+
+        // Trash PTY processes for all PTY-backed panels
+        for (const id of existingPanelIds) {
+          const terminal = terminals.find((t) => t.id === id);
+          if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
+            terminalClient.trash(id).catch((error) => {
+              console.error("Failed to trash terminal:", error);
+            });
+          }
+        }
+
+        set((state) => {
+          // Move all existing panels to trash
+          const newTerminals = state.terminals.map((t) =>
+            existingPanelIds.includes(t.id) ? { ...t, location: "trash" as const } : t
+          );
+
+          const newTrashed = new Map(state.trashedTerminals);
+
+          // Add all existing panels to trash with shared groupRestoreId
+          // The first existing panel (anchor) gets the groupMetadata
+          for (let i = 0; i < existingPanelIds.length; i++) {
+            const id = existingPanelIds[i];
+            const isAnchor = i === 0;
+            newTrashed.set(id, {
+              id,
+              expiresAt,
+              originalLocation,
+              groupRestoreId,
+              ...(isAnchor && {
+                groupMetadata: {
+                  panelIds: existingPanelIds,
+                  activeTabId,
+                  location: group.location,
+                  worktreeId,
+                },
+              }),
+            });
+          }
+
+          // Delete the tab group since all panels are trashed
+          const newTabGroups = new Map(state.tabGroups);
+          newTabGroups.delete(group.id);
+          saveTabGroups(newTabGroups);
+
+          saveTerminals(newTerminals);
+          return { terminals: newTerminals, trashedTerminals: newTrashed, tabGroups: newTabGroups };
+        });
+
+        // Schedule expiry for all existing panels
+        for (const id of existingPanelIds) {
+          scheduleTrashExpiry(id, expiresAt);
+        }
+
+        // Apply renderer policies for PTY-backed panels
+        for (const id of existingPanelIds) {
+          const terminal = terminals.find((t) => t.id === id);
+          if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
+            terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+          }
+        }
+      },
+
       restoreTerminal: (id, targetWorktreeId) => {
         clearTrashExpiryTimer(id);
         const trashedInfo = get().trashedTerminals.get(id);
@@ -803,10 +898,19 @@ export const createTerminalRegistrySlice =
           }
 
           const newTrashed = new Map(state.trashedTerminals);
-          // Preserve existing originalLocation if already set (from trashTerminal call)
+          // Preserve existing fields if already set (from trashTerminal/trashPanelGroup call)
           const existingTrashed = state.trashedTerminals.get(id);
           const location = existingTrashed?.originalLocation ?? originalLocation;
-          newTrashed.set(id, { id, expiresAt, originalLocation: location });
+          newTrashed.set(id, {
+            id,
+            expiresAt,
+            originalLocation: location,
+            // Preserve group restore metadata if present
+            ...(existingTrashed?.groupRestoreId && {
+              groupRestoreId: existingTrashed.groupRestoreId,
+            }),
+            ...(existingTrashed?.groupMetadata && { groupMetadata: existingTrashed.groupMetadata }),
+          });
           const newTerminals = state.terminals.map((t) =>
             t.id === id ? { ...t, location: "trash" as const } : t
           );

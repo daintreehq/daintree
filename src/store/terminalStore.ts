@@ -192,18 +192,107 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       }
     },
 
+    trashPanelGroup: (panelId: string) => {
+      const state = get();
+      // Get the group before trashing to identify all panels
+      const group = registrySlice.getPanelGroup(panelId);
+      const panelIdsInGroup = group?.panelIds ?? [panelId];
+
+      registrySlice.trashPanelGroup(panelId);
+
+      const updates: Partial<PanelGridState> = {};
+
+      // If any panel in the group was focused, find a new focus
+      if (panelIdsInGroup.includes(state.focusedId ?? "")) {
+        const gridTerminals = state.terminals.filter(
+          (t) => !panelIdsInGroup.includes(t.id) && t.location === "grid"
+        );
+        updates.focusedId = gridTerminals[0]?.id ?? null;
+      }
+
+      // If any panel in the group was maximized, clear maximize
+      if (state.maximizedId && panelIdsInGroup.includes(state.maximizedId)) {
+        updates.maximizedId = null;
+      }
+
+      // If any panel in the group was the active dock terminal, clear it
+      if (state.activeDockTerminalId && panelIdsInGroup.includes(state.activeDockTerminalId)) {
+        updates.activeDockTerminalId = null;
+      }
+
+      if (Object.keys(updates).length > 0) {
+        set(updates);
+      }
+    },
+
     restoreTerminal: (id: string, targetWorktreeId?: string) => {
       registrySlice.restoreTerminal(id, targetWorktreeId);
       set({ focusedId: id, activeDockTerminalId: null });
     },
 
     restoreLastTrashed: () => {
-      const trashedIds = Array.from(get().trashedTerminals.keys());
+      const trashedTerminals = get().trashedTerminals;
+      const trashedIds = Array.from(trashedTerminals.keys());
       if (trashedIds.length === 0) {
         return;
       }
+
       const lastId = trashedIds[trashedIds.length - 1];
-      get().restoreTerminal(lastId);
+      const lastTrashed = trashedTerminals.get(lastId);
+
+      // Check if this panel was part of a group
+      if (lastTrashed?.groupRestoreId) {
+        // Find all panels with the same groupRestoreId
+        const groupPanels: Array<{ id: string; trashed: typeof lastTrashed }> = [];
+        let anchorPanel: typeof lastTrashed | undefined;
+
+        for (const [id, trashed] of trashedTerminals.entries()) {
+          if (trashed.groupRestoreId === lastTrashed.groupRestoreId) {
+            groupPanels.push({ id, trashed });
+            if (trashed.groupMetadata) {
+              anchorPanel = trashed;
+            }
+          }
+        }
+
+        // Restore all panels in the group
+        const restoredPanelIds: string[] = [];
+        for (const { id } of groupPanels) {
+          registrySlice.restoreTerminal(id);
+          restoredPanelIds.push(id);
+        }
+
+        // Recreate the tab group if we have metadata
+        if (anchorPanel?.groupMetadata && restoredPanelIds.length > 1) {
+          const { panelIds, activeTabId, location, worktreeId } = anchorPanel.groupMetadata;
+          // Filter to only include panels that were actually restored and exist in the original order
+          const validPanelIds = panelIds.filter((id) => restoredPanelIds.includes(id));
+          if (validPanelIds.length > 1) {
+            const validActiveTabId = validPanelIds.includes(activeTabId)
+              ? activeTabId
+              : validPanelIds[0];
+            const groupId = registrySlice.createTabGroup(
+              location,
+              worktreeId ?? undefined,
+              validPanelIds,
+              validActiveTabId
+            );
+            // Seed activeTabByGroup for proper UI state
+            focusSlice.setActiveTab(groupId, validActiveTabId);
+          }
+        }
+
+        // Focus the active tab from the restored group
+        const focusId =
+          anchorPanel?.groupMetadata?.activeTabId &&
+          restoredPanelIds.includes(anchorPanel.groupMetadata.activeTabId)
+            ? anchorPanel.groupMetadata.activeTabId
+            : restoredPanelIds[0];
+        set({ focusedId: focusId, activeDockTerminalId: null });
+      } else {
+        // Single panel restore (existing behavior)
+        get().restoreTerminal(lastId);
+      }
     },
 
     moveTerminalToPosition: (

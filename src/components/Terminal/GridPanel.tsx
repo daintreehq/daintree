@@ -37,7 +37,7 @@ export function GridPanel({
   onTabReorder,
 }: GridPanelProps) {
   const setFocused = useTerminalStore((state) => state.setFocused);
-  const trashTerminal = useTerminalStore((state) => state.trashTerminal);
+  const trashPanelGroup = useTerminalStore((state) => state.trashPanelGroup);
   const removeTerminal = useTerminalStore((state) => state.removeTerminal);
   const toggleMaximize = useTerminalStore((state) => state.toggleMaximize);
   const getPanelGroup = useTerminalStore((state) => state.getPanelGroup);
@@ -73,7 +73,8 @@ export function GridPanel({
         setIsTrashing(true);
         timeoutRef.current = setTimeout(() => {
           try {
-            trashTerminal(terminal.id);
+            // trashPanelGroup handles both grouped and ungrouped panels
+            trashPanelGroup(terminal.id);
           } catch (error) {
             console.error("Failed to trash terminal:", error);
           } finally {
@@ -84,7 +85,7 @@ export function GridPanel({
         }, duration);
       }
     },
-    [removeTerminal, trashTerminal, terminal.id]
+    [removeTerminal, trashPanelGroup, terminal.id]
   );
 
   const handleToggleMaximize = useCallback(() => {

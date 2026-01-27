@@ -57,10 +57,21 @@ export interface AddTerminalOptions {
   // Note: Tab membership is now managed via createTabGroup/addPanelToGroup, not on terminals
 }
 
+export interface TrashedTerminalGroupMetadata {
+  panelIds: string[];
+  activeTabId: string;
+  location: TabGroupLocation;
+  worktreeId: string | null;
+}
+
 export interface TrashedTerminal {
   id: string;
   expiresAt: number;
   originalLocation: "dock" | "grid";
+  /** Shared ID for panels trashed together as a group */
+  groupRestoreId?: string;
+  /** Present on the "anchor" panel of a trashed group, holds metadata for recreation */
+  groupMetadata?: TrashedTerminalGroupMetadata;
 }
 
 export interface TerminalRegistrySlice {
@@ -97,6 +108,8 @@ export interface TerminalRegistrySlice {
   toggleTerminalLocation: (id: string) => void;
 
   trashTerminal: (id: string) => void;
+  /** Trash all panels in a group together, storing group metadata for restoration */
+  trashPanelGroup: (panelId: string) => void;
   restoreTerminal: (id: string, targetWorktreeId?: string) => void;
   markAsTrashed: (id: string, expiresAt: number, originalLocation: "dock" | "grid") => void;
   markAsRestored: (id: string) => void;

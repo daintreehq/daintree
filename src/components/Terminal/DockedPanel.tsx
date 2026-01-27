@@ -13,7 +13,7 @@ export interface DockedPanelProps {
 
 export function DockedPanel({ terminal, onPopoverClose, onAddTab }: DockedPanelProps) {
   const setFocused = useTerminalStore((state) => state.setFocused);
-  const trashTerminal = useTerminalStore((state) => state.trashTerminal);
+  const trashPanelGroup = useTerminalStore((state) => state.trashPanelGroup);
   const removeTerminal = useTerminalStore((state) => state.removeTerminal);
   const updateTitle = useTerminalStore((state) => state.updateTitle);
   const moveTerminalToGrid = useTerminalStore((state) => state.moveTerminalToGrid);
@@ -46,7 +46,8 @@ export function DockedPanel({ terminal, onPopoverClose, onAddTab }: DockedPanelP
         setIsTrashing(true);
         timeoutRef.current = setTimeout(() => {
           try {
-            trashTerminal(terminal.id);
+            // trashPanelGroup handles both grouped and ungrouped panels
+            trashPanelGroup(terminal.id);
           } catch (error) {
             console.error("Failed to trash terminal:", error);
           } finally {
@@ -58,7 +59,7 @@ export function DockedPanel({ terminal, onPopoverClose, onAddTab }: DockedPanelP
         }, duration);
       }
     },
-    [removeTerminal, trashTerminal, terminal.id, onPopoverClose]
+    [removeTerminal, trashPanelGroup, terminal.id, onPopoverClose]
   );
 
   const handleRestore = useCallback(() => {
