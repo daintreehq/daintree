@@ -40,6 +40,7 @@ export function GridPanel({
   const trashTerminal = useTerminalStore((state) => state.trashTerminal);
   const removeTerminal = useTerminalStore((state) => state.removeTerminal);
   const toggleMaximize = useTerminalStore((state) => state.toggleMaximize);
+  const getPanelGroup = useTerminalStore((state) => state.getPanelGroup);
   const updateTitle = useTerminalStore((state) => state.updateTitle);
   const moveTerminalToDock = useTerminalStore((state) => state.moveTerminalToDock);
   const dockBehavior = useDockStore((state) => state.behavior);
@@ -87,8 +88,8 @@ export function GridPanel({
   );
 
   const handleToggleMaximize = useCallback(() => {
-    toggleMaximize(terminal.id, gridCols, gridPanelCount);
-  }, [toggleMaximize, terminal.id, gridCols, gridPanelCount]);
+    toggleMaximize(terminal.id, gridCols, gridPanelCount, getPanelGroup);
+  }, [toggleMaximize, terminal.id, gridCols, gridPanelCount, getPanelGroup]);
 
   const handleTitleChange = useCallback(
     (newTitle: string) => {

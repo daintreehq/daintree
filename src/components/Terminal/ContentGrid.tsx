@@ -375,16 +375,29 @@ function EmptyState({
 
 export function ContentGrid({ className, defaultCwd, agentAvailability }: ContentGridProps) {
   const { showMenu } = useNativeContextMenu();
-  const { terminals, focusedId, maximizedId, preMaximizeLayout, clearPreMaximizeLayout } =
-    useTerminalStore(
-      useShallow((state) => ({
-        terminals: state.terminals,
-        focusedId: state.focusedId,
-        maximizedId: state.maximizedId,
-        preMaximizeLayout: state.preMaximizeLayout,
-        clearPreMaximizeLayout: state.clearPreMaximizeLayout,
-      }))
-    );
+  const {
+    terminals,
+    focusedId,
+    maximizedId,
+    maximizeTarget,
+    preMaximizeLayout,
+    clearPreMaximizeLayout,
+    validateMaximizeTarget,
+    getTerminal,
+    setFocused,
+  } = useTerminalStore(
+    useShallow((state) => ({
+      terminals: state.terminals,
+      focusedId: state.focusedId,
+      maximizedId: state.maximizedId,
+      maximizeTarget: state.maximizeTarget,
+      preMaximizeLayout: state.preMaximizeLayout,
+      clearPreMaximizeLayout: state.clearPreMaximizeLayout,
+      validateMaximizeTarget: state.validateMaximizeTarget,
+      getTerminal: state.getTerminal,
+      setFocused: state.setFocused,
+    }))
+  );
 
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const showProjectPulse = usePreferencesStore((state) => state.showProjectPulse);
@@ -425,7 +438,6 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
   const deleteTabGroup = useTerminalStore((state) => state.deleteTabGroup);
   const addTerminal = useTerminalStore((state) => state.addTerminal);
   const setActiveTab = useTerminalStore((state) => state.setActiveTab);
-  const setFocused = useTerminalStore((state) => state.setFocused);
 
   const tabGroups = useMemo(
     () => getTabGroups("grid", activeWorktreeId ?? undefined),
@@ -569,11 +581,6 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
   const gridItemCount = tabGroups.length + (showPlaceholder ? 1 : 0);
 
   // Attach ResizeObserver to track container dimensions
-  // CRITICAL: This effect must re-run when the layout mode changes because gridContainerRef
-  // points to different DOM elements in different render branches:
-  // - Two-pane split mode: wrapper div (line 723)
-  // - Standard grid mode: actual grid element (line 751)
-  // If the observer doesn't reconnect, gridWidth becomes stale and column calculations break.
   useEffect(() => {
     const container = gridContainerRef.current;
     if (!container) return;
@@ -723,8 +730,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
     [agentAvailability, defaultCwd, layoutConfig, showMenu]
   );
 
-  // Terminal IDs for SortableContext - Use first panel's ID for each group
-  // This ensures DnD system works consistently with terminal-based reordering
+  // Terminal IDs for SortableContext
   const terminalIds = useMemo(() => {
     const ids = tabGroups.map((g) => g.panelIds[0] ?? g.id);
     if (showPlaceholder && placeholderInGrid) {
@@ -735,19 +741,16 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
   }, [tabGroups, showPlaceholder, placeholderIndex, placeholderInGrid]);
 
   // Batch-fit grid terminals when layout (gridCols/count) changes
-  // Skip during drag to avoid tier churn from CSS transforms
   useEffect(() => {
     const ids = gridTerminals.map((t) => t.id);
     let cancelled = false;
 
     const timeoutId = window.setTimeout(() => {
-      // Skip batch fit during drag - transforms make dimensions unreliable
       if (isDraggingRef.current) return;
 
       let index = 0;
       const processNext = () => {
         if (cancelled || index >= ids.length) return;
-        // Re-check drag state in case drag started during batch
         if (isDraggingRef.current) return;
 
         const id = ids[index++];
@@ -755,8 +758,6 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
 
         if (managed?.hostElement.isConnected) {
           terminalInstanceService.fit(id);
-          // Only do fit, don't force tier - let the tier provider handle it
-          // Forcing VISIBLE tier here can cause churn during reorders
         }
         requestAnimationFrame(processNext);
       };
@@ -772,51 +773,67 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
   // Show "grid full" overlay when trying to drag from dock to a full grid
   const showGridFullOverlay = sourceContainer === "dock" && isGridFull;
 
-  // Maximized terminal takes full screen
-  if (maximizedId) {
-    const terminal = gridTerminals.find((t: TerminalInstance) => t.id === maximizedId);
-    if (terminal) {
-      // Check if the maximized panel is part of a tab group
-      const group = getPanelGroup(maximizedId);
+  // Validate maximize target before rendering
+  useEffect(() => {
+    if (maximizedId && maximizeTarget) {
+      validateMaximizeTarget(getPanelGroup, getTerminal);
+    }
+  }, [maximizedId, maximizeTarget, validateMaximizeTarget, getPanelGroup, getTerminal, terminals]);
 
+  // Maximized terminal or group takes full screen
+  if (maximizedId && maximizeTarget) {
+    if (maximizeTarget.type === "group") {
+      // Find the group and render it maximized with tab bar
+      const group = tabGroups.find((g) => g.id === maximizeTarget.id);
       if (group) {
-        // Get filtered panels (excludes trashed, scoped to location/worktree)
         const groupPanels = getTabGroupPanels(group.id, "grid");
+        if (groupPanels.length > 0) {
+          // Ensure focus is set on a panel in the maximized group
+          if (!focusedId || !groupPanels.some((p) => p.id === focusedId)) {
+            const activeTabId = useTerminalStore.getState().getActiveTabId(group.id);
+            const panelToFocus = groupPanels.find((p) => p.id === activeTabId) || groupPanels[0];
+            if (panelToFocus) {
+              setFocused(panelToFocus.id);
+            }
+          }
 
-        if (groupPanels.length > 1) {
-          // Multi-panel group - render with tabs
           return (
             <div className={cn("h-full relative bg-canopy-bg", className)}>
               <GridTabGroup
                 group={group}
                 panels={groupPanels}
                 focusedId={focusedId}
-                gridPanelCount={gridItemCount}
+                gridPanelCount={1}
+                gridCols={1}
                 isMaximized={true}
               />
             </div>
           );
         }
       }
-
-      // Single panel or ungrouped - render GridPanel directly
-      return (
-        <div className={cn("h-full relative bg-canopy-bg", className)}>
-          <GridPanel
-            terminal={terminal}
-            isFocused={true}
-            isMaximized={true}
-            gridPanelCount={gridItemCount}
-          />
-        </div>
-      );
+      return null;
+    } else {
+      // Single panel maximize
+      const terminal = gridTerminals.find((t: TerminalInstance) => t.id === maximizedId);
+      if (terminal) {
+        return (
+          <div className={cn("h-full relative bg-canopy-bg", className)}>
+            <GridPanel
+              terminal={terminal}
+              isFocused={true}
+              isMaximized={true}
+              gridPanelCount={gridItemCount}
+            />
+          </div>
+        );
+      }
+      return null;
     }
   }
 
   const isEmpty = gridTerminals.length === 0;
 
-  // Two-pane split mode detection - only enable for exactly 2 single-panel groups
-  // TwoPaneSplitLayout doesn't support tab groups, so disable if any group has multiple panels
+  // Two-pane split mode detection
   const allGroupsAreSinglePanel = tabGroups.every((g) => g.panelIds.length === 1);
   const useTwoPaneSplitMode =
     twoPaneSplitEnabled &&
@@ -825,16 +842,12 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
     !maximizedId &&
     !showPlaceholder;
 
-  // Render two-pane split layout when eligible
   if (useTwoPaneSplitMode) {
-    // Get the first panel from each group for the two-pane layout
-    // This handles tab groups correctly - each group appears as one pane
     const twoPaneTerminals = tabGroups
       .slice(0, 2)
       .map((g) => getTabGroupPanels(g.id, "grid")[0])
       .filter((t): t is TerminalInstance => t !== undefined);
 
-    // Only render if we have exactly 2 panels
     if (twoPaneTerminals.length === 2) {
       return (
         <div className={cn("h-full flex flex-col", className)}>
@@ -881,14 +894,10 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
             style={{
               display: "grid",
               gridTemplateColumns: `repeat(${gridCols}, 1fr)`,
-              // Use minmax to prevent pancake terminals while still filling space
-              // Terminals stretch to fill available space but never shrink below minimum
               gridAutoRows: `minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`,
               gap: "4px",
               backgroundColor: "var(--color-grid-bg)",
-              // Smooth transition for column count changes
               transition: "grid-template-columns 200ms ease-out",
-              // Allow scrolling if terminals exceed viewport (rather than crushing them)
               overflowY: "auto",
             }}
             role="grid"
@@ -920,10 +929,8 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
                     elements.push(<SortableGridPlaceholder key={GRID_PLACEHOLDER_ID} />);
                   }
 
-                  // Check if any panel in the group is trashed
                   const isGroupDisabled = groupPanels.some((p) => isInTrash(p.id));
 
-                  // Single-panel group: render GridPanel directly
                   if (groupPanels.length === 1) {
                     const terminal = groupPanels[0];
                     elements.push(
@@ -944,7 +951,6 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
                       </SortableTerminal>
                     );
                   } else {
-                    // Multi-panel group: wrap in SortableTerminal using first panel for DnD
                     const firstPanel = groupPanels[0];
                     elements.push(
                       <SortableTerminal

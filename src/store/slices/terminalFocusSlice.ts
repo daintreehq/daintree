@@ -29,9 +29,13 @@ interface PreMaximizeLayoutSnapshot {
   worktreeId: string | undefined;
 }
 
+export type MaximizeTarget = { type: "panel"; id: string } | { type: "group"; id: string } | null;
+
 export interface TerminalFocusSlice {
   focusedId: string | null;
   maximizedId: string | null;
+  /** Tracks whether maximize is for a single panel or a tab group */
+  maximizeTarget: MaximizeTarget;
   activeDockTerminalId: string | null;
   pingedId: string | null;
   preMaximizeLayout: PreMaximizeLayoutSnapshot | null;
@@ -40,8 +44,20 @@ export interface TerminalFocusSlice {
 
   setFocused: (id: string | null, shouldPing?: boolean) => void;
   pingTerminal: (id: string) => void;
-  toggleMaximize: (id: string, currentGridCols?: number, currentGridItemCount?: number) => void;
+  toggleMaximize: (
+    id: string,
+    currentGridCols?: number,
+    currentGridItemCount?: number,
+    getPanelGroup?: (panelId: string) => { id: string; panelIds: string[] } | undefined
+  ) => void;
   setMaximizedId: (id: string | null) => void;
+  /** Get the maximize target (panel or group) */
+  getMaximizeTarget: () => MaximizeTarget;
+  /** Validate and cleanup maximize state if target is invalid */
+  validateMaximizeTarget: (
+    getPanelGroup: (panelId: string) => { id: string; panelIds: string[] } | undefined,
+    getTerminal: (id: string) => TerminalInstance | undefined
+  ) => void;
   clearPreMaximizeLayout: () => void;
   focusNext: () => void;
   focusPrevious: () => void;
@@ -91,6 +107,7 @@ export const createTerminalFocusSlice =
     return {
       focusedId: null,
       maximizedId: null,
+      maximizeTarget: null,
       activeDockTerminalId: null,
       pingedId: null,
       preMaximizeLayout: null,
@@ -123,30 +140,68 @@ export const createTerminalFocusSlice =
         }, 1600);
       },
 
-      toggleMaximize: (id, currentGridCols, currentGridItemCount) =>
+      toggleMaximize: (id, currentGridCols, currentGridItemCount, getPanelGroup) =>
         set((state) => {
-          const isMaximizing = state.maximizedId !== id;
           const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
 
-          if (isMaximizing) {
-            if (currentGridCols !== undefined && currentGridItemCount !== undefined) {
-              return {
-                maximizedId: id,
-                preMaximizeLayout: {
+          // Check if we're unmaximizing
+          // Unmaximize if:
+          // 1. The maximized panel/group contains this panel
+          // 2. We're clicking on a panel that's already maximized (same panel)
+          // 3. We're clicking on any panel while a group is maximized that contains this panel
+          let shouldUnmaximize = false;
+          if (state.maximizeTarget) {
+            if (state.maximizeTarget.type === "panel" && state.maximizeTarget.id === id) {
+              shouldUnmaximize = true;
+            } else if (state.maximizeTarget.type === "group") {
+              if (getPanelGroup) {
+                const group = getPanelGroup(id);
+                if (group && group.id === state.maximizeTarget.id) {
+                  shouldUnmaximize = true;
+                }
+              } else {
+                // Backwards compatibility: if getPanelGroup not provided, fall back to panel ID check
+                if (state.maximizedId === id) {
+                  shouldUnmaximize = true;
+                }
+              }
+            }
+          } else if (state.maximizedId === id) {
+            // Backwards compatibility: old behavior when no maximizeTarget
+            shouldUnmaximize = true;
+          }
+
+          if (shouldUnmaximize) {
+            return {
+              maximizedId: null,
+              maximizeTarget: null,
+            };
+          }
+
+          // Maximizing - check if panel is in a group
+          const group = getPanelGroup?.(id);
+          const layoutSnapshot =
+            currentGridCols !== undefined && currentGridItemCount !== undefined
+              ? {
                   gridCols: currentGridCols,
                   gridItemCount: currentGridItemCount,
                   worktreeId: activeWorktreeId ?? undefined,
-                },
-              };
-            } else {
-              return {
-                maximizedId: id,
-                preMaximizeLayout: null,
-              };
-            }
-          } else {
+                }
+              : null;
+
+          if (group && group.panelIds.length > 1) {
+            // Panel is in a group with multiple panels - maximize the entire group
             return {
-              maximizedId: null,
+              maximizedId: id, // Keep track of which panel triggered maximize for backwards compatibility
+              maximizeTarget: { type: "group", id: group.id },
+              preMaximizeLayout: layoutSnapshot,
+            };
+          } else {
+            // Single panel (not in a group or group has only 1 panel) - maximize just the panel
+            return {
+              maximizedId: id,
+              maximizeTarget: { type: "panel", id },
+              preMaximizeLayout: layoutSnapshot,
             };
           }
         }),
@@ -155,6 +210,44 @@ export const createTerminalFocusSlice =
         set({
           maximizedId: id,
         }),
+
+      getMaximizeTarget: () => get().maximizeTarget,
+
+      validateMaximizeTarget: (getPanelGroup, getTerminal) => {
+        const state = get();
+        if (!state.maximizeTarget || !state.maximizedId) return;
+
+        let shouldClear = false;
+
+        if (state.maximizeTarget.type === "panel") {
+          // Check if the panel still exists
+          const terminal = getTerminal(state.maximizedId);
+          if (!terminal || terminal.location === "trash") {
+            shouldClear = true;
+          }
+        } else if (state.maximizeTarget.type === "group") {
+          // Check if the group still exists and contains the maximized panel
+          const group = getPanelGroup(state.maximizedId);
+          if (!group || group.id !== state.maximizeTarget.id) {
+            // Group is gone or panel moved out - clear maximize
+            shouldClear = true;
+          } else if (group.panelIds.length === 1) {
+            // Group shrunk to single panel - downgrade to panel maximize
+            set({
+              maximizeTarget: { type: "panel", id: state.maximizedId },
+            });
+            return;
+          }
+        }
+
+        if (shouldClear) {
+          set({
+            maximizedId: null,
+            maximizeTarget: null,
+            preMaximizeLayout: null,
+          });
+        }
+      },
 
       clearPreMaximizeLayout: () =>
         set({
@@ -355,9 +448,17 @@ export const createTerminalFocusSlice =
             }
           }
 
+          // Clear maximize state if the removed panel was maximized, or if it was in a maximized group
           if (state.maximizedId === removedId) {
             updates.maximizedId = null;
+            updates.maximizeTarget = null;
             updates.preMaximizeLayout = null;
+          } else if (state.maximizeTarget?.type === "group") {
+            // Check if the removed panel was part of the maximized group
+            // We need to validate the group still exists and is valid
+            // This will be handled by the group cleanup logic in the registry slice
+            // For now, we mark that validation is needed by checking in the next render
+            // The ContentGrid will handle the fallback when it can't find the group
           }
 
           if (state.activeDockTerminalId === removedId) {
