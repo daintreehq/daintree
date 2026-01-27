@@ -55,7 +55,7 @@ export interface HydrationOptions {
     focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean }
   ) => void;
   setReconnectError?: (id: string, error: TerminalReconnectError) => void;
-  hydrateTabGroups?: (tabGroups: TabGroup[]) => void;
+  hydrateTabGroups?: (tabGroups: TabGroup[], options?: { skipPersist?: boolean }) => void;
 }
 
 export async function hydrateAppState(
@@ -581,8 +581,10 @@ export async function hydrateAppState(
           options.hydrateTabGroups(tabGroups ?? []);
         } catch (error) {
           logWarn("Failed to restore tab groups", { error });
-          // Clear tab groups on error to prevent stale state
-          options.hydrateTabGroups([]);
+          // Check staleness before clearing to prevent race condition
+          if (!checkCurrent()) return;
+          // Clear tab groups on error to prevent stale state, but skip persist to avoid wiping storage
+          options.hydrateTabGroups([], { skipPersist: true });
         }
       }
     }

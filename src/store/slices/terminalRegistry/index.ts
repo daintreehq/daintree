@@ -1993,21 +1993,36 @@ export const createTerminalRegistrySlice =
         return true;
       },
 
-      hydrateTabGroups: (tabGroups) => {
+      hydrateTabGroups: (tabGroups, options) => {
         const terminals = get().terminals;
         const terminalIdSet = new Set(terminals.map((t) => t.id));
         const trashedTerminals = get().trashedTerminals;
 
         // Sanitize tab groups during hydration:
-        // 1. Drop panelIds that no longer exist or are trashed (check both trashedTerminals AND location)
-        // 2. Deduplicate panelIds within each group
-        // 3. Delete groups with <= 1 unique panel
-        // 4. Validate group location is "grid" or "dock"
-        // 5. Normalize member locations to match group location
+        // 1. Deduplicate group IDs (keep first occurrence)
+        // 2. Drop panelIds that no longer exist or are trashed (check both trashedTerminals AND location)
+        // 3. Deduplicate panelIds within each group
+        // 4. Delete groups with <= 1 unique panel
+        // 5. Validate group location is "grid" or "dock"
+        // 6. Normalize member locations to match group location
         const sanitizedGroups = new Map<string, TabGroup>();
         const panelsAlreadyInGroups = new Set<string>();
+        const seenGroupIds = new Set<string>();
 
         for (const group of tabGroups) {
+          // Validate shape: skip malformed groups that would crash during sanitation
+          if (!group || typeof group.id !== "string" || !Array.isArray(group.panelIds)) {
+            console.warn(`[TabGroup] Hydration: Skipping malformed group`, group);
+            continue;
+          }
+
+          // Deduplicate group IDs - keep first occurrence
+          if (seenGroupIds.has(group.id)) {
+            console.log(`[TabGroup] Hydration: Dropping duplicate group ID ${group.id}`);
+            continue;
+          }
+          seenGroupIds.add(group.id);
+
           // Validate group location
           const groupLocation = group.location === "dock" ? "dock" : "grid";
 
@@ -2078,7 +2093,10 @@ export const createTerminalRegistrySlice =
           if (terminalsUpdated) {
             saveTerminals(newTerminals);
           }
-          saveTabGroups(sanitizedGroups);
+          // Skip persistence if this is an error-recovery clear
+          if (!options?.skipPersist) {
+            saveTabGroups(sanitizedGroups);
+          }
           return { terminals: newTerminals, tabGroups: sanitizedGroups };
         });
 

@@ -14,6 +14,10 @@ const worktreeClientMock = {
   getAll: vi.fn(),
 };
 
+const projectClientMock = {
+  getTabGroups: vi.fn(),
+};
+
 const terminalConfigClientMock = {
   setScrollback: vi.fn(),
 };
@@ -48,6 +52,7 @@ vi.mock("@/clients", () => ({
   appClient: appClientMock,
   terminalClient: terminalClientMock,
   worktreeClient: worktreeClientMock,
+  projectClient: projectClientMock,
 }));
 
 vi.mock("@/clients/terminalConfigClient", () => ({
@@ -107,6 +112,7 @@ describe("hydrateAppState", () => {
     terminalClientMock.getForProject.mockResolvedValue([]);
     terminalClientMock.reconnect.mockResolvedValue({ exists: false });
     worktreeClientMock.getAll.mockResolvedValue([]);
+    projectClientMock.getTabGroups.mockResolvedValue([]);
   });
 
   it("rehydrates dev-preview panels without backend terminals", async () => {
@@ -408,5 +414,133 @@ describe("hydrateAppState", () => {
 
     // Should restore terminal content
     expect(fetchAndRestoreMock).toHaveBeenCalledWith("agent-1");
+  });
+
+  it("loads and hydrates persisted tab groups after terminal restore", async () => {
+    // This test verifies that tab groups are loaded from project storage
+    // and passed to the hydrateTabGroups callback after terminals are restored.
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "terminal-1",
+            kind: "terminal",
+            title: "Terminal 1",
+            cwd: "/project",
+            location: "grid",
+          },
+          {
+            id: "terminal-2",
+            kind: "terminal",
+            title: "Terminal 2",
+            cwd: "/project",
+            location: "grid",
+          },
+        ],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+
+    // Set up persisted tab groups
+    const persistedTabGroups = [
+      {
+        id: "group-1",
+        location: "grid",
+        worktreeId: undefined,
+        activeTabId: "terminal-1",
+        panelIds: ["terminal-1", "terminal-2"],
+      },
+    ];
+    projectClientMock.getTabGroups.mockResolvedValue(persistedTabGroups);
+
+    const addTerminal = vi.fn().mockResolvedValue("terminal-id");
+    const setActiveWorktree = vi.fn();
+    const loadRecipes = vi.fn().mockResolvedValue(undefined);
+    const openDiagnosticsDock = vi.fn();
+    const hydrateTabGroups = vi.fn();
+
+    await hydrateAppState({
+      addTerminal,
+      setActiveWorktree,
+      loadRecipes,
+      openDiagnosticsDock,
+      hydrateTabGroups,
+    });
+
+    // Verify tab groups were fetched for the current project
+    expect(projectClientMock.getTabGroups).toHaveBeenCalledWith("project-1");
+
+    // Verify hydrateTabGroups was called with the persisted groups
+    expect(hydrateTabGroups).toHaveBeenCalledTimes(1);
+    expect(hydrateTabGroups).toHaveBeenCalledWith(persistedTabGroups);
+  });
+
+  it("clears tab groups when no persisted groups exist", async () => {
+    // When there are no persisted tab groups, hydrateTabGroups should be
+    // called with an empty array to clear any stale state.
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+
+    projectClientMock.getTabGroups.mockResolvedValue([]);
+
+    const addTerminal = vi.fn().mockResolvedValue("terminal-id");
+    const setActiveWorktree = vi.fn();
+    const loadRecipes = vi.fn().mockResolvedValue(undefined);
+    const openDiagnosticsDock = vi.fn();
+    const hydrateTabGroups = vi.fn();
+
+    await hydrateAppState({
+      addTerminal,
+      setActiveWorktree,
+      loadRecipes,
+      openDiagnosticsDock,
+      hydrateTabGroups,
+    });
+
+    // Should still call hydrateTabGroups with empty array to clear stale groups
+    expect(hydrateTabGroups).toHaveBeenCalledWith([]);
+  });
+
+  it("clears tab groups on error fetching persisted groups", async () => {
+    // When fetching tab groups fails, hydrateTabGroups should be called
+    // with an empty array to prevent stale state.
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+
+    projectClientMock.getTabGroups.mockRejectedValue(new Error("Storage error"));
+
+    const addTerminal = vi.fn().mockResolvedValue("terminal-id");
+    const setActiveWorktree = vi.fn();
+    const loadRecipes = vi.fn().mockResolvedValue(undefined);
+    const openDiagnosticsDock = vi.fn();
+    const hydrateTabGroups = vi.fn();
+
+    await hydrateAppState({
+      addTerminal,
+      setActiveWorktree,
+      loadRecipes,
+      openDiagnosticsDock,
+      hydrateTabGroups,
+    });
+
+    // Should call hydrateTabGroups with empty array and skipPersist on error
+    expect(hydrateTabGroups).toHaveBeenCalledWith([], { skipPersist: true });
   });
 });

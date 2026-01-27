@@ -24,7 +24,7 @@ export interface HydrationCallbacks {
     focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean }
   ) => void;
   setReconnectError?: (id: string, error: TerminalReconnectError) => void;
-  hydrateTabGroups?: (tabGroups: TabGroup[]) => void;
+  hydrateTabGroups?: (tabGroups: TabGroup[], options?: { skipPersist?: boolean }) => void;
 }
 
 export function useAppHydration(callbacks: HydrationCallbacks) {
