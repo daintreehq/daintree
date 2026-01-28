@@ -1,5 +1,6 @@
 import type { TerminalInstance } from "@/store";
 import { isAgentTerminal } from "@/utils/terminalType";
+import type { EditorView } from "@codemirror/view";
 
 export interface SendToAgentResult {
   success: boolean;
@@ -104,7 +105,10 @@ export async function sendToAgent(
 /**
  * Get the selection from a CodeMirror EditorView, or full content if no selection.
  */
-export function getEditorSelection(editorView: any, fallbackContent: string): string {
+export function getEditorSelection(
+  editorView: EditorView | null | undefined,
+  fallbackContent: string
+): string {
   if (!editorView) {
     return fallbackContent;
   }
@@ -114,13 +118,13 @@ export function getEditorSelection(editorView: any, fallbackContent: string): st
     const { selection } = state;
 
     // Check if there's a non-empty selection
-    const hasSelection = selection.ranges.some((range: any) => !range.empty);
+    const hasSelection = selection.ranges.some((range) => !range.empty);
 
     if (hasSelection) {
       // Get selected text from all ranges (CodeMirror supports multiple selections)
       const selections = selection.ranges
-        .filter((range: any) => !range.empty)
-        .map((range: any) => state.sliceDoc(range.from, range.to));
+        .filter((range) => !range.empty)
+        .map((range) => state.sliceDoc(range.from, range.to));
 
       return selections.join("\n");
     }

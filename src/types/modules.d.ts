@@ -6,13 +6,21 @@ declare module "react-diff-view" {
   export type ViewType = "unified" | "split";
   export type DiffType = "add" | "delete" | "modify" | "rename" | "copy";
 
+  export interface ChangeData {
+    type: "insert" | "delete" | "normal";
+    content: string;
+    lineNumber?: number;
+    oldLineNumber?: number;
+    newLineNumber?: number;
+  }
+
   export interface HunkData {
     content: string;
     oldStart: number;
     newStart: number;
     oldLines: number;
     newLines: number;
-    changes: any[];
+    changes: ChangeData[];
     isPlain?: boolean;
   }
 

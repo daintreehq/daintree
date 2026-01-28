@@ -360,19 +360,31 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
         command,
       };
 
+      interface NotesPanelFields {
+        notePath: string;
+        noteId: string;
+        scope: "worktree" | "project";
+      }
+
+      interface DevPreviewPanelFields {
+        devCommand?: string;
+      }
+
       let kindSpecificOptions = {};
       if (kind === "browser") {
         kindSpecificOptions = { browserUrl: activePanel.browserUrl };
       } else if (kind === "notes") {
+        const notesPanel = activePanel as TerminalInstance & NotesPanelFields;
         kindSpecificOptions = {
-          notePath: (activePanel as any).notePath,
-          noteId: (activePanel as any).noteId,
-          scope: (activePanel as any).scope,
+          notePath: notesPanel.notePath,
+          noteId: notesPanel.noteId,
+          scope: notesPanel.scope,
           createdAt: Date.now(),
         };
       } else if (kind === "dev-preview") {
+        const devPanel = activePanel as TerminalInstance & DevPreviewPanelFields;
         kindSpecificOptions = {
-          devCommand: (activePanel as any).devCommand,
+          devCommand: devPanel.devCommand,
           browserUrl: activePanel.browserUrl,
         };
       }

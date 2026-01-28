@@ -245,6 +245,13 @@ class TerminalRegistryController {
   }
 
   /**
+   * Write data to a terminal.
+   */
+  write(id: string, data: string): void {
+    terminalClient.write(id, data);
+  }
+
+  /**
    * Wake a terminal from hibernation.
    */
   async wake(id: string): Promise<{ state: string | null; warnings?: string[] }> {

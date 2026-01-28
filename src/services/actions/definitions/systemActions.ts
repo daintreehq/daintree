@@ -121,7 +121,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
     argsSchema: FileSearchPayloadSchema,
     run: async (args: unknown) => {
       const payload = args as { cwd: string; query: string; limit?: number };
-      return await filesClient.search(payload as any);
+      return await filesClient.search(payload);
     },
   }));
 
@@ -139,7 +139,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
         agentId: "claude" | "gemini" | "codex" | "opencode";
         projectPath?: string;
       };
-      return await slashCommandsClient.list(payload as any);
+      return await slashCommandsClient.list(payload);
     },
   }));
 
