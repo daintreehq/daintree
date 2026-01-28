@@ -1,6 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
-import { cn } from "@/lib/utils";
 
 export type TransitionDirection = "minimize" | "restore";
 
@@ -126,7 +125,7 @@ interface TransitionGhostProps {
 }
 
 function TransitionGhost({ transition, onComplete }: TransitionGhostProps) {
-  const { direction, sourceRect, targetRect } = transition;
+  const { sourceRect, targetRect } = transition;
   const elementRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -138,7 +137,7 @@ function TransitionGhost({ transition, onComplete }: TransitionGhostProps) {
     element.style.top = `${sourceRect.y}px`;
     element.style.width = `${sourceRect.width}px`;
     element.style.height = `${sourceRect.height}px`;
-    element.style.opacity = direction === "restore" ? "0.8" : "1";
+    element.style.opacity = "0.8";
     element.style.transform = "none";
 
     // Force reflow to ensure initial styles are applied
@@ -156,17 +155,12 @@ function TransitionGhost({ transition, onComplete }: TransitionGhostProps) {
 
     const timer = setTimeout(onComplete, ANIMATION_DURATION);
     return () => clearTimeout(timer);
-  }, [sourceRect, targetRect, direction, onComplete]);
+  }, [sourceRect, targetRect, onComplete]);
 
   return (
     <div
       ref={elementRef}
-      className={cn(
-        "absolute border-2",
-        direction === "minimize"
-          ? "border-canopy-accent/60 bg-canopy-accent/10"
-          : "border-canopy-accent/40 bg-canopy-accent/5"
-      )}
+      className="absolute border-2 border-canopy-accent/50 bg-canopy-accent/10"
       style={{
         transitionDuration: `${ANIMATION_DURATION}ms`,
         transitionProperty: "left, top, width, height, opacity",
