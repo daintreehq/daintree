@@ -24,6 +24,7 @@ import {
   FileCode,
   Zap,
   Command,
+  CookingPot,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -55,7 +56,7 @@ interface EnvVar {
   value: string;
 }
 
-type ProjectSettingsTab = "general" | "context" | "automation" | "commands";
+type ProjectSettingsTab = "general" | "context" | "automation" | "recipes" | "commands";
 
 const SENSITIVE_ENV_KEY_RE = /(key|secret|token|password)/i;
 
@@ -209,6 +210,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   useEffect(() => {
     if (isOpen) {
       setIsInitialized(false);
+      hasLoadedRecipes.current = false;
     }
   }, [projectId, isOpen]);
 
@@ -222,6 +224,19 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   useEffect(() => {
     if (!isOpen) {
       setIsEmojiPickerOpen(false);
+      setIsRecipeEditorOpen(false);
+      setEditingRecipe(undefined);
+      setRecipeToDelete(null);
+      setDeleteError(null);
+      setShowImportDialog(false);
+      setImportJson("");
+      setImportError(null);
+      setExportError(null);
+      setExportFeedback(null);
+      if (exportTimeoutRef.current) {
+        clearTimeout(exportTimeoutRef.current);
+        exportTimeoutRef.current = null;
+      }
     }
   }, [isOpen]);
 
@@ -384,6 +399,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
     general: "General",
     context: "Context",
     automation: "Automation",
+    recipes: "Recipes",
     commands: "Commands",
   };
 
@@ -419,6 +435,13 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
               icon={<Zap className="w-4 h-4" />}
             >
               Automation
+            </NavButton>
+            <NavButton
+              active={activeTab === "recipes"}
+              onClick={() => setActiveTab("recipes")}
+              icon={<CookingPot className="w-4 h-4" />}
+            >
+              Recipes
             </NavButton>
             <NavButton
               active={activeTab === "commands"}
@@ -985,9 +1008,19 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
 
                         return (
                           <div className="space-y-3">
-                            {globalRecipes.length === 0 ? (
+                            {recipesLoading ? (
                               <div className="text-sm text-canopy-text/60 text-center py-4 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
-                                No global recipes available. Create a recipe first.
+                                Loading recipes...
+                              </div>
+                            ) : globalRecipes.length === 0 ? (
+                              <div className="text-sm text-canopy-text/60 text-center py-4 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
+                                No global recipes available.{" "}
+                                <button
+                                  onClick={() => setActiveTab("recipes")}
+                                  className="text-canopy-accent hover:underline"
+                                >
+                                  Create a recipe
+                                </button>
                               </div>
                             ) : (
                               <>
@@ -1044,7 +1077,10 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                         );
                       })()}
                     </div>
+                  </div>
 
+                  {/* Recipes Tab */}
+                  <div className={activeTab === "recipes" ? "" : "hidden"}>
                     <div className="mb-6">
                       <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
                         <BookOpen className="h-4 w-4" />
@@ -1056,7 +1092,11 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                       </p>
 
                       <div className="space-y-2">
-                        {recipes.length === 0 ? (
+                        {recipesLoading ? (
+                          <div className="text-sm text-canopy-text/60 text-center py-8 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
+                            Loading recipes...
+                          </div>
+                        ) : recipes.length === 0 ? (
                           <div className="text-sm text-canopy-text/60 text-center py-8 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
                             No recipes configured yet
                           </div>
