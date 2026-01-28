@@ -5,6 +5,9 @@
   "author": "Canopy Team",
   "main": "dist-electron/electron/main.js",
   "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "dev": "concurrently -k \"npm run watch:main\" \"vite\" \"wait-on dist-electron/electron/main.js && npm run dev:electron\"",
     "dev:vite": "vite",
