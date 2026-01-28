@@ -100,6 +100,7 @@ export type KeyAction =
   | "agent.terminal"
   | "agent.focusNextWaiting"
   | "agent.focusNextFailed"
+  | "agent.commandBar"
 
   // Panel management
   | "panel.palette"

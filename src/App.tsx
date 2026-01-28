@@ -46,6 +46,7 @@ import { PanelPalette } from "./components/PanelPalette/PanelPalette";
 import { ProjectSwitcherPalette } from "./components/Project/ProjectSwitcherPalette";
 import { RecipeEditor } from "./components/TerminalRecipe/RecipeEditor";
 import { NotesPalette } from "./components/Notes";
+import { OneShotCommandBar } from "./components/AppAgent";
 import { SettingsDialog, type SettingsTab } from "./components/Settings";
 import { ShortcutReferenceDialog } from "./components/KeyboardShortcuts";
 import { Toaster } from "./components/ui/toaster";
@@ -935,6 +936,8 @@ function App() {
       <TerminalInfoDialogHost />
 
       <PanelTransitionOverlay />
+
+      <OneShotCommandBar />
 
       <Toaster />
     </ErrorBoundary>

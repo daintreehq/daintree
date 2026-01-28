@@ -189,6 +189,12 @@ export function createApplicationMenu(
           accelerator: "CommandOrControl+Shift+P",
           click: () => sendAction("open-panel-palette"),
         },
+        { type: "separator" },
+        {
+          label: "AI Command Bar...",
+          accelerator: "CommandOrControl+Shift+K",
+          click: () => sendAction("open-command-bar"),
+        },
       ],
     },
     {

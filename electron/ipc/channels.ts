@@ -246,6 +246,12 @@ export const CHANNELS = {
   COMMANDS_GET: "commands:get",
   COMMANDS_EXECUTE: "commands:execute",
   COMMANDS_GET_BUILDER: "commands:get-builder",
+
+  APP_AGENT_RUN_ONE_SHOT: "app-agent:run-one-shot",
+  APP_AGENT_GET_CONFIG: "app-agent:get-config",
+  APP_AGENT_SET_CONFIG: "app-agent:set-config",
+  APP_AGENT_HAS_API_KEY: "app-agent:has-api-key",
+  APP_AGENT_CANCEL: "app-agent:cancel",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

@@ -28,6 +28,7 @@ import { registerEventsHandlers } from "./handlers/events.js";
 import { registerNotesHandlers } from "./handlers/notes.js";
 import { registerDevPreviewHandlers } from "./handlers/devPreview.js";
 import { registerCommandHandlers } from "./handlers/commands.js";
+import { registerAppAgentHandlers } from "./handlers/appAgent.js";
 import { events } from "../services/events.js";
 import { typedHandle, typedSend, sendToRenderer } from "./utils.js";
 
@@ -77,6 +78,7 @@ export function registerIpcHandlers(
     registerNotesHandlers(deps),
     registerDevPreviewHandlers(deps),
     registerCommandHandlers(),
+    registerAppAgentHandlers(deps),
   ];
 
   return () => {

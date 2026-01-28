@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { getAgentIds, getAgentConfig } from "@/config/agents";
-import { useAgentSettingsStore } from "@/store";
+import { useAgentSettingsStore, useAppAgentStore } from "@/store";
 import { Button } from "@/components/ui/button";
 import {
   DEFAULT_AGENT_SETTINGS,
   getAgentSettingsEntry,
   DEFAULT_DANGEROUS_ARGS,
 } from "@shared/types";
-import { RotateCcw, ExternalLink, RefreshCw, Copy, Check } from "lucide-react";
+import { RotateCcw, ExternalLink, RefreshCw, Copy, Check, Bot, Eye, EyeOff } from "lucide-react";
 import { actionService } from "@/services/ActionService";
 import { AgentHelpOutput } from "./AgentHelpOutput";
 import { cliAvailabilityClient } from "@/clients";
@@ -189,6 +189,9 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
 
   return (
     <div className="space-y-6">
+      {/* App Agent (One-Shot Command) Section */}
+      <AppAgentSettings />
+
       {/* Agent Runtime Settings Section */}
       <div className="space-y-4">
         <div>
@@ -547,6 +550,132 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
             })()}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function AppAgentSettings() {
+  const { hasApiKey, config, initialize, setApiKey } = useAppAgentStore();
+  const [apiKeyInput, setApiKeyInput] = useState("");
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+
+  useEffect(() => {
+    initialize();
+  }, [initialize]);
+
+  const handleSaveApiKey = useCallback(async () => {
+    if (!apiKeyInput.trim()) {
+      setError("API key is required");
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+    setSuccess(false);
+
+    try {
+      await setApiKey(apiKeyInput.trim());
+      setApiKeyInput("");
+      setSuccess(true);
+      setTimeout(() => setSuccess(false), 3000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to save API key");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [apiKeyInput, setApiKey]);
+
+  return (
+    <div className="space-y-4 pb-4 border-b border-canopy-border">
+      <div>
+        <h3 className="text-sm font-medium mb-1">One-Shot Command</h3>
+        <p className="text-xs text-canopy-text/50">
+          AI-powered command bar for quick actions (Cmd+Shift+K)
+        </p>
+      </div>
+
+      <div className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-4">
+        <div className="flex items-center gap-3 pb-3 border-b border-canopy-border">
+          <div className="w-10 h-10 rounded-[var(--radius-md)] bg-canopy-accent/10 flex items-center justify-center">
+            <Bot className="w-5 h-5 text-canopy-accent" />
+          </div>
+          <div>
+            <h4 className="text-sm font-medium text-canopy-text">Fireworks AI</h4>
+            <p className="text-xs text-canopy-text/50">Powered by Kimi K2.5</p>
+          </div>
+          <div className="ml-auto">
+            {hasApiKey ? (
+              <span className="flex items-center gap-1.5 text-xs text-green-500">
+                <Check size={14} />
+                Configured
+              </span>
+            ) : (
+              <span className="text-xs text-canopy-text/50">Not configured</span>
+            )}
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-canopy-text">
+              {hasApiKey ? "Update API Key" : "API Key"}
+            </label>
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <input
+                  type={showApiKey ? "text" : "password"}
+                  value={apiKeyInput}
+                  onChange={(e) => {
+                    setApiKeyInput(e.target.value);
+                    setError(null);
+                  }}
+                  placeholder={hasApiKey ? "Enter new API key to update..." : "fw-xxx..."}
+                  className="w-full rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg px-3 py-2 pr-10 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-canopy-accent/50 placeholder:text-canopy-text/30"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowApiKey(!showApiKey)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-canopy-text/40 hover:text-canopy-text"
+                >
+                  {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+              <Button
+                onClick={() => void handleSaveApiKey()}
+                disabled={isLoading || !apiKeyInput.trim()}
+                className="shrink-0"
+              >
+                {isLoading ? "Saving..." : "Save"}
+              </Button>
+            </div>
+            {error && <p className="text-xs text-red-400">{error}</p>}
+            {success && <p className="text-xs text-green-500">API key saved successfully!</p>}
+          </div>
+
+          <div className="px-3 py-2 rounded-[var(--radius-md)] bg-canopy-bg/50 border border-canopy-border/50">
+            <p className="text-xs text-canopy-text/50">
+              Get your API key from{" "}
+              <button
+                onClick={() =>
+                  void window.electron.system.openExternal("https://fireworks.ai/account/api-keys")
+                }
+                className="text-canopy-accent hover:underline"
+              >
+                fireworks.ai/account/api-keys
+              </button>
+            </p>
+          </div>
+
+          {config && (
+            <div className="text-xs text-canopy-text/40">
+              Model: <code className="font-mono">{config.model}</code>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

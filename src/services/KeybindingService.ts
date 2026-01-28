@@ -227,6 +227,14 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Agents",
   },
   {
+    actionId: "agent.commandBar",
+    combo: "Cmd+Shift+K",
+    scope: "global",
+    priority: 0,
+    description: "Open AI command bar",
+    category: "Agents",
+  },
+  {
     actionId: "terminal.inject",
     combo: "Cmd+Shift+I",
     scope: "global",

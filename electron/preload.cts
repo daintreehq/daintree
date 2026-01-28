@@ -397,6 +397,13 @@ const CHANNELS = {
   COMMANDS_GET: "commands:get",
   COMMANDS_EXECUTE: "commands:execute",
   COMMANDS_GET_BUILDER: "commands:get-builder",
+
+  // App Agent channels
+  APP_AGENT_RUN_ONE_SHOT: "app-agent:run-one-shot",
+  APP_AGENT_GET_CONFIG: "app-agent:get-config",
+  APP_AGENT_SET_CONFIG: "app-agent:set-config",
+  APP_AGENT_HAS_API_KEY: "app-agent:has-api-key",
+  APP_AGENT_CANCEL: "app-agent:cancel",
 } as const;
 
 const api: ElectronAPI = {
@@ -1173,6 +1180,41 @@ const api: ElectronAPI = {
     }) => ipcRenderer.invoke(CHANNELS.COMMANDS_EXECUTE, payload),
 
     getBuilder: (commandId: string) => ipcRenderer.invoke(CHANNELS.COMMANDS_GET_BUILDER, commandId),
+  },
+
+  // App Agent API
+  appAgent: {
+    runOneShot: (payload: {
+      request: { prompt: string; clarificationChoice?: string };
+      actions: Array<{
+        id: string;
+        name: string;
+        title: string;
+        description: string;
+        category: string;
+        kind: string;
+        danger: string;
+        inputSchema?: Record<string, unknown>;
+        outputSchema?: Record<string, unknown>;
+        enabled: boolean;
+        disabledReason?: string;
+      }>;
+      context: {
+        projectId?: string;
+        activeWorktreeId?: string;
+        focusedWorktreeId?: string;
+        focusedTerminalId?: string;
+      };
+    }) => ipcRenderer.invoke(CHANNELS.APP_AGENT_RUN_ONE_SHOT, payload),
+
+    getConfig: () => ipcRenderer.invoke(CHANNELS.APP_AGENT_GET_CONFIG),
+
+    setConfig: (config: { provider?: string; model?: string; apiKey?: string; baseUrl?: string }) =>
+      ipcRenderer.invoke(CHANNELS.APP_AGENT_SET_CONFIG, config),
+
+    hasApiKey: () => ipcRenderer.invoke(CHANNELS.APP_AGENT_HAS_API_KEY),
+
+    cancel: () => ipcRenderer.invoke(CHANNELS.APP_AGENT_CANCEL),
   },
 };
 

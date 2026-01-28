@@ -201,7 +201,8 @@ export type ActionId =
   | "notes.create"
   | "notes.delete"
   | "notes.reveal"
-  | "devServer.start";
+  | "devServer.start"
+  | "agent.commandBar";
 
 export interface ActionContext {
   projectId?: string;

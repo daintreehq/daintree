@@ -5,8 +5,9 @@ import type {
   PanelGridConfig,
   UserAgentRegistry,
   AgentUpdateSettings,
+  AppAgentConfig,
 } from "../shared/types/index.js";
-import { DEFAULT_AGENT_SETTINGS } from "../shared/types/index.js";
+import { DEFAULT_AGENT_SETTINGS, DEFAULT_APP_AGENT_CONFIG } from "../shared/types/index.js";
 
 export interface StoreSchema {
   _schemaVersion: number;
@@ -103,6 +104,7 @@ export interface StoreSchema {
     overrides: Record<string, string[]>;
   };
   projectEnv: Record<string, string>;
+  appAgentConfig: AppAgentConfig;
 }
 
 const storeOptions = {
@@ -156,6 +158,7 @@ const storeOptions = {
       overrides: {},
     },
     projectEnv: {},
+    appAgentConfig: DEFAULT_APP_AGENT_CONFIG,
   },
   cwd: process.env.CANOPY_USER_DATA,
 };

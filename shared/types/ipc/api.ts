@@ -76,6 +76,8 @@ import type {
   CommandGetPayload,
   BuilderStep,
 } from "../commands.js";
+import type { AppAgentConfig, OneShotRunRequest, OneShotRunResult } from "../appAgent.js";
+import type { ActionManifestEntry, ActionContext } from "../actions.js";
 
 // ElectronAPI Type (exposed via preload)
 
@@ -560,5 +562,21 @@ export interface ElectronAPI {
     execute(payload: CommandExecutePayload): Promise<CommandResult>;
     /** Get builder configuration for a command */
     getBuilder(commandId: string): Promise<{ steps: BuilderStep[] } | null>;
+  };
+  appAgent: {
+    /** Run a one-shot command through the app agent */
+    runOneShot(payload: {
+      request: OneShotRunRequest;
+      actions: ActionManifestEntry[];
+      context: ActionContext;
+    }): Promise<OneShotRunResult>;
+    /** Get the current app agent config (without API key) */
+    getConfig(): Promise<Omit<AppAgentConfig, "apiKey">>;
+    /** Update app agent config */
+    setConfig(config: Partial<AppAgentConfig>): Promise<Omit<AppAgentConfig, "apiKey">>;
+    /** Check if API key is configured */
+    hasApiKey(): Promise<boolean>;
+    /** Cancel any in-flight request */
+    cancel(): Promise<void>;
   };
 }
