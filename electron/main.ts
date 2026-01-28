@@ -13,8 +13,48 @@ import { fileURLToPath, pathToFileURL } from "url";
 import os from "os";
 import { randomBytes } from "crypto";
 import fixPath from "fix-path";
+import { isTrustedRendererUrl } from "../shared/utils/trustedRenderer.js";
+import type { IpcMainInvokeEvent } from "electron";
 
 fixPath();
+
+// Wrap ipcMain.handle globally to enforce sender validation on ALL IPC handlers
+// This must run before any handlers are registered
+function enforceIpcSenderValidation() {
+  const originalHandle = ipcMain.handle.bind(ipcMain);
+  const originalHandleOnce = ipcMain.handleOnce?.bind(ipcMain);
+
+  ipcMain.handle = function (channel: string, listener: (event: IpcMainInvokeEvent, ...args: any[]) => Promise<any> | any) {
+    return originalHandle(channel, async (event, ...args) => {
+      const senderUrl = event.senderFrame?.url;
+      if (!senderUrl || !isTrustedRendererUrl(senderUrl)) {
+        throw new Error(
+          `IPC call from untrusted origin rejected: channel=${channel}, url=${senderUrl || 'unknown'}`
+        );
+      }
+      return listener(event, ...args);
+    });
+  } as typeof ipcMain.handle;
+
+  if (originalHandleOnce) {
+    ipcMain.handleOnce = function (channel: string, listener: (event: IpcMainInvokeEvent, ...args: any[]) => Promise<any> | any) {
+      return originalHandleOnce(channel, async (event, ...args) => {
+        const senderUrl = event.senderFrame?.url;
+        if (!senderUrl || !isTrustedRendererUrl(senderUrl)) {
+          throw new Error(
+            `IPC call from untrusted origin rejected: channel=${channel}, url=${senderUrl || 'unknown'}`
+          );
+        }
+        return listener(event, ...args);
+      });
+    } as typeof ipcMain.handleOnce;
+  }
+
+  console.log("[MAIN] IPC sender validation enforced globally");
+}
+
+// CRITICAL: Run this before any IPC handlers are registered
+enforceIpcSenderValidation();
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -364,6 +404,32 @@ async function createWindow(): Promise<void> {
       console.warn(`[MAIN] Blocked window.open for unsupported/empty URL: ${url}`);
     }
     return { action: "deny" };
+  });
+
+  // Block same-window navigations to untrusted origins (defense-in-depth)
+  const webContents = mainWindow.webContents;
+  webContents.on("will-navigate", (event, navigationUrl) => {
+    if (!isTrustedRendererUrl(navigationUrl)) {
+      console.error(
+        "[MAIN] Blocked navigation to untrusted URL:",
+        navigationUrl,
+        "from:",
+        webContents.getURL()
+      );
+      event.preventDefault();
+    }
+  });
+
+  webContents.on("will-redirect", (event, redirectUrl) => {
+    if (!isTrustedRendererUrl(redirectUrl)) {
+      console.error(
+        "[MAIN] Blocked redirect to untrusted URL:",
+        redirectUrl,
+        "from:",
+        webContents.getURL()
+      );
+      event.preventDefault();
+    }
   });
 
   // Harden webview security - prevent XSS from injecting malicious webviews

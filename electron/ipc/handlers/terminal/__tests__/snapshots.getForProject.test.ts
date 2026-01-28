@@ -56,7 +56,7 @@ describe("terminal:get-for-project handler", () => {
       projectId: string
     ) => Promise<unknown[]>;
 
-    const result = await handler({}, "project-1");
+    const result = await handler({ senderFrame: { url: "http://localhost:5173" } }, "project-1");
 
     expect(Array.isArray(result)).toBe(true);
     expect(result).toHaveLength(1);
@@ -110,7 +110,10 @@ describe("terminal:get-for-project handler", () => {
       projectId: string
     ) => Promise<unknown[]>;
 
-    const result = (await handler({}, "project-1")) as any[];
+    const result = (await handler(
+      { senderFrame: { url: "http://localhost:5173" } },
+      "project-1"
+    )) as any[];
 
     expect(Array.isArray(result)).toBe(true);
     expect(result).toHaveLength(2);

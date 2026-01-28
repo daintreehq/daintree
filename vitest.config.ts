@@ -18,5 +18,8 @@ export default defineConfig({
     ],
     exclude: ["node_modules", "dist", "dist-electron", "build", "release"],
     testTimeout: 15000,
+    env: {
+      NODE_ENV: "development",
+    },
   },
 });

@@ -76,7 +76,11 @@ describe("project:close handler", () => {
       options?: { killTerminals?: boolean }
     ) => Promise<{ success: boolean; terminalsKilled: number; processesKilled: number }>;
 
-    const result = await handler({}, "project-active", { killTerminals: true });
+    const result = await handler(
+      { senderFrame: { url: "http://localhost:5173" } },
+      "project-active",
+      { killTerminals: true }
+    );
 
     expect(result.success).toBe(true);
     expect(result.terminalsKilled).toBe(2);
@@ -121,8 +125,16 @@ describe("project:close handler", () => {
       options?: { killTerminals?: boolean }
     ) => Promise<unknown>;
 
-    await expect(handler({}, "project-active", { killTerminals: false })).rejects.toThrow(
-      "Cannot close the active project"
-    );
+    await expect(
+      handler(
+        { senderFrame: { url: "http://localhost:5173" } },
+        "project-active",
+        { killTerminals: false }
+      )
+    ).rejects.toThrow("Cannot close the active project");
   });
+
+  // Note: IPC sender validation is enforced globally via monkey-patch in main.ts,
+  // which doesn't apply to mocked ipcMain in unit tests. Integration/E2E tests
+  // should verify the actual runtime enforcement.
 });

@@ -4,6 +4,7 @@
  */
 
 import { contextBridge, ipcRenderer } from "electron";
+import { isTrustedRendererUrl } from "../shared/utils/trustedRenderer.js";
 
 import type {
   WorktreeState,
@@ -60,10 +61,7 @@ export type { ElectronAPI };
 let cachedToken: string | null = null;
 
 function isAllowedTerminalPortTarget(): boolean {
-  const { protocol, origin } = window.location;
-  if (protocol === "app:" && origin === "app://canopy") return true;
-  if (protocol === "http:" || protocol === "https:") return origin === "http://localhost:5173";
-  return false;
+  return isTrustedRendererUrl(window.location.href);
 }
 
 ipcRenderer.on("terminal-port-token", (_event, payload: { token: string }) => {
@@ -1178,5 +1176,19 @@ const api: ElectronAPI = {
   },
 };
 
-// Expose the API to the renderer process
-contextBridge.exposeInMainWorld("electron", api);
+// Expose the API to the renderer process only for trusted origins in the main frame
+if (window.top === window && isTrustedRendererUrl(window.location.href)) {
+  contextBridge.exposeInMainWorld("electron", api);
+} else {
+  if (window.top !== window) {
+    console.error(
+      "[Preload] Refusing to expose window.electron API to subframe:",
+      window.location.href
+    );
+  } else {
+    console.error(
+      "[Preload] Refusing to expose window.electron API to untrusted origin:",
+      window.location.href
+    );
+  }
+}
