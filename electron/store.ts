@@ -102,6 +102,7 @@ export interface StoreSchema {
   keybindingOverrides: {
     overrides: Record<string, string[]>;
   };
+  projectEnv: Record<string, string>;
 }
 
 const storeOptions = {
@@ -154,6 +155,7 @@ const storeOptions = {
     keybindingOverrides: {
       overrides: {},
     },
+    projectEnv: {},
   },
   cwd: process.env.CANOPY_USER_DATA,
 };

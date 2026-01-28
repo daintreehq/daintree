@@ -16,6 +16,8 @@ import { isCanopyError } from "../utils/errorTypes.js";
 import { sanitizeSvg } from "../../shared/utils/svgSanitizer.js";
 import { TerminalSnapshotSchema, filterValidTerminalEntries } from "../schemas/ipc.js";
 import { logError } from "../utils/logger.js";
+import { projectEnvSecureStorage } from "./ProjectEnvSecureStorage.js";
+import { isSensitiveEnvKey } from "../../shared/utils/envVars.js";
 
 const SETTINGS_FILENAME = "settings.json";
 const RECIPES_FILENAME = "recipes.json";
@@ -122,6 +124,13 @@ export class ProjectStore {
     const projects = this.getAllProjects();
     const filtered = projects.filter((p) => p.id !== projectId);
     store.set("projects.list", filtered);
+
+    // Clean up secure environment variables for this project
+    try {
+      projectEnvSecureStorage.deleteAllForProject(projectId);
+    } catch (error) {
+      logError(`Failed to remove secure env vars for ${projectId}`, error);
+    }
 
     if (existsSync(stateDir)) {
       try {
@@ -461,9 +470,48 @@ export class ProjectStore {
           });
       }
 
+      const secureEnvVarKeys = Array.isArray(parsed.secureEnvironmentVariables)
+        ? parsed.secureEnvironmentVariables.filter((k) => typeof k === "string")
+        : [];
+
+      // Resolve secure environment variables from secure storage
+      const resolvedEnvVars: Record<string, string> = {};
+      const insecureKeys: string[] = [];
+      const unresolvedKeys: string[] = [];
+
+      // First, add non-sensitive env vars from settings.json
+      if (parsed.environmentVariables && typeof parsed.environmentVariables === "object") {
+        for (const [key, value] of Object.entries(parsed.environmentVariables)) {
+          if (typeof key === "string" && typeof value === "string") {
+            if (isSensitiveEnvKey(key)) {
+              // This is a plaintext sensitive value that should be migrated
+              insecureKeys.push(key);
+              resolvedEnvVars[key] = value;
+            } else {
+              // Non-sensitive value, use as-is
+              resolvedEnvVars[key] = value;
+            }
+          }
+        }
+      }
+
+      // Then, resolve secure values from secure storage
+      for (const key of secureEnvVarKeys) {
+        const secureValue = projectEnvSecureStorage.get(projectId, key);
+        if (secureValue !== undefined) {
+          resolvedEnvVars[key] = secureValue;
+        } else {
+          // Key exists in metadata but couldn't be decrypted
+          unresolvedKeys.push(key);
+        }
+      }
+
       const settings: ProjectSettings = {
         runCommands: Array.isArray(parsed.runCommands) ? parsed.runCommands : [],
-        environmentVariables: parsed.environmentVariables,
+        environmentVariables: resolvedEnvVars,
+        secureEnvironmentVariables: secureEnvVarKeys,
+        insecureEnvironmentVariables: insecureKeys.length > 0 ? insecureKeys : undefined,
+        unresolvedSecureEnvironmentVariables: unresolvedKeys.length > 0 ? unresolvedKeys : undefined,
         excludedPaths: parsed.excludedPaths,
         projectIconSvg: sanitizedIconSvg,
         defaultWorktreeRecipeId:
@@ -511,14 +559,67 @@ export class ProjectStore {
       throw new Error(`Invalid project ID: ${projectId}`);
     }
 
+    // Split environment variables into sensitive and non-sensitive
+    const nonSensitiveEnvVars: Record<string, string> = {};
+    const secureEnvVarKeys: string[] = [];
+    const existingSecureKeys = projectEnvSecureStorage.listKeys(projectId);
+
+    if (settings.environmentVariables) {
+      for (const [key, value] of Object.entries(settings.environmentVariables)) {
+        if (isSensitiveEnvKey(key)) {
+          // Store sensitive value in secure storage
+          if (!projectEnvSecureStorage.checkAvailability()) {
+            throw new Error(
+              "Cannot save sensitive environment variables: encryption is not available on this system"
+            );
+          }
+          try {
+            projectEnvSecureStorage.set(projectId, key, value);
+            secureEnvVarKeys.push(key);
+          } catch (error) {
+            console.error(
+              `[ProjectStore] Failed to store secure env var ${key} for project ${projectId}:`,
+              error
+            );
+            throw error;
+          }
+        } else {
+          // Store non-sensitive value in settings.json
+          nonSensitiveEnvVars[key] = value;
+        }
+      }
+    }
+
+    // Preserve unresolved secure keys (couldn't decrypt) to avoid data loss
+    const unresolvedKeys = settings.unresolvedSecureEnvironmentVariables || [];
+    for (const unresolvedKey of unresolvedKeys) {
+      if (!secureEnvVarKeys.includes(unresolvedKey)) {
+        secureEnvVarKeys.push(unresolvedKey);
+      }
+    }
+
+    // Delete orphaned secure keys (were resolved at load but user removed them)
+    for (const existingKey of existingSecureKeys) {
+      if (!secureEnvVarKeys.includes(existingKey)) {
+        projectEnvSecureStorage.delete(projectId, existingKey);
+      }
+    }
+
     // Sanitize projectIconSvg and commandOverrides before saving
-    let sanitizedSettings = settings;
+    let sanitizedSettings = {
+      ...settings,
+      environmentVariables: nonSensitiveEnvVars,
+      secureEnvironmentVariables: secureEnvVarKeys.length > 0 ? secureEnvVarKeys : undefined,
+      // Don't persist transient migration metadata
+      insecureEnvironmentVariables: undefined,
+      unresolvedSecureEnvironmentVariables: undefined,
+    };
 
     // Sanitize SVG
     if (settings.projectIconSvg) {
       const sanitizeResult = sanitizeSvg(settings.projectIconSvg);
       if (sanitizeResult.ok) {
-        sanitizedSettings = { ...settings, projectIconSvg: sanitizeResult.svg };
+        sanitizedSettings = { ...sanitizedSettings, projectIconSvg: sanitizeResult.svg };
         if (sanitizeResult.modified) {
           console.warn(
             `[ProjectStore] Sanitized potentially unsafe SVG content before saving for project ${projectId}`
@@ -528,7 +629,7 @@ export class ProjectStore {
         console.warn(
           `[ProjectStore] Rejecting invalid SVG for project ${projectId}: ${sanitizeResult.error}`
         );
-        sanitizedSettings = { ...settings, projectIconSvg: undefined };
+        sanitizedSettings = { ...sanitizedSettings, projectIconSvg: undefined };
       }
     }
 

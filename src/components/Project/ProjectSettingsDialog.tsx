@@ -25,6 +25,8 @@ import {
   Zap,
   Command,
   CookingPot,
+  Lock,
+  ShieldAlert,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -43,6 +45,7 @@ import { ConfirmDialog } from "@/components/Terminal/ConfirmDialog";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import { CommandOverridesTab } from "@/components/Settings/CommandOverridesTab";
 import type { CommandOverride } from "@shared/types/commands";
+import { isSensitiveEnvKey } from "@shared/utils/envVars";
 
 interface ProjectSettingsDialogProps {
   projectId: string;
@@ -57,8 +60,6 @@ interface EnvVar {
 }
 
 type ProjectSettingsTab = "general" | "context" | "automation" | "recipes" | "commands";
-
-const SENSITIVE_ENV_KEY_RE = /(key|secret|token|password)/i;
 
 export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSettingsDialogProps) {
   const { settings, saveSettings, isLoading, error } = useProjectSettings(projectId);
@@ -310,6 +311,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         defaultWorktreeRecipeId: defaultWorktreeRecipeId,
         devServerCommand: devServerCommand.trim() || undefined,
         commandOverrides: commandOverrides.length > 0 ? commandOverrides : undefined,
+        insecureEnvironmentVariables: undefined,
+        unresolvedSecureEnvironmentVariables: undefined,
       });
       onClose();
     } catch (error) {
@@ -728,8 +731,31 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                       </h3>
                       <p className="text-xs text-canopy-text/60 mb-4">
                         Project-specific environment variables. Variable names containing KEY,
-                        SECRET, TOKEN, or PASSWORD will have their values masked.
+                        SECRET, TOKEN, or PASSWORD are stored securely using OS encryption{" "}
+                        <Lock className="inline h-3 w-3" />.
                       </p>
+
+                      {settings?.insecureEnvironmentVariables &&
+                        settings.insecureEnvironmentVariables.length > 0 && (
+                          <div className="mb-4 p-3 bg-yellow-900/20 border border-yellow-600/30 rounded-[var(--radius-md)] flex items-start gap-2">
+                            <ShieldAlert className="h-4 w-4 text-yellow-500 mt-0.5 flex-shrink-0" />
+                            <div className="flex-1 text-xs">
+                              <p className="text-yellow-200 font-semibold mb-1">
+                                Insecure sensitive variables detected
+                              </p>
+                              <p className="text-yellow-300/80 mb-2">
+                                The following variables contain sensitive keywords but are stored in
+                                plaintext:{" "}
+                                <span className="font-mono">
+                                  {settings.insecureEnvironmentVariables.join(", ")}
+                                </span>
+                              </p>
+                              <p className="text-yellow-300/80">
+                                Click Save to automatically move them to secure storage.
+                              </p>
+                            </div>
+                          </div>
+                        )}
 
                       <div className="space-y-2">
                         {environmentVariables.length === 0 ? (
@@ -738,7 +764,9 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                           </div>
                         ) : (
                           environmentVariables.map((envVar, index) => {
-                            const isSensitive = SENSITIVE_ENV_KEY_RE.test(envVar.key);
+                            const isSensitive = isSensitiveEnvKey(envVar.key);
+                            const isInsecure = settings?.insecureEnvironmentVariables?.includes(envVar.key);
+                            const isSecured = isSensitive && !isInsecure;
                             const isVisible = visibleEnvVars.has(envVar.id);
                             const shouldMask = isSensitive && !isVisible;
                             return (
@@ -746,13 +774,25 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                                 key={envVar.id}
                                 className="flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border"
                               >
+                                {isSecured && (
+                                  <Lock
+                                    className="h-3.5 w-3.5 text-green-500/60 flex-shrink-0"
+                                    aria-label="Stored securely"
+                                  />
+                                )}
+                                {isInsecure && (
+                                  <ShieldAlert
+                                    className="h-3.5 w-3.5 text-yellow-500/60 flex-shrink-0"
+                                    aria-label="Stored in plaintext"
+                                  />
+                                )}
                                 <input
                                   type="text"
                                   value={envVar.key}
                                   onChange={(e) => {
                                     const nextKey = e.target.value;
-                                    const wasSensitive = SENSITIVE_ENV_KEY_RE.test(envVar.key);
-                                    const nowSensitive = SENSITIVE_ENV_KEY_RE.test(nextKey);
+                                    const wasSensitive = isSensitiveEnvKey(envVar.key);
+                                    const nowSensitive = isSensitiveEnvKey(nextKey);
                                     setEnvironmentVariables((prev) => {
                                       const updated = [...prev];
                                       updated[index] = { ...envVar, key: nextKey };

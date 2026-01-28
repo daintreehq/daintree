@@ -761,6 +761,12 @@ export interface ProjectSettings {
   runCommands: RunCommand[];
   /** Environment variables to set */
   environmentVariables?: Record<string, string>;
+  /** List of env var keys stored securely (values in safeStorage, not settings.json) */
+  secureEnvironmentVariables?: string[];
+  /** List of env var keys found in plaintext that should be migrated (transient, not persisted) */
+  insecureEnvironmentVariables?: string[];
+  /** List of secure keys that couldn't be decrypted (transient, not persisted) */
+  unresolvedSecureEnvironmentVariables?: string[];
   /** Paths to exclude from monitoring */
   excludedPaths?: string[];
   /** Raw SVG text for project icon (max 250KB, validated/sanitized) */
