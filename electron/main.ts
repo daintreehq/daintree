@@ -24,12 +24,15 @@ function enforceIpcSenderValidation() {
   const originalHandle = ipcMain.handle.bind(ipcMain);
   const originalHandleOnce = ipcMain.handleOnce?.bind(ipcMain);
 
-  ipcMain.handle = function (channel: string, listener: (event: IpcMainInvokeEvent, ...args: any[]) => Promise<any> | any) {
+  ipcMain.handle = function (
+    channel: string,
+    listener: (event: IpcMainInvokeEvent, ...args: any[]) => Promise<any> | any
+  ) {
     return originalHandle(channel, async (event, ...args) => {
       const senderUrl = event.senderFrame?.url;
       if (!senderUrl || !isTrustedRendererUrl(senderUrl)) {
         throw new Error(
-          `IPC call from untrusted origin rejected: channel=${channel}, url=${senderUrl || 'unknown'}`
+          `IPC call from untrusted origin rejected: channel=${channel}, url=${senderUrl || "unknown"}`
         );
       }
       return listener(event, ...args);
@@ -37,12 +40,15 @@ function enforceIpcSenderValidation() {
   } as typeof ipcMain.handle;
 
   if (originalHandleOnce) {
-    ipcMain.handleOnce = function (channel: string, listener: (event: IpcMainInvokeEvent, ...args: any[]) => Promise<any> | any) {
+    ipcMain.handleOnce = function (
+      channel: string,
+      listener: (event: IpcMainInvokeEvent, ...args: any[]) => Promise<any> | any
+    ) {
       return originalHandleOnce(channel, async (event, ...args) => {
         const senderUrl = event.senderFrame?.url;
         if (!senderUrl || !isTrustedRendererUrl(senderUrl)) {
           throw new Error(
-            `IPC call from untrusted origin rejected: channel=${channel}, url=${senderUrl || 'unknown'}`
+            `IPC call from untrusted origin rejected: channel=${channel}, url=${senderUrl || "unknown"}`
           );
         }
         return listener(event, ...args);

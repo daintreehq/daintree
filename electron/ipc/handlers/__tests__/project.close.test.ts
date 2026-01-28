@@ -126,11 +126,9 @@ describe("project:close handler", () => {
     ) => Promise<unknown>;
 
     await expect(
-      handler(
-        { senderFrame: { url: "http://localhost:5173" } },
-        "project-active",
-        { killTerminals: false }
-      )
+      handler({ senderFrame: { url: "http://localhost:5173" } }, "project-active", {
+        killTerminals: false,
+      })
     ).rejects.toThrow("Cannot close the active project");
   });
 
