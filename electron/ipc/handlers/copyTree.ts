@@ -36,14 +36,19 @@ import {
   CopyTreeGetFileTreePayloadSchema,
   CopyTreeCancelPayloadSchema,
 } from "../../schemas/ipc.js";
-import type { CopyTreeCancelPayload, CopyTreeSettings } from "../../types/index.js";
+import type { CopyTreeCancelPayload, ProjectSettings } from "../../types/index.js";
+import { projectStore } from "../../services/ProjectStore.js";
 
 /**
- * Merge project-level CopyTree settings with runtime options.
+ * Merge project-level settings with runtime CopyTree options.
  * Runtime options take precedence over project settings.
+ *
+ * Merges both:
+ * - ProjectSettings.excludedPaths (default exclusions)
+ * - ProjectSettings.copyTreeSettings (context generation settings)
  */
 export function mergeCopyTreeOptions(
-  projectSettings: CopyTreeSettings | undefined,
+  projectSettings: Pick<ProjectSettings, "excludedPaths" | "copyTreeSettings"> | undefined,
   runtimeOptions: CopyTreeOptions | undefined
 ): CopyTreeOptions {
   if (!projectSettings) {
@@ -54,37 +59,79 @@ export function mergeCopyTreeOptions(
     ...runtimeOptions,
   };
 
-  if (projectSettings.maxContextSize !== undefined && merged.maxTotalSize === undefined) {
-    merged.maxTotalSize = projectSettings.maxContextSize;
+  const copyTreeSettings = projectSettings.copyTreeSettings;
+
+  // Only apply project settings if runtime options don't explicitly set them
+  // Priority: runtime > copyTreeSettings > excludedPaths
+
+  // Handle exclude patterns: only use project settings if runtime didn't provide exclude
+  if (merged.exclude === undefined) {
+    const excludePatterns: string[] = [];
+
+    // Add excludedPaths (lowest priority)
+    if (projectSettings.excludedPaths && projectSettings.excludedPaths.length > 0) {
+      excludePatterns.push(...projectSettings.excludedPaths);
+    }
+
+    // Add copyTreeSettings.alwaysExclude (medium priority)
+    if (copyTreeSettings?.alwaysExclude && copyTreeSettings.alwaysExclude.length > 0) {
+      excludePatterns.push(...copyTreeSettings.alwaysExclude);
+    }
+
+    if (excludePatterns.length > 0) {
+      merged.exclude = excludePatterns;
+    }
   }
 
-  if (projectSettings.maxFileSize !== undefined && merged.maxFileSize === undefined) {
-    merged.maxFileSize = projectSettings.maxFileSize;
+  if (!copyTreeSettings) {
+    return merged;
   }
 
-  if (projectSettings.charLimit !== undefined && merged.charLimit === undefined) {
-    merged.charLimit = projectSettings.charLimit;
+  if (copyTreeSettings.maxContextSize !== undefined && merged.maxTotalSize === undefined) {
+    merged.maxTotalSize = copyTreeSettings.maxContextSize;
   }
 
-  if (projectSettings.strategy && merged.sort === undefined) {
-    merged.sort = projectSettings.strategy === "modified" ? "modified" : undefined;
+  if (copyTreeSettings.maxFileSize !== undefined && merged.maxFileSize === undefined) {
+    merged.maxFileSize = copyTreeSettings.maxFileSize;
   }
 
-  if (projectSettings.alwaysInclude && (!merged.always || merged.always.length === 0)) {
-    merged.always = projectSettings.alwaysInclude;
+  if (copyTreeSettings.charLimit !== undefined && merged.charLimit === undefined) {
+    merged.charLimit = copyTreeSettings.charLimit;
   }
 
-  if (projectSettings.alwaysExclude) {
-    const existing = merged.exclude
-      ? Array.isArray(merged.exclude)
-        ? merged.exclude
-        : [merged.exclude]
-      : [];
-    const additional = projectSettings.alwaysExclude;
-    merged.exclude = [...existing, ...additional];
+  if (copyTreeSettings.strategy && merged.sort === undefined) {
+    merged.sort = copyTreeSettings.strategy === "modified" ? "modified" : undefined;
+  }
+
+  // Only apply project alwaysInclude if runtime didn't set it
+  if (merged.always === undefined && copyTreeSettings.alwaysInclude) {
+    merged.always = copyTreeSettings.alwaysInclude;
   }
 
   return merged;
+}
+
+/**
+ * Get the current project's settings for CopyTree operations.
+ * Returns undefined if no project is active.
+ */
+async function getCurrentProjectSettings(): Promise<
+  Pick<ProjectSettings, "excludedPaths" | "copyTreeSettings"> | undefined
+> {
+  const currentProjectId = projectStore.getCurrentProjectId();
+  if (!currentProjectId) {
+    return undefined;
+  }
+  try {
+    const settings = await projectStore.getProjectSettings(currentProjectId);
+    return {
+      excludedPaths: settings.excludedPaths,
+      copyTreeSettings: settings.copyTreeSettings,
+    };
+  } catch (error) {
+    console.warn("[CopyTree] Failed to get project settings:", error);
+    return undefined;
+  }
 }
 
 export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void {
@@ -137,7 +184,11 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       sendToRenderer(mainWindow, CHANNELS.COPYTREE_PROGRESS, { ...progress, traceId });
     };
 
-    return workspaceClient.generateContext(worktree.path, validated.options, onProgress);
+    // Merge project settings with runtime options
+    const projectSettings = await getCurrentProjectSettings();
+    const mergedOptions = mergeCopyTreeOptions(projectSettings, validated.options);
+
+    return workspaceClient.generateContext(worktree.path, mergedOptions, onProgress);
   };
   ipcMain.handle(CHANNELS.COPYTREE_GENERATE, handleCopyTreeGenerate);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.COPYTREE_GENERATE));
@@ -189,11 +240,11 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       sendToRenderer(mainWindow, CHANNELS.COPYTREE_PROGRESS, { ...progress, traceId });
     };
 
-    const result = await workspaceClient.generateContext(
-      worktree.path,
-      validated.options,
-      onProgress
-    );
+    // Merge project settings with runtime options
+    const projectSettings = await getCurrentProjectSettings();
+    const mergedOptions = mergeCopyTreeOptions(projectSettings, validated.options);
+
+    const result = await workspaceClient.generateContext(worktree.path, mergedOptions, onProgress);
 
     if (result.error) {
       return result;
@@ -315,9 +366,13 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
         sendToRenderer(mainWindow, CHANNELS.COPYTREE_PROGRESS, { ...progress, traceId });
       };
 
+      // Merge project settings with runtime options
+      const projectSettings = await getCurrentProjectSettings();
+      const mergedOptions = mergeCopyTreeOptions(projectSettings, validated.options || {});
+
       const result = await workspaceClient.generateContext(
         worktree.path,
-        validated.options || {},
+        mergedOptions,
         onProgress
       );
 
@@ -491,7 +546,11 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       };
     }
 
-    return workspaceClient.testConfig(worktree.path, validated.options);
+    // Merge project settings with runtime options
+    const projectSettings = await getCurrentProjectSettings();
+    const mergedOptions = mergeCopyTreeOptions(projectSettings, validated.options);
+
+    return workspaceClient.testConfig(worktree.path, mergedOptions);
   };
   ipcMain.handle(CHANNELS.COPYTREE_TEST_CONFIG, handleCopyTreeTestConfig);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.COPYTREE_TEST_CONFIG));

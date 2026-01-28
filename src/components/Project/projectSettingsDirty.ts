@@ -1,4 +1,5 @@
 import type { CommandOverride } from "@shared/types/commands";
+import type { CopyTreeSettings } from "@shared/types/domain";
 
 export interface ProjectSettingsSnapshot {
   name: string;
@@ -10,6 +11,7 @@ export interface ProjectSettingsSnapshot {
   runCommands: Array<{ id: string; name: string; command: string }>;
   defaultWorktreeRecipeId: string | undefined;
   commandOverrides: CommandOverride[];
+  copyTreeSettings: CopyTreeSettings;
 }
 
 interface EnvVar {
@@ -35,7 +37,8 @@ export function createProjectSettingsSnapshot(
   environmentVariables: EnvVar[],
   runCommands: RunCommand[],
   defaultWorktreeRecipeId: string | undefined,
-  commandOverrides: CommandOverride[]
+  commandOverrides: CommandOverride[],
+  copyTreeSettings: CopyTreeSettings
 ): ProjectSettingsSnapshot {
   const envVarRecord: Record<string, string> = {};
   const seenKeys = new Map<string, number>();
@@ -75,6 +78,21 @@ export function createProjectSettingsSnapshot(
 
   const sortedCommandOverrides = [...commandOverrides];
 
+  // Normalize CopyTree settings
+  const normalizedCopyTreeSettings: CopyTreeSettings = {
+    ...copyTreeSettings,
+    alwaysInclude: copyTreeSettings.alwaysInclude?.map((p) => p.trim()).filter(Boolean),
+    alwaysExclude: copyTreeSettings.alwaysExclude?.map((p) => p.trim()).filter(Boolean),
+  };
+
+  // Clean up undefined/empty arrays if normalized
+  if (normalizedCopyTreeSettings.alwaysInclude?.length === 0) {
+    delete normalizedCopyTreeSettings.alwaysInclude;
+  }
+  if (normalizedCopyTreeSettings.alwaysExclude?.length === 0) {
+    delete normalizedCopyTreeSettings.alwaysExclude;
+  }
+
   return {
     name: name.trim(),
     emoji,
@@ -85,7 +103,18 @@ export function createProjectSettingsSnapshot(
     runCommands: sanitizedRunCommands,
     defaultWorktreeRecipeId,
     commandOverrides: sortedCommandOverrides,
+    copyTreeSettings: normalizedCopyTreeSettings,
   };
+}
+
+function areStringArraysEqual(a: string[] | undefined, b: string[] | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
 }
 
 export function areSnapshotsEqual(a: ProjectSettingsSnapshot, b: ProjectSettingsSnapshot): boolean {
@@ -140,6 +169,16 @@ export function areSnapshotsEqual(a: ProjectSettingsSnapshot, b: ProjectSettings
     );
     if (aDefaultsStr !== bDefaultsStr) return false;
   }
+
+  // CopyTree settings comparison
+  const aSettings = a.copyTreeSettings;
+  const bSettings = b.copyTreeSettings;
+  if (aSettings.maxContextSize !== bSettings.maxContextSize) return false;
+  if (aSettings.maxFileSize !== bSettings.maxFileSize) return false;
+  if (aSettings.charLimit !== bSettings.charLimit) return false;
+  if (aSettings.strategy !== bSettings.strategy) return false;
+  if (!areStringArraysEqual(aSettings.alwaysInclude, bSettings.alwaysInclude)) return false;
+  if (!areStringArraysEqual(aSettings.alwaysExclude, bSettings.alwaysExclude)) return false;
 
   return true;
 }

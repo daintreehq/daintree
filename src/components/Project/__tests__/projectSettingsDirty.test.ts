@@ -26,7 +26,8 @@ describe("projectSettingsDirty", () => {
           { id: "cmd2", name: "", command: "test", icon: undefined },
         ],
         "recipe-123",
-        [{ commandId: "test", disabled: false }]
+        [{ commandId: "test", disabled: false }],
+        {}
       );
 
       expect(snapshot.name).toBe("My Project");
@@ -63,7 +64,8 @@ describe("projectSettingsDirty", () => {
         ],
         [],
         undefined,
-        []
+        [],
+        {}
       );
 
       expect(Object.keys(snapshot.environmentVariables).length).toBe(2);
@@ -84,7 +86,8 @@ describe("projectSettingsDirty", () => {
         ],
         [],
         undefined,
-        []
+        [],
+        {}
       );
 
       expect(Object.keys(snapshot.environmentVariables).length).toBe(2);
@@ -105,7 +108,8 @@ describe("projectSettingsDirty", () => {
         ],
         [],
         undefined,
-        []
+        [],
+        {}
       );
 
       expect(Object.keys(snapshot.environmentVariables)).toEqual(["ALPHA", "BETA", "ZEBRA"]);
@@ -121,7 +125,8 @@ describe("projectSettingsDirty", () => {
         [],
         [],
         undefined,
-        []
+        [],
+        {}
       );
 
       expect(snapshot.excludedPaths).toEqual(["z/**", "a/**", "m/**"]);
@@ -142,7 +147,8 @@ describe("projectSettingsDirty", () => {
         [],
         [],
         undefined,
-        overrides
+        overrides,
+        {}
       );
 
       expect(snapshot.commandOverrides[0].commandId).toBe("z");
@@ -160,7 +166,8 @@ describe("projectSettingsDirty", () => {
       [{ id: "1", key: "KEY", value: "value" }],
       [{ id: "cmd1", name: "Build", command: "npm run build" }],
       "recipe-1",
-      [{ commandId: "test", disabled: false }]
+      [{ commandId: "test", disabled: false }],
+      {}
     );
 
     it("should return true for identical snapshots", () => {
@@ -173,7 +180,8 @@ describe("projectSettingsDirty", () => {
         [{ id: "1", key: "KEY", value: "value" }],
         [{ id: "cmd1", name: "Build", command: "npm run build" }],
         "recipe-1",
-        [{ commandId: "test", disabled: false }]
+        [{ commandId: "test", disabled: false }],
+        {}
       );
 
       expect(areSnapshotsEqual(baseSnapshot, snapshot2)).toBe(true);
@@ -189,7 +197,8 @@ describe("projectSettingsDirty", () => {
         [{ id: "1", key: "KEY", value: "value" }],
         [{ id: "cmd1", name: "Build", command: "npm run build" }],
         "recipe-1",
-        [{ commandId: "test", disabled: false }]
+        [{ commandId: "test", disabled: false }],
+        {}
       );
 
       expect(areSnapshotsEqual(baseSnapshot, snapshot2)).toBe(false);
@@ -205,7 +214,8 @@ describe("projectSettingsDirty", () => {
         [{ id: "1", key: "KEY", value: "value" }],
         [{ id: "cmd1", name: "Build", command: "npm run build" }],
         "recipe-1",
-        [{ commandId: "test", disabled: false }]
+        [{ commandId: "test", disabled: false }],
+        {}
       );
 
       expect(areSnapshotsEqual(baseSnapshot, snapshot2)).toBe(false);
@@ -221,7 +231,8 @@ describe("projectSettingsDirty", () => {
         [{ id: "1", key: "KEY", value: "value" }],
         [{ id: "cmd1", name: "Build", command: "npm run build" }],
         "recipe-1",
-        [{ commandId: "test", disabled: false }]
+        [{ commandId: "test", disabled: false }],
+        {}
       );
 
       expect(areSnapshotsEqual(baseSnapshot, snapshot2)).toBe(false);
@@ -237,7 +248,8 @@ describe("projectSettingsDirty", () => {
         [{ id: "1", key: "KEY", value: "value" }],
         [{ id: "cmd1", name: "Build", command: "npm run build" }],
         "recipe-1",
-        [{ commandId: "test", disabled: false }]
+        [{ commandId: "test", disabled: false }],
+        {}
       );
 
       expect(areSnapshotsEqual(baseSnapshot, snapshot2)).toBe(false);
@@ -253,7 +265,8 @@ describe("projectSettingsDirty", () => {
         [{ id: "1", key: "KEY", value: "value" }],
         [{ id: "cmd1", name: "Build", command: "npm run build" }],
         "recipe-1",
-        [{ commandId: "test", disabled: false }]
+        [{ commandId: "test", disabled: false }],
+        {}
       );
 
       expect(areSnapshotsEqual(baseSnapshot, snapshot2)).toBe(false);
@@ -269,7 +282,8 @@ describe("projectSettingsDirty", () => {
         [{ id: "1", key: "KEY", value: "different-value" }],
         [{ id: "cmd1", name: "Build", command: "npm run build" }],
         "recipe-1",
-        [{ commandId: "test", disabled: false }]
+        [{ commandId: "test", disabled: false }],
+        {}
       );
 
       expect(areSnapshotsEqual(baseSnapshot, snapshot2)).toBe(false);
@@ -285,7 +299,8 @@ describe("projectSettingsDirty", () => {
         [{ id: "1", key: "KEY", value: "value" }],
         [{ id: "cmd1", name: "Test", command: "npm test" }],
         "recipe-1",
-        [{ commandId: "test", disabled: false }]
+        [{ commandId: "test", disabled: false }],
+        {}
       );
 
       expect(areSnapshotsEqual(baseSnapshot, snapshot2)).toBe(false);
@@ -301,7 +316,8 @@ describe("projectSettingsDirty", () => {
         [{ id: "1", key: "KEY", value: "value" }],
         [{ id: "cmd1", name: "Build", command: "npm run build" }],
         "recipe-2",
-        [{ commandId: "test", disabled: false }]
+        [{ commandId: "test", disabled: false }],
+        {}
       );
 
       expect(areSnapshotsEqual(baseSnapshot, snapshot2)).toBe(false);
@@ -317,7 +333,8 @@ describe("projectSettingsDirty", () => {
         [{ id: "1", key: "KEY", value: "value" }],
         [{ id: "cmd1", name: "Build", command: "npm run build" }],
         "recipe-1",
-        [{ commandId: "test", disabled: true }]
+        [{ commandId: "test", disabled: true }],
+        {}
       );
 
       expect(areSnapshotsEqual(baseSnapshot, snapshot2)).toBe(false);
