@@ -1,5 +1,13 @@
-import { useState, useEffect, useMemo } from "react";
-import { ChevronDown, ChevronRight, RotateCcw, Power, PowerOff, AlertCircle } from "lucide-react";
+import { useState, useEffect, useMemo, useCallback } from "react";
+import {
+  ChevronDown,
+  ChevronRight,
+  RotateCcw,
+  Power,
+  PowerOff,
+  AlertCircle,
+  Search,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { commandsClient } from "@/clients/commandsClient";
 import type { CommandManifestEntry, CommandOverride } from "@shared/types/commands";
@@ -13,12 +21,15 @@ interface CommandOverridesTabProps {
 }
 
 type OverrideMode = "defaults" | "prompt";
+type FilterMode = "all" | "overridden" | "disabled";
 
 export function CommandOverridesTab({ projectId, overrides, onChange }: CommandOverridesTabProps) {
   const [commands, setCommands] = useState<CommandManifestEntry[]>([]);
   const [expandedCommands, setExpandedCommands] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
   const [overrideModes, setOverrideModes] = useState<Record<string, OverrideMode>>({});
+  const [searchQuery, setSearchQuery] = useState("");
+  const [filterMode, setFilterMode] = useState<FilterMode>("all");
 
   useEffect(() => {
     let mounted = true;
@@ -59,9 +70,12 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
     setOverrideModes(newModes);
   }, [overrides]);
 
-  const getOverride = (commandId: string): CommandOverride | undefined => {
-    return overrides.find((o) => o.commandId === commandId);
-  };
+  const getOverride = useCallback(
+    (commandId: string): CommandOverride | undefined => {
+      return overrides.find((o) => o.commandId === commandId);
+    },
+    [overrides]
+  );
 
   const updateOverride = (commandId: string, updates: Partial<CommandOverride>) => {
     const existing = getOverride(commandId);
@@ -158,19 +172,78 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
     });
   };
 
-  const hasOverride = (commandId: string): boolean => {
-    const override = getOverride(commandId);
-    return !!(
-      override &&
-      (override.disabled ||
-        (override.defaults && Object.keys(override.defaults).length > 0) ||
-        override.prompt)
-    );
+  const hasOverride = useCallback(
+    (commandId: string): boolean => {
+      const override = getOverride(commandId);
+      return !!(
+        override &&
+        (override.disabled ||
+          (override.defaults && Object.keys(override.defaults).length > 0) ||
+          override.prompt)
+      );
+    },
+    [getOverride]
+  );
+
+  const getOverrideMode = (commandId: string, hasArgs: boolean): OverrideMode => {
+    const mode = overrideModes[commandId];
+    if (mode) return mode;
+    return hasArgs ? "defaults" : "prompt";
   };
 
-  const getOverrideMode = (commandId: string): OverrideMode => {
-    return overrideModes[commandId] || "defaults";
-  };
+  const isDisabledCommand = useCallback(
+    (commandId: string): boolean => {
+      return getOverride(commandId)?.disabled === true;
+    },
+    [getOverride]
+  );
+
+  // Compute summary counts
+  const overriddenCount = useMemo(() => {
+    return commands.filter((cmd) => {
+      const override = getOverride(cmd.id);
+      return (
+        override &&
+        ((override.defaults && Object.keys(override.defaults).length > 0) || override.prompt)
+      );
+    }).length;
+  }, [commands, getOverride]);
+
+  const disabledCount = useMemo(() => {
+    return commands.filter((cmd) => isDisabledCommand(cmd.id)).length;
+  }, [commands, isDisabledCommand]);
+
+  // Filter and sort commands
+  const filteredCommands = useMemo(() => {
+    let filtered = commands;
+
+    // Apply search filter
+    if (searchQuery.trim()) {
+      const query = searchQuery.trim().toLowerCase();
+      filtered = filtered.filter(
+        (cmd) =>
+          cmd.id.toLowerCase().includes(query) ||
+          (cmd.label?.toLowerCase().includes(query) ?? false) ||
+          (cmd.description?.toLowerCase().includes(query) ?? false)
+      );
+    }
+
+    // Apply filter mode
+    if (filterMode === "overridden") {
+      filtered = filtered.filter((cmd) => hasOverride(cmd.id));
+    } else if (filterMode === "disabled") {
+      filtered = filtered.filter((cmd) => isDisabledCommand(cmd.id));
+    }
+
+    // Sort: overridden commands first
+    return [...filtered].sort((a, b) => {
+      const aOverridden = hasOverride(a.id);
+      const bOverridden = hasOverride(b.id);
+      if (aOverridden && !bOverridden) return -1;
+      if (!aOverridden && bOverridden) return 1;
+      return 0;
+    });
+  }, [commands, searchQuery, filterMode, hasOverride, isDisabledCommand]);
 
   if (isLoading) {
     return <div className="text-sm text-canopy-text/60 text-center py-8">Loading commands...</div>;
@@ -192,14 +265,61 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
         </p>
       </div>
 
+      {/* Summary */}
+      <div className="text-xs text-canopy-text/60 mb-2">
+        {overriddenCount} overridden, {disabledCount} disabled
+      </div>
+
+      {/* Search and Filters */}
+      <div className="flex items-center gap-3 mb-3">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-canopy-text/60" />
+          <input
+            type="text"
+            placeholder="Search commands..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full pl-9 pr-3 py-2 bg-canopy-bg border border-canopy-border rounded text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:border-canopy-accent"
+            aria-label="Search commands"
+          />
+        </div>
+        <div className="flex gap-1">
+          {(["all", "overridden", "disabled"] as const).map((mode) => (
+            <button
+              key={mode}
+              onClick={() => setFilterMode(mode)}
+              className={cn(
+                "px-3 py-1.5 text-xs font-medium rounded transition-colors capitalize",
+                filterMode === mode
+                  ? "bg-canopy-accent text-white"
+                  : "bg-canopy-sidebar text-canopy-text/70 hover:bg-canopy-border"
+              )}
+            >
+              {mode}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="space-y-1">
-        {commands.map((command) => {
+        {filteredCommands.length === 0 && (
+          <div className="text-sm text-canopy-text/60 text-center py-8">
+            {searchQuery.trim()
+              ? `No commands match "${searchQuery.trim()}"`
+              : filterMode === "overridden"
+                ? "No overridden commands yet"
+                : filterMode === "disabled"
+                  ? "No disabled commands"
+                  : "No commands available"}
+          </div>
+        )}
+        {filteredCommands.map((command) => {
           const override = getOverride(command.id);
           const isDisabled = override?.disabled === true;
           const isExpanded = expandedCommands.has(command.id);
-          const hasArgs = command.args && command.args.length > 0;
+          const hasArgs = !!(command.args && command.args.length > 0);
           const canExpand = !isDisabled;
-          const currentMode = getOverrideMode(command.id);
+          const currentMode = getOverrideMode(command.id, hasArgs);
 
           return (
             <div
