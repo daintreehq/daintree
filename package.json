@@ -5,6 +5,9 @@
   "author": "Canopy Team",
   "main": "dist-electron/electron/main.js",
   "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "dev": "concurrently -k \"npm run watch:main\" \"vite\" \"wait-on dist-electron/electron/main.js && npm run dev:electron\"",
     "dev:vite": "vite",
@@ -87,6 +90,7 @@
   },
   "devDependencies": {
     "@electron/rebuild": "^3.7.1",
+    "esbuild": "^0.27.0",
     "@eslint/js": "^9.39.1",
     "@tailwindcss/vite": "^4.1.17",
     "@types/eslint__js": "^8.42.3",

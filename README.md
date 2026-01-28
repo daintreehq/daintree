@@ -73,10 +73,10 @@ npm install -g opencode-ai@latest
 
 2. **Install dependencies:**
 
-   > **Important:** Use `npm install`, not `npm ci`. This project includes native modules (`node-pty`) that must be built against the Electron runtime.
+   > **Note:** This project includes native modules (`node-pty`) that must be built against the Electron runtime. Both `npm install` and `npm ci` work correctly - the `postinstall` script handles the rebuild automatically.
 
    ```bash
-   npm install
+   npm install  # or npm ci for CI environments
    ```
 
 3. **Rebuild Native Modules (if needed):**

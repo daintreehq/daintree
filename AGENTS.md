@@ -24,7 +24,7 @@ npm run fix              # Auto-fix lint/format
 
 ## Critical Rules
 
-1. **Dependencies:** Use `npm install`, never `npm ci` (package-lock is ignored).
+1. **Dependencies:** Use `npm install` for local development. `npm ci` is acceptable for CI environments where reproducible builds are critical. Both commands run the `postinstall` rebuild hook automatically unless `--ignore-scripts` is used.
 2. **Code Style:** Minimal comments, no decorative separators, high signal-to-noise.
 3. **Commits:** Conventional Commits (`feat(scope):`, `fix(scope):`, `chore:`).
 4. **PRs:** Include brief summary, key changes, linked issues. Run `npm run check` first.

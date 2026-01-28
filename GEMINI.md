@@ -5,8 +5,8 @@
 
 ## Critical Rules
 
-1. **Dependencies:** Use `npm install`, never `npm ci` (package-lock is ignored).
-2. **Native Modules:** Run `npm run rebuild` if node-pty errors occur.
+1. **Dependencies:** Use `npm install` for local development. `npm ci` is acceptable for CI environments where reproducible builds are critical. Both commands run the `postinstall` rebuild hook automatically unless `--ignore-scripts` is used.
+2. **Native Modules:** The `postinstall` script rebuilds `node-pty` automatically. Run `npm run rebuild` manually if errors occur.
 3. **Code Style:** Minimal comments, no decorative headers, high signal-to-noise.
 4. **Commits:** NEVER commit changes without explicit permission from the user.
 

@@ -3,7 +3,7 @@
 ## Commands
 
 ```bash
-npm install          # Install deps (NEVER npm ci - no lockfile)
+npm install          # Install deps (or npm ci)
 npm run dev          # Main + Renderer concurrent dev
 npm run build        # Production build
 npm run check        # typecheck + lint + format (run before commits)
