@@ -366,25 +366,13 @@ export type {
   CommandGetPayload,
 } from "./commands.js";
 
-// App Agent types - one-shot command agent
-export type {
-  AppAgentProvider,
-  AppAgentConfig,
-  AgentDecision,
-  AgentDecisionDispatch,
-  AgentDecisionAsk,
-  AgentDecisionReply,
-  OneShotRunRequest,
-  OneShotRunResult,
-  AgentAccessibleAction,
-} from "./appAgent.js";
+// App Agent types - AI configuration
+export type { AppAgentProvider, AppAgentConfig } from "./appAgent.js";
 
 export {
   AppAgentProviderSchema,
   AppAgentConfigSchema,
-  AgentDecisionSchema,
   DEFAULT_APP_AGENT_CONFIG,
-  AGENT_ACCESSIBLE_ACTIONS,
 } from "./appAgent.js";
 
 // Assistant types - AI assistant panel

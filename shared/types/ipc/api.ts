@@ -76,7 +76,7 @@ import type {
   CommandGetPayload,
   BuilderStep,
 } from "../commands.js";
-import type { AppAgentConfig, OneShotRunRequest, OneShotRunResult } from "../appAgent.js";
+import type { AppAgentConfig } from "../appAgent.js";
 import type { ActionManifestEntry, ActionContext } from "../actions.js";
 import type { AssistantMessage, AssistantChunkPayload } from "../assistant.js";
 
@@ -565,12 +565,6 @@ export interface ElectronAPI {
     getBuilder(commandId: string): Promise<{ steps: BuilderStep[] } | null>;
   };
   appAgent: {
-    /** Run a one-shot command through the app agent */
-    runOneShot(payload: {
-      request: OneShotRunRequest;
-      actions: ActionManifestEntry[];
-      context: ActionContext;
-    }): Promise<OneShotRunResult>;
     /** Get the current app agent config (without API key) */
     getConfig(): Promise<Omit<AppAgentConfig, "apiKey">>;
     /** Update app agent config */
@@ -581,15 +575,7 @@ export interface ElectronAPI {
     testApiKey(apiKey: string): Promise<{ valid: boolean; error?: string }>;
     /** Test a model name using the stored API key */
     testModel(model: string): Promise<{ valid: boolean; error?: string }>;
-    /** Cancel any in-flight request */
-    cancel(): Promise<void>;
-    /** Dispatch an action during multi-step execution (internal) */
-    dispatchAction(payload: {
-      actionId: string;
-      args?: Record<string, unknown>;
-      context: ActionContext;
-    }): Promise<{ ok: boolean; result?: unknown; error?: { code: string; message: string } }>;
-    /** Listen for action dispatch requests from main process */
+    /** Listen for action dispatch requests from main process (for Assistant tool calling) */
     onDispatchActionRequest(
       callback: (payload: {
         requestId: string;

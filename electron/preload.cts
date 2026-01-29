@@ -399,14 +399,11 @@ const CHANNELS = {
   COMMANDS_GET_BUILDER: "commands:get-builder",
 
   // App Agent channels
-  APP_AGENT_RUN_ONE_SHOT: "app-agent:run-one-shot",
   APP_AGENT_GET_CONFIG: "app-agent:get-config",
   APP_AGENT_SET_CONFIG: "app-agent:set-config",
   APP_AGENT_HAS_API_KEY: "app-agent:has-api-key",
   APP_AGENT_TEST_API_KEY: "app-agent:test-api-key",
   APP_AGENT_TEST_MODEL: "app-agent:test-model",
-  APP_AGENT_CANCEL: "app-agent:cancel",
-  APP_AGENT_DISPATCH_ACTION: "app-agent:dispatch-action",
 
   // Assistant channels
   ASSISTANT_SEND_MESSAGE: "assistant:send-message",
@@ -1191,31 +1188,8 @@ const api: ElectronAPI = {
     getBuilder: (commandId: string) => ipcRenderer.invoke(CHANNELS.COMMANDS_GET_BUILDER, commandId),
   },
 
-  // App Agent API
+  // App Agent API - Configuration and API key management
   appAgent: {
-    runOneShot: (payload: {
-      request: { prompt: string; clarificationChoice?: string };
-      actions: Array<{
-        id: string;
-        name: string;
-        title: string;
-        description: string;
-        category: string;
-        kind: string;
-        danger: string;
-        inputSchema?: Record<string, unknown>;
-        outputSchema?: Record<string, unknown>;
-        enabled: boolean;
-        disabledReason?: string;
-      }>;
-      context: {
-        projectId?: string;
-        activeWorktreeId?: string;
-        focusedWorktreeId?: string;
-        focusedTerminalId?: string;
-      };
-    }) => ipcRenderer.invoke(CHANNELS.APP_AGENT_RUN_ONE_SHOT, payload),
-
     getConfig: () => ipcRenderer.invoke(CHANNELS.APP_AGENT_GET_CONFIG),
 
     setConfig: (config: { provider?: string; model?: string; apiKey?: string; baseUrl?: string }) =>
@@ -1227,20 +1201,7 @@ const api: ElectronAPI = {
 
     testModel: (model: string) => ipcRenderer.invoke(CHANNELS.APP_AGENT_TEST_MODEL, model),
 
-    cancel: () => ipcRenderer.invoke(CHANNELS.APP_AGENT_CANCEL),
-
-    dispatchAction: (payload: {
-      actionId: string;
-      args?: Record<string, unknown>;
-      context: {
-        projectId?: string;
-        activeWorktreeId?: string;
-        focusedWorktreeId?: string;
-        focusedTerminalId?: string;
-      };
-    }) => ipcRenderer.invoke(CHANNELS.APP_AGENT_DISPATCH_ACTION, payload),
-
-    // Listen for action dispatch requests from main process (for multi-step execution)
+    // Listen for action dispatch requests from main process (for Assistant tool calling)
     onDispatchActionRequest: (
       callback: (payload: {
         requestId: string;

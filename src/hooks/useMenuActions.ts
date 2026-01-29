@@ -75,7 +75,7 @@ export function useMenuActions(options: UseMenuActionsOptions): void {
         "toggle-sidebar": "nav.toggleSidebar",
         "open-agent-palette": "terminal.palette",
         "open-panel-palette": "panel.palette",
-        "open-command-bar": "agent.commandBar",
+        "open-assistant": "assistant.open",
       };
 
       const actionId = menuToActionMap[action];

@@ -7,8 +7,37 @@
 
 import { tool, jsonSchema, type ToolSet } from "ai";
 import { BrowserWindow, ipcMain } from "electron";
-import { AGENT_ACCESSIBLE_ACTIONS } from "../../../shared/types/appAgent.js";
 import type { ActionManifestEntry, ActionContext } from "../../../shared/types/actions.js";
+
+/**
+ * Allowlist of actions that the AI assistant can invoke.
+ * These are carefully curated to be safe and useful for natural language commands.
+ */
+export const AGENT_ACCESSIBLE_ACTIONS = [
+  // Query actions - return system state
+  "terminal.list",
+  "terminal.getOutput",
+  "panel.list",
+  "worktree.list",
+  "worktree.getCurrent",
+  "project.getCurrent",
+  // Command actions - perform operations
+  "app.settings",
+  "app.settings.openTab",
+  "terminal.new",
+  "terminal.kill",
+  "terminal.close",
+  "terminal.trash",
+  "terminal.palette",
+  "worktree.createDialog.open",
+  "worktree.setActive",
+  "agent.launch",
+  "nav.toggleSidebar",
+  "panel.toggleDock",
+  "sidecar.toggle",
+] as const;
+
+export type AgentAccessibleAction = (typeof AGENT_ACCESSIBLE_ACTIONS)[number];
 
 const MAX_RESULT_SIZE = 50000;
 

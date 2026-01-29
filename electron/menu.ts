@@ -191,9 +191,9 @@ export function createApplicationMenu(
         },
         { type: "separator" },
         {
-          label: "AI Command Bar...",
+          label: "Canopy Assistant...",
           accelerator: "CommandOrControl+Shift+K",
-          click: () => sendAction("open-command-bar"),
+          click: () => sendAction("open-assistant"),
         },
       ],
     },

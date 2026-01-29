@@ -2,7 +2,6 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { AgentIdSchema, LaunchLocationSchema } from "./schemas";
 import { z } from "zod";
 import { useTerminalStore } from "@/store/terminalStore";
-import { useAppAgentStore } from "@/store/appAgentStore";
 
 export function registerAgentActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("agent.launch", () => ({
@@ -151,19 +150,6 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         if (wt.worktreeId) validWorktreeIds.add(wt.worktreeId);
       }
       state.focusNextFailed(state.isInTrash, validWorktreeIds);
-    },
-  }));
-
-  actions.set("agent.commandBar", () => ({
-    id: "agent.commandBar",
-    title: "Open Command Bar",
-    description: "Open the AI-powered one-shot command bar",
-    category: "agent",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      useAppAgentStore.getState().open();
     },
   }));
 }

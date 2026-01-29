@@ -3,10 +3,10 @@ import { actionService } from "@/services/ActionService";
 import type { ActionId } from "@shared/types/actions";
 
 /**
- * Hook that listens for action dispatch requests from the main process
- * during app agent multi-step execution.
+ * Hook that listens for action dispatch requests from the main process.
+ * Used by the Assistant panel's tool calling to execute renderer-side actions.
  *
- * This enables the AppAgentService running in main to execute
+ * This enables the AssistantService running in main to execute
  * renderer-side actions via ActionService and get results back.
  */
 export function useAppAgentDispatcher(): void {

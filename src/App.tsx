@@ -47,7 +47,6 @@ import { PanelPalette } from "./components/PanelPalette/PanelPalette";
 import { ProjectSwitcherPalette } from "./components/Project/ProjectSwitcherPalette";
 import { RecipeEditor } from "./components/TerminalRecipe/RecipeEditor";
 import { NotesPalette } from "./components/Notes";
-import { OneShotCommandBar } from "./components/AppAgent";
 import { SettingsDialog, type SettingsTab } from "./components/Settings";
 import { ShortcutReferenceDialog } from "./components/KeyboardShortcuts";
 import { Toaster } from "./components/ui/toaster";
@@ -488,7 +487,7 @@ function App() {
   const loadRecipes = useRecipeStore((state) => state.loadRecipes);
   useTerminalConfig();
   useWindowNotifications();
-  useAppAgentDispatcher(); // Listen for action dispatch requests from main process
+  useAppAgentDispatcher(); // Enable Assistant tool calling via action dispatch
 
   const [homeDir, setHomeDir] = useState<string | undefined>(undefined);
   useEffect(() => {
@@ -939,8 +938,6 @@ function App() {
       <TerminalInfoDialogHost />
 
       <PanelTransitionOverlay />
-
-      <OneShotCommandBar />
 
       <Toaster />
     </ErrorBoundary>
