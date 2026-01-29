@@ -35,7 +35,9 @@ export function TerminalIcon({ type, kind, agentId, className, brandColor }: Ter
 
   // Assistant panes get the Canopy icon
   if (kind === "assistant") {
-    return <CanopyIcon {...finalProps} className={cn(finalProps.className, "text-canopy-accent")} />;
+    return (
+      <CanopyIcon {...finalProps} className={cn(finalProps.className, "text-canopy-accent")} />
+    );
   }
 
   // Get effective agent ID - either from explicit agentId prop or from type (backward compat)

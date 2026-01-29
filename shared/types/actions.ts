@@ -14,6 +14,7 @@ export type ActionId =
   // Query actions for App Agent
   | "terminal.list"
   | "terminal.getOutput"
+  | "terminal.sendCommand"
   | "panel.list"
   | "worktree.list"
   | "worktree.getCurrent"

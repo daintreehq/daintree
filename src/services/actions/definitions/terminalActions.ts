@@ -141,6 +141,52 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
     },
   }));
 
+  // Command action: send a command to a terminal for execution
+  actions.set("terminal.sendCommand", () => ({
+    id: "terminal.sendCommand",
+    title: "Send Command to Terminal",
+    description: "Send a shell command to a terminal for execution",
+    category: "terminal",
+    kind: "command",
+    danger: "confirm", // Commands can have side effects
+    scope: "renderer",
+    argsSchema: z.object({
+      terminalId: z.string().min(1).describe("Terminal instance ID from terminal.list"),
+      command: z.string().min(1).describe("The command to execute"),
+    }),
+    run: async (args: unknown) => {
+      const { terminalId, command } = args as { terminalId: string; command: string };
+
+      // Verify terminal exists and is valid for command execution
+      const terminals = useTerminalStore.getState().terminals;
+      const terminal = terminals.find((t) => t.id === terminalId);
+
+      if (!terminal) {
+        throw new Error("Terminal not found");
+      }
+
+      // Check if terminal is trashed
+      if (terminal.location === "trash") {
+        throw new Error("Cannot send commands to trashed terminals");
+      }
+
+      // Check if terminal kind supports PTY (must have a shell to send commands to)
+      const { panelKindHasPty } = await import("@shared/config/panelKindRegistry");
+      const kind = terminal.kind ?? "terminal";
+      if (!panelKindHasPty(kind)) {
+        throw new Error(`Terminal kind "${kind}" does not support command execution`);
+      }
+
+      // Check if terminal has PTY capability
+      if (terminal.hasPty === false) {
+        throw new Error("Terminal does not have PTY capability");
+      }
+
+      // Send command via submit (handles bracketed paste)
+      await terminalClient.submit(terminalId, command);
+    },
+  }));
+
   actions.set("terminal.new", () => ({
     id: "terminal.new",
     title: "New Terminal",
