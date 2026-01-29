@@ -2,7 +2,7 @@ import { useRef, useCallback, useState, useEffect } from "react";
 import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
 import { ArrowDown, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { MessageBubble } from "./MessageBubble";
+import { InteractionBlock } from "./InteractionBlock";
 import type { AssistantMessage, StreamingState } from "./types";
 
 interface MessageListProps {
@@ -67,11 +67,7 @@ export function MessageList({ messages, streamingState, className }: MessageList
   const renderMessage = (_index: number, msg: AssistantMessage) => {
     const isStreaming = msg.id === "__streaming__";
 
-    return (
-      <div className="px-6 py-3">
-        <MessageBubble message={msg} isStreaming={isStreaming} />
-      </div>
-    );
+    return <InteractionBlock message={msg} isStreaming={isStreaming} />;
   };
 
   const computeItemKey = useCallback((_index: number, item: AssistantMessage) => item.id, []);
@@ -84,10 +80,10 @@ export function MessageList({ messages, streamingState, className }: MessageList
             <Sparkles className="w-6 h-6 text-canopy-accent/70" />
           </div>
           <p className="text-sm text-canopy-text/60 leading-relaxed">
-            Start a conversation with Canopy Assistant
+            Start an interaction with Canopy Assistant
           </p>
           <p className="text-xs text-canopy-text/40 mt-2 leading-relaxed">
-            Ask questions, get help with your code, explore ideas, or request code reviews
+            Execute commands, request code analysis, or explore your codebase
           </p>
         </div>
       </div>
@@ -124,7 +120,7 @@ export function MessageList({ messages, streamingState, className }: MessageList
           )}
         >
           <ArrowDown className="w-3.5 h-3.5" />
-          New messages
+          New output
         </button>
       )}
     </div>

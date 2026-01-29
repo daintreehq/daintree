@@ -132,7 +132,7 @@ export function AssistantPane({
               ref={inputRef}
               onSubmit={handleSubmit}
               disabled={isLoading}
-              placeholder={isLoading ? "Assistant is typing..." : "Ask the assistant..."}
+              placeholder="Execute a command or ask a question..."
             />
           </>
         )}

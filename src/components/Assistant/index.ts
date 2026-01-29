@@ -2,7 +2,7 @@ export { AssistantPane } from "./AssistantPane";
 export type { AssistantPaneProps } from "./AssistantPane";
 
 export { MessageList } from "./MessageList";
-export { MessageBubble } from "./MessageBubble";
+export { InteractionBlock } from "./InteractionBlock";
 export { MarkdownRenderer } from "./MarkdownRenderer";
 export { AssistantInput } from "./AssistantInput";
 export type { AssistantInputHandle } from "./AssistantInput";

@@ -1,5 +1,12 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
-import { Send } from "lucide-react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useId,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
 import { cn } from "@/lib/utils";
 
 export interface AssistantInputHandle {
@@ -15,10 +22,19 @@ interface AssistantInputProps {
 }
 
 export const AssistantInput = forwardRef<AssistantInputHandle, AssistantInputProps>(
-  ({ onSubmit, disabled = false, placeholder = "Ask the assistant...", className }, ref) => {
+  (
+    {
+      onSubmit,
+      disabled = false,
+      placeholder = "Execute a command or ask a question...",
+      className,
+    },
+    ref
+  ) => {
     const [value, setValue] = useState("");
     const [isComposing, setIsComposing] = useState(false);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const hintId = useId();
 
     const adjustHeight = useCallback(() => {
       const textarea = textareaRef.current;
@@ -76,16 +92,17 @@ export const AssistantInput = forwardRef<AssistantInputHandle, AssistantInputPro
     const canSubmit = value.trim().length > 0 && !disabled;
 
     return (
-      <div className={cn("border-t border-canopy-border bg-canopy-bg px-4 pb-3 pt-3", className)}>
+      <div className={cn("shrink-0 border-t border-divider bg-canopy-bg", className)}>
         <div
           className={cn(
-            "group cursor-text",
-            "flex items-center gap-1.5 rounded-sm border border-white/[0.06] bg-white/[0.03] py-1 shadow-[0_6px_12px_rgba(0,0,0,0.18)] transition-colors",
-            "group-hover:border-white/[0.08] group-hover:bg-white/[0.04]",
-            "focus-within:border-white/[0.12] focus-within:ring-1 focus-within:ring-white/[0.06] focus-within:bg-white/[0.05]",
+            "relative flex items-start gap-2 px-3 py-3",
             disabled && "opacity-60 pointer-events-none"
           )}
         >
+          <div className="shrink-0 pt-1.5 text-canopy-accent" aria-hidden="true">
+            <span className="font-mono text-lg leading-none">›</span>
+          </div>
+
           <textarea
             ref={textareaRef}
             value={value}
@@ -97,51 +114,30 @@ export const AssistantInput = forwardRef<AssistantInputHandle, AssistantInputPro
             disabled={disabled}
             rows={1}
             className={cn(
-              "flex-1 bg-transparent pl-3 text-canopy-text text-sm leading-relaxed",
-              "resize-none outline-none",
-              "placeholder:text-canopy-text/40",
-              "disabled:cursor-not-allowed"
+              "flex-1 max-h-[200px] min-h-[24px] resize-none bg-transparent py-1 text-sm text-canopy-text",
+              "placeholder:text-canopy-text/30 focus:outline-none scrollbar-none font-mono"
             )}
-            aria-label="Message input"
+            aria-label="Command input"
+            aria-describedby={hintId}
           />
-          <div className="pr-1.5">
-            <button
-              type="button"
-              onClick={handleSubmit}
-              disabled={!canSubmit}
+
+          <div className="shrink-0 pt-1" aria-hidden="true">
+            <span
               className={cn(
-                "p-1.5 rounded-sm shrink-0",
+                "text-[10px] border rounded px-1.5 py-0.5 transition-colors",
                 canSubmit
-                  ? "bg-canopy-accent text-white hover:bg-canopy-accent/90"
-                  : "bg-white/[0.06] text-canopy-text/30",
-                "disabled:cursor-not-allowed",
-                "transition-colors duration-150",
-                "focus:outline-none focus:ring-1 focus:ring-white/[0.12]"
+                  ? "text-canopy-accent/70 border-canopy-accent/30"
+                  : "text-canopy-text/30 border-divider"
               )}
-              aria-label="Send message"
             >
-              <Send className="w-4 h-4" />
-            </button>
+              ⏎ Run
+            </span>
           </div>
         </div>
-        <div className="flex items-center justify-between mt-2 px-1 text-[10px] text-canopy-text/40">
-          <span className="flex items-center gap-1">
-            <kbd className="px-1.5 py-0.5 rounded bg-canopy-sidebar/60 font-mono border border-canopy-border/40">
-              ⏎
-            </kbd>
-            <span>to send</span>
-            <span className="mx-1.5 text-canopy-text/20">•</span>
-            <kbd className="px-1.5 py-0.5 rounded bg-canopy-sidebar/60 font-mono border border-canopy-border/40">
-              ⇧⏎
-            </kbd>
-            <span>new line</span>
-          </span>
-          <span className="text-canopy-text/30">
-            <kbd className="px-1.5 py-0.5 rounded bg-canopy-sidebar/60 font-mono border border-canopy-border/40">
-              ⌘⇧K
-            </kbd>
-            <span className="ml-1">focus</span>
-          </span>
+
+        <div id={hintId} className="px-3 pb-2 text-[10px] text-canopy-text/30">
+          <kbd className="px-1 py-0.5 bg-canopy-sidebar/40 rounded font-mono">⇧⏎</kbd>
+          <span className="ml-1">new line</span>
         </div>
       </div>
     );
