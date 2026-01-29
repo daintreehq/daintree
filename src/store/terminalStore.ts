@@ -84,7 +84,7 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
   const getTerminal = (id: string) => get().terminals.find((t) => t.id === id);
 
   const registrySlice = createTerminalRegistrySlice({
-    onTerminalRemoved: (id, removedIndex, remainingTerminals) => {
+    onTerminalRemoved: (id, removedIndex, remainingTerminals, removedTerminal) => {
       clearTerminalRestartGuard(id);
       get().clearQueue(id);
       get().handleTerminalRemoved(id, remainingTerminals, removedIndex);
@@ -95,14 +95,20 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       get().cleanupStaleTabs(validPanelIds);
 
       // Clean up worktree focus tracking if this was the last focused terminal
-      const terminal = get().terminals.find((t) => t.id === id);
-      if (terminal?.worktreeId) {
+      if (removedTerminal?.worktreeId) {
         void import("@/store/worktreeStore").then(({ useWorktreeSelectionStore }) => {
           const store = useWorktreeSelectionStore.getState();
-          const lastFocused = store.lastFocusedTerminalByWorktree.get(terminal.worktreeId!);
+          const lastFocused = store.lastFocusedTerminalByWorktree.get(removedTerminal.worktreeId!);
           if (lastFocused === id) {
-            store.clearWorktreeFocusTracking(terminal.worktreeId!);
+            store.clearWorktreeFocusTracking(removedTerminal.worktreeId!);
           }
+        });
+      }
+
+      // Clean up assistant chat conversation when assistant panel is permanently removed
+      if (removedTerminal?.kind === "assistant") {
+        void import("@/store/assistantChatStore").then(({ useAssistantChatStore }) => {
+          useAssistantChatStore.getState().removeConversation(id);
         });
       }
     },

@@ -466,7 +466,7 @@ export const createTerminalRegistrySlice =
         });
 
         const remainingTerminals = get().terminals;
-        middleware?.onTerminalRemoved?.(id, removedIndex, remainingTerminals);
+        middleware?.onTerminalRemoved?.(id, removedIndex, remainingTerminals, terminal);
       },
 
       updateTitle: (id, newTitle) => {

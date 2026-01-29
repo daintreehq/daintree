@@ -29,7 +29,7 @@ export function AssistantPane({
   const inputRef = useRef<AssistantInputHandle>(null);
 
   const { messages, streamingState, isLoading, error, sendMessage, cancelStreaming, clearError } =
-    useAssistantChat();
+    useAssistantChat({ panelId: id });
 
   useEffect(() => {
     initialize();

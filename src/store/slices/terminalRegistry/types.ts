@@ -192,7 +192,8 @@ export type TerminalRegistryMiddleware = {
   onTerminalRemoved?: (
     id: string,
     removedIndex: number,
-    remainingTerminals: TerminalInstance[]
+    remainingTerminals: TerminalInstance[],
+    removedTerminal: TerminalInstance | undefined
   ) => void;
 };
 
