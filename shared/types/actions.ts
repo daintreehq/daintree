@@ -13,6 +13,7 @@ export type ActionId =
   | KeyAction
   // Query actions for App Agent
   | "terminal.list"
+  | "terminal.getOutput"
   | "panel.list"
   | "worktree.list"
   | "worktree.getCurrent"

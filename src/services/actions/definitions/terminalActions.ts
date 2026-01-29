@@ -2,6 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { TerminalTypeSchema } from "./schemas";
 import { z } from "zod";
 import type { ActionId, ActionContext } from "@shared/types/actions";
+import { stripAnsiCodes } from "@shared/utils/artifactParser";
 import { appClient, terminalClient } from "@/clients";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { useTerminalStore } from "@/store/terminalStore";
@@ -65,6 +66,78 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
         agentState: t.agentState ?? null,
         isInputLocked: t.isInputLocked ?? false,
       }));
+    },
+  }));
+
+  // Query action: get terminal output content
+  actions.set("terminal.getOutput", () => ({
+    id: "terminal.getOutput",
+    title: "Get Terminal Output",
+    description:
+      "Get terminal serialized state (last N lines from buffer, ANSI codes stripped by default). Note: includes terminal control sequences and alternate buffer content.",
+    category: "terminal",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({
+      terminalId: z.string().describe("Terminal instance ID from terminal.list"),
+      maxLines: z
+        .number()
+        .int()
+        .min(1)
+        .max(1000)
+        .default(100)
+        .describe("Maximum lines to return (default: 100, max: 1000)"),
+      stripAnsi: z
+        .boolean()
+        .default(true)
+        .describe("Remove ANSI escape codes from output (default: true)"),
+    }),
+    run: async (args: unknown) => {
+      const {
+        terminalId,
+        maxLines = 100,
+        stripAnsi = true,
+      } = args as {
+        terminalId: string;
+        maxLines?: number;
+        stripAnsi?: boolean;
+      };
+
+      // Validate maxLines bounds
+      const effectiveMaxLines = Math.min(Math.max(maxLines, 1), 1000);
+
+      // Get serialized terminal state via existing IPC method
+      const serializedState = await window.electron.terminal.getSerializedState(terminalId);
+
+      if (serializedState === null) {
+        return {
+          terminalId,
+          content: null,
+          lineCount: 0,
+          truncated: false,
+          error: "Terminal not found or has no output",
+        };
+      }
+
+      // Split into lines and extract last N
+      const allLines = serializedState.split("\n");
+      const totalLines = allLines.length;
+      const truncated = totalLines > effectiveMaxLines;
+      const selectedLines = allLines.slice(-effectiveMaxLines);
+
+      // Optionally strip ANSI codes
+      let content = selectedLines.join("\n");
+      if (stripAnsi) {
+        content = stripAnsiCodes(content);
+      }
+
+      return {
+        terminalId,
+        content,
+        lineCount: selectedLines.length,
+        truncated,
+      };
     },
   }));
 

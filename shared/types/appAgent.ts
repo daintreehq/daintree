@@ -74,6 +74,7 @@ export interface OneShotRunResult {
 export const AGENT_ACCESSIBLE_ACTIONS = [
   // Query actions - return system state
   "terminal.list",
+  "terminal.getOutput",
   "panel.list",
   "worktree.list",
   "worktree.getCurrent",

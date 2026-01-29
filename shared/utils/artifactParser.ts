@@ -120,6 +120,11 @@ export function suggestFilename(language: string, content: string): string | und
 }
 
 export function stripAnsiCodes(text: string): string {
+  // More comprehensive ANSI escape code stripping
+  // Handles CSI, OSC, DCS, and other control sequences
   // eslint-disable-next-line no-control-regex
-  return text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+  return text.replace(
+    /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g,
+    ""
+  );
 }
