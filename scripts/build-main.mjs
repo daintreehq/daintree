@@ -1,4 +1,5 @@
 import { build, context } from "esbuild";
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -63,6 +64,15 @@ async function run() {
       await Promise.all([build(esmConfig), build(cjsConfig)]);
       console.log("[Build] Complete.");
     }
+
+    // Copy static assets to dist-electron
+    const assetsDir = path.join(root, "dist-electron/electron/services/assistant");
+    fs.mkdirSync(assetsDir, { recursive: true });
+    fs.copyFileSync(
+      path.join(root, "electron/services/assistant/systemPrompt.txt"),
+      path.join(assetsDir, "systemPrompt.txt")
+    );
+    console.log("[Build] Copied systemPrompt.txt");
   } catch (error) {
     console.error("[Build] Failed:", error);
     process.exit(1);
