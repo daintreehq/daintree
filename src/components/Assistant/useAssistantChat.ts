@@ -71,23 +71,33 @@ export function useAssistantChat(options: UseAssistantChatOptions = {}) {
     });
   }, []);
 
+  const streamingStateRef = useRef<StreamingState | null>(null);
+
+  // Keep ref in sync with state for use in finalizeStreaming
+  useEffect(() => {
+    streamingStateRef.current = streamingState;
+  }, [streamingState]);
+
   const finalizeStreaming = useCallback(() => {
-    setStreamingState((prev) => {
-      if (!prev) return null;
+    // Capture streaming state from ref to avoid closure issues and prevent double-add
+    const prev = streamingStateRef.current;
+    if (!prev) return;
 
-      if (prev.content || prev.toolCalls.length > 0) {
-        const message: AssistantMessage = {
-          id: generateId(),
-          role: "assistant",
-          content: prev.content,
-          timestamp: Date.now(),
-          toolCalls: prev.toolCalls.length > 0 ? prev.toolCalls : undefined,
-        };
-        setMessages((msgs) => [...msgs, message]);
-      }
+    // Clear the ref immediately to prevent double finalization
+    streamingStateRef.current = null;
 
-      return null;
-    });
+    if (prev.content || prev.toolCalls.length > 0) {
+      const message: AssistantMessage = {
+        id: generateId(),
+        role: "assistant",
+        content: prev.content,
+        timestamp: Date.now(),
+        toolCalls: prev.toolCalls.length > 0 ? prev.toolCalls : undefined,
+      };
+      setMessages((msgs) => [...msgs, message]);
+    }
+
+    setStreamingState(null);
   }, []);
 
   const cancelStreaming = useCallback(() => {

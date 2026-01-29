@@ -58,6 +58,34 @@ function sanitizeButtonList(buttons: ToolbarButtonId[]): ToolbarButtonId[] {
   return buttons.filter((id) => !FIXED_BUTTON_IDS.includes(id));
 }
 
+/**
+ * Merge persisted button list with defaults, adding any new buttons that
+ * were added to defaults after the user's preferences were saved.
+ * New buttons are added at their default position.
+ */
+function mergeButtonList(
+  persisted: ToolbarButtonId[] | undefined,
+  defaults: ToolbarButtonId[]
+): ToolbarButtonId[] {
+  if (!persisted) return defaults;
+
+  const persistedSet = new Set(persisted);
+  const result = [...persisted];
+
+  // Find buttons in defaults that aren't in persisted (new buttons)
+  for (let i = 0; i < defaults.length; i++) {
+    const buttonId = defaults[i];
+    if (!persistedSet.has(buttonId)) {
+      // Insert at the same position as in defaults, or at end if beyond length
+      const insertIndex = Math.min(i, result.length);
+      result.splice(insertIndex, 0, buttonId);
+      persistedSet.add(buttonId); // Track that we've added it
+    }
+  }
+
+  return sanitizeButtonList(result);
+}
+
 interface ToolbarPreferencesState extends ToolbarPreferences {
   setLeftButtons: (buttons: ToolbarButtonId[]) => void;
   setRightButtons: (buttons: ToolbarButtonId[]) => void;
@@ -148,11 +176,13 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
           ...currentState,
           ...persisted,
           layout: {
-            leftButtons: sanitizeButtonList(
-              persisted.layout?.leftButtons ?? currentState.layout.leftButtons
+            leftButtons: mergeButtonList(
+              persisted.layout?.leftButtons,
+              currentState.layout.leftButtons
             ),
-            rightButtons: sanitizeButtonList(
-              persisted.layout?.rightButtons ?? currentState.layout.rightButtons
+            rightButtons: mergeButtonList(
+              persisted.layout?.rightButtons,
+              currentState.layout.rightButtons
             ),
           },
         };

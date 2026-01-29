@@ -1,5 +1,6 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { useTerminalStore } from "@/store/terminalStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 export function registerAssistantActions(
   actions: ActionRegistry,
@@ -14,26 +15,14 @@ export function registerAssistantActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const store = useTerminalStore.getState();
-      const terminals = store.terminals;
-
-      // Look for an existing assistant panel (excluding trashed ones)
-      const existingAssistant = terminals.find(
-        (t) => t.kind === "assistant" && t.location !== "trash"
-      );
-
-      if (existingAssistant) {
-        // Activate the existing assistant panel (handles both grid and dock)
-        store.activateTerminal(existingAssistant.id);
-      } else {
-        // Create a new assistant panel (addTerminal auto-focuses grid panels)
-        await store.addTerminal({
-          kind: "assistant",
-          title: "Assistant",
-          location: "grid",
-          cwd: "",
-        });
-      }
+      const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
+      await useTerminalStore.getState().addTerminal({
+        kind: "assistant",
+        title: "Assistant",
+        location: "grid",
+        cwd: "",
+        worktreeId: activeWorktreeId ?? undefined,
+      });
     },
   }));
 }

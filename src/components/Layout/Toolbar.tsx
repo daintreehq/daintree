@@ -943,19 +943,19 @@ export function Toolbar({
       },
       assistant: {
         render: () => (
-          <Button
+          <button
             key="assistant"
-            variant="ghost"
-            size="icon"
+            type="button"
             onClick={() => {
               void actionService.dispatch("assistant.open", undefined, { source: "user" });
             }}
-            className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-purple-400 focus-visible:text-purple-400"
+            className="app-no-drag inline-flex items-center justify-center h-9 w-9 rounded-[var(--radius-md)] text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-canopy-accent"
             title="Open Assistant (⌘⇧K)"
             aria-label="Open Assistant"
+            style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
           >
             <CanopyIcon size={18} />
-          </Button>
+          </button>
         ),
         isAvailable: true,
       },
