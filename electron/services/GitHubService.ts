@@ -1102,3 +1102,72 @@ export async function getPRTooltip(cwd: string, prNumber: number): Promise<PRToo
     return null;
   }
 }
+
+export async function getIssueByNumber(
+  cwd: string,
+  issueNumber: number
+): Promise<GitHubIssue | null> {
+  const client = GitHubAuth.createClient();
+  if (!client) {
+    throw new Error("GitHub token not configured");
+  }
+
+  const context = await getRepoContext(cwd);
+  if (!context) {
+    throw new Error("Not a GitHub repository");
+  }
+
+  try {
+    const response = (await client(GET_ISSUE_QUERY, {
+      owner: context.owner,
+      repo: context.repo,
+      number: issueNumber,
+    })) as GraphQlQueryResponseData;
+
+    const issue = response?.repository?.issue;
+    if (!issue) {
+      return null;
+    }
+
+    return parseIssueNode(issue as Record<string, unknown>);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("Could not resolve to") || message.includes("Could not resolve")) {
+      return null;
+    }
+    throw new Error(parseGitHubError(error));
+  }
+}
+
+export async function getPRByNumber(cwd: string, prNumber: number): Promise<GitHubPR | null> {
+  const client = GitHubAuth.createClient();
+  if (!client) {
+    throw new Error("GitHub token not configured");
+  }
+
+  const context = await getRepoContext(cwd);
+  if (!context) {
+    throw new Error("Not a GitHub repository");
+  }
+
+  try {
+    const response = (await client(GET_PR_QUERY, {
+      owner: context.owner,
+      repo: context.repo,
+      number: prNumber,
+    })) as GraphQlQueryResponseData;
+
+    const pr = response?.repository?.pullRequest;
+    if (!pr) {
+      return null;
+    }
+
+    return parsePRNode(pr as Record<string, unknown>);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("Could not resolve to") || message.includes("Could not resolve")) {
+      return null;
+    }
+    throw new Error(parseGitHubError(error));
+  }
+}

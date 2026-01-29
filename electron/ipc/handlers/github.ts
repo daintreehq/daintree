@@ -351,5 +351,53 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   ipcMain.handle(CHANNELS.GITHUB_GET_ISSUE_URL, handleGitHubGetIssueUrl);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_GET_ISSUE_URL));
 
+  const handleGitHubGetIssueByNumber = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: { cwd: string; issueNumber: number }
+  ) => {
+    if (!payload || typeof payload !== "object") {
+      return null;
+    }
+    if (typeof payload.cwd !== "string" || !payload.cwd.trim()) {
+      return null;
+    }
+    if (
+      typeof payload.issueNumber !== "number" ||
+      !Number.isInteger(payload.issueNumber) ||
+      payload.issueNumber <= 0
+    ) {
+      return null;
+    }
+
+    const { getIssueByNumber } = await import("../../services/GitHubService.js");
+    return getIssueByNumber(payload.cwd.trim(), payload.issueNumber);
+  };
+  ipcMain.handle(CHANNELS.GITHUB_GET_ISSUE_BY_NUMBER, handleGitHubGetIssueByNumber);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_GET_ISSUE_BY_NUMBER));
+
+  const handleGitHubGetPRByNumber = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: { cwd: string; prNumber: number }
+  ) => {
+    if (!payload || typeof payload !== "object") {
+      return null;
+    }
+    if (typeof payload.cwd !== "string" || !payload.cwd.trim()) {
+      return null;
+    }
+    if (
+      typeof payload.prNumber !== "number" ||
+      !Number.isInteger(payload.prNumber) ||
+      payload.prNumber <= 0
+    ) {
+      return null;
+    }
+
+    const { getPRByNumber } = await import("../../services/GitHubService.js");
+    return getPRByNumber(payload.cwd.trim(), payload.prNumber);
+  };
+  ipcMain.handle(CHANNELS.GITHUB_GET_PR_BY_NUMBER, handleGitHubGetPRByNumber);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_GET_PR_BY_NUMBER));
+
   return () => handlers.forEach((cleanup) => cleanup());
 }

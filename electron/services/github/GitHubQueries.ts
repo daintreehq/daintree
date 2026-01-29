@@ -180,10 +180,37 @@ export const GET_ISSUE_QUERY = `
             avatarUrl
           }
         }
+        comments {
+          totalCount
+        }
         labels(first: 10) {
           nodes {
             name
             color
+          }
+        }
+        timelineItems(itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT], last: 20) {
+          nodes {
+            ... on CrossReferencedEvent {
+              source {
+                ... on PullRequest {
+                  number
+                  state
+                  merged
+                  url
+                }
+              }
+            }
+            ... on ConnectedEvent {
+              subject {
+                ... on PullRequest {
+                  number
+                  state
+                  merged
+                  url
+                }
+              }
+            }
           }
         }
       }
@@ -219,6 +246,9 @@ export const GET_PR_QUERY = `
             name
             color
           }
+        }
+        reviews(first: 1) {
+          totalCount
         }
       }
     }

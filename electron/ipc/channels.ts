@@ -96,6 +96,8 @@ export const CHANNELS = {
   GITHUB_GET_ISSUE_TOOLTIP: "github:get-issue-tooltip",
   GITHUB_GET_PR_TOOLTIP: "github:get-pr-tooltip",
   GITHUB_GET_ISSUE_URL: "github:get-issue-url",
+  GITHUB_GET_ISSUE_BY_NUMBER: "github:get-issue-by-number",
+  GITHUB_GET_PR_BY_NUMBER: "github:get-pr-by-number",
 
   APP_GET_STATE: "app:get-state",
   APP_SET_STATE: "app:set-state",

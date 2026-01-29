@@ -86,4 +86,18 @@ export const githubClient = {
   getIssueUrl: (cwd: string, issueNumber: number): Promise<string | null> => {
     return window.electron.github.getIssueUrl(cwd, issueNumber);
   },
+
+  getIssueByNumber: (
+    cwd: string,
+    issueNumber: number
+  ): Promise<import("@shared/types/github").GitHubIssue | null> => {
+    return window.electron.github.getIssueByNumber(cwd, issueNumber);
+  },
+
+  getPRByNumber: (
+    cwd: string,
+    prNumber: number
+  ): Promise<import("@shared/types/github").GitHubPR | null> => {
+    return window.electron.github.getPRByNumber(cwd, prNumber);
+  },
 } as const;

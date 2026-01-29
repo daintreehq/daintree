@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Search, ExternalLink, RefreshCw, AlertCircle, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -7,6 +7,15 @@ import { actionService } from "@/services/ActionService";
 import { GitHubListItem } from "./GitHubListItem";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
+
+function parseExactNumber(query: string): number | null {
+  const trimmed = query.trim();
+  const match = trimmed.match(/^#?(\d+)$/);
+  if (!match) return null;
+  const num = parseInt(match[1], 10);
+  if (num <= 0 || !Number.isFinite(num)) return null;
+  return num;
+}
 
 interface GitHubResourceListProps {
   type: "issue" | "pr";
@@ -48,8 +57,12 @@ export function GitHubResourceList({
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
+  const [exactNumberNotFound, setExactNumberNotFound] = useState<number | null>(null);
 
   const debouncedSearch = useDebounce(searchQuery, 300);
+
+  const exactNumber = useMemo(() => parseExactNumber(searchQuery), [searchQuery]);
+  const exactNumberAbortRef = useRef<AbortController | null>(null);
 
   const stateTabs = useMemo(() => {
     if (type === "pr") {
@@ -67,6 +80,8 @@ export function GitHubResourceList({
 
   // Note: currentCursor is passed as a parameter (not read from state) to avoid
   // dependency cycle where updating cursor would recreate this callback
+  const loadMoreAbortRef = useRef<AbortController | null>(null);
+
   const fetchData = useCallback(
     async (
       currentCursor: string | null | undefined,
@@ -76,6 +91,11 @@ export function GitHubResourceList({
       if (!projectPath) return;
 
       if (append) {
+        loadMoreAbortRef.current?.abort();
+        const abortController = new AbortController();
+        loadMoreAbortRef.current = abortController;
+        abortSignal = abortController.signal;
+
         setLoadingMore(true);
         setLoadMoreError(null);
       } else {
@@ -130,14 +150,80 @@ export function GitHubResourceList({
   );
 
   useEffect(() => {
+    if (exactNumber !== null) {
+      return;
+    }
+
     const abortController = new AbortController();
 
     setCursor(null);
     setHasMore(false);
+    setExactNumberNotFound(null);
     fetchData(null, false, abortController.signal);
 
     return () => abortController.abort();
-  }, [debouncedSearch, filterState, projectPath, type, fetchData]);
+  }, [debouncedSearch, filterState, projectPath, type, fetchData, exactNumber]);
+
+  useEffect(() => {
+    if (exactNumber === null) {
+      return;
+    }
+
+    exactNumberAbortRef.current?.abort();
+    loadMoreAbortRef.current?.abort();
+    const abortController = new AbortController();
+    exactNumberAbortRef.current = abortController;
+
+    setLoading(true);
+    setError(null);
+    setExactNumberNotFound(null);
+    setData([]);
+    setCursor(null);
+    setHasMore(false);
+
+    const fetchExact = async () => {
+      try {
+        const result =
+          type === "issue"
+            ? await githubClient.getIssueByNumber(projectPath, exactNumber)
+            : await githubClient.getPRByNumber(projectPath, exactNumber);
+
+        if (abortController.signal.aborted) return;
+
+        if (result) {
+          const matchesFilter =
+            filterState === "all" ||
+            (type === "issue" && result.state.toLowerCase() === filterState) ||
+            (type === "pr" && result.state.toLowerCase() === filterState);
+
+          if (matchesFilter) {
+            setData([result]);
+            setExactNumberNotFound(null);
+          } else {
+            setData([]);
+            setExactNumberNotFound(exactNumber);
+          }
+        } else {
+          setData([]);
+          setExactNumberNotFound(exactNumber);
+        }
+      } catch (err) {
+        if (abortController.signal.aborted) return;
+        const message = err instanceof Error ? err.message : "Failed to fetch data";
+        setError(message);
+      } finally {
+        if (!abortController.signal.aborted) {
+          setLoading(false);
+        }
+      }
+    };
+
+    void fetchExact();
+
+    return () => {
+      abortController.abort();
+    };
+  }, [exactNumber, projectPath, type, filterState]);
 
   const handleLoadMore = () => {
     if (!loadingMore && hasMore) {
@@ -235,14 +321,26 @@ export function GitHubResourceList({
     </div>
   );
 
-  const renderEmpty = () => (
-    <div className="p-8 text-center text-muted-foreground">
-      <p className="text-sm">
-        No {type === "issue" ? "issues" : "pull requests"} found
-        {debouncedSearch && ` for "${debouncedSearch}"`}
-      </p>
-    </div>
-  );
+  const renderEmpty = () => {
+    if (exactNumberNotFound !== null) {
+      return (
+        <div className="p-8 text-center text-muted-foreground">
+          <p className="text-sm">
+            {type === "issue" ? "Issue" : "PR"} #{exactNumberNotFound} not found
+          </p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="p-8 text-center text-muted-foreground">
+        <p className="text-sm">
+          No {type === "issue" ? "issues" : "pull requests"} found
+          {debouncedSearch && ` for "${debouncedSearch}"`}
+        </p>
+      </div>
+    );
+  };
 
   return (
     <div className="w-[450px] flex flex-col max-h-[500px]">

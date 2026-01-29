@@ -227,6 +227,8 @@ const CHANNELS = {
   GITHUB_GET_ISSUE_TOOLTIP: "github:get-issue-tooltip",
   GITHUB_GET_PR_TOOLTIP: "github:get-pr-tooltip",
   GITHUB_GET_ISSUE_URL: "github:get-issue-url",
+  GITHUB_GET_ISSUE_BY_NUMBER: "github:get-issue-by-number",
+  GITHUB_GET_PR_BY_NUMBER: "github:get-pr-by-number",
 
   // Notes channels
   NOTES_CREATE: "notes:create",
@@ -925,6 +927,12 @@ const api: ElectronAPI = {
 
     getIssueUrl: (cwd: string, issueNumber: number): Promise<string | null> =>
       _typedInvoke(CHANNELS.GITHUB_GET_ISSUE_URL, { cwd, issueNumber }),
+
+    getIssueByNumber: (cwd: string, issueNumber: number) =>
+      ipcRenderer.invoke(CHANNELS.GITHUB_GET_ISSUE_BY_NUMBER, { cwd, issueNumber }),
+
+    getPRByNumber: (cwd: string, prNumber: number) =>
+      ipcRenderer.invoke(CHANNELS.GITHUB_GET_PR_BY_NUMBER, { cwd, prNumber }),
 
     onPRDetected: (callback: (data: PRDetectedPayload) => void) =>
       _typedOn(CHANNELS.PR_DETECTED, callback),
