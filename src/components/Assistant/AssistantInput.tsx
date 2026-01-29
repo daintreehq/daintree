@@ -44,12 +44,7 @@ export const AssistantInput = forwardRef<AssistantInputHandle, AssistantInputPro
 
     const handleKeyDown = useCallback(
       (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-        if (
-          e.key === "Enter" &&
-          !e.shiftKey &&
-          !isComposing &&
-          !e.nativeEvent.isComposing
-        ) {
+        if (e.key === "Enter" && !e.shiftKey && !isComposing && !e.nativeEvent.isComposing) {
           e.preventDefault();
           handleSubmit();
         }

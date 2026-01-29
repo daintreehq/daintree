@@ -64,7 +64,7 @@ export function MessageList({ messages, streamingState, className }: MessageList
       ]
     : messages;
 
-  const renderMessage = (index: number, msg: AssistantMessage) => {
+  const renderMessage = (_index: number, msg: AssistantMessage) => {
     const isStreaming = msg.id === "__streaming__";
 
     return (

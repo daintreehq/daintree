@@ -52,10 +52,7 @@ export function MessageBubble({ message, isStreaming = false, className }: Messa
           {isUser ? <User className="w-3.5 h-3.5" /> : <Bot className="w-3.5 h-3.5" />}
         </div>
         <span
-          className={cn(
-            "text-xs font-medium",
-            isUser ? "text-canopy-accent" : "text-blue-400"
-          )}
+          className={cn("text-xs font-medium", isUser ? "text-canopy-accent" : "text-blue-400")}
         >
           {isUser ? "You" : "Assistant"}
         </span>
