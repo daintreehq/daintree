@@ -76,14 +76,14 @@ export const AssistantInput = forwardRef<AssistantInputHandle, AssistantInputPro
     const canSubmit = value.trim().length > 0 && !disabled;
 
     return (
-      <div className={cn("border-t border-canopy-border bg-canopy-bg px-4 py-3", className)}>
+      <div className={cn("border-t border-canopy-border bg-canopy-bg px-4 pb-3 pt-3", className)}>
         <div
           className={cn(
-            "flex items-end gap-2.5 rounded-lg border bg-canopy-sidebar/20 px-3.5 py-2.5",
-            "border-canopy-border/60",
-            "transition-all duration-150",
-            "focus-within:border-canopy-accent/60 focus-within:bg-canopy-sidebar/30 focus-within:ring-1 focus-within:ring-canopy-accent/20",
-            disabled && "opacity-50"
+            "group cursor-text",
+            "flex items-center gap-1.5 rounded-sm border border-white/[0.06] bg-white/[0.03] py-1 shadow-[0_6px_12px_rgba(0,0,0,0.18)] transition-colors",
+            "group-hover:border-white/[0.08] group-hover:bg-white/[0.04]",
+            "focus-within:border-white/[0.12] focus-within:ring-1 focus-within:ring-white/[0.06] focus-within:bg-white/[0.05]",
+            disabled && "opacity-60 pointer-events-none"
           )}
         >
           <textarea
@@ -97,30 +97,32 @@ export const AssistantInput = forwardRef<AssistantInputHandle, AssistantInputPro
             disabled={disabled}
             rows={1}
             className={cn(
-              "flex-1 bg-transparent text-canopy-text text-sm leading-relaxed",
+              "flex-1 bg-transparent pl-3 text-canopy-text text-sm leading-relaxed",
               "resize-none outline-none",
               "placeholder:text-canopy-text/40",
               "disabled:cursor-not-allowed"
             )}
             aria-label="Message input"
           />
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={!canSubmit}
-            className={cn(
-              "p-2 rounded-md shrink-0",
-              canSubmit
-                ? "bg-canopy-accent text-white hover:bg-canopy-accent/90"
-                : "bg-canopy-sidebar/50 text-canopy-text/30",
-              "disabled:cursor-not-allowed",
-              "transition-all duration-150",
-              "focus:outline-none focus:ring-2 focus:ring-canopy-accent/50"
-            )}
-            aria-label="Send message"
-          >
-            <Send className="w-4 h-4" />
-          </button>
+          <div className="pr-1.5">
+            <button
+              type="button"
+              onClick={handleSubmit}
+              disabled={!canSubmit}
+              className={cn(
+                "p-1.5 rounded-sm shrink-0",
+                canSubmit
+                  ? "bg-canopy-accent text-white hover:bg-canopy-accent/90"
+                  : "bg-white/[0.06] text-canopy-text/30",
+                "disabled:cursor-not-allowed",
+                "transition-colors duration-150",
+                "focus:outline-none focus:ring-1 focus:ring-white/[0.12]"
+              )}
+              aria-label="Send message"
+            >
+              <Send className="w-4 h-4" />
+            </button>
+          </div>
         </div>
         <div className="flex items-center justify-between mt-2 px-1 text-[10px] text-canopy-text/40">
           <span className="flex items-center gap-1">
