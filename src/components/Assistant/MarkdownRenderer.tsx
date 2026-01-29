@@ -360,10 +360,7 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
 
   if (!hasRenderable) {
     return (
-      <div
-        className={cn("text-sm text-canopy-text min-h-[1.5em]", className)}
-        aria-hidden="true"
-      />
+      <div className={cn("text-sm text-canopy-text min-h-[1.5em]", className)} aria-hidden="true" />
     );
   }
 
