@@ -722,7 +722,7 @@ export function Toolbar({
           stats && currentProject ? (
             <div
               key="github-stats"
-              className="relative flex items-center h-8 rounded-[var(--radius-md)] bg-white/[0.03] border border-divider divide-x divide-[var(--border-divider)] mr-2"
+              className="relative flex items-center h-8 rounded-[var(--radius-md)] overflow-hidden bg-white/[0.03] border border-divider divide-x divide-[var(--border-divider)] mr-2"
             >
               <Button
                 ref={issuesButtonRef}
