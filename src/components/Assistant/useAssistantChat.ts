@@ -1,5 +1,10 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { AssistantMessage, StreamingState, ToolCall } from "./types";
+import { actionService } from "@/services/ActionService";
+import { useTerminalStore } from "@/store/terminalStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useProjectStore } from "@/store/projectStore";
+import type { AssistantMessage as IPCAssistantMessage } from "@shared/types/assistant";
 
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -15,8 +20,9 @@ export function useAssistantChat(options: UseAssistantChatOptions = {}) {
   const [streamingState, setStreamingState] = useState<StreamingState | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
+  const sessionIdRef = useRef<string>(generateId());
   const currentRequestIdRef = useRef<number>(0);
+  const cleanupRef = useRef<(() => void) | null>(null);
 
   const addMessage = useCallback((role: AssistantMessage["role"], content: string) => {
     const message: AssistantMessage = {
@@ -85,8 +91,9 @@ export function useAssistantChat(options: UseAssistantChatOptions = {}) {
   }, []);
 
   const cancelStreaming = useCallback(() => {
-    abortControllerRef.current?.abort();
-    abortControllerRef.current = null;
+    window.electron.assistant.cancel(sessionIdRef.current);
+    cleanupRef.current?.();
+    cleanupRef.current = null;
     setStreamingState(null);
     setIsLoading(false);
   }, []);
@@ -96,17 +103,22 @@ export function useAssistantChat(options: UseAssistantChatOptions = {}) {
   }, []);
 
   const clearMessages = useCallback(() => {
-    abortControllerRef.current?.abort();
-    abortControllerRef.current = null;
+    window.electron.assistant.cancel(sessionIdRef.current);
+    cleanupRef.current?.();
+    cleanupRef.current = null;
     setMessages([]);
     setStreamingState(null);
     setError(null);
     setIsLoading(false);
+    // Generate new session ID for fresh conversation
+    sessionIdRef.current = generateId();
   }, []);
 
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
-      abortControllerRef.current?.abort();
+      cleanupRef.current?.();
+      window.electron.assistant.cancel(sessionIdRef.current);
     };
   }, []);
 
@@ -119,56 +131,144 @@ export function useAssistantChat(options: UseAssistantChatOptions = {}) {
       setIsLoading(true);
 
       const requestId = ++currentRequestIdRef.current;
-      const controller = new AbortController();
-      abortControllerRef.current = controller;
+      const sessionId = sessionIdRef.current;
+
+      // Clean up previous listener
+      cleanupRef.current?.();
 
       try {
         startStreaming();
 
-        // TODO: Integrate with actual assistant backend
-        // For now, simulate a response
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        // Get current context
+        const projectId = useProjectStore.getState().currentProject?.id;
+        const worktreeSelection = useWorktreeSelectionStore.getState();
+        const activeWorktreeId = worktreeSelection.activeWorktreeId ?? undefined;
+        const focusedWorktreeId = worktreeSelection.focusedWorktreeId ?? undefined;
+        const focusedTerminalId = useTerminalStore.getState().focusedId ?? undefined;
 
-        const mockResponse =
-          "I'm the Canopy Assistant. I can help you with:\n\n" +
-          "- **Code questions** - Ask about patterns, best practices, or debugging\n" +
-          "- **Project navigation** - Find files, understand structure\n" +
-          "- **Terminal commands** - Get help with git, npm, and more\n\n" +
-          "```typescript\n" +
-          "// Example: I can explain code like this\n" +
-          "const greeting = (name: string) => `Hello, ${name}!`;\n" +
-          "```\n\n" +
-          "What would you like help with?";
+        // Get available actions
+        const actions = actionService.list();
 
-        // Simulate streaming
-        for (const char of mockResponse) {
-          if (controller.signal.aborted || currentRequestIdRef.current !== requestId) {
-            break;
+        // Convert messages to IPC format including tool results
+        const ipcMessages: IPCAssistantMessage[] = messages
+          .concat({
+            id: generateId(),
+            role: "user",
+            content,
+            timestamp: Date.now(),
+          })
+          .map((msg) => ({
+            id: msg.id,
+            role: msg.role,
+            content: msg.content,
+            toolCalls: msg.toolCalls?.map((tc) => ({
+              id: tc.id,
+              name: tc.name,
+              args: tc.args,
+            })),
+            toolResults: msg.toolCalls
+              ?.filter((tc) => tc.status !== "pending" && tc.result !== undefined)
+              .map((tc) => ({
+                toolCallId: tc.id,
+                toolName: tc.name,
+                result: tc.result,
+                error: tc.error,
+              })),
+            createdAt: new Date(msg.timestamp).toISOString(),
+          }));
+
+        // Subscribe to chunks
+        const cleanup = window.electron.assistant.onChunk((data) => {
+          // Only process chunks for this session
+          if (data.sessionId !== sessionId) return;
+          // Ignore if request was superseded
+          if (currentRequestIdRef.current !== requestId) return;
+
+          const { chunk } = data;
+
+          switch (chunk.type) {
+            case "text":
+              if (chunk.content) {
+                appendStreamingContent(chunk.content);
+              }
+              break;
+
+            case "tool_call":
+              if (chunk.toolCall) {
+                addStreamingToolCall({
+                  id: chunk.toolCall.id,
+                  name: chunk.toolCall.name,
+                  args: chunk.toolCall.args,
+                  status: "pending",
+                });
+              }
+              break;
+
+            case "tool_result":
+              if (chunk.toolResult) {
+                updateStreamingToolCall(chunk.toolResult.toolCallId, {
+                  status: chunk.toolResult.error ? "error" : "success",
+                  result: chunk.toolResult.result,
+                  error: chunk.toolResult.error,
+                });
+              }
+              break;
+
+            case "error":
+              if (chunk.error) {
+                setError(chunk.error);
+                onError?.(chunk.error);
+              }
+              break;
+
+            case "done":
+              finalizeStreaming();
+              setIsLoading(false);
+              cleanupRef.current?.();
+              cleanupRef.current = null;
+              break;
           }
-          appendStreamingContent(char);
-          await new Promise((resolve) => setTimeout(resolve, 5));
-        }
+        });
 
-        if (currentRequestIdRef.current === requestId) {
-          finalizeStreaming();
-        }
+        cleanupRef.current = cleanup;
+
+        // Send the message
+        await window.electron.assistant.sendMessage({
+          sessionId,
+          messages: ipcMessages,
+          actions,
+          context: {
+            projectId,
+            activeWorktreeId,
+            focusedWorktreeId,
+            focusedTerminalId,
+          },
+        });
       } catch (err) {
         if (currentRequestIdRef.current === requestId) {
           const errorMessage = err instanceof Error ? err.message : "An error occurred";
           setError(errorMessage);
           onError?.(errorMessage);
           setStreamingState(null);
-        }
-      } finally {
-        if (currentRequestIdRef.current === requestId) {
           setIsLoading(false);
-          if (abortControllerRef.current === controller) {
-            abortControllerRef.current = null;
-          }
+          // Clean up listener on error
+          cleanupRef.current?.();
+          cleanupRef.current = null;
+          // Cancel the session to avoid dangling stream
+          window.electron.assistant.cancel(sessionId);
         }
       }
     },
-    [addMessage, startStreaming, appendStreamingContent, finalizeStreaming, onError]
+    [
+      messages,
+      addMessage,
+      startStreaming,
+      appendStreamingContent,
+      addStreamingToolCall,
+      updateStreamingToolCall,
+      finalizeStreaming,
+      onError,
+    ]
   );
 
   return {

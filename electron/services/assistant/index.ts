@@ -1,8 +1,8 @@
 /**
  * Assistant service utilities
  *
- * This module provides the system prompt and related utilities for
- * Canopy's app-wide assistant.
+ * This module provides the system prompt, action tools, and related utilities
+ * for Canopy's app-wide assistant.
  */
 
 export {
@@ -15,3 +15,11 @@ export {
   DESTRUCTIVE_KEYWORDS,
   isLikelyDestructive,
 } from "./systemPrompt.js";
+
+export {
+  createActionTools,
+  createToolNameMap,
+  sanitizeToolName,
+  unsanitizeToolName,
+  sanitizeSchema,
+} from "./actionTools.js";

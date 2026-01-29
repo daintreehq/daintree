@@ -1291,10 +1291,26 @@ const api: ElectronAPI = {
         toolResults?: Array<{ toolCallId: string; result: unknown; error?: string }>;
         createdAt: string;
       }>;
+      actions?: Array<{
+        id: string;
+        name: string;
+        title: string;
+        description: string;
+        category: string;
+        kind: "query" | "command";
+        danger: "safe" | "confirm" | "restricted";
+        inputSchema?: Record<string, unknown>;
+        outputSchema?: Record<string, unknown>;
+        enabled: boolean;
+        disabledReason?: string;
+      }>;
       context?: {
         projectId?: string;
         activeWorktreeId?: string;
+        focusedWorktreeId?: string;
         focusedTerminalId?: string;
+        isTerminalPaletteOpen?: boolean;
+        isSettingsOpen?: boolean;
       };
     }) => ipcRenderer.invoke(CHANNELS.ASSISTANT_SEND_MESSAGE, payload),
 
@@ -1309,7 +1325,7 @@ const api: ElectronAPI = {
           type: "text" | "tool_call" | "tool_result" | "error" | "done";
           content?: string;
           toolCall?: { id: string; name: string; args: Record<string, unknown> };
-          toolResult?: { toolCallId: string; result: unknown; error?: string };
+          toolResult?: { toolCallId: string; toolName: string; result: unknown; error?: string };
           error?: string;
           finishReason?: string;
         };
@@ -1323,7 +1339,7 @@ const api: ElectronAPI = {
             type: "text" | "tool_call" | "tool_result" | "error" | "done";
             content?: string;
             toolCall?: { id: string; name: string; args: Record<string, unknown> };
-            toolResult?: { toolCallId: string; result: unknown; error?: string };
+            toolResult?: { toolCallId: string; toolName: string; result: unknown; error?: string };
             error?: string;
             finishReason?: string;
           };
