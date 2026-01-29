@@ -229,7 +229,7 @@ export class ActivityMonitor {
     /codex\s+v/i, // Codex vX.X.X variant
     /type\s+your\s+message/i, // Gemini CLI ready prompt
   ];
-  private static readonly DEFAULT_PROMPT_PATTERNS = [/^\s*[>›❯⟩]\s*/i];
+  private static readonly DEFAULT_PROMPT_PATTERNS = [/^\s*[>›❯⟩$#%]\s*/i];
   private readonly bootCompletePatterns: RegExp[];
 
   constructor(
