@@ -1,12 +1,24 @@
 import { Terminal, Globe, FileText, GitBranch, Monitor, LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { CanopyIcon } from "@/components/icons";
+import type { ComponentType } from "react";
 
-const ICON_MAP: Record<string, LucideIcon> = {
+const ICON_MAP: Record<
+  string,
+  | LucideIcon
+  | ComponentType<{
+      className?: string;
+      style?: Record<string, string>;
+      width?: number;
+      height?: number;
+    }>
+> = {
   terminal: Terminal,
   globe: Globe,
   "file-text": FileText,
   "git-branch": GitBranch,
   monitor: Monitor,
+  canopy: CanopyIcon,
 };
 
 export interface PanelKindIconProps {
@@ -21,7 +33,7 @@ export function PanelKindIcon({ iconId, color, size = 16, className }: PanelKind
 
   return (
     <Icon
-      style={{ color }}
+      style={color ? { color } : undefined}
       className={cn("shrink-0", className)}
       width={size}
       height={size}

@@ -1,12 +1,13 @@
 /**
  * Built-in panel component registrations.
- * Called once at app startup to register terminal, agent, browser, and notes panels.
+ * Called once at app startup to register terminal, agent, browser, notes, and assistant panels.
  */
 import { registerPanelComponent } from "./panelComponentRegistry";
 import { TerminalPane } from "@/components/Terminal/TerminalPane";
 import { BrowserPane } from "@/components/Browser/BrowserPane";
 import { NotesPane } from "@/components/Notes/NotesPane";
 import { DevPreviewPane } from "@/components/DevPreview/DevPreviewPane";
+import { AssistantPane } from "@/components/Assistant/AssistantPane";
 
 // Registration flag to prevent double registration
 let registered = false;
@@ -43,5 +44,10 @@ export function registerBuiltInPanelComponents(): void {
   // Dev Preview panel - auto-starts dev server and shows iframe
   registerPanelComponent("dev-preview", {
     component: DevPreviewPane,
+  });
+
+  // Assistant panel - Canopy AI assistant interface
+  registerPanelComponent("assistant", {
+    component: AssistantPane,
   });
 }

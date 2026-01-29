@@ -102,6 +102,9 @@ export type KeyAction =
   | "agent.focusNextFailed"
   | "agent.commandBar"
 
+  // Assistant panel
+  | "assistant.open"
+
   // Panel management
   | "panel.palette"
   | "panel.toggleDock"

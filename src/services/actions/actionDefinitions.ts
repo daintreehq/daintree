@@ -1,6 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "./actionTypes";
 import { registerAgentActions } from "./definitions/agentActions";
 import { registerAppActions } from "./definitions/appActions";
+import { registerAssistantActions } from "./definitions/assistantActions";
 import { registerBrowserActions } from "./definitions/browserActions";
 import { registerDevServerActions } from "./definitions/devServerActions";
 import { registerGithubActions } from "./definitions/githubActions";
@@ -25,6 +26,7 @@ export function createActionDefinitions(callbacks: ActionCallbacks): ActionRegis
 
   registerTerminalActions(actions, callbacks);
   registerAgentActions(actions, callbacks);
+  registerAssistantActions(actions, callbacks);
   registerPanelActions(actions, callbacks);
   registerWorktreeActions(actions, callbacks);
   registerWorktreeSessionActions(actions, callbacks);

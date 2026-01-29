@@ -94,6 +94,18 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     keepAliveOnProjectSwitch: true,
     showInPalette: true,
   },
+  assistant: {
+    id: "assistant",
+    name: "Assistant",
+    iconId: "canopy",
+    color: "#a855f7", // purple-500 (distinct from other purples)
+    hasPty: false,
+    canRestart: false,
+    canConvert: false,
+    usesTerminalUi: false,
+    keepAliveOnProjectSwitch: true,
+    showInPalette: true,
+  },
 };
 
 /**
@@ -215,5 +227,5 @@ export function panelKindKeepsAliveOnProjectSwitch(kind: PanelKind): boolean {
  * Get all built-in panel kinds.
  */
 export function getBuiltInPanelKinds(): BuiltInPanelKind[] {
-  return ["terminal", "agent", "browser", "notes", "dev-preview"];
+  return ["terminal", "agent", "browser", "notes", "dev-preview", "assistant"];
 }

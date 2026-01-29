@@ -201,7 +201,13 @@ export type AgentId = string;
 export type LegacyAgentType = "claude" | "gemini" | "codex" | "opencode";
 
 /** Built-in panel kinds */
-export type BuiltInPanelKind = "terminal" | "agent" | "browser" | "notes" | "dev-preview";
+export type BuiltInPanelKind =
+  | "terminal"
+  | "agent"
+  | "browser"
+  | "notes"
+  | "dev-preview"
+  | "assistant";
 
 /**
  * Panel kind: distinguishes between default terminals, agent-driven terminals, browser panels,
@@ -288,7 +294,8 @@ export function isBuiltInPanelKind(kind: PanelKind): kind is BuiltInPanelKind {
     kind === "agent" ||
     kind === "browser" ||
     kind === "notes" ||
-    kind === "dev-preview"
+    kind === "dev-preview" ||
+    kind === "assistant"
   );
 }
 
@@ -798,7 +805,8 @@ export type ToolbarButtonId =
   | "copy-tree"
   | "settings"
   | "problems"
-  | "sidecar-toggle";
+  | "sidecar-toggle"
+  | "assistant";
 
 /** Configuration for which toolbar buttons are visible and their order */
 export interface ToolbarLayout {

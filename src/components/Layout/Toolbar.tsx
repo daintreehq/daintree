@@ -25,6 +25,7 @@ import {
   Monitor,
   Circle,
 } from "lucide-react";
+import { CanopyIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { GitHubResourceList, CommitList } from "@/components/GitHub";
@@ -939,6 +940,24 @@ export function Toolbar({
           </Button>
         ),
         isAvailable: showDeveloperTools,
+      },
+      assistant: {
+        render: () => (
+          <Button
+            key="assistant"
+            variant="ghost"
+            size="icon"
+            onClick={() => {
+              void actionService.dispatch("assistant.open", undefined, { source: "user" });
+            }}
+            className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-purple-400 focus-visible:text-purple-400"
+            title="Open Assistant (⌘⇧K)"
+            aria-label="Open Assistant"
+          >
+            <CanopyIcon size={18} />
+          </Button>
+        ),
+        isAvailable: true,
       },
       "sidecar-toggle": {
         render: () => (
