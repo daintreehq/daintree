@@ -9,7 +9,7 @@ import {
   AlertCircle,
   GitCommit,
   GitPullRequest,
-  AlertTriangle,
+  CircleDot,
   PanelRightOpen,
   PanelRightClose,
   PanelLeftOpen,
@@ -749,7 +749,7 @@ export function Toolbar({
                 }
                 aria-label={`${stats.issueCount ?? "?"} open issues${isStale ? " (cached)" : ""}`}
               >
-                <AlertTriangle className="h-4 w-4" />
+                <CircleDot className="h-4 w-4" />
                 <span className="text-xs font-medium tabular-nums">{stats.issueCount ?? "?"}</span>
               </Button>
               <FixedDropdown
