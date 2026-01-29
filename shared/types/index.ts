@@ -386,3 +386,17 @@ export {
   DEFAULT_APP_AGENT_CONFIG,
   AGENT_ACCESSIBLE_ACTIONS,
 } from "./appAgent.js";
+
+// Assistant types - AI assistant panel
+export type {
+  AssistantMessageRole,
+  AssistantMessage,
+  ToolCall,
+  ToolResult,
+  StreamChunkType,
+  StreamChunk,
+  SendMessageRequest,
+  AssistantChunkPayload,
+} from "./assistant.js";
+
+export { AssistantMessageSchema, StreamChunkSchema, ASSISTANT_MODELS } from "./assistant.js";

@@ -255,6 +255,12 @@ export const CHANNELS = {
   APP_AGENT_TEST_MODEL: "app-agent:test-model",
   APP_AGENT_CANCEL: "app-agent:cancel",
   APP_AGENT_DISPATCH_ACTION: "app-agent:dispatch-action",
+
+  // Assistant channels
+  ASSISTANT_SEND_MESSAGE: "assistant:send-message",
+  ASSISTANT_CANCEL: "assistant:cancel",
+  ASSISTANT_CHUNK: "assistant:chunk",
+  ASSISTANT_HAS_API_KEY: "assistant:has-api-key",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

@@ -407,6 +407,12 @@ const CHANNELS = {
   APP_AGENT_TEST_MODEL: "app-agent:test-model",
   APP_AGENT_CANCEL: "app-agent:cancel",
   APP_AGENT_DISPATCH_ACTION: "app-agent:dispatch-action",
+
+  // Assistant channels
+  ASSISTANT_SEND_MESSAGE: "assistant:send-message",
+  ASSISTANT_CANCEL: "assistant:cancel",
+  ASSISTANT_CHUNK: "assistant:chunk",
+  ASSISTANT_HAS_API_KEY: "assistant:has-api-key",
 } as const;
 
 const api: ElectronAPI = {
@@ -1271,6 +1277,61 @@ const api: ElectronAPI = {
       requestId: string;
       result: { ok: boolean; result?: unknown; error?: { code: string; message: string } };
     }) => ipcRenderer.send("app-agent:dispatch-action-response", payload),
+  },
+
+  // Assistant API
+  assistant: {
+    sendMessage: (payload: {
+      sessionId: string;
+      messages: Array<{
+        id: string;
+        role: "user" | "assistant";
+        content: string;
+        toolCalls?: Array<{ id: string; name: string; args: Record<string, unknown> }>;
+        toolResults?: Array<{ toolCallId: string; result: unknown; error?: string }>;
+        createdAt: string;
+      }>;
+      context?: {
+        projectId?: string;
+        activeWorktreeId?: string;
+        focusedTerminalId?: string;
+      };
+    }) => ipcRenderer.invoke(CHANNELS.ASSISTANT_SEND_MESSAGE, payload),
+
+    cancel: (sessionId: string) => ipcRenderer.invoke(CHANNELS.ASSISTANT_CANCEL, sessionId),
+
+    hasApiKey: () => ipcRenderer.invoke(CHANNELS.ASSISTANT_HAS_API_KEY),
+
+    onChunk: (
+      callback: (data: {
+        sessionId: string;
+        chunk: {
+          type: "text" | "tool_call" | "tool_result" | "error" | "done";
+          content?: string;
+          toolCall?: { id: string; name: string; args: Record<string, unknown> };
+          toolResult?: { toolCallId: string; result: unknown; error?: string };
+          error?: string;
+          finishReason?: string;
+        };
+      }) => void
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        data: {
+          sessionId: string;
+          chunk: {
+            type: "text" | "tool_call" | "tool_result" | "error" | "done";
+            content?: string;
+            toolCall?: { id: string; name: string; args: Record<string, unknown> };
+            toolResult?: { toolCallId: string; result: unknown; error?: string };
+            error?: string;
+            finishReason?: string;
+          };
+        }
+      ) => callback(data);
+      ipcRenderer.on(CHANNELS.ASSISTANT_CHUNK, handler);
+      return () => ipcRenderer.removeListener(CHANNELS.ASSISTANT_CHUNK, handler);
+    },
   },
 };
 

@@ -78,6 +78,7 @@ import type {
 } from "../commands.js";
 import type { AppAgentConfig, OneShotRunRequest, OneShotRunResult } from "../appAgent.js";
 import type { ActionManifestEntry, ActionContext } from "../actions.js";
+import type { AssistantMessage, AssistantChunkPayload } from "../assistant.js";
 
 // ElectronAPI Type (exposed via preload)
 
@@ -602,5 +603,23 @@ export interface ElectronAPI {
       requestId: string;
       result: { ok: boolean; result?: unknown; error?: { code: string; message: string } };
     }): void;
+  };
+  assistant: {
+    /** Send a message to the assistant and receive streaming response */
+    sendMessage(payload: {
+      sessionId: string;
+      messages: AssistantMessage[];
+      context?: {
+        projectId?: string;
+        activeWorktreeId?: string;
+        focusedTerminalId?: string;
+      };
+    }): Promise<void>;
+    /** Cancel an active streaming session */
+    cancel(sessionId: string): Promise<void>;
+    /** Check if API key is configured (uses appAgentConfig) */
+    hasApiKey(): Promise<boolean>;
+    /** Subscribe to streaming chunks from the assistant */
+    onChunk(callback: (data: AssistantChunkPayload) => void): () => void;
   };
 }
