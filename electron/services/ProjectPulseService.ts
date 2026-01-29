@@ -178,7 +178,7 @@ export class ProjectPulseService {
     }
 
     // Run operations in parallel for performance
-    const [heatmapResult, recentCommitsResult, deltaResult, firstCommitResult] =
+    const [heatmapResult, recentCommitsResult, deltaResult, firstCommitResult, fullStreakResult] =
       await Promise.allSettled([
         this.computeHeatmap(git, rangeDays),
         includeRecentCommits ? this.getRecentCommits(git, 8) : Promise.resolve([]),
@@ -186,6 +186,7 @@ export class ProjectPulseService {
           ? this.getBranchDelta(git, mainBranch, branch)
           : Promise.resolve(null),
         this.getFirstCommitDate(git),
+        this.calculateFullStreak(git),
       ]);
 
     const heatmap =
@@ -197,6 +198,7 @@ export class ProjectPulseService {
     const deltaToMain = deltaResult.status === "fulfilled" ? deltaResult.value : undefined;
     const firstCommitDate =
       firstCommitResult.status === "fulfilled" ? firstCommitResult.value : null;
+    const fullStreak = fullStreakResult.status === "fulfilled" ? fullStreakResult.value : 0;
 
     // Mark cells before project start and calculate project age
     let projectAgeDays: number = rangeDays;
@@ -223,7 +225,7 @@ export class ProjectPulseService {
     // Calculate summary stats
     const commitsInRange = heatmap.reduce((sum, cell) => sum + cell.count, 0);
     const activeDays = heatmap.filter((cell) => cell.count > 0).length;
-    const currentStreakDays = this.calculateStreak(heatmap);
+    const currentStreakDays = fullStreak;
 
     const pulse: ProjectPulse = {
       worktreeId,
@@ -476,21 +478,71 @@ export class ProjectPulseService {
     }
   }
 
-  private calculateStreak(cells: HeatCell[]): number {
+  private async calculateFullStreak(git: SimpleGit): Promise<number> {
+    const MAX_COMMITS_FOR_STREAK = 50_000;
+
+    let output: string;
+    try {
+      output = await git.raw([
+        "log",
+        `--max-count=${MAX_COMMITS_FOR_STREAK}`,
+        "--pretty=format:%ct",
+      ]);
+    } catch (error) {
+      logError("Failed to get commit timestamps for full streak", {
+        error: (error as Error).message,
+      });
+      return 0;
+    }
+
+    if (!output.trim()) {
+      return 0;
+    }
+
+    // Group commits by local calendar day
+    const commitsByDay = new Map<string, number>();
+    const lines = output.split("\n").filter(Boolean);
+
+    // Detect if we hit the commit limit (may truncate streak for high-volume repos)
+    const hitCommitLimit = lines.length === MAX_COMMITS_FOR_STREAK;
+    if (hitCommitLimit) {
+      logDebug("Full streak calculation hit commit limit", {
+        commitCount: MAX_COMMITS_FOR_STREAK,
+        note: "Streak may be undercounted for high-volume repositories",
+      });
+    }
+
+    for (const line of lines) {
+      const timestamp = parseInt(line, 10) * 1000;
+      if (isNaN(timestamp)) continue;
+      const date = formatLocalDay(new Date(timestamp));
+      commitsByDay.set(date, (commitsByDay.get(date) || 0) + 1);
+    }
+
+    // Count consecutive days backward from today (using local midnight for consistency)
     let streak = 0;
-    // Start from the most recent day and count backwards
-    for (let i = cells.length - 1; i >= 0; i--) {
-      const cell = cells[i];
-      // Skip today if it has no commits yet
-      if (cell.isToday && cell.count === 0) {
-        continue;
-      }
-      if (cell.count > 0) {
+    const currentDate = getLocalMidnight(new Date());
+    const todayStr = formatLocalDay(currentDate);
+
+    // Check if today has commits - if not, start from yesterday
+    const todayCount = commitsByDay.get(todayStr) || 0;
+    if (todayCount === 0) {
+      currentDate.setDate(currentDate.getDate() - 1);
+    }
+
+    // Count the streak
+    while (true) {
+      const dateKey = formatLocalDay(currentDate);
+      const commitCount = commitsByDay.get(dateKey) || 0;
+
+      if (commitCount > 0) {
         streak++;
+        currentDate.setDate(currentDate.getDate() - 1);
       } else {
         break;
       }
     }
+
     return streak;
   }
 
