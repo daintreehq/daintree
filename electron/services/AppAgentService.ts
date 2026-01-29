@@ -10,27 +10,16 @@ import {
   type AgentDecision,
 } from "../../shared/types/appAgent.js";
 import type { ActionManifestEntry, ActionContext } from "../../shared/types/actions.js";
+import {
+  SYSTEM_PROMPT,
+  buildContextBlock,
+  CLARIFICATION_PATTERNS,
+  getChoicePatterns,
+} from "./assistant/systemPrompt.js";
 
 const FIREWORKS_BASE_URL = "https://api.fireworks.ai/inference/v1";
 
 const DEFAULT_MAX_TURNS = 10;
-
-const SYSTEM_PROMPT = `You are Canopy's app-wide assistant. You help users control the Canopy IDE by selecting and executing actions.
-
-You have access to tools that represent available actions in the application. When a user asks you to do something:
-1. First use query tools (like terminal.list, worktree.list) to understand the current state if needed
-2. Then call the appropriate action tool with the correct arguments
-3. Ask a clarifying question if you need more information from the user
-4. Reply with a helpful message when you've completed the task or cannot fulfill the request
-
-Guidelines:
-- You can call multiple tools in sequence to gather information before acting
-- Query tools (kind: "query") return current state - use them to make informed decisions
-- Action tools (kind: "command") perform operations - use them to change state
-- If the user's request is ambiguous, ask a clarifying question with specific choices
-- Be concise in your final responses
-- If an action cannot be performed, explain why briefly
-- After completing all necessary tool calls, provide a brief confirmation message`;
 
 interface OpenAIMessage {
   role: "system" | "user" | "assistant" | "tool";
@@ -635,20 +624,11 @@ export class AppAgentService {
       },
     ];
 
-    const contextInfo: string[] = [];
-    if (context.projectId) {
-      contextInfo.push(`Current project: ${context.projectId}`);
-    }
-    if (context.activeWorktreeId) {
-      contextInfo.push(`Active worktree: ${context.activeWorktreeId}`);
-    }
-    if (context.focusedTerminalId) {
-      contextInfo.push(`Focused terminal: ${context.focusedTerminalId}`);
-    }
+    const contextBlock = buildContextBlock(context);
 
     let userContent = request.prompt;
-    if (contextInfo.length > 0) {
-      userContent = `Context:\n${contextInfo.join("\n")}\n\nRequest: ${request.prompt}`;
+    if (contextBlock) {
+      userContent = `${contextBlock}\n\nRequest: ${request.prompt}`;
     }
 
     if (request.clarificationChoice) {
@@ -724,26 +704,19 @@ export class AppAgentService {
   }
 
   private parseClarificationFromContent(content: string): AgentDecision | null {
-    const questionPatterns = [
-      /which\s+(\w+)\s+would\s+you\s+like/i,
-      /do\s+you\s+want\s+to/i,
-      /should\s+i/i,
-      /would\s+you\s+prefer/i,
-    ];
+    const questionPatterns = Object.values(CLARIFICATION_PATTERNS);
 
     const hasQuestion = questionPatterns.some((pattern) => pattern.test(content));
     if (!hasQuestion) {
       return null;
     }
 
-    const choicePatterns = [
-      /(?:^|\n)\s*[-*•]\s*(.+?)(?=\n|$)/gm,
-      /(?:^|\n)\s*\d+[.)]\s*(.+?)(?=\n|$)/gm,
-      /["']([^"']+)["']/g,
-    ];
+    // Get fresh regex instances to avoid lastIndex persistence issues
+    const choicePatterns = getChoicePatterns();
+    const allPatterns = [choicePatterns.BULLET, choicePatterns.NUMBERED, /["']([^"']+)["']/g];
 
     const choices: Array<{ label: string; value: string }> = [];
-    for (const pattern of choicePatterns) {
+    for (const pattern of allPatterns) {
       const matches = content.matchAll(pattern);
       for (const match of matches) {
         const label = match[1]?.trim();
