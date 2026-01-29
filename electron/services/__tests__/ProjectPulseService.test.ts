@@ -60,7 +60,11 @@ describe("ProjectPulseService", () => {
     // Filter for heatmap calls (with --since) vs streak calls (without --since)
     const heatmapCalls = raw.mock.calls.filter(([args]) => {
       const argv = args as string[];
-      return argv[0] === "log" && argv.includes("--pretty=format:%ct") && argv.some((a) => a.startsWith("--since="));
+      return (
+        argv[0] === "log" &&
+        argv.includes("--pretty=format:%ct") &&
+        argv.some((a) => a.startsWith("--since="))
+      );
     });
     expect(heatmapCalls.length).toBe(1);
   });
@@ -102,7 +106,11 @@ describe("ProjectPulseService", () => {
     // Filter for heatmap calls (with --since) vs streak calls (without --since)
     const heatmapCalls = raw.mock.calls.filter(([args]) => {
       const argv = args as string[];
-      return argv[0] === "log" && argv.includes("--pretty=format:%ct") && argv.some((a) => a.startsWith("--since="));
+      return (
+        argv[0] === "log" &&
+        argv.includes("--pretty=format:%ct") &&
+        argv.some((a) => a.startsWith("--since="))
+      );
     });
     expect(heatmapCalls.length).toBe(2);
   });
