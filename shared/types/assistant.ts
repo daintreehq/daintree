@@ -12,6 +12,7 @@ export type ToolCall = z.infer<typeof ToolCallSchema>;
 
 export const ToolResultSchema = z.object({
   toolCallId: z.string(),
+  toolName: z.string(),
   result: z.unknown(),
   error: z.string().optional(),
 });
@@ -40,16 +41,34 @@ export const StreamChunkSchema = z.object({
 });
 export type StreamChunk = z.infer<typeof StreamChunkSchema>;
 
+export const ActionManifestEntrySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  title: z.string(),
+  description: z.string(),
+  category: z.string(),
+  kind: z.enum(["query", "command"]),
+  danger: z.enum(["safe", "confirm", "restricted"]),
+  inputSchema: z.record(z.string(), z.unknown()).optional(),
+  outputSchema: z.record(z.string(), z.unknown()).optional(),
+  enabled: z.boolean(),
+  disabledReason: z.string().optional(),
+});
+
+export const ActionContextSchema = z.object({
+  projectId: z.string().optional(),
+  activeWorktreeId: z.string().optional(),
+  focusedWorktreeId: z.string().optional(),
+  focusedTerminalId: z.string().optional(),
+  isTerminalPaletteOpen: z.boolean().optional(),
+  isSettingsOpen: z.boolean().optional(),
+});
+
 export const SendMessageRequestSchema = z.object({
   sessionId: z.string(),
   messages: z.array(AssistantMessageSchema),
-  context: z
-    .object({
-      projectId: z.string().optional(),
-      activeWorktreeId: z.string().optional(),
-      focusedTerminalId: z.string().optional(),
-    })
-    .optional(),
+  actions: z.array(ActionManifestEntrySchema).optional(),
+  context: ActionContextSchema.optional(),
 });
 export type SendMessageRequest = z.infer<typeof SendMessageRequestSchema>;
 

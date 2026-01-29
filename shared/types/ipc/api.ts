@@ -605,15 +605,12 @@ export interface ElectronAPI {
     }): void;
   };
   assistant: {
-    /** Send a message to the assistant and receive streaming response */
+    /** Send a message to the assistant and receive streaming response with optional tool calling */
     sendMessage(payload: {
       sessionId: string;
       messages: AssistantMessage[];
-      context?: {
-        projectId?: string;
-        activeWorktreeId?: string;
-        focusedTerminalId?: string;
-      };
+      actions?: ActionManifestEntry[];
+      context?: ActionContext;
     }): Promise<void>;
     /** Cancel an active streaming session */
     cancel(sessionId: string): Promise<void>;

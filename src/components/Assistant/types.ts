@@ -6,6 +6,7 @@ export interface ToolCall {
   args: Record<string, unknown>;
   status: "pending" | "success" | "error";
   result?: unknown;
+  error?: string;
 }
 
 export interface AssistantMessage {
