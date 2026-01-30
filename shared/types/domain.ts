@@ -132,6 +132,9 @@ export interface Worktree {
 
   /** Worktree changes snapshot */
   worktreeChanges?: WorktreeChanges | null;
+
+  /** Task ID for task-scoped worktree orchestration */
+  taskId?: string;
 }
 
 /** Runtime worktree state (internal to WorktreeService) */

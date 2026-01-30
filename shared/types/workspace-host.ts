@@ -79,6 +79,8 @@ export interface WorktreeSnapshot {
   worktreeChanges?: WorktreeChanges | null;
   worktreeId: string;
   timestamp?: number;
+  /** Task ID for task-scoped worktree orchestration */
+  taskId?: string;
 }
 
 /** Monitor configuration for polling intervals */

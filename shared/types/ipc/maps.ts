@@ -18,6 +18,8 @@ import type {
   CreateWorktreeOptions,
   BranchInfo,
   WorktreeConfig,
+  CreateForTaskPayload,
+  CleanupTaskOptions,
 } from "./worktree.js";
 import type {
   TerminalSpawnOptions,
@@ -134,6 +136,18 @@ export interface IpcInvokeMap {
   };
   "worktree:delete": {
     args: [payload: WorktreeDeletePayload];
+    result: void;
+  };
+  "worktree:create-for-task": {
+    args: [payload: CreateForTaskPayload];
+    result: WorktreeState;
+  };
+  "worktree:get-by-task-id": {
+    args: [taskId: string];
+    result: WorktreeState[];
+  };
+  "worktree:cleanup-task": {
+    args: [taskId: string, options?: CleanupTaskOptions];
     result: void;
   };
 

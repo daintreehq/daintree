@@ -133,6 +133,9 @@ const CHANNELS = {
   WORKTREE_GET_DEFAULT_PATH: "worktree:get-default-path",
   WORKTREE_GET_AVAILABLE_BRANCH: "worktree:get-available-branch",
   WORKTREE_DELETE: "worktree:delete",
+  WORKTREE_CREATE_FOR_TASK: "worktree:create-for-task",
+  WORKTREE_GET_BY_TASK_ID: "worktree:get-by-task-id",
+  WORKTREE_CLEANUP_TASK: "worktree:cleanup-task",
 
   // Terminal channels
   TERMINAL_SPAWN: "terminal:spawn",
@@ -441,6 +444,14 @@ const api: ElectronAPI = {
 
     delete: (worktreeId: string, force?: boolean, deleteBranch?: boolean) =>
       _typedInvoke(CHANNELS.WORKTREE_DELETE, { worktreeId, force, deleteBranch }),
+
+    createForTask: (payload: { taskId: string; baseBranch?: string; description?: string }) =>
+      _typedInvoke(CHANNELS.WORKTREE_CREATE_FOR_TASK, payload),
+
+    getByTaskId: (taskId: string) => _typedInvoke(CHANNELS.WORKTREE_GET_BY_TASK_ID, taskId),
+
+    cleanupTask: (taskId: string, options?: { force?: boolean; deleteBranch?: boolean }) =>
+      _typedInvoke(CHANNELS.WORKTREE_CLEANUP_TASK, taskId, options),
 
     onUpdate: (callback: (state: WorktreeState) => void) =>
       _typedOn(CHANNELS.WORKTREE_UPDATE, callback),

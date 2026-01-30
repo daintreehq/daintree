@@ -11,6 +11,9 @@ export const CHANNELS = {
   WORKTREE_GET_DEFAULT_PATH: "worktree:get-default-path",
   WORKTREE_GET_AVAILABLE_BRANCH: "worktree:get-available-branch",
   WORKTREE_DELETE: "worktree:delete",
+  WORKTREE_CREATE_FOR_TASK: "worktree:create-for-task",
+  WORKTREE_GET_BY_TASK_ID: "worktree:get-by-task-id",
+  WORKTREE_CLEANUP_TASK: "worktree:cleanup-task",
 
   TERMINAL_SPAWN: "terminal:spawn",
   TERMINAL_SPAWN_RESULT: "terminal:spawn-result",
