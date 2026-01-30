@@ -1,3 +1,5 @@
+import type { AgentRoutingConfig } from "../types/agentSettings.js";
+
 export interface AgentHelpConfig {
   args: string[];
   title?: string;
@@ -135,6 +137,11 @@ export interface AgentConfig {
     /** Update command for other package managers or scripts */
     other?: Record<string, string>;
   };
+  /**
+   * Routing configuration for intelligent agent dispatch.
+   * Used by orchestrators to select the best agent for a given task.
+   */
+  routing?: AgentRoutingConfig;
 }
 
 export const AGENT_REGISTRY: Record<string, AgentConfig> = {
@@ -211,6 +218,30 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       promptConfidence: 0.85,
       debounceMs: 2000,
     },
+    routing: {
+      capabilities: [
+        "javascript",
+        "typescript",
+        "python",
+        "rust",
+        "go",
+        "react",
+        "node",
+        "debugging",
+        "refactoring",
+        "code-review",
+      ],
+      domains: {
+        frontend: 0.85,
+        backend: 0.85,
+        testing: 0.8,
+        refactoring: 0.95,
+        debugging: 0.9,
+        architecture: 0.8,
+      },
+      maxConcurrent: 2,
+      enabled: true,
+    },
   },
   gemini: {
     id: "gemini",
@@ -281,6 +312,29 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       fallbackConfidence: 0.7,
       promptConfidence: 0.85,
       debounceMs: 2000,
+    },
+    routing: {
+      capabilities: [
+        "javascript",
+        "typescript",
+        "python",
+        "go",
+        "java",
+        "kotlin",
+        "system-design",
+        "architecture",
+        "exploration",
+      ],
+      domains: {
+        frontend: 0.7,
+        backend: 0.85,
+        testing: 0.7,
+        refactoring: 0.75,
+        debugging: 0.75,
+        architecture: 0.9,
+      },
+      maxConcurrent: 2,
+      enabled: true,
     },
   },
   codex: {
@@ -353,6 +407,28 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       fallbackConfidence: 0.75,
       promptConfidence: 0.85,
       debounceMs: 2000,
+    },
+    routing: {
+      capabilities: [
+        "javascript",
+        "typescript",
+        "react",
+        "node",
+        "testing",
+        "frontend",
+        "css",
+        "html",
+      ],
+      domains: {
+        frontend: 0.9,
+        backend: 0.7,
+        testing: 0.85,
+        refactoring: 0.8,
+        debugging: 0.75,
+        architecture: 0.65,
+      },
+      maxConcurrent: 2,
+      enabled: true,
     },
   },
   opencode: {
@@ -459,6 +535,27 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       fallbackConfidence: 0.7,
       promptConfidence: 0.85,
       debounceMs: 2000,
+    },
+    routing: {
+      capabilities: [
+        "javascript",
+        "typescript",
+        "python",
+        "go",
+        "rust",
+        "multi-provider",
+        "general-purpose",
+      ],
+      domains: {
+        frontend: 0.75,
+        backend: 0.75,
+        testing: 0.7,
+        refactoring: 0.7,
+        debugging: 0.7,
+        architecture: 0.7,
+      },
+      maxConcurrent: 1,
+      enabled: true,
     },
   },
 };

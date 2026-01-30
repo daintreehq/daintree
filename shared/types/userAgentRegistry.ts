@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AgentRoutingConfigSchema } from "./agentSettings.js";
 
 const RESERVED_KEYS = ["__proto__", "constructor", "prototype"];
 
@@ -13,6 +14,7 @@ export const UserAgentConfigSchema = z
     shortcut: z.string().nullable().optional(),
     tooltip: z.string().optional(),
     usageUrl: z.string().url().optional(),
+    routing: AgentRoutingConfigSchema.optional(),
   })
   .refine((data) => !RESERVED_KEYS.includes(data.id), {
     message: "Agent ID cannot be a reserved key (__proto__, constructor, prototype)",
