@@ -1,7 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import { Terminal, Copy, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { CanopyIcon } from "@/components/icons/CanopyIcon";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { ToolCallBlock } from "./ToolCallBlock";
 import { StreamingCursor } from "./StreamingCursor";
@@ -78,14 +77,14 @@ function AssistantResponseBlock({
   return (
     <div
       className={cn(
-        "group flex items-start w-full gap-3 px-4 py-4 border-b border-divider/40 hover:bg-white/[0.01] transition-colors",
+        "group flex items-start w-full gap-3 px-4 py-3 border-b border-divider/40 hover:bg-white/[0.01] transition-colors",
         className
       )}
       role="article"
       aria-label="Assistant response"
     >
-      <div className="shrink-0 translate-y-[1px]" aria-hidden="true">
-        <CanopyIcon size={14} className="text-canopy-text/40" />
+      <div className="shrink-0 translate-y-1.5" aria-hidden="true">
+        <div className="h-1.5 w-1.5 rounded-full bg-canopy-accent/60 shadow-[0_0_6px_rgba(16,185,129,0.4)]" />
       </div>
       <div className="flex-1 min-w-0 space-y-3 select-text">
         {hasToolCalls && (
