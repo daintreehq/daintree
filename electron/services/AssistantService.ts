@@ -6,6 +6,7 @@ import type { ActionManifestEntry, ActionContext } from "../../shared/types/acti
 import { createActionTools, sanitizeToolName } from "./assistant/actionTools.js";
 import { SYSTEM_PROMPT, buildContextBlock } from "./assistant/index.js";
 import { listenerManager } from "./assistant/ListenerManager.js";
+import { createListenerTools } from "./assistant/listenerTools.js";
 
 const FIREWORKS_BASE_URL = "https://api.fireworks.ai/inference/v1";
 const MAX_STEPS = 10;
@@ -128,9 +129,11 @@ export class AssistantService {
         }
       }
 
-      // Build tools from actions if provided
-      const tools = actions && context ? createActionTools(actions, context) : undefined;
-      const hasTools = tools && Object.keys(tools).length > 0;
+      // Build tools from actions and listener management
+      const actionTools = actions && context ? createActionTools(actions, context) : {};
+      const listenerTools = createListenerTools({ sessionId });
+      const tools = { ...actionTools, ...listenerTools };
+      const hasTools = Object.keys(tools).length > 0;
 
       const result = streamText({
         model: this.fireworks(config.model),

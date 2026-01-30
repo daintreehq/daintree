@@ -25,3 +25,5 @@ export {
 } from "./actionTools.js";
 
 export { ListenerManager, listenerManager } from "./ListenerManager.js";
+
+export { createListenerTools, type ListenerToolContext } from "./listenerTools.js";
