@@ -1,0 +1,84 @@
+{
+  "id": "standard-pr-review",
+  "version": "1.0.0",
+  "name": "Standard PR Review",
+  "description": "Lint → Test → Review → Merge workflow for pull request validation",
+  "nodes": [
+    {
+      "id": "lint",
+      "type": "action",
+      "config": {
+        "actionId": "terminal.executeCommand",
+        "args": {
+          "command": "npm run lint"
+        }
+      },
+      "onSuccess": ["test"],
+      "onFailure": ["notify-lint-failure"]
+    },
+    {
+      "id": "test",
+      "type": "action",
+      "config": {
+        "actionId": "terminal.executeCommand",
+        "args": {
+          "command": "npm test"
+        }
+      },
+      "onSuccess": ["review"],
+      "onFailure": ["notify-test-failure"]
+    },
+    {
+      "id": "review",
+      "type": "action",
+      "config": {
+        "actionId": "terminal.executeCommand",
+        "args": {
+          "command": "echo 'Code review checkpoint - manual approval required'"
+        }
+      },
+      "onSuccess": ["merge"],
+      "onFailure": ["notify-review-failure"]
+    },
+    {
+      "id": "merge",
+      "type": "action",
+      "config": {
+        "actionId": "terminal.executeCommand",
+        "args": {
+          "command": "echo 'Merge step - ready for merge'"
+        }
+      }
+    },
+    {
+      "id": "notify-lint-failure",
+      "type": "action",
+      "config": {
+        "actionId": "terminal.executeCommand",
+        "args": {
+          "command": "echo 'Lint failed - please fix linting errors'"
+        }
+      }
+    },
+    {
+      "id": "notify-test-failure",
+      "type": "action",
+      "config": {
+        "actionId": "terminal.executeCommand",
+        "args": {
+          "command": "echo 'Tests failed - please fix failing tests'"
+        }
+      }
+    },
+    {
+      "id": "notify-review-failure",
+      "type": "action",
+      "config": {
+        "actionId": "terminal.executeCommand",
+        "args": {
+          "command": "echo 'Review rejected - please address review comments'"
+        }
+      }
+    }
+  ]
+}
