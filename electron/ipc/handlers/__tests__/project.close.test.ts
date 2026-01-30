@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import os from "os";
 
 vi.mock("electron", () => ({
   ipcMain: {
@@ -12,6 +13,9 @@ vi.mock("electron", () => ({
   shell: {
     openPath: vi.fn(),
     openExternal: vi.fn(),
+  },
+  app: {
+    getPath: vi.fn().mockReturnValue(os.tmpdir()),
   },
 }));
 

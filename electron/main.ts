@@ -98,6 +98,7 @@ import { CHANNELS } from "./ipc/channels.js";
 import { createApplicationMenu } from "./menu.js";
 import { resolveAppUrlToDistPath, getMimeType, buildHeaders } from "./utils/appProtocol.js";
 import { projectStore } from "./services/ProjectStore.js";
+import { taskQueueService } from "./services/TaskQueueService.js";
 import { store } from "./store.js";
 import { MigrationRunner } from "./services/StoreMigrations.js";
 import { migrations } from "./services/migrations/index.js";
@@ -744,6 +745,17 @@ async function createWindow(): Promise<void> {
     }
   } else if (currentProject && !workspaceReady) {
     console.warn("[MAIN] Workspace service unavailable - skipping worktree loading");
+  }
+
+  // Initialize task queue for the current project
+  if (currentProject) {
+    console.log("[MAIN] Initializing task queue for current project:", currentProject.name);
+    try {
+      await taskQueueService.initialize(currentProject.id);
+      console.log("[MAIN] Task queue initialized for current project");
+    } catch (error) {
+      console.error("[MAIN] Failed to initialize task queue:", error);
+    }
   }
 
   let eventInspectorActive = false;

@@ -3,10 +3,12 @@
  *
  * Manages tasks with dependencies forming a directed acyclic graph (DAG).
  * Provides priority-based dequeuing with automatic dependency resolution.
+ * Persists task state to disk per-project for crash recovery.
  */
 
 import { randomUUID } from "crypto";
 import { events } from "./events.js";
+import { taskPersistence } from "./persistence/TaskPersistence.js";
 import type { TaskState } from "../types/index.js";
 import type {
   TaskRecord,
@@ -18,6 +20,8 @@ import type {
 
 export class TaskQueueService {
   private tasks: Map<string, TaskRecord> = new Map();
+  private currentProjectId: string | null = null;
+  private persistenceEnabled: boolean = true;
 
   /**
    * Create a new task.
@@ -79,6 +83,8 @@ export class TaskQueueService {
       timestamp: now,
     });
 
+    await this.schedulePersist();
+
     return { ...task };
   }
 
@@ -110,6 +116,8 @@ export class TaskQueueService {
 
     const now = Date.now();
     Object.assign(task, safeUpdates, { updatedAt: now });
+
+    await this.schedulePersist();
 
     return { ...task };
   }
@@ -225,6 +233,8 @@ export class TaskQueueService {
     }
 
     this.tasks.delete(id);
+
+    await this.schedulePersist();
   }
 
   /**
@@ -275,6 +285,8 @@ export class TaskQueueService {
     if (task.status === "queued" && task.blockedBy.length > 0) {
       await this.transitionToBlocked(task);
     }
+
+    await this.schedulePersist();
   }
 
   /**
@@ -301,6 +313,8 @@ export class TaskQueueService {
     if (task.status === "blocked" && task.blockedBy.length === 0) {
       await this.transitionToQueued(task);
     }
+
+    await this.schedulePersist();
   }
 
   /**
@@ -385,6 +399,8 @@ export class TaskQueueService {
 
     // Handle dependents based on policy (mark as cancelled)
     await this.handleUpstreamFailure(task, "cancelled");
+
+    await this.schedulePersist();
   }
 
   /**
@@ -421,6 +437,8 @@ export class TaskQueueService {
       agentId,
       timestamp: now,
     });
+
+    await this.schedulePersist();
   }
 
   /**
@@ -463,6 +481,8 @@ export class TaskQueueService {
 
     // Unblock dependent tasks
     await this.checkAndUnblockDependents(task);
+
+    await this.schedulePersist();
   }
 
   /**
@@ -504,6 +524,8 @@ export class TaskQueueService {
 
     // Handle dependents based on policy (mark as failed)
     await this.handleUpstreamFailure(task, "failed");
+
+    await this.schedulePersist();
   }
 
   /**
@@ -728,6 +750,132 @@ export class TaskQueueService {
    */
   clear(): void {
     this.tasks.clear();
+  }
+
+  /**
+   * Initialize the service for a project.
+   * Loads persisted tasks from disk.
+   */
+  async initialize(projectId: string): Promise<void> {
+    this.currentProjectId = projectId;
+    await this.loadFromDisk(projectId);
+  }
+
+  /**
+   * Handle project switch: flush pending saves, clear memory, load new project's tasks.
+   */
+  async onProjectSwitch(newProjectId?: string): Promise<void> {
+    // Flush pending saves for current project
+    if (this.currentProjectId) {
+      await taskPersistence.flush(this.currentProjectId);
+    }
+
+    // Clear in-memory tasks
+    this.tasks.clear();
+
+    // Load tasks for new project if provided
+    if (newProjectId) {
+      this.currentProjectId = newProjectId;
+      await this.loadFromDisk(newProjectId);
+    } else {
+      this.currentProjectId = null;
+    }
+  }
+
+  /**
+   * Load tasks from disk for a project.
+   * Rebuilds the reverse index (dependents) from forward dependencies.
+   */
+  private async loadFromDisk(projectId: string): Promise<void> {
+    if (!this.persistenceEnabled) return;
+
+    const loadedTasks = await taskPersistence.load(projectId);
+    this.tasks.clear();
+
+    // First pass: add all tasks without computing blockedBy
+    for (const task of loadedTasks) {
+      // Clear dependents - we'll rebuild this from dependencies
+      task.dependents = [];
+      this.tasks.set(task.id, task);
+    }
+
+    // Second pass: rebuild reverse index (dependents) and recompute blockedBy
+    for (const task of this.tasks.values()) {
+      for (const depId of task.dependencies) {
+        const depTask = this.tasks.get(depId);
+        if (depTask) {
+          depTask.dependents = depTask.dependents ?? [];
+          depTask.dependents.push(task.id);
+        } else {
+          // Dependency not found - this indicates corruption, remove it
+          console.warn(
+            `[TaskQueueService] Removing orphan dependency ${depId} from task ${task.id}`
+          );
+          task.dependencies = task.dependencies.filter((d) => d !== depId);
+        }
+      }
+    }
+
+    // Third pass: recompute blockedBy for all tasks
+    for (const task of this.tasks.values()) {
+      try {
+        task.blockedBy = this.computeBlockedBy(task);
+      } catch {
+        // If computing blockedBy fails, clear dependencies
+        console.warn(`[TaskQueueService] Failed to compute blockedBy for task ${task.id}`);
+        task.dependencies = [];
+        task.blockedBy = [];
+      }
+    }
+
+    // Fourth pass: crash recovery - normalize task states
+    // Tasks in "running" state are reset to "queued" or "blocked" after restart
+    for (const task of this.tasks.values()) {
+      if (task.status === "running") {
+        console.warn(
+          `[TaskQueueService] Crash recovery: resetting running task ${task.id} to queued/blocked`
+        );
+
+        // Clear runtime fields
+        task.assignedAgentId = undefined;
+        task.runId = undefined;
+        task.startedAt = undefined;
+
+        // Move to queued or blocked based on dependencies
+        if (task.blockedBy && task.blockedBy.length > 0) {
+          task.status = "blocked";
+        } else {
+          task.status = "queued";
+        }
+      }
+    }
+
+    console.log(`[TaskQueueService] Loaded ${this.tasks.size} tasks for project ${projectId}`);
+  }
+
+  /**
+   * Schedule a debounced persistence save.
+   */
+  private async schedulePersist(): Promise<void> {
+    if (!this.persistenceEnabled || !this.currentProjectId) return;
+
+    const tasksArray = Array.from(this.tasks.values());
+    await taskPersistence.save(this.currentProjectId, tasksArray);
+  }
+
+  /**
+   * Enable or disable persistence (useful for testing).
+   */
+  setPersistenceEnabled(enabled: boolean): void {
+    this.persistenceEnabled = enabled;
+  }
+
+  /**
+   * Force an immediate save to disk.
+   */
+  async flushPersistence(): Promise<void> {
+    if (!this.currentProjectId) return;
+    await taskPersistence.flush(this.currentProjectId);
   }
 }
 

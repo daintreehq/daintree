@@ -3,6 +3,15 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import os from "os";
+
+// Mock electron app before importing TaskQueueService
+vi.mock("electron", () => ({
+  app: {
+    getPath: vi.fn().mockReturnValue(os.tmpdir()),
+  },
+}));
+
 import { TaskQueueService } from "../TaskQueueService.js";
 import { events } from "../events.js";
 
@@ -11,6 +20,7 @@ describe("TaskQueueService", () => {
 
   beforeEach(() => {
     service = new TaskQueueService();
+    service.setPersistenceEnabled(false);
     vi.clearAllMocks();
   });
 
