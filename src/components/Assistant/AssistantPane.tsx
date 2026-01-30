@@ -28,8 +28,16 @@ export function AssistantPane({
   const { hasApiKey, isInitialized, initialize } = useAppAgentStore();
   const inputRef = useRef<AssistantInputHandle>(null);
 
-  const { messages, streamingState, isLoading, error, sendMessage, cancelStreaming, clearError } =
-    useAssistantChat({ panelId: id });
+  const {
+    messages,
+    streamingState,
+    isLoading,
+    error,
+    sendMessage,
+    cancelStreaming,
+    clearError,
+    clearMessages,
+  } = useAssistantChat({ panelId: id });
 
   useEffect(() => {
     initialize();
@@ -53,6 +61,10 @@ export function AssistantPane({
     inputRef.current?.focus();
   }, [onFocus]);
 
+  const handleRestart = useCallback(() => {
+    clearMessages();
+  }, [clearMessages]);
+
   const showLoading = !isInitialized;
   const showEmptyState = isInitialized && !hasApiKey;
   const showChat = isInitialized && hasApiKey;
@@ -73,6 +85,7 @@ export function AssistantPane({
       onTitleChange={onTitleChange}
       onMinimize={onMinimize}
       onRestore={onRestore}
+      onRestart={handleRestart}
     >
       <div className="flex flex-col h-full bg-canopy-bg">
         {showLoading && (
