@@ -605,6 +605,8 @@ export interface ElectronAPI {
     }): Promise<void>;
     /** Cancel an active streaming session */
     cancel(sessionId: string): Promise<void>;
+    /** Clear session and remove all listeners associated with it */
+    clearSession(sessionId: string): Promise<void>;
     /** Check if API key is configured (uses appAgentConfig) */
     hasApiKey(): Promise<boolean>;
     /** Subscribe to streaming chunks from the assistant */

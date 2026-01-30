@@ -260,6 +260,7 @@ export const CHANNELS = {
   ASSISTANT_CANCEL: "assistant:cancel",
   ASSISTANT_CHUNK: "assistant:chunk",
   ASSISTANT_HAS_API_KEY: "assistant:has-api-key",
+  ASSISTANT_CLEAR_SESSION: "assistant:clear-session",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

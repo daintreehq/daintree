@@ -412,6 +412,7 @@ const CHANNELS = {
   ASSISTANT_CANCEL: "assistant:cancel",
   ASSISTANT_CHUNK: "assistant:chunk",
   ASSISTANT_HAS_API_KEY: "assistant:has-api-key",
+  ASSISTANT_CLEAR_SESSION: "assistant:clear-session",
 } as const;
 
 const api: ElectronAPI = {
@@ -1285,18 +1286,26 @@ const api: ElectronAPI = {
 
     cancel: (sessionId: string) => ipcRenderer.invoke(CHANNELS.ASSISTANT_CANCEL, sessionId),
 
+    clearSession: (sessionId: string) =>
+      ipcRenderer.invoke(CHANNELS.ASSISTANT_CLEAR_SESSION, sessionId),
+
     hasApiKey: () => ipcRenderer.invoke(CHANNELS.ASSISTANT_HAS_API_KEY),
 
     onChunk: (
       callback: (data: {
         sessionId: string;
         chunk: {
-          type: "text" | "tool_call" | "tool_result" | "error" | "done";
+          type: "text" | "tool_call" | "tool_result" | "error" | "done" | "listener_triggered";
           content?: string;
           toolCall?: { id: string; name: string; args: Record<string, unknown> };
           toolResult?: { toolCallId: string; toolName: string; result: unknown; error?: string };
           error?: string;
           finishReason?: string;
+          listenerData?: {
+            listenerId: string;
+            eventType: string;
+            data: Record<string, unknown>;
+          };
         };
       }) => void
     ) => {
@@ -1305,12 +1314,17 @@ const api: ElectronAPI = {
         data: {
           sessionId: string;
           chunk: {
-            type: "text" | "tool_call" | "tool_result" | "error" | "done";
+            type: "text" | "tool_call" | "tool_result" | "error" | "done" | "listener_triggered";
             content?: string;
             toolCall?: { id: string; name: string; args: Record<string, unknown> };
             toolResult?: { toolCallId: string; toolName: string; result: unknown; error?: string };
             error?: string;
             finishReason?: string;
+            listenerData?: {
+              listenerId: string;
+              eventType: string;
+              data: Record<string, unknown>;
+            };
           };
         }
       ) => callback(data);

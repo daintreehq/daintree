@@ -28,8 +28,22 @@ export const AssistantMessageSchema = z.object({
 });
 export type AssistantMessage = z.infer<typeof AssistantMessageSchema>;
 
-export const StreamChunkTypeSchema = z.enum(["text", "tool_call", "tool_result", "error", "done"]);
+export const StreamChunkTypeSchema = z.enum([
+  "text",
+  "tool_call",
+  "tool_result",
+  "error",
+  "done",
+  "listener_triggered",
+]);
 export type StreamChunkType = z.infer<typeof StreamChunkTypeSchema>;
+
+export const ListenerTriggeredDataSchema = z.object({
+  listenerId: z.string(),
+  eventType: z.string(),
+  data: z.record(z.string(), z.unknown()),
+});
+export type ListenerTriggeredData = z.infer<typeof ListenerTriggeredDataSchema>;
 
 export const StreamChunkSchema = z.object({
   type: StreamChunkTypeSchema,
@@ -38,6 +52,7 @@ export const StreamChunkSchema = z.object({
   toolResult: ToolResultSchema.optional(),
   error: z.string().optional(),
   finishReason: z.string().optional(),
+  listenerData: ListenerTriggeredDataSchema.optional(),
 });
 export type StreamChunk = z.infer<typeof StreamChunkSchema>;
 

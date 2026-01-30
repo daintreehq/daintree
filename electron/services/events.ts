@@ -277,6 +277,12 @@ export const EVENT_META: Record<keyof CanopyEventMap, EventMetadata> = {
     requiresTimestamp: true,
     description: "Terminal reliability metric (pause/suspend/wake timing)",
   },
+  "terminal:state-changed": {
+    category: "agent",
+    requiresContext: true,
+    requiresTimestamp: true,
+    description: "Terminal agent state changed (idle, working, completed, etc.)",
+  },
 
   // Task events
   "task:created": {
@@ -653,6 +659,19 @@ export type CanopyEventMap = {
    */
   "terminal:reliability-metric": TerminalReliabilityMetricPayload;
 
+  /**
+   * Emitted when a terminal's agent state changes.
+   * This is a listener-friendly variant of agent:state-changed focused on terminals.
+   */
+  "terminal:state-changed": WithContext<{
+    terminalId: string;
+    agentId?: string;
+    oldState: AgentState;
+    newState: AgentState;
+    toState: AgentState;
+    worktreeId?: string;
+  }>;
+
   // Task Lifecycle Events (Future-proof for task management)
 
   /**
@@ -748,6 +767,7 @@ export const ALL_EVENT_TYPES: Array<keyof CanopyEventMap> = [
   "terminal:backgrounded",
   "terminal:foregrounded",
   "terminal:reliability-metric",
+  "terminal:state-changed",
   "task:created",
   "task:assigned",
   "task:state-changed",

@@ -11,6 +11,29 @@ function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function formatListenerNotification(eventType: string, data: Record<string, unknown>): string {
+  if (eventType === "terminal:state-changed") {
+    const terminalId = data.terminalId as string | undefined;
+    const newState = data.newState as string | undefined;
+    const oldState = data.oldState as string | undefined;
+    const worktreeId = data.worktreeId as string | undefined;
+
+    const stateEmoji = newState === "completed" ? "✅" : newState === "failed" ? "❌" : "🔔";
+    let msg = `${stateEmoji} Terminal state: ${oldState || "unknown"} → ${newState || "unknown"}`;
+
+    if (terminalId) {
+      msg += ` (terminal: ${terminalId.slice(0, 8)})`;
+    }
+    if (worktreeId) {
+      msg += ` [${worktreeId}]`;
+    }
+
+    return msg;
+  }
+
+  return `🔔 Event triggered: ${eventType}`;
+}
+
 // Stable default to avoid infinite loops - must be module-level constant
 const EMPTY_CONVERSATION: ConversationState = Object.freeze({
   messages: [],
@@ -54,6 +77,28 @@ export function useAssistantChat(options: UseAssistantChatOptions) {
   useEffect(() => {
     sessionIdRef.current = conversation.sessionId;
   }, [conversation.sessionId]);
+
+  // Mount-level chunk subscription for persistent listener notifications
+  useEffect(() => {
+    const cleanup = window.electron.assistant.onChunk((data) => {
+      if (data.sessionId !== sessionIdRef.current) return;
+
+      const { chunk } = data;
+
+      if (chunk.type === "listener_triggered" && chunk.listenerData) {
+        const { eventType, data: eventData } = chunk.listenerData;
+        const notificationText = formatListenerNotification(eventType, eventData);
+        storeAddMessage(panelId, {
+          id: `listener-${Date.now()}-${Math.random()}`,
+          role: "assistant",
+          content: notificationText,
+          timestamp: Date.now(),
+        });
+      }
+    });
+
+    return cleanup;
+  }, [panelId, storeAddMessage]);
 
   const addMessage = useCallback(
     (role: AssistantMessage["role"], content: string) => {
@@ -273,6 +318,9 @@ export function useAssistantChat(options: UseAssistantChatOptions) {
                 storeSetError(panelId, chunk.error);
                 onError?.(chunk.error);
               }
+              break;
+
+            case "listener_triggered":
               break;
 
             case "done":

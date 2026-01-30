@@ -4,8 +4,13 @@ import { assistantService } from "../../services/AssistantService.js";
 import {
   type AssistantChunkPayload,
   SendMessageRequestSchema,
+  type StreamChunk,
 } from "../../../shared/types/assistant.js";
 import type { ActionManifestEntry, ActionContext } from "../../../shared/types/actions.js";
+import {
+  initTerminalStateListenerBridge,
+  destroyTerminalStateListenerBridge,
+} from "../../services/assistant/TerminalStateListenerBridge.js";
 
 const MAX_MESSAGES = 100;
 const MAX_MESSAGE_LENGTH = 50000;
@@ -25,8 +30,18 @@ function sendToWebContents(
 }
 
 export function registerAssistantHandlers(mainWindow: BrowserWindow): () => void {
+  const emitChunkToRenderer = (sessionId: string, chunk: StreamChunk): void => {
+    sendToWebContents(mainWindow.webContents, CHANNELS.ASSISTANT_CHUNK, {
+      sessionId,
+      chunk,
+    });
+  };
+
+  initTerminalStateListenerBridge(emitChunkToRenderer);
+
   const destroyedListener = () => {
     assistantService.cancelAll();
+    destroyTerminalStateListenerBridge();
   };
 
   const navigationListener = () => {
@@ -120,6 +135,10 @@ export function registerAssistantHandlers(mainWindow: BrowserWindow): () => void
     assistantService.cancel(sessionId);
   });
 
+  ipcMain.handle(CHANNELS.ASSISTANT_CLEAR_SESSION, (_event, sessionId: string) => {
+    assistantService.clearSession(sessionId);
+  });
+
   ipcMain.handle(CHANNELS.ASSISTANT_HAS_API_KEY, () => {
     return assistantService.hasApiKey();
   });
@@ -131,8 +150,10 @@ export function registerAssistantHandlers(mainWindow: BrowserWindow): () => void
   mainWindow.webContents.on("did-start-navigation", navigationListener);
 
   return () => {
+    destroyTerminalStateListenerBridge();
     ipcMain.removeHandler(CHANNELS.ASSISTANT_SEND_MESSAGE);
     ipcMain.removeHandler(CHANNELS.ASSISTANT_CANCEL);
+    ipcMain.removeHandler(CHANNELS.ASSISTANT_CLEAR_SESSION);
     ipcMain.removeHandler(CHANNELS.ASSISTANT_HAS_API_KEY);
     mainWindow.webContents.removeListener("destroyed", destroyedListener);
     mainWindow.webContents.removeListener("did-start-navigation", navigationListener);

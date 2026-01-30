@@ -14,6 +14,7 @@ const MAX_STEPS = 10;
 export class AssistantService {
   private fireworks: ReturnType<typeof createOpenAI> | null = null;
   private activeStreams = new Map<string, AbortController>();
+  private chunkCallbacks = new Map<string, (chunk: StreamChunk) => void>();
 
   constructor() {
     this.initializeProvider();
@@ -81,6 +82,7 @@ export class AssistantService {
 
     const controller = new AbortController();
     this.activeStreams.set(sessionId, controller);
+    this.chunkCallbacks.set(sessionId, onChunk);
 
     try {
       // Build context block for the system prompt
@@ -214,7 +216,15 @@ export class AssistantService {
       // Only delete if this controller is still the active one
       if (this.activeStreams.get(sessionId) === controller) {
         this.activeStreams.delete(sessionId);
+        this.chunkCallbacks.delete(sessionId);
       }
+    }
+  }
+
+  emitChunk(sessionId: string, chunk: StreamChunk): void {
+    const callback = this.chunkCallbacks.get(sessionId);
+    if (callback) {
+      callback(chunk);
     }
   }
 
@@ -223,6 +233,7 @@ export class AssistantService {
     if (controller) {
       controller.abort();
       this.activeStreams.delete(sessionId);
+      this.chunkCallbacks.delete(sessionId);
     }
   }
 

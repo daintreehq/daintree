@@ -26,7 +26,8 @@ export function createListenerTools(context: ListenerToolContext): ToolSet {
     register_listener: tool({
       description:
         "Subscribe to Canopy events. Returns a listener ID for later removal. " +
-        "Use this to monitor terminal activity, agent state changes, worktree updates, and more.",
+        "Use this to monitor terminal activity, agent state changes, worktree updates, and more. " +
+        "For terminal:state-changed, you can filter by terminalId and toState (e.g., 'completed').",
       inputSchema: jsonSchema({
         type: "object",
         properties: {

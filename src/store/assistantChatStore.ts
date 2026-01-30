@@ -147,6 +147,13 @@ const createAssistantChatStore: StateCreator<AssistantChatState & AssistantChatA
   },
 
   clearConversation: (panelId) => {
+    const existing = get().conversations[panelId];
+    if (existing?.sessionId) {
+      window.electron.assistant.clearSession(existing.sessionId).catch((err) => {
+        console.error("[AssistantChatStore] Failed to clear session:", err);
+      });
+    }
+
     set((s) => {
       const existing = s.conversations[panelId];
       if (!existing) return s;
@@ -166,6 +173,13 @@ const createAssistantChatStore: StateCreator<AssistantChatState & AssistantChatA
   },
 
   removeConversation: (panelId) => {
+    const existing = get().conversations[panelId];
+    if (existing?.sessionId) {
+      window.electron.assistant.clearSession(existing.sessionId).catch((err) => {
+        console.error("[AssistantChatStore] Failed to clear session:", err);
+      });
+    }
+
     set((s) => {
       const { [panelId]: _, ...rest } = s.conversations;
       return { conversations: rest };
