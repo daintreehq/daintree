@@ -178,6 +178,7 @@ describe("Terminal Entry Validation Schemas", () => {
     it("accepts valid snapshot with minimal fields", () => {
       const snapshot = {
         id: "snap-123",
+        type: "terminal",
         title: "Terminal 1",
         cwd: "/Users/test",
         location: "grid",
@@ -240,6 +241,75 @@ describe("Terminal Entry Validation Schemas", () => {
       expect(result.success).toBe(true);
     });
 
+    it("accepts browser panel snapshot without cwd", () => {
+      const snapshot = {
+        id: "browser-123",
+        kind: "browser",
+        title: "Browser",
+        location: "grid",
+        browserUrl: "https://example.com",
+      };
+
+      const result = TerminalSnapshotSchema.safeParse(snapshot);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.cwd).toBeUndefined();
+        expect(result.data).toMatchObject(snapshot);
+      }
+    });
+
+    it("accepts notes panel snapshot without cwd", () => {
+      const snapshot = {
+        id: "notes-123",
+        kind: "notes",
+        title: "Notes",
+        location: "grid",
+        notePath: "/notes/test.md",
+        noteId: "note-123",
+        scope: "project",
+        createdAt: 1704067200000,
+      };
+
+      const result = TerminalSnapshotSchema.safeParse(snapshot);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.cwd).toBeUndefined();
+        expect(result.data).toMatchObject(snapshot);
+      }
+    });
+
+    it("rejects PTY panel snapshot without cwd (terminal)", () => {
+      const snapshot = {
+        id: "snap-123",
+        kind: "terminal",
+        title: "Terminal 1",
+        location: "grid",
+      };
+
+      const result = TerminalSnapshotSchema.safeParse(snapshot);
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues[0].message).toContain("PTY-backed panels require");
+      }
+    });
+
+    it("rejects PTY panel snapshot without cwd (agent)", () => {
+      const snapshot = {
+        id: "agent-123",
+        kind: "agent",
+        agentId: "claude",
+        title: "Claude",
+        location: "grid",
+        type: "claude",
+      };
+
+      const result = TerminalSnapshotSchema.safeParse(snapshot);
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues[0].message).toContain("PTY-backed panels require");
+      }
+    });
+
     it("accepts extension panel kinds (string)", () => {
       const snapshot = {
         id: "ext-123",
@@ -259,6 +329,7 @@ describe("Terminal Entry Validation Schemas", () => {
       for (const location of locations) {
         const snapshot = {
           id: "snap-123",
+          type: "terminal",
           title: "Test",
           cwd: "/Users/test",
           location,
@@ -412,9 +483,9 @@ describe("Terminal Entry Validation Schemas", () => {
 
     it("works with TerminalSnapshotSchema", () => {
       const snapshots = [
-        { id: "s1", title: "Snap 1", cwd: "/", location: "grid" },
+        { id: "s1", type: "terminal", title: "Snap 1", cwd: "/", location: "grid" },
         { id: "", title: "Invalid", cwd: "/", location: "grid" }, // empty id
-        { id: "s2", kind: "browser", title: "Browser", cwd: "/", location: "dock" },
+        { id: "s2", kind: "browser", title: "Browser", location: "dock" },
       ];
 
       const result = filterValidTerminalEntries(snapshots, TerminalSnapshotSchema, "snapshot-test");
