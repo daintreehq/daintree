@@ -109,6 +109,7 @@ export function AssistantPane({
                 messages={messages}
                 streamingState={streamingState}
                 streamingMessageId={streamingMessageId}
+                isLoading={isLoading}
                 className="flex-1 min-h-0"
               />
             ) : (
@@ -139,7 +140,7 @@ export function AssistantPane({
               ref={inputRef}
               onSubmit={handleSubmit}
               onCancel={cancelStreaming}
-              isStreaming={isLoading && !!streamingState}
+              isStreaming={isLoading}
               disabled={isLoading}
               placeholder="Execute a command or ask a question..."
             />

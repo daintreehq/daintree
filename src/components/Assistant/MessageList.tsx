@@ -4,12 +4,16 @@ import { ArrowDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { InteractionBlock } from "./InteractionBlock";
 import { EmptyState } from "./EmptyState";
+import { AssistantThinkingIndicator } from "./AssistantThinkingIndicator";
 import type { AssistantMessage, StreamingState } from "./types";
+
+const LOADING_INDICATOR_DELAY_MS = 150;
 
 interface MessageListProps {
   messages: AssistantMessage[];
   streamingState: StreamingState | null;
   streamingMessageId?: string | null;
+  isLoading?: boolean;
   className?: string;
 }
 
@@ -17,11 +21,13 @@ export function MessageList({
   messages,
   streamingState,
   streamingMessageId,
+  isLoading = false,
   className,
 }: MessageListProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const [atBottom, setAtBottom] = useState(true);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [showLoadingPlaceholder, setShowLoadingPlaceholder] = useState(false);
 
   const handleAtBottomChange = useCallback(
     (bottom: boolean) => {
@@ -58,6 +64,24 @@ export function MessageList({
 
     isStreamingRef.current = isStreaming;
   }, [streamingState]);
+
+  // Manage delayed loading indicator visibility
+  useEffect(() => {
+    const shouldShowLoading = isLoading && !streamingState;
+
+    if (shouldShowLoading) {
+      const timerId = setTimeout(() => {
+        setShowLoadingPlaceholder(true);
+      }, LOADING_INDICATOR_DELAY_MS);
+
+      return () => {
+        clearTimeout(timerId);
+      };
+    }
+
+    setShowLoadingPlaceholder(false);
+    return undefined;
+  }, [isLoading, streamingState]);
 
   // Scroll to bottom on mount when messages exist (handles panel drag/remount)
   useEffect(() => {
@@ -96,9 +120,23 @@ export function MessageList({
           toolCalls: streamingState.toolCalls,
         },
       ]
-    : messages;
+    : showLoadingPlaceholder
+      ? [
+          ...messages,
+          {
+            id: "__loading__",
+            role: "assistant" as const,
+            content: "",
+            timestamp: Date.now(),
+          },
+        ]
+      : messages;
 
   const renderMessage = (_index: number, msg: AssistantMessage) => {
+    if (msg.id === "__loading__") {
+      return <AssistantThinkingIndicator />;
+    }
+
     const isStreaming = msg.id.startsWith("__streaming__");
 
     return <InteractionBlock message={msg} isStreaming={isStreaming} />;

@@ -174,11 +174,15 @@ export function useAssistantChat(options: UseAssistantChatOptions) {
   const appendStreamingContent = useCallback(
     (chunk: string) => {
       const prev = streamingStateRef.current;
-      const newState = prev
-        ? { ...prev, content: prev.content + chunk }
-        : { content: chunk, toolCalls: [] };
-      setStreamingStateSync(newState);
-      syncStreamingMessage(newState);
+      if (!prev) {
+        const newState = { content: chunk, toolCalls: [] };
+        setStreamingStateSync(newState);
+        syncStreamingMessage(newState);
+      } else {
+        const newState = { ...prev, content: prev.content + chunk };
+        setStreamingStateSync(newState);
+        syncStreamingMessage(newState);
+      }
     },
     [setStreamingStateSync, syncStreamingMessage]
   );
@@ -186,11 +190,15 @@ export function useAssistantChat(options: UseAssistantChatOptions) {
   const addStreamingToolCall = useCallback(
     (toolCall: ToolCall) => {
       const prev = streamingStateRef.current;
-      const newState = prev
-        ? { ...prev, toolCalls: [...prev.toolCalls, toolCall] }
-        : { content: "", toolCalls: [toolCall] };
-      setStreamingStateSync(newState);
-      syncStreamingMessage(newState);
+      if (!prev) {
+        const newState = { content: "", toolCalls: [toolCall] };
+        setStreamingStateSync(newState);
+        syncStreamingMessage(newState);
+      } else {
+        const newState = { ...prev, toolCalls: [...prev.toolCalls, toolCall] };
+        setStreamingStateSync(newState);
+        syncStreamingMessage(newState);
+      }
     },
     [setStreamingStateSync, syncStreamingMessage]
   );
@@ -315,9 +323,14 @@ export function useAssistantChat(options: UseAssistantChatOptions) {
       // Clean up previous listener
       cleanupRef.current?.();
 
-      try {
-        startStreaming();
+      // Reset streaming state to ensure clean slate for new message
+      streamingStateRef.current = null;
+      setStreamingStateSync(null);
+      streamingMessageIdRef.current = null;
+      setStreamingMessageId(null);
 
+      try {
+        // Don't call startStreaming() here - let it be created when first chunk arrives
         // Get current context
         const projectId = useProjectStore.getState().currentProject?.id;
         const worktreeSelection = useWorktreeSelectionStore.getState();
@@ -487,7 +500,6 @@ export function useAssistantChat(options: UseAssistantChatOptions) {
     clearMessages,
     addMessage,
     updateLastMessage,
-    startStreaming,
     appendStreamingContent,
     addStreamingToolCall,
     updateStreamingToolCall,
