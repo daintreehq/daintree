@@ -18,14 +18,17 @@ export async function validateTerminalConfig(
 ): Promise<ValidationResult> {
   const errors: ValidationError[] = [];
 
-  const cwdExists = await systemClient.checkDirectory(terminal.cwd);
-  if (!cwdExists) {
-    errors.push({
-      type: "cwd",
-      message: `Working directory does not exist: ${terminal.cwd}`,
-      code: "ENOENT",
-      recoverable: true,
-    });
+  // Only validate cwd for PTY panels that have it
+  if (terminal.cwd) {
+    const cwdExists = await systemClient.checkDirectory(terminal.cwd);
+    if (!cwdExists) {
+      errors.push({
+        type: "cwd",
+        message: `Working directory does not exist: ${terminal.cwd}`,
+        code: "ENOENT",
+        recoverable: true,
+      });
+    }
   }
 
   // Check agent CLI availability

@@ -3,6 +3,7 @@ import Fuse, { type IFuseOptions } from "fuse.js";
 import { useShallow } from "zustand/react/shallow";
 import { useTerminalStore, type TerminalInstance } from "@/store";
 import { useWorktrees } from "./useWorktrees";
+import { isPtyPanel } from "@shared/types/domain";
 
 export interface SearchableTerminal {
   id: string;
@@ -12,6 +13,7 @@ export interface SearchableTerminal {
   agentId?: TerminalInstance["agentId"];
   worktreeId?: string;
   worktreeName?: string;
+  /** Working directory - always present since palette only shows PTY panels */
   cwd: string;
 }
 
@@ -77,6 +79,7 @@ export function useTerminalPalette(): UseTerminalPaletteReturn {
     return terminals
       .filter((t) => t.location !== "trash")
       .filter((t) => t.hasPty !== false) // Exclude orphaned terminals without active PTY processes
+      .filter((t) => isPtyPanel(t)) // Only include PTY panels (terminals, agents, dev-preview)
       .map((t) => ({
         id: t.id,
         title: t.title,
@@ -85,7 +88,7 @@ export function useTerminalPalette(): UseTerminalPaletteReturn {
         agentId: t.agentId,
         worktreeId: t.worktreeId,
         worktreeName: t.worktreeId ? worktreeMap.get(t.worktreeId)?.name : undefined,
-        cwd: t.cwd,
+        cwd: t.cwd ?? "", // PTY panels should always have cwd, fallback to empty string
       }));
   }, [terminals, worktreeMap]);
 

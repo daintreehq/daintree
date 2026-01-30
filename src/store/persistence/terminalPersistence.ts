@@ -25,7 +25,6 @@ const DEFAULT_OPTIONS: Required<Omit<TerminalPersistenceOptions, "getProjectId">
       title: t.title,
       worktreeId: t.worktreeId,
       location: t.location === "trash" ? "grid" : t.location,
-      cwd: t.cwd,
     };
 
     if (t.kind === "dev-preview") {
@@ -55,6 +54,7 @@ const DEFAULT_OPTIONS: Required<Omit<TerminalPersistenceOptions, "getProjectId">
         createdAt: t.createdAt,
       };
     } else {
+      // Non-PTY panels: browser, assistant, etc.
       return {
         ...base,
         ...(t.browserUrl && { browserUrl: t.browserUrl }),

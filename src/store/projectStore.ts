@@ -213,7 +213,6 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
               title: t.title,
               worktreeId: t.worktreeId,
               location: t.location === "trash" ? "grid" : t.location,
-              cwd: t.cwd,
             };
 
             if (t.kind === "dev-preview") {
@@ -230,6 +229,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
                 ...base,
                 type: t.type,
                 agentId: t.agentId,
+                cwd: t.cwd,
                 command: t.command?.trim() || undefined,
               };
             } else if (t.kind === "notes") {
@@ -241,6 +241,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
                 createdAt: t.createdAt,
               };
             } else {
+              // Non-PTY panels: browser, assistant, etc.
               return {
                 ...base,
                 ...(t.browserUrl && { browserUrl: t.browserUrl }),
@@ -401,7 +402,6 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
               title: t.title,
               worktreeId: t.worktreeId,
               location: t.location === "trash" ? "grid" : t.location,
-              cwd: t.cwd,
             };
 
             if (t.kind === "dev-preview") {
@@ -418,6 +418,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
                 ...base,
                 type: t.type,
                 agentId: t.agentId,
+                cwd: t.cwd,
                 command: t.command?.trim() || undefined,
               };
             } else if (t.kind === "notes") {
@@ -429,6 +430,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
                 createdAt: t.createdAt,
               };
             } else {
+              // Non-PTY panels: browser, assistant, etc.
               return {
                 ...base,
                 ...(t.browserUrl && { browserUrl: t.browserUrl }),

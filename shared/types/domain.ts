@@ -481,7 +481,11 @@ interface NotesPanelData extends BasePanelData {
   createdAt: number;
 }
 
-export type PanelInstance = PtyPanelData | BrowserPanelData | NotesPanelData;
+interface AssistantPanelData extends BasePanelData {
+  kind: "assistant";
+}
+
+export type PanelInstance = PtyPanelData | BrowserPanelData | NotesPanelData | AssistantPanelData;
 
 export function isPtyPanel(panel: PanelInstance | TerminalInstance): panel is PtyPanelData {
   const kind = panel.kind ?? "terminal";
@@ -497,6 +501,10 @@ export function isNotesPanel(panel: PanelInstance): panel is NotesPanelData {
   return panel.kind === "notes";
 }
 
+export function isAssistantPanel(panel: PanelInstance): panel is AssistantPanelData {
+  return panel.kind === "assistant";
+}
+
 export function isDevPreviewPanel(panel: PanelInstance | TerminalInstance): panel is PtyPanelData {
   const kind = panel.kind ?? "terminal";
   return kind === "dev-preview";
@@ -505,6 +513,9 @@ export function isDevPreviewPanel(panel: PanelInstance | TerminalInstance): pane
 /**
  * Legacy interface for backward compatibility with persisted state.
  * New code should use the PanelInstance discriminated union.
+ *
+ * Note: PTY-specific fields (cwd, cols, rows) are optional to support
+ * non-PTY panels like assistant, browser, and notes.
  */
 export interface TerminalInstance {
   id: string;
@@ -513,10 +524,13 @@ export interface TerminalInstance {
   type?: TerminalType;
   agentId?: AgentId;
   title: string;
-  cwd: string;
+  /** Working directory - only present for PTY panels */
+  cwd?: string;
   pid?: number;
-  cols: number;
-  rows: number;
+  /** Terminal columns - only present for PTY panels */
+  cols?: number;
+  /** Terminal rows - only present for PTY panels */
+  rows?: number;
   agentState?: AgentState;
   lastStateChange?: number;
   error?: string;
@@ -622,8 +636,8 @@ export interface TerminalSnapshot {
   agentId?: AgentId;
   /** Display title */
   title: string;
-  /** Working directory */
-  cwd: string;
+  /** Working directory - only present for PTY panels */
+  cwd?: string;
   /** Associated worktree ID */
   worktreeId?: string;
   /** Location in the UI - grid or dock */

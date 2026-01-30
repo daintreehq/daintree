@@ -254,6 +254,9 @@ export async function hydrateAppState(
                     kind = "browser";
                   } else if (saved.notePath !== undefined || saved.noteId !== undefined) {
                     kind = "notes";
+                  } else if (saved.title === "Assistant") {
+                    // Legacy assistant panels from before kind was always set
+                    kind = "assistant";
                   }
                   // Note: dev-preview detection removed since 'devCommand' isn't in TerminalSnapshot.
                   // Dev-preview panels should always have 'kind' set during persistence.

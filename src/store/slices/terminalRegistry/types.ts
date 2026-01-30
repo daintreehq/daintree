@@ -24,7 +24,8 @@ export interface AddTerminalOptions {
   agentId?: string;
   title?: string;
   worktreeId?: string;
-  cwd: string;
+  /** Working directory - required for PTY panels, optional/unused for non-PTY panels */
+  cwd?: string;
   shell?: string;
   command?: string;
   location?: TerminalLocation;

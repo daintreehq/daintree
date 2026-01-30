@@ -10,6 +10,7 @@ export interface TerminalListItemProps {
   kind?: TerminalKind;
   agentId?: string;
   worktreeName?: string;
+  /** Working directory - always present since palette only shows PTY panels */
   cwd: string;
   isSelected: boolean;
   onClick: () => void;

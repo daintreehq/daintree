@@ -133,7 +133,18 @@ export const createTerminalRegistrySlice =
               browserUrl: options.browserUrl,
               exitBehavior: options.exitBehavior,
             };
+          } else if (requestedKind === "assistant") {
+            terminal = {
+              id,
+              kind: "assistant",
+              title,
+              worktreeId: options.worktreeId,
+              location,
+              isVisible: location === "grid",
+              runtimeStatus,
+            };
           } else {
+            // Generic non-PTY panel fallback for extensions
             terminal = {
               id,
               kind: requestedKind,
@@ -354,7 +365,7 @@ export const createTerminalRegistrySlice =
             agentId,
             title,
             worktreeId: options.worktreeId,
-            cwd: options.cwd,
+            cwd: options.cwd ?? "",
             cols: 80,
             rows: 24,
             agentState,

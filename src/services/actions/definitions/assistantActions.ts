@@ -22,7 +22,6 @@ export function registerAssistantActions(
         kind: "assistant",
         title: "Assistant",
         location: "grid",
-        cwd: "",
         worktreeId: activeWorktreeId ?? undefined,
       });
     },
