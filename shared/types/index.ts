@@ -395,3 +395,13 @@ export { ListenerSchema, ListenerFilterSchema, RegisterListenerOptionsSchema } f
 
 // Agent Capabilities types - query agent registry and metadata
 export type { AgentRegistry, AgentMetadata } from "./ipc/agentCapabilities.js";
+
+// Task Queue types - DAG-based task management
+export type {
+  TaskResult,
+  TaskRecord,
+  CreateTaskParams,
+  TaskFilter,
+  DagValidationResult,
+  TaskStateChangePayload,
+} from "./task.js";
