@@ -89,10 +89,171 @@ function escapeHtml(text: string): string {
     .replace(/'/g, "&#39;");
 }
 
+type TableAlignment = "left" | "center" | "right";
+
+interface TableData {
+  headers: string[];
+  alignments: TableAlignment[];
+  rows: string[][];
+}
+
 interface ParsedBlock {
-  type: "text" | "code";
+  type: "text" | "code" | "table";
   content: string;
   language?: string;
+  tableData?: TableData;
+}
+
+function parseTableRow(row: string): string[] {
+  const cells: string[] = [];
+  let current = "";
+
+  // Skip leading whitespace and pipe if present
+  const trimmed = row.trimStart();
+  let i = trimmed.startsWith("|") ? 1 : 0;
+
+  while (i < trimmed.length) {
+    if (trimmed[i] === "\\" && i + 1 < trimmed.length && trimmed[i + 1] === "|") {
+      // Escaped pipe
+      current += "|";
+      i += 2;
+    } else if (trimmed[i] === "|") {
+      cells.push(current.trim());
+      current = "";
+      i++;
+    } else {
+      current += trimmed[i];
+      i++;
+    }
+  }
+
+  // Add the last cell if there's content (handles rows without trailing pipe)
+  const lastCell = current.trim();
+  if (lastCell || cells.length > 0) {
+    cells.push(lastCell);
+  }
+
+  // Remove empty last cell if row ended with pipe
+  if (cells.length > 0 && cells[cells.length - 1] === "") {
+    cells.pop();
+  }
+
+  return cells;
+}
+
+function parseAlignment(separator: string): TableAlignment {
+  const trimmed = separator.trim();
+  const hasLeftColon = trimmed.startsWith(":");
+  const hasRightColon = trimmed.endsWith(":");
+
+  if (hasLeftColon && hasRightColon) {
+    return "center";
+  } else if (hasRightColon) {
+    return "right";
+  }
+  return "left";
+}
+
+function isValidSeparatorRow(row: string): boolean {
+  // Separator row must contain only |, -, :, and whitespace
+  const cells = parseTableRow(row);
+  if (cells.length === 0) return false;
+
+  return cells.every((cell) => {
+    const trimmed = cell.trim();
+    // Must have at least 3 dashes (GFM requirement)
+    return /^:?-{3,}:?$/.test(trimmed);
+  });
+}
+
+function tryParseTable(
+  lines: string[],
+  startIndex: number
+): { table: TableData; endIndex: number } | null {
+  // Need at least 2 lines for a valid table (header + separator)
+  if (startIndex + 1 >= lines.length) return null;
+
+  const headerLine = lines[startIndex];
+  const separatorLine = lines[startIndex + 1];
+
+  // Check if this looks like a table (must start with | after trimming)
+  const trimmedHeader = headerLine.trimStart();
+  const trimmedSeparator = separatorLine.trimStart();
+  if (!trimmedHeader.startsWith("|") || !trimmedSeparator.startsWith("|")) return null;
+  if (!isValidSeparatorRow(separatorLine)) return null;
+
+  const headers = parseTableRow(headerLine);
+  const separatorCells = parseTableRow(separatorLine);
+
+  // Header and separator must have the same number of columns
+  if (headers.length === 0 || headers.length !== separatorCells.length) return null;
+
+  const alignments = separatorCells.map(parseAlignment);
+  const rows: string[][] = [];
+
+  // Parse body rows
+  let endIndex = startIndex + 2;
+  while (endIndex < lines.length) {
+    const line = lines[endIndex];
+    const trimmedLine = line.trimStart();
+
+    // Stop if line doesn't start with a pipe (table rows must start with |)
+    if (!trimmedLine.startsWith("|")) break;
+
+    const cells = parseTableRow(line);
+    // Require at least one cell to continue, and stop if separator-like
+    if (cells.length > 0 && !isValidSeparatorRow(line)) {
+      const normalizedCells = [...cells];
+      while (normalizedCells.length < headers.length) {
+        normalizedCells.push("");
+      }
+      rows.push(normalizedCells.slice(0, headers.length));
+      endIndex++;
+    } else {
+      break;
+    }
+  }
+
+  return {
+    table: { headers, alignments, rows },
+    endIndex,
+  };
+}
+
+function parseTextWithTables(text: string): ParsedBlock[] {
+  const blocks: ParsedBlock[] = [];
+  const lines = text.split("\n");
+  let currentTextLines: string[] = [];
+
+  const flushText = () => {
+    if (currentTextLines.length > 0) {
+      const content = currentTextLines.join("\n");
+      if (content.trim()) {
+        blocks.push({ type: "text", content });
+      }
+      currentTextLines = [];
+    }
+  };
+
+  let i = 0;
+  while (i < lines.length) {
+    const tableResult = tryParseTable(lines, i);
+    if (tableResult) {
+      flushText();
+      blocks.push({
+        type: "table",
+        content: "",
+        tableData: tableResult.table,
+      });
+      i = tableResult.endIndex;
+    } else {
+      currentTextLines.push(lines[i]);
+      i++;
+    }
+  }
+
+  flushText();
+  return blocks;
 }
 
 function parseMarkdown(content: string): ParsedBlock[] {
@@ -103,10 +264,10 @@ function parseMarkdown(content: string): ParsedBlock[] {
 
   while ((match = codeBlockRegex.exec(content)) !== null) {
     if (match.index > lastIndex) {
-      blocks.push({
-        type: "text",
-        content: content.slice(lastIndex, match.index),
-      });
+      const textContent = content.slice(lastIndex, match.index);
+      // Parse text content for tables
+      const textBlocks = parseTextWithTables(textContent);
+      blocks.push(...textBlocks);
     }
 
     const languageInfo = match[1].trim();
@@ -124,10 +285,10 @@ function parseMarkdown(content: string): ParsedBlock[] {
   }
 
   if (lastIndex < content.length) {
-    blocks.push({
-      type: "text",
-      content: content.slice(lastIndex),
-    });
+    const textContent = content.slice(lastIndex);
+    // Parse text content for tables
+    const textBlocks = parseTextWithTables(textContent);
+    blocks.push(...textBlocks);
   }
 
   return blocks;
@@ -324,12 +485,71 @@ function CodeBlock({ content, language }: { content: string; language: string })
   );
 }
 
+function TableBlock({ tableData }: { tableData: TableData }) {
+  const alignmentClass = (alignment: TableAlignment): string => {
+    switch (alignment) {
+      case "center":
+        return "text-center";
+      case "right":
+        return "text-right";
+      default:
+        return "text-left";
+    }
+  };
+
+  return (
+    <div className="my-3 overflow-x-auto rounded-lg border border-canopy-border">
+      <table className="w-full border-collapse text-sm">
+        <thead>
+          <tr className="bg-canopy-sidebar/30">
+            {tableData.headers.map((header, i) => (
+              <th
+                key={i}
+                scope="col"
+                className={cn(
+                  "px-3 py-1.5 font-semibold text-canopy-text/90 border-b border-canopy-border",
+                  i > 0 && "border-l border-canopy-border",
+                  alignmentClass(tableData.alignments[i])
+                )}
+                dangerouslySetInnerHTML={{ __html: renderInlineMarkdown(header) }}
+              />
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {tableData.rows.map((row, rowIndex) => (
+            <tr
+              key={rowIndex}
+              className={cn(
+                rowIndex % 2 === 1 && "bg-canopy-sidebar/10",
+                rowIndex < tableData.rows.length - 1 && "border-b border-canopy-border/50"
+              )}
+            >
+              {row.map((cell, cellIndex) => (
+                <td
+                  key={cellIndex}
+                  className={cn(
+                    "px-3 py-1.5 text-canopy-text",
+                    cellIndex > 0 && "border-l border-canopy-border/50",
+                    alignmentClass(tableData.alignments[cellIndex])
+                  )}
+                  dangerouslySetInnerHTML={{ __html: renderInlineMarkdown(cell) }}
+                />
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function MarkdownRenderer({ content, className }: MarkdownRendererProps) {
   const blocks = useMemo(() => parseMarkdown(content), [content]);
 
   // Handle empty or whitespace-only content
   const hasRenderable = blocks.some(
-    (block) => block.type === "code" || block.content.trim().length > 0
+    (block) => block.type === "code" || block.type === "table" || block.content.trim().length > 0
   );
 
   if (!hasRenderable) {
@@ -343,13 +563,17 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
 
   return (
     <div className={cn("prose prose-sm prose-canopy max-w-none", className)}>
-      {blocks.map((block, index) =>
-        block.type === "code" ? (
-          <CodeBlock key={index} content={block.content} language={block.language || "text"} />
-        ) : (
-          <TextBlock key={index} content={block.content} />
-        )
-      )}
+      {blocks.map((block, index) => {
+        if (block.type === "code") {
+          return (
+            <CodeBlock key={index} content={block.content} language={block.language || "text"} />
+          );
+        }
+        if (block.type === "table" && block.tableData) {
+          return <TableBlock key={index} tableData={block.tableData} />;
+        }
+        return <TextBlock key={index} content={block.content} />;
+      })}
     </div>
   );
 }
