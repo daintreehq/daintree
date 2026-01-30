@@ -156,6 +156,7 @@ export class WorkflowEngine {
     events.emit("workflow:failed", {
       runId,
       workflowId: run.workflowId,
+      workflowVersion: run.workflowVersion,
       error: "Workflow was cancelled",
       timestamp: now,
     });
@@ -342,6 +343,7 @@ export class WorkflowEngine {
       events.emit("workflow:failed", {
         runId: run.runId,
         workflowId: run.workflowId,
+        workflowVersion: run.workflowVersion,
         error: `Node ${mapping.nodeId} failed: ${payload.error}`,
         timestamp: payload.timestamp,
       });
