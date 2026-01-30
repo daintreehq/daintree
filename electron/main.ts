@@ -120,10 +120,7 @@ import {
   disposeAgentAvailabilityStore,
 } from "./services/AgentAvailabilityStore.js";
 import { initializeAgentRouter, disposeAgentRouter } from "./services/AgentRouter.js";
-import {
-  initializeWorkflowEngine,
-  disposeWorkflowEngine,
-} from "./services/WorkflowEngine.js";
+import { initializeWorkflowEngine, disposeWorkflowEngine } from "./services/WorkflowEngine.js";
 import { workflowLoader } from "./services/WorkflowLoader.js";
 
 // Initialize logger early with userData path
@@ -601,7 +598,7 @@ async function createWindow(): Promise<void> {
     }
   });
   ptyClient.on("host-crash", (code) => {
-    console.error(`[MAIN] Pty Host crashed with code ${code} (max restarts exceeded)`)
+    console.error(`[MAIN] Pty Host crashed with code ${code} (max restarts exceeded)`);
   });
   ptyClient.setPortRefreshCallback(() => {
     console.log("[MAIN] Pty Host restarted, refreshing ports...");
@@ -707,7 +704,7 @@ async function createWindow(): Promise<void> {
         .showMessageBox({
           type: "error",
           title: "Service Initialization Failed",
-          message: `One or more services failed to start:\n\n${failures.join("\n")}\n\nThe application will continue in degraded mode. Some features may be unavailable.\n\nTry restarting the application if problems persist.`, 
+          message: `One or more services failed to start:\n\n${failures.join("\n")}\n\nThe application will continue in degraded mode. Some features may be unavailable.\n\nTry restarting the application if problems persist.`,
           buttons: ["OK"],
         })
         .catch(console.error);

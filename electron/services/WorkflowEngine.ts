@@ -10,18 +10,9 @@ import { randomUUID } from "crypto";
 import { events } from "./events.js";
 import { workflowLoader, WorkflowLoader } from "./WorkflowLoader.js";
 import { taskQueueService, TaskQueueService } from "./TaskQueueService.js";
-import type {
-  WorkflowRun,
-  WorkflowRunStatus,
-  NodeState,
-  EvaluatedCondition,
-} from "../../shared/types/workflowRun.js";
-import type {
-  WorkflowDefinition,
-  WorkflowNode,
-  WorkflowCondition,
-} from "../../shared/types/workflow.js";
-import type { TaskRecord, TaskResult } from "../../shared/types/task.js";
+import type { WorkflowRun, NodeState } from "../../shared/types/workflowRun.js";
+import type { WorkflowNode, WorkflowCondition } from "../../shared/types/workflow.js";
+import type { TaskRecord } from "../../shared/types/task.js";
 
 export class WorkflowEngine {
   /** Active workflow runs (runId -> WorkflowRun) */
@@ -114,7 +105,9 @@ export class WorkflowEngine {
         if (nodeState.taskId && nodeState.status !== "completed" && nodeState.status !== "failed") {
           try {
             await this.queueService.cancelTask(nodeState.taskId);
-          } catch {}
+          } catch (_e) {
+            // Best effort cancellation
+          }
         }
       }
 
@@ -454,14 +447,14 @@ export class WorkflowEngine {
     }
 
     const parts = path.split(".");
-    let current: any = obj;
+    let current: unknown = obj;
 
     for (const part of parts) {
-      if (current === null || current === undefined) {
+      if (current === null || typeof current !== "object") {
         return undefined;
       }
 
-      current = current[part];
+      current = (current as Record<string, unknown>)[part];
     }
 
     return current;
