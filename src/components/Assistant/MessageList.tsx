@@ -39,6 +39,7 @@ export function MessageList({ messages, streamingState, className }: MessageList
 
   const streamingTimestampRef = useRef<number>(Date.now());
   const isStreamingRef = useRef(false);
+  const hasScrolledOnMount = useRef(false);
 
   useEffect(() => {
     const wasStreaming = isStreamingRef.current;
@@ -50,6 +51,18 @@ export function MessageList({ messages, streamingState, className }: MessageList
 
     isStreamingRef.current = isStreaming;
   }, [streamingState]);
+
+  // Scroll to bottom on mount when messages exist (handles panel drag/remount)
+  useEffect(() => {
+    if (!hasScrolledOnMount.current && messages.length > 0) {
+      hasScrolledOnMount.current = true;
+      setAutoScroll(true);
+      virtuosoRef.current?.scrollToIndex({
+        index: "LAST",
+        behavior: "auto",
+      });
+    }
+  }, [messages.length]);
 
   const allItems = streamingState
     ? [
