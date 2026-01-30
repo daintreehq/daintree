@@ -3,13 +3,14 @@
  *
  * Loads workflow templates from WorkflowLoader, translates nodes into TaskQueue tasks,
  * subscribes to task completion events, evaluates routing conditions, and tracks
- * workflow run state.
+ * workflow run state. Persists run state to disk for crash recovery.
  */
 
 import { randomUUID } from "crypto";
 import { events } from "./events.js";
 import { workflowLoader, WorkflowLoader } from "./WorkflowLoader.js";
 import { taskQueueService, TaskQueueService } from "./TaskQueueService.js";
+import { workflowPersistence, WorkflowPersistence } from "./persistence/WorkflowPersistence.js";
 import type { WorkflowRun, NodeState } from "../../shared/types/workflowRun.js";
 import type { WorkflowNode, WorkflowCondition } from "../../shared/types/workflow.js";
 import type { TaskRecord } from "../../shared/types/task.js";
@@ -27,9 +28,16 @@ export class WorkflowEngine {
   /** Flag to track if engine is disposed */
   private isDisposed = false;
 
+  /** Current project ID for persistence */
+  private currentProjectId: string | null = null;
+
+  /** Whether persistence is enabled */
+  private persistenceEnabled: boolean = true;
+
   constructor(
     private loader: WorkflowLoader = workflowLoader,
-    private queueService: TaskQueueService = taskQueueService
+    private queueService: TaskQueueService = taskQueueService,
+    private persistence: WorkflowPersistence = workflowPersistence
   ) {
     this.unsubscribers.push(
       events.on("task:completed", (payload) => {
@@ -96,6 +104,8 @@ export class WorkflowEngine {
         timestamp: now,
       });
 
+      await this.schedulePersist();
+
       return runId;
     } catch (error) {
       run.status = "failed";
@@ -110,6 +120,8 @@ export class WorkflowEngine {
           }
         }
       }
+
+      await this.schedulePersist();
 
       throw error;
     }
@@ -153,6 +165,8 @@ export class WorkflowEngine {
       error: "Workflow was cancelled",
       timestamp: now,
     });
+
+    await this.schedulePersist();
   }
 
   /**
@@ -280,6 +294,7 @@ export class WorkflowEngine {
       }
     }
 
+    await this.schedulePersist();
     await this.checkWorkflowCompletion(run);
   }
 
@@ -342,6 +357,7 @@ export class WorkflowEngine {
       });
     }
 
+    await this.schedulePersist();
     await this.checkWorkflowCompletion(run);
   }
 
@@ -514,6 +530,234 @@ export class WorkflowEngine {
         timestamp: now,
       });
     }
+
+    await this.schedulePersist();
+  }
+
+  /**
+   * Initialize the engine for a project.
+   * Loads persisted workflow runs and rebuilds taskToNode index.
+   * For runs in "running" status, checks task queue state and handles orphaned workflows.
+   */
+  async initialize(projectId: string): Promise<void> {
+    this.currentProjectId = projectId;
+    await this.loadFromDisk(projectId);
+  }
+
+  /**
+   * Handle project switch: flush pending saves, clear memory, load new project's workflow runs.
+   */
+  async onProjectSwitch(newProjectId?: string): Promise<void> {
+    if (this.currentProjectId) {
+      await this.persistence.flush(this.currentProjectId);
+    }
+
+    this.runs.clear();
+    this.taskToNode.clear();
+
+    if (newProjectId) {
+      this.currentProjectId = newProjectId;
+      await this.loadFromDisk(newProjectId);
+    } else {
+      this.currentProjectId = null;
+    }
+  }
+
+  /**
+   * Load workflow runs from disk for a project.
+   * Rebuilds the taskToNode reverse index.
+   * Handles crash recovery for running workflows.
+   */
+  private async loadFromDisk(projectId: string): Promise<void> {
+    if (!this.persistenceEnabled) return;
+
+    const loadedRuns = await this.persistence.load(projectId);
+    this.runs.clear();
+    this.taskToNode.clear();
+
+    for (const run of loadedRuns) {
+      this.runs.set(run.runId, run);
+
+      // Rebuild taskToNode reverse index
+      for (const [nodeId, taskId] of Object.entries(run.taskMapping)) {
+        this.taskToNode.set(taskId, { runId: run.runId, nodeId });
+      }
+    }
+
+    // Crash recovery: handle workflows that were running when the app restarted
+    for (const run of this.runs.values()) {
+      if (run.status === "running") {
+        await this.handleRunningWorkflowRecovery(run);
+      }
+    }
+
+    console.log(`[WorkflowEngine] Loaded ${this.runs.size} workflow runs for project ${projectId}`);
+  }
+
+  /**
+   * Handle recovery for a workflow that was running when the app restarted.
+   * Checks if tasks are still active in the task queue and marks orphaned workflows as failed.
+   * For tasks that completed/failed while down, re-runs routing logic to schedule downstream nodes.
+   */
+  private async handleRunningWorkflowRecovery(run: WorkflowRun): Promise<void> {
+    let hasOrphanedTasks = false;
+    let hasActiveTasks = false;
+    let hasRecoveryChanges = false;
+
+    // Track nodes that completed/failed while we were down (need routing)
+    const nodesToProcess: Array<{ nodeId: string; nodeState: NodeState }> = [];
+
+    for (const [nodeId, nodeState] of Object.entries(run.nodeStates)) {
+      if (
+        nodeState.status === "completed" ||
+        nodeState.status === "failed" ||
+        nodeState.status === "cancelled"
+      ) {
+        continue;
+      }
+
+      if (!nodeState.taskId) {
+        continue;
+      }
+
+      // Check if the task still exists in the queue
+      const task = await this.queueService.getTask(nodeState.taskId);
+
+      if (!task) {
+        // Task is missing from queue - mark node as failed
+        console.warn(
+          `[WorkflowEngine] Crash recovery: task ${nodeState.taskId} for node ${nodeId} is missing from queue`
+        );
+        nodeState.status = "failed";
+        nodeState.completedAt = Date.now();
+        nodeState.result = { error: "Task missing after restart" };
+        hasOrphanedTasks = true;
+        hasRecoveryChanges = true;
+        nodesToProcess.push({ nodeId, nodeState });
+      } else if (task.status === "completed") {
+        // Task completed while we were down
+        nodeState.status = "completed";
+        nodeState.completedAt = task.completedAt ?? Date.now();
+        nodeState.result = task.result;
+        hasRecoveryChanges = true;
+        nodesToProcess.push({ nodeId, nodeState });
+      } else if (task.status === "failed" || task.status === "cancelled") {
+        // Task failed/cancelled while we were down
+        nodeState.status = task.status;
+        nodeState.completedAt = task.completedAt ?? Date.now();
+        nodeState.result = task.result;
+        hasOrphanedTasks = true;
+        hasRecoveryChanges = true;
+        nodesToProcess.push({ nodeId, nodeState });
+      } else {
+        // Task is still active (queued, blocked, running)
+        hasActiveTasks = true;
+      }
+    }
+
+    // Process routing for nodes that reached terminal states while down
+    for (const { nodeId, nodeState } of nodesToProcess) {
+      const node = run.definition.nodes.find((n) => n.id === nodeId);
+      if (!node) {
+        console.error(`[WorkflowEngine] Recovery: node ${nodeId} not found in workflow definition`);
+        continue;
+      }
+
+      // Re-run routing logic based on the node's terminal state
+      if (nodeState.status === "completed") {
+        const nextNodeIds = await this.evaluateRouting(node, nodeState, run, "onSuccess");
+        for (const nextId of nextNodeIds) {
+          const nextNode = run.definition.nodes.find((n) => n.id === nextId);
+          if (nextNode && !run.scheduledNodes.has(nextId)) {
+            try {
+              await this.compileNodeToTask(nextNode, run);
+              hasRecoveryChanges = true;
+            } catch (error) {
+              console.error(`[WorkflowEngine] Recovery: failed to schedule node ${nextId}:`, error);
+            }
+          }
+        }
+      } else if (nodeState.status === "failed") {
+        const nextNodeIds = await this.evaluateRouting(node, nodeState, run, "onFailure");
+        for (const nextId of nextNodeIds) {
+          const nextNode = run.definition.nodes.find((n) => n.id === nextId);
+          if (nextNode && !run.scheduledNodes.has(nextId)) {
+            try {
+              await this.compileNodeToTask(nextNode, run);
+              hasRecoveryChanges = true;
+            } catch (error) {
+              console.error(`[WorkflowEngine] Recovery: failed to schedule node ${nextId}:`, error);
+            }
+          }
+        }
+      }
+    }
+
+    // Check workflow completion after processing recovered nodes
+    await this.checkWorkflowCompletion(run);
+
+    // Persist recovery changes immediately (bypass debounce since this is initialization)
+    if (hasRecoveryChanges && this.currentProjectId) {
+      try {
+        const runsArray = Array.from(this.runs.values());
+        await this.persistence.flush(this.currentProjectId);
+        await this.persistence.save(this.currentProjectId, runsArray);
+        await this.persistence.flush(this.currentProjectId);
+      } catch (error) {
+        console.error(
+          `[WorkflowEngine] Failed to persist recovery changes for workflow ${run.runId}:`,
+          error
+        );
+      }
+    }
+
+    // Log recovery summary
+    if (hasOrphanedTasks && !hasActiveTasks && run.status === "failed") {
+      console.warn(
+        `[WorkflowEngine] Crash recovery: marked workflow ${run.runId} as failed due to orphaned tasks`
+      );
+    } else if (hasActiveTasks || nodesToProcess.length > 0) {
+      console.log(
+        `[WorkflowEngine] Crash recovery: workflow ${run.runId} recovered (${nodesToProcess.length} nodes processed, ${hasActiveTasks ? "active tasks remain" : "no active tasks"})`
+      );
+    }
+  }
+
+  /**
+   * Schedule a debounced persistence save.
+   * Swallows errors to prevent unhandled rejections in event handlers.
+   */
+  private async schedulePersist(): Promise<void> {
+    if (!this.persistenceEnabled || !this.currentProjectId) return;
+
+    try {
+      const runsArray = Array.from(this.runs.values());
+      await this.persistence.save(this.currentProjectId, runsArray);
+    } catch (error) {
+      console.error("[WorkflowEngine] Failed to persist workflow state:", error);
+    }
+  }
+
+  /**
+   * Enable or disable persistence (useful for testing).
+   */
+  setPersistenceEnabled(enabled: boolean): void {
+    this.persistenceEnabled = enabled;
+  }
+
+  /**
+   * Force an immediate save to disk.
+   */
+  async flushPersistence(): Promise<void> {
+    if (!this.currentProjectId) return;
+    await this.persistence.flush(this.currentProjectId);
+  }
+
+  /**
+   * List all workflow runs (for debugging/UI).
+   */
+  async listAllRuns(): Promise<WorkflowRun[]> {
+    return Array.from(this.runs.values()).map((run) => ({ ...run }));
   }
 
   /**
