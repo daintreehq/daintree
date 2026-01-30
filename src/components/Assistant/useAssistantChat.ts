@@ -167,25 +167,26 @@ export function useAssistantChat(options: UseAssistantChatOptions) {
   }, [streamingState]);
 
   const finalizeStreaming = useCallback(() => {
-    // Capture streaming state from ref to avoid closure issues and prevent double-add
-    const prev = streamingStateRef.current;
-    if (!prev) return;
+    // Use functional setState to capture the most recent streaming state,
+    // avoiding race conditions where streamingStateRef is stale
+    setStreamingState((prev) => {
+      if (!prev) return null;
 
-    // Clear the ref immediately to prevent double finalization
-    streamingStateRef.current = null;
+      if (prev.content || prev.toolCalls.length > 0) {
+        const message: AssistantMessage = {
+          id: generateId(),
+          role: "assistant",
+          content: prev.content,
+          timestamp: Date.now(),
+          toolCalls: prev.toolCalls.length > 0 ? prev.toolCalls : undefined,
+        };
+        storeAddMessage(panelId, message);
+      }
 
-    if (prev.content || prev.toolCalls.length > 0) {
-      const message: AssistantMessage = {
-        id: generateId(),
-        role: "assistant",
-        content: prev.content,
-        timestamp: Date.now(),
-        toolCalls: prev.toolCalls.length > 0 ? prev.toolCalls : undefined,
-      };
-      storeAddMessage(panelId, message);
-    }
-
-    setStreamingState(null);
+      // Clear ref after successfully adding message
+      streamingStateRef.current = null;
+      return null;
+    });
   }, [panelId, storeAddMessage]);
 
   const cancelStreaming = useCallback(() => {
@@ -307,11 +308,29 @@ export function useAssistantChat(options: UseAssistantChatOptions) {
 
             case "tool_result":
               if (chunk.toolResult) {
-                updateStreamingToolCall(chunk.toolResult.toolCallId, {
-                  status: chunk.toolResult.error ? "error" : "success",
-                  result: chunk.toolResult.result,
-                  error: chunk.toolResult.error,
-                });
+                const toolResult = chunk.toolResult;
+                // Check if tool call exists before updating
+                const toolCallExists = streamingStateRef.current?.toolCalls.some(
+                  (tc) => tc.id === toolResult.toolCallId
+                );
+
+                if (toolCallExists) {
+                  updateStreamingToolCall(toolResult.toolCallId, {
+                    status: toolResult.error ? "error" : "success",
+                    result: toolResult.result,
+                    error: toolResult.error,
+                  });
+                } else {
+                  // Tool result arrived before tool call - create placeholder
+                  addStreamingToolCall({
+                    id: toolResult.toolCallId,
+                    name: toolResult.toolName,
+                    args: {},
+                    status: toolResult.error ? "error" : "success",
+                    result: toolResult.result,
+                    error: toolResult.error,
+                  });
+                }
               }
               break;
 
@@ -320,6 +339,11 @@ export function useAssistantChat(options: UseAssistantChatOptions) {
                 storeSetError(panelId, chunk.error);
                 onError?.(chunk.error);
               }
+              // Finalize and cleanup on error to prevent stuck loading state
+              finalizeStreaming();
+              storeSetLoading(panelId, false);
+              cleanupRef.current?.();
+              cleanupRef.current = null;
               break;
 
             case "listener_triggered":
