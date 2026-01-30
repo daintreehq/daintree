@@ -81,7 +81,7 @@ export function AssistantPane({
           </div>
         )}
 
-        {showEmptyState && <EmptyState onSendMessage={sendMessage} />}
+        {showEmptyState && <EmptyState />}
 
         {showChat && (
           <>
