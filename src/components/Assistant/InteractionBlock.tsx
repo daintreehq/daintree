@@ -76,7 +76,7 @@ function AssistantResponseBlock({
   return (
     <div
       className={cn(
-        "group relative flex w-full gap-3 px-4 py-4 border-b border-divider/20 hover:bg-white/[0.01] transition-colors",
+        "group flex w-full gap-3 px-4 py-4 border-b border-divider/20 hover:bg-white/[0.01] transition-colors",
         className
       )}
       role="article"
@@ -109,37 +109,40 @@ function AssistantResponseBlock({
         {!hasContent && !hasToolCalls && !isStreaming && (
           <div className="text-canopy-text/40 text-sm italic">No response content</div>
         )}
-      </div>
 
-      {/* Copy button for assistant messages */}
-      {hasContent && !isStreaming && (
-        <button
-          type="button"
-          onClick={handleCopy}
-          className={cn(
-            "absolute right-3 top-3 flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium",
-            "opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none group-hover:pointer-events-auto",
-            "focus-visible:opacity-100 focus-visible:pointer-events-auto focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
-            copied
-              ? "text-green-400 bg-green-400/10"
-              : "text-canopy-text/50 hover:text-canopy-text/80 hover:bg-canopy-bg/50"
-          )}
-          aria-label="Copy response"
-          title="Copy response to clipboard"
-        >
-          {copied ? (
-            <>
-              <Check className="w-3 h-3" />
-              Copied
-            </>
-          ) : (
-            <>
-              <Copy className="w-3 h-3" />
-              Copy
-            </>
-          )}
-        </button>
-      )}
+        {/* Copy button - positioned at bottom of content area */}
+        {hasContent && !isStreaming && (
+          <div className="flex justify-end pt-1">
+            <button
+              type="button"
+              onClick={handleCopy}
+              className={cn(
+                "flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium",
+                "opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
+                "[@media(hover:none)]:opacity-100",
+                copied
+                  ? "text-green-400 bg-green-400/10"
+                  : "text-canopy-text/50 hover:text-canopy-text/80 hover:bg-canopy-bg/50"
+              )}
+              aria-label={copied ? "Copied response" : "Copy response"}
+              title="Copy response to clipboard"
+            >
+              {copied ? (
+                <>
+                  <Check className="w-3 h-3" />
+                  Copied
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3 h-3" />
+                  Copy
+                </>
+              )}
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
