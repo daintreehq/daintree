@@ -61,9 +61,13 @@ export function AssistantPane({
     inputRef.current?.focus();
   }, [onFocus]);
 
-  const handleRestart = useCallback(() => {
+  const handleClearConversation = useCallback(() => {
+    if (messages.length > 1 || isLoading) {
+      const confirmed = window.confirm("Clear conversation? This cannot be undone.");
+      if (!confirmed) return;
+    }
     clearMessages();
-  }, [clearMessages]);
+  }, [clearMessages, messages.length, isLoading]);
 
   const showLoading = !isInitialized;
   const showEmptyState = isInitialized && !hasApiKey;
@@ -85,7 +89,7 @@ export function AssistantPane({
       onTitleChange={onTitleChange}
       onMinimize={onMinimize}
       onRestore={onRestore}
-      onRestart={handleRestart}
+      onRestart={showChat && messages.length > 0 ? handleClearConversation : undefined}
     >
       <div className="flex flex-col h-full bg-canopy-bg">
         {showLoading && (
