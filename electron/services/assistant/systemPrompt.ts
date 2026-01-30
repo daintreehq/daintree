@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { app } from "electron";
+import type { ActionContext } from "../../../shared/types/actions.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -40,14 +41,9 @@ export const SYSTEM_PROMPT = loadSystemPrompt();
  * Template for constructing the context block in user messages
  * Only includes fields that are useful for agent decision-making
  */
-export function buildContextBlock(context: {
-  projectId?: string;
-  activeWorktreeId?: string;
-  focusedWorktreeId?: string;
-  focusedTerminalId?: string;
-  isTerminalPaletteOpen?: boolean;
-  isSettingsOpen?: boolean;
-}): string {
+export function buildContextBlock(
+  context: ActionContext & { activeListenerCount?: number }
+): string {
   const lines: string[] = [];
 
   if (context.projectId) {
@@ -67,6 +63,9 @@ export function buildContextBlock(context: {
   }
   if (context.isSettingsOpen) {
     lines.push(`Settings: open`);
+  }
+  if (context.activeListenerCount && context.activeListenerCount > 0) {
+    lines.push(`Active listeners: ${context.activeListenerCount}`);
   }
 
   return lines.length > 0 ? `Context:\n${lines.join("\n")}` : "";

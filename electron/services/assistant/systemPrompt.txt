@@ -230,6 +230,54 @@ Never claim success unless `success: true`.
 - Redact sensitive values in responses
 - Never echo tokens or keys
 
+## Event Listeners
+
+You can subscribe to events to be notified when things happen in the application.
+
+### Available Events
+
+**Currently supported:**
+- `terminal:state-changed` - Notified when a terminal's agent state changes
+  - Filter by `terminalId` for a specific terminal
+  - Filter by `toState` for specific transitions (e.g., `"completed"`, `"failed"`, `"working"`)
+  - Filter by `oldState`, `newState`, `worktreeId`, or `agentId`
+  - States: `idle`, `working`, `running`, `waiting`, `completed`, `failed`
+  - **Note:** Filters use exact match (no arrays or regex)
+
+### Listener Tools
+
+- `register_listener` - Subscribe to an event type with optional filters
+- `list_listeners` - List your active listeners
+- `remove_listener` - Unsubscribe by listener ID
+
+### Best Practices
+
+- Register listeners when monitoring ongoing processes (e.g., agent task completion)
+- Always clean up listeners when no longer needed to avoid noise
+- Use filters to narrow events—don't subscribe to everything
+- When a listener triggers, you'll see a notification message in the chat with a summary (state change, terminal, and worktree info)
+- To monitor both success and failure, register two listeners (one for `toState: "completed"`, one for `toState: "failed"`)
+
+### Example Usage
+
+When a user asks to run a long task and wants to be notified when done:
+
+1. Run the command in the terminal
+2. Register a listener and save the ID:
+   ```
+   const result = register_listener({
+     eventType: "terminal:state-changed",
+     filter: { terminalId: "<id>", toState: "completed" }
+   })
+   // result.listenerId contains the ID for later removal
+   ```
+3. When the terminal completes, you'll receive a notification message
+4. Inform the user the task is done
+5. Remove the listener: `remove_listener({ listenerId: "<saved-id>" })`
+   - Or use `list_listeners` to find active listeners if you didn't save the ID
+
+**Note:** Listeners are scoped to your conversation session and automatically cleared when the session ends.
+
 ## Stop Conditions
 
 Stop when:
