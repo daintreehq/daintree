@@ -1168,6 +1168,84 @@ port.on("message", async (rawMsg: any) => {
         break;
       }
 
+      case "get-available-terminals": {
+        const terminals = ptyManager.getAvailableTerminals();
+        sendEvent({
+          type: "available-terminals",
+          requestId: msg.requestId,
+          terminals: terminals.map((t) => ({
+            id: t.id,
+            projectId: t.projectId,
+            kind: t.kind,
+            type: t.type,
+            agentId: t.agentId,
+            title: t.title,
+            cwd: t.cwd,
+            worktreeId: t.worktreeId,
+            agentState: t.agentState,
+            lastStateChange: t.lastStateChange,
+            spawnedAt: t.spawnedAt,
+            isTrashed: t.isTrashed,
+            trashExpiresAt: t.trashExpiresAt,
+            activityTier: ptyManager.getActivityTier(t.id),
+            hasPty: !t.wasKilled && !t.isExited,
+          })),
+        });
+        break;
+      }
+
+      case "get-terminals-by-state": {
+        const terminals = ptyManager.getTerminalsByState(msg.state);
+        sendEvent({
+          type: "terminals-by-state",
+          requestId: msg.requestId,
+          terminals: terminals.map((t) => ({
+            id: t.id,
+            projectId: t.projectId,
+            kind: t.kind,
+            type: t.type,
+            agentId: t.agentId,
+            title: t.title,
+            cwd: t.cwd,
+            worktreeId: t.worktreeId,
+            agentState: t.agentState,
+            lastStateChange: t.lastStateChange,
+            spawnedAt: t.spawnedAt,
+            isTrashed: t.isTrashed,
+            trashExpiresAt: t.trashExpiresAt,
+            activityTier: ptyManager.getActivityTier(t.id),
+            hasPty: !t.wasKilled && !t.isExited,
+          })),
+        });
+        break;
+      }
+
+      case "get-all-terminals": {
+        const terminals = ptyManager.getAll();
+        sendEvent({
+          type: "all-terminals",
+          requestId: msg.requestId,
+          terminals: terminals.map((t) => ({
+            id: t.id,
+            projectId: t.projectId,
+            kind: t.kind,
+            type: t.type,
+            agentId: t.agentId,
+            title: t.title,
+            cwd: t.cwd,
+            worktreeId: t.worktreeId,
+            agentState: t.agentState,
+            lastStateChange: t.lastStateChange,
+            spawnedAt: t.spawnedAt,
+            isTrashed: t.isTrashed,
+            trashExpiresAt: t.trashExpiresAt,
+            activityTier: ptyManager.getActivityTier(t.id),
+            hasPty: !t.wasKilled && !t.isExited,
+          })),
+        });
+        break;
+      }
+
       case "dispose":
         cleanup();
         break;

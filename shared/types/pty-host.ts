@@ -83,7 +83,10 @@ export type PtyHostRequest =
   | { type: "get-terminal-info"; id: string; requestId: string }
   | { type: "force-resume"; id: string }
   | { type: "acknowledge-data"; id: string; charCount: number }
-  | { type: "set-analysis-enabled"; id: string; enabled: boolean };
+  | { type: "set-analysis-enabled"; id: string; enabled: boolean }
+  | { type: "get-available-terminals"; requestId: string }
+  | { type: "get-terminals-by-state"; state: AgentState; requestId: string }
+  | { type: "get-all-terminals"; requestId: string };
 
 /**
  * Terminal snapshot data sent from Host → Main for state queries.
@@ -169,6 +172,9 @@ export type PtyHostEvent =
   | { type: "replay-history-result"; requestId: string; replayed: number }
   | { type: "serialized-state"; requestId: string; id: string; state: string | null }
   | { type: "terminal-diagnostic-info"; requestId: string; info: any }
+  | { type: "available-terminals"; requestId: string; terminals: PtyHostTerminalInfo[] }
+  | { type: "terminals-by-state"; requestId: string; terminals: PtyHostTerminalInfo[] }
+  | { type: "all-terminals"; requestId: string; terminals: PtyHostTerminalInfo[] }
   | {
       type: "terminal-status";
       id: string;

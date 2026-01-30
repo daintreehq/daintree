@@ -449,6 +449,34 @@ export class PtyManager extends EventEmitter {
   }
 
   /**
+   * Get available terminals (idle or waiting for user input).
+   * These terminals can potentially be reused for new tasks.
+   * Excludes trashed terminals and terminals without active PTY processes.
+   */
+  getAvailableTerminals(): TerminalInfo[] {
+    return this.registry
+      .getAll()
+      .filter((t) => {
+        const info = t.getInfo();
+        const isAvailableState = info.agentState === "idle" || info.agentState === "waiting";
+        const hasActivePty = !info.wasKilled && !info.isExited;
+        const notTrashed = !info.isTrashed;
+        return isAvailableState && hasActivePty && notTrashed;
+      })
+      .map((t) => t.getInfo());
+  }
+
+  /**
+   * Get terminals filtered by agent state.
+   */
+  getTerminalsByState(state: import("../../shared/types/domain.js").AgentState): TerminalInfo[] {
+    return this.registry
+      .getAll()
+      .filter((t) => t.getInfo().agentState === state)
+      .map((t) => t.getInfo());
+  }
+
+  /**
    * Get project statistics.
    */
   getProjectStats(projectId: string): {

@@ -186,6 +186,119 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
   ipcMain.handle(CHANNELS.TERMINAL_GET_FOR_PROJECT, handleTerminalGetForProject);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_FOR_PROJECT));
 
+  const handleTerminalGetAvailable = async () => {
+    try {
+      const terminals = await ptyClient.getAvailableTerminalsAsync();
+
+      const sanitized = terminals
+        .filter((t) => t.kind !== "dev-preview")
+        .map((t) => ({
+          id: t.id,
+          projectId: t.projectId,
+          kind: t.kind,
+          type: t.type,
+          agentId: t.agentId,
+          title: t.title,
+          cwd: t.cwd,
+          worktreeId: t.worktreeId,
+          agentState: t.agentState,
+          lastStateChange: t.lastStateChange,
+          spawnedAt: t.spawnedAt,
+          isTrashed: t.isTrashed,
+          trashExpiresAt: t.trashExpiresAt,
+          activityTier: t.activityTier,
+          hasPty: t.hasPty,
+        }));
+
+      logInfo(`terminal:getAvailable: found ${sanitized.length} available terminals`);
+      return sanitized;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to get available terminals: ${errorMessage}`);
+    }
+  };
+  ipcMain.handle(CHANNELS.TERMINAL_GET_AVAILABLE, handleTerminalGetAvailable);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_AVAILABLE));
+
+  const handleTerminalGetByState = async (_event: Electron.IpcMainInvokeEvent, state: string) => {
+    try {
+      if (typeof state !== "string" || !state) {
+        throw new Error("Invalid state: must be a non-empty string");
+      }
+
+      const validStates = ["idle", "working", "waiting", "completed", "failed"];
+      if (!validStates.includes(state)) {
+        throw new Error(`Invalid state: must be one of ${validStates.join(", ")}`);
+      }
+
+      const terminals = await ptyClient.getTerminalsByStateAsync(
+        state as import("../../../../shared/types/domain.js").AgentState
+      );
+
+      const sanitized = terminals
+        .filter((t) => t.kind !== "dev-preview")
+        .map((t) => ({
+          id: t.id,
+          projectId: t.projectId,
+          kind: t.kind,
+          type: t.type,
+          agentId: t.agentId,
+          title: t.title,
+          cwd: t.cwd,
+          worktreeId: t.worktreeId,
+          agentState: t.agentState,
+          lastStateChange: t.lastStateChange,
+          spawnedAt: t.spawnedAt,
+          isTrashed: t.isTrashed,
+          trashExpiresAt: t.trashExpiresAt,
+          activityTier: t.activityTier,
+          hasPty: t.hasPty,
+        }));
+
+      logInfo(`terminal:getByState(${state}): found ${sanitized.length} terminals`);
+      return sanitized;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to get terminals by state: ${errorMessage}`);
+    }
+  };
+  ipcMain.handle(CHANNELS.TERMINAL_GET_BY_STATE, handleTerminalGetByState);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_BY_STATE));
+
+  const handleTerminalGetAll = async () => {
+    try {
+      const terminals = await ptyClient.getAllTerminalsAsync();
+
+      const sanitized = terminals
+        .filter((t) => t.kind !== "dev-preview")
+        .map((t) => ({
+          id: t.id,
+          projectId: t.projectId,
+          kind: t.kind,
+          type: t.type,
+          agentId: t.agentId,
+          title: t.title,
+          cwd: t.cwd,
+          worktreeId: t.worktreeId,
+          agentState: t.agentState,
+          lastStateChange: t.lastStateChange,
+          spawnedAt: t.spawnedAt,
+          isTrashed: t.isTrashed,
+          trashExpiresAt: t.trashExpiresAt,
+          activityTier: t.activityTier,
+          hasPty: t.hasPty,
+        }));
+
+      logInfo(`terminal:getAll: found ${sanitized.length} terminals`);
+      return sanitized;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to get all terminals: ${errorMessage}`);
+    }
+  };
+  ipcMain.handle(CHANNELS.TERMINAL_GET_ALL, handleTerminalGetAll);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_ALL));
+
   const handleTerminalReconnect = async (
     _event: Electron.IpcMainInvokeEvent,
     terminalId: string

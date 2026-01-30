@@ -151,6 +151,9 @@ const CHANNELS = {
   TERMINAL_SET_ACTIVITY_TIER: "terminal:set-activity-tier",
   TERMINAL_WAKE: "terminal:wake",
   TERMINAL_GET_FOR_PROJECT: "terminal:get-for-project",
+  TERMINAL_GET_AVAILABLE: "terminal:get-available",
+  TERMINAL_GET_BY_STATE: "terminal:get-by-state",
+  TERMINAL_GET_ALL: "terminal:get-all",
   TERMINAL_RECONNECT: "terminal:reconnect",
   TERMINAL_REPLAY_HISTORY: "terminal:replay-history",
   TERMINAL_GET_SERIALIZED_STATE: "terminal:get-serialized-state",
@@ -522,6 +525,13 @@ const api: ElectronAPI = {
 
     getForProject: (projectId: string) =>
       ipcRenderer.invoke(CHANNELS.TERMINAL_GET_FOR_PROJECT, projectId),
+
+    getAvailableTerminals: () => ipcRenderer.invoke(CHANNELS.TERMINAL_GET_AVAILABLE),
+
+    getTerminalsByState: (state: string) =>
+      ipcRenderer.invoke(CHANNELS.TERMINAL_GET_BY_STATE, state),
+
+    getAllTerminals: () => ipcRenderer.invoke(CHANNELS.TERMINAL_GET_ALL),
 
     reconnect: (terminalId: string) => ipcRenderer.invoke(CHANNELS.TERMINAL_RECONNECT, terminalId),
 

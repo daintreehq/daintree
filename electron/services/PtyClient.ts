@@ -598,6 +598,36 @@ export class PtyClient extends EventEmitter {
         this.broker.resolve((event as any).requestId, (event as any).replayed ?? 0);
         break;
 
+      case "available-terminals": {
+        const availableEvent = event as {
+          type: "available-terminals";
+          requestId: string;
+          terminals: TerminalInfoResponse[];
+        };
+        this.broker.resolve(availableEvent.requestId, availableEvent.terminals ?? []);
+        break;
+      }
+
+      case "terminals-by-state": {
+        const byStateEvent = event as {
+          type: "terminals-by-state";
+          requestId: string;
+          terminals: TerminalInfoResponse[];
+        };
+        this.broker.resolve(byStateEvent.requestId, byStateEvent.terminals ?? []);
+        break;
+      }
+
+      case "all-terminals": {
+        const allEvent = event as {
+          type: "all-terminals";
+          requestId: string;
+          terminals: TerminalInfoResponse[];
+        };
+        this.broker.resolve(allEvent.requestId, allEvent.terminals ?? []);
+        break;
+      }
+
       case "serialized-state":
         this.broker.resolve((event as any).requestId, (event as any).state ?? null);
         break;
@@ -970,6 +1000,32 @@ export class PtyClient extends EventEmitter {
     const promise = this.broker.register<TerminalInfoResponse | null>(requestId);
     this.send({ type: "get-terminal", id, requestId });
     return promise.catch(() => null);
+  }
+
+  /** Get available terminals (idle or waiting for user input) */
+  async getAvailableTerminalsAsync(): Promise<TerminalInfoResponse[]> {
+    const requestId = this.broker.generateId("available-terminals");
+    const promise = this.broker.register<TerminalInfoResponse[]>(requestId);
+    this.send({ type: "get-available-terminals", requestId });
+    return promise.catch(() => []);
+  }
+
+  /** Get terminals filtered by agent state */
+  async getTerminalsByStateAsync(
+    state: import("../../shared/types/domain.js").AgentState
+  ): Promise<TerminalInfoResponse[]> {
+    const requestId = this.broker.generateId(`terminals-by-state-${state}`);
+    const promise = this.broker.register<TerminalInfoResponse[]>(requestId);
+    this.send({ type: "get-terminals-by-state", state, requestId });
+    return promise.catch(() => []);
+  }
+
+  /** Get all terminals */
+  async getAllTerminalsAsync(): Promise<TerminalInfoResponse[]> {
+    const requestId = this.broker.generateId("all-terminals");
+    const promise = this.broker.register<TerminalInfoResponse[]>(requestId);
+    this.send({ type: "get-all-terminals", requestId });
+    return promise.catch(() => []);
   }
 
   /** Replay terminal history */

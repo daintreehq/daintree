@@ -110,6 +110,9 @@ export interface ElectronAPI {
     wake(id: string): Promise<{ state: string | null; warnings?: string[] }>;
     acknowledgeData(id: string, length: number): void;
     getForProject(projectId: string): Promise<BackendTerminalInfo[]>;
+    getAvailableTerminals(): Promise<BackendTerminalInfo[]>;
+    getTerminalsByState(state: import("../domain.js").AgentState): Promise<BackendTerminalInfo[]>;
+    getAllTerminals(): Promise<BackendTerminalInfo[]>;
     reconnect(terminalId: string): Promise<TerminalReconnectResult>;
     replayHistory(terminalId: string, maxLines?: number): Promise<{ replayed: number }>;
     getSerializedState(terminalId: string): Promise<string | null>;
