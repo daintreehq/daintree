@@ -64,11 +64,20 @@ export function MessageList({ messages, streamingState, className }: MessageList
     }
   }, [messages.length]);
 
+  // Create streaming item with a dynamic key that changes when tool calls are added/updated.
+  // This ensures Virtuoso detects the change and re-renders the streaming item.
+  // We compute a version from tool call count + status to catch both additions and status changes.
+  // Without this, Virtuoso may optimize away re-renders for items with stable keys,
+  // causing tool-call-only responses to not display during streaming.
+  const streamingKey = streamingState
+    ? `__streaming__:${streamingState.toolCalls.length}:${streamingState.toolCalls.map((tc) => tc.status).join(",")}`
+    : null;
+
   const allItems = streamingState
     ? [
         ...messages,
         {
-          id: "__streaming__",
+          id: streamingKey!,
           role: "assistant" as const,
           content: streamingState.content,
           timestamp: streamingTimestampRef.current,
@@ -78,7 +87,7 @@ export function MessageList({ messages, streamingState, className }: MessageList
     : messages;
 
   const renderMessage = (_index: number, msg: AssistantMessage) => {
-    const isStreaming = msg.id === "__streaming__";
+    const isStreaming = msg.id.startsWith("__streaming__");
 
     return <InteractionBlock message={msg} isStreaming={isStreaming} />;
   };

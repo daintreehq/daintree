@@ -67,7 +67,7 @@ export function InteractionBlock({
           </div>
         )}
 
-        {(hasContent || isStreaming) && (
+        {(hasContent || (isStreaming && !hasToolCalls)) && (
           <div>
             <MarkdownRenderer
               content={message.content}
@@ -76,6 +76,8 @@ export function InteractionBlock({
             {isStreaming && <StreamingCursor />}
           </div>
         )}
+
+        {isStreaming && hasToolCalls && !hasContent && <StreamingCursor className="ml-0" />}
 
         {!hasContent && !hasToolCalls && !isStreaming && (
           <div className="text-canopy-text/40 text-sm italic">No response content</div>
