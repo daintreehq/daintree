@@ -184,13 +184,12 @@ function TerminalPaneComponent({
       return {
         isInputLocked: terminal?.isInputLocked ?? false,
         stateChangeTrigger: terminal?.stateChangeTrigger,
-        stateChangeConfidence: terminal?.stateChangeConfidence,
         isRestarting: terminal?.isRestarting ?? false,
       };
     })
   );
 
-  const { isInputLocked, stateChangeTrigger, stateChangeConfidence, isRestarting } = terminalState;
+  const { isInputLocked, stateChangeTrigger, isRestarting } = terminalState;
 
   const isBackendDisconnected = backendStatus === "disconnected";
   const isBackendRecovering = backendStatus === "recovering";
@@ -472,8 +471,6 @@ function TerminalPaneComponent({
       lastCommand={lastCommand}
       queueCount={queueCount}
       flowStatus={flowStatus}
-      stateChangeTrigger={stateChangeTrigger}
-      stateChangeConfidence={stateChangeConfidence}
       isPinged={isPinged}
       wasJustSelected={wasJustSelected}
       tabs={tabs}

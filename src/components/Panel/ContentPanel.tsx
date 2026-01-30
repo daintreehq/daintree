@@ -4,7 +4,7 @@ import { PanelHeader } from "./PanelHeader";
 import { useIsDragging } from "@/components/DragDrop";
 import { TitleEditingProvider, useTitleEditing } from "./TitleEditingContext";
 import { TerminalHeaderContent } from "@/components/Terminal/TerminalHeaderContent";
-import type { PanelKind, TerminalType, AgentState, AgentStateChangeTrigger } from "@/types";
+import type { PanelKind, TerminalType, AgentState } from "@/types";
 import type { ActivityState } from "@/components/Terminal/TerminalPane";
 import type { TabInfo } from "./TabButton";
 
@@ -57,8 +57,6 @@ export interface ContentPanelProps extends BasePanelProps {
   lastCommand?: string;
   queueCount?: number;
   flowStatus?: "running" | "paused-backpressure" | "paused-user" | "suspended";
-  stateChangeTrigger?: AgentStateChangeTrigger;
-  stateChangeConfidence?: number;
   onRestart?: () => void;
   isPinged?: boolean;
   wasJustSelected?: boolean;
@@ -109,8 +107,6 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     lastCommand,
     queueCount = 0,
     flowStatus,
-    stateChangeTrigger,
-    stateChangeConfidence,
     onRestart,
     isPinged,
     wasJustSelected,
@@ -153,8 +149,6 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           exitCode={exitCode}
           queueCount={queueCount}
           flowStatus={flowStatus}
-          stateChangeTrigger={stateChangeTrigger}
-          stateChangeConfidence={stateChangeConfidence}
         />
       );
     }
@@ -171,8 +165,6 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     exitCode,
     queueCount,
     flowStatus,
-    stateChangeTrigger,
-    stateChangeConfidence,
   ]);
 
   const handleTitleDoubleClick = useCallback(
