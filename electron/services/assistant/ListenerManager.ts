@@ -46,6 +46,16 @@ export class ListenerManager {
     return result;
   }
 
+  countForSession(sessionId: string): number {
+    let count = 0;
+    for (const listener of this.listeners.values()) {
+      if (listener.sessionId === sessionId) {
+        count++;
+      }
+    }
+    return count;
+  }
+
   clearSession(sessionId: string): void {
     const toRemove: string[] = [];
     for (const listener of this.listeners.values()) {

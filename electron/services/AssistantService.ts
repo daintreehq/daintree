@@ -86,7 +86,12 @@ export class AssistantService {
 
     try {
       // Build context block for the system prompt
-      const contextBlock = context ? buildContextBlock(context) : "";
+      const activeListenerCount = listenerManager.countForSession(sessionId);
+      const contextBlock = context
+        ? buildContextBlock({ ...context, activeListenerCount })
+        : activeListenerCount > 0
+          ? buildContextBlock({ activeListenerCount })
+          : "";
       const systemPromptWithContext = contextBlock
         ? `${SYSTEM_PROMPT}\n\n${contextBlock}`
         : SYSTEM_PROMPT;
