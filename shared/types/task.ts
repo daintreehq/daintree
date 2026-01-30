@@ -6,6 +6,18 @@
  */
 
 import type { TaskState } from "./domain.js";
+import type { AgentDomainWeights } from "./agentSettings.js";
+
+/**
+ * Routing hints for intelligent agent assignment.
+ * Used by the router to select the best agent for a task.
+ */
+export interface TaskRoutingHints {
+  /** Capabilities the agent must have (e.g., ['javascript', 'react']) */
+  requiredCapabilities?: string[];
+  /** Domains where the agent should be strong (e.g., ['frontend', 'testing']) */
+  preferredDomains?: (keyof AgentDomainWeights)[];
+}
 
 /**
  * Result of a completed task.
@@ -66,6 +78,8 @@ export interface TaskRecord {
   metadata?: Record<string, unknown>;
   /** Result of task execution */
   result?: TaskResult;
+  /** Routing hints for agent assignment */
+  routingHints?: TaskRoutingHints;
 }
 
 /**
@@ -84,6 +98,8 @@ export interface CreateTaskParams {
   worktreeId?: string;
   /** Arbitrary metadata */
   metadata?: Record<string, unknown>;
+  /** Routing hints for agent assignment */
+  routingHints?: TaskRoutingHints;
 }
 
 /**

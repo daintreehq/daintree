@@ -2,7 +2,7 @@
  * TaskOrchestrator - Coordinates task queue with agent state machine.
  *
  * Subscribes to agent lifecycle events and drives task state transitions:
- * - Assigns queued tasks to idle agents
+ * - Assigns queued tasks to idle agents using capability-based routing
  * - Monitors agent execution and updates task state
  * - Handles failures and propagates to dependents
  * - Cancels tasks when worktrees are removed
@@ -11,9 +11,11 @@
 import { randomUUID } from "crypto";
 import { events } from "./events.js";
 import { taskQueueService, TaskQueueService } from "./TaskQueueService.js";
+import { AgentRouter, getAgentRouter } from "./AgentRouter.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { AgentState } from "../../shared/types/domain.js";
 import type { CanopyEventMap } from "./events.js";
+import type { TaskRoutingHints } from "../../shared/types/task.js";
 
 /**
  * Check if an agent is available to receive a new task.
@@ -39,10 +41,15 @@ export class TaskOrchestrator {
   /** Unsubscribe functions for event listeners */
   private unsubscribers: Array<() => void> = [];
 
+  /** Router for capability-based agent selection */
+  private router: AgentRouter;
+
   constructor(
     private queueService: TaskQueueService,
-    private ptyClient: PtyClient
+    private ptyClient: PtyClient,
+    router?: AgentRouter
   ) {
+    this.router = router ?? getAgentRouter();
     // Subscribe to agent state changes
     this.unsubscribers.push(
       events.on("agent:state-changed", (payload) => {
@@ -74,7 +81,8 @@ export class TaskOrchestrator {
 
   /**
    * Attempt to assign the next queued task to an available agent.
-   * Uses check-and-set pattern to prevent race conditions.
+   * Uses capability-based routing when routing hints are present.
+   * Falls back to simple availability-based assignment otherwise.
    * Loops until no more tasks or agents are available.
    */
   async assignNextTask(): Promise<void> {
@@ -94,21 +102,19 @@ export class TaskOrchestrator {
           break; // No more tasks
         }
 
-        // Find an available agent terminal
-        const availableTerminals = await this.ptyClient.getAvailableTerminalsAsync();
+        // Try capability-based routing first if routing hints are present
+        let selectedAgentId: string | null = null;
 
-        // Filter to only agent-type terminals that are actually available
-        // Match worktree if task has one, otherwise allow any agent
-        const availableAgent = availableTerminals.find(
-          (t) =>
-            t.kind === "agent" &&
-            t.agentId &&
-            isAgentAvailable(t.agentState) &&
-            !this.agentToRunMap.has(t.agentId) && // Not already running a task
-            (!task.worktreeId || t.worktreeId === task.worktreeId) // Worktree match if specified
-        );
+        if (task.routingHints) {
+          selectedAgentId = await this.routeTaskWithHints(task.routingHints, task.worktreeId);
+        }
 
-        if (!availableAgent || !availableAgent.agentId) {
+        // Fall back to simple availability-based selection
+        if (!selectedAgentId) {
+          selectedAgentId = await this.findAvailableAgent(task.worktreeId);
+        }
+
+        if (!selectedAgentId) {
           // No available agents - task will stay queued for next attempt
           break;
         }
@@ -118,15 +124,15 @@ export class TaskOrchestrator {
 
         // Set tracking maps BEFORE marking running to avoid race with fast agent events
         this.runToTaskMap.set(runId, task.id);
-        this.agentToRunMap.set(availableAgent.agentId, runId);
+        this.agentToRunMap.set(selectedAgentId, runId);
 
         // Mark task as running (atomic state transition)
         try {
-          await this.queueService.markRunning(task.id, availableAgent.agentId, runId);
+          await this.queueService.markRunning(task.id, selectedAgentId, runId);
         } catch (error) {
           // Task state transition failed - roll back tracking maps
           this.runToTaskMap.delete(runId);
-          this.agentToRunMap.delete(availableAgent.agentId);
+          this.agentToRunMap.delete(selectedAgentId);
 
           console.warn(
             `[TaskOrchestrator] Failed to mark task ${task.id} as running:`,
@@ -140,6 +146,59 @@ export class TaskOrchestrator {
     } finally {
       this.isAssigning = false;
     }
+  }
+
+  /**
+   * Route a task using capability-based routing.
+   * Returns the best agent ID or null if no suitable agent is found.
+   */
+  private async routeTaskWithHints(
+    hints: TaskRoutingHints,
+    worktreeId?: string
+  ): Promise<string | null> {
+    const routedAgentId = await this.router.routeTask({
+      ...hints,
+      worktreeId,
+    });
+
+    if (!routedAgentId) {
+      return null;
+    }
+
+    // Verify the routed agent is still available in the terminal list
+    // and not already running a task
+    const availableTerminals = await this.ptyClient.getAvailableTerminalsAsync();
+    const terminal = availableTerminals.find(
+      (t) =>
+        t.kind === "agent" &&
+        t.agentId === routedAgentId &&
+        isAgentAvailable(t.agentState) &&
+        !this.agentToRunMap.has(routedAgentId) &&
+        (!worktreeId || t.worktreeId === worktreeId)
+    );
+
+    return terminal ? routedAgentId : null;
+  }
+
+  /**
+   * Find any available agent using simple availability-based selection.
+   * Used as fallback when no routing hints are present.
+   */
+  private async findAvailableAgent(worktreeId?: string): Promise<string | null> {
+    const availableTerminals = await this.ptyClient.getAvailableTerminalsAsync();
+
+    // Filter to only agent-type terminals that are actually available
+    // Match worktree if task has one, otherwise allow any agent
+    const availableAgent = availableTerminals.find(
+      (t) =>
+        t.kind === "agent" &&
+        t.agentId &&
+        isAgentAvailable(t.agentState) &&
+        !this.agentToRunMap.has(t.agentId) && // Not already running a task
+        (!worktreeId || t.worktreeId === worktreeId) // Worktree match if specified
+    );
+
+    return availableAgent?.agentId ?? null;
   }
 
   /**
@@ -328,11 +387,14 @@ let orchestratorInstance: TaskOrchestrator | null = null;
  * Initialize the task orchestrator with dependencies.
  * Should be called once during app startup after ptyClient is ready.
  */
-export function initializeTaskOrchestrator(ptyClient: PtyClient): TaskOrchestrator {
+export function initializeTaskOrchestrator(
+  ptyClient: PtyClient,
+  router?: AgentRouter
+): TaskOrchestrator {
   if (orchestratorInstance) {
     orchestratorInstance.dispose();
   }
-  orchestratorInstance = new TaskOrchestrator(taskQueueService, ptyClient);
+  orchestratorInstance = new TaskOrchestrator(taskQueueService, ptyClient, router);
   return orchestratorInstance;
 }
 

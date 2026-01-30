@@ -59,6 +59,7 @@ export class TaskQueueService {
       dependents: [],
       worktreeId: params.worktreeId,
       metadata: params.metadata,
+      routingHints: params.routingHints,
     };
 
     // Compute blocked by (unmet dependencies)

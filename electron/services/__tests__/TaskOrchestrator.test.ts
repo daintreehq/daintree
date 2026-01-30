@@ -3,13 +3,29 @@
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
+import os from "os";
+
+// Mock electron app before importing TaskQueueService
+vi.mock("electron", () => ({
+  app: {
+    getPath: vi.fn().mockReturnValue(os.tmpdir()),
+  },
+}));
+
 import { TaskOrchestrator } from "../TaskOrchestrator.js";
 import { TaskQueueService } from "../TaskQueueService.js";
 import { events } from "../events.js";
 import type { PtyClient } from "../PtyClient.js";
+import type { AgentRouter } from "../AgentRouter.js";
 
 type MockPtyClient = {
   getAvailableTerminalsAsync: ReturnType<typeof vi.fn>;
+};
+
+type MockAgentRouter = {
+  routeTask: ReturnType<typeof vi.fn>;
+  scoreCandidates: ReturnType<typeof vi.fn>;
+  hasCapableAgent: ReturnType<typeof vi.fn>;
 };
 
 function createMockPtyClient(): MockPtyClient {
@@ -18,15 +34,30 @@ function createMockPtyClient(): MockPtyClient {
   };
 }
 
+function createMockAgentRouter(): MockAgentRouter {
+  return {
+    routeTask: vi.fn().mockResolvedValue(null),
+    scoreCandidates: vi.fn().mockResolvedValue([]),
+    hasCapableAgent: vi.fn().mockReturnValue(false),
+  };
+}
+
 describe("TaskOrchestrator", () => {
   let orchestrator: TaskOrchestrator;
   let queueService: TaskQueueService;
   let mockPtyClient: MockPtyClient;
+  let mockRouter: MockAgentRouter;
 
   beforeEach(() => {
     queueService = new TaskQueueService();
+    queueService.setPersistenceEnabled(false);
     mockPtyClient = createMockPtyClient();
-    orchestrator = new TaskOrchestrator(queueService, mockPtyClient as unknown as PtyClient);
+    mockRouter = createMockAgentRouter();
+    orchestrator = new TaskOrchestrator(
+      queueService,
+      mockPtyClient as unknown as PtyClient,
+      mockRouter as unknown as AgentRouter
+    );
     vi.clearAllMocks();
   });
 
@@ -514,6 +545,128 @@ describe("TaskOrchestrator", () => {
       // Task should still be queued (no assignment happened)
       const updated = await queueService.getTask(task.id);
       expect(updated?.status).toBe("queued");
+    });
+  });
+
+  describe("capability-based routing", () => {
+    it("uses router when task has routing hints", async () => {
+      const task = await queueService.createTask({
+        title: "Test task",
+        routingHints: {
+          requiredCapabilities: ["javascript"],
+          preferredDomains: ["frontend"],
+        },
+      });
+      await queueService.enqueueTask(task.id);
+
+      // Mock router to return a specific agent
+      mockRouter.routeTask.mockResolvedValue("routed-agent");
+
+      // Mock pty client to verify the routed agent
+      mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
+        {
+          id: "term-1",
+          kind: "agent",
+          agentId: "routed-agent",
+          agentState: "idle",
+        },
+      ]);
+
+      await orchestrator.assignNextTask();
+
+      // Verify router was called with hints
+      expect(mockRouter.routeTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requiredCapabilities: ["javascript"],
+          preferredDomains: ["frontend"],
+        })
+      );
+
+      const updatedTask = await queueService.getTask(task.id);
+      expect(updatedTask?.status).toBe("running");
+      expect(updatedTask?.assignedAgentId).toBe("routed-agent");
+    });
+
+    it("falls back to simple selection when router returns null", async () => {
+      const task = await queueService.createTask({
+        title: "Test task",
+        routingHints: {
+          requiredCapabilities: ["rare-capability"],
+        },
+      });
+      await queueService.enqueueTask(task.id);
+
+      // Router returns null (no matching agent)
+      mockRouter.routeTask.mockResolvedValue(null);
+
+      // But there's a fallback agent available
+      mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
+        {
+          id: "term-1",
+          kind: "agent",
+          agentId: "fallback-agent",
+          agentState: "idle",
+        },
+      ]);
+
+      await orchestrator.assignNextTask();
+
+      const updatedTask = await queueService.getTask(task.id);
+      expect(updatedTask?.status).toBe("running");
+      expect(updatedTask?.assignedAgentId).toBe("fallback-agent");
+    });
+
+    it("does not use router when no routing hints", async () => {
+      const task = await queueService.createTask({ title: "Simple task" });
+      await queueService.enqueueTask(task.id);
+
+      mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
+        {
+          id: "term-1",
+          kind: "agent",
+          agentId: "any-agent",
+          agentState: "idle",
+        },
+      ]);
+
+      await orchestrator.assignNextTask();
+
+      // Router should not be called for tasks without hints
+      expect(mockRouter.routeTask).not.toHaveBeenCalled();
+
+      const updatedTask = await queueService.getTask(task.id);
+      expect(updatedTask?.status).toBe("running");
+      expect(updatedTask?.assignedAgentId).toBe("any-agent");
+    });
+
+    it("verifies routed agent is available before assignment", async () => {
+      const task = await queueService.createTask({
+        title: "Test task",
+        routingHints: {
+          requiredCapabilities: ["javascript"],
+        },
+      });
+      await queueService.enqueueTask(task.id);
+
+      // Router returns an agent
+      mockRouter.routeTask.mockResolvedValue("routed-agent");
+
+      // But that agent is not in the available list (maybe went busy)
+      mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
+        {
+          id: "term-1",
+          kind: "agent",
+          agentId: "different-agent",
+          agentState: "idle",
+        },
+      ]);
+
+      await orchestrator.assignNextTask();
+
+      // Should fall back to different-agent since routed-agent is not available
+      const updatedTask = await queueService.getTask(task.id);
+      expect(updatedTask?.status).toBe("running");
+      expect(updatedTask?.assignedAgentId).toBe("different-agent");
     });
   });
 });

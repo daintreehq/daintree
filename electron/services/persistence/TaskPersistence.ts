@@ -24,6 +24,11 @@ const TaskStateSchema = z.enum([
   "cancelled",
 ]);
 
+const TaskRoutingHintsSchema = z.object({
+  requiredCapabilities: z.array(z.string()).optional(),
+  preferredDomains: z.array(z.string()).optional(),
+});
+
 const TaskRecordSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
@@ -43,6 +48,7 @@ const TaskRecordSchema = z.object({
   runId: z.string().optional(),
   metadata: z.record(z.string(), z.any()).optional(),
   result: TaskResultSchema.optional(),
+  routingHints: TaskRoutingHintsSchema.optional(),
 });
 
 const TaskQueueStateSchema = z.object({

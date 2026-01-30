@@ -115,6 +115,11 @@ import {
   initializeTaskOrchestrator,
   disposeTaskOrchestrator,
 } from "./services/TaskOrchestrator.js";
+import {
+  initializeAgentAvailabilityStore,
+  disposeAgentAvailabilityStore,
+} from "./services/AgentAvailabilityStore.js";
+import { initializeAgentRouter, disposeAgentRouter } from "./services/AgentRouter.js";
 
 // Initialize logger early with userData path
 initializeLogger(app.getPath("userData"));
@@ -200,8 +205,10 @@ if (!gotTheLock) {
     Promise.all([
       workspaceClient ? workspaceClient.dispose() : Promise.resolve(),
       new Promise<void>((resolve) => {
-        // Dispose orchestrator before ptyClient to prevent event handlers from firing
+        // Dispose orchestrator and routing before ptyClient to prevent event handlers from firing
         disposeTaskOrchestrator();
+        disposeAgentRouter();
+        disposeAgentAvailabilityStore();
 
         if (ptyClient) {
           ptyClient.dispose();
@@ -713,8 +720,13 @@ async function createWindow(): Promise<void> {
     const currentProjectId = projectStore.getCurrentProjectId();
     ptyClient.setActiveProject(currentProjectId);
 
+    // Initialize agent availability tracking and routing
+    const availabilityStore = initializeAgentAvailabilityStore();
+    const agentRouter = initializeAgentRouter(availabilityStore);
+    console.log("[MAIN] AgentAvailabilityStore and AgentRouter initialized");
+
     // Initialize TaskOrchestrator for task queue coordination
-    initializeTaskOrchestrator(ptyClient);
+    initializeTaskOrchestrator(ptyClient, agentRouter);
     console.log("[MAIN] TaskOrchestrator initialized");
 
     // Spawn Default Terminal
@@ -856,6 +868,8 @@ async function createWindow(): Promise<void> {
     if (sidecarManager) sidecarManager.destroy();
 
     disposeTaskOrchestrator();
+    disposeAgentRouter();
+    disposeAgentAvailabilityStore();
 
     if (ptyClient) ptyClient.dispose();
     disposePtyClient();
