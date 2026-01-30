@@ -405,3 +405,27 @@ export type {
   DagValidationResult,
   TaskStateChangePayload,
 } from "./task.js";
+
+// Workflow types - declarative workflow definitions
+export type {
+  WorkflowConditionOp,
+  WorkflowCondition,
+  WorkflowNodeType,
+  WorkflowActionConfig,
+  WorkflowNode,
+  WorkflowDefinition,
+  WorkflowValidationResult,
+  WorkflowValidationError,
+  LoadedWorkflow,
+  WorkflowSource,
+  WorkflowSummary,
+} from "./workflow.js";
+
+export {
+  WorkflowConditionOpSchema,
+  WorkflowConditionSchema,
+  WorkflowNodeTypeSchema,
+  WorkflowActionConfigSchema,
+  WorkflowNodeSchema,
+  WorkflowDefinitionSchema,
+} from "./workflow.js";

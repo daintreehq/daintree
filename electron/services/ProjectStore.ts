@@ -5,7 +5,9 @@ import type {
   ProjectSettings,
   ProjectStatus,
   TerminalRecipe,
+  WorkflowDefinition,
 } from "../types/index.js";
+import { workflowLoader } from "./WorkflowLoader.js";
 import { createHash } from "crypto";
 import path from "path";
 import fs from "fs/promises";
@@ -21,6 +23,7 @@ import { isSensitiveEnvKey } from "../../shared/utils/envVars.js";
 
 const SETTINGS_FILENAME = "settings.json";
 const RECIPES_FILENAME = "recipes.json";
+const WORKFLOWS_FILENAME = "workflows.json";
 
 export class ProjectStore {
   private projectsConfigDir: string;
@@ -840,6 +843,163 @@ export class ProjectStore {
     const recipes = await this.getRecipes(projectId);
     const filtered = recipes.filter((r) => r.id !== recipeId);
     await this.saveRecipes(projectId, filtered);
+  }
+
+  private getWorkflowsFilePath(projectId: string): string | null {
+    const stateDir = this.getProjectStateDir(projectId);
+    if (!stateDir) return null;
+    return path.join(stateDir, WORKFLOWS_FILENAME);
+  }
+
+  async getWorkflows(projectId: string): Promise<WorkflowDefinition[]> {
+    const filePath = this.getWorkflowsFilePath(projectId);
+    if (!filePath || !existsSync(filePath)) {
+      return [];
+    }
+
+    try {
+      const content = await fs.readFile(filePath, "utf-8");
+      const parsed = JSON.parse(content);
+
+      if (!Array.isArray(parsed)) {
+        console.warn(`[ProjectStore] Invalid workflows format for ${projectId}, expected array`);
+        return [];
+      }
+
+      // Validate each workflow with full validation (schema + cycles + references)
+      return parsed.filter((workflow: unknown): workflow is WorkflowDefinition => {
+        const validation = workflowLoader.validate(workflow);
+        if (!validation.valid) {
+          const workflowId =
+            workflow &&
+            typeof workflow === "object" &&
+            "id" in workflow &&
+            typeof (workflow as { id: unknown }).id === "string"
+              ? (workflow as { id: string }).id
+              : "unknown";
+          const errors = validation.errors?.map((e) => e.message).join("; ");
+          console.warn(`[ProjectStore] Filtering invalid workflow ${workflowId}: ${errors}`);
+          return false;
+        }
+        return true;
+      });
+    } catch (error) {
+      console.error(`[ProjectStore] Failed to load workflows for ${projectId}:`, error);
+      try {
+        const quarantinePath = `${filePath}.corrupted`;
+        await fs.rename(filePath, quarantinePath);
+        console.warn(`[ProjectStore] Corrupted workflows file moved to ${quarantinePath}`);
+      } catch {
+        // Ignore
+      }
+      return [];
+    }
+  }
+
+  async saveWorkflows(projectId: string, workflows: WorkflowDefinition[]): Promise<void> {
+    const stateDir = this.getProjectStateDir(projectId);
+    if (!stateDir) {
+      throw new Error(`Invalid project ID: ${projectId}`);
+    }
+
+    const filePath = this.getWorkflowsFilePath(projectId);
+    if (!filePath) {
+      throw new Error(`Invalid project ID: ${projectId}`);
+    }
+
+    // Validate all workflows with full validation (schema + cycles + references)
+    for (const workflow of workflows) {
+      const validation = workflowLoader.validate(workflow);
+      if (!validation.valid) {
+        const errors = validation.errors?.map((e) => e.message).join("; ");
+        throw new Error(`Invalid workflow ${workflow.id}: ${errors}`);
+      }
+    }
+
+    // Use unique temp file to avoid races between concurrent saves
+    const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const tempFilePath = `${filePath}.${uniqueSuffix}.tmp`;
+
+    const attemptSave = async (ensureDir: boolean): Promise<void> => {
+      if (ensureDir) {
+        await fs.mkdir(stateDir, { recursive: true });
+      }
+      await fs.writeFile(tempFilePath, JSON.stringify(workflows, null, 2), "utf-8");
+      await fs.rename(tempFilePath, filePath);
+    };
+
+    try {
+      await attemptSave(false);
+    } catch (error) {
+      const isEnoent = error instanceof Error && "code" in error && error.code === "ENOENT";
+      if (!isEnoent) {
+        console.error(`[ProjectStore] Failed to save workflows for ${projectId}:`, error);
+        this.cleanupTempFile(tempFilePath);
+        throw error;
+      }
+
+      try {
+        await attemptSave(true);
+      } catch (retryError) {
+        console.error(`[ProjectStore] Failed to save workflows for ${projectId}:`, retryError);
+        this.cleanupTempFile(tempFilePath);
+        throw retryError;
+      }
+    }
+  }
+
+  async addWorkflow(projectId: string, workflow: WorkflowDefinition): Promise<void> {
+    // Validate the workflow with full validation
+    const validation = workflowLoader.validate(workflow);
+    if (!validation.valid) {
+      const errors = validation.errors?.map((e) => e.message).join("; ");
+      throw new Error(`Invalid workflow: ${errors}`);
+    }
+
+    const workflows = await this.getWorkflows(projectId);
+
+    // Check for duplicate ID
+    if (workflows.some((w) => w.id === workflow.id)) {
+      throw new Error(`Workflow with ID ${workflow.id} already exists`);
+    }
+
+    workflows.push(workflow);
+    await this.saveWorkflows(projectId, workflows);
+  }
+
+  async updateWorkflow(
+    projectId: string,
+    workflowId: string,
+    updates: Partial<Omit<WorkflowDefinition, "id">>
+  ): Promise<void> {
+    const workflows = await this.getWorkflows(projectId);
+    const index = workflows.findIndex((w) => w.id === workflowId);
+    if (index === -1) {
+      throw new Error(`Workflow ${workflowId} not found in project ${projectId}`);
+    }
+
+    const updated = { ...workflows[index], ...updates };
+
+    // Validate the updated workflow with full validation
+    const validation = workflowLoader.validate(updated);
+    if (!validation.valid) {
+      const errors = validation.errors?.map((e) => e.message).join("; ");
+      throw new Error(`Invalid workflow update: ${errors}`);
+    }
+
+    workflows[index] = updated;
+    await this.saveWorkflows(projectId, workflows);
+  }
+
+  async deleteWorkflow(projectId: string, workflowId: string): Promise<void> {
+    const workflows = await this.getWorkflows(projectId);
+    const filtered = workflows.filter((w) => w.id !== workflowId);
+    await this.saveWorkflows(projectId, filtered);
+  }
+
+  async getWorkflow(projectId: string, workflowId: string): Promise<WorkflowDefinition | null> {
+    const workflows = await this.getWorkflows(projectId);
+    return workflows.find((w) => w.id === workflowId) || null;
   }
 
   /**
