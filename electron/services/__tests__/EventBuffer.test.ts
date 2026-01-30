@@ -788,4 +788,135 @@ describe("EventBuffer", () => {
       largeBuffer.stop();
     });
   });
+
+  describe("onRecord callback", () => {
+    beforeEach(() => {
+      buffer.clear();
+    });
+
+    it("invokes callback when event is recorded", () => {
+      const callback = vi.fn();
+      buffer.onRecord(callback);
+
+      events.emit("agent:spawned", {
+        agentId: "agent-1",
+        terminalId: "term-1",
+        type: "claude",
+        timestamp: Date.now(),
+      });
+
+      expect(callback).toHaveBeenCalledTimes(1);
+      expect(callback).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "agent:spawned",
+          payload: expect.objectContaining({ agentId: "agent-1" }),
+        })
+      );
+    });
+
+    it("returns unsubscribe function", () => {
+      const callback = vi.fn();
+      const unsubscribe = buffer.onRecord(callback);
+
+      events.emit("agent:spawned", {
+        agentId: "agent-1",
+        terminalId: "term-1",
+        type: "claude",
+        timestamp: Date.now(),
+      });
+
+      expect(callback).toHaveBeenCalledTimes(1);
+
+      unsubscribe();
+
+      events.emit("agent:spawned", {
+        agentId: "agent-2",
+        terminalId: "term-2",
+        type: "gemini",
+        timestamp: Date.now(),
+      });
+
+      expect(callback).toHaveBeenCalledTimes(1);
+    });
+
+    it("supports multiple callbacks", () => {
+      const callback1 = vi.fn();
+      const callback2 = vi.fn();
+      buffer.onRecord(callback1);
+      buffer.onRecord(callback2);
+
+      events.emit("agent:spawned", {
+        agentId: "agent-1",
+        terminalId: "term-1",
+        type: "claude",
+        timestamp: Date.now(),
+      });
+
+      expect(callback1).toHaveBeenCalledTimes(1);
+      expect(callback2).toHaveBeenCalledTimes(1);
+    });
+
+    it("continues with other callbacks if one throws", () => {
+      const errorCallback = vi.fn(() => {
+        throw new Error("Test error");
+      });
+      const normalCallback = vi.fn();
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      buffer.onRecord(errorCallback);
+      buffer.onRecord(normalCallback);
+
+      events.emit("agent:spawned", {
+        agentId: "agent-1",
+        terminalId: "term-1",
+        type: "claude",
+        timestamp: Date.now(),
+      });
+
+      expect(errorCallback).toHaveBeenCalledTimes(1);
+      expect(normalCallback).toHaveBeenCalledTimes(1);
+      expect(consoleSpy).toHaveBeenCalledWith(
+        "[EventBuffer] Error in onRecord callback:",
+        expect.any(Error)
+      );
+
+      consoleSpy.mockRestore();
+    });
+
+    it("unsubscribe is idempotent", () => {
+      const callback = vi.fn();
+      const unsubscribe = buffer.onRecord(callback);
+
+      unsubscribe();
+      unsubscribe();
+
+      events.emit("agent:spawned", {
+        agentId: "agent-1",
+        terminalId: "term-1",
+        type: "claude",
+        timestamp: Date.now(),
+      });
+
+      expect(callback).not.toHaveBeenCalled();
+    });
+
+    it("receives sanitized payload for sensitive events", () => {
+      const callback = vi.fn();
+      buffer.onRecord(callback);
+
+      events.emit("agent:output", {
+        agentId: "agent-1",
+        data: "SECRET_KEY=12345",
+        timestamp: Date.now(),
+      });
+
+      expect(callback).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            data: "[REDACTED - May contain sensitive information]",
+          }),
+        })
+      );
+    });
+  });
 });

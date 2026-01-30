@@ -16,6 +16,7 @@ export interface FilterOptions {
   worktreeId?: string;
   agentId?: string;
   taskId?: string;
+  runId?: string;
   terminalId?: string;
   issueNumber?: number;
   prNumber?: number;
@@ -203,6 +204,13 @@ export class EventBuffer {
       filtered = filtered.filter((event) => {
         const payload = event.payload;
         return payload && payload.taskId === options.taskId;
+      });
+    }
+
+    if (options.runId) {
+      filtered = filtered.filter((event) => {
+        const payload = event.payload;
+        return payload && payload.runId === options.runId;
       });
     }
 
