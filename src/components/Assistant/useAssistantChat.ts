@@ -332,25 +332,43 @@ export function useAssistantChat(options: UseAssistantChatOptions) {
         const currentMessages = useAssistantChatStore.getState().getConversation(panelId).messages;
 
         // Convert messages to IPC format including tool results
-        const ipcMessages: IPCAssistantMessage[] = currentMessages.map((msg) => ({
-          id: msg.id,
-          role: msg.role,
-          content: msg.content,
-          toolCalls: msg.toolCalls?.map((tc) => ({
-            id: tc.id,
-            name: tc.name,
-            args: tc.args,
-          })),
-          toolResults: msg.toolCalls
-            ?.filter((tc) => tc.status !== "pending" && tc.result !== undefined)
+        // Tool results are derived from tool calls that have completed (status is success/error)
+        const ipcMessages: IPCAssistantMessage[] = currentMessages.map((msg) => {
+          // For messages with tool calls, extract completed results
+          const completedToolResults = msg.toolCalls
+            ?.filter((tc) => {
+              // Include tool call if it has a terminal status (not pending) and has a result or error
+              // This handles both successful results and errors, including void/undefined results
+              const hasTerminalStatus = tc.status !== "pending";
+              const hasResultOrError = tc.result !== undefined || tc.error !== undefined;
+              return hasTerminalStatus && hasResultOrError;
+            })
             .map((tc) => ({
               toolCallId: tc.id,
               toolName: tc.name,
-              result: tc.result,
+              // Normalize undefined to null for IPC transport
+              result: tc.result ?? null,
               error: tc.error,
+            }));
+
+          return {
+            id: msg.id,
+            role: msg.role,
+            content: msg.content,
+            toolCalls: msg.toolCalls?.map((tc) => ({
+              id: tc.id,
+              name: tc.name,
+              args: tc.args,
             })),
-          createdAt: new Date(msg.timestamp).toISOString(),
-        }));
+            // Only include toolResults if there are completed results
+            // This ensures the backend receives properly paired tool calls and results
+            toolResults:
+              completedToolResults && completedToolResults.length > 0
+                ? completedToolResults
+                : undefined,
+            createdAt: new Date(msg.timestamp).toISOString(),
+          };
+        });
 
         // Subscribe to chunks
         const cleanup = window.electron.assistant.onChunk((data) => {
@@ -370,12 +388,26 @@ export function useAssistantChat(options: UseAssistantChatOptions) {
 
             case "tool_call":
               if (chunk.toolCall) {
-                addStreamingToolCall({
-                  id: chunk.toolCall.id,
-                  name: chunk.toolCall.name,
-                  args: chunk.toolCall.args,
-                  status: "pending",
-                });
+                // Check if tool call already exists (can happen if tool_result arrived first)
+                const existingToolCall = streamingStateRef.current?.toolCalls.find(
+                  (tc) => tc.id === chunk.toolCall!.id
+                );
+
+                if (existingToolCall) {
+                  // Update existing tool call with proper name and args
+                  updateStreamingToolCall(chunk.toolCall.id, {
+                    name: chunk.toolCall.name,
+                    args: chunk.toolCall.args,
+                  });
+                } else {
+                  // Add new tool call
+                  addStreamingToolCall({
+                    id: chunk.toolCall.id,
+                    name: chunk.toolCall.name,
+                    args: chunk.toolCall.args,
+                    status: "pending",
+                  });
+                }
               }
               break;
 
