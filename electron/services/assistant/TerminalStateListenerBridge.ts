@@ -1,14 +1,17 @@
 import { events } from "../events.js";
 import { listenerManager } from "./ListenerManager.js";
 
-export type ChunkEmitter = (sessionId: string, chunk: {
-  type: "listener_triggered";
-  listenerData: {
-    listenerId: string;
-    eventType: string;
-    data: Record<string, unknown>;
-  };
-}) => void;
+export type ChunkEmitter = (
+  sessionId: string,
+  chunk: {
+    type: "listener_triggered";
+    listenerData: {
+      listenerId: string;
+      eventType: string;
+      data: Record<string, unknown>;
+    };
+  }
+) => void;
 
 let chunkEmitter: ChunkEmitter | null = null;
 let unsubscribe: (() => void) | null = null;

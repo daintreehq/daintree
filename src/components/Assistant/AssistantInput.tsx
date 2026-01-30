@@ -1,4 +1,5 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { ArrowUp, Square } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export interface AssistantInputHandle {
@@ -8,6 +9,8 @@ export interface AssistantInputHandle {
 
 interface AssistantInputProps {
   onSubmit: (value: string) => void;
+  onCancel?: () => void;
+  isStreaming?: boolean;
   disabled?: boolean;
   placeholder?: string;
   className?: string;
@@ -17,6 +20,8 @@ export const AssistantInput = forwardRef<AssistantInputHandle, AssistantInputPro
   (
     {
       onSubmit,
+      onCancel,
+      isStreaming = false,
       disabled = false,
       placeholder = "Execute a command or ask a question...",
       className,
@@ -84,22 +89,22 @@ export const AssistantInput = forwardRef<AssistantInputHandle, AssistantInputPro
       textareaRef.current?.focus();
     }, []);
 
+    const canSubmit = value.trim().length > 0 && !disabled;
+
     return (
-      <div className={cn("group shrink-0 cursor-text bg-canopy-bg px-4 pb-3 pt-3", className)}>
+      <div className={cn("shrink-0 cursor-text bg-canopy-sidebar/20", className)}>
         <div
           className={cn(
-            "relative flex w-full items-center gap-1.5 rounded-sm border border-white/[0.06] bg-white/[0.03] py-1 shadow-[0_6px_12px_rgba(0,0,0,0.18)] transition-colors",
-            "group-hover:border-white/[0.08] group-hover:bg-white/[0.04]",
-            "focus-within:border-white/[0.12] focus-within:ring-1 focus-within:ring-white/[0.06] focus-within:bg-white/[0.05]",
-            disabled && "opacity-60 pointer-events-none"
+            "flex items-start gap-2 px-3 py-2",
+            disabled && !isStreaming && "opacity-60 pointer-events-none"
           )}
           onClick={handleContainerClick}
         >
           <div
-            className="select-none pl-2 pr-1 font-mono text-xs font-semibold leading-5 text-canopy-accent/85"
+            className="shrink-0 pt-1.5 select-none font-mono text-lg text-canopy-text/40"
             aria-hidden="true"
           >
-            ❯
+            ›
           </div>
 
           <textarea
@@ -113,12 +118,44 @@ export const AssistantInput = forwardRef<AssistantInputHandle, AssistantInputPro
             disabled={disabled}
             rows={1}
             className={cn(
-              "flex-1 max-h-[200px] min-h-[24px] resize-none bg-transparent text-sm text-canopy-text",
+              "flex-1 max-h-[200px] min-h-[24px] resize-none bg-transparent text-sm text-canopy-text pt-1",
               "placeholder:text-canopy-text/30 focus:outline-none scrollbar-none font-mono"
             )}
             aria-label="Command input"
             aria-keyshortcuts="Enter Shift+Enter"
           />
+
+          {isStreaming && onCancel ? (
+            <button
+              type="button"
+              onClick={onCancel}
+              className={cn(
+                "shrink-0 mt-0.5 p-1.5 rounded transition-colors",
+                "text-red-400 hover:bg-red-500/10"
+              )}
+              aria-label="Cancel response"
+            >
+              <Square className="w-4 h-4" />
+            </button>
+          ) : (
+            canSubmit && (
+              <button
+                type="button"
+                onClick={handleSubmit}
+                className={cn(
+                  "shrink-0 mt-0.5 p-1.5 rounded transition-colors",
+                  "text-canopy-accent hover:bg-canopy-accent/10"
+                )}
+                aria-label="Submit"
+              >
+                <ArrowUp className="w-4 h-4" />
+              </button>
+            )
+          )}
+        </div>
+
+        <div className="px-3 pb-1 text-[10px] text-canopy-text/20">
+          <kbd className="font-mono">⇧⏎</kbd> newline
         </div>
       </div>
     );

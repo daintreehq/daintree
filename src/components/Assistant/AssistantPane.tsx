@@ -1,8 +1,7 @@
 import { useEffect, useRef, useCallback } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, XCircle, X } from "lucide-react";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { useAppAgentStore } from "@/store";
-import { cn } from "@/lib/utils";
 import { MessageList } from "./MessageList";
 import { AssistantInput, type AssistantInputHandle } from "./AssistantInput";
 import { EmptyState } from "./EmptyState";
@@ -52,6 +51,7 @@ export function AssistantPane({
   const handleSubmit = useCallback(
     (value: string) => {
       sendMessage(value);
+      inputRef.current?.focus();
     },
     [sendMessage]
   );
@@ -70,8 +70,9 @@ export function AssistantPane({
   }, [clearMessages, messages.length, isLoading]);
 
   const showLoading = !isInitialized;
-  const showEmptyState = isInitialized && !hasApiKey;
+  const showNoApiKey = isInitialized && !hasApiKey;
   const showChat = isInitialized && hasApiKey;
+  const hasMessages = messages.length > 0;
 
   return (
     <ContentPanel
@@ -89,7 +90,7 @@ export function AssistantPane({
       onTitleChange={onTitleChange}
       onMinimize={onMinimize}
       onRestore={onRestore}
-      onRestart={showChat && messages.length > 0 ? handleClearConversation : undefined}
+      onRestart={showChat && hasMessages ? handleClearConversation : undefined}
     >
       <div className="flex flex-col h-full bg-canopy-bg">
         {showLoading && (
@@ -98,49 +99,36 @@ export function AssistantPane({
           </div>
         )}
 
-        {showEmptyState && <EmptyState />}
+        {showNoApiKey && <EmptyState />}
 
         {showChat && (
           <>
-            <MessageList
-              messages={messages}
-              streamingState={streamingState}
-              className="flex-1 min-h-0"
-            />
+            {hasMessages ? (
+              <MessageList
+                messages={messages}
+                streamingState={streamingState}
+                className="flex-1 min-h-0"
+              />
+            ) : (
+              <EmptyState onSubmit={handleSubmit} />
+            )}
 
             {error && (
               <div
-                className={cn(
-                  "mx-4 mb-2 px-3 py-2 rounded-md",
-                  "bg-red-500/10 border border-red-500/20",
-                  "text-red-400 text-sm"
-                )}
+                className="flex items-start gap-3 px-3 py-2 border-l-2 border-red-500 bg-red-500/5"
                 role="alert"
               >
-                <div className="flex items-center justify-between">
-                  <span>{error}</span>
-                  <button
-                    type="button"
-                    onClick={clearError}
-                    className="text-red-400/70 hover:text-red-400 text-xs"
-                  >
-                    Dismiss
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {isLoading && streamingState && (
-              <div className="px-6 pb-2">
+                <XCircle className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />
+                <span className="flex-1 font-mono text-xs text-red-400 whitespace-pre-wrap break-words">
+                  {error}
+                </span>
                 <button
                   type="button"
-                  onClick={cancelStreaming}
-                  className={cn(
-                    "text-xs text-red-400/70 hover:text-red-400",
-                    "hover:underline transition-colors"
-                  )}
+                  onClick={clearError}
+                  className="text-red-400/70 hover:text-red-400 transition-colors"
+                  aria-label="Dismiss error"
                 >
-                  Cancel response
+                  <X className="w-3 h-3" />
                 </button>
               </div>
             )}
@@ -148,6 +136,8 @@ export function AssistantPane({
             <AssistantInput
               ref={inputRef}
               onSubmit={handleSubmit}
+              onCancel={cancelStreaming}
+              isStreaming={isLoading && !!streamingState}
               disabled={isLoading}
               placeholder="Execute a command or ask a question..."
             />

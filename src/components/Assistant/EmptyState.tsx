@@ -9,9 +9,25 @@ import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 
 interface EmptyStateProps {
   className?: string;
+  onSubmit?: (prompt: string) => void;
 }
 
-export function EmptyState({ className }: EmptyStateProps) {
+const suggestedActions = [
+  {
+    text: "Explain this codebase",
+    prompt: "Give me an overview of this codebase. What does it do and how is it structured?",
+  },
+  {
+    text: "Find TODO comments",
+    prompt: "Search for TODO comments in the codebase and summarize what needs to be done.",
+  },
+  {
+    text: "Review recent changes",
+    prompt: "Show me the recent git changes and summarize what was modified.",
+  },
+];
+
+export function EmptyState({ className, onSubmit }: EmptyStateProps) {
   const currentProject = useProjectStore((s) => s.currentProject);
   const hasApiKey = useAppAgentStore((s) => s.hasApiKey);
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
@@ -28,11 +44,12 @@ export function EmptyState({ className }: EmptyStateProps) {
   }, []);
 
   return (
-    <div
-      className={cn("flex h-full flex-col items-center justify-center p-8 select-none", className)}
-    >
+    <div className={cn("flex h-full flex-col items-center justify-center p-8", className)}>
       {/* Watermark - Ultra-low contrast branding */}
-      <div className="mb-8 flex flex-col items-center gap-4 opacity-5" aria-hidden="true">
+      <div
+        className="mb-8 flex flex-col items-center gap-4 opacity-5 select-none"
+        aria-hidden="true"
+      >
         <svg
           className="h-16 w-16"
           viewBox="0 0 24 24"
@@ -49,46 +66,62 @@ export function EmptyState({ className }: EmptyStateProps) {
         </svg>
       </div>
 
-      {/* System Status Monitor */}
-      <div className="w-full max-w-[240px] space-y-3" role="status" aria-label="Assistant status">
-        {/* Status Header */}
-        <div className="flex items-center gap-2 text-[10px] font-bold tracking-[0.15em] text-canopy-text/30 uppercase">
-          <div
-            className={cn(
-              "h-1 w-1 rounded-full",
-              hasApiKey ? "bg-green-500/50" : "bg-amber-500/50"
-            )}
-            aria-hidden="true"
-          />
-          {hasApiKey ? "System Ready" : "Configuration Required"}
-        </div>
-
-        {/* Context Grid */}
-        <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 border-l border-divider/30 pl-3 font-mono text-[11px] text-canopy-text/60">
-          <span className="text-canopy-text/30">SCOPE</span>
-          <span className="truncate">{currentProject ? "Project" : "Global"}</span>
-
+      {/* Context Info */}
+      <div className="w-full max-w-[260px] space-y-4" role="status" aria-label="Assistant context">
+        {/* Context chips - less dashboard-like styling */}
+        <div className="flex flex-wrap gap-2 justify-center">
           {currentProject && (
-            <>
-              <span className="text-canopy-text/30">PROJECT</span>
-              <span className="truncate text-canopy-accent/80">{currentProject.name}</span>
-            </>
+            <span
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-canopy-sidebar/30 border border-canopy-border/30 rounded text-xs text-canopy-text/60 max-w-[200px]"
+              title={currentProject.name}
+            >
+              <span className="text-canopy-accent/70 truncate">{currentProject.name}</span>
+            </span>
           )}
-
           {activeWorktree?.branch && (
-            <>
-              <span className="text-canopy-text/30">BRANCH</span>
-              <div className="flex items-center gap-1.5 truncate">
-                <GitBranch className="h-3 w-3" />
-                <span>{activeWorktree.branch}</span>
-              </div>
-            </>
+            <span
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-canopy-sidebar/30 border border-canopy-border/30 rounded text-xs text-canopy-text/60 max-w-[200px]"
+              title={activeWorktree.branch}
+            >
+              <GitBranch className="h-3 w-3 shrink-0" />
+              <span className="truncate">{activeWorktree.branch}</span>
+            </span>
+          )}
+          {!currentProject && !activeWorktreeId && (
+            <span className="inline-flex items-center px-2.5 py-1 bg-canopy-sidebar/30 border border-canopy-border/30 rounded text-xs text-canopy-text/40">
+              Global scope
+            </span>
           )}
         </div>
+
+        {/* Suggested actions when API key is configured */}
+        {hasApiKey && onSubmit && (
+          <div className="flex flex-col gap-2 items-center">
+            <div className="text-[10px] uppercase tracking-wider text-canopy-text/30 font-semibold">
+              Suggested actions
+            </div>
+            <div className="flex flex-wrap gap-2 justify-center">
+              {suggestedActions.map((action) => (
+                <button
+                  key={action.text}
+                  type="button"
+                  onClick={() => onSubmit(action.prompt)}
+                  className={cn(
+                    "px-3 py-1.5 bg-canopy-accent/10 border border-canopy-accent/20 rounded text-xs",
+                    "text-canopy-accent hover:bg-canopy-accent/15 hover:border-canopy-accent/30",
+                    "transition-colors font-medium"
+                  )}
+                >
+                  {action.text}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Configuration prompt if no API key */}
         {!hasApiKey && (
-          <div className="mt-4 pt-4 border-t border-divider/20">
+          <div className="pt-2">
             <button
               type="button"
               onClick={handleOpenSettings}

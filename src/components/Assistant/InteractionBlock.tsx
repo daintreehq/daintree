@@ -21,23 +21,17 @@ export function InteractionBlock({
     return (
       <div
         className={cn(
-          "group relative flex w-full gap-3 bg-canopy-sidebar/30 px-4 py-3 border-b border-divider/40",
+          "group relative flex w-full gap-3 px-4 py-2 border-l-2 border-canopy-accent/30",
           className
         )}
-        role="log"
+        role="article"
         aria-label="User input"
       >
-        <div className="shrink-0 text-canopy-accent pt-[2px]" aria-hidden="true">
+        <div className="shrink-0 text-canopy-accent/60 pt-[2px]" aria-hidden="true">
           <Terminal className="w-3.5 h-3.5" />
         </div>
         <div className="prose-sm font-mono text-sm leading-relaxed text-canopy-text/90 w-full break-words whitespace-pre-wrap">
           {message.content}
-        </div>
-        <div
-          className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 text-[10px] text-canopy-text/30 transition-opacity"
-          aria-hidden="true"
-        >
-          INPUT
         </div>
       </div>
     );
@@ -52,7 +46,7 @@ export function InteractionBlock({
         "flex w-full gap-3 px-4 py-4 border-b border-divider/20 hover:bg-white/[0.01] transition-colors",
         className
       )}
-      role="log"
+      role="article"
       aria-label="Assistant response"
     >
       <div className="shrink-0 pt-[3px]" aria-hidden="true">
