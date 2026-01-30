@@ -1,5 +1,72 @@
+import { z } from "zod";
 import { AGENT_REGISTRY } from "../config/agentRegistry.js";
 import { escapeShellArg } from "../utils/shellEscape.js";
+
+/**
+ * Domain weights for agent routing (0-1 scale).
+ * Higher values indicate stronger capability in that domain.
+ */
+export interface AgentDomainWeights {
+  frontend?: number;
+  backend?: number;
+  testing?: number;
+  refactoring?: number;
+  debugging?: number;
+  architecture?: number;
+  devops?: number;
+}
+
+/**
+ * Routing configuration for intelligent agent dispatch.
+ * Used by orchestrators to select the best agent for a given task.
+ */
+export interface AgentRoutingConfig {
+  /** Capability tags for filtering (e.g., ['javascript', 'react', 'typescript']) */
+  capabilities: string[];
+  /** Domain weights (0-1 scale) indicating agent strengths */
+  domains?: AgentDomainWeights;
+  /** Maximum parallel tasks this agent can handle (default: 1) */
+  maxConcurrent?: number;
+  /** Whether this agent can be routed to (default: true) */
+  enabled: boolean;
+}
+
+/** Zod schema for domain weights validation */
+export const AgentDomainWeightsSchema = z.object({
+  frontend: z.number().min(0).max(1).optional(),
+  backend: z.number().min(0).max(1).optional(),
+  testing: z.number().min(0).max(1).optional(),
+  refactoring: z.number().min(0).max(1).optional(),
+  debugging: z.number().min(0).max(1).optional(),
+  architecture: z.number().min(0).max(1).optional(),
+  devops: z.number().min(0).max(1).optional(),
+});
+
+/** Zod schema for routing config validation */
+export const AgentRoutingConfigSchema = z.object({
+  capabilities: z
+    .array(
+      z
+        .string()
+        .trim()
+        .min(1, "Capability string cannot be empty")
+        .transform((s) => s.toLowerCase())
+    )
+    .default([])
+    .transform((arr) => Array.from(new Set(arr))),
+  domains: AgentDomainWeightsSchema.optional(),
+  maxConcurrent: z.number().int().min(1).default(1),
+  enabled: z.boolean().default(true),
+});
+
+/**
+ * Default routing config for agents without explicit routing configuration.
+ */
+export const DEFAULT_ROUTING_CONFIG: AgentRoutingConfig = {
+  capabilities: [],
+  enabled: true,
+  maxConcurrent: 1,
+};
 
 export interface AgentSettingsEntry {
   enabled?: boolean;
