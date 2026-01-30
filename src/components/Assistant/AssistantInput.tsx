@@ -121,9 +121,10 @@ export const AssistantInput = forwardRef<AssistantInputHandle, AssistantInputPro
               disabled={disabled}
               rows={1}
               className={cn(
-                "flex-1 max-h-[200px] min-h-[24px] resize-none bg-transparent text-sm text-canopy-text py-0.5",
-                "placeholder:text-canopy-text/30 focus:outline-none scrollbar-none"
+                "flex-1 max-h-[200px] min-h-[20px] resize-none bg-transparent text-xs leading-5 text-canopy-text py-0.5",
+                "placeholder:text-white/25 focus:outline-none scrollbar-none"
               )}
+              style={{ fontFamily: "var(--font-mono, monospace)" }}
               aria-label="Command input"
               aria-keyshortcuts="Enter Shift+Enter"
             />
