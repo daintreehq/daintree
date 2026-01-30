@@ -1,8 +1,9 @@
 import { useRef, useCallback, useState, useEffect } from "react";
 import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
-import { ArrowDown, Sparkles } from "lucide-react";
+import { ArrowDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { InteractionBlock } from "./InteractionBlock";
+import { EmptyState } from "./EmptyState";
 import type { AssistantMessage, StreamingState } from "./types";
 
 interface MessageListProps {
@@ -106,21 +107,7 @@ export function MessageList({
   const computeItemKey = useCallback((_index: number, item: AssistantMessage) => item.id, []);
 
   if (allItems.length === 0) {
-    return (
-      <div className={cn("flex-1 flex items-center justify-center", className)}>
-        <div className="text-center px-6 max-w-md">
-          <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-gradient-to-br from-canopy-accent/10 to-blue-500/10 mb-4">
-            <Sparkles className="w-6 h-6 text-canopy-accent/70" />
-          </div>
-          <p className="text-sm text-canopy-text/60 leading-relaxed">
-            Start an interaction with Canopy Assistant
-          </p>
-          <p className="text-xs text-canopy-text/40 mt-2 leading-relaxed">
-            Execute commands, request code analysis, or explore your codebase
-          </p>
-        </div>
-      </div>
-    );
+    return <EmptyState className={cn("flex-1", className)} />;
   }
 
   return (
