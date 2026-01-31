@@ -169,10 +169,25 @@ export async function getLatestTrackedFileMtime(worktreePath: string): Promise<n
   }
 }
 
+export interface GetWorktreeChangesOptions {
+  forceRefresh?: boolean;
+  cacheTTL?: number;
+}
+
 export async function getWorktreeChangesWithStats(
   cwd: string,
-  forceRefresh = false
+  forceRefreshOrOptions: boolean | GetWorktreeChangesOptions = false
 ): Promise<WorktreeChanges> {
+  // Support both legacy boolean and new options object
+  // Guard against null/undefined being passed as second argument
+  const options: GetWorktreeChangesOptions =
+    typeof forceRefreshOrOptions === "boolean"
+      ? { forceRefresh: forceRefreshOrOptions }
+      : forceRefreshOrOptions && typeof forceRefreshOrOptions === "object"
+        ? forceRefreshOrOptions
+        : {};
+
+  const { forceRefresh = false, cacheTTL } = options;
   if (!forceRefresh) {
     const cached = GIT_WORKTREE_CHANGES_CACHE.get(cwd);
     if (cached) {
@@ -402,7 +417,7 @@ export async function getWorktreeChangesWithStats(
       lastCommitTimestampMs,
     };
 
-    GIT_WORKTREE_CHANGES_CACHE.set(cwd, result);
+    GIT_WORKTREE_CHANGES_CACHE.set(cwd, result, cacheTTL);
     return result;
   } catch (error) {
     if (error instanceof WorktreeRemovedError) {

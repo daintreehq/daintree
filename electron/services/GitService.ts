@@ -303,7 +303,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
 
   async getWorktreeChangesWithStats(
     worktreePath: string,
-    forceRefresh = false
+    forceRefresh = true // Default to true to avoid overwriting per-worktree cache TTLs
   ): Promise<WorktreeChanges> {
     const { getWorktreeChangesWithStats: getChanges } = await import("../utils/git.js");
     return getChanges(worktreePath, forceRefresh);

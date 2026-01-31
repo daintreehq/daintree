@@ -373,7 +373,18 @@ export class WorktreeMonitor {
         invalidateGitStatusCache(this.path);
       }
 
-      const newChanges = await getWorktreeChangesWithStats(this.path, forceRefresh);
+      // Use polling interval as cache TTL to prevent stale data between polls
+      // Subtract 500ms buffer to ensure cache expires before next poll
+      // Guard against non-finite intervals (NaN, Infinity) that would break cache expiry
+      const pollingInterval = this.config.basePollingInterval;
+      const cacheTTL =
+        Number.isFinite(pollingInterval) && pollingInterval > 0
+          ? Math.max(500, pollingInterval - 500)
+          : undefined; // Fall back to cache default TTL
+      const newChanges = await getWorktreeChangesWithStats(this.path, {
+        forceRefresh,
+        cacheTTL,
+      });
 
       if (!this.isRunning) {
         return;
