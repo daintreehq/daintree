@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback } from "react";
-import { Loader2, XCircle, X } from "lucide-react";
+import { Loader2, XCircle, X, RefreshCw, Maximize2 } from "lucide-react";
+import { CanopyIcon } from "@/components/icons/CanopyIcon";
 import { useAppAgentStore, useAssistantChatStore } from "@/store";
 import { MessageList } from "./MessageList";
 import { AssistantInput, type AssistantInputHandle } from "./AssistantInput";
@@ -60,25 +61,36 @@ export function AssistantPane() {
 
       {showChat && (
         <>
-          <div className="flex items-center justify-between px-3 py-2 border-b border-canopy-border">
-            <h2 className="text-sm font-medium text-canopy-text">Assistant</h2>
-            <div className="flex items-center gap-2">
+          <div className="flex items-center justify-between px-4 py-2.5 border-b border-divider bg-canopy-sidebar select-none">
+            <div className="flex items-center gap-2.5">
+              <CanopyIcon size={16} className="text-canopy-accent" />
+              <span className="font-semibold text-sm text-canopy-text">Canopy Assistant</span>
+            </div>
+            <div className="flex items-center gap-4 text-canopy-text/50">
               {hasMessages && (
                 <button
                   type="button"
                   onClick={handleClearConversation}
-                  className="text-xs text-canopy-text/60 hover:text-canopy-text transition-colors"
+                  className="hover:text-canopy-text transition-colors"
+                  title="Clear conversation"
                 >
-                  Clear
+                  <RefreshCw size={14} />
                 </button>
               )}
               <button
                 type="button"
+                className="hover:text-canopy-text transition-colors"
+                title="Maximize"
+              >
+                <Maximize2 size={14} />
+              </button>
+              <button
+                type="button"
                 onClick={close}
-                className="text-canopy-text/60 hover:text-canopy-text transition-colors"
+                className="hover:text-canopy-text hover:text-red-400 transition-colors"
                 aria-label="Close assistant"
               >
-                <X className="w-4 h-4" />
+                <X size={14} />
               </button>
             </div>
           </div>
@@ -97,7 +109,7 @@ export function AssistantPane() {
 
           {error && (
             <div
-              className="flex items-start gap-3 px-3 py-2 border-l-2 border-red-500 bg-red-500/5"
+              className="flex items-start gap-3 px-4 py-2.5 border-l-2 border-red-500 bg-red-500/[0.03]"
               role="alert"
             >
               <XCircle className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />

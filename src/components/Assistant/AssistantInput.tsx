@@ -1,6 +1,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
-import { ArrowUp, Square } from "lucide-react";
+import { ArrowUp, Square, Activity } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAppAgentStore } from "@/store/appAgentStore";
 
 export interface AssistantInputHandle {
   focus: () => void;
@@ -14,6 +15,31 @@ interface AssistantInputProps {
   disabled?: boolean;
   placeholder?: string;
   className?: string;
+}
+
+function formatModelName(modelId: string | undefined): string {
+  if (!modelId) return "Assistant";
+
+  // Remove common prefixes like "accounts/fireworks/models/"
+  let name = modelId.replace(/^accounts\/[^/]+\/models\//, "").replace(/^models\//, "");
+
+  // Replace version patterns: 2p5 -> 2.5, 3p1 -> 3.1, etc.
+  name = name.replace(/(\d)p(\d)/g, "$1.$2");
+
+  // Split on hyphens and underscores
+  const parts = name.split(/[-_]/);
+
+  // Process each part
+  const formattedParts = parts.map((part) => {
+    // Keep version numbers as-is (e.g., "3.1", "405b")
+    if (/^\d/.test(part)) return part;
+
+    // Capitalize first letter of each word
+    return part.charAt(0).toUpperCase() + part.slice(1).toLowerCase();
+  });
+
+  // Join with spaces and clean up
+  return formattedParts.join(" ").replace(/\s+/g, " ").trim();
 }
 
 export const AssistantInput = forwardRef<AssistantInputHandle, AssistantInputProps>(
@@ -31,6 +57,7 @@ export const AssistantInput = forwardRef<AssistantInputHandle, AssistantInputPro
     const [value, setValue] = useState("");
     const [isComposing, setIsComposing] = useState(false);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const config = useAppAgentStore((s) => s.config);
 
     const adjustHeight = useCallback(() => {
       const textarea = textareaRef.current;
@@ -89,13 +116,13 @@ export const AssistantInput = forwardRef<AssistantInputHandle, AssistantInputPro
       textareaRef.current?.focus();
     }, []);
 
+    const modelDisplayName = formatModelName(config?.model);
     const canSubmit = value.trim().length > 0 && !disabled;
 
     return (
       <div
         className={cn(
-          "group shrink-0 cursor-text bg-canopy-bg px-4 pb-3 pt-3",
-          "border-t border-divider/40",
+          "group shrink-0 cursor-text bg-canopy-sidebar px-4 pb-3 pt-3 border-t border-divider",
           className
         )}
         onClick={handleContainerClick}
@@ -110,7 +137,7 @@ export const AssistantInput = forwardRef<AssistantInputHandle, AssistantInputPro
             )}
             aria-disabled={disabled && !isStreaming}
           >
-            <div className="select-none pl-2 pr-1 font-mono text-xs font-semibold leading-5 text-canopy-accent/85">
+            <div className="select-none pl-2 pr-1 font-mono text-[13px] font-medium leading-5 text-canopy-accent/85">
               ❯
             </div>
 
@@ -125,10 +152,9 @@ export const AssistantInput = forwardRef<AssistantInputHandle, AssistantInputPro
               disabled={disabled}
               rows={1}
               className={cn(
-                "flex-1 max-h-[200px] min-h-[20px] resize-none bg-transparent text-xs leading-5 text-canopy-text py-0.5",
+                "flex-1 max-h-[200px] min-h-[20px] resize-none bg-transparent font-mono text-[13px] leading-[1.6] text-canopy-text py-0.5",
                 "placeholder:text-white/25 focus:outline-none scrollbar-none"
               )}
-              style={{ fontFamily: "var(--font-mono, monospace)" }}
               aria-label="Command input"
               aria-keyshortcuts="Enter Shift+Enter"
             />
@@ -166,6 +192,22 @@ export const AssistantInput = forwardRef<AssistantInputHandle, AssistantInputPro
                 </button>
               )
             )}
+          </div>
+        </div>
+
+        {/* Footer Status */}
+        <div className="flex justify-between mt-2.5 px-1 items-center">
+          <div className="flex gap-4 text-[10px] text-canopy-text/40 uppercase tracking-wider font-medium">
+            <span
+              className={cn(
+                "flex items-center gap-1.5",
+                isStreaming ? "text-blue-400/80" : "text-canopy-accent/80"
+              )}
+            >
+              <Activity size={10} />
+              {isStreaming ? "Working" : "Ready"}
+            </span>
+            <span className="text-canopy-text/30">{modelDisplayName}</span>
           </div>
         </div>
       </div>

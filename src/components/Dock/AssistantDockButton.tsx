@@ -84,6 +84,7 @@ export function AssistantDockButton() {
         side="top"
         align="end"
         sideOffset={10}
+        alignOffset={16}
         collisionPadding={collisionPadding}
         onEscapeKeyDown={(e) => {
           e.preventDefault();

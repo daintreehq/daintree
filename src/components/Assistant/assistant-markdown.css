@@ -1,0 +1,356 @@
+/* Assistant Markdown Styles
+ * Custom typography for AI agent responses.
+ * Designed for readability in chat interfaces with dark themes.
+ */
+
+.assistant-markdown {
+  /* Base text */
+  color: var(--color-canopy-text);
+  font-size: 14px;
+  line-height: 1.6;
+  font-family:
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+
+  /* Paragraphs */
+  & p {
+    margin: 0;
+  }
+
+  & p + p {
+    margin-top: 1em;
+  }
+
+  /* Headings - compact for chat context */
+  & h1,
+  & h2,
+  & h3,
+  & h4 {
+    color: #fff;
+    font-weight: 600;
+    margin: 0;
+    line-height: 1.4;
+  }
+
+  & h1 {
+    font-size: 1.214em;
+    margin-top: 1.5em;
+    margin-bottom: 0.65em;
+  }
+
+  & h2 {
+    font-size: 1.107em;
+    margin-top: 1.4em;
+    margin-bottom: 0.6em;
+  }
+
+  & h3 {
+    font-size: 1.053em;
+    margin-top: 1.25em;
+    margin-bottom: 0.5em;
+    color: color-mix(in oklab, #fff 90%, transparent);
+  }
+
+  & h4 {
+    font-size: 1em;
+    margin-top: 1.125em;
+    margin-bottom: 0.45em;
+    color: color-mix(in oklab, #fff 85%, transparent);
+  }
+
+  /* First heading has no top margin */
+  & > h1:first-child,
+  & > h2:first-child,
+  & > h3:first-child,
+  & > h4:first-child {
+    margin-top: 0;
+  }
+
+  /* Bold */
+  & strong {
+    font-weight: 600;
+    color: var(--color-canopy-text);
+  }
+
+  /* Italic */
+  & em {
+    font-style: italic;
+  }
+
+  /* Links */
+  & a {
+    color: var(--color-canopy-accent);
+    text-decoration: none;
+    transition: opacity 150ms ease;
+  }
+
+  & a:hover {
+    text-decoration: underline;
+    opacity: 0.85;
+  }
+
+  /* Inline code */
+  & code:not(pre code) {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.93em;
+    padding: 0.125em 0.375em;
+    border-radius: 4px;
+    background: color-mix(in oklab, var(--color-canopy-sidebar) 70%, transparent);
+    border: 1px solid color-mix(in oklab, var(--color-canopy-border) 60%, transparent);
+    color: color-mix(in oklab, var(--color-canopy-text) 95%, var(--color-canopy-accent));
+  }
+
+  /* Lists */
+  & ul,
+  & ol {
+    margin: 0.75em 0;
+    padding-left: 1.5em;
+  }
+
+  & ul {
+    list-style-type: disc;
+  }
+
+  & ol {
+    list-style-type: decimal;
+  }
+
+  & li {
+    margin: 0.35em 0;
+    padding-left: 0.25em;
+  }
+
+  & li::marker {
+    color: color-mix(in oklab, var(--color-canopy-text) 65%, transparent);
+  }
+
+  /* Nested lists */
+  & li > ul,
+  & li > ol {
+    margin: 0.25em 0;
+  }
+
+  /* First/last list margin cleanup */
+  & > ul:first-child,
+  & > ol:first-child {
+    margin-top: 0;
+  }
+
+  & > ul:last-child,
+  & > ol:last-child {
+    margin-bottom: 0;
+  }
+
+  /* Blockquotes */
+  & blockquote {
+    margin: 1em 0;
+    padding: 0.5em 1em;
+    border-left: 3px solid var(--color-canopy-accent);
+    background: color-mix(in oklab, var(--color-canopy-sidebar) 30%, transparent);
+    border-radius: 0 4px 4px 0;
+    color: color-mix(in oklab, var(--color-canopy-text) 92%, transparent);
+  }
+
+  & blockquote p {
+    margin: 0;
+  }
+
+  /* Horizontal rule */
+  & hr {
+    margin: 1em 0;
+    border: none;
+    border-top: 1px solid var(--color-canopy-border);
+  }
+}
+
+/* Code block styling - handled separately by CodeBlock component */
+.assistant-code-block {
+  margin: 1em 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--color-canopy-border);
+  background: color-mix(in oklab, var(--color-canopy-sidebar) 40%, transparent);
+}
+
+.assistant-code-block:first-child {
+  margin-top: 0;
+}
+
+.assistant-code-block:last-child {
+  margin-bottom: 0;
+}
+
+.assistant-code-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.375rem 0.75rem;
+  background: color-mix(in oklab, var(--color-canopy-sidebar) 80%, transparent);
+  border-bottom: 1px solid var(--color-canopy-border);
+}
+
+.assistant-code-language {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: color-mix(in oklab, var(--color-canopy-text) 50%, transparent);
+}
+
+.assistant-code-copy {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 10px;
+  font-weight: 500;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: color-mix(in oklab, var(--color-canopy-text) 50%, transparent);
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+
+.assistant-code-copy:hover {
+  background: color-mix(in oklab, var(--color-canopy-bg) 50%, transparent);
+  color: color-mix(in oklab, var(--color-canopy-text) 80%, transparent);
+}
+
+.assistant-code-copy.copied {
+  color: #4ade80;
+  background: color-mix(in oklab, #4ade80 10%, transparent);
+}
+
+.assistant-code-content {
+  padding: 0.75rem;
+  overflow-x: auto;
+}
+
+.assistant-code-content pre {
+  margin: 0;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--color-canopy-text);
+}
+
+.assistant-code-content code {
+  font-family: inherit;
+}
+
+/* Syntax highlighting - Tokyo Night inspired */
+.assistant-code-content .token.comment,
+.assistant-code-content .token.prolog,
+.assistant-code-content .token.doctype,
+.assistant-code-content .token.cdata {
+  color: #565f89;
+}
+
+.assistant-code-content .token.punctuation {
+  color: #c0caf5;
+}
+
+.assistant-code-content .token.property,
+.assistant-code-content .token.tag,
+.assistant-code-content .token.boolean,
+.assistant-code-content .token.number,
+.assistant-code-content .token.constant,
+.assistant-code-content .token.symbol {
+  color: #ff9e64;
+}
+
+.assistant-code-content .token.selector,
+.assistant-code-content .token.attr-name,
+.assistant-code-content .token.string,
+.assistant-code-content .token.char,
+.assistant-code-content .token.builtin {
+  color: #9ece6a;
+}
+
+.assistant-code-content .token.operator,
+.assistant-code-content .token.entity,
+.assistant-code-content .token.url {
+  color: #89ddff;
+}
+
+.assistant-code-content .token.atrule,
+.assistant-code-content .token.attr-value,
+.assistant-code-content .token.keyword {
+  color: #bb9af7;
+}
+
+.assistant-code-content .token.function,
+.assistant-code-content .token.class-name {
+  color: #7aa2f7;
+}
+
+.assistant-code-content .token.regex,
+.assistant-code-content .token.important,
+.assistant-code-content .token.variable {
+  color: #e0af68;
+}
+
+/* Table styling */
+.assistant-table {
+  margin: 1em 0;
+  overflow-x: auto;
+  border-radius: 8px;
+  border: 1px solid var(--color-canopy-border);
+}
+
+.assistant-table:first-child {
+  margin-top: 0;
+}
+
+.assistant-table:last-child {
+  margin-bottom: 0;
+}
+
+.assistant-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.assistant-table th {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  font-weight: 600;
+  color: color-mix(in oklab, var(--color-canopy-text) 90%, transparent);
+  background: color-mix(in oklab, var(--color-canopy-sidebar) 40%, transparent);
+  border-bottom: 1px solid var(--color-canopy-border);
+}
+
+.assistant-table td {
+  padding: 0.5rem 0.75rem;
+  color: var(--color-canopy-text);
+  border-bottom: 1px solid color-mix(in oklab, var(--color-canopy-border) 50%, transparent);
+}
+
+.assistant-table tr:last-child td {
+  border-bottom: none;
+}
+
+.assistant-table tr:nth-child(even) td {
+  background: color-mix(in oklab, var(--color-canopy-sidebar) 15%, transparent);
+}
+
+/* Text alignment utilities for tables */
+.assistant-table .text-left {
+  text-align: left;
+}
+
+.assistant-table .text-center {
+  text-align: center;
+}
+
+.assistant-table .text-right {
+  text-align: right;
+}

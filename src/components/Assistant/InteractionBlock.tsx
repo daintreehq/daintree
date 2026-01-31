@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
-import { Terminal, Copy, Check } from "lucide-react";
+import { ChevronRight, Copy, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { ToolCallBlock } from "./ToolCallBlock";
@@ -15,19 +15,14 @@ interface InteractionBlockProps {
 function UserInputBlock({ content, className }: { content: string; className?: string }) {
   return (
     <div
-      className={cn(
-        "group relative flex items-start w-full gap-3 px-4 py-2",
-        "border-l-2 border-canopy-accent/50 border-b border-divider/40",
-        "bg-canopy-sidebar/10",
-        className
-      )}
+      className={cn("group flex gap-4 px-6 py-4", className)}
       role="article"
       aria-label="User input"
     >
-      <div className="shrink-0 text-canopy-accent/60 translate-y-[1px]" aria-hidden="true">
-        <Terminal className="w-3.5 h-3.5" />
+      <div className="mt-0.5 text-canopy-text/40 shrink-0 select-none" aria-hidden="true">
+        <ChevronRight size={16} />
       </div>
-      <div className="prose-sm font-mono text-sm leading-relaxed text-canopy-text/90 w-full break-words whitespace-pre-wrap select-text">
+      <div className="text-canopy-text font-medium font-mono text-[14px] leading-[1.6] break-words whitespace-pre-wrap select-text">
         {content}
       </div>
     </div>
@@ -67,7 +62,6 @@ function AssistantResponseBlock({
       });
   }, [message.content]);
 
-  // Clean up copied state timeout on unmount
   useEffect(() => {
     if (!copied) return;
     const timeoutId = setTimeout(() => setCopied(false), 2000);
@@ -76,74 +70,66 @@ function AssistantResponseBlock({
 
   return (
     <div
-      className={cn(
-        "group flex items-start w-full gap-3 px-4 py-3 border-b border-divider/40 hover:bg-white/[0.01] transition-colors",
-        className
-      )}
+      className={cn("group pl-8 pr-6 py-4 space-y-5 relative", className)}
       role="article"
       aria-label="Assistant response"
     >
-      <div className="shrink-0 translate-y-1.5" aria-hidden="true">
-        <div className="h-1.5 w-1.5 rounded-full bg-canopy-accent/60 shadow-[0_0_6px_rgba(16,185,129,0.4)]" />
-      </div>
-      <div className="flex-1 min-w-0 space-y-3 select-text">
-        {hasToolCalls && (
-          <div className="flex flex-col gap-1">
-            {message.toolCalls!.map((tc) => (
-              <ToolCallBlock key={tc.id} toolCall={tc} />
-            ))}
-          </div>
-        )}
+      {/* Thread line visual */}
+      <div className="absolute left-0 top-0 bottom-0 w-px bg-canopy-border ml-[26px]" />
 
-        {(hasContent || (isStreaming && !hasToolCalls)) && (
-          <div>
-            <MarkdownRenderer
-              content={message.content}
-              className="text-canopy-text text-sm leading-6 font-normal"
-            />
-            {isStreaming && <StreamingCursor />}
-          </div>
-        )}
+      {hasToolCalls && (
+        <div className="space-y-2">
+          {message.toolCalls!.map((tc) => (
+            <ToolCallBlock key={tc.id} toolCall={tc} />
+          ))}
+        </div>
+      )}
 
-        {isStreaming && hasToolCalls && !hasContent && <StreamingCursor className="ml-0" />}
+      {(hasContent || (isStreaming && !hasToolCalls)) && (
+        <div>
+          <MarkdownRenderer content={message.content} />
+          {isStreaming && <StreamingCursor />}
+        </div>
+      )}
 
-        {!hasContent && !hasToolCalls && !isStreaming && (
-          <div className="text-canopy-text/40 text-sm italic">No response content</div>
-        )}
+      {isStreaming && hasToolCalls && !hasContent && <StreamingCursor className="ml-0" />}
 
-        {/* Copy button - positioned at bottom of content area */}
-        {hasContent && !isStreaming && (
-          <div className="flex justify-end pt-1">
-            <button
-              type="button"
-              onClick={handleCopy}
-              className={cn(
-                "flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium",
-                "opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
-                "[@media(hover:none)]:opacity-100",
-                copied
-                  ? "text-green-400 bg-green-400/10"
-                  : "text-canopy-text/50 hover:text-canopy-text/80 hover:bg-canopy-bg/50"
-              )}
-              aria-label={copied ? "Copied response" : "Copy response"}
-              title="Copy response to clipboard"
-            >
-              {copied ? (
-                <>
-                  <Check className="w-3 h-3" />
-                  Copied
-                </>
-              ) : (
-                <>
-                  <Copy className="w-3 h-3" />
-                  Copy
-                </>
-              )}
-            </button>
-          </div>
-        )}
-      </div>
+      {!hasContent && !hasToolCalls && !isStreaming && (
+        <div className="text-canopy-text/40 text-sm italic">No response content</div>
+      )}
+
+      {/* Copy button */}
+      {hasContent && !isStreaming && (
+        <div className="flex justify-end pt-1">
+          <button
+            type="button"
+            onClick={handleCopy}
+            className={cn(
+              "flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium",
+              "opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
+              "[@media(hover:none)]:opacity-100",
+              copied
+                ? "text-canopy-accent bg-canopy-accent/10"
+                : "text-canopy-text/50 hover:text-canopy-text/80 hover:bg-canopy-sidebar/50"
+            )}
+            aria-label={copied ? "Copied response" : "Copy response"}
+            title="Copy response to clipboard"
+          >
+            {copied ? (
+              <>
+                <Check className="w-3 h-3" />
+                Copied
+              </>
+            ) : (
+              <>
+                <Copy className="w-3 h-3" />
+                Copy
+              </>
+            )}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

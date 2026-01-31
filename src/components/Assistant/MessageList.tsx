@@ -149,7 +149,7 @@ export function MessageList({
   }
 
   return (
-    <div className={cn("flex-1 relative", className)}>
+    <div className={cn("flex-1 relative font-mono text-sm", className)}>
       <Virtuoso
         ref={virtuosoRef}
         data={allItems}

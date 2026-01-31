@@ -1,5 +1,4 @@
 import { cn } from "@/lib/utils";
-import { CanopyIcon } from "@/components/icons/CanopyIcon";
 
 interface AssistantThinkingIndicatorProps {
   className?: string;
@@ -8,18 +7,15 @@ interface AssistantThinkingIndicatorProps {
 export function AssistantThinkingIndicator({ className }: AssistantThinkingIndicatorProps) {
   return (
     <div
-      className={cn(
-        "group relative flex items-start w-full gap-3 px-4 py-4 border-b border-divider/40",
-        className
-      )}
+      className={cn("pl-8 pr-6 py-4 relative", className)}
       role="article"
       aria-label="Assistant is thinking"
     >
-      <div className="shrink-0 translate-y-[1px]" aria-hidden="true">
-        <CanopyIcon size={14} className="text-canopy-text/40" />
-      </div>
+      {/* Thread line visual */}
+      <div className="absolute left-0 top-0 bottom-0 w-px bg-canopy-border ml-[26px]" />
+
       <div className="flex items-center gap-2">
-        <span className="text-canopy-text/60 text-sm">Thinking</span>
+        <span className="text-canopy-text/50 text-[13px]">Thinking</span>
         <div className="flex gap-1" aria-hidden="true">
           <span className="w-1 h-1 rounded-full bg-canopy-text/40 animate-pulse [animation-delay:0ms]" />
           <span className="w-1 h-1 rounded-full bg-canopy-text/40 animate-pulse [animation-delay:150ms]" />

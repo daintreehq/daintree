@@ -3,6 +3,7 @@ import { refractor } from "refractor";
 import type { Element, Text, RootContent } from "hast";
 import { Check, Copy } from "lucide-react";
 import { cn } from "@/lib/utils";
+import "./assistant-markdown.css";
 
 interface MarkdownRendererProps {
   content: string;
@@ -108,13 +109,11 @@ function parseTableRow(row: string): string[] {
   const cells: string[] = [];
   let current = "";
 
-  // Skip leading whitespace and pipe if present
   const trimmed = row.trimStart();
   let i = trimmed.startsWith("|") ? 1 : 0;
 
   while (i < trimmed.length) {
     if (trimmed[i] === "\\" && i + 1 < trimmed.length && trimmed[i + 1] === "|") {
-      // Escaped pipe
       current += "|";
       i += 2;
     } else if (trimmed[i] === "|") {
@@ -127,13 +126,11 @@ function parseTableRow(row: string): string[] {
     }
   }
 
-  // Add the last cell if there's content (handles rows without trailing pipe)
   const lastCell = current.trim();
   if (lastCell || cells.length > 0) {
     cells.push(lastCell);
   }
 
-  // Remove empty last cell if row ended with pipe
   if (cells.length > 0 && cells[cells.length - 1] === "") {
     cells.pop();
   }
@@ -155,13 +152,11 @@ function parseAlignment(separator: string): TableAlignment {
 }
 
 function isValidSeparatorRow(row: string): boolean {
-  // Separator row must contain only |, -, :, and whitespace
   const cells = parseTableRow(row);
   if (cells.length === 0) return false;
 
   return cells.every((cell) => {
     const trimmed = cell.trim();
-    // Must have at least 3 dashes (GFM requirement)
     return /^:?-{3,}:?$/.test(trimmed);
   });
 }
@@ -170,13 +165,11 @@ function tryParseTable(
   lines: string[],
   startIndex: number
 ): { table: TableData; endIndex: number } | null {
-  // Need at least 2 lines for a valid table (header + separator)
   if (startIndex + 1 >= lines.length) return null;
 
   const headerLine = lines[startIndex];
   const separatorLine = lines[startIndex + 1];
 
-  // Check if this looks like a table (must start with | after trimming)
   const trimmedHeader = headerLine.trimStart();
   const trimmedSeparator = separatorLine.trimStart();
   if (!trimmedHeader.startsWith("|") || !trimmedSeparator.startsWith("|")) return null;
@@ -185,23 +178,19 @@ function tryParseTable(
   const headers = parseTableRow(headerLine);
   const separatorCells = parseTableRow(separatorLine);
 
-  // Header and separator must have the same number of columns
   if (headers.length === 0 || headers.length !== separatorCells.length) return null;
 
   const alignments = separatorCells.map(parseAlignment);
   const rows: string[][] = [];
 
-  // Parse body rows
   let endIndex = startIndex + 2;
   while (endIndex < lines.length) {
     const line = lines[endIndex];
     const trimmedLine = line.trimStart();
 
-    // Stop if line doesn't start with a pipe (table rows must start with |)
     if (!trimmedLine.startsWith("|")) break;
 
     const cells = parseTableRow(line);
-    // Require at least one cell to continue, and stop if separator-like
     if (cells.length > 0 && !isValidSeparatorRow(line)) {
       const normalizedCells = [...cells];
       while (normalizedCells.length < headers.length) {
@@ -265,7 +254,6 @@ function parseMarkdown(content: string): ParsedBlock[] {
   while ((match = codeBlockRegex.exec(content)) !== null) {
     if (match.index > lastIndex) {
       const textContent = content.slice(lastIndex, match.index);
-      // Parse text content for tables
       const textBlocks = parseTextWithTables(textContent);
       blocks.push(...textBlocks);
     }
@@ -286,7 +274,6 @@ function parseMarkdown(content: string): ParsedBlock[] {
 
   if (lastIndex < content.length) {
     const textContent = content.slice(lastIndex);
-    // Parse text content for tables
     const textBlocks = parseTextWithTables(textContent);
     blocks.push(...textBlocks);
   }
@@ -305,15 +292,15 @@ function renderInlineMarkdown(text: string): string {
   result = result.replace(/\*([^*]+)\*/g, "<em>$1</em>");
   result = result.replace(/_([^_]+)_/g, "<em>$1</em>");
 
-  // Inline code: `code` - prose-canopy handles styling
+  // Inline code: `code`
   result = result.replace(/`([^`]+)`/g, "<code>$1</code>");
 
-  // Links: [text](url) - with XSS protection, prose-canopy handles styling
+  // Links: [text](url) - with XSS protection
   result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, linkText, url) => {
     const trimmedUrl = url.trim();
     const isAllowedScheme = /^(https?|mailto):/i.test(trimmedUrl);
     if (!isAllowedScheme && !/^[./]/.test(trimmedUrl)) {
-      return `<span class="text-canopy-text/50">${linkText}</span>`;
+      return `<span style="opacity: 0.5">${linkText}</span>`;
     }
     const escapedUrl = trimmedUrl
       .replace(/&/g, "&amp;")
@@ -353,6 +340,13 @@ function TextBlock({ content }: { content: string }) {
     const trimmed = line.trim();
 
     // Headings
+    if (trimmed.startsWith("#### ")) {
+      flushList();
+      elements.push(
+        <h4 key={i} dangerouslySetInnerHTML={{ __html: renderInlineMarkdown(trimmed.slice(5)) }} />
+      );
+      continue;
+    }
     if (trimmed.startsWith("### ")) {
       flushList();
       elements.push(
@@ -443,22 +437,14 @@ function CodeBlock({ content, language }: { content: string; language: string })
   }, []);
 
   return (
-    <div className="not-prose my-3 first:mt-0 rounded-lg overflow-hidden border border-canopy-border bg-canopy-sidebar/30">
+    <div className="assistant-code-block">
       {language && language !== "text" && (
-        <div className="flex items-center justify-between px-3 py-1.5 bg-canopy-sidebar/70 border-b border-canopy-border">
-          <span className="text-[10px] font-mono text-canopy-text/50 uppercase tracking-wider">
-            {language}
-          </span>
+        <div className="assistant-code-header">
+          <span className="assistant-code-language">{language}</span>
           <button
             type="button"
             onClick={handleCopy}
-            className={cn(
-              "flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium",
-              "transition-colors",
-              copied
-                ? "text-green-400 bg-green-400/10"
-                : "text-canopy-text/50 hover:text-canopy-text/80 hover:bg-canopy-bg/50"
-            )}
+            className={cn("assistant-code-copy", copied && "copied")}
             aria-label="Copy code"
           >
             {copied ? (
@@ -475,12 +461,11 @@ function CodeBlock({ content, language }: { content: string; language: string })
           </button>
         </div>
       )}
-      <pre className="p-3 overflow-x-auto">
-        <code
-          className="text-[13px] font-mono leading-relaxed"
-          dangerouslySetInnerHTML={{ __html: highlightedHtml }}
-        />
-      </pre>
+      <div className="assistant-code-content">
+        <pre>
+          <code dangerouslySetInnerHTML={{ __html: highlightedHtml }} />
+        </pre>
+      </div>
     </div>
   );
 }
@@ -498,19 +483,15 @@ function TableBlock({ tableData }: { tableData: TableData }) {
   };
 
   return (
-    <div className="my-3 overflow-x-auto rounded-lg border border-canopy-border">
-      <table className="w-full border-collapse text-sm">
+    <div className="assistant-table">
+      <table>
         <thead>
-          <tr className="bg-canopy-sidebar/30">
+          <tr>
             {tableData.headers.map((header, i) => (
               <th
                 key={i}
                 scope="col"
-                className={cn(
-                  "px-3 py-1.5 font-semibold text-canopy-text/90 border-b border-canopy-border",
-                  i > 0 && "border-l border-canopy-border",
-                  alignmentClass(tableData.alignments[i])
-                )}
+                className={alignmentClass(tableData.alignments[i])}
                 dangerouslySetInnerHTML={{ __html: renderInlineMarkdown(header) }}
               />
             ))}
@@ -518,21 +499,11 @@ function TableBlock({ tableData }: { tableData: TableData }) {
         </thead>
         <tbody>
           {tableData.rows.map((row, rowIndex) => (
-            <tr
-              key={rowIndex}
-              className={cn(
-                rowIndex % 2 === 1 && "bg-canopy-sidebar/10",
-                rowIndex < tableData.rows.length - 1 && "border-b border-canopy-border/50"
-              )}
-            >
+            <tr key={rowIndex}>
               {row.map((cell, cellIndex) => (
                 <td
                   key={cellIndex}
-                  className={cn(
-                    "px-3 py-1.5 text-canopy-text",
-                    cellIndex > 0 && "border-l border-canopy-border/50",
-                    alignmentClass(tableData.alignments[cellIndex])
-                  )}
+                  className={alignmentClass(tableData.alignments[cellIndex])}
                   dangerouslySetInnerHTML={{ __html: renderInlineMarkdown(cell) }}
                 />
               ))}
@@ -547,22 +518,16 @@ function TableBlock({ tableData }: { tableData: TableData }) {
 export function MarkdownRenderer({ content, className }: MarkdownRendererProps) {
   const blocks = useMemo(() => parseMarkdown(content), [content]);
 
-  // Handle empty or whitespace-only content
   const hasRenderable = blocks.some(
     (block) => block.type === "code" || block.type === "table" || block.content.trim().length > 0
   );
 
   if (!hasRenderable) {
-    return (
-      <div
-        className={cn("prose prose-sm prose-canopy min-h-[1.5em]", className)}
-        aria-hidden="true"
-      />
-    );
+    return <div className={cn("assistant-markdown min-h-[1.5em]", className)} aria-hidden="true" />;
   }
 
   return (
-    <div className={cn("prose prose-sm prose-canopy max-w-none", className)}>
+    <div className={cn("assistant-markdown", className)}>
       {blocks.map((block, index) => {
         if (block.type === "code") {
           return (
