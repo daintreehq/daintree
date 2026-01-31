@@ -16,6 +16,15 @@
     Roboto,
     sans-serif;
 
+  /* Remove top/bottom margins on first/last children */
+  & > :first-child {
+    margin-top: 0;
+  }
+
+  & > :last-child {
+    margin-bottom: 0;
+  }
+
   /* Paragraphs */
   & p {
     margin: 0;

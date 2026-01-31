@@ -15,7 +15,11 @@ interface InteractionBlockProps {
 function UserInputBlock({ content, className }: { content: string; className?: string }) {
   return (
     <div
-      className={cn("group flex gap-4 px-6 py-4", className)}
+      className={cn(
+        "group flex gap-5 px-5 py-3",
+        "bg-canopy-sidebar/25 border-y border-divider/60",
+        className
+      )}
       role="article"
       aria-label="User input"
     >
@@ -70,12 +74,12 @@ function AssistantResponseBlock({
 
   return (
     <div
-      className={cn("group pl-8 pr-6 py-4 space-y-5 relative", className)}
+      className={cn("group pl-14 pr-5 py-3 space-y-3 relative", className)}
       role="article"
       aria-label="Assistant response"
     >
-      {/* Thread line visual */}
-      <div className="absolute left-0 top-0 bottom-0 w-px bg-canopy-border ml-[26px]" />
+      {/* Thread line - centered on chevron with equal spacing */}
+      <div className="absolute left-7 top-0 bottom-0 w-px bg-canopy-border" />
 
       {hasToolCalls && (
         <div className="space-y-2">
@@ -98,37 +102,25 @@ function AssistantResponseBlock({
         <div className="text-canopy-text/40 text-sm italic">No response content</div>
       )}
 
-      {/* Copy button */}
+      {/* Copy button - bottom right */}
       {hasContent && !isStreaming && (
-        <div className="flex justify-end pt-1">
-          <button
-            type="button"
-            onClick={handleCopy}
-            className={cn(
-              "flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium",
-              "opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
-              "[@media(hover:none)]:opacity-100",
-              copied
-                ? "text-canopy-accent bg-canopy-accent/10"
-                : "text-canopy-text/50 hover:text-canopy-text/80 hover:bg-canopy-sidebar/50"
-            )}
-            aria-label={copied ? "Copied response" : "Copy response"}
-            title="Copy response to clipboard"
-          >
-            {copied ? (
-              <>
-                <Check className="w-3 h-3" />
-                Copied
-              </>
-            ) : (
-              <>
-                <Copy className="w-3 h-3" />
-                Copy
-              </>
-            )}
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={handleCopy}
+          className={cn(
+            "absolute bottom-3 right-5 p-1.5 rounded transition-all",
+            "opacity-0 group-hover:opacity-100 focus:opacity-100",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
+            "[@media(hover:none)]:opacity-100",
+            copied
+              ? "text-canopy-accent bg-canopy-accent/10"
+              : "text-canopy-text/30 hover:text-canopy-text/60 hover:bg-canopy-sidebar/40"
+          )}
+          aria-label={copied ? "Copied response" : "Copy response"}
+          title="Copy response to clipboard"
+        >
+          {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+        </button>
       )}
     </div>
   );

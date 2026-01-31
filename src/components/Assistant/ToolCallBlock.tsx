@@ -83,7 +83,7 @@ export function ToolCallBlock({ toolCall, className }: ToolCallBlockProps) {
         type="button"
         onClick={toggleExpanded}
         className={cn(
-          "flex items-center justify-between gap-3 px-3 py-2 rounded border border-canopy-border w-full max-w-sm",
+          "flex items-center justify-between gap-3 px-3 py-2 rounded border border-canopy-border w-full max-w-[520px]",
           "group hover:border-canopy-text/20 transition-colors cursor-pointer bg-canopy-sidebar/30",
           "focus:outline-none focus:ring-1 focus:ring-canopy-accent/30"
         )}
@@ -109,7 +109,7 @@ export function ToolCallBlock({ toolCall, className }: ToolCallBlockProps) {
       {expanded && (
         <div
           id={`tool-call-details-${toolCall.id}`}
-          className="px-3 py-3 mt-1 text-[13px] font-mono text-canopy-text/60 bg-canopy-sidebar/20 rounded border border-canopy-border max-w-sm"
+          className="px-3 py-3 mt-1 text-[13px] font-mono text-canopy-text/60 bg-canopy-sidebar/20 rounded border border-canopy-border max-w-[520px]"
         >
           <div className="mb-1.5 text-canopy-text/40 text-[10px] uppercase tracking-wider font-medium">
             Arguments
