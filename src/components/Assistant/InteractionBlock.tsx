@@ -17,7 +17,7 @@ function UserInputBlock({ content, className }: { content: string; className?: s
     <div
       className={cn(
         "group relative flex gap-4 px-6 py-5",
-        "bg-white/[0.02] border-b border-white/[0.05]",
+        "bg-white/[0.03] border-b border-white/[0.05]",
         className
       )}
       role="article"
