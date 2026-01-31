@@ -78,7 +78,7 @@ function AssistantResponseBlock({
       role="article"
       aria-label="Assistant response"
     >
-      {/* Thread line - centered on chevron with equal spacing */}
+      {/* Thread line - extends through full padding box */}
       <div className="absolute left-7 top-0 bottom-0 w-px bg-canopy-border" />
 
       {hasToolCalls && (
