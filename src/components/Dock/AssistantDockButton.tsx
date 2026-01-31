@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAssistantChatStore } from "@/store/assistantChatStore";
 import { useSidecarStore } from "@/store";
@@ -14,6 +15,19 @@ export function AssistantDockButton() {
   const toggle = useAssistantChatStore((s) => s.toggle);
   const close = useAssistantChatStore((s) => s.close);
   const currentProject = useProjectStore((s) => s.currentProject);
+
+  const { isLoading, lastMessage } = useAssistantChatStore(
+    useShallow((s) => ({
+      isLoading: s.conversation.isLoading,
+      lastMessage: s.conversation.messages[s.conversation.messages.length - 1],
+    }))
+  );
+
+  const isWaiting = useMemo(() => {
+    if (isLoading || !lastMessage) return false;
+    if (lastMessage.role !== "assistant" || !lastMessage.toolCalls) return false;
+    return lastMessage.toolCalls.some((tc) => tc.status === "pending");
+  }, [isLoading, lastMessage]);
 
   const { isOpen: sidecarOpen, width: sidecarWidth } = useSidecarStore(
     useShallow((s) => ({ isOpen: s.isOpen, width: s.width }))
@@ -38,11 +52,12 @@ export function AssistantDockButton() {
     [close]
   );
 
-  // Build tooltip text from current context
+  // Build tooltip and aria-label from current context and state
   const tooltipText = useMemo(() => {
-    const base = "Canopy Assistant";
+    if (!isOpen && isLoading) return "Assistant is working...";
+    if (!isOpen && isWaiting) return "Assistant needs your attention";
 
-    // Prefer active worktree name, fallback to project name
+    const base = "Canopy Assistant";
     const contextLabel =
       currentContext?.activeWorktreeName || currentContext?.projectName || currentProject?.name;
 
@@ -51,7 +66,13 @@ export function AssistantDockButton() {
     }
 
     return `${base} (⌘⇧K)`;
-  }, [currentContext, currentProject]);
+  }, [isOpen, isLoading, isWaiting, currentContext, currentProject]);
+
+  const ariaLabel = useMemo(() => {
+    if (!isOpen && isLoading) return "Toggle Assistant (working)";
+    if (!isOpen && isWaiting) return "Toggle Assistant (needs attention)";
+    return "Toggle Assistant";
+  }, [isOpen, isLoading, isWaiting]);
 
   return (
     <Popover open={isOpen} onOpenChange={handleOpenChange}>
@@ -68,12 +89,22 @@ export function AssistantDockButton() {
               "bg-white/[0.08] text-canopy-text border-canopy-accent/40 ring-1 ring-inset ring-canopy-accent/30"
           )}
           title={tooltipText}
-          aria-label="Toggle Assistant"
+          aria-label={ariaLabel}
+          aria-busy={!isOpen && isLoading}
           aria-haspopup="dialog"
           aria-expanded={isOpen}
           aria-controls="assistant-popup"
         >
-          <CanopyIcon className="w-4 h-4" />
+          {!isOpen && isLoading ? (
+            <div className="relative w-4 h-4" aria-hidden="true">
+              <div className="absolute inset-0 rounded-full border-2 border-white/10" />
+              <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-canopy-accent animate-spin" />
+            </div>
+          ) : !isOpen && isWaiting ? (
+            <AlertCircle className="w-4 h-4 text-amber-500" />
+          ) : (
+            <CanopyIcon className="w-4 h-4" />
+          )}
         </button>
       </PopoverTrigger>
       <PopoverContent
