@@ -9,7 +9,7 @@ import { useAssistantChat } from "./useAssistantChat";
 
 export function AssistantPane() {
   const { hasApiKey, isInitialized, initialize } = useAppAgentStore();
-  const { close } = useAssistantChatStore();
+  const { isOpen, close } = useAssistantChatStore();
   const inputRef = useRef<AssistantInputHandle>(null);
 
   const {
@@ -24,9 +24,24 @@ export function AssistantPane() {
     clearMessages,
   } = useAssistantChat();
 
+  const showLoading = !isInitialized;
+  const showNoApiKey = isInitialized && !hasApiKey;
+  const showChat = isInitialized && hasApiKey;
+  const hasMessages = messages.length > 0;
+
   useEffect(() => {
     initialize();
   }, [initialize]);
+
+  // Focus input when assistant opens and chat UI is ready
+  useEffect(() => {
+    if (!isOpen || !showChat || isLoading) return;
+
+    const rafId = requestAnimationFrame(() => {
+      inputRef.current?.focus();
+    });
+    return () => cancelAnimationFrame(rafId);
+  }, [isOpen, showChat, isLoading]);
 
   const handleSubmit = useCallback(
     (value: string) => {
@@ -43,11 +58,6 @@ export function AssistantPane() {
     }
     clearMessages();
   }, [clearMessages, messages.length, isLoading]);
-
-  const showLoading = !isInitialized;
-  const showNoApiKey = isInitialized && !hasApiKey;
-  const showChat = isInitialized && hasApiKey;
-  const hasMessages = messages.length > 0;
 
   return (
     <div className="flex flex-col h-full bg-canopy-bg">
