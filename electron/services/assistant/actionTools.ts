@@ -21,6 +21,15 @@ export const AGENT_ACCESSIBLE_ACTIONS = [
   "worktree.list",
   "worktree.getCurrent",
   "project.getCurrent",
+
+  // Worktree queries - for building worktree creation workflows
+  "worktree.listBranches",
+  "worktree.getDefaultPath",
+  "worktree.getAvailableBranch",
+
+  // Recipe queries
+  "recipe.list",
+
   // Command actions - perform operations
   "app.settings",
   "app.settings.openTab",
@@ -36,6 +45,13 @@ export const AGENT_ACCESSIBLE_ACTIONS = [
   "nav.toggleSidebar",
   "panel.toggleDock",
   "sidecar.toggle",
+
+  // Worktree creation - requires confirmation
+  "worktree.create",
+  "worktree.createWithRecipe",
+
+  // Recipe execution
+  "recipe.run",
 ] as const;
 
 export type AgentAccessibleAction = (typeof AGENT_ACCESSIBLE_ACTIONS)[number];

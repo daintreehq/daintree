@@ -18,6 +18,7 @@ import { registerSystemActions } from "./definitions/systemActions";
 import { registerTerminalActions } from "./definitions/terminalActions";
 import { registerWorktreeActions } from "./definitions/worktreeActions";
 import { registerWorktreeSessionActions } from "./definitions/worktreeSessionActions";
+import { registerWorkflowActions } from "./definitions/workflowActions";
 
 export type { ActionCallbacks, ActionRegistry } from "./actionTypes";
 
@@ -43,6 +44,7 @@ export function createActionDefinitions(callbacks: ActionCallbacks): ActionRegis
   registerNotesActions(actions, callbacks);
   registerIntrospectionActions(actions, callbacks);
   registerDevServerActions(actions, callbacks);
+  registerWorkflowActions(actions);
 
   return actions;
 }
