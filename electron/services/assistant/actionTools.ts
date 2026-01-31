@@ -74,8 +74,57 @@ export function unsanitizeToolName(sanitizedName: string): string {
 }
 
 /**
+ * Recursively sanitize a property schema.
+ * Fixes empty objects from z.any() by converting to { type: "object" }.
+ */
+function sanitizePropertySchema(propSchema: unknown): unknown {
+  if (typeof propSchema !== "object" || propSchema === null) {
+    return propSchema;
+  }
+
+  const schema = propSchema as Record<string, unknown>;
+
+  // Handle empty objects from z.any() - they need at least a type
+  // An empty object {} in JSON Schema technically means "any value" but many AI providers
+  // don't handle this well. Convert to an explicit object type.
+  if (Object.keys(schema).length === 0) {
+    return { type: "object", additionalProperties: true };
+  }
+
+  // If it's an object with no type but has other properties, it might be malformed
+  if (!schema["type"] && !schema["anyOf"] && !schema["oneOf"] && !schema["allOf"]) {
+    // Check if it looks like an object schema (has properties)
+    if (schema["properties"]) {
+      return { type: "object", ...schema };
+    }
+    // Otherwise, treat as a permissive object
+    return { type: "object", additionalProperties: true, ...schema };
+  }
+
+  // Recursively sanitize nested properties
+  if (schema["properties"] && typeof schema["properties"] === "object") {
+    const sanitizedProps: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(schema["properties"] as Record<string, unknown>)) {
+      sanitizedProps[key] = sanitizePropertySchema(value);
+    }
+    return { ...schema, properties: sanitizedProps };
+  }
+
+  // Handle anyOf (from Zod optionals) by recursively sanitizing each option
+  if (schema["anyOf"] && Array.isArray(schema["anyOf"])) {
+    return {
+      ...schema,
+      anyOf: (schema["anyOf"] as unknown[]).map((s) => sanitizePropertySchema(s)),
+    };
+  }
+
+  return schema;
+}
+
+/**
  * Sanitize JSON Schema for AI provider compatibility.
  * Removes $schema, unwraps anyOf from Zod optionals, ensures type/properties exist.
+ * Fixes malformed schemas like empty objects from z.any().
  */
 export function sanitizeSchema(
   schema: Record<string, unknown> | undefined
@@ -108,6 +157,15 @@ export function sanitizeSchema(
   }
   if (sanitized["type"] === "object" && !sanitized["properties"]) {
     sanitized["properties"] = {};
+  }
+
+  // Recursively sanitize all properties to fix malformed nested schemas
+  if (sanitized["properties"] && typeof sanitized["properties"] === "object") {
+    const sanitizedProps: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(sanitized["properties"] as Record<string, unknown>)) {
+      sanitizedProps[key] = sanitizePropertySchema(value);
+    }
+    sanitized["properties"] = sanitizedProps;
   }
 
   return sanitized;

@@ -136,8 +136,19 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     danger: "confirm",
     scope: "renderer",
     argsSchema: z.object({
-      rootPath: z.string(),
-      options: z.any(),
+      rootPath: z.string().describe("Root path of the git repository"),
+      options: z
+        .object({
+          baseBranch: z.string().describe("Branch to base the worktree on"),
+          newBranch: z.string().describe("Name for the new branch"),
+          path: z.string().describe("Filesystem path for the new worktree"),
+          fromRemote: z.boolean().optional().describe("Whether baseBranch is a remote branch"),
+          useExistingBranch: z
+            .boolean()
+            .optional()
+            .describe("Use an existing branch instead of creating a new one"),
+        })
+        .describe("Worktree creation options"),
     }),
     resultSchema: z.string(),
     run: async (args: unknown) => {

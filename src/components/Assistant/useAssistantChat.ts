@@ -398,6 +398,7 @@ export function useAssistantChat(options?: UseAssistantChatOptions) {
               break;
 
             case "error":
+              console.error("[AssistantChat] API Error:", chunk.error);
               if (chunk.error) {
                 storeSetError(chunk.error);
                 onError?.(chunk.error);
@@ -431,6 +432,7 @@ export function useAssistantChat(options?: UseAssistantChatOptions) {
       } catch (err) {
         if (currentRequestIdRef.current === requestId) {
           const errorMessage = err instanceof Error ? err.message : "An error occurred";
+          console.error("[AssistantChat] Error:", errorMessage);
           storeSetError(errorMessage);
           onError?.(errorMessage);
           setStreamingStateSync(null);
