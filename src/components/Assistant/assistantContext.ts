@@ -37,9 +37,7 @@ export function getAssistantContext(): ActionContext {
 
   // Enrich with focused terminal metadata
   if (focusedTerminalId) {
-    const terminal = useTerminalStore
-      .getState()
-      .terminals.find((t) => t.id === focusedTerminalId);
+    const terminal = useTerminalStore.getState().terminals.find((t) => t.id === focusedTerminalId);
     if (terminal) {
       context.focusedTerminalKind = terminal.kind;
       context.focusedTerminalType = terminal.type;

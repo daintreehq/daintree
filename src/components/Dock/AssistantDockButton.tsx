@@ -44,9 +44,7 @@ export function AssistantDockButton() {
 
     // Prefer active worktree name, fallback to project name
     const contextLabel =
-      currentContext?.activeWorktreeName ||
-      currentContext?.projectName ||
-      currentProject?.name;
+      currentContext?.activeWorktreeName || currentContext?.projectName || currentProject?.name;
 
     if (contextLabel) {
       return `${base} — ${contextLabel}`;

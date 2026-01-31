@@ -195,7 +195,8 @@ export class AssistantService {
       }
 
       // Build tools from filtered actions and listener management
-      const actionTools = filteredActions && context ? createActionTools(filteredActions, context) : {};
+      const actionTools =
+        filteredActions && context ? createActionTools(filteredActions, context) : {};
       const listenerTools = createListenerTools({ sessionId });
       const tools = { ...actionTools, ...listenerTools };
       const hasTools = Object.keys(tools).length > 0;
