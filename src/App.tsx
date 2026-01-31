@@ -19,6 +19,7 @@ import {
   useWorktreeActions,
   useMenuActions,
   useAppAgentDispatcher,
+  useAssistantStreamProcessor,
 } from "./hooks";
 import { useActionRegistry } from "./hooks/useActionRegistry";
 import { useAssistantContextSync } from "./hooks/useAssistantContextSync";
@@ -490,6 +491,7 @@ function App() {
   useTerminalConfig();
   useWindowNotifications();
   useAppAgentDispatcher(); // Enable Assistant tool calling via action dispatch
+  useAssistantStreamProcessor(); // Process Assistant chunks even when pane is closed
 
   const [homeDir, setHomeDir] = useState<string | undefined>(undefined);
   useEffect(() => {

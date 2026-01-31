@@ -22,11 +22,25 @@ function createInitialConversation(): ConversationState {
   };
 }
 
+interface StreamingState {
+  content: string;
+  toolCalls: Array<{
+    id: string;
+    name: string;
+    args: Record<string, unknown>;
+    status: "pending" | "success" | "error";
+    result?: unknown;
+    error?: string;
+  }>;
+}
+
 interface AssistantChatState {
   conversation: ConversationState;
   isOpen: boolean;
   displayMode: "popup" | "docked";
   currentContext: ActionContext | null;
+  streamingState: StreamingState | null;
+  streamingMessageId: string | null;
 }
 
 interface AssistantChatActions {
@@ -43,6 +57,7 @@ interface AssistantChatActions {
   toggle: () => void;
   setDisplayMode: (mode: "popup" | "docked") => void;
   setCurrentContext: (context: ActionContext | null) => void;
+  setStreamingState: (state: StreamingState | null, messageId: string | null) => void;
 }
 
 const initialState: AssistantChatState = {
@@ -50,6 +65,8 @@ const initialState: AssistantChatState = {
   isOpen: false,
   displayMode: "popup",
   currentContext: null,
+  streamingState: null,
+  streamingMessageId: null,
 };
 
 const createAssistantChatStore: StateCreator<AssistantChatState & AssistantChatActions> = (
@@ -121,10 +138,17 @@ const createAssistantChatStore: StateCreator<AssistantChatState & AssistantChatA
 
     set({
       conversation: createInitialConversation(),
+      streamingState: null,
+      streamingMessageId: null,
     });
   },
 
-  reset: () => set({ conversation: createInitialConversation() }),
+  reset: () =>
+    set({
+      conversation: createInitialConversation(),
+      streamingState: null,
+      streamingMessageId: null,
+    }),
 
   open: () => set({ isOpen: true }),
 
@@ -135,6 +159,9 @@ const createAssistantChatStore: StateCreator<AssistantChatState & AssistantChatA
   setDisplayMode: (mode) => set({ displayMode: mode }),
 
   setCurrentContext: (context) => set({ currentContext: context }),
+
+  setStreamingState: (state, messageId) =>
+    set({ streamingState: state, streamingMessageId: messageId }),
 });
 
 export const useAssistantChatStore = create<AssistantChatState & AssistantChatActions>()(
