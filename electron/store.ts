@@ -81,10 +81,8 @@ export interface StoreSchema {
       lastUsedAt?: number;
     }>;
     panelGridConfig?: PanelGridConfig;
-    dockCollapsed?: boolean;
-    dockMode?: "expanded" | "compact" | "slim" | "hidden";
+    dockMode?: "expanded" | "compact";
     dockBehavior?: "auto" | "manual";
-    dockAutoHideWhenEmpty?: boolean;
     compactDockMinimal?: boolean;
   };
   projects: {
@@ -134,10 +132,8 @@ const storeOptions = {
       recipes: [],
       hasSeenWelcome: false,
       panelGridConfig: { strategy: "automatic" as const, value: 3 },
-      dockCollapsed: false,
-      dockMode: "hidden" as const,
+      dockMode: "compact" as const,
       dockBehavior: "auto" as const,
-      dockAutoHideWhenEmpty: false,
     },
     projects: {
       list: [],

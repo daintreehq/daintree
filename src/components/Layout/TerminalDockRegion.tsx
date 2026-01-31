@@ -1,17 +1,14 @@
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useDockRenderState } from "@/hooks/useDockRenderState";
-import { useDockStore } from "@/store";
 import { ContentDock } from "./ContentDock";
 import { CompactDock } from "./CompactDock";
 import { DockHandleOverlay } from "./DockHandleOverlay";
-import { DockColorStrip } from "./DockColorStrip";
 import { DockPanelOffscreenContainer } from "./DockPanelOffscreenContainer";
 
 export function TerminalDockRegion() {
   const {
     effectiveMode,
     shouldShowInLayout,
-    showColorStrip,
     dockedCount,
     density,
     isHydrated,
@@ -19,11 +16,9 @@ export function TerminalDockRegion() {
     compactMinimal,
   } = useDockRenderState();
 
-  const setMode = useDockStore((state) => state.setMode);
-
-  // Before hydration, only show the handle overlay to prevent flash of incorrect state
+  // Before hydration, show nothing to prevent flash of incorrect state
   if (!isHydrated) {
-    return <DockHandleOverlay />;
+    return null;
   }
 
   const isCompactMode = effectiveMode === "compact";
@@ -48,11 +43,8 @@ export function TerminalDockRegion() {
         </ErrorBoundary>
       )}
 
-      {/* Handle overlay is visible in expanded and hidden modes (compact has its own expand button) */}
+      {/* Handle overlay for toggling between expanded and compact */}
       <DockHandleOverlay />
-
-      {/* Color strip when dock is hidden but has status counts or docked panels */}
-      {showColorStrip && <DockColorStrip onExpandDock={() => setMode("expanded")} />}
     </DockPanelOffscreenContainer>
   );
 }

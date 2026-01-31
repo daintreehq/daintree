@@ -5,7 +5,6 @@ import type { DockMode, DockBehavior } from "@shared/types";
 interface DockState {
   mode: DockMode;
   behavior: DockBehavior;
-  autoHideWhenEmpty: boolean;
   compactMinimal: boolean;
   peek: boolean;
   isHydrated: boolean;
@@ -15,17 +14,11 @@ interface DockState {
   setBehavior: (behavior: DockBehavior) => void;
   cycleMode: () => void;
   toggleExpanded: () => void;
-  setAutoHideWhenEmpty: (enabled: boolean) => void;
   setCompactMinimal: (enabled: boolean) => void;
   setPeek: (peek: boolean) => void;
   setPopoverHeight: (height: number) => void;
   hydrate: (
-    state: Partial<
-      Pick<
-        DockState,
-        "mode" | "behavior" | "autoHideWhenEmpty" | "compactMinimal" | "popoverHeight"
-      >
-    >
+    state: Partial<Pick<DockState, "mode" | "behavior" | "compactMinimal" | "popoverHeight">>
   ) => void;
 }
 
@@ -33,26 +26,33 @@ const POPOVER_DEFAULT_HEIGHT = 500;
 const POPOVER_MIN_HEIGHT = 300;
 const POPOVER_MAX_HEIGHT_RATIO = 0.8;
 
-const MODE_CYCLE: DockMode[] = ["expanded", "compact", "hidden"];
+const MODE_CYCLE: DockMode[] = ["expanded", "compact"];
+
+/** Normalize legacy dock modes to valid modes */
+function normalizeDockMode(mode: string): DockMode {
+  // Map legacy "slim" and "hidden" to "compact" to preserve minimized appearance
+  if (mode === "slim" || mode === "hidden") return "compact";
+  if (mode === "expanded") return "expanded";
+  // Default to compact for unknown values
+  return "compact";
+}
 
 export const useDockStore = create<DockState>()((set, get) => ({
-  mode: "hidden",
+  mode: "compact",
   behavior: "auto",
-  autoHideWhenEmpty: false,
   compactMinimal: false,
   peek: false,
   isHydrated: false,
   popoverHeight: POPOVER_DEFAULT_HEIGHT,
 
   setMode: (mode) => {
-    const normalizedMode: DockMode = mode === "slim" ? "hidden" : mode;
+    const normalizedMode = normalizeDockMode(mode);
     // Setting mode explicitly switches to manual behavior
     set({ mode: normalizedMode, behavior: "manual" });
     const state = get();
     void persistDockState({
       mode: normalizedMode,
       behavior: state.behavior,
-      autoHideWhenEmpty: state.autoHideWhenEmpty,
       compactMinimal: state.compactMinimal,
     });
   },
@@ -63,56 +63,40 @@ export const useDockStore = create<DockState>()((set, get) => ({
     void persistDockState({
       mode: state.mode,
       behavior: state.behavior,
-      autoHideWhenEmpty: state.autoHideWhenEmpty,
       compactMinimal: state.compactMinimal,
     });
   },
 
   cycleMode: () => {
-    const { mode, behavior } = get();
+    const { mode } = get();
     // In auto mode, cycling switches to manual mode
-    if (behavior === "auto") {
+    const state = get();
+    if (state.behavior === "auto") {
       set({ behavior: "manual" });
     }
-    const normalizedMode: DockMode = mode === "slim" ? "hidden" : mode;
+    const normalizedMode = normalizeDockMode(mode);
     const currentIndex = MODE_CYCLE.indexOf(normalizedMode);
     const nextIndex = (currentIndex + 1) % MODE_CYCLE.length;
     const nextMode = MODE_CYCLE[nextIndex];
     set({ mode: nextMode });
-    const state = get();
+    const finalState = get();
     void persistDockState({
-      mode: state.mode,
-      behavior: state.behavior,
-      autoHideWhenEmpty: state.autoHideWhenEmpty,
-      compactMinimal: state.compactMinimal,
+      mode: finalState.mode,
+      behavior: finalState.behavior,
+      compactMinimal: finalState.compactMinimal,
     });
   },
 
   toggleExpanded: () => {
-    const { mode, behavior } = get();
-    // In auto mode, toggling switches to manual mode
-    if (behavior === "auto") {
-      set({ behavior: "manual" });
-    }
-    // Toggle between expanded and hidden, treating compact as expanded for toggle purposes
-    const nextMode: DockMode = mode === "expanded" || mode === "compact" ? "hidden" : "expanded";
-    set({ mode: nextMode });
+    const { mode } = get();
+    // Toggle between expanded and compact
+    // When toggling, always switch to manual mode
+    const nextMode: DockMode = mode === "expanded" ? "compact" : "expanded";
+    set({ mode: nextMode, behavior: "manual" });
     const state = get();
     void persistDockState({
       mode: state.mode,
       behavior: state.behavior,
-      autoHideWhenEmpty: state.autoHideWhenEmpty,
-      compactMinimal: state.compactMinimal,
-    });
-  },
-
-  setAutoHideWhenEmpty: (enabled) => {
-    set({ autoHideWhenEmpty: enabled });
-    const state = get();
-    void persistDockState({
-      mode: state.mode,
-      behavior: state.behavior,
-      autoHideWhenEmpty: state.autoHideWhenEmpty,
       compactMinimal: state.compactMinimal,
     });
   },
@@ -123,7 +107,6 @@ export const useDockStore = create<DockState>()((set, get) => ({
     void persistDockState({
       mode: state.mode,
       behavior: state.behavior,
-      autoHideWhenEmpty: state.autoHideWhenEmpty,
       compactMinimal: enabled,
     });
   },
@@ -139,7 +122,11 @@ export const useDockStore = create<DockState>()((set, get) => ({
     void persistPopoverHeight(clampedHeight);
   },
 
-  hydrate: (state) => set({ ...state, isHydrated: true }),
+  hydrate: (state) => {
+    // Normalize legacy modes during hydration
+    const normalizedMode = state.mode ? normalizeDockMode(state.mode) : "expanded";
+    set({ ...state, mode: normalizedMode, isHydrated: true });
+  },
 }));
 
 async function persistPopoverHeight(height: number): Promise<void> {
@@ -155,14 +142,12 @@ export { POPOVER_DEFAULT_HEIGHT, POPOVER_MIN_HEIGHT, POPOVER_MAX_HEIGHT_RATIO };
 async function persistDockState(state: {
   mode: DockMode;
   behavior: DockBehavior;
-  autoHideWhenEmpty: boolean;
   compactMinimal: boolean;
 }): Promise<void> {
   try {
     await appClient.setState({
       dockMode: state.mode,
       dockBehavior: state.behavior,
-      dockAutoHideWhenEmpty: state.autoHideWhenEmpty,
       compactDockMinimal: state.compactMinimal,
     });
   } catch (error) {

@@ -261,12 +261,12 @@ export interface TabGroup {
  */
 export type TerminalLocation = PanelLocation;
 
-/** Dock display mode (slim is legacy and treated as hidden) */
-export type DockMode = "expanded" | "compact" | "slim" | "hidden";
+/** Dock display mode */
+export type DockMode = "expanded" | "compact";
 
 /**
  * Dock behavior controls how the dock mode is determined:
- * - "auto": Hidden by default, expands when there are docked terminals
+ * - "auto": Compact by default, expands when there are docked terminals
  * - "manual": User controls the mode directly
  */
 export type DockBehavior = "auto" | "manual";
@@ -278,14 +278,10 @@ export type DockBehavior = "auto" | "manual";
 export interface DockRenderState {
   /** The effective dock mode after applying behavior rules */
   effectiveMode: DockMode;
-  /** Whether the dock content should render in the layout (takes up space) */
+  /** Whether the dock content should render in the layout (takes up space) - true after hydration */
   shouldShowInLayout: boolean;
-  /** Whether to show the color strip (hidden mode with content) */
-  showColorStrip: boolean;
   /** Density for ContentDock components */
   density: "normal" | "compact";
-  /** Whether the dock handle should show as "visible" (expanded) or "hidden" */
-  isHandleVisible: boolean;
   /** Whether hydration is complete */
   isHydrated: boolean;
 }
