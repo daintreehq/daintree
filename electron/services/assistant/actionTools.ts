@@ -28,6 +28,7 @@ export const AGENT_ACCESSIBLE_ACTIONS = [
   "terminal.kill",
   "terminal.close",
   "terminal.trash",
+  "terminal.sendCommand",
   "terminal.palette",
   "worktree.createDialog.open",
   "worktree.setActive",
