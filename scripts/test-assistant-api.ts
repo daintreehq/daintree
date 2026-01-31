@@ -42,7 +42,10 @@ function loadEnv(): Record<string, string> {
     if (trimmed && !trimmed.startsWith("#")) {
       const [key, ...valueParts] = trimmed.split("=");
       if (key && valueParts.length > 0) {
-        env[key.trim()] = valueParts.join("=").trim().replace(/^["']|["']$/g, "");
+        env[key.trim()] = valueParts
+          .join("=")
+          .trim()
+          .replace(/^["']|["']$/g, "");
       }
     }
   }
@@ -201,7 +204,7 @@ interface ApiResponse {
 
 async function testApi(apiKey: string, useFullTools: boolean = true) {
   const FIREWORKS_BASE_URL = "https://api.fireworks.ai/inference/v1";
-  const MODEL = "accounts/fireworks/models/kimi-k2p5";  // Kimi K2
+  const MODEL = "accounts/fireworks/models/kimi-k2p5"; // Kimi K2
 
   console.log("Testing Fireworks AI API...");
   console.log("Model:", MODEL);
@@ -276,7 +279,6 @@ async function testApi(apiKey: string, useFullTools: boolean = true) {
 
       console.log("Finish reason:", data.choices[0].finish_reason);
     }
-
   } catch (err) {
     console.error("\n=== FETCH ERROR ===");
     console.error(err);
@@ -289,7 +291,7 @@ async function testApi(apiKey: string, useFullTools: boolean = true) {
 
 async function main() {
   const args = process.argv.slice(2);
-  const useFullTools = !args.includes("--simple");  // Full tools by default
+  const useFullTools = !args.includes("--simple"); // Full tools by default
   const showHelp = args.includes("--help") || args.includes("-h");
 
   if (showHelp) {

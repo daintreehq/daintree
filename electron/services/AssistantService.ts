@@ -1,5 +1,5 @@
 import { createOpenAI } from "@ai-sdk/openai";
-import { streamText, type ModelMessage, stepCountIs, type JSONValue } from "ai";
+import { streamText, type ModelMessage, stepCountIs, type JSONValue, APICallError } from "ai";
 import { store } from "../store.js";
 import type { StreamChunk, AssistantMessage } from "../../shared/types/assistant.js";
 import type { ActionManifestEntry, ActionContext } from "../../shared/types/actions.js";
@@ -7,6 +7,327 @@ import { createActionTools, sanitizeToolName } from "./assistant/actionTools.js"
 import { SYSTEM_PROMPT, buildContextBlock } from "./assistant/index.js";
 import { listenerManager } from "./assistant/ListenerManager.js";
 import { createListenerTools } from "./assistant/listenerTools.js";
+
+/**
+ * Sanitizes error messages to remove sensitive information.
+ * Removes API keys, bearer tokens, credentials, file paths, and control characters.
+ */
+function sanitizeErrorMessage(message: string): string {
+  let sanitized = message;
+
+  // Remove API keys (common patterns: sk-xxx, fw-xxx, api-key patterns)
+  sanitized = sanitized.replace(/\b(sk|fw|api|key)[_-]?[a-zA-Z0-9]{16,}\b/gi, "[REDACTED_KEY]");
+
+  // Remove JWTs (three base64 segments separated by dots)
+  sanitized = sanitized.replace(
+    /\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g,
+    "[REDACTED_JWT]"
+  );
+
+  // Remove credentials from URLs (scheme://user:pass@host)
+  sanitized = sanitized.replace(/(https?:\/\/)[^:@\s]+:[^@\s]+@/gi, "$1[REDACTED]@");
+
+  // Remove API keys/tokens from query parameters and JSON
+  sanitized = sanitized.replace(
+    /\b(api_key|apikey|key|token|access_token|refresh_token|id_token|secret|password|session|auth|authorization)["']?\s*[:=]\s*["']?[a-zA-Z0-9\-._~+/]+(["']|\b)/gi,
+    "$1=[REDACTED]"
+  );
+
+  // Remove all Authorization header values (any scheme)
+  sanitized = sanitized.replace(
+    /Authorization['":\s]+(Bearer|Basic|Token|Api-Key|Digest)\s+[^\s"']+/gi,
+    "Authorization: [REDACTED]"
+  );
+
+  // Remove X-API-Key and similar headers
+  sanitized = sanitized.replace(
+    /(X-API-Key|Api-Key|X-Auth-Token)['":\s]+[^\s"']+/gi,
+    "$1: [REDACTED]"
+  );
+
+  // Remove file paths (Unix and Windows)
+  sanitized = sanitized.replace(/\/(Users|home|usr|var|tmp|opt)\/[^\s"']+/g, "[PATH]");
+  sanitized = sanitized.replace(/[A-Z]:\\[^\s"']+/g, "[PATH]");
+  sanitized = sanitized.replace(/file:\/\/[^\s"']+/g, "file://[PATH]");
+
+  // Remove ANSI escape sequences
+  // eslint-disable-next-line no-control-regex
+  sanitized = sanitized.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+
+  // Remove other control characters (C0 and C1 control codes except newline/tab)
+  // eslint-disable-next-line no-control-regex
+  sanitized = sanitized.replace(/[\x00-\x08\x0B-\x1F\x7F-\x9F]/g, "");
+
+  // Remove bidirectional text override characters (security risk)
+  sanitized = sanitized.replace(/[\u202A-\u202E\u2066-\u2069]/g, "");
+
+  // Enforce maximum display length (prevent UI overflow)
+  const MAX_ERROR_LENGTH = 2000;
+  if (sanitized.length > MAX_ERROR_LENGTH) {
+    sanitized = sanitized.slice(0, MAX_ERROR_LENGTH) + "\n... (truncated)";
+  }
+
+  return sanitized;
+}
+
+/**
+ * Extracts a human-readable error message from various error types.
+ * Handles Vercel AI SDK errors, Fireworks.ai API responses, and generic errors.
+ */
+function extractDetailedError(error: unknown): string {
+  const details: string[] = [];
+
+  // Handle APICallError from Vercel AI SDK
+  if (APICallError.isInstance(error)) {
+    // Start with the base error message
+    let mainMessage = error.message;
+
+    // Try to parse the response body for provider-specific error details
+    if (error.responseBody) {
+      // Limit response body size to prevent memory/CPU issues
+      const MAX_RESPONSE_SIZE = 64 * 1024; // 64KB
+      const responseBody = error.responseBody.slice(0, MAX_RESPONSE_SIZE);
+
+      try {
+        const body = JSON.parse(responseBody);
+
+        // Guard against null or non-object JSON
+        if (body && typeof body === "object") {
+          // Fireworks.ai format: { error: { message, type, code } }
+          if (body.error) {
+            if (typeof body.error === "string") {
+              // error is a string
+              mainMessage = body.error;
+            } else if (typeof body.error === "object" && body.error !== null) {
+              // error is an object
+              if (body.error.message) {
+                mainMessage = body.error.message;
+              }
+              if (body.error.type) {
+                details.push(`Type: ${body.error.type}`);
+              }
+              if (body.error.code) {
+                details.push(`Code: ${body.error.code}`);
+              }
+            }
+          }
+          // Alternative format: { message, code } or { detail }
+          else if (body.message) {
+            mainMessage = body.message;
+            if (body.code) {
+              details.push(`Code: ${body.code}`);
+            }
+          } else if (body.detail) {
+            mainMessage = body.detail;
+          }
+          // Handle errors array: { errors: [{ message }] }
+          else if (Array.isArray(body.errors) && body.errors.length > 0 && body.errors[0].message) {
+            mainMessage = body.errors[0].message;
+          }
+        }
+      } catch {
+        // Response body is not JSON, include truncated snippet
+        const snippet = responseBody.slice(0, 200);
+        details.push(`Response: ${snippet}${responseBody.length > 200 ? "..." : ""}`);
+      }
+    }
+
+    // Add HTTP status code
+    if (error.statusCode) {
+      const statusText = getHttpStatusText(error.statusCode);
+      details.unshift(`HTTP ${error.statusCode}${statusText ? ` (${statusText})` : ""}`);
+    }
+
+    // Add retryable hint for rate limits
+    if (error.isRetryable && error.statusCode === 429) {
+      details.push("Rate limited - please wait and try again");
+    }
+
+    // Build the full error message
+    const fullError = [mainMessage, ...details].filter(Boolean).join("\n");
+    return sanitizeErrorMessage(fullError);
+  }
+
+  // Handle generic Error objects
+  if (error instanceof Error) {
+    const mainMessage = error.message;
+
+    // Check for nested cause (common in wrapped errors)
+    if (error.cause && error.cause instanceof Error) {
+      details.push(`Caused by: ${error.cause.message}`);
+    }
+
+    // Check for common error properties that might be present on custom error types
+    const errorAny = error as unknown as Record<string, unknown>;
+
+    // Handle statusCode (number or numeric string)
+    if (typeof errorAny["statusCode"] === "number") {
+      const statusText = getHttpStatusText(errorAny["statusCode"] as number);
+      details.unshift(`HTTP ${errorAny["statusCode"]}${statusText ? ` (${statusText})` : ""}`);
+    } else if (typeof errorAny["statusCode"] === "string") {
+      const statusCode = parseInt(errorAny["statusCode"], 10);
+      if (!isNaN(statusCode)) {
+        const statusText = getHttpStatusText(statusCode);
+        details.unshift(`HTTP ${statusCode}${statusText ? ` (${statusText})` : ""}`);
+      }
+    }
+
+    if (typeof errorAny["code"] === "string") {
+      details.push(`Code: ${errorAny["code"]}`);
+    }
+
+    const fullError = [mainMessage, ...details].filter(Boolean).join("\n");
+    return sanitizeErrorMessage(fullError);
+  }
+
+  // Handle string errors
+  if (typeof error === "string") {
+    return sanitizeErrorMessage(error);
+  }
+
+  // Handle unknown error types
+  if (error && typeof error === "object") {
+    const errorObj = error as Record<string, unknown>;
+    if (typeof errorObj["message"] === "string") {
+      return sanitizeErrorMessage(errorObj["message"]);
+    }
+    // Extract safe fields instead of stringifying entire object
+    const safeFields: string[] = [];
+    if (typeof errorObj["code"] === "string" || typeof errorObj["code"] === "number") {
+      safeFields.push(`Code: ${errorObj["code"]}`);
+    }
+    if (typeof errorObj["type"] === "string") {
+      safeFields.push(`Type: ${errorObj["type"]}`);
+    }
+    if (typeof errorObj["statusCode"] === "number") {
+      safeFields.push(`Status: ${errorObj["statusCode"]}`);
+    }
+
+    if (safeFields.length > 0) {
+      return sanitizeErrorMessage(["Unknown error", ...safeFields].join("\n"));
+    }
+
+    // Last resort: try safe JSON stringify with circular reference handling
+    try {
+      const seen = new Set<unknown>();
+      const json = JSON.stringify(
+        error,
+        (key, value) => {
+          // Skip sensitive fields
+          if (["headers", "config", "request", "response", "stack"].includes(key)) {
+            return "[OMITTED]";
+          }
+          // Handle circular references
+          if (typeof value === "object" && value !== null) {
+            if (seen.has(value)) {
+              return "[Circular]";
+            }
+            seen.add(value);
+          }
+          return value;
+        },
+        2
+      );
+      if (json.length < 500) {
+        return sanitizeErrorMessage(json);
+      }
+      return sanitizeErrorMessage(json.slice(0, 200) + "...");
+    } catch {
+      return "Unknown error occurred";
+    }
+  }
+
+  return "Unknown error occurred";
+}
+
+/**
+ * Returns a human-readable description for common HTTP status codes.
+ */
+function getHttpStatusText(statusCode: number): string {
+  const statusTexts: Record<number, string> = {
+    400: "Bad Request",
+    401: "Unauthorized",
+    403: "Forbidden",
+    404: "Not Found",
+    408: "Request Timeout",
+    429: "Too Many Requests",
+    500: "Internal Server Error",
+    502: "Bad Gateway",
+    503: "Service Unavailable",
+    504: "Gateway Timeout",
+  };
+  return statusTexts[statusCode] || "";
+}
+
+/**
+ * Extracts a detailed error message from stream part errors.
+ * Stream errors may come as strings, Error objects, or structured data.
+ */
+function extractStreamPartError(partError: unknown): string {
+  if (!partError) {
+    return "Stream error occurred";
+  }
+
+  if (typeof partError === "string") {
+    return sanitizeErrorMessage(partError);
+  }
+
+  if (partError instanceof Error) {
+    return extractDetailedError(partError);
+  }
+
+  // Handle structured error objects
+  if (typeof partError === "object") {
+    const errorObj = partError as Record<string, unknown>;
+
+    // Try common error formats
+    if (typeof errorObj["message"] === "string") {
+      const details: string[] = [];
+      const mainMessage = errorObj["message"];
+
+      if (typeof errorObj["code"] === "string") {
+        details.push(`Code: ${errorObj["code"]}`);
+      }
+      if (typeof errorObj["type"] === "string") {
+        details.push(`Type: ${errorObj["type"]}`);
+      }
+
+      const fullError = [mainMessage, ...details].filter(Boolean).join("\n");
+      return sanitizeErrorMessage(fullError);
+    }
+
+    // Fallback: safe stringify with circular reference handling
+    try {
+      const seen = new Set<unknown>();
+      const json = JSON.stringify(
+        partError,
+        (key, value) => {
+          // Skip sensitive fields
+          if (["headers", "config", "request", "response", "stack"].includes(key)) {
+            return "[OMITTED]";
+          }
+          // Handle circular references
+          if (typeof value === "object" && value !== null) {
+            if (seen.has(value)) {
+              return "[Circular]";
+            }
+            seen.add(value);
+          }
+          return value;
+        },
+        2
+      );
+      if (json.length < 500) {
+        return sanitizeErrorMessage(json);
+      }
+      return sanitizeErrorMessage(json.slice(0, 200) + "...");
+    } catch {
+      return "Stream error occurred (unserializable)";
+    }
+  }
+
+  return "Stream error occurred";
+}
 
 // Actions that require a focused terminal and cannot accept an explicit terminalId
 // These actions operate on "the current terminal" without a way to specify which one
@@ -248,7 +569,7 @@ export class AssistantService {
             console.error("[AssistantService] Stream part error:", part.error);
             onChunk({
               type: "error",
-              error: part.error ? String(part.error) : "Stream error occurred",
+              error: extractStreamPartError(part.error),
             });
             break;
         }
@@ -269,8 +590,15 @@ export class AssistantService {
         return;
       }
 
-      const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
-      console.error("[AssistantService] Stream error:", errorMessage);
+      // Extract detailed error information for user display
+      const errorMessage = extractDetailedError(error);
+
+      // Log full error details for debugging (including stack trace)
+      console.error("[AssistantService] Stream error:", error);
+      if (error instanceof Error && error.stack) {
+        console.error("[AssistantService] Stack trace:", error.stack);
+      }
+
       onChunk({
         type: "error",
         error: errorMessage,

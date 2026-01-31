@@ -389,7 +389,10 @@ interface ActionInfo {
  * Extract a balanced brace block starting from a given position.
  * Returns the content inside the braces (excluding the outer braces).
  */
-function extractBalancedBlock(content: string, startIndex: number): { block: string; endIndex: number } | null {
+function extractBalancedBlock(
+  content: string,
+  startIndex: number
+): { block: string; endIndex: number } | null {
   if (content[startIndex] !== "{" && content[startIndex] !== "(") return null;
 
   const openChar = content[startIndex];
@@ -457,7 +460,9 @@ function extractActionsFromSource(): ActionInfo[] {
   const actions: ActionInfo[] = [];
   const definitionsDir = path.join(ROOT, "src/services/actions/definitions");
 
-  const files = fs.readdirSync(definitionsDir).filter((f) => f.endsWith(".ts") && f !== "schemas.ts");
+  const files = fs
+    .readdirSync(definitionsDir)
+    .filter((f) => f.endsWith(".ts") && f !== "schemas.ts");
 
   for (const file of files) {
     const content = fs.readFileSync(path.join(definitionsDir, file), "utf-8");
@@ -490,7 +495,9 @@ function extractActionsFromSource(): ActionInfo[] {
       let description = descMatch?.[1]?.replace(/\s+/g, " ").trim() || "";
       if (!description) {
         // Try to match multi-line description with string concatenation
-        const multiLineDesc = bodyRaw.match(/description:\s*\n?\s*["']([^"']+)["']\s*\+?\s*\n?\s*["']?([^"']*)?["']?/s);
+        const multiLineDesc = bodyRaw.match(
+          /description:\s*\n?\s*["']([^"']+)["']\s*\+?\s*\n?\s*["']?([^"']*)?["']?/s
+        );
         if (multiLineDesc) {
           description = (multiLineDesc[1] + (multiLineDesc[2] || "")).replace(/\s+/g, " ").trim();
         }
@@ -680,7 +687,9 @@ Output:
   // Filter and process actions
   const actionsToInclude = showAll
     ? extractedActions
-    : extractedActions.filter((a) => allowlistSet.has(a.id as (typeof AGENT_ACCESSIBLE_ACTIONS)[number]));
+    : extractedActions.filter((a) =>
+        allowlistSet.has(a.id as (typeof AGENT_ACCESSIBLE_ACTIONS)[number])
+      );
 
   for (const action of actionsToInclude) {
     const sanitizedSchema = sanitizeSchema(action.inputSchema);
