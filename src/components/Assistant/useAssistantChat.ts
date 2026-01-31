@@ -1,11 +1,9 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { AssistantMessage, StreamingState, ToolCall } from "./types";
 import { actionService } from "@/services/ActionService";
-import { useTerminalStore } from "@/store/terminalStore";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { useProjectStore } from "@/store/projectStore";
 import { useAssistantChatStore } from "@/store/assistantChatStore";
 import type { AssistantMessage as IPCAssistantMessage } from "@shared/types/assistant";
+import { getAssistantContext } from "./assistantContext";
 
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -302,12 +300,7 @@ export function useAssistantChat(options?: UseAssistantChatOptions) {
       setStreamingMessageId(null);
 
       try {
-        const projectId = useProjectStore.getState().currentProject?.id;
-        const worktreeSelection = useWorktreeSelectionStore.getState();
-        const activeWorktreeId = worktreeSelection.activeWorktreeId ?? undefined;
-        const focusedWorktreeId = worktreeSelection.focusedWorktreeId ?? undefined;
-        const focusedTerminalId = useTerminalStore.getState().focusedId ?? undefined;
-
+        const context = getAssistantContext();
         const actions = actionService.list();
 
         const currentMessages = useAssistantChatStore.getState().conversation.messages;
@@ -433,12 +426,7 @@ export function useAssistantChat(options?: UseAssistantChatOptions) {
           sessionId,
           messages: ipcMessages,
           actions,
-          context: {
-            projectId,
-            activeWorktreeId,
-            focusedWorktreeId,
-            focusedTerminalId,
-          },
+          context,
         });
       } catch (err) {
         if (currentRequestIdRef.current === requestId) {

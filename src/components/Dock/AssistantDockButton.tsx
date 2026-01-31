@@ -6,11 +6,14 @@ import { useSidecarStore } from "@/store";
 import { CanopyIcon } from "@/components/icons/CanopyIcon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { AssistantPane } from "@/components/Assistant/AssistantPane";
+import { useProjectStore } from "@/store/projectStore";
 
 export function AssistantDockButton() {
   const isOpen = useAssistantChatStore((s) => s.isOpen);
+  const currentContext = useAssistantChatStore((s) => s.currentContext);
   const toggle = useAssistantChatStore((s) => s.toggle);
   const close = useAssistantChatStore((s) => s.close);
+  const currentProject = useProjectStore((s) => s.currentProject);
 
   const { isOpen: sidecarOpen, width: sidecarWidth } = useSidecarStore(
     useShallow((s) => ({ isOpen: s.isOpen, width: s.width }))
@@ -35,6 +38,23 @@ export function AssistantDockButton() {
     [close]
   );
 
+  // Build tooltip text from current context
+  const tooltipText = useMemo(() => {
+    const base = "Canopy Assistant";
+
+    // Prefer active worktree name, fallback to project name
+    const contextLabel =
+      currentContext?.activeWorktreeName ||
+      currentContext?.projectName ||
+      currentProject?.name;
+
+    if (contextLabel) {
+      return `${base} — ${contextLabel}`;
+    }
+
+    return `${base} (⌘⇧K)`;
+  }, [currentContext, currentProject]);
+
   return (
     <Popover open={isOpen} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
@@ -49,7 +69,7 @@ export function AssistantDockButton() {
             isOpen &&
               "bg-white/[0.08] text-canopy-text border-canopy-accent/40 ring-1 ring-inset ring-canopy-accent/30"
           )}
-          title="Toggle Assistant (⌘⇧K)"
+          title={tooltipText}
           aria-label="Toggle Assistant"
           aria-haspopup="dialog"
           aria-expanded={isOpen}

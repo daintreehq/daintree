@@ -43,23 +43,70 @@ export const SYSTEM_PROMPT = loadSystemPrompt();
  * Template for constructing the context block in user messages
  * Only includes fields that are useful for agent decision-making
  */
+/**
+ * Sanitize context values to prevent breaking parseability
+ * Removes newlines and escapes pipe characters
+ */
+function sanitizeContextValue(value: string): string {
+  return value.replace(/\n/g, " ").replace(/\|/g, "\\|");
+}
+
 export function buildContextBlock(
   context: ActionContext & { activeListenerCount?: number }
 ): string {
   const lines: string[] = [];
 
-  if (context.projectId) {
+  // Project context - show name or path if available
+  if (context.projectName || context.projectPath) {
+    const name = context.projectName ? sanitizeContextValue(context.projectName) : "";
+    const path = context.projectPath ? sanitizeContextValue(context.projectPath) : "";
+    if (name && path) {
+      lines.push(`Current project: ${name} (${path})`);
+    } else if (name) {
+      lines.push(`Current project: ${name}`);
+    } else {
+      lines.push(`Current project: ${path}`);
+    }
+  } else if (context.projectId) {
     lines.push(`Current project: ${context.projectId}`);
   }
-  if (context.activeWorktreeId) {
+
+  // Active worktree context
+  if (context.activeWorktreeName) {
+    const parts = [sanitizeContextValue(context.activeWorktreeName)];
+    if (context.activeWorktreeBranch) {
+      parts.push(sanitizeContextValue(context.activeWorktreeBranch));
+    }
+    if (context.activeWorktreePath) {
+      parts.push(sanitizeContextValue(context.activeWorktreePath));
+    }
+    // Tri-state: only use "main" when explicitly true
+    const worktreeLabel = context.activeWorktreeIsMain === true ? "main" : "worktree";
+    lines.push(`Active ${worktreeLabel}: ${parts.join(" | ")}`);
+  } else if (context.activeWorktreeId) {
     lines.push(`Active worktree: ${context.activeWorktreeId}`);
   }
+
+  // Focused worktree (if different from active)
   if (context.focusedWorktreeId && context.focusedWorktreeId !== context.activeWorktreeId) {
     lines.push(`Focused worktree: ${context.focusedWorktreeId}`);
   }
+
+  // Focused terminal context
   if (context.focusedTerminalId) {
-    lines.push(`Focused terminal: ${context.focusedTerminalId}`);
+    const parts = [context.focusedTerminalId];
+    if (context.focusedTerminalKind || context.focusedTerminalType) {
+      const kind = context.focusedTerminalKind || context.focusedTerminalType || "";
+      parts.push(sanitizeContextValue(kind));
+    }
+    if (context.focusedTerminalTitle) {
+      // Sanitize and quote the title
+      const sanitized = sanitizeContextValue(context.focusedTerminalTitle);
+      parts.push(`"${sanitized.replace(/"/g, '\\"')}"`);
+    }
+    lines.push(`Focused terminal: ${parts.filter((p) => p).join(" | ")}`);
   }
+
   if (context.isTerminalPaletteOpen) {
     lines.push(`Terminal palette: open`);
   }

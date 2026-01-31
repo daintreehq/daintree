@@ -72,9 +72,18 @@ export const ActionManifestEntrySchema = z.object({
 
 export const ActionContextSchema = z.object({
   projectId: z.string().optional(),
+  projectName: z.string().optional(),
+  projectPath: z.string().optional(),
   activeWorktreeId: z.string().optional(),
+  activeWorktreeName: z.string().optional(),
+  activeWorktreePath: z.string().optional(),
+  activeWorktreeBranch: z.string().optional(),
+  activeWorktreeIsMain: z.boolean().optional(),
   focusedWorktreeId: z.string().optional(),
   focusedTerminalId: z.string().optional(),
+  focusedTerminalKind: z.string().optional(),
+  focusedTerminalType: z.string().optional(),
+  focusedTerminalTitle: z.string().optional(),
   isTerminalPaletteOpen: z.boolean().optional(),
   isSettingsOpen: z.boolean().optional(),
 });

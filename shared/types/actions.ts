@@ -212,9 +212,18 @@ export type ActionId =
 
 export interface ActionContext {
   projectId?: string;
+  projectName?: string;
+  projectPath?: string;
   activeWorktreeId?: string;
+  activeWorktreeName?: string;
+  activeWorktreePath?: string;
+  activeWorktreeBranch?: string;
+  activeWorktreeIsMain?: boolean;
   focusedWorktreeId?: string;
   focusedTerminalId?: string;
+  focusedTerminalKind?: string;
+  focusedTerminalType?: string;
+  focusedTerminalTitle?: string;
   isTerminalPaletteOpen?: boolean;
   isSettingsOpen?: boolean;
 }

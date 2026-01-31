@@ -126,13 +126,24 @@ You have access to a limited set of actions. Only use actions explicitly provide
 
 ## Context Block
 
-User messages may include context:
+The system prompt is automatically enriched with context about the current workspace state:
 ```
 Context:
-Current project: my-app
-Active worktree: main
-Focused terminal: claude-1
+Current project: my-app (/Users/user/projects/my-app)
+Active main: main | main | /Users/user/projects/my-app
+Focused terminal: term-123 | agent | "Claude Agent"
+Terminal palette: open
+Active listeners: 2
 ```
+
+Context fields (all optional):
+- **Current project**: Name and/or absolute path
+- **Active main/worktree**: Name, branch, path (labeled "main" when isMain=true, otherwise "worktree")
+- **Focused worktree**: ID (only shown if different from active)
+- **Focused terminal**: ID, kind/type, quoted title
+- **Terminal palette**: Status if open
+- **Settings**: Status if open
+- **Active listeners**: Count of registered event listeners
 
 Treat as hints, not guarantees. Verify critical state before destructive ops.
 

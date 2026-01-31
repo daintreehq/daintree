@@ -21,7 +21,9 @@ import {
   useAppAgentDispatcher,
 } from "./hooks";
 import { useActionRegistry } from "./hooks/useActionRegistry";
+import { useAssistantContextSync } from "./hooks/useAssistantContextSync";
 import { actionService } from "./services/ActionService";
+import { getAssistantContext } from "./components/Assistant/assistantContext";
 import {
   useAppHydration,
   useProjectSwitchRehydration,
@@ -738,12 +740,7 @@ function App() {
   const { inject } = useContextInjection();
 
   useEffect(() => {
-    actionService.setContextProvider(() => ({
-      projectId: useProjectStore.getState().currentProject?.id,
-      activeWorktreeId: useWorktreeSelectionStore.getState().activeWorktreeId ?? undefined,
-      focusedWorktreeId: useWorktreeSelectionStore.getState().focusedWorktreeId ?? undefined,
-      focusedTerminalId: useTerminalStore.getState().focusedId ?? undefined,
-    }));
+    actionService.setContextProvider(() => getAssistantContext());
 
     return () => actionService.setContextProvider(null);
   }, []);
@@ -798,6 +795,7 @@ function App() {
   useTerminalStoreBootstrap();
   useSemanticWorkerLifecycle();
   useSystemWakeHandler();
+  useAssistantContextSync();
 
   if (!isElectronAvailable()) {
     return (

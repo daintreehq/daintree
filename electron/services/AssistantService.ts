@@ -8,6 +8,17 @@ import { SYSTEM_PROMPT, buildContextBlock } from "./assistant/index.js";
 import { listenerManager } from "./assistant/ListenerManager.js";
 import { createListenerTools } from "./assistant/listenerTools.js";
 
+// Actions that require a focused terminal and cannot accept an explicit terminalId
+// These actions operate on "the current terminal" without a way to specify which one
+const TERMINAL_FOCUS_REQUIRED_ACTIONS = new Set([
+  "terminal.close", // No ID parameter - always uses focused terminal
+  "terminal.toggleMaximize",
+  "terminal.toggleInputLock",
+  "terminal.duplicate",
+  "terminal.rename",
+  "terminal.viewInfo",
+]);
+
 const FIREWORKS_BASE_URL = "https://api.fireworks.ai/inference/v1";
 const MAX_STEPS = 10;
 
@@ -172,8 +183,19 @@ export class AssistantService {
         }
       }
 
-      // Build tools from actions and listener management
-      const actionTools = actions && context ? createActionTools(actions, context) : {};
+      // Filter actions based on context
+      let filteredActions = actions;
+      if (actions && context) {
+        // Remove terminal-focus-required actions when no terminal is focused
+        if (!context.focusedTerminalId) {
+          filteredActions = actions.filter(
+            (action) => !TERMINAL_FOCUS_REQUIRED_ACTIONS.has(action.id)
+          );
+        }
+      }
+
+      // Build tools from filtered actions and listener management
+      const actionTools = filteredActions && context ? createActionTools(filteredActions, context) : {};
       const listenerTools = createListenerTools({ sessionId });
       const tools = { ...actionTools, ...listenerTools };
       const hasTools = Object.keys(tools).length > 0;

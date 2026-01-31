@@ -1,5 +1,6 @@
 import { create, type StateCreator } from "zustand";
 import type { AssistantMessage } from "@/components/Assistant/types";
+import type { ActionContext } from "@shared/types/actions";
 
 export interface ConversationState {
   messages: AssistantMessage[];
@@ -25,6 +26,7 @@ interface AssistantChatState {
   conversation: ConversationState;
   isOpen: boolean;
   displayMode: "popup" | "docked";
+  currentContext: ActionContext | null;
 }
 
 interface AssistantChatActions {
@@ -40,12 +42,14 @@ interface AssistantChatActions {
   close: () => void;
   toggle: () => void;
   setDisplayMode: (mode: "popup" | "docked") => void;
+  setCurrentContext: (context: ActionContext | null) => void;
 }
 
 const initialState: AssistantChatState = {
   conversation: createInitialConversation(),
   isOpen: false,
   displayMode: "popup",
+  currentContext: null,
 };
 
 const createAssistantChatStore: StateCreator<AssistantChatState & AssistantChatActions> = (
@@ -129,6 +133,8 @@ const createAssistantChatStore: StateCreator<AssistantChatState & AssistantChatA
   toggle: () => set((s) => ({ isOpen: !s.isOpen })),
 
   setDisplayMode: (mode) => set({ displayMode: mode }),
+
+  setCurrentContext: (context) => set({ currentContext: context }),
 });
 
 export const useAssistantChatStore = create<AssistantChatState & AssistantChatActions>()(
