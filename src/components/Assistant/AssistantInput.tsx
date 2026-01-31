@@ -1,5 +1,5 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
-import { ChevronRight, Square } from "lucide-react";
+import { ArrowUp, Square, Activity } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAppAgentStore } from "@/store/appAgentStore";
 
@@ -117,89 +117,94 @@ export const AssistantInput = forwardRef<AssistantInputHandle, AssistantInputPro
     }, []);
 
     const modelDisplayName = formatModelName(config?.model);
+    const canSubmit = value.trim().length > 0 && !disabled;
 
     return (
       <div
         className={cn(
-          "p-4 border-t border-white/10 bg-[color-mix(in_oklab,var(--color-canopy-sidebar)_80%,var(--color-canopy-bg))]",
+          "group shrink-0 cursor-text bg-canopy-bg px-4 pb-3 pt-3",
           className
         )}
         onClick={handleContainerClick}
       >
-        <div
-          className={cn(
-            "flex items-center gap-3 px-3 py-3 rounded-md border transition-all duration-200 cursor-text",
-            "border-white/10 bg-canopy-bg",
-            "hover:border-white/20 hover:bg-white/[0.05]",
-            "focus-within:border-white/20 focus-within:bg-white/[0.05]",
-            disabled && !isStreaming && "opacity-60"
-          )}
-          aria-disabled={disabled && !isStreaming}
-        >
-          <ChevronRight
-            size={16}
-            className={cn("text-canopy-text/40 shrink-0", isStreaming && "animate-pulse")}
-          />
-
-          <textarea
-            ref={textareaRef}
-            value={value}
-            onChange={handleChange}
-            onKeyDown={handleKeyDown}
-            onCompositionStart={handleCompositionStart}
-            onCompositionEnd={handleCompositionEnd}
-            placeholder={placeholder}
-            disabled={disabled}
-            rows={1}
+        <div className="flex items-end gap-2">
+          <div
             className={cn(
-              "flex-1 max-h-[200px] min-h-[20px] resize-none bg-transparent font-mono text-sm leading-[1.6] text-canopy-text",
-              "placeholder:text-canopy-text/30 focus:outline-none focus:ring-0 p-0 scrollbar-none"
+              "relative flex w-full items-center gap-1.5 rounded-sm border border-white/[0.06] bg-white/[0.03] py-1 shadow-[0_6px_12px_rgba(0,0,0,0.18)] transition-colors",
+              "group-hover:border-white/[0.08] group-hover:bg-white/[0.04]",
+              "focus-within:border-white/[0.12] focus-within:ring-1 focus-within:ring-white/[0.06] focus-within:bg-white/[0.05]",
+              disabled && !isStreaming && "opacity-60"
             )}
-            aria-label="Command input"
-            aria-keyshortcuts="Enter Shift+Enter"
-          />
-
-          {isStreaming && onCancel ? (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onCancel();
-              }}
-              className={cn(
-                "shrink-0 p-1 rounded transition-colors",
-                "text-red-400 hover:bg-red-500/10"
-              )}
-              aria-label="Cancel response"
-            >
-              <Square className="w-3.5 h-3.5" />
-            </button>
-          ) : (
-            <div className="flex items-center gap-2 shrink-0">
-              <span className="text-[10px] text-canopy-text/30 font-mono border border-canopy-border rounded px-1.5 py-0.5">
-                return
-              </span>
+            aria-disabled={disabled && !isStreaming}
+          >
+            <div className="select-none pl-2 pr-1 font-mono text-xs font-semibold leading-5 text-canopy-accent/85">
+              ❯
             </div>
-          )}
+
+            <textarea
+              ref={textareaRef}
+              value={value}
+              onChange={handleChange}
+              onKeyDown={handleKeyDown}
+              onCompositionStart={handleCompositionStart}
+              onCompositionEnd={handleCompositionEnd}
+              placeholder={placeholder}
+              disabled={disabled}
+              rows={1}
+              className={cn(
+                "flex-1 max-h-[200px] min-h-[20px] resize-none bg-transparent font-mono text-[13px] leading-[1.6] text-canopy-text py-0.5",
+                "placeholder:text-white/25 focus:outline-none scrollbar-none"
+              )}
+              aria-label="Command input"
+              aria-keyshortcuts="Enter Shift+Enter"
+            />
+
+            {isStreaming && onCancel ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onCancel();
+                }}
+                className={cn(
+                  "shrink-0 mr-1.5 p-1 rounded transition-colors",
+                  "text-red-400 hover:bg-red-500/10"
+                )}
+                aria-label="Cancel response"
+              >
+                <Square className="w-3.5 h-3.5" />
+              </button>
+            ) : (
+              canSubmit && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleSubmit();
+                  }}
+                  className={cn(
+                    "shrink-0 mr-1.5 p-1 rounded transition-colors",
+                    "text-canopy-accent hover:bg-canopy-accent/10"
+                  )}
+                  aria-label="Submit"
+                >
+                  <ArrowUp className="w-3.5 h-3.5" />
+                </button>
+              )
+            )}
+          </div>
         </div>
 
         {/* Footer Status */}
-        <div className="flex justify-between mt-3 px-1 items-center">
-          <div className="flex gap-4 text-[10px] uppercase tracking-widest font-semibold">
+        <div className="flex justify-between mt-2.5 px-1 items-center">
+          <div className="flex gap-4 text-[10px] text-canopy-text/40 uppercase tracking-wider font-medium">
             <span
               className={cn(
                 "flex items-center gap-1.5",
                 isStreaming ? "text-blue-400/80" : "text-canopy-accent/80"
               )}
             >
-              <div
-                className={cn(
-                  "w-1.5 h-1.5 rounded-full",
-                  isStreaming
-                    ? "bg-blue-400 shadow-[0_0_8px_rgba(96,165,250,0.6)]"
-                    : "bg-canopy-accent shadow-[0_0_8px_rgba(var(--color-canopy-accent-rgb,16,185,129),0.6)]"
-                )}
-              />
+              <Activity size={10} />
               {isStreaming ? "Working" : "Ready"}
             </span>
             <span className="text-canopy-text/30">{modelDisplayName}</span>
