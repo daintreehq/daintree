@@ -204,6 +204,22 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     },
   }));
 
+  actions.set("worktree.getAvailableBranch", () => ({
+    id: "worktree.getAvailableBranch",
+    title: "Get Available Branch Name",
+    description:
+      "Get a collision-safe branch name. Returns the original name if available, or a numbered variant if the branch exists.",
+    category: "worktree",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ rootPath: z.string(), branchName: z.string() }),
+    run: async (args: unknown) => {
+      const { rootPath, branchName } = args as { rootPath: string; branchName: string };
+      return await worktreeClient.getAvailableBranch(rootPath, branchName);
+    },
+  }));
+
   actions.set("worktree.select", () => ({
     id: "worktree.select",
     title: "Select Worktree",

@@ -101,6 +101,15 @@ You have access to a limited set of actions. Only use actions explicitly provide
 - `worktree.getCurrent` - Get active/focused worktree
 - `worktree.setActive` - Change default worktree
 - `worktree.createDialog.open` - Open worktree creation dialog
+- `worktree.listBranches` - Query available branches for a repository
+- `worktree.getDefaultPath` - Get suggested path for a new worktree
+- `worktree.getAvailableBranch` - Get collision-safe branch name
+- `worktree.create` - Create a new worktree with a new branch
+- `worktree.createWithRecipe` - Create worktree then optionally launch recipe
+
+### Recipe
+- `recipe.list` - List available recipes for the project
+- `recipe.run` - Execute a recipe on a worktree
 
 ### Agent
 - `agent.launch` - Spawn Claude, Codex, or Gemini terminal
@@ -123,6 +132,64 @@ You have access to a limited set of actions. Only use actions explicitly provide
 - `app.settings.openTab` - Open specific settings tab
 
 **Note:** This is a curated subset of available Canopy actions. Additional actions may be added over time.
+
+## Worktree & Recipe Workflow
+
+You can create worktrees and run recipes programmatically. Use these workflows for autonomous task execution.
+
+### Creating Worktrees
+
+**Option 1: Single composite call (recommended)**
+```
+worktree_createWithRecipe({
+  branchName: "feature-123",
+  baseBranch: "main",       // optional, defaults to main worktree's branch
+  recipeId: "recipe-dev",   // optional, runs recipe after creation
+  fromRemote: false         // optional, true if baseBranch is remote
+})
+```
+
+Returns: `{ worktreeId, worktreePath, branch, recipeLaunched }`
+
+**Option 2: Step-by-step (for more control)**
+Get `rootPath` from current project via `project_getCurrent()`:
+1. Query branches: `worktree_listBranches({ rootPath })`
+2. Get safe name: `worktree_getAvailableBranch({ rootPath, branchName })` → use this result for steps 3-4
+3. Get path: `worktree_getDefaultPath({ rootPath, branchName: safeName })`
+4. Create: `worktree_create({ rootPath, options: { baseBranch, newBranch: safeName, path, fromRemote } })`
+5. Run recipe (optional): `recipe_run({ recipeId, worktreeId })`
+
+Note: `worktree_create` automatically selects the new worktree, so `worktree_setActive` is not needed.
+
+### Running Recipes
+
+1. List available: `recipe_list()` or `recipe_list({ worktreeId })`
+2. Execute: `recipe_run({ recipeId, worktreeId })`
+
+### Branch Naming
+
+- Feature work: `feature/description` or `issue-123`
+- Bug fixes: `fix/description`
+- Experiments: `experiment/description`
+
+### Parameters
+
+**worktree.create options:**
+- `baseBranch` - Branch to base worktree on (e.g., "main", "develop", "origin/feature")
+- `newBranch` - Name for new branch to create (always creates a new branch)
+- `path` - Directory path for worktree (absolute preferred; relative resolved against rootPath)
+- `fromRemote` - Set true if baseBranch is remote like "origin/feature"
+- `useExistingBranch` - Set true to attach to existing local branch instead of creating new one
+
+**Important:** `worktree.createWithRecipe` always creates a new branch. To work with existing branches, use step-by-step with `useExistingBranch: true`.
+
+### Error Handling
+
+- Path exists → use `worktree_getDefaultPath` for suggested path
+- Branch exists → use `worktree_getAvailableBranch` for collision-safe name
+- Recipe not found → list recipes with `recipe_list` first
+- No base branch and no main worktree → must specify `baseBranch` parameter
+- Recipe launch fails → worktree is still created (partial success); check recipe configuration
 
 ## Context Block
 

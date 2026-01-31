@@ -6,6 +6,38 @@ import { useRecipeStore } from "@/store/recipeStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 
 export function registerRecipeActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
+  actions.set("recipe.list", () => ({
+    id: "recipe.list",
+    title: "List Recipes",
+    description: "List all available recipes for the current project",
+    category: "recipes",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
+    run: async (args: unknown) => {
+      const { worktreeId } = (args ?? {}) as { worktreeId?: string };
+      const recipeState = useRecipeStore.getState();
+      const recipes = recipeState.recipes;
+
+      // Filter by worktree if specified, otherwise return all recipes
+      const filtered = worktreeId
+        ? recipes.filter((r) => r.worktreeId === worktreeId || r.worktreeId === undefined)
+        : recipes;
+
+      return {
+        recipes: filtered.map((r) => ({
+          id: r.id,
+          name: r.name,
+          worktreeId: r.worktreeId ?? null,
+          terminalCount: r.terminals.length,
+          showInEmptyState: r.showInEmptyState ?? false,
+        })),
+        isLoading: recipeState.isLoading,
+      };
+    },
+  }));
+
   actions.set("recipe.run", () => ({
     id: "recipe.run",
     title: "Run Recipe",
