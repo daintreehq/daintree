@@ -25,7 +25,6 @@ import {
   Monitor,
   Circle,
 } from "lucide-react";
-import { CanopyIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { GitHubResourceList, CommitList } from "@/components/GitHub";
