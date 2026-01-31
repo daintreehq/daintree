@@ -139,7 +139,7 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
   actions.set("panel.toggleDock", () => ({
     id: "panel.toggleDock",
     title: "Toggle Terminal Dock",
-    description: "Toggle the terminal dock between expanded and hidden",
+    description: "Toggle the terminal dock between expanded and compact",
     category: "panel",
     kind: "command",
     danger: "safe",
@@ -152,7 +152,7 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
   actions.set("panel.toggleDockAlt", () => ({
     id: "panel.toggleDockAlt",
     title: "Toggle Terminal Dock (Alt)",
-    description: "Toggle the terminal dock between expanded and hidden",
+    description: "Toggle the terminal dock between expanded and compact",
     category: "panel",
     kind: "command",
     danger: "safe",
@@ -165,7 +165,7 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
   actions.set("panel.dockCycleMode", () => ({
     id: "panel.dockCycleMode",
     title: "Cycle Dock Mode",
-    description: "Cycle dock mode: expanded ↔ hidden",
+    description: "Cycle dock mode: expanded ↔ compact",
     category: "panel",
     kind: "command",
     danger: "safe",
@@ -188,43 +188,16 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
     },
   }));
 
-  actions.set("panel.dockSetSlim", () => ({
-    id: "panel.dockSetSlim",
-    title: "Hide Dock (Legacy Slim)",
-    description: "Legacy action: hide the dock",
+  actions.set("panel.dockSetCompact", () => ({
+    id: "panel.dockSetCompact",
+    title: "Compact Dock",
+    description: "Set dock to compact mode (minimal height)",
     category: "panel",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      useDockStore.getState().setMode("hidden");
-    },
-  }));
-
-  actions.set("panel.dockSetHidden", () => ({
-    id: "panel.dockSetHidden",
-    title: "Hide Dock",
-    description: "Hide the terminal dock",
-    category: "panel",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      useDockStore.getState().setMode("hidden");
-    },
-  }));
-
-  actions.set("panel.dockToggleAutoHide", () => ({
-    id: "panel.dockToggleAutoHide",
-    title: "Toggle Dock Auto-Hide",
-    description: "Toggle auto-hide dock when empty",
-    category: "panel",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      const { autoHideWhenEmpty, setAutoHideWhenEmpty } = useDockStore.getState();
-      setAutoHideWhenEmpty(!autoHideWhenEmpty);
+      useDockStore.getState().setMode("compact");
     },
   }));
 
