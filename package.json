@@ -34,7 +34,8 @@
     "typecheck": "tsc --noEmit && tsc -b electron/tsconfig.preload.json electron/tsconfig.json",
     "check": "npm run typecheck && npm run lint:ratchet && npm run format:check",
     "fix": "npm run format && npm run lint:fix",
-    "stress-test": "tsx scripts/tui-stress-test.tsx"
+    "stress-test": "tsx scripts/tui-stress-test.tsx",
+    "assistant:dump-tools": "tsx scripts/dump-assistant-tools.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.21",
