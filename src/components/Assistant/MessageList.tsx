@@ -26,24 +26,9 @@ export function MessageList({
 }: MessageListProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const [atBottom, setAtBottom] = useState(true);
-  const [autoScroll, setAutoScroll] = useState(true);
   const [showLoadingPlaceholder, setShowLoadingPlaceholder] = useState(false);
 
-  const handleAtBottomChange = useCallback(
-    (bottom: boolean) => {
-      setAtBottom(bottom);
-      if (!bottom && autoScroll) {
-        setAutoScroll(false);
-      }
-      if (bottom && !autoScroll) {
-        setAutoScroll(true);
-      }
-    },
-    [autoScroll]
-  );
-
   const scrollToBottom = useCallback(() => {
-    setAutoScroll(true);
     virtuosoRef.current?.scrollToIndex({
       index: "LAST",
       behavior: "smooth",
@@ -87,7 +72,6 @@ export function MessageList({
   useEffect(() => {
     if (!hasScrolledOnMount.current && messages.length > 0) {
       hasScrolledOnMount.current = true;
-      setAutoScroll(true);
       virtuosoRef.current?.scrollToIndex({
         index: "LAST",
         behavior: "auto",
@@ -153,8 +137,8 @@ export function MessageList({
       <Virtuoso
         ref={virtuosoRef}
         data={allItems}
-        followOutput={autoScroll ? "smooth" : false}
-        atBottomStateChange={handleAtBottomChange}
+        followOutput="smooth"
+        atBottomStateChange={setAtBottom}
         itemContent={renderMessage}
         computeItemKey={computeItemKey}
         className="h-full"
