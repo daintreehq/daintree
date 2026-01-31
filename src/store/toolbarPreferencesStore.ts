@@ -23,7 +23,6 @@ function getSafeStorage(): StateStorage {
 }
 
 const DEFAULT_LEFT_BUTTONS: ToolbarButtonId[] = [
-  "assistant",
   "claude",
   "gemini",
   "codex",

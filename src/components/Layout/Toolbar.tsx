@@ -942,22 +942,8 @@ export function Toolbar({
         isAvailable: showDeveloperTools,
       },
       assistant: {
-        render: () => (
-          <button
-            key="assistant"
-            type="button"
-            onClick={() => {
-              void actionService.dispatch("assistant.open", undefined, { source: "user" });
-            }}
-            className="app-no-drag inline-flex items-center justify-center h-9 w-9 rounded-[var(--radius-md)] text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-canopy-accent"
-            title="Open Assistant (⌘⇧K)"
-            aria-label="Open Assistant"
-            style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-          >
-            <CanopyIcon size={18} />
-          </button>
-        ),
-        isAvailable: true,
+        render: () => null,
+        isAvailable: false,
       },
       "sidecar-toggle": {
         render: () => (

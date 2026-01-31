@@ -23,6 +23,8 @@ function createInitialConversation(): ConversationState {
 
 interface AssistantChatState {
   conversation: ConversationState;
+  isOpen: boolean;
+  displayMode: "popup" | "docked";
 }
 
 interface AssistantChatActions {
@@ -34,10 +36,16 @@ interface AssistantChatActions {
   setError: (error: string | null) => void;
   clearConversation: () => void;
   reset: () => void;
+  open: () => void;
+  close: () => void;
+  toggle: () => void;
+  setDisplayMode: (mode: "popup" | "docked") => void;
 }
 
 const initialState: AssistantChatState = {
   conversation: createInitialConversation(),
+  isOpen: false,
+  displayMode: "popup",
 };
 
 const createAssistantChatStore: StateCreator<AssistantChatState & AssistantChatActions> = (
@@ -113,6 +121,14 @@ const createAssistantChatStore: StateCreator<AssistantChatState & AssistantChatA
   },
 
   reset: () => set({ conversation: createInitialConversation() }),
+
+  open: () => set({ isOpen: true }),
+
+  close: () => set({ isOpen: false }),
+
+  toggle: () => set((s) => ({ isOpen: !s.isOpen })),
+
+  setDisplayMode: (mode) => set({ displayMode: mode }),
 });
 
 export const useAssistantChatStore = create<AssistantChatState & AssistantChatActions>()(

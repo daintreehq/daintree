@@ -1,15 +1,14 @@
 import { useEffect, useRef, useCallback } from "react";
 import { Loader2, XCircle, X } from "lucide-react";
-import { useAppAgentStore } from "@/store";
+import { useAppAgentStore, useAssistantChatStore } from "@/store";
 import { MessageList } from "./MessageList";
 import { AssistantInput, type AssistantInputHandle } from "./AssistantInput";
 import { EmptyState } from "./EmptyState";
 import { useAssistantChat } from "./useAssistantChat";
-import { useAssistantUiStore } from "@/store/assistantUiStore";
 
 export function AssistantPane() {
   const { hasApiKey, isInitialized, initialize } = useAppAgentStore();
-  const { close } = useAssistantUiStore();
+  const { close } = useAssistantChatStore();
   const inputRef = useRef<AssistantInputHandle>(null);
 
   const {

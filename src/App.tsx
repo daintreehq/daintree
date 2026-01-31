@@ -49,7 +49,6 @@ import { RecipeEditor } from "./components/TerminalRecipe/RecipeEditor";
 import { NotesPalette } from "./components/Notes";
 import { SettingsDialog, type SettingsTab } from "./components/Settings";
 import { ShortcutReferenceDialog } from "./components/KeyboardShortcuts";
-import { AssistantHost } from "./components/Assistant/AssistantHost";
 import { Toaster } from "./components/ui/toaster";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { DndProvider } from "./components/DragDrop";
@@ -939,8 +938,6 @@ function App() {
       <TerminalInfoDialogHost />
 
       <PanelTransitionOverlay />
-
-      <AssistantHost />
 
       <Toaster />
     </ErrorBoundary>

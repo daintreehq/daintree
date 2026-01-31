@@ -1,5 +1,5 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
-import { useAssistantUiStore } from "@/store/assistantUiStore";
+import { useAssistantChatStore } from "@/store/assistantChatStore";
 
 export function registerAssistantActions(
   actions: ActionRegistry,
@@ -14,7 +14,7 @@ export function registerAssistantActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      useAssistantUiStore.getState().toggle();
+      useAssistantChatStore.getState().toggle();
     },
   }));
 }

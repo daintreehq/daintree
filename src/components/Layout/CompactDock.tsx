@@ -23,6 +23,7 @@ import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { WaitingContainer } from "./WaitingContainer";
 import { FailedContainer } from "./FailedContainer";
 import { TrashContainer } from "./TrashContainer";
+import { AssistantDockButton } from "@/components/Dock/AssistantDockButton";
 import {
   SortableDockItem,
   SortableDockPlaceholder,
@@ -313,6 +314,7 @@ export function CompactDock({
         <WaitingContainer compact />
         <FailedContainer compact />
         <TrashContainer trashedTerminals={trashedItems} compact />
+        <AssistantDockButton />
       </div>
     </div>
   );
