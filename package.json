@@ -35,7 +35,8 @@
     "check": "npm run typecheck && npm run lint:ratchet && npm run format:check",
     "fix": "npm run format && npm run lint:fix",
     "stress-test": "tsx scripts/tui-stress-test.tsx",
-    "assistant:dump-tools": "tsx scripts/dump-assistant-tools.ts"
+    "assistant:dump-tools": "tsx scripts/dump-assistant-tools.ts",
+    "assistant:test-api": "tsx scripts/test-assistant-api.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.21",

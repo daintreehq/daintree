@@ -41,9 +41,7 @@ export function createListenerTools(context: ListenerToolContext): ToolSet {
             type: "object",
             description:
               "Optional filter to narrow events by field values (e.g., { terminalId: 'abc' })",
-            additionalProperties: {
-              type: ["string", "number", "boolean", "null"],
-            },
+            additionalProperties: true,
           },
         },
         required: ["eventType"],
