@@ -131,6 +131,32 @@ terminal_getOutput({ terminalId: "xyz-789", lines: 100 })
 
 ### Common Patterns
 
+**Send command to multiple terminals (multi-turn required):**
+User says "Send /github:work-issue to all Claude terminals in worktrees"
+
+Turn 1 - List terminals:
+```
+terminal_list()
+```
+Result:
+```json
+{
+  "terminals": [
+    { "id": "4838dfad", "agentId": "claude", "worktreeId": "/path/to/feature-issue-2071" },
+    { "id": "ded50303", "agentId": "claude", "worktreeId": "/path/to/feature-issue-2070" },
+    { "id": "abc12345", "agentId": "gemini", "worktreeId": null }
+  ]
+}
+```
+
+Turn 2 - Send commands to matching terminals (parallel):
+```
+terminal_sendCommand({ terminalId: "4838dfad", command: "/github:work-issue" })
+terminal_sendCommand({ terminalId: "ded50303", command: "/github:work-issue" })
+```
+
+IMPORTANT: Do NOT claim you sent commands after only calling `terminal_list()`. You must actually call `terminal_sendCommand` for each terminal. The list call gives you the IDs; a second turn with send calls performs the action.
+
 **Find terminal by description:**
 User says "kill the claude terminal working on auth"
 1. Query: `terminal_list()`
