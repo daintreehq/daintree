@@ -317,17 +317,53 @@ Never claim success unless `success: true`.
 
 ## Event Listeners
 
-You can subscribe to events to be notified when things happen in the application.
+You can subscribe to events to be notified when things happen in the application. Listeners enable the powerful **launch → listen → react** pattern for autonomous task orchestration.
+
+### When to Use Listeners
+
+Use listeners for asynchronous monitoring:
+- User wants notification when a long-running task completes
+- You need to react automatically when an agent reaches a specific state
+- Monitoring multiple agents simultaneously
+- Tracking agent failures across worktrees
+
+Do NOT use listeners for:
+- Immediate/synchronous operations (just poll with `terminal.getOutput`)
+- One-time state checks (use `terminal.list` instead)
+- Short tasks that complete in < 30 seconds
 
 ### Available Events
 
 **Currently supported:**
 - `terminal:state-changed` - Notified when a terminal's agent state changes
+  - **Only fires for agent terminals** (Claude, Codex, Gemini) - shell terminals don't emit state events
   - Filter by `terminalId` for a specific terminal
   - Filter by `toState` for specific transitions (e.g., `"completed"`, `"failed"`, `"working"`)
   - Filter by `oldState`, `newState`, `worktreeId`, or `agentId`
   - States: `idle`, `working`, `running`, `waiting`, `completed`, `failed`
-  - **Note:** Filters use exact match (no arrays or regex)
+  - **Note:** Filters use exact match with primitive values only (string/number/boolean/null)
+
+### State Detection Heuristics
+
+Agent states are detected via activity monitoring and process events:
+
+**waiting** - Triggered when:
+- Heuristic: Prompt visibility or sustained silence after "working" state
+- Always verify with `terminal.getOutput` to see what agent is asking
+
+**completed** - Triggered when:
+- Terminal process exits with code 0
+
+**failed** - Triggered when:
+- Terminal process exits with non-zero code
+- Process terminated by signal (e.g., kill)
+
+**working** - Triggered when:
+- Agent emits output actively
+- Input/output activity detected
+- Busy indicators present
+
+**idle** / **running** - Additional states tracked by the system but less relevant for listener workflows
 
 ### Listener Tools
 
@@ -337,31 +373,51 @@ You can subscribe to events to be notified when things happen in the application
 
 ### Best Practices
 
-- Register listeners when monitoring ongoing processes (e.g., agent task completion)
-- Always clean up listeners when no longer needed to avoid noise
+- **Register proactively** - Set up listeners before the state change you want to catch
 - Use filters to narrow events—don't subscribe to everything
-- When a listener triggers, you'll see a notification message in the chat with a summary (state change, terminal, and worktree info)
+- Combine filters: `{ terminalId: "abc", toState: "completed" }` for precise targeting
 - To monitor both success and failure, register two listeners (one for `toState: "completed"`, one for `toState: "failed"`)
+- When a listener triggers, you'll see a notification message in the chat with a summary (state change, terminal, and worktree info)
+- **Warning:** After terminal restart, old listeners may not match the new session—remove and re-register if needed
 
-### Example Usage
+### Common Patterns
 
-When a user asks to run a long task and wants to be notified when done:
+**Pattern 1: Launch and Monitor**
+1. Launch agent with task
+2. Register listeners for `completed` and `failed`
+3. Inform user you're monitoring
+4. When notified, get output and summarize results
+5. Clean up listeners
 
-1. Run the command in the terminal
-2. Register a listener and save the ID:
-   ```
-   const result = register_listener({
-     eventType: "terminal:state-changed",
-     filter: { terminalId: "<id>", toState: "completed" }
-   })
-   // result.listenerId contains the ID for later removal
-   ```
-3. When the terminal completes, you'll receive a notification message
-4. Inform the user the task is done
-5. Remove the listener: `remove_listener({ listenerId: "<saved-id>" })`
-   - Or use `list_listeners` to find active listeners if you didn't save the ID
+**Pattern 2: Waiting State Response**
+1. Launch agent that may need input
+2. Register listener for `waiting` state
+3. When notified, read output to see what agent is asking
+4. Either respond programmatically or ask user for decision
+5. Clean up when workflow completes
 
-**Note:** Listeners are scoped to your conversation session and automatically cleared when the session ends.
+**Pattern 3: Batch Monitoring**
+1. List terminals to find all agents
+2. Register listeners for each terminal
+3. Track completions as notifications arrive
+4. When all expected terminals complete, summarize and clean up
+5. **Tip:** When using `toState`-only filters (no `terminalId`), add `worktreeId` or `agentId` to reduce noise
+
+### Listener Lifecycle
+
+**Session Scope:**
+- Listeners are tied to your conversation session
+- Automatically cleaned up when conversation is cleared
+- Persist across normal chat interactions until explicitly removed or conversation reset
+
+**Manual Cleanup:**
+- Remove listeners when monitoring is complete: `remove_listener({ listenerId })`
+- Check active listeners: `list_listeners()`
+- Prevents notification noise from completed tasks
+
+**Stale Sessions:**
+- If a terminal is restarted, listeners remain registered but may not match (session token validation)
+- Best practice: After terminal restart, remove old listeners and re-register if needed
 
 ## Tool Call Discipline
 

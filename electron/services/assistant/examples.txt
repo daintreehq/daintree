@@ -57,7 +57,7 @@ Returns array with id, kind, agentState, worktreeId, location for each terminal.
 
 **Get terminal output:**
 ```
-terminal_getOutput({ terminalId: "abc-123", lines: 50 })
+terminal_getOutput({ terminalId: "abc-123", maxLines: 50 })
 ```
 
 **Get current worktree:**
@@ -110,23 +110,45 @@ agent_launch({
 
 **Example: Monitor agent completion**
 
+User: "Run the tests and let me know when they finish"
+
 Step 1 - Launch agent:
 ```
 agent_launch({ agentId: "claude", prompt: "Run the test suite and fix any failures" })
 ```
 Result: `{ terminalId: "xyz-789" }`
 
-Step 2 - Register completion listener:
+Step 2 - Register listeners for completion and failure:
 ```
 register_listener({
   eventType: "terminal:state-changed",
   filter: { terminalId: "xyz-789", toState: "completed" }
 })
+register_listener({
+  eventType: "terminal:state-changed",
+  filter: { terminalId: "xyz-789", toState: "failed" }
+})
 ```
+Result: `{ listenerId: "listener-abc" }` and `{ listenerId: "listener-def" }`
 
-Step 3 - When notified, check results:
+Step 3 - Inform user:
+"Running tests. I'll notify you when complete."
+
+Step 4 - When listener triggers (you receive notification chunk):
+Payload: `{ type: "listener_triggered", listenerData: { listenerId: "listener-abc", eventType: "terminal:state-changed", data: { terminalId: "xyz-789", toState: "completed", ... } } }`
+
+Step 5 - Check results:
 ```
 terminal_getOutput({ terminalId: "xyz-789", maxLines: 100 })
+```
+
+Step 6 - Report to user:
+"Tests completed. All 47 tests passed."
+
+Step 7 - Clean up listeners:
+```
+remove_listener({ listenerId: "listener-abc" })
+remove_listener({ listenerId: "listener-def" })
 ```
 
 ### Event Listener Patterns
@@ -198,19 +220,20 @@ Result: `{ terminalId: "dep-update-001" }`
 
 Step 2 - Register listeners for waiting, completed, and failed states upfront:
 ```
-register_listener({
+const l1 = register_listener({
   eventType: "terminal:state-changed",
   filter: { terminalId: "dep-update-001", toState: "waiting" }
 })
-register_listener({
+const l2 = register_listener({
   eventType: "terminal:state-changed",
   filter: { terminalId: "dep-update-001", toState: "completed" }
 })
-register_listener({
+const l3 = register_listener({
   eventType: "terminal:state-changed",
   filter: { terminalId: "dep-update-001", toState: "failed" }
 })
 ```
+Store listener IDs: `l1.listenerId`, `l2.listenerId`, `l3.listenerId`
 
 Step 3 - When waiting notification arrives:
 ```
@@ -225,8 +248,9 @@ terminal_sendCommand({ terminalId: "dep-update-001", command: "y" })
 
 Step 5 - When completed/failed notification arrives, clean up all listeners:
 ```
-list_listeners()
-// Remove all listeners for this terminal
+remove_listener({ listenerId: l1.listenerId })
+remove_listener({ listenerId: l2.listenerId })
+remove_listener({ listenerId: l3.listenerId })
 ```
 
 **Monitor multiple terminals for completion:**
@@ -237,11 +261,13 @@ Track several parallel agents.
 // agent2 = { terminalId: "t2" }
 // agent3 = { terminalId: "t3" }
 
-register_listener({ eventType: "terminal:state-changed", filter: { terminalId: "t1", toState: "completed" } })
-register_listener({ eventType: "terminal:state-changed", filter: { terminalId: "t2", toState: "completed" } })
-register_listener({ eventType: "terminal:state-changed", filter: { terminalId: "t3", toState: "completed" } })
+const listeners = [
+  register_listener({ eventType: "terminal:state-changed", filter: { terminalId: "t1", toState: "completed" } }),
+  register_listener({ eventType: "terminal:state-changed", filter: { terminalId: "t2", toState: "completed" } }),
+  register_listener({ eventType: "terminal:state-changed", filter: { terminalId: "t3", toState: "completed" } })
+]
 ```
-Notifications arrive as each agent completes - process them individually.
+Notifications arrive as each agent completes - process them individually. Store listener IDs and remove as each terminal completes.
 
 **Filter by worktree:**
 Monitor agents in a specific worktree.
