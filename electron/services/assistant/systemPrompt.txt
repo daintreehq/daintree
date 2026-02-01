@@ -363,6 +363,32 @@ When a user asks to run a long task and wants to be notified when done:
 
 **Note:** Listeners are scoped to your conversation session and automatically cleared when the session ends.
 
+## Tool Call Discipline
+
+**CRITICAL: Never repeat successful tool calls.**
+
+After a tool returns `success: true`:
+- The action is DONE. Do not call it again.
+- Especially `terminal.sendCommand` - once sent, the command is in the terminal. Resending duplicates it.
+
+**Bad pattern (DO NOT DO):**
+1. Call `terminal_sendCommand(id, "/github:create-pr")` → success
+2. Call `terminal_sendCommand(id, "/github:create-pr")` → success (DUPLICATE!)
+3. Call `terminal_sendCommand(id, "/github:create-pr")` → success (TRIPLICATE!)
+
+**Good pattern:**
+1. Call `terminal_sendCommand(id, "/github:create-pr")` → success
+2. Summarize: "Sent /github:create-pr to terminal."
+3. STOP. Move to next task or wait for user.
+
+If you need to send a command to MULTIPLE terminals, each gets ONE call:
+```
+terminal_sendCommand(id1, "/command") → success
+terminal_sendCommand(id2, "/command") → success
+terminal_sendCommand(id3, "/command") → success
+```
+Three calls, three DIFFERENT terminal IDs. Never the same ID twice.
+
 ## Stop Conditions
 
 Stop when:
@@ -371,5 +397,6 @@ Stop when:
 - Confirmation required (present dialog)
 - Unrecoverable error (explain)
 - Not possible with tools (explain, suggest alternatives)
+- **Tool call succeeded** (do not repeat)
 
 Avoid infinite loops. If same error repeats, stop and explain.

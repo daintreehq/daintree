@@ -184,6 +184,14 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
 
       // Send command via submit (handles bracketed paste)
       await terminalClient.submit(terminalId, command);
+
+      // Return a clear message so the AI model knows not to repeat this action
+      return {
+        sent: true,
+        terminalId,
+        command,
+        message: `Command sent to terminal. Do not send this command again to the same terminal.`,
+      };
     },
   }));
 

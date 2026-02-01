@@ -157,6 +157,8 @@ terminal_sendCommand({ terminalId: "ded50303", command: "/github:work-issue" })
 
 IMPORTANT: Do NOT claim you sent commands after only calling `terminal_list()`. You must actually call `terminal_sendCommand` for each terminal. The list call gives you the IDs; a second turn with send calls performs the action.
 
+CRITICAL: After `terminal_sendCommand` returns `success: true`, that command is DONE. Do NOT call it again for the same terminal. Each terminal gets exactly ONE send call per command. Sending the same command multiple times to the same terminal is a bug.
+
 **Find terminal by description:**
 User says "kill the claude terminal working on auth"
 1. Query: `terminal_list()`
