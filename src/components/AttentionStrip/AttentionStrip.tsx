@@ -10,10 +10,12 @@ import { useAttentionTerminals } from "@/hooks/useAttentionTerminals";
 export function AttentionStrip() {
   const { terminals, waitingCount, failedCount, totalCount } = useAttentionTerminals();
 
-  const { activateTerminal, pingTerminal } = useTerminalStore(
+  const { activateTerminal, pingTerminal, getPanelGroup, setActiveTab } = useTerminalStore(
     useShallow((state) => ({
       activateTerminal: state.activateTerminal,
       pingTerminal: state.pingTerminal,
+      getPanelGroup: state.getPanelGroup,
+      setActiveTab: state.setActiveTab,
     }))
   );
 
@@ -34,6 +36,12 @@ export function AttentionStrip() {
       selectWorktree(firstTerminal.worktreeId);
     }
 
+    // If the terminal is in a docked tab group, set it as the active tab
+    const group = getPanelGroup(firstTerminal.id);
+    if (group) {
+      setActiveTab(group.id, firstTerminal.id);
+    }
+
     activateTerminal(firstTerminal.id);
     pingTerminal(firstTerminal.id);
   }, [
@@ -41,6 +49,8 @@ export function AttentionStrip() {
     activeWorktreeId,
     trackTerminalFocus,
     selectWorktree,
+    getPanelGroup,
+    setActiveTab,
     activateTerminal,
     pingTerminal,
   ]);
@@ -82,12 +92,13 @@ export function AttentionStrip() {
           />
         )}
         <span
+          id="attention-strip-message"
           className={cn(
             "text-xs font-medium truncate",
             hasFailed ? "text-[var(--color-status-error)]" : "text-[var(--color-status-warning)]"
           )}
           role={hasFailed ? "alert" : "status"}
-          aria-live="polite"
+          aria-live={hasFailed ? "assertive" : "polite"}
           aria-atomic="true"
         >
           {message}
@@ -98,6 +109,7 @@ export function AttentionStrip() {
         variant="outline"
         size="xs"
         onClick={handleView}
+        aria-describedby="attention-strip-message"
         className={cn(
           "shrink-0",
           hasFailed
