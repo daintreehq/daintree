@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback } from "react";
-import { Loader2, XCircle, X, RefreshCw, Maximize2 } from "lucide-react";
+import { Loader2, XCircle, X, RefreshCw, Maximize2, RotateCw } from "lucide-react";
 import { CanopyIcon } from "@/components/icons/CanopyIcon";
 import { useAppAgentStore, useAssistantChatStore } from "@/store";
 import { cn } from "@/lib/utils";
@@ -20,6 +20,7 @@ export function AssistantPane() {
     isLoading,
     error,
     sendMessage,
+    retryLastMessage,
     cancelStreaming,
     clearError,
     clearMessages,
@@ -135,19 +136,36 @@ export function AssistantPane() {
             <div
               className="flex items-start gap-3 px-4 py-2.5 border-l-2 border-red-500 bg-red-500/[0.03]"
               role="alert"
+              aria-busy={isLoading}
             >
               <XCircle className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />
-              <span className="flex-1 font-mono text-xs text-red-400 whitespace-pre-wrap break-words">
+              <span className="flex-1 min-w-0 font-mono text-xs text-red-400 whitespace-pre-wrap break-words">
                 {error}
               </span>
-              <button
-                type="button"
-                onClick={clearError}
-                className="text-red-400/70 hover:text-red-400 transition-colors"
-                aria-label="Dismiss error"
-              >
-                <X className="w-3 h-3" />
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                {messages.some((msg) => msg.role === "user") && (
+                  <button
+                    type="button"
+                    onClick={retryLastMessage}
+                    disabled={isLoading}
+                    className="flex items-center gap-1.5 px-2 py-1 rounded text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-xs font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-red-400 focus-visible:outline-offset-2"
+                    aria-label={isLoading ? "Retrying last message..." : "Retry last message"}
+                    title={isLoading ? "Retrying..." : "Retry last message"}
+                  >
+                    <RotateCw className={`w-3 h-3 ${isLoading ? "animate-spin motion-reduce:animate-none" : ""}`} />
+                    <span>{isLoading ? "Retrying..." : "Retry"}</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={clearError}
+                  className="p-1.5 rounded text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-red-400 focus-visible:outline-offset-2"
+                  aria-label="Dismiss error"
+                  title="Dismiss error"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
             </div>
           )}
 

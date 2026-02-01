@@ -74,6 +74,91 @@ export function useAssistantChat(options?: UseAssistantChatOptions) {
     sessionIdRef.current = useAssistantChatStore.getState().conversation.sessionId;
   }, [storeClearConversation]);
 
+  const retryLastMessage = useCallback(() => {
+    const state = useAssistantChatStore.getState();
+
+    if (state.conversation.isLoading) {
+      console.warn("[AssistantChat] Cannot retry while request is in progress");
+      return;
+    }
+
+    const messages = state.conversation.messages;
+    const lastUserMessageIndex = messages.findLastIndex((msg) => msg.role === "user");
+
+    if (lastUserMessageIndex === -1) {
+      console.warn("[AssistantChat] No user message to retry");
+      return;
+    }
+
+    const messagesToRetry = messages.slice(0, lastUserMessageIndex + 1);
+    useAssistantChatStore.getState().setMessages(messagesToRetry);
+
+    storeSetError(null);
+    storeSetLoading(true);
+
+    const requestId = ++currentRequestIdRef.current;
+    const sessionId = sessionIdRef.current;
+
+    storeSetStreamingState(null, null);
+
+    (async () => {
+      try {
+        const context = getAssistantContext();
+        const actions = actionService.list();
+
+        const currentMessages = messagesToRetry;
+
+        const ipcMessages = currentMessages.map((msg) => {
+          const completedToolResults = msg.toolCalls
+            ?.filter((tc) => {
+              const hasTerminalStatus = tc.status !== "pending";
+              const hasResultOrError = tc.result !== undefined || tc.error !== undefined;
+              return hasTerminalStatus && hasResultOrError;
+            })
+            .map((tc) => ({
+              toolCallId: tc.id,
+              toolName: tc.name,
+              result: tc.result ?? null,
+              error: tc.error,
+            }));
+
+          return {
+            id: msg.id,
+            role: msg.role,
+            content: msg.content,
+            toolCalls: msg.toolCalls?.map((tc) => ({
+              id: tc.id,
+              name: tc.name,
+              args: tc.args,
+            })),
+            toolResults:
+              completedToolResults && completedToolResults.length > 0
+                ? completedToolResults
+                : undefined,
+            createdAt: new Date(msg.timestamp).toISOString(),
+          };
+        });
+
+        await window.electron.assistant.sendMessage({
+          sessionId,
+          messages: ipcMessages,
+          actions,
+          context,
+        });
+      } catch (err) {
+        if (currentRequestIdRef.current === requestId) {
+          const errorMessage = err instanceof Error ? err.message : "An error occurred";
+          console.error("[AssistantChat] Retry error:", errorMessage);
+          storeSetError(errorMessage);
+          onError?.(errorMessage);
+          storeSetStreamingState(null, null);
+          storeSetLoading(false);
+          window.electron.assistant.cancel(sessionId);
+        }
+      }
+    })();
+  }, [storeSetError, storeSetLoading, onError, storeSetStreamingState]);
+
   const sendMessage = useCallback(
     async (content: string) => {
       if (!content.trim()) return;
@@ -153,6 +238,7 @@ export function useAssistantChat(options?: UseAssistantChatOptions) {
     isLoading: conversation.isLoading,
     error: conversation.error,
     sendMessage,
+    retryLastMessage,
     cancelStreaming,
     clearError,
     clearMessages,
