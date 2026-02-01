@@ -99,7 +99,10 @@ export type KeyAction =
   | "agent.opencode"
   | "agent.terminal"
   | "agent.focusNextWaiting"
+  | "agent.focusNextWorking"
   | "agent.focusNextFailed"
+  | "agent.focusNextAgent"
+  | "agent.focusPreviousAgent"
 
   // Assistant panel
   | "assistant.open"

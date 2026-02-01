@@ -164,4 +164,67 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       state.focusNextFailed(state.isInTrash, validWorktreeIds);
     },
   }));
+
+  actions.set("agent.focusNextWorking", () => ({
+    id: "agent.focusNextWorking",
+    title: "Focus Next Working Agent",
+    description: "Focus the next agent in working state",
+    category: "agent",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const state = useTerminalStore.getState();
+      const { useWorktreeDataStore } = await import("@/store/worktreeDataStore");
+      const worktreeData = useWorktreeDataStore.getState();
+      const validWorktreeIds = new Set<string>();
+      for (const [id, wt] of worktreeData.worktrees) {
+        validWorktreeIds.add(id);
+        if (wt.worktreeId) validWorktreeIds.add(wt.worktreeId);
+      }
+      state.focusNextWorking(state.isInTrash, validWorktreeIds);
+    },
+  }));
+
+  actions.set("agent.focusNextAgent", () => ({
+    id: "agent.focusNextAgent",
+    title: "Focus Next Agent",
+    description: "Cycle through all agent panels",
+    category: "agent",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const state = useTerminalStore.getState();
+      const { useWorktreeDataStore } = await import("@/store/worktreeDataStore");
+      const worktreeData = useWorktreeDataStore.getState();
+      const validWorktreeIds = new Set<string>();
+      for (const [id, wt] of worktreeData.worktrees) {
+        validWorktreeIds.add(id);
+        if (wt.worktreeId) validWorktreeIds.add(wt.worktreeId);
+      }
+      state.focusNextAgent(state.isInTrash, validWorktreeIds);
+    },
+  }));
+
+  actions.set("agent.focusPreviousAgent", () => ({
+    id: "agent.focusPreviousAgent",
+    title: "Focus Previous Agent",
+    description: "Cycle backwards through all agent panels",
+    category: "agent",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const state = useTerminalStore.getState();
+      const { useWorktreeDataStore } = await import("@/store/worktreeDataStore");
+      const worktreeData = useWorktreeDataStore.getState();
+      const validWorktreeIds = new Set<string>();
+      for (const [id, wt] of worktreeData.worktrees) {
+        validWorktreeIds.add(id);
+        if (wt.worktreeId) validWorktreeIds.add(wt.worktreeId);
+      }
+      state.focusPreviousAgent(state.isInTrash, validWorktreeIds);
+    },
+  }));
 }
