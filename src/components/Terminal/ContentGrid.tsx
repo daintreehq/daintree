@@ -45,6 +45,8 @@ import { cliAvailabilityClient, agentSettingsClient } from "@/clients";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { generateAgentCommand } from "@shared/types";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
+import { FleetFilterBar } from "@/components/FleetFilters";
+import { useFleetFilterStore, type FleetStateFilter } from "@/store/fleetFilterStore";
 
 export interface ContentGridProps {
   className?: string;
@@ -419,15 +421,48 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
   const sidecarOpen = useSidecarStore((state) => state.isOpen);
   const sidecarLayoutMode = useSidecarStore((state) => state.layoutMode);
 
-  const gridTerminals = useMemo(
-    () =>
-      terminals.filter(
-        (t) =>
-          (t.location === "grid" || t.location === undefined) &&
-          (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
-      ),
-    [terminals, activeWorktreeId]
+  // Fleet filter state
+  const { stateFilters: fleetStateFilters, worktreeFilter: fleetWorktreeFilter } =
+    useFleetFilterStore(
+      useShallow((state) => ({
+        stateFilters: state.stateFilters,
+        worktreeFilter: state.worktreeFilter,
+      }))
+    );
+
+  // All grid terminals (for fleet filter counts)
+  const allGridTerminals = useMemo(
+    () => terminals.filter((t) => t.location === "grid" || t.location === undefined),
+    [terminals]
   );
+
+  // Apply fleet filters to determine which terminals should be visible
+  const gridTerminals = useMemo(() => {
+    // Start with all grid terminals
+    let filtered = allGridTerminals;
+
+    // Determine worktree scope
+    const effectiveWorktreeId =
+      fleetWorktreeFilter !== "all" ? fleetWorktreeFilter : activeWorktreeId;
+
+    // Apply worktree filter
+    filtered = filtered.filter(
+      (t) => (t.worktreeId ?? undefined) === (effectiveWorktreeId ?? undefined)
+    );
+
+    // Apply state filters (only to agents)
+    if (fleetStateFilters.size > 0) {
+      filtered = filtered.filter((t) => {
+        // Non-agents are always shown when state filters are active
+        if (t.kind !== "agent") return true;
+        // Agents must match one of the selected states
+        const state = t.agentState as FleetStateFilter | undefined;
+        return state && fleetStateFilters.has(state);
+      });
+    }
+
+    return filtered;
+  }, [allGridTerminals, activeWorktreeId, fleetStateFilters, fleetWorktreeFilter]);
 
   // Get tab groups for the grid
   const getTabGroups = useTerminalStore((state) => state.getTabGroups);
@@ -439,10 +474,23 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
   const addTerminal = useTerminalStore((state) => state.addTerminal);
   const setActiveTab = useTerminalStore((state) => state.setActiveTab);
 
-  const tabGroups = useMemo(
-    () => getTabGroups("grid", activeWorktreeId ?? undefined),
-    [getTabGroups, activeWorktreeId, terminals] // re-compute when terminals change
+  // Get visible terminal IDs based on filters
+  const visibleTerminalIds = useMemo(
+    () => new Set(gridTerminals.map((t) => t.id)),
+    [gridTerminals]
   );
+
+  // Get tab groups, filtered to only include groups with at least one visible panel
+  const tabGroups = useMemo(() => {
+    const effectiveWorktreeId =
+      fleetWorktreeFilter !== "all" ? fleetWorktreeFilter : activeWorktreeId;
+    const allGroups = getTabGroups("grid", effectiveWorktreeId ?? undefined);
+
+    // Filter groups to only those with at least one visible panel
+    return allGroups.filter((group) =>
+      group.panelIds.some((panelId) => visibleTerminalIds.has(panelId))
+    );
+  }, [getTabGroups, activeWorktreeId, fleetWorktreeFilter, terminals, visibleTerminalIds]);
 
   // Handler for adding a new tab to a single panel (creates a tab group)
   const handleAddTabForPanel = useCallback(
@@ -814,8 +862,8 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
       }
       return null;
     } else {
-      // Single panel maximize
-      const terminal = gridTerminals.find((t: TerminalInstance) => t.id === maximizedId);
+      // Single panel maximize - use allGridTerminals to avoid filter issues
+      const terminal = allGridTerminals.find((t: TerminalInstance) => t.id === maximizedId);
       if (terminal) {
         return (
           <div className={cn("h-full relative bg-canopy-bg", className)}>
@@ -853,6 +901,17 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
       return (
         <div className={cn("h-full flex flex-col", className)}>
           <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
+          <FleetFilterBar
+            terminals={
+              fleetWorktreeFilter !== "all"
+                ? allGridTerminals.filter((t) => t.worktreeId === fleetWorktreeFilter)
+                : allGridTerminals.filter(
+                    (t) => (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+                  )
+            }
+            visibleCount={gridTerminals.filter((t) => t.kind === "agent").length}
+            className="shrink-0"
+          />
           <div
             ref={(node) => {
               setNodeRef(node);
@@ -880,6 +939,17 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
   return (
     <div className={cn("h-full flex flex-col", className)}>
       <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
+      <FleetFilterBar
+        terminals={
+          fleetWorktreeFilter !== "all"
+            ? allGridTerminals.filter((t) => t.worktreeId === fleetWorktreeFilter)
+            : allGridTerminals.filter(
+                (t) => (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+              )
+        }
+        visibleCount={gridTerminals.filter((t) => t.kind === "agent").length}
+        className="shrink-0"
+      />
       <div className="relative flex-1 min-h-0">
         <SortableContext id="grid-container" items={terminalIds} strategy={rectSortingStrategy}>
           <div
