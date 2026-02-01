@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import { Loader2, XCircle, X, RefreshCw, Maximize2, RotateCw } from "lucide-react";
 import { CanopyIcon } from "@/components/icons/CanopyIcon";
 import { useAppAgentStore, useAssistantChatStore } from "@/store";
@@ -7,6 +7,7 @@ import { MessageList } from "./MessageList";
 import { AssistantInput, type AssistantInputHandle } from "./AssistantInput";
 import { EmptyState } from "./EmptyState";
 import { useAssistantChat } from "./useAssistantChat";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 export function AssistantPane() {
   const { hasApiKey, isInitialized, initialize } = useAppAgentStore();
@@ -53,13 +54,39 @@ export function AssistantPane() {
     [sendMessage]
   );
 
+  const [showClearDialog, setShowClearDialog] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
+
   const handleClearConversation = useCallback(() => {
-    if (messages.length > 1 || isLoading) {
-      const confirmed = window.confirm("Clear conversation? This cannot be undone.");
-      if (!confirmed) return;
+    if (messages.length > 0 || isLoading) {
+      setShowClearDialog(true);
+    } else {
+      clearMessages();
+    }
+  }, [clearMessages, messages.length, isLoading]);
+
+  const handleConfirmClear = useCallback(async () => {
+    if (isClearing) return;
+    setIsClearing(true);
+    setShowClearDialog(false);
+
+    if (isLoading) {
+      cancelStreaming();
     }
     clearMessages();
-  }, [clearMessages, messages.length, isLoading]);
+    setIsClearing(false);
+
+    // Return focus to input after clearing (clear button is removed when messages are cleared)
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+    });
+  }, [clearMessages, cancelStreaming, isLoading, isClearing]);
+
+  useEffect(() => {
+    if (!isOpen && showClearDialog) {
+      setShowClearDialog(false);
+    }
+  }, [isOpen, showClearDialog]);
 
   return (
     <div className="flex flex-col h-full bg-canopy-bg">
@@ -181,6 +208,17 @@ export function AssistantPane() {
           />
         </>
       )}
+
+      <ConfirmDialog
+        isOpen={showClearDialog}
+        onClose={() => setShowClearDialog(false)}
+        onConfirm={handleConfirmClear}
+        title="Clear conversation?"
+        description="This will clear all messages in the current conversation. This action cannot be undone."
+        confirmLabel="Clear"
+        variant="destructive"
+        isConfirmLoading={isClearing}
+      />
     </div>
   );
 }
