@@ -166,7 +166,6 @@ export function GridPanel({
       agentId: terminal.agentId,
       cwd: terminal.cwd,
       agentState: terminal.agentState,
-      lastStateChange: terminal.lastStateChange,
       activity: terminal.activityHeadline
         ? {
             headline: terminal.activityHeadline,

@@ -147,7 +147,6 @@ export function DockedPanel({ terminal, onPopoverClose, onAddTab }: DockedPanelP
       agentId: terminal.agentId,
       cwd: terminal.cwd,
       agentState: terminal.agentState,
-      lastStateChange: terminal.lastStateChange,
       activity: terminal.activityHeadline
         ? {
             headline: terminal.activityHeadline,

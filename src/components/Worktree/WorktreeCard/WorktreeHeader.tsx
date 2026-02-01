@@ -23,7 +23,6 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../../ui/tooltip";
 import {
   AlertCircle,
-  AlertTriangle,
   Check,
   CircleDot,
   Copy,
@@ -35,9 +34,6 @@ import {
   Shield,
 } from "lucide-react";
 import { useIssueTooltip, usePRTooltip } from "@/hooks/useGitHubTooltip";
-import { useWorktreeConflicts } from "@/hooks/useConflictDetector";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
-import { getConflictingWorktreeNames } from "@/utils/conflictDetector";
 import { IssueTooltipContent, PRTooltipContent, TooltipLoading } from "./GitHubTooltipContent";
 
 const DROPDOWN_COMPONENTS: WorktreeMenuComponents = {
@@ -195,68 +191,6 @@ const PRBadge = memo(function PRBadge({
   );
 });
 
-interface ConflictBadgeProps {
-  worktreeId: string;
-}
-
-const ConflictBadge = memo(function ConflictBadge({ worktreeId }: ConflictBadgeProps) {
-  const { conflictCount, conflicts } = useWorktreeConflicts(worktreeId);
-  const worktreeMap = useWorktreeDataStore((state) => state.worktrees);
-
-  const tooltipContent = useMemo(() => {
-    const lines: { file: string; fullPath: string; worktrees: string }[] = [];
-    for (const conflict of conflicts) {
-      const otherWorktrees = getConflictingWorktreeNames(worktreeId, conflict, worktreeMap);
-      const pathSegments = conflict.filePath.split("/");
-      const fileName = pathSegments[pathSegments.length - 1] ?? conflict.filePath;
-      const parentDir = pathSegments.length > 1 ? pathSegments[pathSegments.length - 2] : "";
-      const displayPath = parentDir ? `${parentDir}/${fileName}` : fileName;
-
-      lines.push({
-        file: displayPath,
-        fullPath: conflict.filePath,
-        worktrees: otherWorktrees.join(", "),
-      });
-    }
-    return lines;
-  }, [conflicts, worktreeId, worktreeMap]);
-
-  if (conflictCount === 0) {
-    return null;
-  }
-
-  return (
-    <TooltipProvider>
-      <Tooltip delayDuration={300}>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            className="flex items-center gap-0.5 text-amber-400 text-xs font-mono shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent rounded px-0.5 -mx-0.5"
-            aria-label={`${conflictCount} potential merge conflict${conflictCount !== 1 ? "s" : ""}`}
-          >
-            <AlertTriangle className="w-3 h-3" aria-hidden="true" />
-            <span>{conflictCount}</span>
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="top" align="start" className="max-w-sm">
-          <div className="space-y-1">
-            <div className="font-medium text-xs">
-              Potential merge conflict{conflictCount !== 1 ? "s" : ""}
-            </div>
-            <div className="text-xs text-canopy-text/70 space-y-0.5">
-              {tooltipContent.map((entry, i) => (
-                <div key={i} className="break-words" title={entry.fullPath}>
-                  {entry.file} → {entry.worktrees}
-                </div>
-              ))}
-            </div>
-          </div>
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
-  );
-});
-
 export interface WorktreeHeaderProps {
   worktree: WorktreeState;
   isActive: boolean;
@@ -351,8 +285,6 @@ export function WorktreeHeader({
             <span className="text-amber-500 text-xs font-medium shrink-0">(detached)</span>
           )}
         </div>
-
-        <ConflictBadge worktreeId={worktree.id} />
 
         {worktreeErrorCount > 0 && (
           <TooltipProvider>

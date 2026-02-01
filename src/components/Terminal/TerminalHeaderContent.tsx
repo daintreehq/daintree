@@ -5,14 +5,12 @@ import { cn } from "@/lib/utils";
 import { STATE_ICONS, STATE_COLORS } from "@/components/Worktree/terminalStateConfig";
 import type { ActivityState } from "./TerminalPane";
 import { useTerminalStore } from "@/store";
-import { WorkingTimer } from "@/components/Panel/WorkingTimer";
 
 export interface TerminalHeaderContentProps {
   id: string;
   kind?: PanelKind;
   type?: TerminalType;
   agentState?: AgentState;
-  lastStateChange?: number;
   activity?: ActivityState | null;
   lastCommand?: string;
   isExited?: boolean;
@@ -26,7 +24,6 @@ function TerminalHeaderContentComponent({
   kind,
   type,
   agentState,
-  lastStateChange,
   activity,
   lastCommand,
   isExited = false,
@@ -162,11 +159,6 @@ function TerminalHeaderContentComponent({
 
       {/* Agent state chip */}
       {renderAgentStateChip()}
-
-      {/* Working duration timer */}
-      {agentState === "working" && lastStateChange != null && (
-        <WorkingTimer startedAt={lastStateChange} />
-      )}
     </>
   );
 }
