@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback } from "react";
 import { Loader2, XCircle, X, RefreshCw, Maximize2 } from "lucide-react";
 import { CanopyIcon } from "@/components/icons/CanopyIcon";
 import { useAppAgentStore, useAssistantChatStore } from "@/store";
+import { cn } from "@/lib/utils";
 import { MessageList } from "./MessageList";
 import { AssistantInput, type AssistantInputHandle } from "./AssistantInput";
 import { EmptyState } from "./EmptyState";
@@ -71,16 +72,22 @@ export function AssistantPane() {
 
       {showChat && (
         <>
-          <div className="flex items-center justify-between px-3 shrink-0 text-xs transition-colors relative overflow-hidden group h-8 border-b border-divider bg-white/[0.02] select-none">
+          <div
+            className={cn(
+              "flex items-center justify-between px-3 shrink-0 text-xs transition-colors relative overflow-hidden group",
+              "h-8 border-b border-divider",
+              "bg-white/[0.02]"
+            )}
+          >
             <div className="flex items-center gap-2 min-w-0">
               <span className="shrink-0 flex items-center justify-center w-3.5 h-3.5">
                 <CanopyIcon className="w-3.5 h-3.5 text-canopy-accent" />
               </span>
-              <span className="text-xs font-medium font-sans text-canopy-text truncate">
+              <span className="text-xs font-medium font-sans text-canopy-text truncate select-none transition-colors">
                 Canopy Assistant
               </span>
             </div>
-            <div className="flex items-center gap-1.5 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+            <div className="flex items-center gap-1.5 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity motion-reduce:transition-none">
               {hasMessages && (
                 <button
                   type="button"
