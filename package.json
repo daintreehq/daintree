@@ -153,6 +153,10 @@
       {
         "from": "electron/services/assistant/systemPrompt.txt",
         "to": "systemPrompt.txt"
+      },
+      {
+        "from": "electron/services/assistant/examples.txt",
+        "to": "examples.txt"
       }
     ],
     "asarUnpack": [

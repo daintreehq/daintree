@@ -79,6 +79,38 @@ Access native features via namespaced API in Renderer. Returns Promises or Clean
 - **Context:** `CopyTreeService` generates context for agents, injects into terminals.
 - **Actions:** `ActionService` dispatches all UI operations with validation and observability.
 
+### Assistant Debugging
+
+The Canopy Assistant logs all requests and responses for debugging. Logs are development-only and cleared on app startup.
+
+**Log Location:** `~/Library/Application Support/canopy-app/logs/assistant.log` (macOS)
+
+**Format:** JSON Lines (one JSON object per line)
+
+**Entry Types:**
+
+- `request` — Messages, tools, context, model config sent to the AI
+- `stream` — Individual events: `text-delta`, `tool-call`, `tool-result`, `error`
+- `complete` — Request finished with finishReason and durationMs
+- `error` — Request failed with error message
+- `cancelled` — Request was cancelled by user
+
+**Debugging Tool Calls:**
+
+```bash
+# View all tool calls and results
+grep -E '"event":"(tool-call|tool-result)"' ~/Library/Application\ Support/canopy-app/logs/assistant.log
+
+# View full request/response cycle
+grep '"type":"request"\|"type":"complete"' ~/Library/Application\ Support/canopy-app/logs/assistant.log
+```
+
+**Key Files:**
+
+- `electron/utils/assistantLogger.ts` — Logging infrastructure
+- `electron/services/AssistantService.ts` — Request handling and stream processing
+- `electron/services/assistant/actionTools.ts` — Action-to-tool conversion and allowlist
+
 ## Directory Map
 
 ```text

@@ -10,31 +10,36 @@ const __dirname = path.dirname(__filename);
 const FALLBACK_PROMPT =
   "You are Canopy's assistant. Help users control the IDE using available tools.";
 
-function loadSystemPrompt(): string {
-  const isDev = !app.isPackaged;
-
-  let promptPath: string;
+function loadTextFile(filename: string, isDev: boolean): string | null {
+  let filePath: string;
   if (isDev) {
-    // Development: load from dist-electron copy (created by build script)
-    // Note: __dirname points to the bundled main.js location (dist-electron/electron/),
-    // not the original source directory, so we need the relative path from there.
-    promptPath = path.join(__dirname, "services", "assistant", "systemPrompt.txt");
+    filePath = path.join(__dirname, "services", "assistant", filename);
   } else {
-    // Production: load from resources (via electron-builder extraResources)
-    promptPath = path.join(process.resourcesPath, "systemPrompt.txt");
+    filePath = path.join(process.resourcesPath, filename);
   }
 
   try {
-    const content = fs.readFileSync(promptPath, "utf-8").trim();
-    if (!content) {
-      console.warn("[SystemPrompt] File is empty:", promptPath);
-      return FALLBACK_PROMPT;
-    }
-    return content;
-  } catch (error) {
-    console.error("[SystemPrompt] Failed to load from file:", promptPath, error);
+    return fs.readFileSync(filePath, "utf-8").trim();
+  } catch {
+    return null;
+  }
+}
+
+function loadSystemPrompt(): string {
+  const isDev = !app.isPackaged;
+
+  const mainPrompt = loadTextFile("systemPrompt.txt", isDev);
+  if (!mainPrompt) {
+    console.warn("[SystemPrompt] Main prompt file not found or empty");
     return FALLBACK_PROMPT;
   }
+
+  const examples = loadTextFile("examples.txt", isDev);
+  if (examples) {
+    return `${mainPrompt}\n\n${examples}`;
+  }
+
+  return mainPrompt;
 }
 
 export const SYSTEM_PROMPT = loadSystemPrompt();

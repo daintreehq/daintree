@@ -1,0 +1,190 @@
+## Tool Usage Examples
+
+This section provides concrete examples of how to use tools correctly.
+
+### Launching Agents
+
+**Launch Claude and ask it to say hello world:**
+```
+User: "Open a Claude terminal and ask it to say hello world"
+
+agent_launch({ agentId: "claude", prompt: "Say hello world" })
+```
+Result: Creates Claude terminal and sends "Say hello world" as the initial prompt. One tool call does both.
+
+**Launch Claude with an initial prompt:**
+```
+agent_launch({ agentId: "claude", prompt: "Review the authentication module and suggest improvements" })
+```
+Result: Creates Claude terminal AND sends the prompt immediately.
+
+**Launch Codex for a specific task:**
+```
+agent_launch({ agentId: "codex", prompt: "Write tests for src/utils/validation.ts" })
+```
+
+**Launch agent in a specific worktree:**
+```
+agent_launch({ agentId: "claude", worktreeId: "/path/to/worktree", prompt: "Fix the failing tests" })
+```
+
+**Launch plain terminal:**
+```
+agent_launch({ agentId: "terminal" })
+```
+
+**Available agentIds:** `claude`, `codex`, `gemini`, `opencode`, `terminal`
+
+### Sending Commands to Existing Terminals
+
+**Send command to a specific terminal:**
+```
+terminal_sendCommand({ terminalId: "abc-123", command: "npm test" })
+```
+
+**Send multi-line input:**
+```
+terminal_sendCommand({ terminalId: "abc-123", command: "git commit -m 'Fix bug'\ngit push" })
+```
+
+### Querying State
+
+**List all terminals:**
+```
+terminal_list()
+```
+Returns array with id, kind, agentState, worktreeId, location for each terminal.
+
+**Get terminal output:**
+```
+terminal_getOutput({ terminalId: "abc-123", lines: 50 })
+```
+
+**Get current worktree:**
+```
+worktree_getCurrent()
+```
+
+**List all worktrees:**
+```
+worktree_list()
+```
+
+### Creating Worktrees
+
+**Quick worktree with recipe (recommended):**
+```
+worktree_createWithRecipe({
+  branchName: "feature-login",
+  recipeId: "dev"
+})
+```
+
+**Worktree from specific base branch:**
+```
+worktree_createWithRecipe({
+  branchName: "hotfix-auth",
+  baseBranch: "release/2.0",
+  recipeId: "dev"
+})
+```
+
+### Multi-Step Workflows
+
+**Example: Create worktree, launch agent, assign task**
+
+Step 1 - Create worktree:
+```
+worktree_createWithRecipe({ branchName: "feature-search", recipeId: "dev" })
+```
+Result: `{ worktreeId: "/path/to/feature-search", ... }`
+
+Step 2 - Launch agent in new worktree with task:
+```
+agent_launch({
+  agentId: "claude",
+  worktreeId: "/path/to/feature-search",
+  prompt: "Implement full-text search for the notes feature"
+})
+```
+
+**Example: Monitor agent completion**
+
+Step 1 - Launch agent:
+```
+agent_launch({ agentId: "claude", prompt: "Run the test suite and fix any failures" })
+```
+Result: `{ terminalId: "xyz-789" }`
+
+Step 2 - Register completion listener:
+```
+register_listener({
+  eventType: "terminal:state-changed",
+  filter: { terminalId: "xyz-789", toState: "completed" }
+})
+```
+
+Step 3 - When notified, check results:
+```
+terminal_getOutput({ terminalId: "xyz-789", lines: 100 })
+```
+
+### Common Patterns
+
+**Find terminal by description:**
+User says "kill the claude terminal working on auth"
+1. Query: `terminal_list()`
+2. Match by agentId="claude" and title/context containing "auth"
+3. Confirm with user if multiple matches
+4. Execute: `terminal_kill({ terminalId: "<matched-id>" })`
+
+**Restart failed agent:**
+1. Query: `terminal_list()` - find terminals with agentState="failed"
+2. Execute: `terminal_restart({ terminalId: "<failed-id>" })`
+
+**Open GitHub issue in sidecar:**
+```
+github_openIssue({ issueNumber: 123 })
+```
+Or in sidecar browser:
+```
+sidecar_openUrl({ url: "https://github.com/owner/repo/issues/123" })
+```
+
+### What NOT to Do
+
+**DON'T launch agent without prompt when user wants to send a task:**
+```
+User: "Open a Claude terminal and ask it to say hello world"
+
+// WRONG - creates empty terminal, then tries to send command separately
+agent_launch({ agentId: "claude" })
+agent_launch({ agentId: "claude" })  // Still wrong - just creates another empty terminal!
+
+// WRONG - two-step approach is unnecessary
+agent_launch({ agentId: "claude" })
+terminal_sendCommand({ terminalId: "...", command: "say hello world" })
+
+// RIGHT - single call with prompt parameter
+agent_launch({ agentId: "claude", prompt: "Say hello world" })
+```
+
+**DON'T guess terminal IDs:**
+```
+// WRONG
+terminal_kill({ terminalId: "claude-1" })
+
+// RIGHT
+terminal_list()  // First query to get actual IDs
+terminal_kill({ terminalId: "<actual-id-from-list>" })
+```
+
+**DON'T create worktree without checking branch name:**
+```
+// WRONG - might conflict
+worktree_create({ branchName: "feature-x" })
+
+// RIGHT - get safe name first
+worktree_getAvailableBranch({ rootPath, branchName: "feature-x" })
+// Then use the returned safe name
+```

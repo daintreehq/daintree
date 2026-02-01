@@ -73,13 +73,9 @@ export const AGENT_ACCESSIBLE_ACTIONS = [
   "copyTree.getFileTree",
 
   // ===== AGENT LAUNCHING =====
-  // Spawn and manage AI agents
+  // Use agent.launch with agentId to spawn any agent type
+  // Shortcut actions (agent.claude, agent.codex, etc.) are for keyboard shortcuts only
   "agent.launch",
-  "agent.claude",
-  "agent.codex",
-  "agent.gemini",
-  "agent.opencode",
-  "agent.terminal",
   "agent.focusNextFailed",
   "agent.focusNextWaiting",
   "agent.palette",

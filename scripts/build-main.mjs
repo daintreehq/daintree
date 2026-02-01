@@ -68,11 +68,15 @@ async function run() {
     // Copy static assets to dist-electron
     const assetsDir = path.join(root, "dist-electron/electron/services/assistant");
     fs.mkdirSync(assetsDir, { recursive: true });
-    fs.copyFileSync(
-      path.join(root, "electron/services/assistant/systemPrompt.txt"),
-      path.join(assetsDir, "systemPrompt.txt")
-    );
-    console.log("[Build] Copied systemPrompt.txt");
+
+    const assistantFiles = ["systemPrompt.txt", "examples.txt"];
+    for (const file of assistantFiles) {
+      fs.copyFileSync(
+        path.join(root, "electron/services/assistant", file),
+        path.join(assetsDir, file)
+      );
+    }
+    console.log("[Build] Copied assistant prompt files");
   } catch (error) {
     console.error("[Build] Failed:", error);
     process.exit(1);

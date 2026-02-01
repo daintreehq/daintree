@@ -276,10 +276,24 @@ export function useAssistantStreamProcessor() {
           }
           break;
 
-        case "done":
+        case "done": {
+          const hadContent = streamingStateRef.current
+            ? streamingStateRef.current.content.length > 0 ||
+              streamingStateRef.current.toolCalls.length > 0
+            : false;
+
           finalizeStreaming();
+
+          // If we completed without any content and it wasn't cancelled, show an error
+          if (!hadContent && chunk.finishReason !== "cancelled") {
+            useAssistantChatStore
+              .getState()
+              .setError("The model did not respond. Please try again.");
+          }
+
           useAssistantChatStore.getState().setLoading(false);
           break;
+        }
       }
     });
 
