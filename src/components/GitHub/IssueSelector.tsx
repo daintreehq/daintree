@@ -96,14 +96,21 @@ export function IssueSelector({
           )}
           <div className="flex items-center gap-1 shrink-0">
             {selectedIssue && !disabled && (
-              <button
-                type="button"
+              <span
+                role="button"
+                tabIndex={0}
                 onClick={handleClear}
-                className="p-0.5 hover:bg-canopy-border rounded"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    handleClear(e as unknown as React.MouseEvent);
+                  }
+                }}
+                className="p-0.5 hover:bg-canopy-border rounded cursor-pointer"
                 title="Clear selection"
               >
                 <X className="h-3.5 w-3.5 text-muted-foreground hover:text-canopy-text" />
-              </button>
+              </span>
             )}
             <ChevronsUpDown className="h-4 w-4 opacity-50" />
           </div>
