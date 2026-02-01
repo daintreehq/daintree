@@ -126,8 +126,157 @@ register_listener({
 
 Step 3 - When notified, check results:
 ```
-terminal_getOutput({ terminalId: "xyz-789", lines: 100 })
+terminal_getOutput({ terminalId: "xyz-789", maxLines: 100 })
 ```
+
+### Event Listener Patterns
+
+**Monitor all terminals for waiting state:**
+When any agent enters waiting state (may need user input), you'll be notified.
+
+IMPORTANT: Only `terminal:state-changed` events are currently bridged to the assistant.
+```
+register_listener({
+  eventType: "terminal:state-changed",
+  filter: { toState: "waiting" }
+})
+```
+Result: `{ success: true, listenerId: "abc-123", ... }`
+Use the listenerId to remove the listener later.
+
+**Monitor specific terminal for multiple outcomes:**
+Register separate listeners for completion and failure.
+```
+// Listen for success
+register_listener({
+  eventType: "terminal:state-changed",
+  filter: { terminalId: "xyz-789", toState: "completed" }
+})
+
+// Listen for failure
+register_listener({
+  eventType: "terminal:state-changed",
+  filter: { terminalId: "xyz-789", toState: "failed" }
+})
+```
+
+**Handle waiting state with user notification:**
+When a listener triggers for waiting state:
+1. The notification chunk arrives with payload: `{ type: "listener_triggered", listenerData: { listenerId, eventType: "terminal:state-changed", data: { terminalId, agentId, toState: "waiting", ... } } }`
+2. Query the terminal output to see what the agent is asking:
+```
+terminal_getOutput({ terminalId: "xyz-789", maxLines: 20 })
+```
+3. Check output to determine if agent truly needs input (waiting can be silence-based)
+4. Either respond programmatically:
+```
+terminal_sendCommand({ terminalId: "xyz-789", command: "y" })
+```
+5. Or describe the situation to the user and wait for their decision.
+
+**Cleanup listeners after workflow completes:**
+Always remove listeners when no longer needed.
+```
+// After handling the notification:
+remove_listener({ listenerId: "abc-123" })
+```
+Or list active listeners first if you didn't save the ID:
+```
+list_listeners()
+// Returns: { success: true, count: 1, listeners: [{ listenerId: "abc-123", eventType: "terminal:state-changed", filter: {...}, createdAt: 1234567890 }] }
+remove_listener({ listenerId: "abc-123" })
+```
+
+**Launch, listen, and react workflow:**
+Complete example: launch agent, monitor for waiting/completion/failure, handle prompt.
+
+Step 1 - Launch agent with task that may need input:
+```
+agent_launch({ agentId: "claude", prompt: "Update dependencies and resolve any conflicts" })
+```
+Result: `{ terminalId: "dep-update-001" }`
+
+Step 2 - Register listeners for waiting, completed, and failed states upfront:
+```
+register_listener({
+  eventType: "terminal:state-changed",
+  filter: { terminalId: "dep-update-001", toState: "waiting" }
+})
+register_listener({
+  eventType: "terminal:state-changed",
+  filter: { terminalId: "dep-update-001", toState: "completed" }
+})
+register_listener({
+  eventType: "terminal:state-changed",
+  filter: { terminalId: "dep-update-001", toState: "failed" }
+})
+```
+
+Step 3 - When waiting notification arrives:
+```
+terminal_getOutput({ terminalId: "dep-update-001", maxLines: 30 })
+```
+Output shows: "Package react has breaking changes. Proceed? (y/n)"
+
+Step 4 - Respond to prompt:
+```
+terminal_sendCommand({ terminalId: "dep-update-001", command: "y" })
+```
+
+Step 5 - When completed/failed notification arrives, clean up all listeners:
+```
+list_listeners()
+// Remove all listeners for this terminal
+```
+
+**Monitor multiple terminals for completion:**
+Track several parallel agents.
+```
+// After launching multiple agents:
+// agent1 = { terminalId: "t1" }
+// agent2 = { terminalId: "t2" }
+// agent3 = { terminalId: "t3" }
+
+register_listener({ eventType: "terminal:state-changed", filter: { terminalId: "t1", toState: "completed" } })
+register_listener({ eventType: "terminal:state-changed", filter: { terminalId: "t2", toState: "completed" } })
+register_listener({ eventType: "terminal:state-changed", filter: { terminalId: "t3", toState: "completed" } })
+```
+Notifications arrive as each agent completes - process them individually.
+
+**Filter by worktree:**
+Monitor agents in a specific worktree.
+```
+register_listener({
+  eventType: "terminal:state-changed",
+  filter: { worktreeId: "/path/to/feature-branch", toState: "waiting" }
+})
+```
+
+**Filter by agent type:**
+Monitor only Claude agents for completion.
+```
+register_listener({
+  eventType: "terminal:state-changed",
+  filter: { agentId: "claude", toState: "completed" }
+})
+```
+
+**Single listener for multiple states:**
+Use one listener and branch on the state in the handler.
+```
+register_listener({
+  eventType: "terminal:state-changed",
+  filter: { terminalId: "xyz-789" }
+})
+```
+When notification arrives, check `listenerData.data.toState`:
+- If "waiting": check output and respond
+- If "completed": verify success and clean up listener
+- If "failed": log error and clean up listener
+
+This pattern is more efficient than registering multiple listeners.
+
+IMPORTANT: Filters use exact string matching. The filter `{ toState: "waiting" }` only matches the exact string "waiting", not "waiting for input" or similar.
 
 ### Common Patterns
 
