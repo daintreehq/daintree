@@ -3,6 +3,7 @@ import type { TerminalInstance } from "./terminalRegistrySlice";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { isAgentTerminal } from "@/utils/terminalType";
 
 export type NavigationDirection = "up" | "down" | "left" | "right";
 
@@ -76,11 +77,14 @@ export interface TerminalFocusSlice {
   closeDockTerminal: () => void;
   activateTerminal: (id: string) => void;
 
-  // Waiting agent navigation
+  // Agent state navigation
   focusNextWaiting: (isInTrash: (id: string) => boolean, validWorktreeIds: Set<string>) => void;
-
-  // Failed agent navigation
+  focusNextWorking: (isInTrash: (id: string) => boolean, validWorktreeIds: Set<string>) => void;
   focusNextFailed: (isInTrash: (id: string) => boolean, validWorktreeIds: Set<string>) => void;
+
+  // Agent cycling (any state)
+  focusNextAgent: (isInTrash: (id: string) => boolean, validWorktreeIds: Set<string>) => void;
+  focusPreviousAgent: (isInTrash: (id: string) => boolean, validWorktreeIds: Set<string>) => void;
 
   handleTerminalRemoved: (
     removedId: string,
@@ -408,6 +412,97 @@ export const createTerminalFocusSlice =
         // Activate and ping the terminal for visual feedback
         activateTerminal(nextTerminal.id);
         pingTerminal(nextTerminal.id);
+      },
+
+      focusNextWorking: (isInTrash, validWorktreeIds) => {
+        const terminals = getTerminals();
+        const { focusedId, activateTerminal, pingTerminal } = get();
+
+        // Find all working terminals excluding trash and orphaned
+        const workingTerminals = terminals.filter(
+          (t) => t.agentState === "working" && isTerminalVisible(t, isInTrash, validWorktreeIds)
+        );
+
+        if (workingTerminals.length === 0) return;
+
+        // Find current index in working list
+        const currentIndex = workingTerminals.findIndex((t) => t.id === focusedId);
+
+        // Calculate next index with wrap-around
+        const nextIndex = (currentIndex + 1) % workingTerminals.length;
+        const nextTerminal = workingTerminals[nextIndex];
+
+        const worktreeStore = useWorktreeSelectionStore.getState();
+        if (nextTerminal.worktreeId && nextTerminal.worktreeId !== worktreeStore.activeWorktreeId) {
+          worktreeStore.trackTerminalFocus(nextTerminal.worktreeId, nextTerminal.id);
+          worktreeStore.selectWorktree(nextTerminal.worktreeId);
+        }
+
+        // Activate and ping the terminal for visual feedback
+        activateTerminal(nextTerminal.id);
+        pingTerminal(nextTerminal.id);
+      },
+
+      focusNextAgent: (isInTrash, validWorktreeIds) => {
+        const terminals = getTerminals();
+        const { focusedId, activateTerminal, pingTerminal } = get();
+
+        // Find all agent terminals excluding trash and orphaned
+        const agentTerminals = terminals.filter(
+          (t) =>
+            isAgentTerminal(t.kind ?? t.type, t.agentId) &&
+            isTerminalVisible(t, isInTrash, validWorktreeIds)
+        );
+
+        if (agentTerminals.length === 0) return;
+
+        // Find current index in agent list
+        const currentIndex = agentTerminals.findIndex((t) => t.id === focusedId);
+
+        // Calculate next index with wrap-around
+        const nextIndex = (currentIndex + 1) % agentTerminals.length;
+        const nextTerminal = agentTerminals[nextIndex];
+
+        const worktreeStore = useWorktreeSelectionStore.getState();
+        if (nextTerminal.worktreeId && nextTerminal.worktreeId !== worktreeStore.activeWorktreeId) {
+          worktreeStore.trackTerminalFocus(nextTerminal.worktreeId, nextTerminal.id);
+          worktreeStore.selectWorktree(nextTerminal.worktreeId);
+        }
+
+        // Activate and ping the terminal for visual feedback
+        activateTerminal(nextTerminal.id);
+        pingTerminal(nextTerminal.id);
+      },
+
+      focusPreviousAgent: (isInTrash, validWorktreeIds) => {
+        const terminals = getTerminals();
+        const { focusedId, activateTerminal, pingTerminal } = get();
+
+        // Find all agent terminals excluding trash and orphaned
+        const agentTerminals = terminals.filter(
+          (t) =>
+            isAgentTerminal(t.kind ?? t.type, t.agentId) &&
+            isTerminalVisible(t, isInTrash, validWorktreeIds)
+        );
+
+        if (agentTerminals.length === 0) return;
+
+        // Find current index in agent list
+        const currentIndex = agentTerminals.findIndex((t) => t.id === focusedId);
+
+        // Calculate previous index with wrap-around
+        const prevIndex = currentIndex <= 0 ? agentTerminals.length - 1 : currentIndex - 1;
+        const prevTerminal = agentTerminals[prevIndex];
+
+        const worktreeStore = useWorktreeSelectionStore.getState();
+        if (prevTerminal.worktreeId && prevTerminal.worktreeId !== worktreeStore.activeWorktreeId) {
+          worktreeStore.trackTerminalFocus(prevTerminal.worktreeId, prevTerminal.id);
+          worktreeStore.selectWorktree(prevTerminal.worktreeId);
+        }
+
+        // Activate and ping the terminal for visual feedback
+        activateTerminal(prevTerminal.id);
+        pingTerminal(prevTerminal.id);
       },
 
       handleTerminalRemoved: (removedId, remainingTerminals, removedIndex) => {
