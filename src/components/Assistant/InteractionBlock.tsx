@@ -16,17 +16,17 @@ function UserInputBlock({ content, className }: { content: string; className?: s
   return (
     <div
       className={cn(
-        "group relative flex gap-4 px-6 py-5",
+        "group relative flex gap-[17px] pl-4 pr-6 py-5",
         "bg-white/[0.03] border-b border-white/[0.05]",
         className
       )}
       role="article"
       aria-label="User input"
     >
-      <div className="mt-0.5 text-canopy-text/40 shrink-0 select-none" aria-hidden="true">
-        <ChevronRight size={16} />
+      <div className="text-canopy-text/40 shrink-0 select-none" aria-hidden="true">
+        <ChevronRight size={18} />
       </div>
-      <div className="text-[14px] leading-relaxed text-canopy-text font-medium tracking-normal break-words whitespace-pre-wrap select-text">
+      <div className="text-[13px] leading-relaxed text-canopy-text/90 font-medium tracking-normal break-words whitespace-pre-wrap select-text">
         {content}
       </div>
     </div>
@@ -74,15 +74,15 @@ function AssistantResponseBlock({
 
   return (
     <div
-      className={cn("relative pt-5 pb-6 group", className)}
+      className={cn("relative py-6 group", className)}
       role="article"
       aria-label="Assistant response"
     >
       {/* Thread line - extends full height with hover state */}
-      <div className="absolute left-[29px] top-0 bottom-0 w-px bg-white/[0.06] group-hover:bg-white/[0.1] transition-colors" />
+      <div className="absolute left-6 top-0 bottom-0 w-px bg-white/[0.06] group-hover:bg-white/[0.1] transition-colors" />
 
       {hasToolCalls && (
-        <div className="pl-[60px] pr-6 space-y-2 mb-4">
+        <div className={cn("pl-[49px] pr-6 space-y-2", hasContent && "mb-4")}>
           {message.toolCalls!.map((tc) => (
             <ToolCallBlock key={tc.id} toolCall={tc} />
           ))}
@@ -90,20 +90,20 @@ function AssistantResponseBlock({
       )}
 
       {(hasContent || (isStreaming && !hasToolCalls)) && (
-        <div className="pl-[60px] pr-6">
+        <div className="pl-[49px] pr-6">
           <MarkdownRenderer content={message.content} />
           {isStreaming && <StreamingCursor />}
         </div>
       )}
 
       {isStreaming && hasToolCalls && !hasContent && (
-        <div className="pl-[60px]">
+        <div className="pl-[49px]">
           <StreamingCursor className="ml-0" />
         </div>
       )}
 
       {!hasContent && !hasToolCalls && !isStreaming && (
-        <div className="pl-[60px] text-canopy-text/40 text-sm italic">No response content</div>
+        <div className="pl-[49px] text-canopy-text/40 text-sm italic">No response content</div>
       )}
 
       {/* Copy button - bottom right */}

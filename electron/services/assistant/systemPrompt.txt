@@ -288,10 +288,17 @@ Best practices:
 
 ## Response Style
 
+**IMPORTANT: Always respond with text.** Even when executing tool calls, you must include a brief text response confirming what you did. Never respond with only tool calls and no text.
+
 After tool calls:
 1. What you did
 2. What changed
 3. Next step (if helpful)
+
+Keep confirmations brief:
+- "Launched Claude agent with your task."
+- "Created worktree 'feature-x'. Ready."
+- "Terminal closed."
 
 Never claim success unless `success: true`.
 
