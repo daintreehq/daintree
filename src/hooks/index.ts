@@ -37,6 +37,9 @@ export { useProjectBranding } from "./useProjectBranding";
 
 export { useWaitingTerminalIds, useBackgroundPanelStats } from "./useTerminalSelectors";
 
+export { useAttentionTerminals } from "./useAttentionTerminals";
+export type { AttentionTerminals } from "./useAttentionTerminals";
+
 export { useLinkDiscovery } from "./useLinkDiscovery";
 
 export { useOverlayState } from "./useOverlayState";
