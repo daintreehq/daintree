@@ -5,6 +5,7 @@ import { TerminalDockRegion } from "./TerminalDockRegion";
 import { DiagnosticsDock } from "../Diagnostics";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { SidecarDock, SidecarVisibilityController } from "../Sidecar";
+import { AttentionStrip } from "../AttentionStrip";
 import { ProjectSettingsDialog, ProjectSwitchOverlay } from "@/components/Project";
 import { useDiagnosticsStore, useDockStore, type PanelState } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
@@ -338,6 +339,7 @@ export function AppLayout({
                 backgroundColor: "var(--color-canopy-bg)",
               }}
             >
+              <AttentionStrip />
               <div className="flex-1 overflow-hidden min-h-0">{children}</div>
               {/* Terminal Dock Region - manages dock visibility and overlays */}
               <TerminalDockRegion />
