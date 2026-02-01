@@ -8,25 +8,25 @@ const STATUS_CONFIG = {
   success: {
     icon: CheckCircle2,
     containerClass:
-      "bg-[color-mix(in_oklab,var(--color-status-success)_8%,transparent)] border-[color:color-mix(in_oklab,var(--color-status-success)_20%,transparent)]",
+      "bg-[color-mix(in_oklab,var(--color-status-success)_18%,transparent)] border-[color:color-mix(in_oklab,var(--color-status-success)_30%,transparent)] backdrop-blur-sm",
     accentClass: "text-[var(--color-status-success)]",
   },
   error: {
     icon: XCircle,
     containerClass:
-      "bg-[color-mix(in_oklab,var(--color-status-error)_8%,transparent)] border-[color:color-mix(in_oklab,var(--color-status-error)_20%,transparent)]",
+      "bg-[color-mix(in_oklab,var(--color-status-error)_18%,transparent)] border-[color:color-mix(in_oklab,var(--color-status-error)_30%,transparent)] backdrop-blur-sm",
     accentClass: "text-[var(--color-status-error)]",
   },
   info: {
     icon: Info,
     containerClass:
-      "bg-[color-mix(in_oklab,var(--color-status-info)_6%,transparent)] border-[color:color-mix(in_oklab,var(--color-status-info)_15%,transparent)]",
+      "bg-[color-mix(in_oklab,var(--color-status-info)_18%,transparent)] border-[color:color-mix(in_oklab,var(--color-status-info)_30%,transparent)] backdrop-blur-sm",
     accentClass: "text-[var(--color-status-info)]",
   },
   warning: {
     icon: AlertTriangle,
     containerClass:
-      "bg-[color-mix(in_oklab,var(--color-status-warning)_8%,transparent)] border-[color:color-mix(in_oklab,var(--color-status-warning)_20%,transparent)]",
+      "bg-[color-mix(in_oklab,var(--color-status-warning)_18%,transparent)] border-[color:color-mix(in_oklab,var(--color-status-warning)_30%,transparent)] backdrop-blur-sm",
     accentClass: "text-[var(--color-status-warning)]",
   },
 };
@@ -86,7 +86,7 @@ function Toast({ notification }: { notification: Notification }) {
             {notification.title}
           </h4>
         )}
-        <div className="text-xs text-canopy-text/75 leading-snug break-words">
+        <div className="text-xs text-canopy-text/90 leading-snug break-words">
           {notification.message}
         </div>
         {notification.action && (
@@ -116,8 +116,8 @@ function Toast({ notification }: { notification: Notification }) {
         className={cn(
           "absolute right-1.5 top-1.5 rounded-[var(--radius-xs)]",
           "h-6 w-6 flex items-center justify-center",
-          "text-canopy-text/30 transition-colors",
-          "hover:text-canopy-text/60 hover:bg-white/5",
+          "text-canopy-text/60 transition-colors",
+          "hover:text-canopy-text/90 hover:bg-white/10",
           "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
         )}
       >
