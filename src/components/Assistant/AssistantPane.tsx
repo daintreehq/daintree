@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from "react";
-import { Loader2, XCircle, X, RefreshCw, Maximize2, RotateCw } from "lucide-react";
+import { Loader2, XCircle, X, RefreshCw, RotateCw } from "lucide-react";
 import { CanopyIcon } from "@/components/icons/CanopyIcon";
 import { useAppAgentStore, useAssistantChatStore } from "@/store";
 import { cn } from "@/lib/utils";
@@ -127,14 +127,6 @@ export function AssistantPane() {
                   <RefreshCw className="w-3 h-3" aria-hidden="true" />
                 </button>
               )}
-              <button
-                type="button"
-                className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
-                title="Maximize"
-                aria-label="Maximize"
-              >
-                <Maximize2 className="w-3 h-3" aria-hidden="true" />
-              </button>
               <button
                 type="button"
                 onClick={close}
