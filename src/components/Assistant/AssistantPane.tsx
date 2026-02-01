@@ -212,6 +212,7 @@ export function AssistantPane() {
         confirmLabel="Clear"
         variant="destructive"
         isConfirmLoading={isClearing}
+        zIndex="nested"
       />
     </div>
   );
