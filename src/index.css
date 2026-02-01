@@ -98,6 +98,7 @@
    * Tier 55: Maximized content (terminals)
    * Tier 60: Modal dialogs (full-screen overlays)
    * Tier 70: Popovers, dropdowns, tooltips (can appear above modals)
+   * Tier 75: Nested dialogs (dialogs triggered from within popovers)
    * Tier 80: Toast notifications (always visible)
    */
   --z-panel: 40;
@@ -105,6 +106,7 @@
   --z-maximized: 55;
   --z-modal: 60;
   --z-popover: 70;
+  --z-nested-dialog: 75;
   --z-toast: 80;
 
   /* Overlay elevation system

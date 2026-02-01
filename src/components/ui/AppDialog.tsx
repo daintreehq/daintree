@@ -10,6 +10,7 @@ import { Button } from "./button";
 
 type DialogSize = "sm" | "md" | "lg" | "xl" | "2xl" | "4xl" | "6xl";
 type DialogVariant = "default" | "destructive" | "info";
+type DialogZIndex = "modal" | "nested";
 
 interface AppDialogContextValue {
   onClose: () => void;
@@ -29,9 +30,10 @@ export interface AppDialogProps {
   children: React.ReactNode;
   className?: string;
   maxHeight?: string;
+  zIndex?: DialogZIndex;
 }
 
-export type { DialogSize, DialogVariant };
+export type { DialogSize, DialogVariant, DialogZIndex };
 
 const sizeClasses: Record<DialogSize, string> = {
   sm: "max-w-md",
@@ -52,6 +54,7 @@ export function AppDialog({
   children,
   className,
   maxHeight = "max-h-[80vh]",
+  zIndex = "modal",
 }: AppDialogProps) {
   const previousActiveElement = useRef<HTMLElement | null>(null);
   const titleId = useId();
@@ -157,7 +160,8 @@ export function AppDialog({
     <AppDialogContext.Provider value={{ onClose: handleClose, titleId, descriptionId, variant }}>
       <div
         className={cn(
-          "fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/50 backdrop-blur-md backdrop-saturate-[1.25]",
+          "fixed inset-0 flex items-center justify-center bg-black/50 backdrop-blur-md backdrop-saturate-[1.25]",
+          zIndex === "nested" ? "z-[var(--z-nested-dialog)]" : "z-[var(--z-modal)]",
           "transition-opacity duration-150",
           "motion-reduce:transition-none motion-reduce:duration-0",
           isVisible ? "opacity-100" : "opacity-0"
