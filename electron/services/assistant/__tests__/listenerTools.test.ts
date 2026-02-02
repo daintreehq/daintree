@@ -106,7 +106,12 @@ describe("listenerTools", () => {
           };
         }
       ).inputSchema.jsonSchema;
-      expect(schema.properties.eventType.enum).toEqual(["terminal:state-changed"]);
+      expect(schema.properties.eventType.enum).toEqual([
+        "terminal:state-changed",
+        "agent:completed",
+        "agent:failed",
+        "agent:killed",
+      ]);
       expect(schema.required).toContain("eventType");
     });
 
@@ -220,6 +225,72 @@ describe("listenerTools", () => {
       expect(listeners.length).toBe(1);
       expect(listeners[0].once).toBe(true);
       expect(listeners[0].filter).toEqual({ terminalId: "term-123" });
+    });
+
+    it("registers a listener for agent:completed", async () => {
+      const result = await tools.register_listener.execute!(
+        { eventType: "agent:completed", filter: { terminalId: "term-1" } },
+        { toolCallId: "tc-1", messages: [], abortSignal: new AbortController().signal }
+      );
+
+      expect(result).toEqual({
+        success: true,
+        listenerId: expect.any(String),
+        eventType: "agent:completed",
+        filter: { terminalId: "term-1" },
+        message: "Successfully subscribed to agent:completed events",
+      });
+      expect(listenerManager.size()).toBe(1);
+    });
+
+    it("registers a listener for agent:failed", async () => {
+      const result = await tools.register_listener.execute!(
+        { eventType: "agent:failed", filter: { agentId: "agent-1" } },
+        { toolCallId: "tc-1", messages: [], abortSignal: new AbortController().signal }
+      );
+
+      expect(result).toEqual({
+        success: true,
+        listenerId: expect.any(String),
+        eventType: "agent:failed",
+        filter: { agentId: "agent-1" },
+        message: "Successfully subscribed to agent:failed events",
+      });
+      expect(listenerManager.size()).toBe(1);
+    });
+
+    it("registers a listener for agent:killed", async () => {
+      const result = await tools.register_listener.execute!(
+        { eventType: "agent:killed", filter: undefined },
+        { toolCallId: "tc-1", messages: [], abortSignal: new AbortController().signal }
+      );
+
+      expect(result).toEqual({
+        success: true,
+        listenerId: expect.any(String),
+        eventType: "agent:killed",
+        message: "Successfully subscribed to agent:killed events",
+      });
+      expect(listenerManager.size()).toBe(1);
+    });
+
+    it("registers one-shot listener for agent:completed", async () => {
+      const result = await tools.register_listener.execute!(
+        { eventType: "agent:completed", filter: undefined, once: true },
+        { toolCallId: "tc-1", messages: [], abortSignal: new AbortController().signal }
+      );
+
+      expect(result).toEqual({
+        success: true,
+        listenerId: expect.any(String),
+        eventType: "agent:completed",
+        once: true,
+        message: expect.stringContaining("one-shot"),
+      });
+
+      const listeners = listenerManager.listForSession("test-session-1");
+      expect(listeners.length).toBe(1);
+      expect(listeners[0].once).toBe(true);
     });
   });
 

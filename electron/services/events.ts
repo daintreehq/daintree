@@ -788,9 +788,12 @@ export type CanopyEventMap = {
  *
  * The `satisfies` constraint ensures all entries are valid event types at compile time.
  */
-export const BRIDGED_EVENT_TYPES = ["terminal:state-changed"] as const satisfies ReadonlyArray<
-  keyof CanopyEventMap
->;
+export const BRIDGED_EVENT_TYPES = [
+  "terminal:state-changed",
+  "agent:completed",
+  "agent:failed",
+  "agent:killed",
+] as const satisfies ReadonlyArray<keyof CanopyEventMap>;
 
 export type BridgedEventType = (typeof BRIDGED_EVENT_TYPES)[number];
 

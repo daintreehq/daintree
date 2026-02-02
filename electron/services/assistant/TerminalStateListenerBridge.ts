@@ -14,60 +14,122 @@ export type ChunkEmitter = (
 ) => void;
 
 let chunkEmitter: ChunkEmitter | null = null;
-let unsubscribe: (() => void) | null = null;
+const unsubscribers: Array<() => void> = [];
+
+/**
+ * Emit event to matching listeners
+ */
+function emitToListeners(eventType: string, eventData: Record<string, unknown>): void {
+  if (!chunkEmitter) {
+    return;
+  }
+
+  const listeners = listenerManager.getMatchingListeners(eventType, eventData);
+
+  for (const listener of listeners) {
+    let emitSucceeded = false;
+    try {
+      chunkEmitter(listener.sessionId, {
+        type: "listener_triggered",
+        listenerData: {
+          listenerId: listener.id,
+          eventType,
+          data: eventData,
+        },
+      });
+      emitSucceeded = true;
+    } catch (error) {
+      console.error(
+        "[TerminalStateListenerBridge] Failed to emit listener chunk:",
+        error instanceof Error ? error.message : error
+      );
+    }
+
+    if (listener.once && emitSucceeded) {
+      listenerManager.unregister(listener.id);
+    }
+  }
+}
 
 export function initTerminalStateListenerBridge(emitter: ChunkEmitter): void {
-  if (unsubscribe) {
+  if (unsubscribers.length > 0) {
     destroyTerminalStateListenerBridge();
   }
 
   chunkEmitter = emitter;
 
-  unsubscribe = events.on("agent:state-changed", (payload) => {
-    if (!chunkEmitter) {
-      return;
-    }
+  // Bridge agent:state-changed to terminal:state-changed
+  unsubscribers.push(
+    events.on("agent:state-changed", (payload) => {
+      const eventData = {
+        terminalId: payload.terminalId,
+        agentId: payload.agentId,
+        oldState: payload.previousState,
+        newState: payload.state,
+        toState: payload.state,
+        worktreeId: payload.worktreeId,
+        timestamp: payload.timestamp,
+        traceId: payload.traceId,
+      };
 
-    const eventData = {
-      terminalId: payload.terminalId,
-      agentId: payload.agentId,
-      oldState: payload.previousState,
-      newState: payload.state,
-      toState: payload.state,
-      worktreeId: payload.worktreeId,
-      timestamp: payload.timestamp,
-    };
+      emitToListeners("terminal:state-changed", eventData);
+    })
+  );
 
-    const listeners = listenerManager.getMatchingListeners("terminal:state-changed", eventData);
+  // Bridge agent:completed
+  unsubscribers.push(
+    events.on("agent:completed", (payload) => {
+      const eventData = {
+        agentId: payload.agentId,
+        terminalId: payload.terminalId,
+        worktreeId: payload.worktreeId,
+        exitCode: payload.exitCode,
+        duration: payload.duration,
+        timestamp: payload.timestamp,
+        traceId: payload.traceId,
+      };
 
-    for (const listener of listeners) {
-      try {
-        chunkEmitter(listener.sessionId, {
-          type: "listener_triggered",
-          listenerData: {
-            listenerId: listener.id,
-            eventType: "terminal:state-changed",
-            data: eventData,
-          },
-        });
-      } catch (error) {
-        console.error(
-          "[TerminalStateListenerBridge] Failed to emit listener chunk:",
-          error instanceof Error ? error.message : error
-        );
-      } finally {
-        if (listener.once) {
-          listenerManager.unregister(listener.id);
-        }
-      }
-    }
-  });
+      emitToListeners("agent:completed", eventData);
+    })
+  );
+
+  // Bridge agent:failed
+  unsubscribers.push(
+    events.on("agent:failed", (payload) => {
+      const eventData = {
+        agentId: payload.agentId,
+        terminalId: payload.terminalId,
+        worktreeId: payload.worktreeId,
+        error: payload.error,
+        timestamp: payload.timestamp,
+        traceId: payload.traceId,
+      };
+
+      emitToListeners("agent:failed", eventData);
+    })
+  );
+
+  // Bridge agent:killed
+  unsubscribers.push(
+    events.on("agent:killed", (payload) => {
+      const eventData = {
+        agentId: payload.agentId,
+        terminalId: payload.terminalId,
+        worktreeId: payload.worktreeId,
+        reason: payload.reason,
+        timestamp: payload.timestamp,
+        traceId: payload.traceId,
+      };
+
+      emitToListeners("agent:killed", eventData);
+    })
+  );
 }
 
 export function destroyTerminalStateListenerBridge(): void {
-  if (unsubscribe) {
+  for (const unsubscribe of unsubscribers) {
     unsubscribe();
-    unsubscribe = null;
   }
+  unsubscribers.length = 0;
   chunkEmitter = null;
 }

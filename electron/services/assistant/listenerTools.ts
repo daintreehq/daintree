@@ -30,8 +30,11 @@ export function createListenerTools(context: ListenerToolContext): ToolSet {
       description:
         "Subscribe to Canopy events. Returns a listener ID for later removal. " +
         `Currently supported events: ${BRIDGED_EVENT_TYPES.join(", ")}. ` +
-        "terminal:state-changed fires when a terminal's agent state changes " +
-        "(e.g., idle → working → completed). Filter by terminalId and/or toState (e.g., 'completed', 'waiting'). " +
+        "terminal:state-changed fires when a terminal's agent state changes (e.g., idle → working → completed). " +
+        "agent:completed fires when an agent finishes successfully (includes exitCode and duration). " +
+        "agent:failed fires when an agent encounters an error (includes error message). " +
+        "agent:killed fires when an agent is terminated. " +
+        "Filter by terminalId, agentId, and/or worktreeId. " +
         "Set once: true to automatically remove the listener after the first event (one-shot listener).",
       inputSchema: jsonSchema({
         type: "object",
@@ -39,7 +42,7 @@ export function createListenerTools(context: ListenerToolContext): ToolSet {
           eventType: {
             type: "string",
             description:
-              "The event type to subscribe to. Currently only 'terminal:state-changed' is supported.",
+              "The event type to subscribe to: terminal:state-changed, agent:completed, agent:failed, or agent:killed.",
             enum: BRIDGED_EVENT_TYPES_MUTABLE,
           },
           filter: {
