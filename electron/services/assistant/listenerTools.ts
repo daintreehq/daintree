@@ -156,6 +156,11 @@ export function createListenerTools(context: ListenerToolContext): ToolSet {
 
           const suffix = messages.length > 0 ? ` (${messages.join(", ")})` : "";
 
+          // Use directive message when autoResume is enabled to signal assistant should end turn
+          const message = autoResumeOptions
+            ? "Listener registered with auto-resume. END YOUR TURN NOW - the conversation will automatically continue when the event fires. Do not poll, check status, or make additional tool calls. Simply inform the user you're waiting."
+            : `Successfully subscribed to ${eventType} events${suffix}`;
+
           return {
             success: true,
             listenerId,
@@ -163,7 +168,7 @@ export function createListenerTools(context: ListenerToolContext): ToolSet {
             ...(filter ? { filter } : {}),
             ...(once ? { once } : {}),
             ...(autoResumeOptions ? { autoResume: true } : {}),
-            message: `Successfully subscribed to ${eventType} events${suffix}`,
+            message,
           };
         } catch (error) {
           return {

@@ -88,13 +88,13 @@ You have access to a limited set of actions. Only use actions explicitly provide
 **IMPORTANT:** Do not assume actions exist. Use only the tools provided. The actions below are documented for context but may not all be available.
 
 ### Terminal
-- `terminal.list` - Query all terminals with state, location, worktree
-- `terminal.getOutput` - Read terminal output
-- `terminal.new` - Create new terminal
-- `terminal.kill` - Force terminate (requires confirmation)
-- `terminal.close` - Close terminal gracefully
-- `terminal.trash` - Move to trash (recoverable)
-- `terminal.palette` - Open terminal palette
+- `terminal_list` - Query all terminals with state, location, worktree
+- `terminal_getOutput` - Read terminal output
+- `terminal_new` - Create new terminal
+- `terminal_kill` - Force terminate (requires confirmation)
+- `terminal_close` - Close terminal gracefully
+- `terminal_trash` - Move to trash (recoverable)
+- `terminal_palette` - Open terminal palette
 
 ### Worktree
 - `worktree.list` - Query all worktrees
@@ -334,8 +334,8 @@ Use listeners for asynchronous monitoring:
 - Tracking agent failures across worktrees
 
 Do NOT use listeners for:
-- Immediate/synchronous operations (just poll with `terminal.getOutput`)
-- One-time state checks (use `terminal.list` instead)
+- Immediate/synchronous operations (just poll with `terminal_getOutput`)
+- One-time state checks (use `terminal_list` instead)
 - Short tasks that complete in < 30 seconds
 
 ### Supported Events
@@ -391,7 +391,7 @@ Common filter fields:
 - `ai-classification` - AI model state classification (when enabled)
 - `timeout` - Silence timeout triggered check
 
-**Best practice:** For `waiting` state with `heuristic` trigger, verify with `terminal.getOutput` to see what the agent is asking. False positives can occur.
+**Best practice:** For `waiting` state with `heuristic` trigger, verify with `terminal_getOutput` to see what the agent is asking. False positives can occur.
 
 ### Listener Tools
 
@@ -435,7 +435,7 @@ register_listener({
   once: true
 }) // Returns listenerId
 
-// 2. Block until event (default 30s timeout, max 5 min)
+// 2. Block until event (default 30s timeout, max 60s)
 await_listener({
   listenerId: "the-listener-id",
   timeoutMs: 60000  // Wait up to 1 minute
@@ -595,6 +595,38 @@ await_listener({ listenerId: "abc", timeoutMs: 30000 })
 - **Filter limitations** - Exact match only; no regex, ranges, or complex conditions
 - **await_listener timeout** - Maximum 60 seconds (60000ms); use autoResume for longer waits
 - **Pending queue cap** - Maximum 100 events per session; oldest acknowledged events evicted first when cap reached
+
+### autoResume Anti-Pattern (DO NOT DO)
+
+When you register a listener with `autoResume`, you MUST end your turn immediately. The system will automatically resume the conversation when the event fires.
+
+**WRONG - polling after autoResume defeats its purpose:**
+```
+agent_launch({ agentId: "claude", prompt: "Run tests" })
+register_listener({
+  eventType: "agent:completed",
+  filter: { terminalId: "<id>" },
+  once: true,
+  autoResume: { prompt: "Summarize results" }
+})
+terminal_getOutput({ terminalId: "<id>" })  // WRONG - defeats autoResume purpose
+// Response: "The agent is still working..."  // WRONG - should have yielded immediately
+```
+
+**CORRECT - end turn immediately after autoResume:**
+```
+agent_launch({ agentId: "claude", prompt: "Run tests" })
+register_listener({
+  eventType: "agent:completed",
+  filter: { terminalId: "<id>" },
+  once: true,
+  autoResume: { prompt: "Summarize results" }
+})
+// STOP making tool calls in this turn. Respond immediately:
+// "Launched test runner. I'll report back when it completes."
+```
+
+The tool result from `register_listener` will explicitly tell you to end your turn when autoResume is enabled. Follow this directive.
 
 ## Tool Call Discipline
 
