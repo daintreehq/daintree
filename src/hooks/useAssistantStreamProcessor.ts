@@ -6,14 +6,18 @@ function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-function formatListenerNotification(eventType: string, data: Record<string, unknown> | null | undefined): string {
+function formatListenerNotification(
+  eventType: string,
+  data: Record<string, unknown> | null | undefined
+): string {
   if (!data || typeof data !== "object") {
     return eventType;
   }
 
   if (eventType === "terminal:state-changed") {
     const newState = (data.newState as string | undefined) || (data.toState as string | undefined);
-    const oldState = (data.oldState as string | undefined) || (data.fromState as string | undefined);
+    const oldState =
+      (data.oldState as string | undefined) || (data.fromState as string | undefined);
 
     return `${oldState || "unknown"} → ${newState || "unknown"}`;
   }
@@ -21,7 +25,11 @@ function formatListenerNotification(eventType: string, data: Record<string, unkn
   return eventType;
 }
 
-function extractEventMetadata(eventType: string, data: Record<string, unknown> | null | undefined, listenerId?: string): EventMetadata {
+function extractEventMetadata(
+  eventType: string,
+  data: Record<string, unknown> | null | undefined,
+  listenerId?: string
+): EventMetadata {
   const metadata: EventMetadata = { eventType };
 
   if (listenerId) {
@@ -35,7 +43,8 @@ function extractEventMetadata(eventType: string, data: Record<string, unknown> |
   if (eventType === "terminal:state-changed") {
     const terminalId = data.terminalId as string | undefined;
     const worktreeId = data.worktreeId as string | undefined;
-    const oldState = (data.oldState as string | undefined) || (data.fromState as string | undefined);
+    const oldState =
+      (data.oldState as string | undefined) || (data.fromState as string | undefined);
     const newState = (data.newState as string | undefined) || (data.toState as string | undefined);
 
     if (terminalId) metadata.terminalId = terminalId;
