@@ -7,6 +7,7 @@ import { createActionTools, sanitizeToolName } from "./assistant/actionTools.js"
 import { SYSTEM_PROMPT, buildContextBlock } from "./assistant/index.js";
 import { listenerManager } from "./assistant/ListenerManager.js";
 import { createListenerTools } from "./assistant/listenerTools.js";
+import { pendingEventQueue, type PendingEvent } from "./assistant/PendingEventQueue.js";
 import {
   logAssistantRequest,
   logAssistantStreamEvent,
@@ -456,6 +457,62 @@ export class AssistantService {
     this.initializeProvider();
   }
 
+  private buildPendingEventsSection(events: PendingEvent[]): string {
+    if (events.length === 0) {
+      return "";
+    }
+
+    const lines = ["Pending listener events (unacknowledged):"];
+
+    for (const event of events) {
+      const dataStr = this.formatEventData(event.data);
+      const time = new Date(event.timestamp).toISOString();
+      lines.push(`- [${event.eventType}] ${dataStr} (id: ${event.id}, at: ${time})`);
+    }
+
+    lines.push("");
+    lines.push(
+      "Use list_pending_events to get full event details, or acknowledge_event to mark as seen."
+    );
+
+    return lines.join("\n");
+  }
+
+  private formatEventData(data: unknown): string {
+    if (data === null || data === undefined) {
+      return "{}";
+    }
+    if (typeof data !== "object") {
+      return String(data);
+    }
+
+    const record = data as Record<string, unknown>;
+    const parts: string[] = [];
+
+    // Extract key fields for terminal state events
+    if (record.terminalId) {
+      parts.push(`terminal: ${record.terminalId}`);
+    }
+    if (record.newState) {
+      parts.push(`state: ${record.newState}`);
+    }
+    if (record.oldState && record.newState) {
+      parts.push(`(${record.oldState} → ${record.newState})`);
+    }
+
+    if (parts.length === 0) {
+      // Fallback: show first 3 keys
+      const keys = Object.keys(record).slice(0, 3);
+      for (const key of keys) {
+        const value = record[key];
+        const valueStr = typeof value === "string" ? value : JSON.stringify(value);
+        parts.push(`${key}: ${valueStr}`);
+      }
+    }
+
+    return parts.join(", ");
+  }
+
   async streamMessage(
     sessionId: string,
     messages: AssistantMessage[],
@@ -513,14 +570,19 @@ export class AssistantService {
       try {
         // Build context block for the system prompt
         const activeListenerCount = listenerManager.countForSession(sessionId);
+        const pendingEvents = pendingEventQueue.getPending(sessionId);
         const contextBlock = context
           ? buildContextBlock({ ...context, activeListenerCount })
           : activeListenerCount > 0
             ? buildContextBlock({ activeListenerCount })
             : "";
-        const systemPromptWithContext = contextBlock
-          ? `${SYSTEM_PROMPT}\n\n${contextBlock}`
-          : SYSTEM_PROMPT;
+
+        // Build pending events section if there are unacknowledged events
+        const pendingEventsSection = this.buildPendingEventsSection(pendingEvents);
+
+        const systemPromptWithContext = [SYSTEM_PROMPT, contextBlock, pendingEventsSection]
+          .filter(Boolean)
+          .join("\n\n");
 
         // Convert messages to ModelMessage format with proper tool call/result interleaving
         // AI SDK requires that every tool call has a corresponding tool result.
@@ -877,6 +939,7 @@ export class AssistantService {
   clearSession(sessionId: string): void {
     this.cancel(sessionId);
     listenerManager.clearSession(sessionId);
+    pendingEventQueue.clearSession(sessionId);
   }
 
   cancelAll(): void {
@@ -885,6 +948,7 @@ export class AssistantService {
       this.activeStreams.delete(sessionId);
       this.chunkCallbacks.delete(sessionId);
       listenerManager.clearSession(sessionId);
+      pendingEventQueue.clearSession(sessionId);
     }
   }
 
@@ -895,6 +959,7 @@ export class AssistantService {
     this.activeStreams.clear();
     this.chunkCallbacks.clear();
     listenerManager.clearAllSessions();
+    pendingEventQueue.clearAll();
   }
 }
 

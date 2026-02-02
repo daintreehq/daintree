@@ -9,6 +9,7 @@
 import { tool, jsonSchema } from "ai";
 import type { ToolSet } from "ai";
 import { listenerManager } from "./ListenerManager.js";
+import { pendingEventQueue } from "./PendingEventQueue.js";
 import { BRIDGED_EVENT_TYPES, type BridgedEventType } from "../events.js";
 
 // Mutable copy for JSON schema compatibility
@@ -159,6 +160,79 @@ export function createListenerTools(context: ListenerToolContext): ToolSet {
           removed,
           listenerId,
           message: removed ? "Listener removed successfully" : "Listener was already removed",
+        };
+      },
+    }),
+
+    list_pending_events: tool({
+      description:
+        "List all pending (unacknowledged) listener events for this conversation. " +
+        "Events are queued when listeners trigger, even if you weren't actively streaming. " +
+        "Use this to see what events fired while you were working on other tasks. " +
+        "Events are sorted by timestamp (oldest first).",
+      inputSchema: jsonSchema({
+        type: "object",
+        properties: {
+          includeAcknowledged: {
+            type: "boolean",
+            description:
+              "If true, include events that have already been acknowledged. Default is false.",
+          },
+        },
+      }),
+      execute: async ({ includeAcknowledged }: { includeAcknowledged?: boolean }) => {
+        const events = includeAcknowledged
+          ? pendingEventQueue.getAll(context.sessionId)
+          : pendingEventQueue.getPending(context.sessionId);
+
+        return {
+          success: true,
+          count: events.length,
+          events: events.map((e) => ({
+            eventId: e.id,
+            listenerId: e.listenerId,
+            eventType: e.eventType,
+            data: e.data,
+            timestamp: e.timestamp,
+            acknowledged: e.acknowledged,
+          })),
+        };
+      },
+    }),
+
+    acknowledge_event: tool({
+      description:
+        "Mark a pending event as acknowledged (seen). " +
+        "Acknowledged events won't appear in the pending events list or context injection. " +
+        "Use 'all' as eventId to acknowledge all pending events at once.",
+      inputSchema: jsonSchema({
+        type: "object",
+        properties: {
+          eventId: {
+            type: "string",
+            description: "The event ID to acknowledge, or 'all' to acknowledge all pending events",
+          },
+        },
+        required: ["eventId"],
+      }),
+      execute: async ({ eventId }: { eventId: string }) => {
+        if (eventId === "all") {
+          const count = pendingEventQueue.acknowledgeAll(context.sessionId);
+          return {
+            success: true,
+            acknowledged: count,
+            message:
+              count > 0 ? `Acknowledged ${count} event(s)` : "No pending events to acknowledge",
+          };
+        }
+
+        const acknowledged = pendingEventQueue.acknowledge(eventId, context.sessionId);
+        return {
+          success: acknowledged,
+          eventId,
+          message: acknowledged
+            ? "Event acknowledged"
+            : "Event not found or not owned by this session",
         };
       },
     }),

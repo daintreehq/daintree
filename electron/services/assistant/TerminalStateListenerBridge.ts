@@ -1,5 +1,6 @@
 import { events } from "../events.js";
 import { listenerManager } from "./ListenerManager.js";
+import { pendingEventQueue } from "./PendingEventQueue.js";
 
 export type ChunkEmitter = (
   sessionId: string,
@@ -42,6 +43,15 @@ export function initTerminalStateListenerBridge(emitter: ChunkEmitter): void {
 
     for (const listener of listeners) {
       try {
+        // Push to pending event queue for reliable delivery
+        pendingEventQueue.push(
+          listener.sessionId,
+          listener.id,
+          "terminal:state-changed",
+          eventData
+        );
+
+        // Also emit real-time chunk for immediate UI feedback
         chunkEmitter(listener.sessionId, {
           type: "listener_triggered",
           listenerData: {
