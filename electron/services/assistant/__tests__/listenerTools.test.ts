@@ -3,17 +3,20 @@ import { createListenerTools, type ListenerToolContext } from "../listenerTools.
 
 // Mock the listenerManager module
 vi.mock("../ListenerManager.js", async () => {
-  const { ListenerManager } =
+  const { ListenerManager, ListenerWaiter } =
     await vi.importActual<typeof import("../ListenerManager.js")>("../ListenerManager.js");
   const instance = new ListenerManager();
+  const waiterInstance = new ListenerWaiter();
   return {
     ListenerManager,
+    ListenerWaiter,
     listenerManager: instance,
+    listenerWaiter: waiterInstance,
   };
 });
 
 // Import mocked instance after mock setup
-import { listenerManager } from "../ListenerManager.js";
+import { listenerManager, listenerWaiter } from "../ListenerManager.js";
 import type { ToolSet } from "ai";
 
 describe("listenerTools", () => {
@@ -519,6 +522,286 @@ describe("listenerTools", () => {
       expect(list1.listeners[0].filter).toEqual({ terminalId: "term-1" });
       expect(list2.count).toBe(1);
       expect(list2.listeners[0].filter).toEqual({ terminalId: "term-2" });
+    });
+  });
+
+  describe("await_listener", () => {
+    it("returns not_found error for non-existent listener", async () => {
+      const result = await tools.await_listener.execute!(
+        { listenerId: "non-existent-id" },
+        { toolCallId: "tc-1", messages: [], abortSignal: new AbortController().signal }
+      );
+
+      expect(result).toEqual({
+        success: false,
+        error: "not_found",
+        message: "Listener not found or already triggered",
+      });
+    });
+
+    it("returns not_found error for listener from another session", async () => {
+      // Register listener in another session directly
+      const otherSessionListenerId = listenerManager.register(
+        "other-session",
+        "terminal:state-changed"
+      );
+
+      const result = await tools.await_listener.execute!(
+        { listenerId: otherSessionListenerId },
+        { toolCallId: "tc-1", messages: [], abortSignal: new AbortController().signal }
+      );
+
+      expect(result).toEqual({
+        success: false,
+        error: "not_found",
+        message: "Listener not found or already triggered",
+      });
+    });
+
+    it("returns event data when listener triggers", async () => {
+      // Register a listener
+      const registerResult = await tools.register_listener.execute!(
+        { eventType: "terminal:state-changed", filter: undefined },
+        { toolCallId: "tc-1", messages: [], abortSignal: new AbortController().signal }
+      );
+      expect(registerResult.success).toBe(true);
+      const listenerId = (registerResult as { success: true; listenerId: string }).listenerId;
+
+      // Start awaiting and simulate event trigger
+      const awaitPromise = tools.await_listener.execute!(
+        { listenerId, timeoutMs: 5000 },
+        { toolCallId: "tc-2", messages: [], abortSignal: new AbortController().signal }
+      );
+
+      // Give the await a moment to register the waiter
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // Simulate event trigger
+      listenerWaiter.notify(listenerId, {
+        listenerId,
+        eventType: "terminal:state-changed",
+        data: { terminalId: "term-123", toState: "completed" },
+        timestamp: Date.now(),
+      });
+
+      const result = await awaitPromise;
+
+      expect(result).toEqual({
+        success: true,
+        eventType: "terminal:state-changed",
+        data: { terminalId: "term-123", toState: "completed" },
+        waitedMs: expect.any(Number),
+      });
+      expect((result as { waitedMs: number }).waitedMs).toBeGreaterThanOrEqual(0);
+      expect((result as { waitedMs: number }).waitedMs).toBeLessThan(1000);
+    });
+
+    it("returns timeout error when listener does not trigger in time", async () => {
+      // Register a listener
+      const registerResult = await tools.register_listener.execute!(
+        { eventType: "terminal:state-changed", filter: undefined },
+        { toolCallId: "tc-1", messages: [], abortSignal: new AbortController().signal }
+      );
+      expect(registerResult.success).toBe(true);
+      const listenerId = (registerResult as { success: true; listenerId: string }).listenerId;
+
+      // Start awaiting with a very short timeout
+      const result = await tools.await_listener.execute!(
+        { listenerId, timeoutMs: 50 },
+        { toolCallId: "tc-2", messages: [], abortSignal: new AbortController().signal }
+      );
+
+      expect(result).toEqual({
+        success: false,
+        error: "timeout",
+        waitedMs: expect.any(Number),
+      });
+      expect((result as { waitedMs: number }).waitedMs).toBeGreaterThanOrEqual(40);
+    });
+
+    it("returns cancelled error when stream is aborted", async () => {
+      // Register a listener
+      const registerResult = await tools.register_listener.execute!(
+        { eventType: "terminal:state-changed", filter: undefined },
+        { toolCallId: "tc-1", messages: [], abortSignal: new AbortController().signal }
+      );
+      expect(registerResult.success).toBe(true);
+      const listenerId = (registerResult as { success: true; listenerId: string }).listenerId;
+
+      const abortController = new AbortController();
+
+      // Start awaiting
+      const awaitPromise = tools.await_listener.execute!(
+        { listenerId, timeoutMs: 5000 },
+        { toolCallId: "tc-2", messages: [], abortSignal: abortController.signal }
+      );
+
+      // Give the await a moment to register
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // Abort the stream
+      abortController.abort();
+
+      const result = await awaitPromise;
+
+      expect(result).toEqual({
+        success: false,
+        error: "cancelled",
+        reason: "Stream was cancelled",
+        waitedMs: expect.any(Number),
+      });
+    });
+
+    it("returns already_awaiting error when awaiting same listener twice", async () => {
+      // Register a listener
+      const registerResult = await tools.register_listener.execute!(
+        { eventType: "terminal:state-changed", filter: undefined },
+        { toolCallId: "tc-1", messages: [], abortSignal: new AbortController().signal }
+      );
+      expect(registerResult.success).toBe(true);
+      const listenerId = (registerResult as { success: true; listenerId: string }).listenerId;
+
+      // Start first await
+      const firstAwaitPromise = tools.await_listener.execute!(
+        { listenerId, timeoutMs: 5000 },
+        { toolCallId: "tc-2", messages: [], abortSignal: new AbortController().signal }
+      );
+
+      // Give the await a moment to register
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // Try to await again
+      const secondResult = await tools.await_listener.execute!(
+        { listenerId, timeoutMs: 5000 },
+        { toolCallId: "tc-3", messages: [], abortSignal: new AbortController().signal }
+      );
+
+      expect(secondResult).toEqual({
+        success: false,
+        error: "already_awaiting",
+        message: "Already awaiting this listener",
+      });
+
+      // Clean up first await
+      listenerWaiter.cancel(listenerId, "cleanup");
+      await firstAwaitPromise;
+    });
+
+    it("clamps timeout to maximum of 300000ms", async () => {
+      // Register a listener
+      const registerResult = await tools.register_listener.execute!(
+        { eventType: "terminal:state-changed", filter: undefined },
+        { toolCallId: "tc-1", messages: [], abortSignal: new AbortController().signal }
+      );
+      expect(registerResult.success).toBe(true);
+      const listenerId = (registerResult as { success: true; listenerId: string }).listenerId;
+
+      // Start awaiting with excessive timeout (should be clamped)
+      const awaitPromise = tools.await_listener.execute!(
+        { listenerId, timeoutMs: 999999999 },
+        { toolCallId: "tc-2", messages: [], abortSignal: new AbortController().signal }
+      );
+
+      // Give the await a moment to register
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // Trigger event immediately
+      listenerWaiter.notify(listenerId, {
+        listenerId,
+        eventType: "terminal:state-changed",
+        data: {},
+        timestamp: Date.now(),
+      });
+
+      const result = await awaitPromise;
+      expect(result.success).toBe(true);
+    });
+
+    it("uses default timeout of 30000ms when not specified", async () => {
+      // Register a listener
+      const registerResult = await tools.register_listener.execute!(
+        { eventType: "terminal:state-changed", filter: undefined },
+        { toolCallId: "tc-1", messages: [], abortSignal: new AbortController().signal }
+      );
+      expect(registerResult.success).toBe(true);
+      const listenerId = (registerResult as { success: true; listenerId: string }).listenerId;
+
+      // Start awaiting without specifying timeout
+      const awaitPromise = tools.await_listener.execute!(
+        { listenerId },
+        { toolCallId: "tc-2", messages: [], abortSignal: new AbortController().signal }
+      );
+
+      // Give the await a moment to register
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // Trigger event
+      listenerWaiter.notify(listenerId, {
+        listenerId,
+        eventType: "terminal:state-changed",
+        data: {},
+        timestamp: Date.now(),
+      });
+
+      const result = await awaitPromise;
+      expect(result.success).toBe(true);
+    });
+
+    it("works independently for multiple concurrent awaits on different listeners", async () => {
+      // Register two listeners
+      const reg1 = await tools.register_listener.execute!(
+        { eventType: "terminal:state-changed", filter: { terminalId: "term-1" } },
+        { toolCallId: "tc-1", messages: [], abortSignal: new AbortController().signal }
+      );
+      const reg2 = await tools.register_listener.execute!(
+        { eventType: "terminal:state-changed", filter: { terminalId: "term-2" } },
+        { toolCallId: "tc-2", messages: [], abortSignal: new AbortController().signal }
+      );
+      expect(reg1.success).toBe(true);
+      expect(reg2.success).toBe(true);
+      const listenerId1 = (reg1 as { success: true; listenerId: string }).listenerId;
+      const listenerId2 = (reg2 as { success: true; listenerId: string }).listenerId;
+
+      // Start both awaits
+      const await1 = tools.await_listener.execute!(
+        { listenerId: listenerId1, timeoutMs: 5000 },
+        { toolCallId: "tc-3", messages: [], abortSignal: new AbortController().signal }
+      );
+      const await2 = tools.await_listener.execute!(
+        { listenerId: listenerId2, timeoutMs: 5000 },
+        { toolCallId: "tc-4", messages: [], abortSignal: new AbortController().signal }
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // Trigger second listener first
+      listenerWaiter.notify(listenerId2, {
+        listenerId: listenerId2,
+        eventType: "terminal:state-changed",
+        data: { terminalId: "term-2" },
+        timestamp: Date.now(),
+      });
+
+      // Then trigger first listener
+      listenerWaiter.notify(listenerId1, {
+        listenerId: listenerId1,
+        eventType: "terminal:state-changed",
+        data: { terminalId: "term-1" },
+        timestamp: Date.now(),
+      });
+
+      const [result1, result2] = await Promise.all([await1, await2]);
+
+      expect(result1.success).toBe(true);
+      expect((result1 as { data: { terminalId: string } }).data.terminalId).toBe("term-1");
+      expect(result2.success).toBe(true);
+      expect((result2 as { data: { terminalId: string } }).data.terminalId).toBe("term-2");
+    });
+
+    it("has correct description mentioning blocking behavior", () => {
+      expect(tools.await_listener.description).toContain("Block and wait");
+      expect(tools.await_listener.description).toContain("timeout");
+      expect(tools.await_listener.description).toContain("300000");
     });
   });
 });

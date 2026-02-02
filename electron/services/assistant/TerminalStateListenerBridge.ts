@@ -1,5 +1,5 @@
 import { events } from "../events.js";
-import { listenerManager } from "./ListenerManager.js";
+import { listenerManager, listenerWaiter } from "./ListenerManager.js";
 import { pendingEventQueue } from "./PendingEventQueue.js";
 
 export type ChunkEmitter = (
@@ -26,8 +26,18 @@ function emitToListeners(eventType: string, eventData: Record<string, unknown>):
   for (const listener of listeners) {
     let emitSucceeded = false;
     try {
-      // Push to pending event queue for reliable delivery
+      const listenerEvent = {
+        listenerId: listener.id,
+        eventType,
+        data: eventData,
+        timestamp: Date.now(),
+      };
+
+      // Always push to pending event queue for reliable delivery
       pendingEventQueue.push(listener.sessionId, listener.id, eventType, eventData);
+
+      // Also check if there's an active waiter for this listener
+      listenerWaiter.notify(listener.id, listenerEvent);
 
       // Also emit real-time chunk for immediate UI feedback if emitter is available
       if (chunkEmitter) {

@@ -8,9 +8,12 @@
 
 import { tool, jsonSchema } from "ai";
 import type { ToolSet } from "ai";
-import { listenerManager } from "./ListenerManager.js";
+import { listenerManager, listenerWaiter } from "./ListenerManager.js";
 import { pendingEventQueue } from "./PendingEventQueue.js";
 import { BRIDGED_EVENT_TYPES, type BridgedEventType } from "../events.js";
+
+const DEFAULT_TIMEOUT_MS = 30000;
+const MAX_TIMEOUT_MS = 300000;
 
 // Mutable copy for JSON schema compatibility
 const BRIDGED_EVENT_TYPES_MUTABLE: string[] = [...BRIDGED_EVENT_TYPES];
@@ -237,6 +240,123 @@ export function createListenerTools(context: ListenerToolContext): ToolSet {
             ? "Event acknowledged"
             : "Event not found or not owned by this session",
         };
+      },
+    }),
+
+    await_listener: tool({
+      description:
+        "Block and wait for a registered listener to trigger. Returns the event data when triggered or an error on timeout. " +
+        "Use this to pause execution until an agent completes, a terminal state changes, or another subscribed event fires. " +
+        "The listener must be registered first using register_listener. " +
+        "Default timeout is 30 seconds, maximum is 5 minutes (300000ms).",
+      inputSchema: jsonSchema({
+        type: "object",
+        properties: {
+          listenerId: {
+            type: "string",
+            description: "The listener ID returned from register_listener",
+          },
+          timeoutMs: {
+            type: "number",
+            description:
+              "Maximum time to wait in milliseconds (default: 30000, max: 300000). Set to longer values for long-running agent operations.",
+          },
+        },
+        required: ["listenerId"],
+      }),
+      execute: async (
+        { listenerId, timeoutMs }: { listenerId: string; timeoutMs?: number },
+        { abortSignal }
+      ) => {
+        // Validate listener exists and belongs to this session
+        const listener = listenerManager.get(listenerId);
+        if (!listener) {
+          return {
+            success: false,
+            error: "not_found",
+            message: "Listener not found or already triggered",
+          };
+        }
+
+        if (listener.sessionId !== context.sessionId) {
+          return {
+            success: false,
+            error: "not_found",
+            message: "Listener not found or already triggered",
+          };
+        }
+
+        // Check if already awaiting this listener
+        if (listenerWaiter.isAwaiting(listenerId)) {
+          return {
+            success: false,
+            error: "already_awaiting",
+            message: "Already awaiting this listener",
+          };
+        }
+
+        // Validate and clamp timeout to valid range
+        const rawTimeout = timeoutMs ?? DEFAULT_TIMEOUT_MS;
+        const effectiveTimeout = Number.isFinite(rawTimeout)
+          ? Math.min(Math.max(rawTimeout, 1), MAX_TIMEOUT_MS)
+          : DEFAULT_TIMEOUT_MS;
+
+        const startTime = Date.now();
+
+        // Check if already aborted
+        if (abortSignal?.aborted) {
+          return {
+            success: false,
+            error: "cancelled",
+            reason: "Stream was already cancelled",
+            waitedMs: 0,
+          };
+        }
+
+        // Set up abort signal handler
+        const abortHandler = () => {
+          listenerWaiter.cancel(listenerId, "cancelled");
+        };
+        abortSignal?.addEventListener("abort", abortHandler);
+
+        try {
+          const event = await listenerWaiter.wait(listenerId, effectiveTimeout, context.sessionId);
+          return {
+            success: true,
+            eventType: event.eventType,
+            data: event.data,
+            waitedMs: Date.now() - startTime,
+          };
+        } catch (error) {
+          const waitedMs = Date.now() - startTime;
+          const errorMessage = error instanceof Error ? error.message : "unknown";
+
+          if (errorMessage === "timeout") {
+            return {
+              success: false,
+              error: "timeout",
+              waitedMs,
+            };
+          }
+
+          if (errorMessage === "cancelled") {
+            return {
+              success: false,
+              error: "cancelled",
+              reason: "Stream was cancelled",
+              waitedMs,
+            };
+          }
+
+          return {
+            success: false,
+            error: "unknown",
+            message: errorMessage,
+            waitedMs,
+          };
+        } finally {
+          abortSignal?.removeEventListener("abort", abortHandler);
+        }
       },
     }),
   };

@@ -7,16 +7,19 @@ import {
 import { events } from "../../events.js";
 
 vi.mock("../ListenerManager.js", async () => {
-  const { ListenerManager } =
+  const { ListenerManager, ListenerWaiter } =
     await vi.importActual<typeof import("../ListenerManager.js")>("../ListenerManager.js");
   const instance = new ListenerManager();
+  const waiterInstance = new ListenerWaiter();
   return {
     ListenerManager,
+    ListenerWaiter,
     listenerManager: instance,
+    listenerWaiter: waiterInstance,
   };
 });
 
-import { listenerManager } from "../ListenerManager.js";
+import { listenerManager, listenerWaiter } from "../ListenerManager.js";
 
 describe("TerminalStateListenerBridge", () => {
   let emittedChunks: Array<{
@@ -519,6 +522,104 @@ describe("TerminalStateListenerBridge", () => {
       expect(emittedChunks.length).toBe(2);
       expect(emittedChunks[0].chunk.listenerData.eventType).toBe("terminal:state-changed");
       expect(emittedChunks[1].chunk.listenerData.eventType).toBe("agent:completed");
+    });
+  });
+
+  describe("waiter notification", () => {
+    it("notifies waiter when event fires for awaited listener", async () => {
+      initTerminalStateListenerBridge(mockEmitter);
+
+      const listenerId = listenerManager.register("session-1", "terminal:state-changed");
+
+      // Start waiting
+      const waitPromise = listenerWaiter.wait(listenerId, 5000, "session-1");
+
+      // Emit event
+      events.emit("agent:state-changed", createAgentStateChangedPayload());
+
+      const result = await waitPromise;
+
+      expect(result.listenerId).toBe(listenerId);
+      expect(result.eventType).toBe("terminal:state-changed");
+      expect(result.data).toEqual(
+        expect.objectContaining({
+          terminalId: "term-1",
+          toState: "working",
+        })
+      );
+    });
+
+    it("still emits chunk when waiter is notified", async () => {
+      initTerminalStateListenerBridge(mockEmitter);
+
+      const listenerId = listenerManager.register("session-1", "terminal:state-changed");
+
+      // Start waiting
+      const waitPromise = listenerWaiter.wait(listenerId, 5000, "session-1");
+
+      // Emit event
+      events.emit("agent:state-changed", createAgentStateChangedPayload());
+
+      await waitPromise;
+
+      // Chunk should still be emitted for UI notification
+      expect(emittedChunks.length).toBe(1);
+      expect(emittedChunks[0].chunk.listenerData.listenerId).toBe(listenerId);
+    });
+
+    it("notifies waiter for agent:completed event", async () => {
+      initTerminalStateListenerBridge(mockEmitter);
+
+      const listenerId = listenerManager.register("session-1", "agent:completed");
+
+      // Start waiting
+      const waitPromise = listenerWaiter.wait(listenerId, 5000, "session-1");
+
+      // Emit event
+      events.emit("agent:completed", {
+        agentId: "agent-1",
+        terminalId: "term-1",
+        worktreeId: "wt-1",
+        exitCode: 0,
+        duration: 5000,
+        timestamp: Date.now(),
+        traceId: "trace-1",
+      });
+
+      const result = await waitPromise;
+
+      expect(result.eventType).toBe("agent:completed");
+      expect(result.data).toEqual(
+        expect.objectContaining({
+          exitCode: 0,
+          duration: 5000,
+        })
+      );
+    });
+
+    it("removes one-shot listener after waiter is notified", async () => {
+      initTerminalStateListenerBridge(mockEmitter);
+
+      const listenerId = listenerManager.register(
+        "session-1",
+        "terminal:state-changed",
+        undefined,
+        true
+      );
+
+      // Start waiting
+      const waitPromise = listenerWaiter.wait(listenerId, 5000, "session-1");
+
+      // Verify listener exists
+      expect(listenerManager.get(listenerId)).toBeDefined();
+
+      // Emit event
+      events.emit("agent:state-changed", createAgentStateChangedPayload());
+
+      await waitPromise;
+
+      // One-shot listener should be removed
+      expect(listenerManager.get(listenerId)).toBeUndefined();
     });
   });
 });
