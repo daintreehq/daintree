@@ -637,6 +637,8 @@ export interface ElectronAPI {
     clearSession(sessionId: string): Promise<void>;
     /** Check if API key is configured (uses appAgentConfig) */
     hasApiKey(): Promise<boolean>;
+    /** Acknowledge a pending event by ID */
+    acknowledgeEvent(sessionId: string, eventId: string): Promise<boolean>;
     /** Subscribe to streaming chunks from the assistant */
     onChunk(callback: (data: AssistantChunkPayload) => void): () => void;
   };

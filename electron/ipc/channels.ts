@@ -267,6 +267,7 @@ export const CHANNELS = {
   ASSISTANT_CHUNK: "assistant:chunk",
   ASSISTANT_HAS_API_KEY: "assistant:has-api-key",
   ASSISTANT_CLEAR_SESSION: "assistant:clear-session",
+  ASSISTANT_ACKNOWLEDGE_EVENT: "assistant:acknowledge-event",
 
   // Agent Capabilities channels
   AGENT_CAPABILITIES_GET_REGISTRY: "agent-capabilities:get-registry",

@@ -62,6 +62,7 @@ export const AutoResumeContextSchema = z.object({
 export type AutoResumeContext = z.infer<typeof AutoResumeContextSchema>;
 
 export const AutoResumeDataSchema = z.object({
+  eventId: z.string(),
   listenerId: z.string(),
   eventType: z.string(),
   eventData: z.record(z.string(), z.unknown()),

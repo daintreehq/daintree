@@ -419,6 +419,7 @@ const CHANNELS = {
   ASSISTANT_CHUNK: "assistant:chunk",
   ASSISTANT_HAS_API_KEY: "assistant:has-api-key",
   ASSISTANT_CLEAR_SESSION: "assistant:clear-session",
+  ASSISTANT_ACKNOWLEDGE_EVENT: "assistant:acknowledge-event",
 
   // Agent Capabilities channels
   AGENT_CAPABILITIES_GET_REGISTRY: "agent-capabilities:get-registry",
@@ -1318,11 +1319,22 @@ const api: ElectronAPI = {
 
     hasApiKey: () => ipcRenderer.invoke(CHANNELS.ASSISTANT_HAS_API_KEY),
 
+    acknowledgeEvent: (sessionId: string, eventId: string): Promise<boolean> =>
+      ipcRenderer.invoke(CHANNELS.ASSISTANT_ACKNOWLEDGE_EVENT, { sessionId, eventId }),
+
     onChunk: (
       callback: (data: {
         sessionId: string;
         chunk: {
-          type: "text" | "tool_call" | "tool_result" | "error" | "done" | "listener_triggered";
+          type:
+            | "text"
+            | "tool_call"
+            | "tool_result"
+            | "error"
+            | "done"
+            | "listener_triggered"
+            | "auto_resume"
+            | "retrying";
           content?: string;
           toolCall?: { id: string; name: string; args: Record<string, unknown> };
           toolResult?: { toolCallId: string; toolName: string; result: unknown; error?: string };
@@ -1333,6 +1345,23 @@ const api: ElectronAPI = {
             eventType: string;
             data: Record<string, unknown>;
           };
+          autoResumeData?: {
+            eventId: string;
+            listenerId: string;
+            eventType: string;
+            eventData: Record<string, unknown>;
+            resumePrompt: string;
+            context: {
+              plan?: string;
+              lastToolCalls?: unknown[];
+              metadata?: Record<string, unknown>;
+            };
+          };
+          retryInfo?: {
+            attempt: number;
+            maxAttempts: number;
+            reason: string;
+          };
         };
       }) => void
     ) => {
@@ -1341,7 +1370,15 @@ const api: ElectronAPI = {
         data: {
           sessionId: string;
           chunk: {
-            type: "text" | "tool_call" | "tool_result" | "error" | "done" | "listener_triggered";
+            type:
+              | "text"
+              | "tool_call"
+              | "tool_result"
+              | "error"
+              | "done"
+              | "listener_triggered"
+              | "auto_resume"
+              | "retrying";
             content?: string;
             toolCall?: { id: string; name: string; args: Record<string, unknown> };
             toolResult?: { toolCallId: string; toolName: string; result: unknown; error?: string };
@@ -1351,6 +1388,23 @@ const api: ElectronAPI = {
               listenerId: string;
               eventType: string;
               data: Record<string, unknown>;
+            };
+            autoResumeData?: {
+              eventId: string;
+              listenerId: string;
+              eventType: string;
+              eventData: Record<string, unknown>;
+              resumePrompt: string;
+              context: {
+                plan?: string;
+                lastToolCalls?: unknown[];
+                metadata?: Record<string, unknown>;
+              };
+            };
+            retryInfo?: {
+              attempt: number;
+              maxAttempts: number;
+              reason: string;
             };
           };
         }

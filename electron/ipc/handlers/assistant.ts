@@ -1,4 +1,5 @@
 import { ipcMain, type BrowserWindow, type WebContents } from "electron";
+import { z } from "zod";
 import { CHANNELS } from "../channels.js";
 import { assistantService } from "../../services/AssistantService.js";
 import {
@@ -11,6 +12,12 @@ import {
   initTerminalStateListenerBridge,
   destroyTerminalStateListenerBridge,
 } from "../../services/assistant/TerminalStateListenerBridge.js";
+import { pendingEventQueue } from "../../services/assistant/PendingEventQueue.js";
+
+const AcknowledgeEventRequestSchema = z.object({
+  sessionId: z.string(),
+  eventId: z.string(),
+});
 
 const MAX_MESSAGES = 100;
 const MAX_MESSAGE_LENGTH = 50000;
@@ -143,6 +150,17 @@ export function registerAssistantHandlers(mainWindow: BrowserWindow): () => void
     return assistantService.hasApiKey();
   });
 
+  ipcMain.handle(CHANNELS.ASSISTANT_ACKNOWLEDGE_EVENT, (_event, payload: unknown) => {
+    const validation = AcknowledgeEventRequestSchema.safeParse(payload);
+    if (!validation.success) {
+      console.error("[AssistantHandlers] Invalid acknowledge event payload:", validation.error);
+      return false;
+    }
+
+    const { sessionId, eventId } = validation.data;
+    return pendingEventQueue.acknowledge(eventId, sessionId);
+  });
+
   // Cleanup on webContents destroy to prevent orphaned streams
   mainWindow.webContents.on("destroyed", destroyedListener);
 
@@ -155,6 +173,7 @@ export function registerAssistantHandlers(mainWindow: BrowserWindow): () => void
     ipcMain.removeHandler(CHANNELS.ASSISTANT_CANCEL);
     ipcMain.removeHandler(CHANNELS.ASSISTANT_CLEAR_SESSION);
     ipcMain.removeHandler(CHANNELS.ASSISTANT_HAS_API_KEY);
+    ipcMain.removeHandler(CHANNELS.ASSISTANT_ACKNOWLEDGE_EVENT);
     mainWindow.webContents.removeListener("destroyed", destroyedListener);
     mainWindow.webContents.removeListener("did-start-navigation", navigationListener);
   };

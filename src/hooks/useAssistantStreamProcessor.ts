@@ -97,6 +97,8 @@ function extractEventMetadata(
  * even when the AssistantPane is closed.
  */
 interface PendingAutoResume {
+  sessionId: string;
+  eventId: string;
   eventType: string;
   eventData: Record<string, unknown>;
   resumePrompt: string;
@@ -165,13 +167,51 @@ export function useAssistantStreamProcessor() {
     }
 
     async function processAutoResume(resumeData: PendingAutoResume) {
-      const { eventType, eventData, resumePrompt, context: resumeContext } = resumeData;
+      const {
+        sessionId: resumeSessionId,
+        eventId,
+        eventType,
+        eventData,
+        resumePrompt,
+        context: resumeContext,
+      } = resumeData;
+
+      // Verify this auto-resume is for the current session
+      const currentSessionId = useAssistantChatStore.getState().conversation.sessionId;
+      if (resumeSessionId !== currentSessionId) {
+        console.warn(
+          `[AssistantStreamProcessor] Dropping queued auto-resume from old session ${resumeSessionId} (current: ${currentSessionId})`
+        );
+        // Acknowledge the event anyway to clear it from the queue
+        try {
+          await window.electron.assistant.acknowledgeEvent(resumeSessionId, eventId);
+        } catch (err) {
+          console.error("[AssistantStreamProcessor] Failed to acknowledge stale event:", err);
+        }
+        return;
+      }
 
       // Reset streaming and retry state before starting
       resetStreamingState();
       useAssistantChatStore.getState().setRetryState(null);
 
-      // Add system message indicating auto-resume
+      // Immediately acknowledge the triggering event so it doesn't appear in pending queue
+      try {
+        const acknowledged = await window.electron.assistant.acknowledgeEvent(
+          currentSessionId,
+          eventId
+        );
+        if (!acknowledged) {
+          console.warn(
+            `[AssistantStreamProcessor] Event ${eventId} not found or session mismatch during acknowledgment`
+          );
+        }
+      } catch (err) {
+        console.error("[AssistantStreamProcessor] Failed to acknowledge event:", err);
+        // Continue anyway - acknowledging is best-effort
+      }
+
+      // Add system message indicating auto-resume (UI only)
       const eventSummary = formatListenerNotification(eventType, eventData);
       useAssistantChatStore.getState().addMessage({
         id: `system-${Date.now()}-${Math.random()}`,
@@ -180,7 +220,7 @@ export function useAssistantStreamProcessor() {
         timestamp: Date.now(),
       });
 
-      // Add context as a system note if provided
+      // Add context as a system note if provided (UI only)
       if (resumeContext.plan) {
         useAssistantChatStore.getState().addMessage({
           id: `system-${Date.now()}-${Math.random()}`,
@@ -190,11 +230,32 @@ export function useAssistantStreamProcessor() {
         });
       }
 
-      // Add the resume prompt as a synthetic user message
+      // Build a user message that includes event context so the model can see it
+      // (system messages are filtered out before sending to the API)
+      const eventContextParts: string[] = [];
+      eventContextParts.push(`[Auto-resume triggered: ${eventSummary}]`);
+
+      // Include compact event data (capped to avoid MAX_MESSAGE_LENGTH issues)
+      if (eventData && Object.keys(eventData).length > 0) {
+        const compactData = JSON.stringify(eventData, null, 0);
+        const maxDataLength = 500;
+        const truncated =
+          compactData.length > maxDataLength
+            ? compactData.slice(0, maxDataLength) + "..."
+            : compactData;
+        eventContextParts.push(`\nEvent data: ${truncated}`);
+      }
+
+      if (resumeContext.plan) {
+        eventContextParts.push(`\nContext: ${resumeContext.plan}`);
+      }
+      const userMessageContent = `${eventContextParts.join("")}\n\n${resumePrompt}`;
+
+      // Add the resume prompt as a synthetic user message with event context
       useAssistantChatStore.getState().addMessage({
         id: `user-${Date.now()}-${Math.random()}`,
         role: "user",
-        content: resumePrompt,
+        content: userMessageContent,
         timestamp: Date.now(),
       });
 
@@ -458,6 +519,7 @@ export function useAssistantStreamProcessor() {
         case "auto_resume":
           if (chunk.autoResumeData) {
             const {
+              eventId,
               eventType,
               eventData,
               resumePrompt,
@@ -466,10 +528,15 @@ export function useAssistantStreamProcessor() {
 
             // Check if currently streaming or loading - if so, queue the auto-resume
             const state = useAssistantChatStore.getState();
+            const currentSessionId = state.conversation.sessionId;
+
             if (state.conversation.isLoading) {
               console.log("[AssistantStreamProcessor] Auto-resume queued - conversation is busy");
               // Queue for processing when current stream completes
+              // Store sessionId so we can verify it's still the same when processing
               pendingAutoResumeRef.current = {
+                sessionId: currentSessionId,
+                eventId,
                 eventType,
                 eventData,
                 resumePrompt,
@@ -488,6 +555,8 @@ export function useAssistantStreamProcessor() {
 
             // Process auto-resume immediately
             processAutoResume({
+              sessionId: currentSessionId,
+              eventId,
               eventType,
               eventData,
               resumePrompt,

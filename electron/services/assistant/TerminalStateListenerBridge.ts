@@ -15,6 +15,7 @@ export type ListenerTriggeredChunk = {
 export type AutoResumeChunk = {
   type: "auto_resume";
   autoResumeData: {
+    eventId: string;
     listenerId: string;
     eventType: string;
     eventData: Record<string, unknown>;
@@ -52,7 +53,13 @@ function emitToListeners(eventType: string, eventData: Record<string, unknown>):
       };
 
       // Always push to pending event queue for reliable delivery
-      pendingEventQueue.push(listener.sessionId, listener.id, eventType, eventData);
+      // Capture the returned event to get the eventId
+      const pendingEvent = pendingEventQueue.push(
+        listener.sessionId,
+        listener.id,
+        eventType,
+        eventData
+      );
 
       // Also check if there's an active waiter for this listener
       listenerWaiter.notify(listener.id, listenerEvent);
@@ -63,9 +70,11 @@ function emitToListeners(eventType: string, eventData: Record<string, unknown>):
       if (chunkEmitter) {
         if (continuation) {
           // Emit auto-resume event instead of regular listener triggered
+          // Include the eventId so the renderer can acknowledge it
           chunkEmitter(listener.sessionId, {
             type: "auto_resume",
             autoResumeData: {
+              eventId: pendingEvent.id,
               listenerId: listener.id,
               eventType,
               eventData,
