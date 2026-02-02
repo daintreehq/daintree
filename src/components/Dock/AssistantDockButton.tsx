@@ -62,10 +62,10 @@ export function AssistantDockButton() {
       currentContext?.activeWorktreeName || currentContext?.projectName || currentProject?.name;
 
     if (contextLabel) {
-      return `${base} — ${contextLabel}`;
+      return `${base} — ${contextLabel} • Experimental`;
     }
 
-    return `${base} (⌘⇧K)`;
+    return `${base} (⌘⇧K) • Experimental`;
   }, [isOpen, isLoading, isWaiting, currentContext, currentProject]);
 
   const ariaLabel = useMemo(() => {

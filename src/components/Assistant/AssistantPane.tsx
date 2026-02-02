@@ -115,6 +115,9 @@ export function AssistantPane() {
               <span className="text-xs font-medium font-sans text-canopy-text truncate select-none transition-colors">
                 Canopy Assistant
               </span>
+              <span className="shrink-0 whitespace-nowrap px-1.5 py-0.5 text-[10px] leading-none font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-500/10 dark:text-amber-400 border border-amber-300 dark:border-amber-500/20">
+                Experimental
+              </span>
             </div>
             <div className="flex items-center gap-1.5 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity motion-reduce:transition-none">
               {hasMessages && (

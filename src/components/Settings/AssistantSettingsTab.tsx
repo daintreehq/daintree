@@ -155,9 +155,15 @@ export function AssistantSettingsTab() {
   return (
     <div className="space-y-6">
       <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <h2 className="text-lg font-semibold text-canopy-text">Canopy Assistant</h2>
+          <span className="shrink-0 whitespace-nowrap px-1.5 py-0.5 text-xs leading-none font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-500/10 dark:text-amber-400 border border-amber-300 dark:border-amber-500/20">
+            Experimental
+          </span>
+        </div>
         <p className="text-sm text-canopy-text/70">
           The Canopy Assistant is an AI-powered panel that lets you control the app using natural
-          language. Press{" "}
+          language. This is an experimental feature actively being developed. Press{" "}
           <kbd className="px-1.5 py-0.5 rounded bg-canopy-bg border border-canopy-border text-xs font-mono">
             ⌘⇧K
           </kbd>{" "}
