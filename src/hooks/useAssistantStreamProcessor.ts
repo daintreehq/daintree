@@ -114,7 +114,7 @@ export function useAssistantStreamProcessor() {
   const streamingMessageIdRef = useRef<string | null>(null);
   const streamingSessionIdRef = useRef<string | null>(null);
   const hadErrorRef = useRef<boolean>(false);
-  const pendingAutoResumeRef = useRef<PendingAutoResume | null>(null);
+  const pendingAutoResumeQueueRef = useRef<PendingAutoResume[]>([]);
 
   useEffect(() => {
     if (!window.electron?.assistant?.onChunk) {
@@ -166,6 +166,42 @@ export function useAssistantStreamProcessor() {
       useAssistantChatStore.getState().setStreamingState(null, null);
     }
 
+    function processNextAutoResume() {
+      // Process next pending auto-resume from queue (FIFO)
+      if (pendingAutoResumeQueueRef.current.length > 0) {
+        const pending = pendingAutoResumeQueueRef.current.shift()!;
+        const remaining = pendingAutoResumeQueueRef.current.length;
+        console.log(
+          `[AssistantStreamProcessor] Processing next queued auto-resume (${pending.eventType}), ${remaining} remaining`
+        );
+        processAutoResume(pending);
+      }
+    }
+
+    async function clearAutoResumeQueue(reason: string) {
+      const queueLength = pendingAutoResumeQueueRef.current.length;
+      if (queueLength === 0) return;
+
+      console.log(
+        `[AssistantStreamProcessor] Clearing ${queueLength} pending auto-resumes due to ${reason}`
+      );
+
+      // Best-effort acknowledge all queued events to prevent re-delivery
+      const queue = pendingAutoResumeQueueRef.current;
+      pendingAutoResumeQueueRef.current = [];
+
+      for (const item of queue) {
+        try {
+          await window.electron.assistant.acknowledgeEvent(item.sessionId, item.eventId);
+        } catch (err) {
+          console.error(
+            `[AssistantStreamProcessor] Failed to acknowledge queued event ${item.eventId}:`,
+            err
+          );
+        }
+      }
+    }
+
     async function processAutoResume(resumeData: PendingAutoResume) {
       const {
         sessionId: resumeSessionId,
@@ -176,8 +212,10 @@ export function useAssistantStreamProcessor() {
         context: resumeContext,
       } = resumeData;
 
-      // Verify this auto-resume is for the current session
+      // Capture current session ID once and reuse throughout this function
       const currentSessionId = useAssistantChatStore.getState().conversation.sessionId;
+
+      // Verify this auto-resume is for the current session
       if (resumeSessionId !== currentSessionId) {
         console.warn(
           `[AssistantStreamProcessor] Dropping queued auto-resume from old session ${resumeSessionId} (current: ${currentSessionId})`
@@ -188,8 +226,13 @@ export function useAssistantStreamProcessor() {
         } catch (err) {
           console.error("[AssistantStreamProcessor] Failed to acknowledge stale event:", err);
         }
+        // Process next item in queue
+        processNextAutoResume();
         return;
       }
+
+      // Set loading immediately to prevent race conditions with concurrent auto-resumes
+      useAssistantChatStore.getState().setLoading(true);
 
       // Reset streaming and retry state before starting
       resetStreamingState();
@@ -318,8 +361,10 @@ export function useAssistantStreamProcessor() {
         resetStreamingState();
         useAssistantChatStore.getState().setRetryState(null);
         useAssistantChatStore.getState().setLoading(false);
-        // Cancel the session on error
-        window.electron.assistant.cancel(useAssistantChatStore.getState().conversation.sessionId);
+        // Cancel the session on error - use the captured sessionId
+        window.electron.assistant.cancel(currentSessionId);
+        // Process next item in queue instead of stalling
+        processNextAutoResume();
       }
     }
 
@@ -353,10 +398,12 @@ export function useAssistantStreamProcessor() {
       resetStreamingState();
     }
 
-    // Subscribe to session changes to reset streaming state
+    // Subscribe to session changes to reset streaming state and clear queue
     const unsubscribe = useAssistantChatStore.subscribe((state, prev) => {
       if (state.conversation.sessionId !== prev.conversation.sessionId) {
         resetStreamingState();
+        // Clear pending auto-resume queue for stale session and acknowledge events
+        clearAutoResumeQueue("session change");
       }
     });
 
@@ -364,9 +411,11 @@ export function useAssistantStreamProcessor() {
       const currentState = useAssistantChatStore.getState();
       const { sessionId: currentSessionId } = currentState.conversation;
 
-      // Reset streaming state if session changed
+      // Reset streaming state and clear queue if session changed
       if (streamingSessionIdRef.current && streamingSessionIdRef.current !== currentSessionId) {
         resetStreamingState();
+        // Clear pending auto-resume queue for stale session and acknowledge events
+        clearAutoResumeQueue("session change in chunk handler");
       }
 
       // Ignore chunks from different sessions
@@ -497,8 +546,8 @@ export function useAssistantStreamProcessor() {
           }
           finalizeStreaming();
           useAssistantChatStore.getState().setLoading(false);
-          // Clear any pending auto-resume on error
-          pendingAutoResumeRef.current = null;
+          // Clear the entire auto-resume queue on error and acknowledge events
+          clearAutoResumeQueue("error");
           break;
 
         case "listener_triggered":
@@ -531,23 +580,25 @@ export function useAssistantStreamProcessor() {
             const currentSessionId = state.conversation.sessionId;
 
             if (state.conversation.isLoading) {
-              console.log("[AssistantStreamProcessor] Auto-resume queued - conversation is busy");
-              // Queue for processing when current stream completes
-              // Store sessionId so we can verify it's still the same when processing
-              pendingAutoResumeRef.current = {
+              const queuePosition = pendingAutoResumeQueueRef.current.length + 1;
+              console.log(
+                `[AssistantStreamProcessor] Auto-resume queued (${eventType}), queue position: ${queuePosition}`
+              );
+              // Add to queue instead of replacing
+              pendingAutoResumeQueueRef.current.push({
                 sessionId: currentSessionId,
                 eventId,
                 eventType,
                 eventData,
                 resumePrompt,
                 context: resumeContext || {},
-              };
+              });
               // Add event notification
               const notificationText = formatListenerNotification(eventType, eventData);
               useAssistantChatStore.getState().addMessage({
                 id: `listener-${Date.now()}-${Math.random()}`,
                 role: "event",
-                content: `${notificationText} (auto-resume queued)`,
+                content: `${notificationText} (auto-resume queued #${queuePosition})`,
                 timestamp: Date.now(),
               });
               break;
@@ -600,13 +651,8 @@ export function useAssistantStreamProcessor() {
 
           useAssistantChatStore.getState().setLoading(false);
 
-          // Process any pending auto-resume now that the conversation is idle
-          if (pendingAutoResumeRef.current) {
-            const pending = pendingAutoResumeRef.current;
-            pendingAutoResumeRef.current = null;
-            console.log("[AssistantStreamProcessor] Processing queued auto-resume");
-            processAutoResume(pending);
-          }
+          // Process next item in queue
+          processNextAutoResume();
           break;
         }
       }
