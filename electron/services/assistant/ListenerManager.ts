@@ -69,7 +69,9 @@ export class ListenerManager {
       this.listeners.delete(id);
     }
     if (toRemove.length > 0) {
-      console.log(`[ListenerManager] Cleared ${toRemove.length} listener(s) for session ${sessionId}`);
+      console.log(
+        `[ListenerManager] Cleared ${toRemove.length} listener(s) for session ${sessionId}`
+      );
     }
     return toRemove.length;
   }

@@ -16,7 +16,7 @@ beforeAll(async () => {
 });
 
 describe("AssistantService lifecycle management", () => {
-  let service: AssistantService;
+  let service: InstanceType<typeof AssistantService>;
 
   beforeEach(() => {
     service = new AssistantService();

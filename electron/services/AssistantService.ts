@@ -889,7 +889,7 @@ export class AssistantService {
   }
 
   clearAllSessions(): void {
-    for (const [sessionId, controller] of this.activeStreams) {
+    for (const controller of this.activeStreams.values()) {
       controller.abort();
     }
     this.activeStreams.clear();
