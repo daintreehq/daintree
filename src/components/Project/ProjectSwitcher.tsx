@@ -16,10 +16,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { projectClient, terminalClient } from "@/clients";
-import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import type { Project, ProjectStats } from "@shared/types";
-import { isAgentTerminal } from "@/utils/terminalType";
 import { groupProjects } from "./projectGrouping";
+import { isAgentTerminal } from "@/utils/terminalType";
 import { ProjectActionRow } from "./ProjectActionRow";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 
@@ -74,13 +73,16 @@ export function ProjectSwitcher() {
         let waitingAgentCount = 0;
 
         for (const terminal of terminalsResult.value) {
-          if (!panelKindHasPty(terminal.kind ?? "terminal")) continue;
-          if (terminal.kind === "dev-preview") continue;
+          // Only count agent terminals - excludes dev-preview, browser, notes, etc.
+          // Use explicit kind check first (fast path), fall back to isAgentTerminal for legacy terminals
+          const isAgent =
+            terminal.kind === "agent" ||
+            (terminal.kind == null && isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId));
+
+          if (!isAgent) continue;
           if (terminal.hasPty === false) continue; // Skip orphaned terminals without active PTY
 
           const agentState = terminal.agentState;
-          const isAgent = isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId);
-          if (!isAgent) continue;
 
           if (agentState === "waiting") {
             waitingAgentCount += 1;
@@ -173,14 +175,16 @@ export function ProjectSwitcher() {
         let waitingAgentCount = 0;
 
         for (const terminal of result.value) {
-          if (!panelKindHasPty(terminal.kind ?? "terminal")) continue;
-          if (terminal.kind === "dev-preview") continue;
+          // Only count agent terminals - excludes dev-preview, browser, notes, etc.
+          // Use explicit kind check first (fast path), fall back to isAgentTerminal for legacy terminals
+          const isAgent =
+            terminal.kind === "agent" ||
+            (terminal.kind == null && isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId));
+
+          if (!isAgent) continue;
           if (terminal.hasPty === false) continue; // Skip orphaned terminals without active PTY
 
           const agentState = terminal.agentState;
-          const isAgent = isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId);
-
-          if (!isAgent) continue;
 
           if (agentState === "waiting") {
             waitingAgentCount += 1;
