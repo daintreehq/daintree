@@ -479,9 +479,27 @@ Pending events appear in the context block as a reminder. Process them to avoid 
 
 ### Common Patterns
 
-**Pattern 1: One-Shot Completion**
+**Pattern 1: autoResume for Agent Tasks (RECOMMENDED)**
 ```
-// Launch and wait for completion
+// Launch ONE agent, register with autoResume, respond immediately
+agent_launch({ agentId: "claude", prompt: "Run tests and fix failures" })
+register_listener({
+  eventType: "agent:completed",
+  filter: { terminalId: "<returned-id>" },
+  once: true,
+  autoResume: {
+    prompt: "The test run has completed. Check the output and summarize results.",
+    context: { metadata: { task: "test-run" } }
+  }
+})
+// Respond to user: "Launched test runner. I'll summarize when complete."
+// System auto-resumes assistant when agent finishes
+// Note: autoResume triggers once, then the continuation is removed even if listener persists
+```
+
+**Pattern 2: One-Shot Completion (Notification Only)**
+```
+// Launch and get notified (no auto-resume)
 agent_launch({ agentId: "claude", prompt: "Run tests" })
 register_listener({
   eventType: "agent:completed",
@@ -489,31 +507,27 @@ register_listener({
   once: true
 })
 // Listener auto-removes when agent completes
+// User must send another message for assistant to process the result
 ```
 
-**Pattern 2: Launch and Monitor**
-1. Launch agent with task
-2. Register listeners for `completed` and `failed`
-3. Inform user you're monitoring
-4. When notified, get output and summarize results
-5. Clean up listeners (or use `once: true`)
-
-**Pattern 3: Blocking Wait**
-1. Launch agent with task
-2. Register one-shot listener
-3. Call `await_listener` with appropriate timeout
-4. Process result immediately when event arrives
+**Pattern 3: Short Blocking Wait**
+```
+// Only for short, predictable waits (<30s)
+register_listener({ eventType: "...", filter: {...}, once: true })
+await_listener({ listenerId: "abc", timeoutMs: 30000 })
+// Process result immediately
+```
 
 **Pattern 4: Waiting State Response**
 1. Launch agent that may need input
-2. Register listener for `waiting` state
+2. Register listener for `waiting` state with autoResume
 3. When notified, read output to see what agent is asking
 4. Either respond programmatically or ask user for decision
 5. Clean up when workflow completes
 
 **Pattern 5: Batch Monitoring**
 1. List terminals to find all agents
-2. Register listeners for each terminal
+2. Register listeners for each terminal (consider autoResume for final summary)
 3. Track completions as notifications arrive
 4. When all expected terminals complete, summarize and clean up
 5. **Tip:** When using `toState`-only filters (no `terminalId`), add `worktreeId` or `agentId` to reduce noise
@@ -535,10 +549,47 @@ register_listener({
 - If a terminal is restarted, listeners remain registered but may not match (session token validation)
 - Best practice: After terminal restart, remove old listeners and re-register if needed
 
+### Choosing Between await_listener and autoResume
+
+When you need to wait for an event, choose the right approach:
+
+**Use `autoResume` (recommended for most cases):**
+- Unknown or long duration (>30 seconds)
+- Agent tasks that may take minutes
+- You want to respond immediately and let the system continue later
+- Pattern: Launch ONE agent → register listener with `autoResume` → respond to user immediately
+
+```
+register_listener({
+  eventType: "agent:completed",
+  filter: { terminalId: "abc" },
+  once: true,
+  autoResume: {
+    prompt: "The agent has completed. Summarize the results.",
+    context: { metadata: { taskId: "issue-123" } }
+  }
+})
+```
+
+When this listener triggers, the assistant is automatically re-invoked with the provided prompt. The context metadata is available for tracking but is not directly injected into the model prompt.
+
+**Use `await_listener` (for short, bounded waits):**
+- Short waits (<30 seconds) where blocking is acceptable
+- You need the result immediately to continue
+- The timeout is predictable and reasonable
+
+```
+await_listener({ listenerId: "abc", timeoutMs: 30000 })
+```
+
+**Anti-pattern to avoid:**
+- DO NOT launch multiple agents in a loop waiting for each
+- DO NOT use await_listener for unpredictable durations
+- DO NOT block for agent tasks that may take minutes
+
 ### Limitations
 
 - **Asynchronous delivery** - Events may arrive after your response completes
-- **No auto-resume** - You won't be re-invoked when listeners trigger; events queue until next user message
 - **Session-scoped** - Listeners are cleared on navigation or conversation reset
 - **No cross-session** - Cannot monitor terminals from other conversation sessions
 - **Filter limitations** - Exact match only; no regex, ranges, or complex conditions
@@ -570,6 +621,44 @@ terminal_sendCommand(id2, "/command") → success
 terminal_sendCommand(id3, "/command") → success
 ```
 Three calls, three DIFFERENT terminal IDs. Never the same ID twice.
+
+### Blocking Wait Workflow Guard
+
+**CRITICAL: Do NOT launch multiple agents in a blocking wait loop.**
+
+When asked to "launch an agent and wait for completion":
+1. Launch ONE agent
+2. Register ONE listener with `autoResume`
+3. Respond immediately to the user
+4. Let the system handle continuation when the agent completes
+
+**Bad pattern (DO NOT DO):**
+```
+// Loop launching agents and blocking
+for each task:
+  agent_launch(...)
+  await_listener(..., timeoutMs: 300000)  // 5 min block!
+  // This freezes the conversation for minutes
+```
+
+**Good pattern:**
+```
+// Launch once, autoResume handles continuation
+agent_launch({ agentId: "claude", prompt: "Complete the task" })
+register_listener({
+  eventType: "agent:completed",
+  filter: { terminalId: "<id>" },
+  once: true,
+  autoResume: { prompt: "Agent finished. Summarize results." }
+})
+// Respond: "Launched agent. I'll report back when complete."
+// System auto-continues when agent finishes
+```
+
+This pattern avoids:
+- Multi-minute blocking that freezes the UI
+- Repeated agent launches that waste resources
+- Poor UX where the conversation appears frozen
 
 ## Stop Conditions
 
