@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
-import { ChevronRight, Copy, Check } from "lucide-react";
+import { ChevronRight, Copy, Check, Bell, CheckCircle, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { ToolCallBlock } from "./ToolCallBlock";
@@ -7,7 +7,7 @@ import { StreamingCursor } from "./StreamingCursor";
 import type { AssistantMessage } from "./types";
 
 interface InteractionBlockProps {
-  message: Pick<AssistantMessage, "role" | "content" | "toolCalls" | "timestamp">;
+  message: Pick<AssistantMessage, "role" | "content" | "toolCalls" | "timestamp" | "eventMetadata">;
   isStreaming?: boolean;
   className?: string;
 }
@@ -28,6 +28,85 @@ function UserInputBlock({ content, className }: { content: string; className?: s
       </div>
       <div className="text-[13px] leading-relaxed text-canopy-text/90 font-medium tracking-normal break-words whitespace-pre-wrap select-text">
         {content}
+      </div>
+    </div>
+  );
+}
+
+function EventBlock({
+  message,
+  className,
+}: {
+  message: Pick<AssistantMessage, "content" | "eventMetadata">;
+  className?: string;
+}) {
+  const { eventMetadata } = message;
+  const eventType = eventMetadata?.eventType || "unknown";
+  const newState = eventMetadata?.newState?.toLowerCase();
+
+  const getStatusIcon = () => {
+    if (newState === "completed" || newState === "success") {
+      return <CheckCircle size={14} className="text-emerald-400" aria-hidden="true" />;
+    }
+    if (newState === "failed" || newState === "error") {
+      return <XCircle size={14} className="text-red-400" aria-hidden="true" />;
+    }
+    return <Bell size={14} className="text-canopy-accent" aria-hidden="true" />;
+  };
+
+  const getStatusText = () => {
+    if (newState === "completed" || newState === "success") {
+      return "Completed";
+    }
+    if (newState === "failed" || newState === "error") {
+      return "Failed";
+    }
+    return "Event";
+  };
+
+  const getEventLabel = () => {
+    if (eventType === "terminal:state-changed") {
+      return "Terminal State";
+    }
+    return eventType.replace(/[:-]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  };
+
+  const content = message.content?.trim() || getStatusText();
+  const fullTerminalId = eventMetadata?.terminalId;
+
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-3 px-4 py-2.5",
+        "bg-canopy-accent/[0.06] border-y border-canopy-accent/10",
+        className
+      )}
+      role="log"
+      aria-label={`${getEventLabel()}: ${content}`}
+    >
+      <div className="shrink-0">
+        {getStatusIcon()}
+        <span className="sr-only">{getStatusText()}</span>
+      </div>
+      <div className="flex items-center gap-2 text-[12px] text-canopy-text/70 min-w-0 flex-wrap">
+        <span className="font-medium text-canopy-accent/80 shrink-0">{getEventLabel()}</span>
+        {content && (
+          <>
+            <span className="text-canopy-text/40 shrink-0">•</span>
+            <span className="break-words">{content}</span>
+          </>
+        )}
+        {fullTerminalId && (
+          <>
+            <span className="text-canopy-text/40 shrink-0">•</span>
+            <span
+              className="text-canopy-text/50 font-mono text-[11px] shrink-0"
+              title={fullTerminalId}
+            >
+              {fullTerminalId.slice(0, 8)}
+            </span>
+          </>
+        )}
       </div>
     </div>
   );
@@ -137,6 +216,10 @@ export function InteractionBlock({
 }: InteractionBlockProps) {
   if (message.role === "user") {
     return <UserInputBlock content={message.content} className={className} />;
+  }
+
+  if (message.role === "event") {
+    return <EventBlock message={message} className={className} />;
   }
 
   return (

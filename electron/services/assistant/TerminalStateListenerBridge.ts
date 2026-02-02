@@ -55,6 +55,10 @@ export function initTerminalStateListenerBridge(emitter: ChunkEmitter): void {
           "[TerminalStateListenerBridge] Failed to emit listener chunk:",
           error instanceof Error ? error.message : error
         );
+      } finally {
+        if (listener.once) {
+          listenerManager.unregister(listener.id);
+        }
       }
     }
   });
