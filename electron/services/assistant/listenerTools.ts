@@ -9,7 +9,10 @@
 import { tool, jsonSchema } from "ai";
 import type { ToolSet } from "ai";
 import { listenerManager } from "./ListenerManager.js";
-import { ALL_EVENT_TYPES, type CanopyEventMap } from "../events.js";
+import { BRIDGED_EVENT_TYPES, type BridgedEventType } from "../events.js";
+
+// Mutable copy for JSON schema compatibility
+const BRIDGED_EVENT_TYPES_MUTABLE: string[] = [...BRIDGED_EVENT_TYPES];
 
 /**
  * Context provided to listener tools containing the session ID.
@@ -26,21 +29,22 @@ export function createListenerTools(context: ListenerToolContext): ToolSet {
     register_listener: tool({
       description:
         "Subscribe to Canopy events. Returns a listener ID for later removal. " +
-        "Use this to monitor terminal activity, agent state changes, worktree updates, and more. " +
-        "For terminal:state-changed, you can filter by terminalId and toState (e.g., 'completed').",
+        `Currently supported events: ${BRIDGED_EVENT_TYPES.join(", ")}. ` +
+        "terminal:state-changed fires when a terminal's agent state changes " +
+        "(e.g., idle → working → completed). Filter by terminalId and/or toState (e.g., 'completed', 'waiting').",
       inputSchema: jsonSchema({
         type: "object",
         properties: {
           eventType: {
             type: "string",
             description:
-              "The event type to subscribe to (e.g., 'agent:state-changed', 'terminal:activity')",
-            enum: ALL_EVENT_TYPES,
+              "The event type to subscribe to. Currently only 'terminal:state-changed' is supported.",
+            enum: BRIDGED_EVENT_TYPES_MUTABLE,
           },
           filter: {
             type: "object",
             description:
-              "Optional filter to narrow events by field values (e.g., { terminalId: 'abc' })",
+              "Optional filter to narrow events by field values (e.g., { terminalId: 'abc', toState: 'completed' })",
             additionalProperties: true,
           },
         },
@@ -50,15 +54,20 @@ export function createListenerTools(context: ListenerToolContext): ToolSet {
         eventType,
         filter,
       }: {
-        eventType: string;
+        eventType: BridgedEventType;
         filter?: Record<string, string | number | boolean | null>;
       }) => {
         try {
-          const listenerId = listenerManager.register(
-            context.sessionId,
-            eventType as keyof CanopyEventMap,
-            filter
-          );
+          // Runtime validation: ensure eventType is actually bridged
+          // This guards against schema bypass or non-tool registration paths
+          if (!BRIDGED_EVENT_TYPES.includes(eventType as BridgedEventType)) {
+            return {
+              success: false,
+              error: `Event type '${eventType}' is not supported. Supported events: ${BRIDGED_EVENT_TYPES.join(", ")}`,
+            };
+          }
+
+          const listenerId = listenerManager.register(context.sessionId, eventType, filter);
           return {
             success: true,
             listenerId,
