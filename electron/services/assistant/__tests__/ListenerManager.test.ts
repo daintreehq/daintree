@@ -568,7 +568,9 @@ describe("ListenerWaiter", () => {
     it("rejects with already_awaiting error when awaiting same listener twice", async () => {
       const firstWait = waiter.wait("listener-1", 5000, "session-1");
 
-      await expect(waiter.wait("listener-1", 5000, "session-1")).rejects.toThrow("already_awaiting");
+      await expect(waiter.wait("listener-1", 5000, "session-1")).rejects.toThrow(
+        "already_awaiting"
+      );
 
       // Clean up first wait
       waiter.cancel("listener-1", "cleanup");
