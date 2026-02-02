@@ -57,7 +57,10 @@ export function createListenerTools(context: ListenerToolContext): ToolSet {
           filter: {
             type: "object",
             description:
-              "Optional filter to narrow events by field values (e.g., { terminalId: 'abc', toState: 'completed' })",
+              "CRITICAL: If you need the terminalId from a just-launched agent, do NOT call register_listener in the same tool batch " +
+              "(including multi_tool_use) as agent_launch. Wait for agent_launch to return, then pass the returned terminalId. " +
+              "Optional filter to narrow events by field values (e.g., { terminalId: 'abc', toState: 'completed' }). " +
+              "Consider using agent_launchWithAutoResume for the common pattern.",
             additionalProperties: true,
           },
           once: {

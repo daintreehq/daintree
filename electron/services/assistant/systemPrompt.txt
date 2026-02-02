@@ -479,13 +479,54 @@ Pending events appear in the context block as a reminder. Process them to avoid 
 
 ### Common Patterns
 
+**CRITICAL: agent_launch + register_listener Data Dependency**
+
+When launching an agent and registering a listener for it, you MUST call them SEQUENTIALLY in separate tool batches (separate assistant turns):
+
+1. Call `agent_launch` FIRST
+2. WAIT for the result (do NOT put register_listener in the same tool batch, including multi_tool_use)
+3. Extract the `terminalId` from the result
+4. Call `register_listener` with that exact terminalId
+
+These tools cannot be in the same tool batch; `register_listener` requires the terminalId that `agent_launch` returns.
+
+**WRONG (parallel calls - DO NOT DO):**
+```
+// BAD: Same tool batch/assistant message — register_listener has no returned terminalId yet
+agent_launch({ agentId: "claude", prompt: "..." })
+register_listener({ filter: { terminalId: "???" }})  // Do NOT substitute agentId/worktreeId for a just-launched agent
+```
+
+**CORRECT (sequential calls):**
+```
+// GOOD: Wait for agent_launch result, then register listener
+agent_launch({ agentId: "claude", prompt: "..." })
+// Returns: { terminalId: "abc123", ... }
+
+// THEN in next tool call batch:
+register_listener({ filter: { terminalId: "abc123" }})  // Uses correct ID
+```
+
+**Recommended: Use agent_launchWithAutoResume for the common pattern:**
+```
+// BEST: Single tool call that handles both operations correctly
+agent_launchWithAutoResume({
+  agentId: "claude",
+  prompt: "Run tests",
+  autoResumePrompt: "Summarize results"
+})
+// Returns: { terminalId: "...", listenerId: "..." } - guaranteed correct association
+```
+
 **Pattern 1: autoResume for Agent Tasks (RECOMMENDED)**
 ```
 // Launch ONE agent, register with autoResume, respond immediately
 agent_launch({ agentId: "claude", prompt: "Run tests and fix failures" })
+// WAIT for result: { terminalId: "abc123" }
+// THEN call register_listener with the returned ID:
 register_listener({
   eventType: "agent:completed",
-  filter: { terminalId: "<returned-id>" },
+  filter: { terminalId: "abc123" },  // Use the ACTUAL ID from agent_launch
   once: true,
   autoResume: {
     prompt: "The test run has completed. Check the output and summarize results.",

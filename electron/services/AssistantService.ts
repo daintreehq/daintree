@@ -7,6 +7,7 @@ import { createActionTools, sanitizeToolName } from "./assistant/actionTools.js"
 import { SYSTEM_PROMPT, buildContextBlock } from "./assistant/index.js";
 import { listenerManager } from "./assistant/ListenerManager.js";
 import { createListenerTools } from "./assistant/listenerTools.js";
+import { createCombinedTools } from "./assistant/combinedTools.js";
 import { pendingEventQueue, type PendingEvent } from "./assistant/PendingEventQueue.js";
 import {
   logAssistantRequest,
@@ -671,11 +672,14 @@ export class AssistantService {
           }
         }
 
-        // Build tools from filtered actions and listener management
+        // Build tools from filtered actions, listener management, and combined tools
         const actionTools =
           filteredActions && context ? createActionTools(filteredActions, context) : {};
         const listenerTools = createListenerTools({ sessionId });
-        const tools = { ...actionTools, ...listenerTools };
+        const combinedTools = context
+          ? createCombinedTools({ sessionId, actionContext: context })
+          : {};
+        const tools = { ...actionTools, ...listenerTools, ...combinedTools };
         const hasTools = Object.keys(tools).length > 0;
 
         // Log request (include attempt number for retries)
