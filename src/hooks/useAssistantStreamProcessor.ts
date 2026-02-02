@@ -1,32 +1,50 @@
 import { useEffect, useRef } from "react";
 import { useAssistantChatStore } from "@/store/assistantChatStore";
-import type { ToolCall } from "@/components/Assistant/types";
+import type { ToolCall, EventMetadata } from "@/components/Assistant/types";
 
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-function formatListenerNotification(eventType: string, data: Record<string, unknown>): string {
-  if (eventType === "terminal:state-changed") {
-    const terminalId = data.terminalId as string | undefined;
-    const newState = data.newState as string | undefined;
-    const oldState = data.oldState as string | undefined;
-    const worktreeId = data.worktreeId as string | undefined;
-
-    const stateEmoji = newState === "completed" ? "✅" : newState === "failed" ? "❌" : "🔔";
-    let msg = `${stateEmoji} Terminal state: ${oldState || "unknown"} → ${newState || "unknown"}`;
-
-    if (terminalId) {
-      msg += ` (terminal: ${terminalId.slice(0, 8)})`;
-    }
-    if (worktreeId) {
-      msg += ` [${worktreeId}]`;
-    }
-
-    return msg;
+function formatListenerNotification(eventType: string, data: Record<string, unknown> | null | undefined): string {
+  if (!data || typeof data !== "object") {
+    return eventType;
   }
 
-  return `🔔 Event triggered: ${eventType}`;
+  if (eventType === "terminal:state-changed") {
+    const newState = (data.newState as string | undefined) || (data.toState as string | undefined);
+    const oldState = (data.oldState as string | undefined) || (data.fromState as string | undefined);
+
+    return `${oldState || "unknown"} → ${newState || "unknown"}`;
+  }
+
+  return eventType;
+}
+
+function extractEventMetadata(eventType: string, data: Record<string, unknown> | null | undefined, listenerId?: string): EventMetadata {
+  const metadata: EventMetadata = { eventType };
+
+  if (listenerId) {
+    metadata.listenerId = listenerId;
+  }
+
+  if (!data || typeof data !== "object") {
+    return metadata;
+  }
+
+  if (eventType === "terminal:state-changed") {
+    const terminalId = data.terminalId as string | undefined;
+    const worktreeId = data.worktreeId as string | undefined;
+    const oldState = (data.oldState as string | undefined) || (data.fromState as string | undefined);
+    const newState = (data.newState as string | undefined) || (data.toState as string | undefined);
+
+    if (terminalId) metadata.terminalId = terminalId;
+    if (worktreeId) metadata.worktreeId = worktreeId;
+    if (oldState) metadata.oldState = oldState;
+    if (newState) metadata.newState = newState;
+  }
+
+  return metadata;
 }
 
 /**
@@ -268,13 +286,15 @@ export function useAssistantStreamProcessor() {
 
         case "listener_triggered":
           if (chunk.listenerData) {
-            const { eventType, data: eventData } = chunk.listenerData;
+            const { eventType, data: eventData, listenerId } = chunk.listenerData;
             const notificationText = formatListenerNotification(eventType, eventData);
+            const eventMetadata = extractEventMetadata(eventType, eventData, listenerId);
             useAssistantChatStore.getState().addMessage({
               id: `listener-${Date.now()}-${Math.random()}`,
-              role: "assistant",
+              role: "event",
               content: notificationText,
               timestamp: Date.now(),
+              eventMetadata,
             });
           }
           break;

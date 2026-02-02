@@ -117,7 +117,12 @@ export function useAssistantChat(options?: UseAssistantChatOptions) {
 
         const currentMessages = messagesToRetry;
 
-        const ipcMessages = currentMessages.map((msg) => {
+        // Filter out event messages - they are UI-only and should not be sent to the API
+        const apiMessages = currentMessages.filter(
+          (msg) => msg.role === "user" || msg.role === "assistant"
+        );
+
+        const ipcMessages = apiMessages.map((msg) => {
           const completedToolResults = msg.toolCalls
             ?.filter((tc) => {
               const hasTerminalStatus = tc.status !== "pending";
@@ -133,7 +138,7 @@ export function useAssistantChat(options?: UseAssistantChatOptions) {
 
           return {
             id: msg.id,
-            role: msg.role,
+            role: msg.role as "user" | "assistant",
             content: msg.content,
             toolCalls: msg.toolCalls?.map((tc) => ({
               id: tc.id,
@@ -189,7 +194,12 @@ export function useAssistantChat(options?: UseAssistantChatOptions) {
 
         const currentMessages = useAssistantChatStore.getState().conversation.messages;
 
-        const ipcMessages: IPCAssistantMessage[] = currentMessages.map((msg) => {
+        // Filter out event messages - they are UI-only and should not be sent to the API
+        const apiMessages = currentMessages.filter(
+          (msg) => msg.role === "user" || msg.role === "assistant"
+        );
+
+        const ipcMessages: IPCAssistantMessage[] = apiMessages.map((msg) => {
           const completedToolResults = msg.toolCalls
             ?.filter((tc) => {
               const hasTerminalStatus = tc.status !== "pending";
@@ -205,7 +215,7 @@ export function useAssistantChat(options?: UseAssistantChatOptions) {
 
           return {
             id: msg.id,
-            role: msg.role,
+            role: msg.role as "user" | "assistant",
             content: msg.content,
             toolCalls: msg.toolCalls?.map((tc) => ({
               id: tc.id,
