@@ -8,10 +8,13 @@ import { AssistantInput, type AssistantInputHandle } from "./AssistantInput";
 import { EmptyState } from "./EmptyState";
 import { useAssistantChat } from "./useAssistantChat";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { AutoResumePrompt } from "./AutoResumePrompt";
 
 export function AssistantPane() {
   const { hasApiKey, isInitialized, initialize } = useAppAgentStore();
   const { isOpen, close } = useAssistantChatStore();
+  const pendingAutoResume = useAssistantChatStore((s) => s.pendingAutoResume);
+  const setPendingAutoResume = useAssistantChatStore((s) => s.setPendingAutoResume);
   const inputRef = useRef<AssistantInputHandle>(null);
 
   const {
@@ -88,6 +91,36 @@ export function AssistantPane() {
       setShowClearDialog(false);
     }
   }, [isOpen, showClearDialog]);
+
+  const handleAutoResumeNow = useCallback(() => {
+    if (!pendingAutoResume) return;
+
+    // Dispatch custom event to trigger processAutoResume in the stream processor
+    const event = new CustomEvent("assistant:triggerAutoResume", {
+      detail: pendingAutoResume,
+    });
+    window.dispatchEvent(event);
+
+    // Clear the pending state
+    setPendingAutoResume(null);
+  }, [pendingAutoResume, setPendingAutoResume]);
+
+  const handleAutoResumeCancel = useCallback(async () => {
+    if (!pendingAutoResume) return;
+
+    // Acknowledge the event so it won't be re-delivered
+    try {
+      await window.electron.assistant.acknowledgeEvent(
+        pendingAutoResume.sessionId,
+        pendingAutoResume.eventId
+      );
+    } catch (err) {
+      console.error("[AssistantPane] Failed to acknowledge cancelled event:", err);
+    }
+
+    // Clear the pending state
+    setPendingAutoResume(null);
+  }, [pendingAutoResume, setPendingAutoResume]);
 
   return (
     <div className="flex flex-col h-full bg-canopy-bg">
@@ -193,6 +226,15 @@ export function AssistantPane() {
                 </button>
               </div>
             </div>
+          )}
+
+          {pendingAutoResume && (
+            <AutoResumePrompt
+              eventSummary={pendingAutoResume.eventSummary}
+              queuedAt={pendingAutoResume.queuedAt}
+              onResume={handleAutoResumeNow}
+              onCancel={handleAutoResumeCancel}
+            />
           )}
 
           <AssistantInput

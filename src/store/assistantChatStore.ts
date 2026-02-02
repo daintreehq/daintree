@@ -40,6 +40,21 @@ interface RetryState {
   isRetrying: boolean;
 }
 
+export interface PendingAutoResumeState {
+  eventId: string;
+  eventType: string;
+  eventSummary: string;
+  sessionId: string;
+  eventData: Record<string, unknown>;
+  resumePrompt: string;
+  context: {
+    plan?: string;
+    lastToolCalls?: unknown[];
+    metadata?: Record<string, unknown>;
+  };
+  queuedAt: number;
+}
+
 interface AssistantChatState {
   conversation: ConversationState;
   isOpen: boolean;
@@ -48,6 +63,9 @@ interface AssistantChatState {
   streamingState: StreamingState | null;
   streamingMessageId: string | null;
   retryState: RetryState | null;
+  pendingAutoResume: PendingAutoResumeState | null;
+  inputHasFocus: boolean;
+  inputDraftText: string;
 }
 
 interface AssistantChatActions {
@@ -66,6 +84,9 @@ interface AssistantChatActions {
   setCurrentContext: (context: ActionContext | null) => void;
   setStreamingState: (state: StreamingState | null, messageId: string | null) => void;
   setRetryState: (state: RetryState | null) => void;
+  setPendingAutoResume: (state: PendingAutoResumeState | null) => void;
+  setInputHasFocus: (hasFocus: boolean) => void;
+  setInputDraftText: (text: string) => void;
 }
 
 const initialState: AssistantChatState = {
@@ -76,6 +97,9 @@ const initialState: AssistantChatState = {
   streamingState: null,
   streamingMessageId: null,
   retryState: null,
+  pendingAutoResume: null,
+  inputHasFocus: false,
+  inputDraftText: "",
 };
 
 const createAssistantChatStore: StateCreator<AssistantChatState & AssistantChatActions> = (
@@ -150,6 +174,9 @@ const createAssistantChatStore: StateCreator<AssistantChatState & AssistantChatA
       streamingState: null,
       streamingMessageId: null,
       retryState: null,
+      pendingAutoResume: null,
+      inputHasFocus: false,
+      inputDraftText: "",
     });
   },
 
@@ -159,6 +186,9 @@ const createAssistantChatStore: StateCreator<AssistantChatState & AssistantChatA
       streamingState: null,
       streamingMessageId: null,
       retryState: null,
+      pendingAutoResume: null,
+      inputHasFocus: false,
+      inputDraftText: "",
     }),
 
   open: () => set({ isOpen: true }),
@@ -175,6 +205,12 @@ const createAssistantChatStore: StateCreator<AssistantChatState & AssistantChatA
     set({ streamingState: state, streamingMessageId: messageId }),
 
   setRetryState: (state) => set({ retryState: state }),
+
+  setPendingAutoResume: (state) => set({ pendingAutoResume: state }),
+
+  setInputHasFocus: (hasFocus) => set({ inputHasFocus: hasFocus }),
+
+  setInputDraftText: (text) => set({ inputDraftText: text }),
 });
 
 export const useAssistantChatStore = create<AssistantChatState & AssistantChatActions>()(

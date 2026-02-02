@@ -2,6 +2,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useSta
 import { ArrowUp, Square, Activity } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAppAgentStore } from "@/store/appAgentStore";
+import { useAssistantChatStore } from "@/store/assistantChatStore";
 
 export interface AssistantInputHandle {
   focus: () => void;
@@ -58,6 +59,8 @@ export const AssistantInput = forwardRef<AssistantInputHandle, AssistantInputPro
     const [isComposing, setIsComposing] = useState(false);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const config = useAppAgentStore((s) => s.config);
+    const setInputHasFocus = useAssistantChatStore((s) => s.setInputHasFocus);
+    const setInputDraftText = useAssistantChatStore((s) => s.setInputDraftText);
 
     const adjustHeight = useCallback(() => {
       const textarea = textareaRef.current;
@@ -73,13 +76,21 @@ export const AssistantInput = forwardRef<AssistantInputHandle, AssistantInputPro
       adjustHeight();
     }, [value, adjustHeight]);
 
+    useEffect(() => {
+      return () => {
+        setInputHasFocus(false);
+        setInputDraftText("");
+      };
+    }, [setInputHasFocus, setInputDraftText]);
+
     const handleSubmit = useCallback(() => {
       const trimmed = value.trim();
       if (!trimmed || disabled) return;
 
       onSubmit(trimmed);
       setValue("");
-    }, [value, disabled, onSubmit]);
+      setInputDraftText("");
+    }, [value, disabled, onSubmit, setInputDraftText]);
 
     const handleKeyDown = useCallback(
       (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -91,9 +102,14 @@ export const AssistantInput = forwardRef<AssistantInputHandle, AssistantInputPro
       [handleSubmit, isComposing]
     );
 
-    const handleChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
-      setValue(e.target.value);
-    }, []);
+    const handleChange = useCallback(
+      (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+        const newValue = e.target.value;
+        setValue(newValue);
+        setInputDraftText(newValue);
+      },
+      [setInputDraftText]
+    );
 
     const handleCompositionStart = useCallback(() => {
       setIsComposing(true);
@@ -103,13 +119,24 @@ export const AssistantInput = forwardRef<AssistantInputHandle, AssistantInputPro
       setIsComposing(false);
     }, []);
 
+    const handleFocus = useCallback(() => {
+      setInputHasFocus(true);
+    }, [setInputHasFocus]);
+
+    const handleBlur = useCallback(() => {
+      setInputHasFocus(false);
+    }, [setInputHasFocus]);
+
     useImperativeHandle(
       ref,
       () => ({
         focus: () => textareaRef.current?.focus(),
-        clear: () => setValue(""),
+        clear: () => {
+          setValue("");
+          setInputDraftText("");
+        },
       }),
-      []
+      [setInputDraftText]
     );
 
     const handleContainerClick = useCallback(() => {
@@ -148,6 +175,8 @@ export const AssistantInput = forwardRef<AssistantInputHandle, AssistantInputPro
               onKeyDown={handleKeyDown}
               onCompositionStart={handleCompositionStart}
               onCompositionEnd={handleCompositionEnd}
+              onFocus={handleFocus}
+              onBlur={handleBlur}
               placeholder={placeholder}
               disabled={disabled}
               rows={1}

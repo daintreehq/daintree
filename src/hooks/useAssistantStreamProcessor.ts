@@ -347,8 +347,17 @@ export function useAssistantStreamProcessor() {
           };
         });
 
+        // Verify session hasn't changed before sending
+        if (useAssistantChatStore.getState().conversation.sessionId !== currentSessionId) {
+          console.warn(
+            "[AssistantStreamProcessor] Session changed during auto-resume preparation, aborting"
+          );
+          processNextAutoResume();
+          return;
+        }
+
         await window.electron.assistant.sendMessage({
-          sessionId: useAssistantChatStore.getState().conversation.sessionId,
+          sessionId: currentSessionId,
           messages: ipcMessages,
           actions,
           context,
@@ -404,6 +413,19 @@ export function useAssistantStreamProcessor() {
         resetStreamingState();
         // Clear pending auto-resume queue for stale session and acknowledge events
         clearAutoResumeQueue("session change");
+        // Acknowledge and clear pending auto-resume banner state
+        const pending = prev.pendingAutoResume;
+        if (pending) {
+          window.electron.assistant
+            .acknowledgeEvent(pending.sessionId, pending.eventId)
+            .catch((err) => {
+              console.error(
+                "[AssistantStreamProcessor] Failed to acknowledge pending event on session change:",
+                err
+              );
+            });
+        }
+        useAssistantChatStore.getState().setPendingAutoResume(null);
       }
     });
 
@@ -416,6 +438,19 @@ export function useAssistantStreamProcessor() {
         resetStreamingState();
         // Clear pending auto-resume queue for stale session and acknowledge events
         clearAutoResumeQueue("session change in chunk handler");
+        // Acknowledge and clear pending auto-resume banner state
+        const pending = currentState.pendingAutoResume;
+        if (pending) {
+          window.electron.assistant
+            .acknowledgeEvent(pending.sessionId, pending.eventId)
+            .catch((err) => {
+              console.error(
+                "[AssistantStreamProcessor] Failed to acknowledge pending event on session change:",
+                err
+              );
+            });
+        }
+        useAssistantChatStore.getState().setPendingAutoResume(null);
       }
 
       // Ignore chunks from different sessions
@@ -539,7 +574,7 @@ export function useAssistantStreamProcessor() {
           }
           break;
 
-        case "error":
+        case "error": {
           if (chunk.error) {
             hadErrorRef.current = true;
             useAssistantChatStore.getState().setError(chunk.error);
@@ -548,7 +583,21 @@ export function useAssistantStreamProcessor() {
           useAssistantChatStore.getState().setLoading(false);
           // Clear the entire auto-resume queue on error and acknowledge events
           clearAutoResumeQueue("error");
+          // Acknowledge and clear pending auto-resume banner state
+          const pendingOnError = useAssistantChatStore.getState().pendingAutoResume;
+          if (pendingOnError) {
+            window.electron.assistant
+              .acknowledgeEvent(pendingOnError.sessionId, pendingOnError.eventId)
+              .catch((err) => {
+                console.error(
+                  "[AssistantStreamProcessor] Failed to acknowledge pending event on error:",
+                  err
+                );
+              });
+          }
+          useAssistantChatStore.getState().setPendingAutoResume(null);
           break;
+        }
 
         case "listener_triggered":
           if (chunk.listenerData) {
@@ -604,15 +653,55 @@ export function useAssistantStreamProcessor() {
               break;
             }
 
-            // Process auto-resume immediately
-            processAutoResume({
-              sessionId: currentSessionId,
-              eventId,
-              eventType,
-              eventData,
-              resumePrompt,
-              context: resumeContext || {},
-            });
+            // Check if user is engaged (input focused or has draft text)
+            const isUserEngaged = state.inputHasFocus || state.inputDraftText.trim().length > 0;
+            const eventSummary = formatListenerNotification(eventType, eventData);
+
+            if (isUserEngaged) {
+              // User is engaged - show grace period banner instead of resuming immediately
+              console.log(
+                `[AssistantStreamProcessor] User engaged, showing auto-resume prompt for ${eventType}`
+              );
+              // Acknowledge old pending event if being replaced
+              const oldPending = state.pendingAutoResume;
+              if (oldPending) {
+                window.electron.assistant
+                  .acknowledgeEvent(oldPending.sessionId, oldPending.eventId)
+                  .catch((err) => {
+                    console.error(
+                      "[AssistantStreamProcessor] Failed to acknowledge replaced pending event:",
+                      err
+                    );
+                  });
+              }
+              useAssistantChatStore.getState().setPendingAutoResume({
+                eventId,
+                eventType,
+                eventSummary,
+                sessionId: currentSessionId,
+                eventData,
+                resumePrompt,
+                context: resumeContext || {},
+                queuedAt: Date.now(),
+              });
+              // Add event notification
+              useAssistantChatStore.getState().addMessage({
+                id: `listener-${Date.now()}-${Math.random()}`,
+                role: "event",
+                content: `${eventSummary} (waiting for input)`,
+                timestamp: Date.now(),
+              });
+            } else {
+              // Process auto-resume immediately
+              processAutoResume({
+                sessionId: currentSessionId,
+                eventId,
+                eventType,
+                eventData,
+                resumePrompt,
+                context: resumeContext || {},
+              });
+            }
           }
           break;
 
@@ -658,9 +747,37 @@ export function useAssistantStreamProcessor() {
       }
     });
 
+    // Listen for manual auto-resume trigger (from grace period banner)
+    const handleTriggerAutoResume = (event: Event) => {
+      const customEvent = event as CustomEvent<{
+        eventId: string;
+        eventType: string;
+        sessionId: string;
+        eventData: Record<string, unknown>;
+        resumePrompt: string;
+        context: {
+          plan?: string;
+          lastToolCalls?: unknown[];
+          metadata?: Record<string, unknown>;
+        };
+      }>;
+      const detail = customEvent.detail;
+      processAutoResume({
+        sessionId: detail.sessionId,
+        eventId: detail.eventId,
+        eventType: detail.eventType,
+        eventData: detail.eventData,
+        resumePrompt: detail.resumePrompt,
+        context: detail.context,
+      });
+    };
+
+    window.addEventListener("assistant:triggerAutoResume", handleTriggerAutoResume);
+
     return () => {
       cleanup();
       unsubscribe();
+      window.removeEventListener("assistant:triggerAutoResume", handleTriggerAutoResume);
     };
   }, []);
 
