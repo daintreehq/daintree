@@ -77,6 +77,10 @@ export function createCombinedTools(context: CombinedToolContext): ToolSet {
         "Launch an agent AND register an autoResume listener in a single atomic operation. " +
         "This is the RECOMMENDED way to launch an agent and wait for completion, as it guarantees " +
         "the listener is registered with the correct terminal ID. " +
+        "IMPORTANT: Choose eventType based on agent mode: " +
+        "- Use 'terminal:state-changed' with stateFilter for INTERACTIVE agents (Claude, Gemini, terminals) that persist and handle multiple prompts. " +
+        "- Use 'agent:completed' for ONE-SHOT agents (Codex, OpenCode) that run a task and exit. " +
+        "When uncertain, prefer 'terminal:state-changed' with stateFilter='waiting' — it's the safer default. " +
         "Returns both the terminalId and listenerId. " +
         "After calling this tool, END YOUR TURN IMMEDIATELY - the conversation will automatically " +
         "continue when the agent completes.",
@@ -133,7 +137,12 @@ export function createCombinedTools(context: CombinedToolContext): ToolSet {
           eventType: {
             type: "string",
             description:
-              "Event type to listen for: agent:completed (default), agent:failed, agent:killed, or terminal:state-changed",
+              "Event type to listen for. Choose based on agent mode: " +
+              "Use 'terminal:state-changed' for INTERACTIVE agents (Claude, Gemini, terminals) — " +
+              "agents that persist and may handle multiple prompts. " +
+              "Use 'agent:completed' for ONE-SHOT agents (Codex, OpenCode) — " +
+              "agents that run a single task and exit. " +
+              "Default: 'agent:completed'",
             enum: ["agent:completed", "agent:failed", "agent:killed", "terminal:state-changed"],
           },
           stateFilter: {
@@ -185,11 +194,20 @@ export function createCombinedTools(context: CombinedToolContext): ToolSet {
 
           // For terminal:state-changed, require stateFilter to avoid premature resume
           if (eventType === "terminal:state-changed") {
-            if (!stateFilter) {
+            if (!stateFilter || stateFilter.trim() === "") {
               return {
                 success: false,
                 error:
                   "stateFilter is required for terminal:state-changed events. Specify the target state (e.g., 'completed', 'waiting', 'failed').",
+                code: "VALIDATION_ERROR",
+              };
+            }
+            // Validate against known states
+            const validStates = ["idle", "working", "running", "waiting", "completed", "failed"];
+            if (!validStates.includes(stateFilter)) {
+              return {
+                success: false,
+                error: `Invalid stateFilter '${stateFilter}'. Must be one of: ${validStates.join(", ")}`,
                 code: "VALIDATION_ERROR",
               };
             }
@@ -264,6 +282,16 @@ export function createCombinedTools(context: CombinedToolContext): ToolSet {
             };
           }
 
+          // Build message based on event type
+          const eventDescription =
+            eventType === "terminal:state-changed" && stateFilter
+              ? `reaches '${stateFilter}' state`
+              : eventType === "agent:completed"
+                ? "completes successfully"
+                : eventType === "agent:failed"
+                  ? "fails"
+                  : "is killed";
+
           return {
             success: true,
             terminalId,
@@ -271,8 +299,8 @@ export function createCombinedTools(context: CombinedToolContext): ToolSet {
             eventType,
             agentId,
             message:
-              "Agent launched with auto-resume listener. END YOUR TURN NOW - " +
-              "the conversation will automatically continue when the agent finishes. " +
+              `Agent launched with auto-resume listener. END YOUR TURN NOW - ` +
+              `the conversation will automatically continue when the agent ${eventDescription}. ` +
               "Do not poll, check status, or make additional tool calls. " +
               "Simply inform the user you're waiting.",
           };

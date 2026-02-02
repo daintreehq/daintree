@@ -338,6 +338,42 @@ Do NOT use listeners for:
 - One-time state checks (use `terminal_list` instead)
 - Short tasks that complete in < 30 seconds
 
+### Choosing the Right Event Type
+
+**Use `terminal:state-changed` with `stateFilter` when:**
+- Agent is **interactive** (Claude, terminal shells)
+- You want to react to **state transitions** (working → waiting, idle → working)
+- Agent may handle multiple requests without exiting
+- Example: "Launch Claude to analyze the project and summarize"
+
+**Use `agent:completed` when:**
+- Agent is **one-shot** (runs a single task then exits)
+- You only care about **successful completion**
+- Process will terminate after completing work
+- Example: "Run a build script and report results"
+- Note: For failure handling, use `agent:failed` or `agent:killed` events
+
+**Common Patterns:**
+
+| User Request | Agent Mode | Event Type | State Filter |
+|-------------|-----------|------------|--------------|
+| "Ask Claude about the project" | Interactive (Claude) | `terminal:state-changed` | `"waiting"` |
+| "Launch Codex to fix bug" | One-shot (Codex) | `agent:completed` | N/A |
+| "Run tests in Codex agent" | One-shot (Codex) | `agent:completed` | N/A |
+| "Monitor Claude for errors" | Interactive (Claude) | `terminal:state-changed` | `"failed"` |
+
+**Agent Mode Detection:**
+- **Interactive agents:** Claude (claude), Gemini (gemini) — persist and handle multiple prompts
+- **One-shot agents:** Codex (codex), OpenCode (opencode) — run task and exit
+- **Special case:** Terminal shells can be either mode depending on usage
+
+**Choosing a Default:**
+- For interactive agents waiting for user input: use `terminal:state-changed` with `stateFilter: "waiting"`
+- For any agent completion (success): use `terminal:state-changed` with `stateFilter: "completed"` or `agent:completed`
+- When uncertain about agent mode: use `terminal:state-changed` with `stateFilter: "completed"` to catch completion reliably
+
+**Note:** `stateFilter` is the parameter name for `agent_launchWithAutoResume`. When using `register_listener` directly, specify the state in the `filter` object as `toState` or `newState`.
+
 ### Supported Events
 
 Four event types are bridged to the listener system:
@@ -351,6 +387,8 @@ Four event types are bridged to the listener system:
 
 **terminal:state-changed** is the most versatile—use it for general state monitoring. Includes `trigger` and `confidence` fields for reliability assessment.
 **agent:completed/failed/killed** are agent lifecycle events with richer payloads for completion workflows. Do not include `trigger` or `confidence` fields.
+
+See "Choosing the Right Event Type" above for when to use each event type.
 
 ### Event Filtering
 
