@@ -31,17 +31,17 @@ describe("listenerTools", () => {
   });
 
   describe("register_listener", () => {
-    it("registers a listener and returns success", async () => {
+    it("registers a listener for terminal:state-changed and returns success", async () => {
       const result = await tools.register_listener.execute!(
-        { eventType: "agent:state-changed", filter: undefined },
+        { eventType: "terminal:state-changed", filter: undefined },
         { toolCallId: "tc-1", messages: [], abortSignal: new AbortController().signal }
       );
 
       expect(result).toEqual({
         success: true,
         listenerId: expect.any(String),
-        eventType: "agent:state-changed",
-        message: "Successfully subscribed to agent:state-changed events",
+        eventType: "terminal:state-changed",
+        message: "Successfully subscribed to terminal:state-changed events",
       });
       expect(listenerManager.size()).toBe(1);
     });
@@ -49,8 +49,8 @@ describe("listenerTools", () => {
     it("registers a listener with filter", async () => {
       const result = await tools.register_listener.execute!(
         {
-          eventType: "terminal:activity",
-          filter: { terminalId: "term-123" },
+          eventType: "terminal:state-changed",
+          filter: { terminalId: "term-123", toState: "completed" },
         },
         { toolCallId: "tc-1", messages: [], abortSignal: new AbortController().signal }
       );
@@ -58,19 +58,19 @@ describe("listenerTools", () => {
       expect(result).toEqual({
         success: true,
         listenerId: expect.any(String),
-        eventType: "terminal:activity",
-        filter: { terminalId: "term-123" },
-        message: "Successfully subscribed to terminal:activity events",
+        eventType: "terminal:state-changed",
+        filter: { terminalId: "term-123", toState: "completed" },
+        message: "Successfully subscribed to terminal:state-changed events",
       });
 
       const listeners = listenerManager.listForSession("test-session-1");
       expect(listeners.length).toBe(1);
-      expect(listeners[0].filter).toEqual({ terminalId: "term-123" });
+      expect(listeners[0].filter).toEqual({ terminalId: "term-123", toState: "completed" });
     });
 
     it("creates listeners scoped to the session", async () => {
       await tools.register_listener.execute!(
-        { eventType: "agent:spawned", filter: undefined },
+        { eventType: "terminal:state-changed", filter: undefined },
         { toolCallId: "tc-1", messages: [], abortSignal: new AbortController().signal }
       );
 
@@ -89,8 +89,57 @@ describe("listenerTools", () => {
 
       expect(result).toEqual({
         success: false,
-        error: expect.stringContaining("Invalid listener registration"),
+        error: expect.stringContaining("not supported"),
       });
+    });
+
+    it("only allows bridged event types in schema", () => {
+      // Verify the tool schema restricts to bridged events only
+      // The AI SDK puts the schema on inputSchema.jsonSchema
+      const schema = (
+        tools.register_listener as unknown as {
+          inputSchema: {
+            jsonSchema: {
+              properties: { eventType: { enum: string[] } };
+              required: string[];
+            };
+          };
+        }
+      ).inputSchema.jsonSchema;
+      expect(schema.properties.eventType.enum).toEqual(["terminal:state-changed"]);
+      expect(schema.required).toContain("eventType");
+    });
+
+    it("rejects unsupported event types with runtime validation", async () => {
+      // Test runtime guard against unsupported event types
+      // This simulates a schema bypass or direct call with invalid event type
+      const result = await tools.register_listener.execute!(
+        { eventType: "agent:state-changed" as any, filter: undefined },
+        { toolCallId: "tc-1", messages: [], abortSignal: new AbortController().signal }
+      );
+
+      expect(result).toEqual({
+        success: false,
+        error: expect.stringContaining("not supported"),
+      });
+      expect(result.error).toContain("terminal:state-changed");
+      // Verify no listener was created
+      expect(listenerManager.size()).toBe(0);
+    });
+
+    it("rejects another unsupported event type", async () => {
+      // Test with a different unsupported event type
+      const result = await tools.register_listener.execute!(
+        { eventType: "terminal:activity" as any, filter: undefined },
+        { toolCallId: "tc-1", messages: [], abortSignal: new AbortController().signal }
+      );
+
+      expect(result).toEqual({
+        success: false,
+        error: expect.stringContaining("not supported"),
+      });
+      // Verify no listener was created
+      expect(listenerManager.size()).toBe(0);
     });
   });
 
@@ -109,13 +158,13 @@ describe("listenerTools", () => {
     });
 
     it("returns all listeners for the session", async () => {
-      // Register multiple listeners
+      // Register multiple listeners with different filters
       await tools.register_listener.execute!(
-        { eventType: "agent:state-changed", filter: undefined },
+        { eventType: "terminal:state-changed", filter: undefined },
         { toolCallId: "tc-1", messages: [], abortSignal: new AbortController().signal }
       );
       await tools.register_listener.execute!(
-        { eventType: "terminal:activity", filter: { terminalId: "term-1" } },
+        { eventType: "terminal:state-changed", filter: { terminalId: "term-1" } },
         { toolCallId: "tc-2", messages: [], abortSignal: new AbortController().signal }
       );
 
@@ -130,12 +179,12 @@ describe("listenerTools", () => {
         listeners: expect.arrayContaining([
           {
             listenerId: expect.any(String),
-            eventType: "agent:state-changed",
+            eventType: "terminal:state-changed",
             createdAt: expect.any(Number),
           },
           {
             listenerId: expect.any(String),
-            eventType: "terminal:activity",
+            eventType: "terminal:state-changed",
             filter: { terminalId: "term-1" },
             createdAt: expect.any(Number),
           },
@@ -146,12 +195,12 @@ describe("listenerTools", () => {
     it("only returns listeners for the current session", async () => {
       // Register listener in our session
       await tools.register_listener.execute!(
-        { eventType: "agent:state-changed", filter: undefined },
+        { eventType: "terminal:state-changed", filter: undefined },
         { toolCallId: "tc-1", messages: [], abortSignal: new AbortController().signal }
       );
 
-      // Register listener in another session directly
-      listenerManager.register("other-session", "terminal:activity");
+      // Register listener in another session directly (bypasses tool validation)
+      listenerManager.register("other-session", "terminal:state-changed");
 
       const result = await tools.list_listeners.execute!(
         {},
@@ -159,14 +208,14 @@ describe("listenerTools", () => {
       );
 
       expect(result.count).toBe(1);
-      expect(result.listeners[0].eventType).toBe("agent:state-changed");
+      expect(result.listeners[0].eventType).toBe("terminal:state-changed");
     });
   });
 
   describe("remove_listener", () => {
     it("removes a registered listener", async () => {
       const registerResult = await tools.register_listener.execute!(
-        { eventType: "agent:state-changed", filter: undefined },
+        { eventType: "terminal:state-changed", filter: undefined },
         { toolCallId: "tc-1", messages: [], abortSignal: new AbortController().signal }
       );
       expect(registerResult.success).toBe(true);
@@ -200,8 +249,11 @@ describe("listenerTools", () => {
     });
 
     it("prevents removing listeners from other sessions without leaking session info", async () => {
-      // Register listener in another session directly
-      const otherSessionListenerId = listenerManager.register("other-session", "terminal:activity");
+      // Register listener in another session directly (bypasses tool validation)
+      const otherSessionListenerId = listenerManager.register(
+        "other-session",
+        "terminal:state-changed"
+      );
 
       const result = await tools.remove_listener.execute!(
         { listenerId: otherSessionListenerId },
@@ -221,7 +273,7 @@ describe("listenerTools", () => {
 
     it("handles already removed listener gracefully", async () => {
       const registerResult = await tools.register_listener.execute!(
-        { eventType: "agent:state-changed", filter: undefined },
+        { eventType: "terminal:state-changed", filter: undefined },
         { toolCallId: "tc-1", messages: [], abortSignal: new AbortController().signal }
       );
       const listenerId = (registerResult as { success: true; listenerId: string }).listenerId;
@@ -244,8 +296,9 @@ describe("listenerTools", () => {
   });
 
   describe("tool metadata", () => {
-    it("register_listener has correct description", () => {
+    it("register_listener has correct description mentioning supported events", () => {
       expect(tools.register_listener.description).toContain("Subscribe to Canopy events");
+      expect(tools.register_listener.description).toContain("terminal:state-changed");
     });
 
     it("list_listeners has correct description", () => {
@@ -264,13 +317,13 @@ describe("listenerTools", () => {
       const tools1 = createListenerTools(context1);
       const tools2 = createListenerTools(context2);
 
-      // Register listeners in both sessions
+      // Register listeners in both sessions with different filters
       await tools1.register_listener.execute!(
-        { eventType: "agent:state-changed", filter: undefined },
+        { eventType: "terminal:state-changed", filter: { terminalId: "term-1" } },
         { toolCallId: "tc-1", messages: [], abortSignal: new AbortController().signal }
       );
       await tools2.register_listener.execute!(
-        { eventType: "terminal:activity", filter: undefined },
+        { eventType: "terminal:state-changed", filter: { terminalId: "term-2" } },
         { toolCallId: "tc-2", messages: [], abortSignal: new AbortController().signal }
       );
 
@@ -285,9 +338,9 @@ describe("listenerTools", () => {
       );
 
       expect(list1.count).toBe(1);
-      expect(list1.listeners[0].eventType).toBe("agent:state-changed");
+      expect(list1.listeners[0].filter).toEqual({ terminalId: "term-1" });
       expect(list2.count).toBe(1);
-      expect(list2.listeners[0].eventType).toBe("terminal:activity");
+      expect(list2.listeners[0].filter).toEqual({ terminalId: "term-2" });
     });
   });
 });
