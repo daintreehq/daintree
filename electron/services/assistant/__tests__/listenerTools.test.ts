@@ -114,7 +114,7 @@ describe("listenerTools", () => {
       // Test runtime guard against unsupported event types
       // This simulates a schema bypass or direct call with invalid event type
       const result = await tools.register_listener.execute!(
-        { eventType: "agent:state-changed" as any, filter: undefined },
+        { eventType: "agent:state-changed" as unknown as any, filter: undefined },
         { toolCallId: "tc-1", messages: [], abortSignal: new AbortController().signal }
       );
 
@@ -130,7 +130,7 @@ describe("listenerTools", () => {
     it("rejects another unsupported event type", async () => {
       // Test with a different unsupported event type
       const result = await tools.register_listener.execute!(
-        { eventType: "terminal:activity" as any, filter: undefined },
+        { eventType: "terminal:activity" as unknown as any, filter: undefined },
         { toolCallId: "tc-1", messages: [], abortSignal: new AbortController().signal }
       );
 
@@ -309,11 +309,9 @@ describe("listenerTools", () => {
       );
 
       expect(result.count).toBe(2);
-      const oneShotListener = result.listeners.find(
-        (l: { once?: boolean }) => l.once === true
-      );
+      const oneShotListener = result.listeners.find((l: { once?: boolean }) => l.once === true);
       const regularListener = result.listeners.find(
-        (l: { filter?: any }) => l.filter?.terminalId === "term-activity"
+        (l: { filter?: Record<string, unknown> }) => l.filter?.terminalId === "term-activity"
       );
 
       expect(oneShotListener.once).toBe(true);

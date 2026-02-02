@@ -75,12 +75,7 @@ export function createListenerTools(context: ListenerToolContext): ToolSet {
             };
           }
 
-          const listenerId = listenerManager.register(
-            context.sessionId,
-            eventType,
-            filter,
-            once
-          );
+          const listenerId = listenerManager.register(context.sessionId, eventType, filter, once);
           return {
             success: true,
             listenerId,

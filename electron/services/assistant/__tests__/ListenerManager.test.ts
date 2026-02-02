@@ -395,7 +395,7 @@ describe("ListenerManager", () => {
       expect(() =>
         manager.register("session-1", "terminal:state-changed", {
           nested: { value: 123 },
-        } as any)
+        } as unknown as any)
       ).toThrow("Invalid listener registration");
     });
 
