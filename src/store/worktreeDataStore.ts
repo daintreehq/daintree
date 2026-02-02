@@ -90,22 +90,22 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
                 selectionStore.setActiveWorktree(null);
               }
 
-              // Move orphaned terminals to trash (not hard-kill them)
+              // Permanently kill terminals associated with deleted worktree
               const terminalStore = useTerminalStore.getState();
               const notificationStore = useNotificationStore.getState();
-              const terminalsToTrash = terminalStore.terminals.filter(
-                (t) => (t.worktreeId ?? undefined) === worktreeId && t.location !== "trash"
+              const terminalsToKill = terminalStore.terminals.filter(
+                (t) => (t.worktreeId ?? undefined) === worktreeId
               );
 
-              if (terminalsToTrash.length > 0) {
-                terminalsToTrash.forEach((terminal) => {
-                  terminalStore.trashTerminal(terminal.id);
+              if (terminalsToKill.length > 0) {
+                terminalsToKill.forEach((terminal) => {
+                  terminalStore.removeTerminal(terminal.id);
                 });
 
                 notificationStore.addNotification({
                   type: "info",
-                  title: "Worktree Deleted Externally",
-                  message: `${terminalsToTrash.length} terminal(s) moved to trash. Check trash to view logs before cleanup.`,
+                  title: "Worktree Deleted",
+                  message: `${terminalsToKill.length} terminal(s) removed with worktree.`,
                   duration: 5000,
                 });
               }
@@ -200,35 +200,6 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
 
           return { worktrees: map, isLoading: false, isInitialized: true };
         });
-
-        // Startup cleanup: trash orphaned terminals from deleted worktrees
-        const getWorktreeIds = (wtMap: Map<string, WorktreeState>) => {
-          const ids = new Set<string>();
-          for (const [id, wt] of wtMap) {
-            ids.add(id);
-            if (wt.worktreeId) ids.add(wt.worktreeId);
-          }
-          return ids;
-        };
-
-        const runOrphanCleanup = () => {
-          const currentWorktrees = get().worktrees;
-          const worktreeIds = getWorktreeIds(currentWorktrees);
-          const terminalStore = useTerminalStore.getState();
-          const orphanedTerminals = terminalStore.terminals.filter((t) => {
-            const worktreeId = typeof t.worktreeId === "string" ? t.worktreeId.trim() : "";
-            return worktreeId && !worktreeIds.has(worktreeId) && t.location !== "trash";
-          });
-
-          if (orphanedTerminals.length > 0) {
-            console.log(
-              `[WorktreeDataStore] Trashing ${orphanedTerminals.length} orphaned terminal(s) from deleted worktrees`
-            );
-            orphanedTerminals.forEach((terminal) => terminalStore.trashTerminal(terminal.id));
-          }
-        };
-
-        runOrphanCleanup();
       } catch (e) {
         set({
           error: e instanceof Error ? e.message : "Failed to load worktrees",
@@ -294,4 +265,35 @@ export function forceReinitializeWorktreeDataStore() {
   });
   // Trigger initialization
   useWorktreeDataStore.getState().initialize();
+}
+
+/**
+ * Cleanup orphaned terminals from deleted worktrees.
+ * This should be called after terminal hydration completes to ensure
+ * terminals are loaded before checking for orphans.
+ */
+export function cleanupOrphanedTerminals() {
+  const getWorktreeIds = (wtMap: Map<string, WorktreeState>) => {
+    const ids = new Set<string>();
+    for (const [id, wt] of wtMap) {
+      ids.add(id);
+      if (wt.worktreeId) ids.add(wt.worktreeId);
+    }
+    return ids;
+  };
+
+  const currentWorktrees = useWorktreeDataStore.getState().worktrees;
+  const worktreeIds = getWorktreeIds(currentWorktrees);
+  const terminalStore = useTerminalStore.getState();
+  const orphanedTerminals = terminalStore.terminals.filter((t) => {
+    const worktreeId = typeof t.worktreeId === "string" ? t.worktreeId.trim() : "";
+    return worktreeId && !worktreeIds.has(worktreeId);
+  });
+
+  if (orphanedTerminals.length > 0) {
+    console.log(
+      `[WorktreeDataStore] Removing ${orphanedTerminals.length} orphaned terminal(s) from deleted worktrees`
+    );
+    orphanedTerminals.forEach((terminal) => terminalStore.removeTerminal(terminal.id));
+  }
 }

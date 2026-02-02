@@ -602,6 +602,15 @@ export async function hydrateAppState(
       }
     }
 
+    // Cleanup orphaned terminals after terminal hydration completes
+    // This must run after terminals are restored to ensure we're checking the full terminal list
+    try {
+      const { cleanupOrphanedTerminals } = await import("@/store/worktreeDataStore");
+      cleanupOrphanedTerminals();
+    } catch (error) {
+      logWarn("Failed to cleanup orphaned terminals", { error });
+    }
+
     // Restore active worktree with validation
     // Fetch worktrees to validate the saved activeWorktreeId still exists
     try {
