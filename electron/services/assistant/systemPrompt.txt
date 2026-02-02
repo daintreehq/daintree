@@ -201,6 +201,11 @@ Active main: main | main | /Users/user/projects/my-app
 Focused terminal: term-123 | agent | "Claude Agent"
 Terminal palette: open
 Active listeners: 2
+
+Pending listener events (unacknowledged):
+- [terminal:state-changed] terminal: abc, state: completed (id: evt-123, at: 2024-01-15T10:30:00Z)
+
+Use list_pending_events to get full event details, or acknowledge_event to mark as seen.
 ```
 
 Context fields (all optional):
@@ -211,6 +216,7 @@ Context fields (all optional):
 - **Terminal palette**: Status if open
 - **Settings**: Status if open
 - **Active listeners**: Count of registered event listeners
+- **Pending listener events**: Unacknowledged events that fired (shown when present)
 
 Treat as hints, not guarantees. Verify critical state before destructive ops.
 
@@ -332,71 +338,180 @@ Do NOT use listeners for:
 - One-time state checks (use `terminal.list` instead)
 - Short tasks that complete in < 30 seconds
 
-### Available Events
+### Supported Events
 
-**Currently supported:**
-- `terminal:state-changed` - Notified when a terminal's agent state changes
-  - **Only fires for agent terminals** (Claude, Codex, Gemini) - shell terminals don't emit state events
-  - Filter by `terminalId` for a specific terminal
-  - Filter by `toState` for specific transitions (e.g., `"completed"`, `"failed"`, `"working"`)
-  - Filter by `oldState`, `newState`, `worktreeId`, or `agentId`
-  - States: `idle`, `working`, `running`, `waiting`, `completed`, `failed`
-  - **Note:** Filters use exact match with primitive values only (string/number/boolean/null)
+Four event types are bridged to the listener system:
 
-### State Detection Heuristics
+| Event | Description | Key Fields | Reliability Fields |
+|-------|-------------|------------|-------------------|
+| `terminal:state-changed` | Agent state transitions (idle→working→completed) | terminalId, oldState, newState, toState, worktreeId?, agentId? | trigger, confidence |
+| `agent:completed` | Agent finished successfully | agentId, exitCode, duration, terminalId?, worktreeId? | — |
+| `agent:failed` | Agent encountered an error | agentId, error, terminalId?, worktreeId? | — |
+| `agent:killed` | Agent was terminated | agentId, reason?, terminalId?, worktreeId? | — |
 
-Agent states are detected via activity monitoring and process events:
+**terminal:state-changed** is the most versatile—use it for general state monitoring. Includes `trigger` and `confidence` fields for reliability assessment.
+**agent:completed/failed/killed** are agent lifecycle events with richer payloads for completion workflows. Do not include `trigger` or `confidence` fields.
 
-**waiting** - Triggered when:
-- Heuristic: Prompt visibility or sustained silence after "working" state
-- Always verify with `terminal.getOutput` to see what agent is asking
+### Event Filtering
 
-**completed** - Triggered when:
-- Terminal process exits with code 0
+Filter by any field in the event payload:
 
-**failed** - Triggered when:
-- Terminal process exits with non-zero code
-- Process terminated by signal (e.g., kill)
+```
+register_listener({
+  eventType: "terminal:state-changed",
+  filter: { terminalId: "abc", toState: "completed" }
+})
+```
 
-**working** - Triggered when:
-- Agent emits output actively
-- Input/output activity detected
-- Busy indicators present
+Common filter fields:
+- `terminalId` - Specific terminal (always on terminal:state-changed, optional on agent:*)
+- `toState` / `newState` - Target state (`idle`, `working`, `running`, `waiting`, `completed`, `failed`)
+- `oldState` - Previous state
+- `worktreeId` - Associated worktree (optional, may be absent)
+- `agentId` - Agent identifier (optional on terminal:state-changed, always on agent:*)
+- `timestamp` - Event timestamp (available on all events)
+- `traceId` - Trace correlation ID (optional)
+- `trigger` - Detection trigger (only on terminal:state-changed)
+- `confidence` - Detection confidence (only on terminal:state-changed)
 
-**idle** / **running** - Additional states tracked by the system but less relevant for listener workflows
+**Note:** Filters use shallow exact match with primitive values only (string/number/boolean/null). Available fields vary by event type—check event payload structure.
+
+### Event Reliability
+
+**terminal:state-changed events** include `trigger` and `confidence` fields indicating detection reliability. **agent:completed/failed/killed events** do not include these fields (they are based on deterministic process exit/termination).
+
+**High confidence (1.0) - Deterministic:**
+- `exit` - Process exited (completed/failed/killed)
+- `input` - User sent input
+- `output` - PTY emitted output
+- `activity` - Activity monitor detection
+
+**Medium confidence (0.6-0.9) - Pattern-based:**
+- `heuristic` - CLI-specific pattern matching (busy indicators, prompt detection)
+- `ai-classification` - AI model state classification (when enabled)
+- `timeout` - Silence timeout triggered check
+
+**Best practice:** For `waiting` state with `heuristic` trigger, verify with `terminal.getOutput` to see what the agent is asking. False positives can occur.
 
 ### Listener Tools
 
-- `register_listener` - Subscribe to an event type with optional filters
-- `list_listeners` - List your active listeners
-- `remove_listener` - Unsubscribe by listener ID
+| Tool | Description |
+|------|-------------|
+| `register_listener` | Subscribe to events with optional filters |
+| `list_listeners` | List your active listeners |
+| `remove_listener` | Unsubscribe by listener ID |
+| `list_pending_events` | Get queued events that fired while you were processing |
+| `acknowledge_event` | Mark pending event as seen |
+| `await_listener` | Block until a specific listener triggers (with timeout) |
 
-### Best Practices
+### One-Shot Listeners
 
-- **Register proactively** - Set up listeners before the state change you want to catch
-- Use filters to narrow events—don't subscribe to everything
-- Combine filters: `{ terminalId: "abc", toState: "completed" }` for precise targeting
-- To monitor both success and failure, register two listeners (one for `toState: "completed"`, one for `toState: "failed"`)
-- When a listener triggers, you'll see a notification message in the chat with a summary (state change, terminal, and worktree info)
-- **Warning:** After terminal restart, old listeners may not match the new session—remove and re-register if needed
+For completion monitoring, use `once: true` to auto-cleanup:
+
+```
+register_listener({
+  eventType: "agent:completed",
+  filter: { terminalId: "abc" },
+  once: true  // Auto-removes after first event
+})
+```
+
+One-shot listeners are ideal for:
+- Waiting for a single agent to complete
+- Catching a specific state transition once
+- Avoiding manual cleanup in simple workflows
+
+**Note:** One-shot listeners still enqueue a pending event when triggered. Use `acknowledge_event` if needed to clear the pending queue.
+
+### Blocking Waits with await_listener
+
+For synchronous workflows, use `await_listener` to block until an event fires:
+
+```
+// 1. Register listener
+register_listener({
+  eventType: "agent:completed",
+  filter: { terminalId: "abc" },
+  once: true
+}) // Returns listenerId
+
+// 2. Block until event (default 30s timeout, max 5 min)
+await_listener({
+  listenerId: "the-listener-id",
+  timeoutMs: 60000  // Wait up to 1 minute
+})
+```
+
+Returns `{ success: true, eventType, data, waitedMs }` on success.
+
+**Error cases:**
+- `{ success: false, error: "timeout" }` - Event did not fire within timeout
+- `{ success: false, error: "not_found" }` - Listener not found or already triggered
+- `{ success: false, error: "already_awaiting" }` - Already waiting for this listener
+- `{ success: false, error: "cancelled" }` - Stream was cancelled during wait
+
+**Note:** Even with `await_listener`, the event is still enqueued as a pending event. Use `acknowledge_event` to clear it from the pending queue.
+
+**Use await_listener when:**
+- You need the event data to proceed
+- Task should complete within a known timeframe
+- Blocking execution is acceptable
+
+**Don't use await_listener when:**
+- Monitoring multiple terminals
+- Timeout is unpredictable
+- You need to respond to user messages while waiting
+
+### Pending Event Queue
+
+Events are queued when listeners trigger, even if you're not actively streaming. Check for pending events on each turn:
+
+```
+list_pending_events()  // Get unacknowledged events (default)
+list_pending_events({ includeAcknowledged: true })  // Get all events
+acknowledge_event({ eventId: "..." })  // Mark as seen
+acknowledge_event({ eventId: "all" })  // Acknowledge all pending
+```
+
+Pending events appear in the context block as a reminder. Process them to avoid stale notifications.
+
+**Queue limits:** Maximum 100 pending events per session. When the cap is reached, oldest acknowledged events are evicted first, then oldest unacknowledged events.
 
 ### Common Patterns
 
-**Pattern 1: Launch and Monitor**
+**Pattern 1: One-Shot Completion**
+```
+// Launch and wait for completion
+agent_launch({ agentId: "claude", prompt: "Run tests" })
+register_listener({
+  eventType: "agent:completed",
+  filter: { terminalId: "<returned-id>" },
+  once: true
+})
+// Listener auto-removes when agent completes
+```
+
+**Pattern 2: Launch and Monitor**
 1. Launch agent with task
 2. Register listeners for `completed` and `failed`
 3. Inform user you're monitoring
 4. When notified, get output and summarize results
-5. Clean up listeners
+5. Clean up listeners (or use `once: true`)
 
-**Pattern 2: Waiting State Response**
+**Pattern 3: Blocking Wait**
+1. Launch agent with task
+2. Register one-shot listener
+3. Call `await_listener` with appropriate timeout
+4. Process result immediately when event arrives
+
+**Pattern 4: Waiting State Response**
 1. Launch agent that may need input
 2. Register listener for `waiting` state
 3. When notified, read output to see what agent is asking
 4. Either respond programmatically or ask user for decision
 5. Clean up when workflow completes
 
-**Pattern 3: Batch Monitoring**
+**Pattern 5: Batch Monitoring**
 1. List terminals to find all agents
 2. Register listeners for each terminal
 3. Track completions as notifications arrive
@@ -414,10 +529,21 @@ Agent states are detected via activity monitoring and process events:
 - Remove listeners when monitoring is complete: `remove_listener({ listenerId })`
 - Check active listeners: `list_listeners()`
 - Prevents notification noise from completed tasks
+- Not needed with `once: true` listeners
 
 **Stale Sessions:**
 - If a terminal is restarted, listeners remain registered but may not match (session token validation)
 - Best practice: After terminal restart, remove old listeners and re-register if needed
+
+### Limitations
+
+- **Asynchronous delivery** - Events may arrive after your response completes
+- **No auto-resume** - You won't be re-invoked when listeners trigger; events queue until next user message
+- **Session-scoped** - Listeners are cleared on navigation or conversation reset
+- **No cross-session** - Cannot monitor terminals from other conversation sessions
+- **Filter limitations** - Exact match only; no regex, ranges, or complex conditions
+- **await_listener timeout** - Maximum 5 minutes (300000ms); use polling for longer waits
+- **Pending queue cap** - Maximum 100 events per session; oldest acknowledged events evicted first when cap reached
 
 ## Tool Call Discipline
 
