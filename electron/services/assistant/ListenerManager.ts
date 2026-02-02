@@ -58,7 +58,7 @@ export class ListenerManager {
     return count;
   }
 
-  clearSession(sessionId: string): void {
+  clearSession(sessionId: string): number {
     const toRemove: string[] = [];
     for (const listener of this.listeners.values()) {
       if (listener.sessionId === sessionId) {
@@ -68,6 +68,19 @@ export class ListenerManager {
     for (const id of toRemove) {
       this.listeners.delete(id);
     }
+    if (toRemove.length > 0) {
+      console.log(`[ListenerManager] Cleared ${toRemove.length} listener(s) for session ${sessionId}`);
+    }
+    return toRemove.length;
+  }
+
+  clearAllSessions(): number {
+    const count = this.listeners.size;
+    this.listeners.clear();
+    if (count > 0) {
+      console.log(`[ListenerManager] Cleared all ${count} listener(s) across all sessions`);
+    }
+    return count;
   }
 
   getMatchingListeners(eventType: string, data: unknown): Listener[] {

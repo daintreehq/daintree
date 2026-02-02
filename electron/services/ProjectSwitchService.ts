@@ -6,6 +6,7 @@ import type { Project } from "../types/index.js";
 import { projectStore } from "./ProjectStore.js";
 import { logBuffer } from "./LogBuffer.js";
 import { taskQueueService } from "./TaskQueueService.js";
+import { assistantService } from "./AssistantService.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { sendToRenderer } from "../ipc/utils.js";
 import { randomUUID } from "crypto";
@@ -86,6 +87,7 @@ export class ProjectSwitchService {
       Promise.resolve(logBuffer.onProjectSwitch()),
       Promise.resolve(this.deps.eventBuffer?.onProjectSwitch()),
       taskQueueService.onProjectSwitch(projectId),
+      Promise.resolve(assistantService.clearAllSessions()),
     ]);
 
     cleanupResults.forEach((result, index) => {
@@ -96,6 +98,7 @@ export class ProjectSwitchService {
           "LogBuffer",
           "EventBuffer",
           "TaskQueueService",
+          "AssistantService",
         ];
         console.error(`[ProjectSwitch] ${serviceNames[index]} cleanup failed:`, result.reason);
       }

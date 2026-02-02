@@ -136,29 +136,123 @@ describe("ListenerManager", () => {
     });
   });
 
+  describe("countForSession", () => {
+    it("returns correct count for session with listeners", () => {
+      manager.register("session-1", "terminal:state-changed");
+      manager.register("session-1", "agent:spawned");
+      manager.register("session-2", "terminal:state-changed");
+
+      expect(manager.countForSession("session-1")).toBe(2);
+      expect(manager.countForSession("session-2")).toBe(1);
+    });
+
+    it("returns 0 for session with no listeners", () => {
+      manager.register("session-1", "terminal:state-changed");
+
+      expect(manager.countForSession("session-2")).toBe(0);
+    });
+
+    it("returns 0 when manager is empty", () => {
+      expect(manager.countForSession("session-1")).toBe(0);
+    });
+
+    it("returns correct count after unregister", () => {
+      const id1 = manager.register("session-1", "terminal:state-changed");
+      manager.register("session-1", "agent:spawned");
+
+      expect(manager.countForSession("session-1")).toBe(2);
+
+      manager.unregister(id1);
+
+      expect(manager.countForSession("session-1")).toBe(1);
+    });
+
+    it("returns 0 after clearSession", () => {
+      manager.register("session-1", "terminal:state-changed");
+      manager.register("session-1", "agent:spawned");
+
+      expect(manager.countForSession("session-1")).toBe(2);
+
+      manager.clearSession("session-1");
+
+      expect(manager.countForSession("session-1")).toBe(0);
+    });
+
+    it("returns 0 for all sessions after clearAllSessions", () => {
+      manager.register("session-1", "terminal:state-changed");
+      manager.register("session-2", "agent:spawned");
+
+      expect(manager.countForSession("session-1")).toBe(1);
+      expect(manager.countForSession("session-2")).toBe(1);
+
+      manager.clearAllSessions();
+
+      expect(manager.countForSession("session-1")).toBe(0);
+      expect(manager.countForSession("session-2")).toBe(0);
+    });
+  });
+
   describe("clearSession", () => {
     it("removes all listeners for a session", () => {
       manager.register("session-1", "terminal:state-changed");
       manager.register("session-1", "agent:spawned");
       manager.register("session-2", "terminal:state-changed");
 
-      manager.clearSession("session-1");
+      const count = manager.clearSession("session-1");
 
+      expect(count).toBe(2);
       expect(manager.listForSession("session-1")).toEqual([]);
       expect(manager.listForSession("session-2").length).toBe(1);
       expect(manager.size()).toBe(1);
     });
 
-    it("does nothing when session has no listeners", () => {
+    it("returns zero when session has no listeners", () => {
       manager.register("session-1", "terminal:state-changed");
 
-      manager.clearSession("session-2");
+      const count = manager.clearSession("session-2");
 
+      expect(count).toBe(0);
       expect(manager.size()).toBe(1);
     });
 
-    it("does nothing when manager is empty", () => {
-      manager.clearSession("session-1");
+    it("returns zero when manager is empty", () => {
+      const count = manager.clearSession("session-1");
+      expect(count).toBe(0);
+      expect(manager.size()).toBe(0);
+    });
+  });
+
+  describe("clearAllSessions", () => {
+    it("removes all listeners across all sessions", () => {
+      manager.register("session-1", "terminal:state-changed");
+      manager.register("session-1", "agent:spawned");
+      manager.register("session-2", "terminal:state-changed");
+      manager.register("session-3", "agent:spawned");
+
+      const count = manager.clearAllSessions();
+
+      expect(count).toBe(4);
+      expect(manager.size()).toBe(0);
+      expect(manager.listForSession("session-1")).toEqual([]);
+      expect(manager.listForSession("session-2")).toEqual([]);
+      expect(manager.listForSession("session-3")).toEqual([]);
+    });
+
+    it("returns zero when manager is empty", () => {
+      const count = manager.clearAllSessions();
+      expect(count).toBe(0);
+      expect(manager.size()).toBe(0);
+    });
+
+    it("can be called multiple times safely", () => {
+      manager.register("session-1", "terminal:state-changed");
+      manager.register("session-2", "agent:spawned");
+
+      const count1 = manager.clearAllSessions();
+      const count2 = manager.clearAllSessions();
+
+      expect(count1).toBe(2);
+      expect(count2).toBe(0);
       expect(manager.size()).toBe(0);
     });
   });

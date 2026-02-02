@@ -40,12 +40,12 @@ export function registerAssistantHandlers(mainWindow: BrowserWindow): () => void
   initTerminalStateListenerBridge(emitChunkToRenderer);
 
   const destroyedListener = () => {
-    assistantService.cancelAll();
+    assistantService.clearAllSessions();
     destroyTerminalStateListenerBridge();
   };
 
   const navigationListener = () => {
-    assistantService.cancelAll();
+    assistantService.clearAllSessions();
   };
 
   ipcMain.handle(CHANNELS.ASSISTANT_SEND_MESSAGE, async (event, payload: unknown) => {

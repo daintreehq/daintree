@@ -883,8 +883,18 @@ export class AssistantService {
     for (const [sessionId, controller] of this.activeStreams) {
       controller.abort();
       this.activeStreams.delete(sessionId);
+      this.chunkCallbacks.delete(sessionId);
       listenerManager.clearSession(sessionId);
     }
+  }
+
+  clearAllSessions(): void {
+    for (const [sessionId, controller] of this.activeStreams) {
+      controller.abort();
+    }
+    this.activeStreams.clear();
+    this.chunkCallbacks.clear();
+    listenerManager.clearAllSessions();
   }
 }
 
