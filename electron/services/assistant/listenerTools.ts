@@ -344,7 +344,32 @@ export function createListenerTools(context: ListenerToolContext): ToolSet {
         { listenerId, timeoutMs }: { listenerId: string; timeoutMs?: number },
         { abortSignal }
       ) => {
-        // Validate listener exists and belongs to this session
+        // Check if event already fired and is in pending queue FIRST
+        // This must come before listener validation to handle one-shot listeners
+        // that have already been removed but have queued events
+        const pendingEvents = pendingEventQueue.getPending(context.sessionId);
+        const matchingEvent = pendingEvents.find((e) => e.listenerId === listenerId);
+
+        if (matchingEvent) {
+          // Event already fired - return immediately
+          console.log(
+            `[await_listener] Event already in pending queue for listener ${listenerId}, returning immediately`
+          );
+
+          // Acknowledge the event
+          pendingEventQueue.acknowledge(matchingEvent.id, context.sessionId);
+
+          return {
+            success: true,
+            eventType: matchingEvent.eventType,
+            data: matchingEvent.data,
+            waitedMs: 0,
+            source: "pending_queue",
+            message: "Event was already pending - returned immediately without blocking",
+          };
+        }
+
+        // No pending event - validate listener exists and belongs to this session
         const listener = listenerManager.get(listenerId);
         if (!listener) {
           return {
@@ -380,6 +405,8 @@ export function createListenerTools(context: ListenerToolContext): ToolSet {
             message: "Already awaiting this listener",
           };
         }
+
+        // No pending event - proceed with blocking wait
 
         // Validate timeout - reject if too long (force use of autoResume for long waits)
         const rawTimeout = timeoutMs ?? DEFAULT_TIMEOUT_MS;

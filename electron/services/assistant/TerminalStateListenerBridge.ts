@@ -61,8 +61,14 @@ function emitToListeners(eventType: string, eventData: Record<string, unknown>):
         eventData
       );
 
-      // Also check if there's an active waiter for this listener
-      listenerWaiter.notify(listener.id, listenerEvent);
+      // Check if there's an active waiter for this listener and notify it
+      // If a waiter is active, acknowledge the event immediately since it will be
+      // delivered directly via the waiter (not queued for later)
+      if (listenerWaiter.isAwaiting(listener.id)) {
+        listenerWaiter.notify(listener.id, listenerEvent);
+        // Auto-acknowledge since event was delivered to waiter
+        pendingEventQueue.acknowledge(pendingEvent.id, listener.sessionId);
+      }
 
       // Check for auto-resume continuation
       const continuation = continuationManager.getByListenerId(listener.id);
