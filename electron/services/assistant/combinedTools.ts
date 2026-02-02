@@ -85,8 +85,7 @@ export function createCombinedTools(context: CombinedToolContext): ToolSet {
         properties: {
           agentId: {
             type: "string",
-            description:
-              "The agent to launch: claude, codex, gemini, opencode, or terminal",
+            description: "The agent to launch: claude, codex, gemini, opencode, or terminal",
             enum: ["claude", "codex", "gemini", "opencode", "terminal"],
           },
           prompt: {
@@ -170,7 +169,12 @@ export function createCombinedTools(context: CombinedToolContext): ToolSet {
       }) => {
         try {
           // Validate eventType at runtime
-          const validEventTypes = ["agent:completed", "agent:failed", "agent:killed", "terminal:state-changed"];
+          const validEventTypes = [
+            "agent:completed",
+            "agent:failed",
+            "agent:killed",
+            "terminal:state-changed",
+          ];
           if (!validEventTypes.includes(eventType)) {
             return {
               success: false,
@@ -184,7 +188,8 @@ export function createCombinedTools(context: CombinedToolContext): ToolSet {
             if (!stateFilter) {
               return {
                 success: false,
-                error: "stateFilter is required for terminal:state-changed events. Specify the target state (e.g., 'completed', 'waiting', 'failed').",
+                error:
+                  "stateFilter is required for terminal:state-changed events. Specify the target state (e.g., 'completed', 'waiting', 'failed').",
                 code: "VALIDATION_ERROR",
               };
             }
