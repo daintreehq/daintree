@@ -42,6 +42,17 @@ const unsubscribers: Array<() => void> = [];
 function emitToListeners(eventType: string, eventData: Record<string, unknown>): void {
   const listeners = listenerManager.getMatchingListeners(eventType, eventData);
 
+  // Log event firing telemetry - only log when no matches (mismatch scenario)
+  // The ListenerManager already logs detailed diagnostics for mismatches
+  if (listeners.length === 0) {
+    console.log(
+      `[TerminalStateListenerBridge] ${eventType} fired (no matches)`,
+      JSON.stringify({
+        terminalId: eventData.terminalId,
+      })
+    );
+  }
+
   for (const listener of listeners) {
     let emitSucceeded = false;
     try {
@@ -106,8 +117,12 @@ function emitToListeners(eventType: string, eventData: Record<string, unknown>):
       emitSucceeded = true;
     } catch (error) {
       console.error(
-        "[TerminalStateListenerBridge] Failed to emit listener chunk:",
-        error instanceof Error ? error.message : error
+        `[TerminalStateListenerBridge] Failed to emit listener chunk for ${eventType}`,
+        JSON.stringify({
+          listenerId: listener.id.substring(0, 8),
+          terminalId: eventData.terminalId,
+          error: error instanceof Error ? error.message : String(error),
+        })
       );
     }
 

@@ -95,8 +95,16 @@ export class ListenerWaiter {
   }
 }
 
+const STALE_LISTENER_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+const STALE_CHECK_INTERVAL_MS = 60 * 1000; // Check every 1 minute
+
 export class ListenerManager {
   private listeners = new Map<string, Listener>();
+  private staleCheckInterval: NodeJS.Timeout | null = null;
+
+  constructor() {
+    this.startStaleListenerCheck();
+  }
 
   register(
     sessionId: string,
@@ -203,7 +211,9 @@ export class ListenerManager {
 
   getMatchingListeners(eventType: string, data: unknown): Listener[] {
     const result: Listener[] = [];
-    for (const listener of this.listeners.values()) {
+    const allListeners = Array.from(this.listeners.values());
+
+    for (const listener of allListeners) {
       if (listener.eventType !== eventType) {
         continue;
       }
@@ -211,6 +221,55 @@ export class ListenerManager {
         result.push(listener);
       }
     }
+
+    // Log diagnostic when no listeners match but listeners exist for this event type
+    if (result.length === 0 && allListeners.length > 0) {
+      const listenersForEventType = allListeners.filter((l) => l.eventType === eventType);
+      if (listenersForEventType.length > 0) {
+        const isObject = typeof data === "object" && data !== null;
+        const dataRecord = isObject ? (data as Record<string, unknown>) : null;
+
+        // Build diagnostic payload with filter key comparisons
+        const diagnosticPayload: any = {
+          dataType: typeof data,
+          isObject,
+        };
+
+        if (dataRecord) {
+          // Extract common filter keys for comparison
+          const filterKeys = new Set<string>();
+          listenersForEventType.forEach((l) => {
+            if (l.filter) {
+              Object.keys(l.filter).forEach((k) => filterKeys.add(k));
+            }
+          });
+
+          // Show event data for the filter keys that exist
+          diagnosticPayload.eventData = {};
+          filterKeys.forEach((key) => {
+            if (key in dataRecord) {
+              diagnosticPayload.eventData[key] = dataRecord[key];
+            }
+          });
+
+          diagnosticPayload.activeListeners = listenersForEventType.map((l) => ({
+            id: l.id.substring(0, 8),
+            filter: l.filter,
+            autoResume: !!l.autoResume,
+            sessionId: l.sessionId.substring(0, 8),
+          }));
+        } else {
+          // Non-object data - just show listener count
+          diagnosticPayload.listenerCount = listenersForEventType.length;
+        }
+
+        console.warn(
+          `[ListenerManager] No listeners matched ${eventType} event`,
+          JSON.stringify(diagnosticPayload)
+        );
+      }
+    }
+
     return result;
   }
 
@@ -241,6 +300,74 @@ export class ListenerManager {
 
   clear(): void {
     this.listeners.clear();
+  }
+
+  detectStaleListeners(): void {
+    const now = Date.now();
+    const staleListeners: Array<{
+      id: string;
+      eventType: string;
+      filter: unknown;
+      ageMinutes: number;
+      sessionId: string;
+      lastWarned?: number;
+    }> = [];
+
+    for (const listener of this.listeners.values()) {
+      const age = now - listener.createdAt;
+      if (age > STALE_LISTENER_THRESHOLD_MS && listener.autoResume) {
+        // Check if we've warned about this listener recently (within last 5 minutes)
+        const lastWarned = (listener as any).lastStaleWarning || 0;
+        const timeSinceLastWarning = now - lastWarned;
+
+        // Only warn if this is the first time crossing threshold or it's been 5+ minutes since last warning
+        if (timeSinceLastWarning >= STALE_LISTENER_THRESHOLD_MS) {
+          staleListeners.push({
+            id: listener.id.substring(0, 8),
+            eventType: listener.eventType,
+            filter: listener.filter,
+            ageMinutes: Math.round(age / 60000),
+            sessionId: listener.sessionId.substring(0, 8),
+          });
+          // Mark that we've warned about this listener
+          (listener as any).lastStaleWarning = now;
+        }
+      }
+    }
+
+    if (staleListeners.length > 0) {
+      // Truncate list if too large to avoid log spam
+      const logListeners = staleListeners.slice(0, 10);
+      const truncated = staleListeners.length > 10;
+      console.warn(
+        `[ListenerManager] Stale autoResume listener(s) detected (waiting >5 min)`,
+        JSON.stringify({
+          count: staleListeners.length,
+          listeners: logListeners,
+          ...(truncated && { truncated: `+${staleListeners.length - 10} more` }),
+        })
+      );
+    }
+  }
+
+  private startStaleListenerCheck(): void {
+    if (this.staleCheckInterval) {
+      return;
+    }
+    this.staleCheckInterval = setInterval(() => {
+      this.detectStaleListeners();
+    }, STALE_CHECK_INTERVAL_MS);
+
+    // Don't prevent process exit
+    this.staleCheckInterval.unref();
+  }
+
+  destroy(): void {
+    if (this.staleCheckInterval) {
+      clearInterval(this.staleCheckInterval);
+      this.staleCheckInterval = null;
+    }
+    this.clear();
   }
 }
 
