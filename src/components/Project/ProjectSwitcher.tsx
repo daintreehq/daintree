@@ -77,7 +77,8 @@ export function ProjectSwitcher() {
           // Use explicit kind check first (fast path), fall back to isAgentTerminal for legacy terminals
           const isAgent =
             terminal.kind === "agent" ||
-            (terminal.kind == null && isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId));
+            (terminal.kind == null &&
+              isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId));
 
           if (!isAgent) continue;
           if (terminal.hasPty === false) continue; // Skip orphaned terminals without active PTY
@@ -179,7 +180,8 @@ export function ProjectSwitcher() {
           // Use explicit kind check first (fast path), fall back to isAgentTerminal for legacy terminals
           const isAgent =
             terminal.kind === "agent" ||
-            (terminal.kind == null && isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId));
+            (terminal.kind == null &&
+              isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId));
 
           if (!isAgent) continue;
           if (terminal.hasPty === false) continue; // Skip orphaned terminals without active PTY
