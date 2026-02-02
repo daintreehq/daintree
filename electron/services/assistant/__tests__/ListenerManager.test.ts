@@ -33,6 +33,27 @@ describe("ListenerManager", () => {
       expect(listener?.filter).toEqual({ terminalId: "term-1" });
     });
 
+    it("registers one-shot listeners with once: true", () => {
+      const id = manager.register("session-1", "terminal:state-changed", undefined, true);
+
+      const listener = manager.get(id);
+      expect(listener?.once).toBe(true);
+    });
+
+    it("registers regular listeners without once flag", () => {
+      const id = manager.register("session-1", "terminal:state-changed");
+
+      const listener = manager.get(id);
+      expect(listener?.once).toBeUndefined();
+    });
+
+    it("registers listeners with once: false", () => {
+      const id = manager.register("session-1", "terminal:state-changed", undefined, false);
+
+      const listener = manager.get(id);
+      expect(listener?.once).toBe(false);
+    });
+
     it("creates listeners with correct createdAt timestamp", () => {
       const before = Date.now();
       const id = manager.register("session-1", "terminal:state-changed");
@@ -374,7 +395,7 @@ describe("ListenerManager", () => {
       expect(() =>
         manager.register("session-1", "terminal:state-changed", {
           nested: { value: 123 },
-        } as any)
+        } as unknown as any)
       ).toThrow("Invalid listener registration");
     });
 

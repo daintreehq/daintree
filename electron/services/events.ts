@@ -781,6 +781,19 @@ export type CanopyEventMap = {
   };
 };
 
+/**
+ * Event types that have working bridges for assistant listeners.
+ * Only these events can be registered via the register_listener tool.
+ * When new bridges are added, update this list accordingly.
+ *
+ * The `satisfies` constraint ensures all entries are valid event types at compile time.
+ */
+export const BRIDGED_EVENT_TYPES = ["terminal:state-changed"] as const satisfies ReadonlyArray<
+  keyof CanopyEventMap
+>;
+
+export type BridgedEventType = (typeof BRIDGED_EVENT_TYPES)[number];
+
 export const ALL_EVENT_TYPES: Array<keyof CanopyEventMap> = [
   "sys:ready",
   "sys:refresh",

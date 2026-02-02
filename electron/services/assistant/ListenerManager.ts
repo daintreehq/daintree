@@ -5,11 +5,12 @@ import { RegisterListenerOptionsSchema } from "../../../shared/types/listener.js
 export class ListenerManager {
   private listeners = new Map<string, Listener>();
 
-  register(sessionId: string, eventType: string, filter?: ListenerFilter): string {
+  register(sessionId: string, eventType: string, filter?: ListenerFilter, once?: boolean): string {
     const validation = RegisterListenerOptionsSchema.safeParse({
       sessionId,
       eventType,
       filter,
+      once,
     });
 
     if (!validation.success) {
@@ -22,6 +23,7 @@ export class ListenerManager {
       sessionId,
       eventType,
       filter,
+      once,
       createdAt: Date.now(),
     };
     this.listeners.set(id, listener);

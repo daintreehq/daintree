@@ -10,6 +10,7 @@ export const ListenerSchema = z.object({
   sessionId: z.string().min(1),
   eventType: z.string().min(1),
   filter: ListenerFilterSchema,
+  once: z.boolean().optional(),
   createdAt: z.number().finite().int(),
 });
 export type Listener = z.infer<typeof ListenerSchema>;
@@ -18,5 +19,6 @@ export const RegisterListenerOptionsSchema = z.object({
   sessionId: z.string().min(1),
   eventType: z.string().min(1),
   filter: ListenerFilterSchema,
+  once: z.boolean().optional(),
 });
 export type RegisterListenerOptions = z.infer<typeof RegisterListenerOptionsSchema>;
