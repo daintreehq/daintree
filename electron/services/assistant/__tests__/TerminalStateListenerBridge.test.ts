@@ -201,6 +201,8 @@ describe("TerminalStateListenerBridge", () => {
           toState: payload.state,
           worktreeId: payload.worktreeId,
           timestamp: payload.timestamp,
+          trigger: payload.trigger,
+          confidence: payload.confidence,
         }),
       });
     });

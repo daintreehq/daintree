@@ -1,6 +1,10 @@
 import { useEffect, useRef } from "react";
 import { useAssistantChatStore } from "@/store/assistantChatStore";
-import type { ToolCall, EventMetadata } from "@/components/Assistant/types";
+import type {
+  ToolCall,
+  EventMetadata,
+  AgentStateChangeTrigger,
+} from "@/components/Assistant/types";
 
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -18,8 +22,25 @@ function formatListenerNotification(
     const newState = (data.newState as string | undefined) || (data.toState as string | undefined);
     const oldState =
       (data.oldState as string | undefined) || (data.fromState as string | undefined);
+    const trigger = data.trigger as string | undefined;
+    const rawConfidence = data.confidence;
 
-    return `${oldState || "unknown"} → ${newState || "unknown"}`;
+    let result = `${oldState || "unknown"} → ${newState || "unknown"}`;
+
+    if (
+      typeof rawConfidence === "number" &&
+      Number.isFinite(rawConfidence) &&
+      rawConfidence >= 0 &&
+      rawConfidence <= 1
+    ) {
+      result += ` (${Math.round(rawConfidence * 100)}%)`;
+    }
+
+    if (trigger) {
+      result += ` [${trigger}]`;
+    }
+
+    return result;
   }
 
   return eventType;
@@ -46,11 +67,22 @@ function extractEventMetadata(
     const oldState =
       (data.oldState as string | undefined) || (data.fromState as string | undefined);
     const newState = (data.newState as string | undefined) || (data.toState as string | undefined);
+    const trigger = data.trigger as AgentStateChangeTrigger | undefined;
+    const rawConfidence = data.confidence;
 
     if (terminalId) metadata.terminalId = terminalId;
     if (worktreeId) metadata.worktreeId = worktreeId;
     if (oldState) metadata.oldState = oldState;
     if (newState) metadata.newState = newState;
+    if (trigger) metadata.trigger = trigger;
+    if (
+      typeof rawConfidence === "number" &&
+      Number.isFinite(rawConfidence) &&
+      rawConfidence >= 0 &&
+      rawConfidence <= 1
+    ) {
+      metadata.confidence = rawConfidence;
+    }
   }
 
   return metadata;

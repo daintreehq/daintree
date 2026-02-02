@@ -690,6 +690,8 @@ export type CanopyEventMap = {
     newState: AgentState;
     toState: AgentState;
     worktreeId?: string;
+    trigger: AgentStateChangeTrigger;
+    confidence: number;
   }>;
 
   // Task Lifecycle Events (Future-proof for task management)

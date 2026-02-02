@@ -1,5 +1,14 @@
 export type MessageRole = "user" | "assistant" | "event";
 
+export type AgentStateChangeTrigger =
+  | "input"
+  | "output"
+  | "heuristic"
+  | "ai-classification"
+  | "timeout"
+  | "exit"
+  | "activity";
+
 export interface ToolCall {
   id: string;
   name: string;
@@ -16,6 +25,8 @@ export interface EventMetadata {
   worktreeId?: string;
   oldState?: string;
   newState?: string;
+  trigger?: AgentStateChangeTrigger;
+  confidence?: number;
 }
 
 export interface AssistantMessage {

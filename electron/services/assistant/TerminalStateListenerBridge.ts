@@ -73,6 +73,8 @@ export function initTerminalStateListenerBridge(emitter: ChunkEmitter): void {
         worktreeId: payload.worktreeId,
         timestamp: payload.timestamp,
         traceId: payload.traceId,
+        trigger: payload.trigger,
+        confidence: payload.confidence,
       };
 
       emitToListeners("terminal:state-changed", eventData);
