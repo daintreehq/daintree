@@ -34,17 +34,18 @@ This review covers the assistant listener flow and terminal waiting-state detect
 
 ### 3) How listener events are delivered
 
-- `TerminalStateListenerBridge` subscribes to `agent:state-changed`.
-- It translates the payload into a "terminal:state-changed" record and asks `ListenerManager` for matches.
-- For each match, it emits a `listener_triggered` chunk to the renderer via `CHANNELS.ASSISTANT_CHUNK`.
-- `useAssistantStreamProcessor` adds a normal assistant message containing a short notification string.
+- `TerminalStateListenerBridge` subscribes to multiple event types:
+  - `agent:state-changed` → translated to `terminal:state-changed` for the assistant
+  - `agent:completed`, `agent:failed`, `agent:killed` → passed through as-is
+- For each matched listener, it emits a `listener_triggered` chunk to the renderer via `CHANNELS.ASSISTANT_CHUNK`.
+- `useAssistantStreamProcessor` handles the event and adds an event-role message to the conversation.
 
 ### 4) What the chat does with listener events
 
 - Listener events do NOT pause or block assistant streaming.
-- Listener events are NOT delivered to the model automatically.
-- The event is only injected into the UI conversation as a new assistant message.
-- The model only "sees" the event if the user sends another message later (since the chat history is sent on the next request).
+- Events are stored in a pending event queue (in-memory).
+- Pending events are automatically injected into the system prompt on the next assistant request.
+- If the listener has `autoResume` configured, the system automatically starts a new assistant request with the provided prompt, making the continuation immediate.
 
 ## Direct Answers to Your Questions
 
@@ -54,29 +55,32 @@ This review covers the assistant listener flow and terminal waiting-state detect
 
 ### Q: Can the agent wait for a response and then continue working later?
 
-- Not automatically. There is no mechanism to "await" a listener and resume the same assistant run.
-- The listener only posts a notification to the UI. The model does not resume until a new user message triggers a new request.
+- Yes, using the `autoResume` feature. When registering a listener, you can provide `autoResume: { prompt, context }`.
+- When the listener triggers, the assistant is automatically re-invoked with the provided prompt. Context is available for tracking (via `metadata`, `plan`, or `lastToolCalls`) but not directly injected into the model.
+- This enables "launch → listen → auto-continue" workflows without requiring user messages.
 
 ### Q: Is there a queue of listener events for later processing?
 
-- No durable queue. Events are emitted immediately and dropped if the session ID does not match the active conversation.
-- Listeners are stored in memory; events are not persisted across reloads or crashes.
+- Yes, an in-memory pending event queue stores triggered events per session (max 100 events).
+- Events are automatically injected into the system prompt on the next request to guarantee the model sees them.
+- Queue is not durable - events are lost on reload or crash, but survive across normal chat interactions.
 
 ### Q: Do I foresee it working as-is?
 
 - Yes, for user-facing notifications ("agent is waiting") and manual intervention.
-- No, for autonomous "pause -> wait -> resume" workflows without additional automation.
+- Yes, for autonomous "launch → wait → resume" workflows using `autoResume` on listener registration.
 
 ## Gaps / Risks
 
-1. Event type mismatch
+1. Event type support
 
-- `register_listener` accepts any event type from `ALL_EVENT_TYPES`, but only `terminal:state-changed` is actually bridged.
-- Listeners for any other event type will never fire.
+- `register_listener` currently supports: `terminal:state-changed`, `agent:completed`, `agent:failed`, `agent:killed`.
+- The tool schema enforces this list, preventing registration of unsupported event types.
 
-2. No auto-resume or model re-entry
+2. Auto-resume available
 
-- `listener_triggered` is UI-only. The model is not re-invoked automatically.
+- `autoResume` option on `register_listener` enables automatic model re-invocation when listeners trigger.
+- When a listener with `autoResume` fires, the system automatically starts a new assistant request with the provided prompt and context.
 
 3. No event queue or ack
 
@@ -92,67 +96,60 @@ This review covers the assistant listener flow and terminal waiting-state detect
 - The translated event does not include trigger/confidence or prompt content.
 - For "waiting" detection (heuristic), this makes it hard to decide if user input is truly required.
 
-6. UI ordering ambiguity
+6. UI rendering
 
-- A listener notification can arrive while the assistant is still streaming a response.
-- The notification is inserted as a normal assistant message, which can look like model output.
+- Listener notifications use `role: "event"` to distinguish them from assistant messages.
+- Auto-resume status updates use `role: "system"` for clear visual separation from model output.
 
-7. "terminal:state-changed" exists only for assistant bridging
+7. Terminal state event bridging
 
-- The event is defined in `events.ts` but not emitted on the bus. The bridge creates it as an assistant-facing shape only.
+- `terminal:state-changed` is an assistant-facing event type created by the bridge from `agent:state-changed`.
+- Not emitted on the event bus directly - exists only in the listener system for backward compatibility.
 
-## What Needs Updating to Make It Workable for Agent Autonomy
+## Implementation Status
 
-### Short-term fixes (low risk)
+### Completed features
 
-1. Restrict or clarify event types
+1. **One-shot listeners** ✅
+   - `once: true` auto-removes listeners after first trigger.
 
-- Option A: Restrict `register_listener` to `terminal:state-changed` only.
-- Option B: Add bridges for other event types and document supported filters per event.
+2. **Richer event context** ✅
+   - `trigger` and `confidence` fields included in terminal:state-changed events.
 
-2. Add one-shot listeners
+3. **Pending-event queue** ✅
+   - `list_pending_events()` and `acknowledge_event()` tools available.
+   - Events are stored and delivered to the assistant on next request.
 
-- Add `once: true` or `maxMatches: 1` to auto-remove listeners after first trigger.
+4. **Explicit await tool** ✅
+   - `await_listener({ listenerId, timeoutMs })` blocks until triggered (max 5 minutes).
 
-3. Include richer event context
+5. **Auto-resume policy** ✅
+   - `register_listener` accepts `autoResume: { prompt, context }` to auto-start a new assistant run.
+   - `ContinuationManager` stores continuation state.
+   - `useAssistantStreamProcessor` handles auto_resume chunks and triggers new model calls.
 
-- Add `trigger`, `confidence`, and possibly a short prompt snippet or "waiting reason" to the payload.
+### Remaining improvements
 
-4. Improve UI semantics
+1. Event type expansion
 
-- Render listener notifications as "system" or "event" entries instead of normal assistant messages.
+- Current support: `terminal:state-changed`, `agent:completed`, `agent:failed`, `agent:killed`.
+- Future: Add bridges for additional event types as needed and document supported filters per event.
 
-### Medium-term (enables real workflows)
+### Future enhancements
 
-5. Add a pending-event queue per session
-
-- Store recent listener events and expose `list_pending_events()` + `ack_event()` tools.
-- Deliver events to the assistant on the next request to guarantee it sees them.
-
-6. Add an explicit "await" tool
-
-- Provide `await_listener({ listenerId, timeoutMs })` that blocks server-side and returns when triggered.
-- This needs careful timeouts and cancellation to avoid hanging streams.
-
-7. Auto-resume policy
-
-- Add a session flag that allows the app to auto-start a new assistant run when a listener triggers.
-- This can inject a short synthetic "event" message to the model and continue a stored plan.
-
-### Long-term (robust orchestration)
-
-8. Event-driven task runner
+1. Event-driven task runner
 
 - Store a "continuation" (plan + prompt) tied to a listener, then dispatch it automatically when triggered.
 - Integrate with a durable store so events survive reloads.
 
-9. Revisit waiting detection reliability
+2. Waiting detection improvements
 
 - Expose the detection source (prompt vs silence vs pattern) and guardrails for false positives.
 - Allow per-agent tuning in `agentRegistry` for prompt patterns and debounce thresholds.
 
 ## Bottom Line
 
-- The listener system works today as a notification pipeline for the UI.
-- It does not yet support autonomous "wait and resume" behavior.
-- To make that workable, we need (1) event delivery guarantees, (2) model re-entry or await semantics, and (3) better context in listener payloads.
+- The listener system works as both a notification pipeline and an autonomous workflow enabler.
+- **Auto-resume is now supported**: Register listeners with `autoResume: { prompt, context }` for non-blocking workflows.
+- **Recommended pattern**: Launch ONE agent → register with autoResume → respond immediately → system handles continuation.
+- Use `await_listener` only for short, bounded waits (<30 seconds) where blocking is acceptable.

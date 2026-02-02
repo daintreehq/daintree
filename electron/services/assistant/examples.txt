@@ -108,7 +108,7 @@ agent_launch({
 })
 ```
 
-**Example: Monitor agent completion**
+**Example: Monitor agent completion with autoResume (RECOMMENDED)**
 
 User: "Run the tests and let me know when they finish"
 
@@ -118,40 +118,63 @@ agent_launch({ agentId: "claude", prompt: "Run the test suite and fix any failur
 ```
 Result: `{ terminalId: "xyz-789" }`
 
-Step 2 - Register listeners for completion and failure:
+Step 2 - Register ONE listener with autoResume:
 ```
 register_listener({
-  eventType: "terminal:state-changed",
-  filter: { terminalId: "xyz-789", toState: "completed" }
-})
-register_listener({
-  eventType: "terminal:state-changed",
-  filter: { terminalId: "xyz-789", toState: "failed" }
+  eventType: "agent:completed",
+  filter: { terminalId: "xyz-789" },
+  once: true,
+  autoResume: {
+    prompt: "The test agent has completed. Get the output and summarize the results.",
+    context: { metadata: { terminalId: "xyz-789", task: "test-run" } }
+  }
 })
 ```
-Result: `{ listenerId: "listener-abc" }` and `{ listenerId: "listener-def" }`
+Result: `{ listenerId: "listener-abc" }`
 
-Step 3 - Inform user:
-"Running tests. I'll notify you when complete."
+Note: autoResume triggers once when the listener fires, then the continuation is removed.
 
-Step 4 - When listener triggers (you receive notification chunk):
-Payload: `{ type: "listener_triggered", listenerData: { listenerId: "listener-abc", eventType: "terminal:state-changed", data: { terminalId: "xyz-789", toState: "completed", ... } } }`
+Step 3 - Respond immediately to user:
+"Launched test runner. I'll summarize the results when complete."
 
-Step 5 - Check results:
+**[Conversation ends - user is not blocked]**
+
+**[Later, when agent completes, system auto-resumes with the prompt]**
+
+Step 4 - Check results (in resumed conversation):
 ```
 terminal_getOutput({ terminalId: "xyz-789", maxLines: 100 })
 ```
 
-Step 6 - Report to user:
+Step 5 - Report to user:
 "Tests completed. All 47 tests passed."
 
-Step 7 - Clean up listeners:
-```
-remove_listener({ listenerId: "listener-abc" })
-remove_listener({ listenerId: "listener-def" })
-```
+**Why autoResume is better:**
+- User gets immediate response, not a frozen conversation
+- No multi-minute blocking waits
+- System handles continuation automatically
+- One listener instead of multiple
 
 ### Event Listener Patterns
+
+**IMPORTANT: Use autoResume for agent tasks**
+
+For any agent task that may take more than 30 seconds, use `autoResume` instead of blocking waits:
+
+```
+// RECOMMENDED: autoResume for agent tasks
+register_listener({
+  eventType: "agent:completed",
+  filter: { terminalId: "xyz-789" },
+  once: true,
+  autoResume: {
+    prompt: "Agent finished. Summarize the results.",
+    context: { task: "my-task" }
+  }
+})
+```
+
+**DO NOT launch multiple agents in a loop with blocking waits.** Launch ONE agent, register ONE listener with autoResume, respond immediately.
 
 **Monitor all terminals for waiting state:**
 When any agent enters waiting state (may need user input), you'll be notified.
@@ -160,41 +183,51 @@ IMPORTANT: Only `terminal:state-changed` events are currently bridged to the ass
 ```
 register_listener({
   eventType: "terminal:state-changed",
-  filter: { toState: "waiting" }
+  filter: { toState: "waiting" },
+  autoResume: {
+    prompt: "An agent is waiting for input. Check what it needs."
+  }
 })
 ```
 Result: `{ success: true, listenerId: "abc-123", ... }`
 Use the listenerId to remove the listener later.
 
-**Monitor specific terminal for multiple outcomes:**
-Register separate listeners for completion and failure.
+**Monitor specific terminal for completion (with autoResume):**
 ```
-// Listen for success
 register_listener({
-  eventType: "terminal:state-changed",
-  filter: { terminalId: "xyz-789", toState: "completed" }
-})
-
-// Listen for failure
-register_listener({
-  eventType: "terminal:state-changed",
-  filter: { terminalId: "xyz-789", toState: "failed" }
+  eventType: "agent:completed",
+  filter: { terminalId: "xyz-789" },
+  once: true,
+  autoResume: {
+    prompt: "The agent completed. Get output and report results.",
+    context: { metadata: { terminalId: "xyz-789" } }
+  }
 })
 ```
 
-**Handle waiting state with user notification:**
-When a listener triggers for waiting state:
-1. The notification chunk arrives with payload: `{ type: "listener_triggered", listenerData: { listenerId, eventType: "terminal:state-changed", data: { terminalId, agentId, toState: "waiting", ... } } }`
-2. Query the terminal output to see what the agent is asking:
+**Handle waiting state (with autoResume):**
+Register with autoResume so you're automatically invoked when the agent needs input:
+```
+register_listener({
+  eventType: "terminal:state-changed",
+  filter: { terminalId: "xyz-789", toState: "waiting" },
+  autoResume: {
+    prompt: "The agent is waiting for input. Check what it needs and respond appropriately."
+  }
+})
+```
+
+When auto-resumed:
+1. Query the terminal output to see what the agent is asking:
 ```
 terminal_getOutput({ terminalId: "xyz-789", maxLines: 20 })
 ```
-3. Check output to determine if agent truly needs input (waiting can be silence-based)
-4. Either respond programmatically:
+2. Check output to determine if agent truly needs input (waiting can be silence-based)
+3. Either respond programmatically:
 ```
 terminal_sendCommand({ terminalId: "xyz-789", command: "y" })
 ```
-5. Or describe the situation to the user and wait for their decision.
+4. Or describe the situation to the user and wait for their decision.
 
 **Cleanup listeners after workflow completes:**
 Always remove listeners when no longer needed.
@@ -209,8 +242,8 @@ list_listeners()
 remove_listener({ listenerId: "abc-123" })
 ```
 
-**Launch, listen, and react workflow:**
-Complete example: launch agent, monitor for waiting/completion/failure, handle prompt.
+**Launch, listen, and react workflow (using autoResume):**
+Complete example: launch ONE agent, register with autoResume, respond immediately.
 
 Step 1 - Launch agent with task that may need input:
 ```
@@ -218,39 +251,42 @@ agent_launch({ agentId: "claude", prompt: "Update dependencies and resolve any c
 ```
 Result: `{ terminalId: "dep-update-001" }`
 
-Step 2 - Register listeners for waiting, completed, and failed states upfront:
+Step 2 - Register ONE listener with autoResume for completion:
 ```
-const l1 = register_listener({
-  eventType: "terminal:state-changed",
-  filter: { terminalId: "dep-update-001", toState: "waiting" }
-})
-const l2 = register_listener({
-  eventType: "terminal:state-changed",
-  filter: { terminalId: "dep-update-001", toState: "completed" }
-})
-const l3 = register_listener({
-  eventType: "terminal:state-changed",
-  filter: { terminalId: "dep-update-001", toState: "failed" }
+register_listener({
+  eventType: "agent:completed",
+  filter: { terminalId: "dep-update-001" },
+  once: true,
+  autoResume: {
+    prompt: "Dependency update completed. Check the output and summarize what was updated.",
+    context: { metadata: { terminalId: "dep-update-001" } }
+  }
 })
 ```
-Store listener IDs: `l1.listenerId`, `l2.listenerId`, `l3.listenerId`
 
-Step 3 - When waiting notification arrives:
-```
-terminal_getOutput({ terminalId: "dep-update-001", maxLines: 30 })
-```
-Output shows: "Package react has breaking changes. Proceed? (y/n)"
+Step 3 - Respond immediately to user:
+"Started dependency update. I'll summarize when complete."
 
-Step 4 - Respond to prompt:
+**[User is not blocked - they can continue other work]**
+
+Step 4 - When auto-resumed after completion:
 ```
-terminal_sendCommand({ terminalId: "dep-update-001", command: "y" })
+terminal_getOutput({ terminalId: "dep-update-001", maxLines: 50 })
 ```
 
-Step 5 - When completed/failed notification arrives, clean up all listeners:
+Step 5 - Summarize results to user:
+"Dependencies updated: react 18.2→18.3, typescript 5.0→5.4. No breaking changes."
+
+**Alternative: Handle waiting state with separate listener**
+If you need to respond to prompts during execution, add a waiting listener:
 ```
-remove_listener({ listenerId: l1.listenerId })
-remove_listener({ listenerId: l2.listenerId })
-remove_listener({ listenerId: l3.listenerId })
+register_listener({
+  eventType: "terminal:state-changed",
+  filter: { terminalId: "dep-update-001", toState: "waiting" },
+  autoResume: {
+    prompt: "Agent needs input. Check what it's asking and respond."
+  }
+})
 ```
 
 **Monitor multiple terminals for completion:**
