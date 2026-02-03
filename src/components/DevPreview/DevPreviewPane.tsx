@@ -531,9 +531,9 @@ export function DevPreviewPane({
       if (payload.panelId !== id) return;
       // DevPreviewService killed the PTY for recovery. Restart via standard pipeline
       // and re-attach so the overlay can monitor the new process.
+      // Use the recovery command (includes install) instead of terminal's devCommand.
       await restartTerminal(id);
-      const terminal = useTerminalStore.getState().getTerminal(id);
-      void window.electron.devPreview.attach(id, id, cwd, terminal?.devCommand);
+      void window.electron.devPreview.attach(id, cwd, payload.command);
     });
 
     return () => {
@@ -837,7 +837,7 @@ export function DevPreviewPane({
 
     // Attach DevPreviewService overlay to the PTY spawned by the standard terminal pipeline.
     // Panel ID = PTY ID in the terminal-first architecture.
-    void window.electron.devPreview.attach(id, id, cwd, devCommand);
+    void window.electron.devPreview.attach(id, cwd, devCommand);
 
     return () => {
       // Only skip cleanup if it's a project switch AND panel kind keeps alive
@@ -977,10 +977,11 @@ export function DevPreviewPane({
     }, 10000);
 
     // Detach overlay, restart PTY through standard pipeline, then re-attach
-    void window.electron.devPreview.detach(id);
+    // Await detach to prevent race where late detach severs the new attachment
+    await window.electron.devPreview.detach(id);
     await restartTerminal(id);
     const terminal = useTerminalStore.getState().getTerminal(id);
-    void window.electron.devPreview.attach(id, id, cwd, terminal?.devCommand);
+    void window.electron.devPreview.attach(id, cwd, terminal?.devCommand);
   }, [clearAutoReload, clearLoadingTimeout, cwd, id, restartTerminal]);
 
   const handleReloadBrowser = useCallback(() => {

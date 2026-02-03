@@ -146,15 +146,45 @@ export class DevPreviewService extends EventEmitter {
       console.log(`[DevPreview] Attaching to panel ${panelId} with ptyId: ${ptyId}, cwd: ${cwd}`);
     }
 
+    // Check if PTY exists before attaching to avoid stuck sessions
+    if (!this.ptyClient.hasTerminal(ptyId)) {
+      if (process.env.CANOPY_VERBOSE) {
+        console.log(`[DevPreview] PTY ${ptyId} does not exist, creating stopped session`);
+      }
+      const session: DevPreviewSession = {
+        panelId,
+        ptyId,
+        projectRoot: cwd,
+        status: "stopped",
+        statusMessage: "Terminal not found",
+        url: null,
+        packageManager,
+        devCommand: finalCommand,
+        installCommand,
+        timestamp: Date.now(),
+        unsubscribers: [],
+        generation: ++this.generationCounter,
+        outputBuffer: "",
+        recoveryInProgress: false,
+        recoveryAttempts: 0,
+      };
+      this.sessions.set(panelId, session);
+      this.emitStatus(panelId, "stopped", "Terminal not found", null);
+      return;
+    }
+
     // Subscribe to the existing PTY's data and exit events
+    // Capture generation to prevent stale listeners from corrupting new sessions
     const dataListener = (id: string, data: string) => {
-      if (id === ptyId) {
+      const currentSession = this.sessions.get(panelId);
+      if (id === ptyId && currentSession && currentSession.generation === generation) {
         this.handlePtyData(panelId, data);
       }
     };
 
     const exitListener = (id: string, exitCode: number) => {
-      if (id === ptyId) {
+      const currentSession = this.sessions.get(panelId);
+      if (id === ptyId && currentSession && currentSession.generation === generation) {
         this.handlePtyExit(panelId, exitCode);
       }
     };
@@ -310,7 +340,7 @@ export class DevPreviewService extends EventEmitter {
    * a restart from the renderer via the "recovery" event. The renderer will
    * use the standard terminal restart flow.
    */
-  private attemptDependencyRecovery(panelId: string): void {
+  private async attemptDependencyRecovery(panelId: string): Promise<void> {
     const session = this.sessions.get(panelId);
     if (!session || !session.packageManager || !session.devCommand) return;
 
@@ -331,10 +361,14 @@ export class DevPreviewService extends EventEmitter {
     session.unsubscribers = [];
 
     // Kill the failing process - the standard terminal pipeline owns the PTY,
-    // but we need to kill this specific process for recovery
+    // but we need to kill this specific process for recovery.
+    // Wait for kill to complete before restarting to avoid port conflicts.
     if (ptyId) {
-      this.ptyClient.kill(ptyId);
+      await this.ptyClient.kill(ptyId);
     }
+
+    // Delete the session so the next attach() doesn't short-circuit
+    this.sessions.delete(panelId);
 
     // Emit recovery event so the renderer can restart via terminal store
     this.emit("recovery", {
@@ -342,14 +376,6 @@ export class DevPreviewService extends EventEmitter {
       command: fullCommand,
       attempt: session.recoveryAttempts,
     });
-
-    // Update session status
-    session.status = "installing";
-    session.statusMessage = "Installing missing dependencies...";
-    session.outputBuffer = "";
-    session.recoveryInProgress = false;
-
-    this.emitStatus(panelId, "installing", "Installing missing dependencies...", null);
   }
 
   private handlePtyExit(panelId: string, code: number): void {

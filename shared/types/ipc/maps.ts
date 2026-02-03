@@ -917,7 +917,7 @@ export interface IpcInvokeMap {
 
   // Dev Preview channels
   "dev-preview:attach": {
-    args: [panelId: string, ptyId: string, cwd: string, devCommand?: string];
+    args: [terminalId: string, cwd: string, devCommand?: string];
     result: void;
   };
   "dev-preview:detach": {

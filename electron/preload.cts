@@ -1010,8 +1010,8 @@ const api: ElectronAPI = {
 
   // Dev Preview API
   devPreview: {
-    attach: (panelId: string, ptyId: string, cwd: string, devCommand?: string) =>
-      _typedInvoke(CHANNELS.DEV_PREVIEW_ATTACH, panelId, ptyId, cwd, devCommand),
+    attach: (terminalId: string, cwd: string, devCommand?: string) =>
+      _typedInvoke(CHANNELS.DEV_PREVIEW_ATTACH, terminalId, cwd, devCommand),
 
     detach: (panelId: string) => _typedInvoke(CHANNELS.DEV_PREVIEW_DETACH, panelId),
 

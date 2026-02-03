@@ -470,7 +470,7 @@ export interface ElectronAPI {
     ): () => void;
   };
   devPreview: {
-    attach(panelId: string, ptyId: string, cwd: string, devCommand?: string): Promise<void>;
+    attach(terminalId: string, cwd: string, devCommand?: string): Promise<void>;
     detach(panelId: string): Promise<void>;
     setUrl(panelId: string, url: string): Promise<void>;
     onStatus(callback: (data: DevPreviewStatusPayload) => void): () => void;

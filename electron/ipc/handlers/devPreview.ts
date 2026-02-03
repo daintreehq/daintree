@@ -58,18 +58,14 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
 
   const handleAttach = async (
     _event: Electron.IpcMainInvokeEvent,
-    panelId: string,
-    ptyId: string,
+    terminalId: string,
     cwd: string,
     devCommand?: string
   ) => {
     if (!devPreviewService) throw new Error("DevPreviewService not initialized");
 
-    if (!panelId || typeof panelId !== "string") {
-      throw new Error("panelId is required");
-    }
-    if (!ptyId || typeof ptyId !== "string") {
-      throw new Error("ptyId is required");
+    if (!terminalId || typeof terminalId !== "string") {
+      throw new Error("terminalId is required");
     }
     if (!cwd || typeof cwd !== "string" || !path.isAbsolute(cwd)) {
       throw new Error("cwd must be an absolute path");
@@ -88,8 +84,8 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
     }
 
     await devPreviewService.attach({
-      panelId,
-      ptyId,
+      panelId: terminalId,
+      ptyId: terminalId,
       cwd,
       devCommand,
     });
