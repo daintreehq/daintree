@@ -7,6 +7,7 @@ import { useIsDragging } from "@/components/DragDrop";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
+import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import {
   useBrowserStateStore,
   useProjectStore,
@@ -688,8 +689,15 @@ export function DevPreviewPane({
 
   const handleToggleView = useCallback(() => {
     if (!canToggleTerminal) return;
-    setShowTerminal((prev) => !prev);
-  }, [canToggleTerminal]);
+    setShowTerminal((prev) => {
+      const nextShowTerminal = !prev;
+      // Update terminal visibility state to prevent focus capture and reduce rendering
+      if (ptyId) {
+        terminalInstanceService.setVisible(ptyId, nextShowTerminal);
+      }
+      return nextShowTerminal;
+    });
+  }, [canToggleTerminal, ptyId]);
 
   const devPreviewToolbar = (
     <BrowserToolbar
@@ -747,9 +755,18 @@ export function DevPreviewPane({
     >
       <div className="flex flex-1 min-h-0 flex-col">
         <div className="relative flex-1 min-h-0 bg-white">
-          {/* Terminal View */}
-          {showTerminal && hasTerminal && (
-            <div className="absolute inset-0 bg-canopy-bg">
+          {/* Terminal View - always mounted when PTY exists to preserve output history */}
+          {hasTerminal && (
+            <div
+              className={cn(
+                "absolute inset-0 bg-canopy-bg",
+                // Use visibility:hidden instead of display:none to preserve xterm state/dimensions
+                // z-index ensures proper layering with browser view
+                showTerminal ? "z-10 visible" : "z-0 invisible"
+              )}
+              aria-hidden={!showTerminal}
+              {...(!showTerminal && { inert: true })}
+            >
               <XtermAdapter
                 terminalId={ptyId}
                 terminalType="terminal"
@@ -758,10 +775,14 @@ export function DevPreviewPane({
               />
             </div>
           )}
-          {/* Browser View - use visibility:hidden instead of unmounting to preserve state */}
+          {/* Browser View - layered on top when terminal is hidden */}
           <div
-            className={cn("absolute inset-0", showTerminal && hasTerminal && "invisible")}
-            style={{ display: showTerminal && hasTerminal ? "none" : undefined }}
+            className={cn(
+              "absolute inset-0",
+              // When terminal is shown, hide browser completely to pause webview
+              showTerminal && hasTerminal ? "hidden" : "z-10 visible"
+            )}
+            aria-hidden={showTerminal && hasTerminal}
           >
             {hasValidUrl ? (
               <>
