@@ -34,6 +34,8 @@ const DEFAULT_OPTIONS: Required<Omit<TerminalPersistenceOptions, "getProjectId">
         cwd: t.cwd,
         command: t.devCommand?.trim() || undefined,
         ...(t.browserUrl && { browserUrl: t.browserUrl }),
+        ...(t.browserHistory && { browserHistory: t.browserHistory }),
+        ...(t.browserZoom != null && { browserZoom: t.browserZoom }),
       };
     }
 
@@ -58,6 +60,8 @@ const DEFAULT_OPTIONS: Required<Omit<TerminalPersistenceOptions, "getProjectId">
       return {
         ...base,
         ...(t.browserUrl && { browserUrl: t.browserUrl }),
+        ...(t.browserHistory && { browserHistory: t.browserHistory }),
+        ...(t.browserZoom != null && { browserZoom: t.browserZoom }),
       };
     }
   },

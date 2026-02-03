@@ -372,6 +372,12 @@ export interface TerminalReconnectError {
   };
 }
 
+export interface BrowserHistory {
+  past: string[];
+  present: string;
+  future: string[];
+}
+
 interface BasePanelData {
   /** Unique identifier for this panel */
   id: string;
@@ -446,6 +452,10 @@ interface PtyPanelData extends BasePanelData {
   isInputLocked?: boolean;
   /** Current URL for browser/dev-preview panels */
   browserUrl?: string;
+  /** Navigation history for browser/dev-preview panels */
+  browserHistory?: BrowserHistory;
+  /** Zoom factor for browser/dev-preview panels */
+  browserZoom?: number;
   /** Dev command override for dev-preview panels */
   devCommand?: string;
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely */
@@ -456,6 +466,10 @@ interface BrowserPanelData extends BasePanelData {
   kind: "browser";
   /** Current URL for browser panes */
   browserUrl?: string;
+  /** Navigation history for browser panes */
+  browserHistory?: BrowserHistory;
+  /** Zoom factor for browser panes */
+  browserZoom?: number;
 }
 
 interface NotesPanelData extends BasePanelData {
@@ -537,6 +551,8 @@ export interface TerminalInstance {
   flowStatusTimestamp?: number;
   isInputLocked?: boolean;
   browserUrl?: string;
+  browserHistory?: BrowserHistory;
+  browserZoom?: number;
   notePath?: string;
   noteId?: string;
   scope?: "worktree" | "project";
@@ -627,6 +643,10 @@ export interface TerminalSnapshot {
   command?: string;
   /** Current URL for browser/dev-preview panes */
   browserUrl?: string;
+  /** Navigation history for browser/dev-preview panes */
+  browserHistory?: BrowserHistory;
+  /** Zoom factor for browser/dev-preview panes */
+  browserZoom?: number;
   /** Path to note file (kind === 'notes') */
   notePath?: string;
   /** Note ID (kind === 'notes') */

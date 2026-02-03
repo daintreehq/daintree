@@ -41,6 +41,8 @@ export interface HydrationOptions {
     skipCommandExecution?: boolean; // Store command but don't execute on spawn
     isInputLocked?: boolean; // Restore input lock state
     browserUrl?: string; // URL for browser panes
+    browserHistory?: import("@shared/types/domain").BrowserHistory;
+    browserZoom?: number;
     notePath?: string; // Path to note file (kind === 'notes')
     noteId?: string; // Note ID (kind === 'notes')
     scope?: "worktree" | "project"; // Note scope (kind === 'notes')
@@ -363,6 +365,7 @@ export async function hydrateAppState(
                       }
                     }
 
+                    const isDevPreview = reconnectedKind === "dev-preview";
                     await addTerminal({
                       kind: reconnectedKind ?? (agentId ? "agent" : "terminal"),
                       type: reconnectedTerminal.type ?? saved.type,
@@ -374,6 +377,8 @@ export async function hydrateAppState(
                       existingId: reconnectedTerminal.id,
                       agentState: currentAgentState,
                       lastStateChange: backendLastStateChange,
+                      browserHistory: isDevPreview ? saved.browserHistory : undefined,
+                      browserZoom: isDevPreview ? saved.browserZoom : undefined,
                     });
 
                     // Initialize frontend tier state from backend
@@ -472,6 +477,8 @@ export async function hydrateAppState(
                       isInputLocked: saved.isInputLocked,
                       devCommand: isDevPreview ? command : undefined,
                       browserUrl: isDevPreview ? saved.browserUrl : undefined,
+                      browserHistory: isDevPreview ? saved.browserHistory : undefined,
+                      browserZoom: isDevPreview ? saved.browserZoom : undefined,
                     });
                   }
                 } else {
@@ -492,6 +499,8 @@ export async function hydrateAppState(
                     location,
                     requestedId: saved.id,
                     browserUrl: saved.browserUrl,
+                    browserHistory: saved.browserHistory,
+                    browserZoom: saved.browserZoom,
                     notePath: saved.notePath,
                     noteId: saved.noteId,
                     scope: saved.scope as "worktree" | "project" | undefined,

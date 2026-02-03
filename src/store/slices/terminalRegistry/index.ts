@@ -93,6 +93,8 @@ export const createTerminalRegistrySlice =
               isVisible: location === "grid",
               runtimeStatus,
               browserUrl: options.browserUrl || "http://localhost:3000",
+              browserHistory: options.browserHistory,
+              browserZoom: options.browserZoom,
               type: "terminal" as const,
               cwd: "",
               cols: 80,
@@ -131,6 +133,8 @@ export const createTerminalRegistrySlice =
               rows: 24,
               devCommand: options.devCommand,
               browserUrl: options.browserUrl,
+              browserHistory: options.browserHistory,
+              browserZoom: options.browserZoom,
               exitBehavior: options.exitBehavior,
             };
           } else {
@@ -1835,6 +1839,34 @@ export const createTerminalRegistrySlice =
 
           const newTerminals = state.terminals.map((t) =>
             t.id === id ? { ...t, browserUrl: url } : t
+          );
+
+          saveTerminals(newTerminals);
+          return { terminals: newTerminals };
+        });
+      },
+
+      setBrowserHistory: (id, history) => {
+        set((state) => {
+          const terminal = state.terminals.find((t) => t.id === id);
+          if (!terminal || panelKindUsesTerminalUi(terminal.kind ?? "terminal")) return state;
+
+          const newTerminals = state.terminals.map((t) =>
+            t.id === id ? { ...t, browserHistory: history } : t
+          );
+
+          saveTerminals(newTerminals);
+          return { terminals: newTerminals };
+        });
+      },
+
+      setBrowserZoom: (id, zoom) => {
+        set((state) => {
+          const terminal = state.terminals.find((t) => t.id === id);
+          if (!terminal || panelKindUsesTerminalUi(terminal.kind ?? "terminal")) return state;
+
+          const newTerminals = state.terminals.map((t) =>
+            t.id === id ? { ...t, browserZoom: zoom } : t
           );
 
           saveTerminals(newTerminals);

@@ -29,10 +29,6 @@ export async function resetAllStoresForProjectSwitch(): Promise<void> {
   useErrorStore.getState().reset();
   useNotificationStore.getState().reset();
   cleanupNotesStore();
-  // Note: Browser state (useBrowserStateStore) is NOT reset here.
-  // Browser state is keyed by panelId (and optionally worktreeId), so different projects
-  // have different panel IDs and won't conflict. This preserves zoom factors across
-  // project switches, which is the expected user experience.
   // Reset assistant chat conversations on project switch
   useAssistantChatStore.getState().reset();
 }

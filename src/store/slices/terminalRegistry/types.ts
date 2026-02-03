@@ -12,6 +12,7 @@ import type {
   TerminalReconnectError,
   TabGroup,
   TabGroupLocation,
+  BrowserHistory,
 } from "@/types";
 import type { PanelKind } from "@/types";
 
@@ -41,6 +42,10 @@ export interface AddTerminalOptions {
   isInputLocked?: boolean;
   /** Initial URL for browser panes (kind === 'browser') */
   browserUrl?: string;
+  /** Navigation history for browser/dev-preview panels */
+  browserHistory?: BrowserHistory;
+  /** Zoom factor for browser/dev-preview panels */
+  browserZoom?: number;
   /** Path to note file (kind === 'notes') */
   notePath?: string;
   /** Note ID (kind === 'notes') */
@@ -141,6 +146,8 @@ export interface TerminalRegistrySlice {
   toggleInputLocked: (id: string) => void;
   convertTerminalType: (id: string, newType: TerminalType, newAgentId?: string) => Promise<void>;
   setBrowserUrl: (id: string, url: string) => void;
+  setBrowserHistory: (id: string, history: BrowserHistory) => void;
+  setBrowserZoom: (id: string, zoom: number) => void;
   setSpawnError: (id: string, error: SpawnError) => void;
   clearSpawnError: (id: string) => void;
   setReconnectError: (id: string, error: TerminalReconnectError) => void;

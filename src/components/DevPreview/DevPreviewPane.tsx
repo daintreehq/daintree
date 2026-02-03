@@ -8,12 +8,8 @@ import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import {
-  useBrowserStateStore,
-  useProjectStore,
-  useTerminalStore,
-  type BrowserHistory,
-} from "@/store";
+import { useProjectStore, useTerminalStore } from "@/store";
+import type { BrowserHistory } from "@shared/types/domain";
 import { panelKindKeepsAliveOnProjectSwitch } from "@shared/config/panelKindRegistry";
 import type { DevPreviewStatus } from "@shared/types/ipc/devPreview";
 
@@ -99,18 +95,20 @@ export function DevPreviewPane({
   const [ptyId, setPtyId] = useState<string>("");
   const [showTerminal, setShowTerminal] = useState(false);
   const [history, setHistory] = useState<BrowserHistory>(() => {
-    const savedState = useBrowserStateStore.getState().getState(id, worktreeId);
-    return (
-      savedState?.history ?? {
-        past: [],
-        present: "",
-        future: [],
-      }
-    );
+    const terminal = useTerminalStore.getState().getTerminal(id);
+    const saved = terminal?.browserHistory;
+    if (saved && Array.isArray(saved.past) && Array.isArray(saved.future) && typeof saved.present === "string") {
+      return saved;
+    }
+    return {
+      past: [],
+      present: "",
+      future: [],
+    };
   });
   const [zoomFactor, setZoomFactor] = useState<number>(() => {
-    const savedState = useBrowserStateStore.getState().getState(id, worktreeId);
-    const savedZoom = savedState?.zoomFactor ?? 1.0;
+    const terminal = useTerminalStore.getState().getTerminal(id);
+    const savedZoom = terminal?.browserZoom ?? 1.0;
     return Number.isFinite(savedZoom) ? Math.max(0.25, Math.min(2.0, savedZoom)) : 1.0;
   });
   const [hasLoaded, setHasLoaded] = useState(false);
@@ -131,8 +129,8 @@ export function DevPreviewPane({
   const isRestoringStateRef = useRef(false);
   const isDragging = useIsDragging();
   const setBrowserUrl = useTerminalStore((state) => state.setBrowserUrl);
-  const updateBrowserZoomFactor = useBrowserStateStore((state) => state.updateZoomFactor);
-  const updateBrowserUrl = useBrowserStateStore((state) => state.updateUrl);
+  const setBrowserHistory = useTerminalStore((state) => state.setBrowserHistory);
+  const setBrowserZoom = useTerminalStore((state) => state.setBrowserZoom);
   const currentWebviewKey = useMemo(() => makeWebviewKey(id, worktreeId), [id, worktreeId]);
   const currentWebviewKeyRef = useRef(currentWebviewKey);
   currentWebviewKeyRef.current = currentWebviewKey;
@@ -142,31 +140,34 @@ export function DevPreviewPane({
   const canGoForward = history.future.length > 0;
   const hasValidUrl = isValidBrowserUrl(currentUrl);
 
-  // Sync history to browser state store (skip during restoration)
+  // Sync history to terminal store (skip during restoration)
   useEffect(() => {
     if (isRestoringStateRef.current) return;
-    updateBrowserUrl(id, currentUrl, history, worktreeId);
-  }, [currentUrl, history, id, updateBrowserUrl, worktreeId]);
+    if (!Array.isArray(history.past) || !Array.isArray(history.future)) return;
+    setBrowserHistory(id, history);
+  }, [history, id, setBrowserHistory]);
 
   // Reload state when worktreeId changes (for shared component instances)
   useEffect(() => {
     isRestoringStateRef.current = true;
-    const savedState = useBrowserStateStore.getState().getState(id, worktreeId);
-    if (savedState) {
-      if (savedState.history) {
-        setHistory(savedState.history);
-        lastSetUrlRef.current = savedState.history.present;
-      }
-      if (savedState.zoomFactor !== undefined) {
-        const savedZoom = savedState.zoomFactor;
-        setZoomFactor(Number.isFinite(savedZoom) ? Math.max(0.25, Math.min(2.0, savedZoom)) : 1.0);
-      }
+    const terminal = useTerminalStore.getState().getTerminal(id);
+    const saved = terminal?.browserHistory;
+    if (saved && Array.isArray(saved.past) && Array.isArray(saved.future) && typeof saved.present === "string") {
+      setHistory(saved);
+      lastSetUrlRef.current = saved.present;
     } else {
-      // Reset to defaults if no state saved for this worktree
       setHistory({ past: [], present: "", future: [] });
+    }
+    if (terminal?.browserZoom !== undefined) {
+      const savedZoom = terminal.browserZoom;
+      setZoomFactor(Number.isFinite(savedZoom) ? Math.max(0.25, Math.min(2.0, savedZoom)) : 1.0);
+    } else {
       setZoomFactor(1.0);
     }
-    isRestoringStateRef.current = false;
+    // Defer flag reset to next tick to ensure sync effect sees it
+    setTimeout(() => {
+      isRestoringStateRef.current = false;
+    }, 0);
   }, [id, worktreeId]);
 
   const clearAutoReload = useCallback(() => {
@@ -682,8 +683,8 @@ export function DevPreviewPane({
   }, [currentUrl, hasValidUrl, id, setBrowserUrl]);
 
   useEffect(() => {
-    updateBrowserZoomFactor(id, zoomFactor, worktreeId);
-  }, [id, updateBrowserZoomFactor, zoomFactor, worktreeId]);
+    setBrowserZoom(id, zoomFactor);
+  }, [id, setBrowserZoom, zoomFactor]);
 
   // Update webview visibility when worktree changes (show/hide instead of reload)
   useEffect(() => {
@@ -799,23 +800,19 @@ export function DevPreviewPane({
     const devCommand = terminal?.devCommand;
     const savedUrl = terminal?.browserUrl ?? null;
 
-    // Restore saved state from browserStateStore (preserves URL across project switches)
+    // Restore saved state from terminal store (preserves URL across project switches)
     isRestoringStateRef.current = true;
-    const savedState = useBrowserStateStore.getState().getState(id, worktreeId);
-    if (savedState) {
-      // Restore full navigation history and zoom from saved state
-      if (savedState.history) {
-        setHistory(savedState.history);
-        lastSetUrlRef.current = savedState.history.present;
-        pendingUrlRef.current = savedState.history.present;
-      }
-      if (savedState.zoomFactor !== undefined) {
-        const savedZoom = savedState.zoomFactor;
-        setZoomFactor(Number.isFinite(savedZoom) ? Math.max(0.25, Math.min(2.0, savedZoom)) : 1.0);
-      }
+    const currentTerminal = useTerminalStore.getState().getTerminal(id);
+    if (currentTerminal?.browserHistory) {
+      setHistory(currentTerminal.browserHistory);
+      lastSetUrlRef.current = currentTerminal.browserHistory.present;
+      pendingUrlRef.current = currentTerminal.browserHistory.present;
     } else if (savedUrl) {
-      // Fallback to terminal's base URL if no saved state (browser-only mode)
       pendingUrlRef.current = savedUrl;
+    }
+    if (currentTerminal?.browserZoom !== undefined) {
+      const savedZoom = currentTerminal.browserZoom;
+      setZoomFactor(Number.isFinite(savedZoom) ? Math.max(0.25, Math.min(2.0, savedZoom)) : 1.0);
     }
     isRestoringStateRef.current = false;
 

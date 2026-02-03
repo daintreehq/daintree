@@ -36,6 +36,7 @@ export type {
   PanelLocation,
   PanelInstance,
   PanelSnapshot,
+  BrowserHistory,
   // Tab group types
   TabGroupLocation,
   TabGroup,

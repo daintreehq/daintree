@@ -223,6 +223,8 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
                 cwd: t.cwd,
                 command: t.devCommand?.trim() || undefined,
                 ...(t.browserUrl && { browserUrl: t.browserUrl }),
+                ...(t.browserHistory && { browserHistory: t.browserHistory }),
+                ...(t.browserZoom != null && { browserZoom: t.browserZoom }),
               };
             } else if (panelKindHasPty(t.kind ?? "terminal")) {
               return {
@@ -245,6 +247,8 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
               return {
                 ...base,
                 ...(t.browserUrl && { browserUrl: t.browserUrl }),
+                ...(t.browserHistory && { browserHistory: t.browserHistory }),
+                ...(t.browserZoom != null && { browserZoom: t.browserZoom }),
               };
             }
           });
@@ -412,6 +416,8 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
                 cwd: t.cwd,
                 command: t.devCommand?.trim() || undefined,
                 ...(t.browserUrl && { browserUrl: t.browserUrl }),
+                ...(t.browserHistory && { browserHistory: t.browserHistory }),
+                ...(t.browserZoom != null && { browserZoom: t.browserZoom }),
               };
             } else if (panelKindHasPty(t.kind ?? "terminal")) {
               return {
@@ -434,6 +440,8 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
               return {
                 ...base,
                 ...(t.browserUrl && { browserUrl: t.browserUrl }),
+                ...(t.browserHistory && { browserHistory: t.browserHistory }),
+                ...(t.browserZoom != null && { browserZoom: t.browserZoom }),
               };
             }
           });

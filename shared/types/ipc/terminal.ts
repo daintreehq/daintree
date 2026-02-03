@@ -58,6 +58,10 @@ export interface TerminalState {
   isInputLocked?: boolean;
   /** Current URL for browser/dev-preview panes */
   browserUrl?: string;
+  /** Navigation history for browser/dev-preview panes */
+  browserHistory?: import("../domain.js").BrowserHistory;
+  /** Zoom factor for browser/dev-preview panes */
+  browserZoom?: number;
   /** Path to note file (kind === 'notes') */
   notePath?: string;
   /** Note ID (kind === 'notes') */

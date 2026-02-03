@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { AlertTriangle, ExternalLink, Home } from "lucide-react";
-import { useTerminalStore, useBrowserStateStore, type BrowserHistory } from "@/store";
+import { useTerminalStore } from "@/store";
+import type { BrowserHistory } from "@shared/types/domain";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { BrowserToolbar } from "./BrowserToolbar";
 import { normalizeBrowserUrl, extractHostPort, isValidBrowserUrl } from "./browserUtils";
@@ -41,20 +42,20 @@ export function BrowserPane({
 }: BrowserPaneProps) {
   const webviewRef = useRef<Electron.WebviewTag>(null);
   const setBrowserUrl = useTerminalStore((state) => state.setBrowserUrl);
-  const updateBrowserUrl = useBrowserStateStore((state) => state.updateUrl);
-  const updateBrowserZoomFactor = useBrowserStateStore((state) => state.updateZoomFactor);
+  const setBrowserHistory = useTerminalStore((state) => state.setBrowserHistory);
+  const setBrowserZoom = useTerminalStore((state) => state.setBrowserZoom);
   const isDragging = useIsDragging();
 
   // Initialize history from persisted state or initialUrl
   const [history, setHistory] = useState<BrowserHistory>(() => {
-    const savedState = useBrowserStateStore.getState().getState(id);
-    if (savedState?.history) {
-      // Use stored history.present if available, otherwise fall back to url
-      const present = savedState.history.present || savedState.url || initialUrl;
+    const terminal = useTerminalStore.getState().getTerminal(id);
+    const saved = terminal?.browserHistory;
+    if (saved && Array.isArray(saved.past) && Array.isArray(saved.future) && typeof saved.present === "string") {
+      const present = saved.present || terminal?.browserUrl || initialUrl;
       return {
-        past: savedState.history.past,
+        past: saved.past,
         present,
-        future: savedState.history.future,
+        future: saved.future,
       };
     }
     const normalized = normalizeBrowserUrl(initialUrl);
@@ -68,8 +69,8 @@ export function BrowserPane({
   // Initialize zoom factor from persisted state (default 1.0 = 100%)
   // Clamp to valid range [0.25, 2.0] to handle corrupt storage
   const [zoomFactor, setZoomFactor] = useState<number>(() => {
-    const savedState = useBrowserStateStore.getState().getState(id);
-    const savedZoom = savedState?.zoomFactor ?? 1.0;
+    const terminal = useTerminalStore.getState().getTerminal(id);
+    const savedZoom = terminal?.browserZoom ?? 1.0;
     return Number.isFinite(savedZoom) ? Math.max(0.25, Math.min(2.0, savedZoom)) : 1.0;
   });
 
@@ -85,18 +86,19 @@ export function BrowserPane({
   const canGoForward = history.future.length > 0;
   const hasValidUrl = isValidBrowserUrl(currentUrl);
 
-  // Sync URL changes to store
+  // Sync URL changes to store (only if valid)
   useEffect(() => {
-    setBrowserUrl(id, currentUrl);
-  }, [id, currentUrl, setBrowserUrl]);
+    if (hasValidUrl) {
+      setBrowserUrl(id, currentUrl);
+    }
+  }, [id, currentUrl, hasValidUrl, setBrowserUrl]);
 
-  // Persist state changes (debounced via effect cleanup)
+  // Persist history changes to terminal store (with validation)
   useEffect(() => {
-    const timeoutId = setTimeout(() => {
-      updateBrowserUrl(id, currentUrl, history);
-    }, 300);
-    return () => clearTimeout(timeoutId);
-  }, [id, currentUrl, history, updateBrowserUrl]);
+    if (Array.isArray(history.past) && Array.isArray(history.future)) {
+      setBrowserHistory(id, history);
+    }
+  }, [id, history, setBrowserHistory]);
 
   // Apply zoom level when it changes or webview becomes ready
   useEffect(() => {
@@ -108,8 +110,8 @@ export function BrowserPane({
 
   // Persist zoom factor changes
   useEffect(() => {
-    updateBrowserZoomFactor(id, zoomFactor);
-  }, [id, zoomFactor, updateBrowserZoomFactor]);
+    setBrowserZoom(id, zoomFactor);
+  }, [id, zoomFactor, setBrowserZoom]);
 
   // Set up webview event listeners - reattach whenever webview element changes
   useEffect(() => {

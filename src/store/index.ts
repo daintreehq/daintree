@@ -65,9 +65,6 @@ export { usePreferencesStore } from "./preferencesStore";
 
 export { useToolbarPreferencesStore } from "./toolbarPreferencesStore";
 
-export { useBrowserStateStore } from "./browserStateStore";
-export type { BrowserPanelState, BrowserHistory } from "./browserStateStore";
-
 export { useDockStore } from "./dockStore";
 
 export { useTwoPaneSplitStore } from "./twoPaneSplitStore";
