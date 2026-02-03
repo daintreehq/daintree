@@ -14,7 +14,6 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { panelKindUsesTerminalUi } from "@shared/config/panelKindRegistry";
 import type { HydrationCallbacks } from "./useAppHydration";
-import { useBrowserStateStore } from "@/store/browserStateStore";
 
 interface ProjectSwitchedEventDetail {
   switchId: string;
@@ -104,9 +103,9 @@ export function useProjectSwitchRehydration(callbacks: HydrationCallbacks) {
       console.log(
         `[useProjectSwitchRehydration] Received PROJECT_ON_SWITCH from main process (project: ${project.name}, switchId: ${switchId}), re-hydrating...`
       );
-      // Clear browser state before hydration for menu-driven switches
-      // (renderer-driven switches already reset via resetAllStoresForProjectSwitch)
-      useBrowserStateStore.getState().reset();
+      // Note: Browser state is NOT reset here. Browser state is keyed by panelId (and
+      // optionally worktreeId), so different projects have different panel IDs and won't
+      // conflict. This preserves zoom factors across project switches.
       window.dispatchEvent(
         new CustomEvent<ProjectSwitchedEventDetail>("project-switched", {
           detail: { switchId },

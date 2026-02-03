@@ -9,7 +9,6 @@ import { useErrorStore } from "./errorStore";
 import { useNotificationStore } from "./notificationStore";
 import { cleanupNotesStore } from "./notesStore";
 import { useRecipeStore } from "./recipeStore";
-import { useBrowserStateStore } from "./browserStateStore";
 import { useAssistantChatStore } from "./assistantChatStore";
 
 export async function resetAllStoresForProjectSwitch(): Promise<void> {
@@ -30,9 +29,10 @@ export async function resetAllStoresForProjectSwitch(): Promise<void> {
   useErrorStore.getState().reset();
   useNotificationStore.getState().reset();
   cleanupNotesStore();
-  // Reset browser state to ensure per-project URLs are restored from project persistence
-  // rather than using stale localStorage state from a different project
-  useBrowserStateStore.getState().reset();
+  // Note: Browser state (useBrowserStateStore) is NOT reset here.
+  // Browser state is keyed by panelId (and optionally worktreeId), so different projects
+  // have different panel IDs and won't conflict. This preserves zoom factors across
+  // project switches, which is the expected user experience.
   // Reset assistant chat conversations on project switch
   useAssistantChatStore.getState().reset();
 }
