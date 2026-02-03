@@ -109,6 +109,7 @@ export function DevPreviewPane({
   const hasLoadedRef = useRef(false);
   const lastSetUrlRef = useRef<string>(history.present);
   const shouldAutoReloadRef = useRef(false);
+  const isRestoringStateRef = useRef(false);
   const isDragging = useIsDragging();
   const setBrowserUrl = useTerminalStore((state) => state.setBrowserUrl);
   const updateBrowserZoomFactor = useBrowserStateStore((state) => state.updateZoomFactor);
@@ -120,13 +121,15 @@ export function DevPreviewPane({
   const canGoForward = history.future.length > 0;
   const hasValidUrl = isValidBrowserUrl(currentUrl);
 
-  // Sync history to browser state store
+  // Sync history to browser state store (skip during restoration)
   useEffect(() => {
+    if (isRestoringStateRef.current) return;
     updateBrowserUrl(id, currentUrl, history, worktreeId);
   }, [currentUrl, history, id, updateBrowserUrl, worktreeId]);
 
   // Reload state when worktreeId changes (for shared component instances)
   useEffect(() => {
+    isRestoringStateRef.current = true;
     const savedState = useBrowserStateStore.getState().getState(id, worktreeId);
     if (savedState) {
       if (savedState.history) {
@@ -142,6 +145,7 @@ export function DevPreviewPane({
       setHistory({ past: [], present: "", future: [] });
       setZoomFactor(1.0);
     }
+    isRestoringStateRef.current = false;
   }, [id, worktreeId]);
 
   const clearAutoReload = useCallback(() => {
@@ -303,10 +307,13 @@ export function DevPreviewPane({
         return;
       }
 
-      shouldAutoReloadRef.current = true;
-      setIsLoading(true);
-      setHistory({ past: [], present: resolvedUrl, future: [] });
-      lastSetUrlRef.current = resolvedUrl;
+      // Only reset history if no URL is currently set (avoid overwriting restored state)
+      if (!currentUrl) {
+        shouldAutoReloadRef.current = true;
+        setIsLoading(true);
+        setHistory({ past: [], present: resolvedUrl, future: [] });
+        lastSetUrlRef.current = resolvedUrl;
+      }
     },
     [clearAutoReload, currentUrl, isBrowserOnly, isWebviewReady, scheduleAutoReload]
   );
@@ -538,9 +545,25 @@ export function DevPreviewPane({
     const devCommand = terminal?.devCommand;
     const savedUrl = terminal?.browserUrl ?? null;
 
-    if (savedUrl) {
+    // Restore saved state from browserStateStore (preserves URL across project switches)
+    isRestoringStateRef.current = true;
+    const savedState = useBrowserStateStore.getState().getState(id, worktreeId);
+    if (savedState) {
+      // Restore full navigation history and zoom from saved state
+      if (savedState.history) {
+        setHistory(savedState.history);
+        lastSetUrlRef.current = savedState.history.present;
+        pendingUrlRef.current = savedState.history.present;
+      }
+      if (savedState.zoomFactor !== undefined) {
+        const savedZoom = savedState.zoomFactor;
+        setZoomFactor(Number.isFinite(savedZoom) ? Math.max(0.25, Math.min(2.0, savedZoom)) : 1.0);
+      }
+    } else if (savedUrl) {
+      // Fallback to terminal's base URL if no saved state (browser-only mode)
       pendingUrlRef.current = savedUrl;
     }
+    isRestoringStateRef.current = false;
 
     void window.electron.devPreview.start(id, cwd, cols, rows, devCommand);
 
@@ -553,7 +576,7 @@ export function DevPreviewPane({
       }
       void window.electron.devPreview.stop(id);
     };
-  }, [clearAutoReload, cwd, id]);
+  }, [clearAutoReload, cwd, id, worktreeId]);
 
   useEffect(() => {
     const handleReloadEvent = (e: Event) => {
