@@ -10,6 +10,7 @@ import { assistantService } from "./AssistantService.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { sendToRenderer } from "../ipc/utils.js";
 import { randomUUID } from "crypto";
+import { store } from "../store.js";
 
 export interface ProjectSwitchDependencies {
   mainWindow: BrowserWindow;
@@ -45,6 +46,12 @@ export class ProjectSwitchService {
 
     const previousProjectId = projectStore.getCurrentProjectId();
 
+    // Save the current active worktree to the outgoing project's per-project state
+    // This ensures the worktree selection is remembered when switching back
+    if (previousProjectId) {
+      await this.saveOutgoingProjectWorktreeState(previousProjectId);
+    }
+
     try {
       await this.cleanupPreviousProject(projectId);
 
@@ -75,6 +82,36 @@ export class ProjectSwitchService {
         this.deps.ptyClient.setActiveProject(null);
       }
       throw error;
+    }
+  }
+
+  /**
+   * Save the current active worktree ID to the outgoing project's per-project state.
+   * This ensures the worktree selection is remembered when switching back to the project.
+   */
+  private async saveOutgoingProjectWorktreeState(projectId: string): Promise<void> {
+    try {
+      const currentAppState = store.get("appState");
+      const activeWorktreeId = currentAppState.activeWorktreeId;
+
+      // Get existing project state to preserve all fields
+      const existingState = await projectStore.getProjectState(projectId);
+
+      // Always save to ensure cleared worktree IDs are persisted (when activeWorktreeId is null/undefined)
+      await projectStore.saveProjectState(projectId, {
+        ...existingState,
+        projectId,
+        activeWorktreeId,
+        sidebarWidth: existingState?.sidebarWidth ?? currentAppState.sidebarWidth ?? 350,
+        terminals: existingState?.terminals ?? [],
+      });
+
+      console.log(
+        `[ProjectSwitch] Saved activeWorktreeId (${activeWorktreeId ?? "null"}) to project ${projectId}`
+      );
+    } catch (error) {
+      // Non-fatal: log but don't block the switch
+      console.error("[ProjectSwitch] Failed to save outgoing project worktree state:", error);
     }
   }
 

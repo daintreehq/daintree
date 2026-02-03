@@ -24,6 +24,8 @@ export function registerAppStateHandlers(): () => void {
     // Focus mode state to include in response
     let focusModeToUse = globalAppState.focusMode ?? false;
     let focusPanelStateToUse = globalAppState.focusPanelState;
+    // Active worktree state to include in response
+    let activeWorktreeIdToUse = globalAppState.activeWorktreeId;
 
     if (projectId) {
       const projectState = await projectStore.getProjectState(projectId);
@@ -57,6 +59,11 @@ export function registerAppStateHandlers(): () => void {
             };
           });
         terminalsSource = "per-project";
+
+        // Use per-project active worktree if it has been set
+        if (projectState.activeWorktreeId !== undefined) {
+          activeWorktreeIdToUse = projectState.activeWorktreeId;
+        }
 
         // Use per-project focus mode if it has been set (undefined means not migrated yet)
         if (projectState.focusMode !== undefined) {
@@ -205,7 +212,8 @@ export function registerAppStateHandlers(): () => void {
     const appState: StoreSchema["appState"] = {
       ...globalAppState,
       terminals: terminalsToUse,
-      // Include per-project focus mode in the response (frontend uses this for hydration)
+      // Include per-project state in the response (frontend uses this for hydration)
+      activeWorktreeId: activeWorktreeIdToUse,
       focusMode: focusModeToUse,
       focusPanelState: focusPanelStateToUse,
     };
