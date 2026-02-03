@@ -63,6 +63,7 @@ export interface HybridInputBarProps {
 
 interface LatestState {
   terminalId: string;
+  projectId?: string;
   disabled: boolean;
   isInitializing: boolean;
   isInHistoryMode: boolean;
@@ -77,7 +78,7 @@ interface LatestState {
   onSendKey?: HybridInputBarProps["onSendKey"];
   addToHistory: (terminalId: string, command: string) => void;
   resetHistoryIndex: (terminalId: string) => void;
-  clearDraftInput: (terminalId: string) => void;
+  clearDraftInput: (terminalId: string, projectId?: string) => void;
   navigateHistory: (
     terminalId: string,
     direction: "up" | "down",
@@ -110,7 +111,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const isInHistoryMode = useTerminalInputStore(
       (s) => (s.historyIndex.get(terminalId) ?? -1) !== -1
     );
-    const [value, setValue] = useState(() => getDraftInput(terminalId));
+    // Get projectId early so it can be used for draft input initialization
+    const projectId = useProjectStore((s) => s.currentProject?.id);
+    const [value, setValue] = useState(() => getDraftInput(terminalId, projectId));
     const submitAfterCompositionRef = useRef(false);
     const isComposingRef = useRef(false);
     const sendRafRef = useRef<number | null>(null);
@@ -142,15 +145,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const latestRef = useRef<LatestState | null>(null);
 
     const openPicker = useCommandStore((s) => s.openPicker);
-    const currentProject = useProjectStore((s) => s.currentProject);
 
     const commandContext = useMemo(
       (): CommandContext => ({
         terminalId,
         cwd,
-        projectId: currentProject?.id,
+        projectId,
       }),
-      [terminalId, cwd, currentProject?.id]
+      [terminalId, cwd, projectId]
     );
 
     const isAgentTerminal = agentId !== undefined;
@@ -176,7 +178,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const isInitializing = isAgentTerminal && initializationState === "initializing";
 
     useEffect(() => {
-      const draft = getDraftInput(terminalId);
+      const draft = getDraftInput(terminalId, projectId);
       setValue(draft);
       lastEmittedValueRef.current = draft;
       setAtContext(null);
@@ -190,11 +192,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           changes: { from: 0, to: view.state.doc.length, insert: draft },
         });
       }
-    }, [terminalId, getDraftInput]);
+    }, [terminalId, projectId, getDraftInput]);
 
     useEffect(() => {
-      setDraftInput(terminalId, value);
-    }, [terminalId, value, setDraftInput]);
+      setDraftInput(terminalId, value, projectId);
+    }, [terminalId, value, projectId, setDraftInput]);
 
     useEffect(() => {
       lastEmittedValueRef.current = value;
@@ -250,6 +252,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     latestRef.current = {
       terminalId,
+      projectId,
       disabled,
       isInitializing,
       isInHistoryMode,
@@ -420,7 +423,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         latest.resetHistoryIndex(latest.terminalId);
 
         applyEditorValue("", { selection: EditorSelection.create([EditorSelection.cursor(0)]) });
-        latest.clearDraftInput(latest.terminalId);
+        latest.clearDraftInput(latest.terminalId, latest.projectId);
         setAtContext(null);
         setSlashContext(null);
       },

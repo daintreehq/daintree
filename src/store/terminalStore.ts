@@ -88,7 +88,12 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       clearTerminalRestartGuard(id);
       get().clearQueue(id);
       get().handleTerminalRemoved(id, remainingTerminals, removedIndex);
-      useTerminalInputStore.getState().clearDraftInput(id);
+      // Clear draft input for the current project when terminal is removed
+      // Use dynamic import to avoid circular dependency with projectStore
+      void import("./projectStore").then(({ useProjectStore }) => {
+        const projectId = useProjectStore.getState().currentProject?.id;
+        useTerminalInputStore.getState().clearDraftInput(id, projectId);
+      });
 
       // Clean up stale tab group mappings
       const validPanelIds = new Set(remainingTerminals.map((t) => t.id));

@@ -2,6 +2,18 @@ import { create } from "zustand";
 
 const MAX_HISTORY_SIZE = 100;
 
+/**
+ * Creates a composite key for draft inputs that includes the project context.
+ * This allows draft inputs to persist across project switches by associating
+ * them with both the project and terminal ID.
+ *
+ * Key format: `{projectId}:{terminalId}` when projectId is provided,
+ * otherwise just `{terminalId}` for backward compatibility.
+ */
+function makeDraftKey(terminalId: string, projectId?: string): string {
+  return projectId ? `${projectId}:${terminalId}` : terminalId;
+}
+
 export interface TerminalInputState {
   hybridInputEnabled: boolean;
   hybridInputAutoFocus: boolean;
@@ -11,9 +23,9 @@ export interface TerminalInputState {
   tempDraft: Map<string, string>;
   setHybridInputEnabled: (enabled: boolean) => void;
   setHybridInputAutoFocus: (enabled: boolean) => void;
-  getDraftInput: (terminalId: string) => string;
-  setDraftInput: (terminalId: string, value: string) => void;
-  clearDraftInput: (terminalId: string) => void;
+  getDraftInput: (terminalId: string, projectId?: string) => string;
+  setDraftInput: (terminalId: string, value: string, projectId?: string) => void;
+  clearDraftInput: (terminalId: string, projectId?: string) => void;
   clearAllDraftInputs: () => void;
   addToHistory: (terminalId: string, command: string) => void;
   navigateHistory: (
@@ -34,21 +46,26 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
   tempDraft: new Map(),
   setHybridInputEnabled: (enabled) => set({ hybridInputEnabled: enabled }),
   setHybridInputAutoFocus: (enabled) => set({ hybridInputAutoFocus: enabled }),
-  getDraftInput: (terminalId) => get().draftInputs.get(terminalId) ?? "",
-  setDraftInput: (terminalId, value) =>
+  getDraftInput: (terminalId, projectId) => {
+    const key = makeDraftKey(terminalId, projectId);
+    return get().draftInputs.get(key) ?? "";
+  },
+  setDraftInput: (terminalId, value, projectId) =>
     set((state) => {
+      const key = makeDraftKey(terminalId, projectId);
       const newDraftInputs = new Map(state.draftInputs);
       if (value === "") {
-        newDraftInputs.delete(terminalId);
+        newDraftInputs.delete(key);
       } else {
-        newDraftInputs.set(terminalId, value);
+        newDraftInputs.set(key, value);
       }
       return { draftInputs: newDraftInputs };
     }),
-  clearDraftInput: (terminalId) =>
+  clearDraftInput: (terminalId, projectId) =>
     set((state) => {
+      const key = makeDraftKey(terminalId, projectId);
       const newDraftInputs = new Map(state.draftInputs);
-      newDraftInputs.delete(terminalId);
+      newDraftInputs.delete(key);
       return { draftInputs: newDraftInputs };
     }),
   clearAllDraftInputs: () => set({ draftInputs: new Map() }),
