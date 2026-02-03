@@ -102,8 +102,8 @@ export function CompactDock({
   );
 
   const handleAddTerminal = useCallback(
-    (agentId: string) => {
-      void actionService.dispatch(
+    async (agentId: string) => {
+      const result = await actionService.dispatch<{ terminalId: string | null }>(
         "agent.launch",
         {
           agentId: agentId as any,
@@ -113,8 +113,12 @@ export function CompactDock({
         },
         { source: "context-menu" }
       );
+
+      if (result.ok && result.result?.terminalId) {
+        openDockTerminal(result.result.terminalId);
+      }
     },
-    [activeWorktreeId, cwd]
+    [activeWorktreeId, cwd, openDockTerminal]
   );
 
   const handleContextMenu = useCallback(
@@ -128,7 +132,7 @@ export function CompactDock({
       if (!actionId) return;
 
       if (actionId.startsWith("new:")) {
-        handleAddTerminal(actionId.slice("new:".length));
+        void handleAddTerminal(actionId.slice("new:".length));
       }
     },
     [handleAddTerminal, showMenu]
