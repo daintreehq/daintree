@@ -65,8 +65,9 @@ const STATUS_STYLES: Record<DevPreviewStatus, { label: string; dot: string; text
 const AUTO_RELOAD_MAX_ATTEMPTS = 3;
 const AUTO_RELOAD_INITIAL_DELAY_MS = 1500;
 const AUTO_RELOAD_RETRY_DELAY_MS = 800;
-const AUTO_RELOAD_WINDOW_MS = 15000;
+const AUTO_RELOAD_WINDOW_MS = 30000;
 const AUTO_RELOAD_ERROR_CODES = new Set([-102, -105, -106, -118]);
+const LOADING_TIMEOUT_MS = 45000;
 
 export interface DevPreviewPaneProps extends BasePanelProps {
   cwd: string;
@@ -126,6 +127,7 @@ export function DevPreviewPane({
   const hasLoadedRef = useRef(false);
   const lastSetUrlRef = useRef<string>(history.present);
   const shouldAutoReloadRef = useRef(false);
+  const loadingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isRestoringStateRef = useRef(false);
   const isDragging = useIsDragging();
   const setBrowserUrl = useTerminalStore((state) => state.setBrowserUrl);
@@ -173,6 +175,28 @@ export function DevPreviewPane({
       autoReloadTimeoutRef.current = null;
     }
   }, []);
+
+  const clearLoadingTimeout = useCallback(() => {
+    if (loadingTimeoutRef.current) {
+      clearTimeout(loadingTimeoutRef.current);
+      loadingTimeoutRef.current = null;
+    }
+  }, []);
+
+  const startLoadingTimeout = useCallback(() => {
+    clearLoadingTimeout();
+    loadingTimeoutRef.current = setTimeout(() => {
+      loadingTimeoutRef.current = null;
+      if (hasLoadedRef.current) return;
+      const instance = webviewMapRef.current.get(currentWebviewKeyRef.current);
+      if (instance) {
+        instance.isLoading = false;
+        instance.loadError = "Loading timed out. The dev server may still be starting.";
+      }
+      setIsLoading(false);
+      setWebviewLoadError("Loading timed out. The dev server may still be starting.");
+    }, LOADING_TIMEOUT_MS);
+  }, [clearLoadingTimeout]);
 
   const getActiveWebview = useCallback((): Electron.WebviewTag | null => {
     const instance = webviewMapRef.current.get(currentWebviewKey);
@@ -405,12 +429,13 @@ export function DevPreviewPane({
     setHasLoaded(false);
     autoReloadAttemptsRef.current = 0;
     clearAutoReload();
+    clearLoadingTimeout();
     lastUrlSetAtRef.current = Date.now();
     const webview = getActiveWebview();
     if (webview && isWebviewReady) {
       webview.reload();
     }
-  }, [clearAutoReload, getActiveWebview, isWebviewReady]);
+  }, [clearAutoReload, clearLoadingTimeout, getActiveWebview, isWebviewReady]);
 
   const handleServerUrl = useCallback(
     (nextUrl: string) => {
@@ -483,6 +508,7 @@ export function DevPreviewPane({
       }
       if (payload.status === "error" || payload.status === "stopped") {
         clearAutoReload();
+        clearLoadingTimeout();
       }
     });
 
@@ -498,8 +524,9 @@ export function DevPreviewPane({
         clearTimeout(restartTimeoutRef.current);
       }
       clearAutoReload();
+      clearLoadingTimeout();
     };
-  }, [clearAutoReload, handleServerUrl, id]);
+  }, [clearAutoReload, clearLoadingTimeout, handleServerUrl, id]);
 
   const setupWebviewListeners = useCallback(
     (webview: Electron.WebviewTag, webviewKey: string) => {
@@ -541,6 +568,7 @@ export function DevPreviewPane({
           scheduleAutoReload(delay);
           return;
         }
+        clearLoadingTimeout();
         setWebviewLoadError(instance?.loadError || "Failed to load");
       };
 
@@ -559,6 +587,7 @@ export function DevPreviewPane({
         hasLoadedRef.current = false;
         setHasLoaded(false);
         setIsLoading(true);
+        startLoadingTimeout();
       };
 
       const handleDidStopLoading = () => {
@@ -576,6 +605,7 @@ export function DevPreviewPane({
         hasLoadedRef.current = true;
         autoReloadAttemptsRef.current = 0;
         clearAutoReload();
+        clearLoadingTimeout();
         setHasLoaded(true);
         setIsLoading(false);
       };
@@ -643,7 +673,7 @@ export function DevPreviewPane({
         webview.removeEventListener("did-navigate-in-page", handleDidNavigateInPage);
       };
     },
-    [clearAutoReload, scheduleAutoReload]
+    [clearAutoReload, clearLoadingTimeout, scheduleAutoReload, startLoadingTimeout]
   );
 
   useEffect(() => {
@@ -753,6 +783,7 @@ export function DevPreviewPane({
     hasLoadedRef.current = false;
     autoReloadAttemptsRef.current = 0;
     clearAutoReload();
+    clearLoadingTimeout();
     pendingUrlRef.current = null;
     lastSetUrlRef.current = "";
     lastUrlSetAtRef.current = 0;
@@ -813,7 +844,7 @@ export function DevPreviewPane({
 
       void window.electron.devPreview.stop(id);
     };
-  }, [clearAutoReload, cwd, id, worktreeId]);
+  }, [clearAutoReload, clearLoadingTimeout, cwd, id, worktreeId]);
 
   // Separate unmount effect to ensure cleanup even during project switch
   useEffect(() => {
@@ -919,6 +950,7 @@ export function DevPreviewPane({
     hasLoadedRef.current = false;
     autoReloadAttemptsRef.current = 0;
     clearAutoReload();
+    clearLoadingTimeout();
     lastSetUrlRef.current = "";
     lastUrlSetAtRef.current = 0;
     shouldAutoReloadRef.current = false;
@@ -929,12 +961,36 @@ export function DevPreviewPane({
       setIsRestarting(false);
     }, 10000);
     void window.electron.devPreview.restart(id);
-  }, [clearAutoReload, id]);
+  }, [clearAutoReload, clearLoadingTimeout, id]);
 
   const handleReloadBrowser = useCallback(() => {
     if (!hasValidUrl || !isWebviewReady) return;
     handleReload();
   }, [handleReload, hasValidUrl, isWebviewReady]);
+
+  const handleForceReload = useCallback(() => {
+    if (!hasValidUrl) return;
+    setIsLoading(true);
+    setWebviewLoadError(null);
+    hasLoadedRef.current = false;
+    setHasLoaded(false);
+    autoReloadAttemptsRef.current = 0;
+    clearAutoReload();
+    clearLoadingTimeout();
+    lastUrlSetAtRef.current = Date.now();
+    const webview = getActiveWebview();
+    if (webview) {
+      webview.loadURL(currentUrl);
+      startLoadingTimeout();
+    }
+  }, [
+    clearAutoReload,
+    clearLoadingTimeout,
+    currentUrl,
+    getActiveWebview,
+    hasValidUrl,
+    startLoadingTimeout,
+  ]);
 
   const statusStyle = STATUS_STYLES[status];
   const showLoadingOverlay = hasValidUrl && !hasLoaded && !webviewLoadError;
@@ -1059,6 +1115,14 @@ export function DevPreviewPane({
                         Webview Load Error
                       </div>
                       <div className="text-xs text-canopy-text/60">{webviewLoadError}</div>
+                      <button
+                        type="button"
+                        onClick={handleForceReload}
+                        className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded bg-white/10 hover:bg-white/15 text-canopy-text transition-colors"
+                      >
+                        <RotateCw className="w-3 h-3" />
+                        Retry
+                      </button>
                     </div>
                   </div>
                 )}
