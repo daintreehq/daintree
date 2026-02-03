@@ -592,4 +592,241 @@ describe("DevPreviewService", () => {
       expect(session1!.ptyId).not.toBe(session2!.ptyId);
     });
   });
+
+  describe("error detection and recovery", () => {
+    beforeEach(() => {
+      vi.mocked(existsSync).mockImplementation((p: unknown) => {
+        const pathStr = String(p);
+        if (pathStr.includes("package.json")) return true;
+        if (pathStr.includes("node_modules")) return true;
+        return false;
+      });
+
+      vi.mocked(readFile).mockResolvedValue(
+        JSON.stringify({
+          scripts: { dev: "vite" },
+        })
+      );
+    });
+
+    it("detects port conflict error and emits error status", async () => {
+      const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
+      const statusEvents: { status: DevPreviewStatus; message: string }[] = [];
+      service.on("status", (e) => statusEvents.push(e));
+
+      await service.start({
+        panelId: "panel-port-conflict",
+        cwd: "/test/project",
+        cols: 80,
+        rows: 24,
+      });
+
+      const session = service.getSession("panel-port-conflict");
+      const ptyId = session?.ptyId;
+
+      // Simulate PTY data with port conflict error
+      mockPtyClient.emit(
+        "data",
+        ptyId,
+        "Error: listen EADDRINUSE: address already in use :::3000\n"
+      );
+
+      const errorEvent = statusEvents.find((e) => e.status === "error");
+      expect(errorEvent).toBeDefined();
+      expect(errorEvent?.message).toContain("Port 3000 is already in use");
+    });
+
+    it("detects missing module error and triggers automatic install", async () => {
+      const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
+      const statusEvents: { status: DevPreviewStatus; message: string }[] = [];
+      service.on("status", (e) => statusEvents.push(e));
+
+      await service.start({
+        panelId: "panel-missing-deps",
+        cwd: "/test/project",
+        cols: 80,
+        rows: 24,
+      });
+
+      const session = service.getSession("panel-missing-deps");
+      const originalPtyId = session?.ptyId;
+
+      // Simulate PTY data with missing module error
+      mockPtyClient.emit("data", originalPtyId, "Error: Cannot find module 'vite'\n");
+
+      // Wait for async recovery
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Should have killed the original PTY
+      expect(mockPtyClient.kill).toHaveBeenCalledWith(originalPtyId);
+
+      // Should have spawned a new PTY for recovery
+      expect(mockPtyClient.spawn).toHaveBeenCalledTimes(2);
+
+      // Should emit installing status
+      const installingEvent = statusEvents.find((e) => e.status === "installing");
+      expect(installingEvent).toBeDefined();
+      expect(installingEvent?.message).toContain("Installing missing dependencies");
+    });
+
+    it("only attempts recovery once per session", async () => {
+      const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
+
+      await service.start({
+        panelId: "panel-single-recovery",
+        cwd: "/test/project",
+        cols: 80,
+        rows: 24,
+      });
+
+      const session = service.getSession("panel-single-recovery");
+      const ptyId = session?.ptyId;
+
+      // First error - should trigger recovery
+      mockPtyClient.emit("data", ptyId, "Error: Cannot find module 'vite'\n");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const initialKillCount = mockPtyClient.kill.mock.calls.length;
+
+      // Get new PTY ID after recovery
+      const updatedSession = service.getSession("panel-single-recovery");
+      const newPtyId = updatedSession?.ptyId;
+
+      // Second error - should NOT trigger another recovery
+      mockPtyClient.emit("data", newPtyId, "Error: Cannot find module 'react'\n");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Kill count should not have increased
+      expect(mockPtyClient.kill.mock.calls.length).toBe(initialKillCount);
+    });
+
+    it("does not detect errors when session is already running", async () => {
+      const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
+      const statusEvents: { status: DevPreviewStatus; message: string }[] = [];
+      service.on("status", (e) => statusEvents.push(e));
+
+      await service.start({
+        panelId: "panel-running",
+        cwd: "/test/project",
+        cols: 80,
+        rows: 24,
+      });
+
+      const session = service.getSession("panel-running");
+      const ptyId = session?.ptyId;
+
+      // First, set session to running by detecting a URL
+      mockPtyClient.emit("data", ptyId, "Server started at http://localhost:3000\n");
+
+      // Clear events for clarity
+      statusEvents.length = 0;
+
+      // Now emit an error - should be ignored since already running
+      mockPtyClient.emit(
+        "data",
+        ptyId,
+        "Error: listen EADDRINUSE: address already in use :::3001\n"
+      );
+
+      // No error status should be emitted
+      const errorEvent = statusEvents.find((e) => e.status === "error");
+      expect(errorEvent).toBeUndefined();
+    });
+
+    it("accumulates output buffer for error detection", async () => {
+      const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
+      const statusEvents: { status: DevPreviewStatus; message: string }[] = [];
+      service.on("status", (e) => statusEvents.push(e));
+
+      await service.start({
+        panelId: "panel-buffer",
+        cwd: "/test/project",
+        cols: 80,
+        rows: 24,
+      });
+
+      const session = service.getSession("panel-buffer");
+      const ptyId = session?.ptyId;
+
+      // Send error in chunks
+      mockPtyClient.emit("data", ptyId, "Error: listen EADDRINUSE: ");
+      mockPtyClient.emit("data", ptyId, "address already in use :::4000\n");
+
+      const errorEvent = statusEvents.find((e) => e.status === "error");
+      expect(errorEvent).toBeDefined();
+      expect(errorEvent?.message).toContain("Port 4000 is already in use");
+    });
+
+    it("uses correct package manager for recovery install command", async () => {
+      vi.mocked(existsSync).mockImplementation((p: unknown) => {
+        const pathStr = String(p);
+        if (pathStr.includes("package.json")) return true;
+        if (pathStr.includes("pnpm-lock.yaml")) return true;
+        if (pathStr.includes("node_modules")) return true;
+        return false;
+      });
+
+      const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
+
+      await service.start({
+        panelId: "panel-pnpm-recovery",
+        cwd: "/test/project",
+        cols: 80,
+        rows: 24,
+      });
+
+      const session = service.getSession("panel-pnpm-recovery");
+      expect(session?.packageManager).toBe("pnpm");
+
+      const ptyId = session?.ptyId;
+
+      // Trigger recovery
+      mockPtyClient.emit("data", ptyId, "Error: Cannot find module 'vite'\n");
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
+      // Verify pnpm install command was submitted
+      expect(mockPtyClient.submit).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.stringContaining("pnpm install")
+      );
+    });
+
+    it("installs dependencies for user-provided commands when node_modules is missing", async () => {
+      vi.mocked(existsSync).mockImplementation((p: unknown) => {
+        const pathStr = String(p);
+        if (pathStr.includes("package.json")) return true;
+        if (pathStr.includes("node_modules")) return false; // Missing node_modules
+        return false;
+      });
+
+      vi.mocked(readFile).mockResolvedValue(
+        JSON.stringify({
+          scripts: { dev: "vite" },
+        })
+      );
+
+      const service = new DevPreviewServiceClass(mockPtyClient as unknown as PtyClient);
+      const statusEvents: { status: DevPreviewStatus; message: string }[] = [];
+      service.on("status", (e) => statusEvents.push(e));
+
+      // Start with a user-provided command (not auto-detected)
+      await service.start({
+        panelId: "panel-user-cmd-install",
+        cwd: "/test/project",
+        cols: 80,
+        rows: 24,
+        devCommand: "npm run start:dev", // User-provided command
+      });
+
+      const session = service.getSession("panel-user-cmd-install");
+
+      // Should be in installing state because node_modules is missing
+      expect(session?.status).toBe("installing");
+      expect(session?.installCommand).toBe("npm install");
+
+      // First status event should be "installing"
+      expect(statusEvents[0].status).toBe("installing");
+      expect(statusEvents[0].message).toBe("Installing dependencies...");
+    });
+  });
 });
