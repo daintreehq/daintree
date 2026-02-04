@@ -801,7 +801,7 @@ export const createTerminalRegistrySlice =
 
         const resolvedActiveTabId = trashPanelIds.includes(activeTabId)
           ? activeTabId
-          : trashPanelIds[0] ?? "";
+          : (trashPanelIds[0] ?? "");
 
         // Use group's location and worktreeId as canonical source
         const originalLocation: "dock" | "grid" = group.location === "dock" ? "dock" : "grid";
