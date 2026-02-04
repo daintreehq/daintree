@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState, useMemo } from "react";
-import { Globe, Server, Power, Terminal, RotateCw } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useMemo } from "react";
+import { Globe, Server, Terminal, RotateCcw, RotateCw } from "lucide-react";
 import { BrowserToolbar } from "@/components/Browser/BrowserToolbar";
 import { XtermAdapter } from "@/components/Terminal/XtermAdapter";
 import { isValidBrowserUrl, normalizeBrowserUrl } from "@/components/Browser/browserUtils";
@@ -8,9 +8,8 @@ import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { useProjectStore, useTerminalStore } from "@/store";
+import { useTerminalStore } from "@/store";
 import type { BrowserHistory } from "@shared/types/domain";
-import { panelKindKeepsAliveOnProjectSwitch } from "@shared/config/panelKindRegistry";
 import type { DevPreviewStatus } from "@shared/types/ipc/devPreview";
 
 interface WebviewInstance {
@@ -22,6 +21,60 @@ interface WebviewInstance {
   isLoading: boolean;
   loadError: string | null;
   lastKnownUrl: string;
+}
+
+interface DevPreviewWebviewStore {
+  instances: Map<string, WebviewInstance>;
+  cleanups: Map<string, () => void>;
+}
+
+const devPreviewWebviewStores = new Map<string, DevPreviewWebviewStore>();
+let devPreviewStashContainer: HTMLDivElement | null = null;
+
+function getDevPreviewWebviewStore(panelId: string): DevPreviewWebviewStore {
+  const existing = devPreviewWebviewStores.get(panelId);
+  if (existing) return existing;
+  const store: DevPreviewWebviewStore = {
+    instances: new Map(),
+    cleanups: new Map(),
+  };
+  devPreviewWebviewStores.set(panelId, store);
+  return store;
+}
+
+function releaseDevPreviewWebviewStore(panelId: string): void {
+  devPreviewWebviewStores.delete(panelId);
+}
+
+function getDevPreviewStashContainer(): HTMLDivElement | null {
+  if (typeof document === "undefined") return null;
+  if (devPreviewStashContainer) return devPreviewStashContainer;
+  const container = document.createElement("div");
+  container.setAttribute("data-dev-preview-stash", "true");
+  container.style.cssText =
+    "position: fixed; left: -10000px; top: -10000px; width: 1px; height: 1px; overflow: hidden; pointer-events: none;";
+  document.body.appendChild(container);
+  devPreviewStashContainer = container;
+  return container;
+}
+
+function stashDevPreviewWebviews(store: DevPreviewWebviewStore): void {
+  const container = getDevPreviewStashContainer();
+  if (!container) return;
+  store.instances.forEach((instance) => {
+    if (instance.element.parentElement !== container) {
+      container.appendChild(instance.element);
+    }
+  });
+}
+
+function destroyDevPreviewWebviews(store: DevPreviewWebviewStore): void {
+  store.cleanups.forEach((cleanup) => cleanup());
+  store.cleanups.clear();
+  store.instances.forEach((instance) => {
+    instance.element.remove();
+  });
+  store.instances.clear();
 }
 
 const MAX_WEBVIEWS_PER_PANEL = 5;
@@ -122,8 +175,9 @@ export function DevPreviewPane({
   const [isWebviewReady, setIsWebviewReady] = useState(false);
   const [isLoadingOverlayVisible, setIsLoadingOverlayVisible] = useState(false);
   const restartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const webviewStore = useMemo(() => getDevPreviewWebviewStore(id), [id]);
   const webviewContainerRef = useRef<HTMLDivElement>(null);
-  const webviewMapRef = useRef<Map<string, WebviewInstance>>(new Map());
+  const webviewMapRef = useRef<Map<string, WebviewInstance>>(webviewStore.instances);
   const pendingUrlRef = useRef<string | null>(null);
   const autoReloadAttemptsRef = useRef(0);
   const autoReloadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -139,6 +193,7 @@ export function DevPreviewPane({
   const setBrowserUrl = useTerminalStore((state) => state.setBrowserUrl);
   const setBrowserHistory = useTerminalStore((state) => state.setBrowserHistory);
   const setBrowserZoom = useTerminalStore((state) => state.setBrowserZoom);
+  const webviewCleanupRefs = useRef<Map<string, () => void>>(webviewStore.cleanups);
   const restartKey = useTerminalStore(
     (state) => state.terminals.find((t) => t.id === id)?.restartKey ?? 0
   );
@@ -146,10 +201,23 @@ export function DevPreviewPane({
   const currentWebviewKeyRef = useRef(currentWebviewKey);
   currentWebviewKeyRef.current = currentWebviewKey;
 
+  useEffect(() => {
+    webviewMapRef.current = webviewStore.instances;
+    webviewCleanupRefs.current = webviewStore.cleanups;
+  }, [webviewStore]);
+
   const currentUrl = history.present;
   const canGoBack = history.past.length > 0;
   const canGoForward = history.future.length > 0;
   const hasValidUrl = isValidBrowserUrl(currentUrl);
+  const baseUrl = useMemo(() => {
+    if (!hasValidUrl) return "";
+    try {
+      return new URL(currentUrl).origin;
+    } catch {
+      return currentUrl;
+    }
+  }, [currentUrl, hasValidUrl]);
 
   // Sync history to terminal store (skip during restoration)
   useEffect(() => {
@@ -295,8 +363,6 @@ export function DevPreviewPane({
     });
   }, [currentWebviewKey]);
 
-  const webviewCleanupRefs = useRef<Map<string, () => void>>(new Map());
-
   const createWebviewForWorktree = useCallback(
     (url: string): Electron.WebviewTag => {
       const container = webviewContainerRef.current;
@@ -309,8 +375,24 @@ export function DevPreviewPane({
       // Check if webview already exists for this key
       const existingInstance = map.get(currentWebviewKey);
       if (existingInstance) {
-        existingInstance.lastActiveTime = Date.now();
-        return existingInstance.element;
+        const element = existingInstance.element;
+        // If the element was detached and lost, discard it and recreate
+        if (!element.isConnected && !element.parentElement) {
+          const cleanup = webviewCleanupRefs.current.get(currentWebviewKey);
+          if (cleanup) {
+            cleanup();
+            webviewCleanupRefs.current.delete(currentWebviewKey);
+          }
+          element.remove();
+          map.delete(currentWebviewKey);
+        } else {
+          if (element.parentElement !== container) {
+            container.appendChild(element);
+          }
+          existingInstance.lastActiveTime = Date.now();
+          updateWebviewVisibility();
+          return element;
+        }
       }
 
       // Evict LRU if needed before creating new webview
@@ -732,6 +814,46 @@ export function DevPreviewPane({
     [clearAutoReload, clearLoadingTimeout, scheduleAutoReload, startLoadingTimeout]
   );
 
+  const handleWebviewContainerRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      webviewContainerRef.current = node;
+      if (!node) return;
+      const map = webviewMapRef.current;
+      let reattached = false;
+      map.forEach((instance, key) => {
+        const element = instance.element;
+        if (element.parentElement !== node) {
+          node.appendChild(element);
+          reattached = true;
+        }
+        if (!webviewCleanupRefs.current.get(key)) {
+          const cleanup = setupWebviewListeners(element, key);
+          webviewCleanupRefs.current.set(key, cleanup);
+        }
+        try {
+          if (element.isConnected && typeof element.getURL === "function") {
+            const url = element.getURL();
+            if (url) {
+              instance.lastKnownUrl = url;
+            }
+          }
+          if (typeof element.isLoading === "function") {
+            instance.isLoading = element.isLoading();
+            if (!instance.isLoading && instance.lastKnownUrl) {
+              instance.hasLoaded = true;
+            }
+          }
+        } catch {
+          // Ignore sync failures for detached webviews
+        }
+      });
+      if (reattached) {
+        updateWebviewVisibility();
+      }
+    },
+    [setupWebviewListeners, updateWebviewVisibility]
+  );
+
   useEffect(() => {
     if (!hasValidUrl) return;
     setBrowserUrl(id, currentUrl);
@@ -745,6 +867,21 @@ export function DevPreviewPane({
   useEffect(() => {
     updateWebviewVisibility();
   }, [updateWebviewVisibility, currentWebviewKey]);
+
+  useLayoutEffect(() => {
+    return () => {
+      if (webviewStore.instances.size === 0) return;
+      const stillExists = Boolean(useTerminalStore.getState().getTerminal(id));
+      if (stillExists) {
+        webviewStore.cleanups.forEach((cleanup) => cleanup());
+        webviewStore.cleanups.clear();
+        stashDevPreviewWebviews(webviewStore);
+        return;
+      }
+      destroyDevPreviewWebviews(webviewStore);
+      releaseDevPreviewWebviewStore(id);
+    };
+  }, [id, webviewStore]);
 
   useEffect(() => {
     const webview = getActiveWebview();
@@ -883,31 +1020,11 @@ export function DevPreviewPane({
     }
     isRestoringStateRef.current = false;
 
-    const cleanups = webviewCleanupRefs.current;
-    const map = webviewMapRef.current;
-
     // Attach DevPreviewService overlay to the PTY spawned by the standard terminal pipeline.
     // Panel ID = PTY ID in the terminal-first architecture.
     void window.electron.devPreview.attach(id, cwd, devCommand);
 
     return () => {
-      // Only skip cleanup if it's a project switch AND panel kind keeps alive
-      const shouldKeepAlive =
-        useProjectStore.getState().isSwitching && panelKindKeepsAliveOnProjectSwitch("dev-preview");
-
-      if (shouldKeepAlive) {
-        return;
-      }
-
-      // Clean up all webviews and their event listeners
-      cleanups.forEach((cleanup) => cleanup());
-      cleanups.clear();
-
-      map.forEach((instance) => {
-        instance.element.remove();
-      });
-      map.clear();
-
       // Detach overlay only when the panel is actually removed.
       // Layout changes (split mode, drag reparenting, dock moves) can unmount/remount
       // the panel without destroying the terminal. In those cases, keep the session
@@ -919,26 +1036,7 @@ export function DevPreviewPane({
     };
   }, [clearAutoReload, clearLoadingTimeout, cwd, id, worktreeId]);
 
-  // Separate unmount effect to ensure cleanup even during project switch
-  useEffect(() => {
-    const cleanups = webviewCleanupRefs.current;
-    const map = webviewMapRef.current;
-
-    return () => {
-      // Force cleanup on actual component unmount (panel close)
-      // This runs even if the cwd/id effect's cleanup was skipped
-      const hasWebviews = map.size > 0;
-      if (hasWebviews) {
-        cleanups.forEach((cleanup) => cleanup());
-        cleanups.clear();
-
-        map.forEach((instance) => {
-          instance.element.remove();
-        });
-        map.clear();
-      }
-    };
-  }, []);
+  // (Webview cleanup handled in layout effect.)
 
   useEffect(() => {
     const handleReloadEvent = (e: Event) => {
@@ -1229,7 +1327,7 @@ export function DevPreviewPane({
               )}
               {/* Container for dynamically created webviews - multiple instances preserved */}
               <div
-                ref={webviewContainerRef}
+                ref={handleWebviewContainerRef}
                 className={cn("w-full h-full", isDragging && "pointer-events-none")}
               />
             </div>
@@ -1264,7 +1362,16 @@ export function DevPreviewPane({
             <Server className="w-3.5 h-3.5 text-canopy-text/40 shrink-0" />
             <span className={cn("h-2 w-2 rounded-full shrink-0", statusStyle.dot)} />
             {status === "running" && !isBrowserOnly ? (
-              <span className={cn("font-medium", statusStyle.text)}>{statusStyle.label}</span>
+              <span className="flex items-center gap-2 min-w-0">
+                <span className={cn("font-medium shrink-0", statusStyle.text)}>
+                  {statusStyle.label}
+                </span>
+                {baseUrl && (
+                  <span className="truncate text-canopy-accent" title={baseUrl}>
+                    {baseUrl}
+                  </span>
+                )}
+              </span>
             ) : status === "error" && error ? (
               <span className={cn("truncate", statusStyle.text)} title={error}>
                 {error}
@@ -1288,17 +1395,6 @@ export function DevPreviewPane({
                 {showTerminal ? <Globe className="w-4 h-4" /> : <Terminal className="w-4 h-4" />}
               </button>
             )}
-            <button
-              type="button"
-              onClick={handleReloadBrowser}
-              disabled={!hasValidUrl || !isWebviewReady || isLoading}
-              className={cn(buttonClass, isLoading && "animate-pulse")}
-              title="Reload browser"
-              aria-label="Reload browser"
-              aria-busy={isLoading}
-            >
-              <RotateCw className="w-4 h-4" />
-            </button>
             {!isBrowserOnly && (
               <button
                 type="button"
@@ -1309,7 +1405,7 @@ export function DevPreviewPane({
                 aria-label="Restart dev server"
                 aria-busy={showRestartSpinner}
               >
-                <Power className="w-4 h-4" />
+                <RotateCcw className="w-4 h-4" />
               </button>
             )}
           </div>
