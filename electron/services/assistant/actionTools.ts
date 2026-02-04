@@ -219,10 +219,6 @@ export const AGENT_ACCESSIBLE_ACTIONS = [
   "app.settings",
   "app.settings.openTab",
   "nav.toggleSidebar",
-  "panel.toggleDock",
-  "panel.dockSetExpanded",
-  "panel.dockSetCompact",
-  "panel.dockCycleMode",
   "modal.close",
 
   // ===== CONFIG READ-ONLY =====

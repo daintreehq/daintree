@@ -41,11 +41,7 @@ describe("devServerErrors", () => {
       it("detects Vite port in use message", () => {
         const output = "Port 5173 is in use, trying another one...";
         const error = detectDevServerError(output);
-        expect(error).toEqual({
-          type: "port-conflict",
-          message: "Port 5173 is already in use. Stop the other server or use a different port.",
-          port: "5173",
-        });
+        expect(error).toBeNull();
       });
     });
 

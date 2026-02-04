@@ -76,12 +76,6 @@ export interface AppState {
   };
   /** Panel grid layout configuration */
   panelGridConfig?: import("../config.js").PanelGridConfig;
-  /** Dock display mode: expanded or compact */
-  dockMode?: import("../domain.js").DockMode;
-  /** Dock behavior: auto (expands when docked terminals) or manual (user controlled) */
-  dockBehavior?: import("../domain.js").DockBehavior;
-  /** Whether compact dock should use ultra-minimal 6px strip mode */
-  compactDockMinimal?: boolean;
 }
 
 /** Result from app hydration */

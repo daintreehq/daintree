@@ -255,27 +255,20 @@ export interface TabGroup {
  */
 export type TerminalLocation = PanelLocation;
 
-/** Dock display mode */
-export type DockMode = "expanded" | "compact";
-
-/**
- * Dock behavior controls how the dock mode is determined:
- * - "auto": Compact by default, expands when there are docked terminals
- * - "manual": User controls the mode directly
- */
-export type DockBehavior = "auto" | "manual";
+/** Dock display mode - always expanded (kept as literal type for compatibility) */
+export type DockMode = "expanded";
 
 /**
  * Centralized dock render state - computed once and consumed by all dock components.
  * Prevents desync between components computing derived visibility independently.
  */
 export interface DockRenderState {
-  /** The effective dock mode after applying behavior rules */
+  /** The effective dock mode (always "expanded") */
   effectiveMode: DockMode;
   /** Whether the dock content should render in the layout (takes up space) - true after hydration */
   shouldShowInLayout: boolean;
-  /** Density for ContentDock components */
-  density: "normal" | "compact";
+  /** Density for ContentDock components (always "normal") */
+  density: "normal";
   /** Whether hydration is complete */
   isHydrated: boolean;
 }

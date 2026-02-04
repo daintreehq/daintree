@@ -41,7 +41,7 @@ function getToolIcon(toolName: string | undefined) {
     return GitBranch;
   }
 
-  // Panel actions: panel.list, panel.toggleDock
+  // Panel actions: panel.list
   if (name.startsWith("panel")) {
     return LayoutGrid;
   }

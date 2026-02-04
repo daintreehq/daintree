@@ -132,6 +132,7 @@ export function DevPreviewPane({
   const shouldAutoReloadRef = useRef(false);
   const loadingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isRestoringStateRef = useRef(false);
+  const suppressInitialLoadOverlayRef = useRef(false);
   const isDragging = useIsDragging();
   const setBrowserUrl = useTerminalStore((state) => state.setBrowserUrl);
   const setBrowserHistory = useTerminalStore((state) => state.setBrowserHistory);
@@ -332,6 +333,8 @@ export function DevPreviewPane({
         if (!currentUrl || hasLoadedRef.current) return;
         const webview = getActiveWebview();
         if (!webview) return;
+        const instance = webviewMapRef.current.get(currentWebviewKeyRef.current);
+        if (!instance?.isReady) return;
         autoReloadAttemptsRef.current += 1;
         webview.loadURL(currentUrl);
       }, delayMs);
@@ -457,6 +460,13 @@ export function DevPreviewPane({
       if (resolvedUrl === currentUrl) {
         lastSetUrlRef.current = resolvedUrl;
         if (isBrowserOnly) return;
+        const instance = webviewMapRef.current.get(currentWebviewKeyRef.current);
+        if (!instance || !instance.isReady || instance.isLoading || !instance.hasLoaded) {
+          return;
+        }
+        if (!instance.loadError) {
+          return;
+        }
         setIsLoading(true);
         hasLoadedRef.current = false;
         setHasLoaded(false);
@@ -464,16 +474,12 @@ export function DevPreviewPane({
         clearAutoReload();
         lastUrlSetAtRef.current = Date.now();
         scheduleAutoReload(AUTO_RELOAD_INITIAL_DELAY_MS);
-        const webview = getActiveWebview();
-        if (webview && isWebviewReady) {
-          webview.loadURL(resolvedUrl);
-        }
+        instance.element.loadURL(resolvedUrl);
         return;
       }
 
       // Only reset history if no URL is currently set (avoid overwriting restored state)
       if (!currentUrl) {
-        shouldAutoReloadRef.current = true;
         setIsLoading(true);
         setHistory({ past: [], present: resolvedUrl, future: [] });
         lastSetUrlRef.current = resolvedUrl;
@@ -579,6 +585,7 @@ export function DevPreviewPane({
         // Only update UI state if this is the currently active webview
         if (webviewKey !== currentWebviewKeyRef.current) return;
 
+        suppressInitialLoadOverlayRef.current = false;
         hasLoadedRef.current = false;
         setHasLoaded(false);
         setIsLoading(false);
@@ -604,8 +611,10 @@ export function DevPreviewPane({
         // Only update UI state if this is the currently active webview
         if (webviewKey !== currentWebviewKeyRef.current) return;
         setWebviewLoadError(null);
-        hasLoadedRef.current = false;
-        setHasLoaded(false);
+        if (!suppressInitialLoadOverlayRef.current) {
+          hasLoadedRef.current = false;
+          setHasLoaded(false);
+        }
         setIsLoading(true);
         startLoadingTimeout();
       };
@@ -622,6 +631,7 @@ export function DevPreviewPane({
 
         // Only update UI state if this is the currently active webview
         if (webviewKey !== currentWebviewKeyRef.current) return;
+        suppressInitialLoadOverlayRef.current = false;
         hasLoadedRef.current = true;
         autoReloadAttemptsRef.current = 0;
         clearAutoReload();
@@ -737,7 +747,7 @@ export function DevPreviewPane({
       hasLoadedRef.current = existingInstance.hasLoaded;
 
       // Check if URL changed using lastKnownUrl (more reliable than getAttribute)
-      if (existingInstance.lastKnownUrl !== currentUrl && currentUrl) {
+      if (existingInstance.lastKnownUrl !== currentUrl && currentUrl && existingInstance.isReady) {
         // URL changed - trigger reload
         try {
           existingInstance.element.loadURL(currentUrl);
@@ -788,18 +798,33 @@ export function DevPreviewPane({
   }, [currentUrl, handleNavigate, isBrowserOnly]);
 
   useEffect(() => {
-    setHistory({ past: [], present: "", future: [] });
+    const currentTerminal = useTerminalStore.getState().getTerminal(id);
+    const savedHistory = currentTerminal?.browserHistory;
+    const savedHistoryPresent = savedHistory?.present?.trim() || "";
+    const savedUrl = currentTerminal?.browserUrl ?? null;
+    const hasSavedUrl = Boolean(savedHistoryPresent || savedUrl);
+
+    const nextHistory =
+      savedHistory && savedHistoryPresent
+        ? savedHistory
+        : {
+            past: [],
+            present: "",
+            future: [],
+          };
+    setHistory(nextHistory);
     setError(undefined);
-    setStatus("starting");
-    setMessage("Starting dev server...");
+    setStatus(hasSavedUrl ? "running" : "starting");
+    setMessage(hasSavedUrl ? "Running" : "Starting dev server...");
     setIsRestarting(false);
     setIsBrowserOnly(false);
     setShowTerminal(false);
-    setHasLoaded(false);
+    setHasLoaded(hasSavedUrl);
     setIsLoading(false);
     setWebviewLoadError(null);
     setIsWebviewReady(false);
-    hasLoadedRef.current = false;
+    hasLoadedRef.current = hasSavedUrl;
+    suppressInitialLoadOverlayRef.current = hasSavedUrl;
     autoReloadAttemptsRef.current = 0;
     clearAutoReload();
     clearLoadingTimeout();
@@ -812,15 +837,11 @@ export function DevPreviewPane({
       restartTimeoutRef.current = null;
     }
 
-    const terminal = useTerminalStore.getState().getTerminal(id);
-    const devCommand = terminal?.devCommand;
-    const savedUrl = terminal?.browserUrl ?? null;
+    const devCommand = currentTerminal?.devCommand;
 
     // Restore saved state from terminal store (preserves URL across project switches)
     isRestoringStateRef.current = true;
-    const currentTerminal = useTerminalStore.getState().getTerminal(id);
     if (currentTerminal?.browserHistory) {
-      setHistory(currentTerminal.browserHistory);
       lastSetUrlRef.current = currentTerminal.browserHistory.present;
       pendingUrlRef.current = currentTerminal.browserHistory.present;
     } else if (savedUrl) {
@@ -857,8 +878,14 @@ export function DevPreviewPane({
       });
       map.clear();
 
-      // Detach overlay (PTY lifecycle managed by terminal store)
-      void window.electron.devPreview.detach(id);
+      // Detach overlay only when the panel is actually removed.
+      // Layout changes (split mode, drag reparenting, dock moves) can unmount/remount
+      // the panel without destroying the terminal. In those cases, keep the session
+      // alive so we don't lose the detected URL.
+      const stillExists = Boolean(useTerminalStore.getState().getTerminal(id));
+      if (!stillExists) {
+        void window.electron.devPreview.detach(id);
+      }
     };
   }, [clearAutoReload, clearLoadingTimeout, cwd, id, worktreeId]);
 
@@ -1000,7 +1027,7 @@ export function DevPreviewPane({
     clearLoadingTimeout();
     lastUrlSetAtRef.current = Date.now();
     const webview = getActiveWebview();
-    if (webview) {
+    if (webview && isWebviewReady) {
       webview.loadURL(currentUrl);
       startLoadingTimeout();
     }
@@ -1010,6 +1037,7 @@ export function DevPreviewPane({
     currentUrl,
     getActiveWebview,
     hasValidUrl,
+    isWebviewReady,
     startLoadingTimeout,
   ]);
 
@@ -1137,7 +1165,7 @@ export function DevPreviewPane({
                 {/* Container for dynamically created webviews - multiple instances preserved */}
                 <div
                   ref={webviewContainerRef}
-                  className={cn("w-full h-full", isDragging && "invisible pointer-events-none")}
+                  className={cn("w-full h-full", isDragging && "pointer-events-none")}
                 />
               </>
             ) : isBrowserOnly ? (

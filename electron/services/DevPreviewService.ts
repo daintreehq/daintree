@@ -42,9 +42,22 @@ export interface DevPreviewAttachOptions {
 export class DevPreviewService extends EventEmitter {
   private sessions = new Map<string, DevPreviewSession>();
   private generationCounter = 0;
+  private lastSubmitByPty = new Map<string, { command: string; timestamp: number }>();
+  private static readonly SUBMIT_DEDUP_WINDOW_MS = 2000;
 
   constructor(private ptyClient: PtyClient) {
     super();
+  }
+
+  private shouldDedupSubmit(ptyId: string, command: string): boolean {
+    const last = this.lastSubmitByPty.get(ptyId);
+    if (!last) return false;
+    if (last.command !== command) return false;
+    return Date.now() - last.timestamp < DevPreviewService.SUBMIT_DEDUP_WINDOW_MS;
+  }
+
+  private markSubmit(ptyId: string, command: string): void {
+    this.lastSubmitByPty.set(ptyId, { command, timestamp: Date.now() });
   }
 
   /**
@@ -205,16 +218,30 @@ export class DevPreviewService extends EventEmitter {
     ];
 
     // Delay command submission to allow PTY shell to initialize
-    const submitTimeout = setTimeout(() => {
-      const currentSession = this.sessions.get(panelId);
-      if (
-        currentSession &&
-        currentSession.generation === generation &&
-        this.ptyClient.hasTerminal(ptyId)
-      ) {
-        this.ptyClient.submit(ptyId, fullCommand);
+    const shouldSkipSubmit = this.shouldDedupSubmit(ptyId, fullCommand);
+    let submitTimeout: NodeJS.Timeout | undefined;
+
+    if (shouldSkipSubmit) {
+      if (process.env.CANOPY_VERBOSE) {
+        console.log(
+          `[DevPreview] Skipping duplicate dev command submit for ${ptyId}: ${fullCommand}`
+        );
       }
-    }, 100);
+    } else {
+      // Mark early to prevent duplicate submits during rapid attach/detach cycles.
+      this.markSubmit(ptyId, fullCommand);
+      submitTimeout = setTimeout(() => {
+        const currentSession = this.sessions.get(panelId);
+        if (
+          currentSession &&
+          currentSession.generation === generation &&
+          this.ptyClient.hasTerminal(ptyId)
+        ) {
+          this.markSubmit(ptyId, fullCommand);
+          this.ptyClient.submit(ptyId, fullCommand);
+        }
+      }, 100);
+    }
 
     const session: DevPreviewSession = {
       panelId,
@@ -370,6 +397,9 @@ export class DevPreviewService extends EventEmitter {
       );
     }
 
+    // Emit status before cleaning up session
+    this.emitStatus(panelId, "installing", "Installing missing dependencies...", null);
+
     // Clean up current listeners
     for (const unsubscribe of session.unsubscribers) {
       unsubscribe();
@@ -426,6 +456,7 @@ export class DevPreviewService extends EventEmitter {
       this.emitStatus(panelId, "stopped", "Dev server stopped", null);
     }
 
+    this.lastSubmitByPty.delete(session.ptyId);
     this.sessions.delete(panelId);
   }
 

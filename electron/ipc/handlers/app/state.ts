@@ -365,32 +365,6 @@ export function registerAppStateHandlers(): () => void {
         }
       }
 
-      if ("dockMode" in partialState) {
-        const mode = partialState.dockMode;
-        if (typeof mode === "string") {
-          // Normalize legacy modes: "slim" and "hidden" both map to "compact" to preserve minimized appearance
-          if (mode === "expanded") {
-            updates.dockMode = "expanded";
-          } else {
-            // compact, hidden, slim -> compact
-            updates.dockMode = "compact";
-          }
-        }
-      }
-
-      if ("dockBehavior" in partialState) {
-        const behavior = partialState.dockBehavior;
-        if (behavior === "auto" || behavior === "manual") {
-          updates.dockBehavior = behavior;
-        }
-      }
-
-      if ("compactDockMinimal" in partialState) {
-        if (typeof partialState.compactDockMinimal === "boolean") {
-          updates.compactDockMinimal = partialState.compactDockMinimal;
-        }
-      }
-
       store.set("appState", { ...currentState, ...updates });
 
       // Note: We intentionally do NOT save per-project terminal state.

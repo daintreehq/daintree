@@ -80,20 +80,7 @@ export function AppLayout({
         }
         // Note: Focus mode is now restored via hydration callback (setFocusMode in HydrationCallbacks)
         // which reads per-project focus mode state. This ensures each project has its own focus mode.
-        // Hydrate dock state with legacy migration and validation
-        // Legacy modes: "slim"/"hidden" -> "compact" (preserve minimized appearance)
-        const validBehaviors: Array<"auto" | "manual"> = ["auto", "manual"];
-        const rawMode = appState.dockMode;
-        const rawBehavior = appState.dockBehavior;
-        const isValidBehavior = rawBehavior && validBehaviors.includes(rawBehavior as any);
-        // Map legacy modes: "slim"/"hidden" -> "compact", preserve "expanded" and "compact"
-        const dockMode =
-          rawMode === "expanded" ? "expanded" : ("compact" as "expanded" | "compact");
-        const dockBehavior = isValidBehavior ? rawBehavior : "auto";
         useDockStore.getState().hydrate({
-          mode: dockMode,
-          behavior: dockBehavior,
-          compactMinimal: Boolean(appState.compactDockMinimal),
           popoverHeight: appState.dockedPopoverHeight,
         });
       } catch (error) {

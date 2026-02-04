@@ -109,11 +109,6 @@ export type KeyAction =
 
   // Panel management
   | "panel.palette"
-  | "panel.toggleDock"
-  | "panel.toggleDockAlt"
-  | "panel.dockCycleMode"
-  | "panel.dockSetExpanded"
-  | "panel.dockSetCompact"
   | "panel.toggleDiagnostics"
   | "panel.toggleSidecar"
   | "panel.diagnosticsLogs"

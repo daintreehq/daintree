@@ -684,6 +684,11 @@ export const createTerminalRegistrySlice =
         const terminal = get().terminals.find((t) => t.id === id);
         if (!terminal) return;
 
+        if (terminal.kind === "dev-preview") {
+          get().removeTerminal(id);
+          return;
+        }
+
         const expiresAt = Date.now() + 120000;
 
         // Only 'dock' or 'grid' are valid original locations - treat undefined as 'grid'
@@ -771,12 +776,37 @@ export const createTerminalRegistrySlice =
           return;
         }
 
+        const devPreviewIds = existingPanelIds.filter((id) => {
+          const terminal = terminals.find((t) => t.id === id);
+          return terminal?.kind === "dev-preview";
+        });
+
+        const trashPanelIds = existingPanelIds.filter((id) => !devPreviewIds.includes(id));
+
+        if (devPreviewIds.length > 0) {
+          devPreviewIds.forEach((id) => get().removeTerminal(id));
+        }
+
+        if (trashPanelIds.length === 0) {
+          set((state) => {
+            const newTabGroups = new Map(state.tabGroups);
+            newTabGroups.delete(group.id);
+            saveTabGroups(newTabGroups);
+            return { tabGroups: newTabGroups };
+          });
+          return;
+        }
+
+        const resolvedActiveTabId = trashPanelIds.includes(activeTabId)
+          ? activeTabId
+          : trashPanelIds[0] ?? "";
+
         // Use group's location and worktreeId as canonical source
         const originalLocation: "dock" | "grid" = group.location === "dock" ? "dock" : "grid";
         const worktreeId = group.worktreeId ?? null;
 
         // Trash PTY processes for all PTY-backed panels
-        for (const id of existingPanelIds) {
+        for (const id of trashPanelIds) {
           const terminal = terminals.find((t) => t.id === id);
           if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
             terminalClient.trash(id).catch((error) => {
@@ -788,15 +818,15 @@ export const createTerminalRegistrySlice =
         set((state) => {
           // Move all existing panels to trash
           const newTerminals = state.terminals.map((t) =>
-            existingPanelIds.includes(t.id) ? { ...t, location: "trash" as const } : t
+            trashPanelIds.includes(t.id) ? { ...t, location: "trash" as const } : t
           );
 
           const newTrashed = new Map(state.trashedTerminals);
 
           // Add all existing panels to trash with shared groupRestoreId
           // The first existing panel (anchor) gets the groupMetadata
-          for (let i = 0; i < existingPanelIds.length; i++) {
-            const id = existingPanelIds[i];
+          for (let i = 0; i < trashPanelIds.length; i++) {
+            const id = trashPanelIds[i];
             const isAnchor = i === 0;
             newTrashed.set(id, {
               id,
@@ -805,8 +835,8 @@ export const createTerminalRegistrySlice =
               groupRestoreId,
               ...(isAnchor && {
                 groupMetadata: {
-                  panelIds: existingPanelIds,
-                  activeTabId,
+                  panelIds: trashPanelIds,
+                  activeTabId: resolvedActiveTabId,
                   location: group.location,
                   worktreeId,
                 },
@@ -824,12 +854,12 @@ export const createTerminalRegistrySlice =
         });
 
         // Schedule expiry for all existing panels
-        for (const id of existingPanelIds) {
+        for (const id of trashPanelIds) {
           scheduleTrashExpiry(id, expiresAt);
         }
 
         // Apply renderer policies for PTY-backed panels
-        for (const id of existingPanelIds) {
+        for (const id of trashPanelIds) {
           const terminal = terminals.find((t) => t.id === id);
           if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
             terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);

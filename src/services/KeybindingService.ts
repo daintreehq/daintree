@@ -405,22 +405,6 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Panels",
   },
   {
-    actionId: "panel.toggleDock",
-    combo: "Ctrl+`",
-    scope: "global",
-    priority: 0,
-    description: "Toggle terminal dock",
-    category: "Panels",
-  },
-  {
-    actionId: "panel.toggleDockAlt",
-    combo: "Cmd+J",
-    scope: "global",
-    priority: 0,
-    description: "Toggle terminal dock",
-    category: "Panels",
-  },
-  {
     actionId: "panel.toggleDiagnostics",
     combo: "Cmd+Shift+D",
     scope: "global",

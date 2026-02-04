@@ -11,7 +11,6 @@ import {
   SplitSquareHorizontal,
   Monitor,
   RotateCcw,
-  PanelBottom,
 } from "lucide-react";
 import { useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
@@ -21,7 +20,6 @@ import {
   useScrollbackStore,
   useTerminalInputStore,
   useTwoPaneSplitStore,
-  useDockStore,
 } from "@/store";
 import type { PanelLayoutStrategy, TerminalType } from "@/types";
 import {
@@ -87,9 +85,6 @@ export function TerminalSettingsTab() {
   const setPreferPreview = useTwoPaneSplitStore((state) => state.setPreferPreview);
   const setDefaultRatio = useTwoPaneSplitStore((state) => state.setDefaultRatio);
   const resetAllWorktreeRatios = useTwoPaneSplitStore((state) => state.resetAllWorktreeRatios);
-
-  const compactMinimal = useDockStore((state) => state.compactMinimal);
-  const setCompactMinimal = useDockStore((state) => state.setCompactMinimal);
 
   const [showMemoryDetails, setShowMemoryDetails] = useState(false);
 
@@ -511,73 +506,6 @@ export function TerminalSettingsTab() {
             </button>
           </>
         )}
-      </div>
-
-      <div className="pt-4 border-t border-canopy-border space-y-4">
-        <div>
-          <h4
-            id="ultra-minimal-dock-heading"
-            className="text-sm font-medium text-canopy-text mb-2 flex items-center gap-2"
-          >
-            <PanelBottom className="w-4 h-4 text-canopy-accent" />
-            Ultra-Minimal Dock
-          </h4>
-          <p id="ultra-minimal-dock-description" className="text-xs text-canopy-text/50 mb-4">
-            When in compact dock mode, display an ultra-minimal 6px bar with color strips instead of
-            icons. Hover to reveal details, click to interact.
-          </p>
-        </div>
-
-        <button
-          onClick={() => setCompactMinimal(!compactMinimal)}
-          role="switch"
-          aria-checked={compactMinimal}
-          aria-labelledby="ultra-minimal-dock-heading"
-          aria-describedby="ultra-minimal-dock-description"
-          className={cn(
-            "w-full flex items-center justify-between p-4 rounded-[var(--radius-lg)] border transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
-            compactMinimal
-              ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
-              : "border-canopy-border hover:bg-white/5 text-canopy-text/70"
-          )}
-        >
-          <div className="flex items-center gap-3">
-            <PanelBottom
-              className={cn(
-                "w-5 h-5",
-                compactMinimal ? "text-canopy-accent" : "text-canopy-text/50"
-              )}
-            />
-            <div className="text-left">
-              <div className="text-sm font-medium">
-                {compactMinimal ? "Ultra-Minimal Mode Enabled" : "Enable Ultra-Minimal Mode"}
-              </div>
-              <div className="text-xs opacity-70">
-                {compactMinimal
-                  ? "6px bar with color-coded strips"
-                  : "Standard compact dock with icons"}
-              </div>
-            </div>
-          </div>
-          <div
-            className={cn(
-              "w-11 h-6 rounded-full relative transition-colors",
-              compactMinimal ? "bg-canopy-accent" : "bg-canopy-border"
-            )}
-            aria-hidden="true"
-          >
-            <div
-              className={cn(
-                "absolute top-1 w-4 h-4 rounded-full bg-white transition-transform",
-                compactMinimal ? "translate-x-6" : "translate-x-1"
-              )}
-            />
-          </div>
-        </button>
-
-        <p className="text-xs text-canopy-text/40">
-          Tip: Set dock mode to "Compact" using the keyboard shortcut or dock menu to use this mode.
-        </p>
       </div>
 
       <div className="pt-4 border-t border-canopy-border space-y-4">

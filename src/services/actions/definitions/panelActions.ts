@@ -5,7 +5,6 @@ import { cliAvailabilityClient, systemClient } from "@/clients";
 import { getAIAgentInfo } from "@/lib/aiAgentDetection";
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { useSidecarStore } from "@/store/sidecarStore";
-import { useDockStore } from "@/store/dockStore";
 import { useTerminalStore } from "@/store/terminalStore";
 
 export function registerPanelActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
@@ -42,7 +41,6 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
         panels = panels.filter((p) => p.location !== "trash");
       }
 
-      const dockState = useDockStore.getState();
       const sidecarState = useSidecarStore.getState();
 
       return {
@@ -57,8 +55,6 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
           agentState: p.agentState ?? null,
         })),
         dock: {
-          mode: dockState.mode,
-          behavior: dockState.behavior,
           panelCount: panels.filter((p) => p.location === "dock").length,
         },
         sidecar: {
@@ -135,71 +131,6 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
       console.error("Failed to activate sidecar tab:", error);
     }
   };
-
-  actions.set("panel.toggleDock", () => ({
-    id: "panel.toggleDock",
-    title: "Toggle Terminal Dock",
-    description: "Toggle the terminal dock between expanded and compact",
-    category: "panel",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      useDockStore.getState().toggleExpanded();
-    },
-  }));
-
-  actions.set("panel.toggleDockAlt", () => ({
-    id: "panel.toggleDockAlt",
-    title: "Toggle Terminal Dock (Alt)",
-    description: "Toggle the terminal dock between expanded and compact",
-    category: "panel",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      useDockStore.getState().toggleExpanded();
-    },
-  }));
-
-  actions.set("panel.dockCycleMode", () => ({
-    id: "panel.dockCycleMode",
-    title: "Cycle Dock Mode",
-    description: "Cycle dock mode: expanded ↔ compact",
-    category: "panel",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      useDockStore.getState().cycleMode();
-    },
-  }));
-
-  actions.set("panel.dockSetExpanded", () => ({
-    id: "panel.dockSetExpanded",
-    title: "Expand Dock",
-    description: "Set dock to expanded mode (full height)",
-    category: "panel",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      useDockStore.getState().setMode("expanded");
-    },
-  }));
-
-  actions.set("panel.dockSetCompact", () => ({
-    id: "panel.dockSetCompact",
-    title: "Compact Dock",
-    description: "Set dock to compact mode (minimal height)",
-    category: "panel",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      useDockStore.getState().setMode("compact");
-    },
-  }));
 
   actions.set("panel.toggleDiagnostics", () => ({
     id: "panel.toggleDiagnostics",

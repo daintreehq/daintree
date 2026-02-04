@@ -7,16 +7,7 @@ import { appClient, terminalClient } from "@/clients";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { useTerminalStore } from "@/store/terminalStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
-import { useDockStore } from "@/store/dockStore";
-
 export function registerTerminalActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
-  const revealDockIfHidden = () => {
-    const dockState = useDockStore.getState();
-    if (dockState.behavior === "manual" && dockState.mode !== "expanded") {
-      dockState.setMode("expanded");
-    }
-  };
-
   // Query action: list all terminals with metadata
   actions.set("terminal.list", () => ({
     id: "terminal.list",
@@ -459,8 +450,6 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
           state.setMaximizedId(null);
         }
         state.moveTerminalToDock(targetId);
-        // Reveal dock if hidden so the terminal is visible
-        revealDockIfHidden();
       }
     },
   }));
@@ -496,7 +485,6 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
       const state = useTerminalStore.getState();
       if (state.focusedId) {
         state.moveTerminalToDock(state.focusedId);
-        revealDockIfHidden();
       }
     },
   }));
@@ -879,7 +867,6 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
     scope: "renderer",
     run: async () => {
       useTerminalStore.getState().bulkMoveToDock();
-      revealDockIfHidden();
     },
   }));
 

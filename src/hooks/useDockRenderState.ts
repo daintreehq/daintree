@@ -1,10 +1,9 @@
-import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useTerminalStore, useWorktreeSelectionStore, useDockStore } from "@/store";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useTerminalNotificationCounts } from "@/hooks/useTerminalSelectors";
 import { isAgentTerminal } from "@/utils/terminalType";
-import type { DockRenderState, DockMode } from "@shared/types";
+import type { DockRenderState } from "@shared/types";
 
 /**
  * Centralized hook for dock render state.
@@ -20,15 +19,11 @@ export function useDockRenderState(): DockRenderState & {
   failedCount: number;
   trashedCount: number;
   shouldFadeForInput: boolean;
-  compactMinimal: boolean;
 } {
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
 
-  const { mode, behavior, compactMinimal, isHydrated, setPeek } = useDockStore(
+  const { isHydrated, setPeek } = useDockStore(
     useShallow((state) => ({
-      mode: state.mode,
-      behavior: state.behavior,
-      compactMinimal: state.compactMinimal,
       isHydrated: state.isHydrated,
       setPeek: state.setPeek,
     }))
@@ -64,32 +59,14 @@ export function useDockRenderState(): DockRenderState & {
   const dockedCount = dockTerminals.length;
   const hasStatus = waitingCount > 0 || failedCount > 0 || trashedCount > 0;
 
-  // Compute effective mode based on behavior setting
-  // CRITICAL: This is the single source of truth for effectiveMode
-  const effectiveMode: DockMode = useMemo(() => {
-    // Before hydration, use "compact" as a safe default
-    if (!isHydrated) return "compact";
-
-    if (behavior === "auto") {
-      // Auto mode: compact by default, expanded when there are docked terminals
-      return hasDocked ? "expanded" : "compact";
-    }
-    // Manual mode: use the stored mode
-    return mode;
-  }, [isHydrated, behavior, mode, hasDocked]);
-
   // Dock is always visible now - no hidden mode
   const shouldShowInLayout = isHydrated;
 
-  // Compute density for ContentDock - compact mode uses compact density
-  const density: DockRenderState["density"] = effectiveMode === "compact" ? "compact" : "normal";
-
   return {
-    effectiveMode,
+    effectiveMode: "expanded",
     shouldShowInLayout,
-    density,
+    density: "normal",
     isHydrated,
-    compactMinimal,
     setPeek,
     hasDocked,
     dockedCount,

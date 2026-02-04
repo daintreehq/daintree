@@ -41,15 +41,18 @@ const PERMISSION_ERROR_PATTERNS = [/EACCES/, /permission denied/i, /EPERM/];
 
 export function detectDevServerError(output: string): DevServerError | null {
   // Check for port conflicts first (most specific)
-  for (const pattern of PORT_ERROR_PATTERNS) {
-    const match = output.match(pattern);
-    if (match) {
-      const port = match[1] || "unknown";
-      return {
-        type: "port-conflict",
-        message: `Port ${port} is already in use. Stop the other server or use a different port.`,
-        port,
-      };
+  const autoRetryPortMessage = /port .* in use.*trying another/i.test(output);
+  if (!autoRetryPortMessage) {
+    for (const pattern of PORT_ERROR_PATTERNS) {
+      const match = output.match(pattern);
+      if (match) {
+        const port = match[1] || "unknown";
+        return {
+          type: "port-conflict",
+          message: `Port ${port} is already in use. Stop the other server or use a different port.`,
+          port,
+        };
+      }
     }
   }
 

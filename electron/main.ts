@@ -14,6 +14,7 @@ import os from "os";
 import { randomBytes } from "crypto";
 import fixPath from "fix-path";
 import { isTrustedRendererUrl } from "../shared/utils/trustedRenderer.js";
+import { isLocalhostUrl } from "../shared/utils/urlUtils.js";
 import type { IpcMainInvokeEvent } from "electron";
 
 fixPath();
@@ -462,11 +463,12 @@ async function createWindow(): Promise<void> {
   mainWindow.webContents.on("will-attach-webview", (event, webPreferences, params) => {
     // Only allow localhost URLs (for dev servers) and the specific partitions we use
     const allowedPartitions = ["persist:browser", "persist:dev-preview"];
-    const isLocalhostUrl =
-      params.src.startsWith("http://localhost") || params.src.startsWith("http://127.0.0.1");
-    const isValidPartition = allowedPartitions.includes(params.partition || "");
+    const isAllowedLocalhostUrl = isLocalhostUrl(params.src);
+    const isValidPartition =
+      allowedPartitions.includes(params.partition || "") ||
+      (params.partition?.startsWith("persist:dev-preview-") ?? false);
 
-    if (!isLocalhostUrl || !isValidPartition) {
+    if (!isAllowedLocalhostUrl || !isValidPartition) {
       console.warn(
         `[MAIN] Blocked webview attachment: url=${params.src}, partition=${params.partition}`
       );

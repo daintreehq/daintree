@@ -116,7 +116,6 @@ You have access to a limited set of actions. Only use actions explicitly provide
 
 ### Panel
 - `panel.list` - Query all panels with locations
-- `panel.toggleDock` - Toggle dock visibility
 
 ### Project
 - `project.getCurrent` - Get active project

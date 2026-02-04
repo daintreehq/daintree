@@ -1,5 +1,5 @@
 import { useCallback, useState, useEffect, useRef, useMemo } from "react";
-import { useDockStore, useTerminalStore, type TerminalInstance } from "@/store";
+import { useTerminalStore, type TerminalInstance } from "@/store";
 import { getTerminalAnimationDuration } from "@/lib/animationUtils";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { getPanelComponent, type PanelComponentProps } from "@/registry";
@@ -43,9 +43,6 @@ export function GridPanel({
   const getPanelGroup = useTerminalStore((state) => state.getPanelGroup);
   const updateTitle = useTerminalStore((state) => state.updateTitle);
   const moveTerminalToDock = useTerminalStore((state) => state.moveTerminalToDock);
-  const dockBehavior = useDockStore((state) => state.behavior);
-  const dockMode = useDockStore((state) => state.mode);
-  const setDockMode = useDockStore((state) => state.setMode);
 
   const [isTrashing, setIsTrashing] = useState(false);
   const mountedRef = useRef(true);
@@ -130,10 +127,7 @@ export function GridPanel({
     }
 
     moveTerminalToDock(terminal.id);
-    if (dockBehavior === "manual" && dockMode !== "expanded") {
-      setDockMode("expanded");
-    }
-  }, [dockBehavior, dockMode, moveTerminalToDock, setDockMode, terminal.id]);
+  }, [moveTerminalToDock, terminal.id]);
 
   // Get the registered component for this panel kind
   const kind = terminal.kind ?? "terminal";
