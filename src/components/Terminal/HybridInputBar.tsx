@@ -205,7 +205,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const placeholder = useMemo(() => {
       const agentName = agentId ? getAgentConfig(agentId)?.name : null;
       if (isInitializing && agentName) {
-        return `${agentName} is loading…`;
+        return `${agentName} is starting — you can type now`;
       }
       return agentName ? `Enter your command for ${agentName}…` : "Enter your command…";
     }, [agentId, isInitializing]);
@@ -414,7 +414,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const sendText = useCallback(
       (text: string) => {
         const latest = latestRef.current;
-        if (!latest || latest.disabled || latest.isInitializing) return;
+        if (!latest || latest.disabled) return;
         if (text.trim().length === 0) return;
 
         const payload = buildTerminalSendPayload(text);
@@ -696,17 +696,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               return false;
             }
 
-            if (latest.isInitializing) {
-              event.preventDefault();
-              return true;
-            }
-
             if (latest.isAutocompleteOpen && latest.autocompleteItems[latest.selectedIndex]) {
               event.preventDefault();
               const action = latest.activeMode === "command" ? "execute" : "insert";
-              if (action === "execute" && latest.isInitializing) {
-                return true;
-              }
               applyAutocompleteSelection(action);
               return true;
             }
@@ -785,7 +777,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
             if (latest.isAutocompleteOpen && latest.autocompleteItems[latest.selectedIndex]) {
               const action = latest.activeMode === "command" ? "execute" : "insert";
-              if (action === "execute" && latest.isInitializing) return true;
 
               handledEnterRef.current = true;
               setTimeout(() => {
@@ -797,7 +788,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             }
 
             if (latest.disabled) return true;
-            if (latest.isInitializing) return true;
 
             handledEnterRef.current = true;
             setTimeout(() => {
@@ -818,7 +808,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               return true;
             }
 
-            if (latest.disabled || latest.isInitializing) return false;
+            if (latest.disabled) return false;
             if (!latest.onSendKey) return false;
 
             latest.onSendKey("escape");
@@ -838,8 +828,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               });
               return true;
             }
-
-            if (latest.isInitializing) return false;
 
             const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
             const isEmpty = text.trim().length === 0;
@@ -870,8 +858,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               return true;
             }
 
-            if (latest.isInitializing) return false;
-
             const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
             const isEmpty = text.trim().length === 0;
             const canNavigateHistory = isEmpty || latest.isInHistoryMode;
@@ -890,7 +876,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             const latest = latestRef.current;
             if (!latest) return false;
             if (isComposingRef.current) return false;
-            if (latest.disabled || latest.isInitializing) return false;
+            if (latest.disabled) return false;
 
             const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
             if (text.trim().length !== 0) return false;
@@ -903,7 +889,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             const latest = latestRef.current;
             if (!latest) return false;
             if (isComposingRef.current) return false;
-            if (latest.disabled || latest.isInitializing) return false;
+            if (latest.disabled) return false;
 
             const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
             if (text.trim().length !== 0) return false;
@@ -928,7 +914,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             const latest = latestRef.current;
             if (!latest) return false;
             if (isComposingRef.current) return false;
-            if (latest.disabled || latest.isInitializing) return false;
+            if (latest.disabled) return false;
             if (!latest.onSendKey) return false;
             if (hasSelection) return false;
 
@@ -960,13 +946,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           placeholderCompartmentRef.current.of(createPlaceholder(placeholder)),
           editableCompartmentRef.current.of(EditorView.editable.of(!disabled)),
           chipCompartmentRef.current.of(createSlashChipField({ commandMap })),
-          tooltipCompartmentRef.current.of(
-            !disabled && !isInitializing ? createSlashTooltip(commandMap) : []
-          ),
+          tooltipCompartmentRef.current.of(!disabled ? createSlashTooltip(commandMap) : []),
           createFileChipField(),
-          fileChipTooltipCompartmentRef.current.of(
-            !disabled && !isInitializing ? createFileChipTooltip() : []
-          ),
+          fileChipTooltipCompartmentRef.current.of(!disabled ? createFileChipTooltip() : []),
           keymapCompartmentRef.current.of(keymapExtension),
           editorUpdateListener,
           domEventHandlers,
@@ -1020,10 +1002,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
       view.dispatch({
         effects: tooltipCompartmentRef.current.reconfigure(
-          !disabled && !isInitializing ? createSlashTooltip(commandMap) : []
+          !disabled ? createSlashTooltip(commandMap) : []
         ),
       });
-    }, [commandMap, disabled, isInitializing]);
+    }, [commandMap, disabled]);
 
     useEffect(() => {
       const view = editorViewRef.current;
@@ -1031,10 +1013,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
       view.dispatch({
         effects: fileChipTooltipCompartmentRef.current.reconfigure(
-          !disabled && !isInitializing ? createFileChipTooltip() : []
+          !disabled ? createFileChipTooltip() : []
         ),
       });
-    }, [disabled, isInitializing]);
+    }, [disabled]);
 
     useEffect(() => {
       const view = editorViewRef.current;
@@ -1062,7 +1044,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               disabled && "opacity-60",
               isInitializing && "opacity-50"
             )}
-            aria-disabled={disabled || isInitializing}
+            aria-disabled={disabled}
+            aria-busy={isInitializing}
           >
             <AutocompleteMenu
               ref={menuRef}
@@ -1087,7 +1070,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             </div>
 
             <div className="pr-1.5">
-              <CommandPickerButton onClick={openPicker} disabled={disabled || isInitializing} />
+              <CommandPickerButton onClick={openPicker} disabled={disabled} />
             </div>
           </div>
         </div>
