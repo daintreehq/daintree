@@ -1,31 +1,37 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
-import { ChevronsUpDown, Plus, Circle, X } from "lucide-react";
+import { ChevronsUpDown, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { useProjectStore } from "@/store/projectStore";
 import { useNotificationStore } from "@/store/notificationStore";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { projectClient, terminalClient } from "@/clients";
-import type { Project, ProjectStats } from "@shared/types";
-import { groupProjects } from "./projectGrouping";
+import type { ProjectStats } from "@shared/types";
 import { isAgentTerminal } from "@/utils/terminalType";
-import { ProjectActionRow } from "./ProjectActionRow";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
+import { ProjectSwitcherPalette } from "./ProjectSwitcherPalette";
+import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
+import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import Fuse, { type IFuseOptions } from "fuse.js";
 
 interface ProjectTerminalCounts {
   activeAgentCount: number;
   waitingAgentCount: number;
 }
+
+const FUSE_OPTIONS: IFuseOptions<SearchableProject> = {
+  keys: [
+    { name: "name", weight: 2 },
+    { name: "path", weight: 1 },
+  ],
+  threshold: 0.4,
+  includeScore: true,
+};
+
+const MAX_RESULTS = 15;
+const DEBOUNCE_MS = 150;
 
 export function ProjectSwitcher() {
   const {
@@ -42,16 +48,40 @@ export function ProjectSwitcher() {
 
   const { addNotification } = useNotificationStore();
   const [isOpen, setIsOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [projectStats, setProjectStats] = useState<Map<string, ProjectStats>>(new Map());
   const [terminalCounts, setTerminalCounts] = useState<Map<string, ProjectTerminalCounts>>(
     new Map()
   );
   const [stopConfirmProjectId, setStopConfirmProjectId] = useState<string | null>(null);
   const [isStoppingProject, setIsStoppingProject] = useState(false);
-  const [isLoadingStats, setIsLoadingStats] = useState(false);
-  const [isLoadingTerminalCounts, setIsLoadingTerminalCounts] = useState(false);
   const switchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const projectSwitcherShortcut = useKeybindingDisplay("project.switcherPalette");
+
+  // Debounce search query
+  useEffect(() => {
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
+
+    debounceRef.current = setTimeout(() => {
+      setDebouncedQuery(query);
+    }, DEBOUNCE_MS);
+
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
+    };
+  }, [query]);
+
+  // Reset selection when query changes
+  useEffect(() => {
+    setSelectedIndex(0);
+  }, [debouncedQuery]);
 
   const refreshStopCandidateCounts = useCallback(
     async (projectId: string) => {
@@ -73,15 +103,10 @@ export function ProjectSwitcher() {
         let waitingAgentCount = 0;
 
         for (const terminal of terminalsResult.value) {
-          // Only count agent terminals - excludes dev-preview, browser, notes, etc.
-          // Use explicit kind check first (fast path), fall back to isAgentTerminal for legacy terminals
-          const isAgent =
-            terminal.kind === "agent" ||
-            (terminal.kind == null &&
-              isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId));
+          if (terminal.hasPty === false) continue;
 
+          const isAgent = isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId);
           if (!isAgent) continue;
-          if (terminal.hasPty === false) continue; // Skip orphaned terminals without active PTY
 
           const agentState = terminal.agentState;
 
@@ -102,177 +127,85 @@ export function ProjectSwitcher() {
     [setProjectStats, setTerminalCounts]
   );
 
-  const handleProjectSwitch = (projectId: string) => {
-    if (switchTimeoutRef.current) {
-      clearTimeout(switchTimeoutRef.current);
-    }
+  const handleProjectSwitch = useCallback(
+    (projectId: string) => {
+      if (switchTimeoutRef.current) {
+        clearTimeout(switchTimeoutRef.current);
+      }
 
-    addNotification({
-      type: "info",
-      title: "Switching projects",
-      message: "Resetting state for clean project isolation",
-      duration: 1500,
-    });
-
-    switchTimeoutRef.current = setTimeout(() => {
-      switchProject(projectId);
-    }, 1500);
-  };
-
-  const fetchProjectStats = useCallback(async (projectsToFetch: Project[]) => {
-    setIsLoadingStats(true);
-    const stats = new Map<string, ProjectStats>();
-
-    const isVerbose =
-      typeof process !== "undefined" &&
-      typeof process.env !== "undefined" &&
-      Boolean(process.env.CANOPY_VERBOSE);
-
-    try {
-      const results = await Promise.allSettled(
-        projectsToFetch.map((project) => projectClient.getStats(project.id))
-      );
-
-      results.forEach((result, index) => {
-        if (result.status === "fulfilled") {
-          stats.set(projectsToFetch[index].id, result.value);
-          // Debug: log stats for each project
-          if (isVerbose) {
-            console.log(
-              `[ProjectSwitcher] Stats for "${projectsToFetch[index].name}":`,
-              result.value
-            );
-          }
-        } else {
-          console.warn(`Failed to fetch stats for ${projectsToFetch[index].id}:`, result.reason);
-        }
+      addNotification({
+        type: "info",
+        title: "Switching projects",
+        message: "Resetting state for clean project isolation",
+        duration: 1500,
       });
 
-      setProjectStats(stats);
-    } finally {
-      setIsLoadingStats(false);
-    }
-  }, []);
+      switchTimeoutRef.current = setTimeout(() => {
+        switchProject(projectId);
+      }, 1500);
+    },
+    [addNotification, switchProject]
+  );
 
-  const fetchProjectTerminalCounts = useCallback(async (projectsToFetch: Project[]) => {
-    setIsLoadingTerminalCounts(true);
-    const nextCounts = new Map<string, ProjectTerminalCounts>();
+  const fetchStats = useCallback(async () => {
+    if (projects.length === 0) return;
 
-    try {
-      const results = await Promise.allSettled(
-        projectsToFetch.map((project) => terminalClient.getForProject(project.id))
-      );
+    const currentProjects = projects;
 
-      results.forEach((result, index) => {
-        if (result.status !== "fulfilled") {
-          console.warn(
-            `Failed to fetch terminals for ${projectsToFetch[index].id}:`,
-            result.reason
-          );
-          return;
+    const [statsResults, terminalsResults] = await Promise.allSettled([
+      Promise.allSettled(currentProjects.map((p) => projectClient.getStats(p.id))),
+      Promise.allSettled(currentProjects.map((p) => terminalClient.getForProject(p.id))),
+    ]);
+
+    if (statsResults.status === "fulfilled") {
+      const newStats = new Map<string, ProjectStats>();
+      statsResults.value.forEach((result, index) => {
+        if (result.status === "fulfilled") {
+          newStats.set(currentProjects[index].id, result.value);
         }
+      });
+      setProjectStats(newStats);
+    }
+
+    if (terminalsResults.status === "fulfilled") {
+      const newCounts = new Map<string, { activeAgentCount: number; waitingAgentCount: number }>();
+      terminalsResults.value.forEach((result, index) => {
+        if (result.status !== "fulfilled") return;
 
         let activeAgentCount = 0;
         let waitingAgentCount = 0;
 
         for (const terminal of result.value) {
-          // Only count agent terminals - excludes dev-preview, browser, notes, etc.
-          // Use explicit kind check first (fast path), fall back to isAgentTerminal for legacy terminals
-          const isAgent =
-            terminal.kind === "agent" ||
-            (terminal.kind == null &&
-              isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId));
+          if (!panelKindHasPty(terminal.kind ?? "terminal")) continue;
+          if (terminal.kind === "dev-preview") continue;
+          if (terminal.hasPty === false) continue;
 
+          const isAgent = isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId);
           if (!isAgent) continue;
-          if (terminal.hasPty === false) continue; // Skip orphaned terminals without active PTY
 
-          const agentState = terminal.agentState;
-
-          if (agentState === "waiting") {
+          if (terminal.agentState === "waiting") {
             waitingAgentCount += 1;
-          } else if (agentState === "working" || agentState === "running") {
+          } else if (terminal.agentState === "working" || terminal.agentState === "running") {
             activeAgentCount += 1;
           }
         }
 
-        nextCounts.set(projectsToFetch[index].id, {
-          activeAgentCount,
-          waitingAgentCount,
-        });
+        newCounts.set(currentProjects[index].id, { activeAgentCount, waitingAgentCount });
       });
-
-      setTerminalCounts(nextCounts);
-    } finally {
-      setIsLoadingTerminalCounts(false);
+      setTerminalCounts(newCounts);
     }
-  }, []);
+  }, [projects]);
 
-  const handleCloseProject = async (
-    projectId: string,
-    e: React.MouseEvent,
-    killTerminals: boolean = false
-  ) => {
-    e.stopPropagation();
-    e.preventDefault();
-
-    if (killTerminals) {
+  const handleStopProject = useCallback(
+    (projectId: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
       setIsOpen(false);
       void refreshStopCandidateCounts(projectId);
       setStopConfirmProjectId(projectId);
-      return;
-    }
-
-    try {
-      const result = await closeProject(projectId, { killTerminals });
-
-      if (killTerminals) {
-        setProjectStats((prev) => {
-          const next = new Map(prev);
-          next.set(projectId, {
-            processCount: 0,
-            terminalCount: 0,
-            estimatedMemoryMB: 0,
-            terminalTypes: {},
-            processIds: [],
-          });
-          return next;
-        });
-        setTerminalCounts((prev) => {
-          const next = new Map(prev);
-          next.set(projectId, { activeAgentCount: 0, waitingAgentCount: 0 });
-          return next;
-        });
-
-        addNotification({
-          type: "success",
-          title: "Project stopped",
-          message: `Terminated ${result.processesKilled} process(es)`,
-          duration: 3000,
-        });
-      } else {
-        addNotification({
-          type: "info",
-          title: "Project backgrounded",
-          message: "Terminals are still running in the background",
-          duration: 3000,
-        });
-      }
-
-      // Refresh stats after close
-      const updatedProjects = await projectClient.getAll();
-      await Promise.all([
-        fetchProjectStats(updatedProjects),
-        fetchProjectTerminalCounts(updatedProjects),
-      ]);
-    } catch (error) {
-      addNotification({
-        type: "error",
-        title: "Failed to close project",
-        message: error instanceof Error ? error.message : "Unknown error",
-        duration: 5000,
-      });
-    }
-  };
+    },
+    [refreshStopCandidateCounts]
+  );
 
   const confirmStopProject = async () => {
     if (!stopConfirmProjectId) return;
@@ -305,11 +238,7 @@ export function ProjectSwitcher() {
         duration: 3000,
       });
 
-      const updatedProjects = await projectClient.getAll();
-      await Promise.all([
-        fetchProjectStats(updatedProjects),
-        fetchProjectTerminalCounts(updatedProjects),
-      ]);
+      await fetchStats();
       setStopConfirmProjectId(null);
     } catch (error) {
       addNotification({
@@ -323,27 +252,28 @@ export function ProjectSwitcher() {
     }
   };
 
-  const handleReopenProject = async (projectId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-
-    addNotification({
-      type: "info",
-      title: "Reopening project",
-      message: "Reconnecting to background terminals...",
-      duration: 1500,
-    });
-
-    try {
-      await reopenProject(projectId);
-    } catch (error) {
+  const handleReopenProject = useCallback(
+    async (projectId: string) => {
       addNotification({
-        type: "error",
-        title: "Failed to reopen project",
-        message: error instanceof Error ? error.message : "Unknown error",
-        duration: 5000,
+        type: "info",
+        title: "Reopening project",
+        message: "Reconnecting to background terminals...",
+        duration: 1500,
       });
-    }
-  };
+
+      try {
+        await reopenProject(projectId);
+      } catch (error) {
+        addNotification({
+          type: "error",
+          title: "Failed to reopen project",
+          message: error instanceof Error ? error.message : "Unknown error",
+          duration: 5000,
+        });
+      }
+    },
+    [addNotification, reopenProject]
+  );
 
   useEffect(() => {
     loadProjects();
@@ -364,38 +294,118 @@ export function ProjectSwitcher() {
 
   // Refresh projects and fetch stats when dropdown opens
   useEffect(() => {
+    if (isOpen) {
+      loadProjects();
+      fetchStats();
+    }
+  }, [isOpen, loadProjects, fetchStats]);
+
+  // Poll for updates while open
+  useEffect(() => {
     if (!isOpen) return;
 
-    let cancelled = false;
-    let inFlight = false;
+    const interval = setInterval(() => {
+      void fetchStats();
+    }, 10000);
 
-    const runFetch = async () => {
-      if (cancelled || inFlight) return;
-      inFlight = true;
+    return () => clearInterval(interval);
+  }, [isOpen, fetchStats]);
 
-      try {
-        // Refresh project list to get latest statuses, then fetch stats
-        await loadProjects();
-        const freshProjects = await projectClient.getAll();
-        if (!cancelled && freshProjects.length > 0) {
-          await Promise.all([
-            fetchProjectStats(freshProjects),
-            fetchProjectTerminalCounts(freshProjects),
-          ]);
-        }
-      } finally {
-        inFlight = false;
+  // Convert projects to searchable format
+  const searchableProjects = useMemo<SearchableProject[]>(() => {
+    return projects.map((p) => {
+      const stats = projectStats.get(p.id);
+      const counts = terminalCounts.get(p.id);
+      const isActive = p.id === currentProject?.id;
+      const hasProcesses = (stats?.processCount ?? 0) > 0;
+      const isBackground = p.status === "background" || (!isActive && hasProcesses);
+
+      return {
+        id: p.id,
+        name: p.name,
+        path: p.path,
+        emoji: p.emoji || "🌲",
+        color: p.color,
+        status: p.status,
+        isActive,
+        isBackground,
+        activeAgentCount: counts?.activeAgentCount ?? 0,
+        waitingAgentCount: counts?.waitingAgentCount ?? 0,
+        processCount: stats?.processCount ?? 0,
+      };
+    });
+  }, [projects, projectStats, terminalCounts, currentProject?.id]);
+
+  // Sort projects: active first, then background, then recent
+  const sortedProjects = useMemo<SearchableProject[]>(() => {
+    return [...searchableProjects].sort((a, b) => {
+      if (a.isActive && !b.isActive) return -1;
+      if (!a.isActive && b.isActive) return 1;
+      if (a.isBackground && !b.isBackground) return -1;
+      if (!a.isBackground && b.isBackground) return 1;
+      return a.name.localeCompare(b.name);
+    });
+  }, [searchableProjects]);
+
+  // Fuzzy search
+  const fuse = useMemo(() => {
+    return new Fuse(sortedProjects, FUSE_OPTIONS);
+  }, [sortedProjects]);
+
+  const results = useMemo<SearchableProject[]>(() => {
+    if (!debouncedQuery.trim()) {
+      return sortedProjects.slice(0, MAX_RESULTS);
+    }
+
+    const fuseResults = fuse.search(debouncedQuery);
+    return fuseResults.slice(0, MAX_RESULTS).map((r) => r.item);
+  }, [debouncedQuery, sortedProjects, fuse]);
+
+  // Reset selection when results change
+  useEffect(() => {
+    setSelectedIndex(0);
+  }, [results]);
+
+  const handleOpen = useCallback(() => {
+    setIsOpen(true);
+    setQuery("");
+    setSelectedIndex(0);
+    setDebouncedQuery("");
+  }, []);
+
+  const handleClose = useCallback(() => {
+    setIsOpen(false);
+    setQuery("");
+    setSelectedIndex(0);
+    setDebouncedQuery("");
+  }, []);
+
+  const selectPrevious = useCallback(() => {
+    if (results.length === 0) return;
+    setSelectedIndex((prev) => (prev <= 0 ? results.length - 1 : prev - 1));
+  }, [results.length]);
+
+  const selectNext = useCallback(() => {
+    if (results.length === 0) return;
+    setSelectedIndex((prev) => (prev >= results.length - 1 ? 0 : prev + 1));
+  }, [results.length]);
+
+  const handleSelectProject = useCallback(
+    async (project: SearchableProject) => {
+      if (project.isActive) {
+        return;
       }
-    };
 
-    void runFetch(); // Initial fetch
-    const interval = setInterval(() => void runFetch(), 10000); // Poll every 10s (reduced from 5s)
+      handleClose();
 
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [isOpen, fetchProjectStats, fetchProjectTerminalCounts, loadProjects]);
+      if (project.isBackground) {
+        await handleReopenProject(project.id);
+      } else {
+        handleProjectSwitch(project.id);
+      }
+    },
+    [handleClose, handleProjectSwitch, handleReopenProject]
+  );
 
   const renderIcon = (emoji: string, color?: string, sizeClass = "h-9 w-9 text-lg") => (
     <div
@@ -404,143 +414,14 @@ export function ProjectSwitcher() {
         sizeClass
       )}
       style={{
-        background: `linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2)), ${getProjectGradient(color)}`,
+        background: color
+          ? `linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2)), ${getProjectGradient(color)}`
+          : "linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2)), var(--color-canopy-sidebar)",
       }}
     >
       <span className="leading-none select-none filter drop-shadow-sm">{emoji}</span>
     </div>
   );
-
-  const groupedProjects = useMemo(
-    () => groupProjects(projects, currentProject?.id || null, projectStats),
-    [projects, currentProject?.id, projectStats]
-  );
-
-  const renderProjectItem = (project: Project, isActive: boolean) => {
-    const stats = projectStats.get(project.id);
-    const isBackground = project.status === "background";
-    const counts = terminalCounts.get(project.id);
-    const activeAgentCount = counts ? counts.activeAgentCount : null;
-    const waitingAgentCount = counts ? counts.waitingAgentCount : null;
-    const showStop = (stats?.processCount ?? 0) > 0;
-
-    return (
-      <DropdownMenuItem
-        key={project.id}
-        onClick={(e) => {
-          if (isLoading) return;
-          if (isActive && currentProject) return;
-
-          if (isBackground) {
-            handleReopenProject(project.id, e);
-          } else {
-            handleProjectSwitch(project.id);
-          }
-        }}
-        disabled={isLoading}
-        className={cn(
-          "p-2 cursor-pointer mb-1 rounded-[var(--radius-lg)] transition-colors",
-          isActive ? "bg-white/[0.04]" : "hover:bg-white/[0.03]"
-        )}
-      >
-        <div className="flex items-center gap-3 w-full min-w-0">
-          {renderIcon(project.emoji || "🌲", project.color, "h-8 w-8 text-base")}
-
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 min-w-0">
-              <span
-                className={cn(
-                  "truncate text-sm font-semibold leading-tight",
-                  isActive ? "text-foreground" : "text-foreground/85"
-                )}
-              >
-                {project.name}
-              </span>
-
-              <div className="ml-auto flex items-center gap-1.5 shrink-0">
-                <ProjectActionRow
-                  activeAgentCount={activeAgentCount}
-                  waitingAgentCount={waitingAgentCount}
-                />
-
-                {showStop && (
-                  <button
-                    type="button"
-                    onClick={(e) => void handleCloseProject(project.id, e, true)}
-                    className={cn(
-                      "p-0.5 rounded transition-colors cursor-pointer",
-                      "text-[var(--color-status-error)] hover:bg-red-500/10",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-                    )}
-                    title={`Stop project (${stats?.terminalCount ?? 0} session${(stats?.terminalCount ?? 0) === 1 ? "" : "s"})`}
-                    aria-label={`Stop project (${stats?.terminalCount ?? 0} session${(stats?.terminalCount ?? 0) === 1 ? "" : "s"})`}
-                  >
-                    <X className="w-3.5 h-3.5" aria-hidden="true" />
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <div className="flex items-center min-w-0 mt-0.5">
-              <span className="truncate text-[11px] leading-none font-mono text-muted-foreground/65">
-                {project.path.split(/[/\\]/).pop()}
-              </span>
-            </div>
-          </div>
-        </div>
-      </DropdownMenuItem>
-    );
-  };
-
-  const renderGroupedProjects = () => {
-    const sections: React.ReactNode[] = [];
-
-    // Active Project Section
-    if (groupedProjects.active.length > 0) {
-      sections.push(
-        <div key="active">
-          <DropdownMenuLabel className="text-[11px] font-semibold text-muted-foreground/50 uppercase tracking-widest px-2 py-1.5">
-            Active
-          </DropdownMenuLabel>
-          {groupedProjects.active.map((project) => renderProjectItem(project, true))}
-        </div>
-      );
-    }
-
-    // Background Projects Section
-    if (groupedProjects.background.length > 0) {
-      sections.push(
-        <div key="background">
-          {sections.length > 0 && <DropdownMenuSeparator className="my-1 bg-border/40" />}
-          <DropdownMenuLabel className="text-[11px] font-semibold text-muted-foreground/50 uppercase tracking-widest px-2 py-1.5 flex items-center gap-2">
-            <Circle
-              className={cn(
-                "h-2 w-2 fill-green-500 text-green-500",
-                (isLoadingStats || isLoadingTerminalCounts) && "animate-pulse"
-              )}
-            />
-            Background ({groupedProjects.background.length})
-          </DropdownMenuLabel>
-          {groupedProjects.background.map((project) => renderProjectItem(project, false))}
-        </div>
-      );
-    }
-
-    // Recent Projects Section
-    if (groupedProjects.recent.length > 0) {
-      sections.push(
-        <div key="recent">
-          {sections.length > 0 && <DropdownMenuSeparator className="my-1 bg-border/40" />}
-          <DropdownMenuLabel className="text-[11px] font-semibold text-muted-foreground/50 uppercase tracking-widest px-2 py-1.5">
-            Recent
-          </DropdownMenuLabel>
-          {groupedProjects.recent.map((project) => renderProjectItem(project, false))}
-        </div>
-      );
-    }
-
-    return sections;
-  };
 
   const stopProject = stopConfirmProjectId
     ? projects.find((project) => project.id === stopConfirmProjectId)
@@ -573,7 +454,7 @@ export function ProjectSwitcher() {
               It will also stop {stopAgentCount} agent session{stopAgentCount === 1 ? "" : "s"}.
             </span>
           )}
-          <span className="block mt-2">This can’t be undone.</span>
+          <span className="block mt-2">This can't be undone.</span>
         </>
       }
       confirmLabel="Stop project"
@@ -589,33 +470,30 @@ export function ProjectSwitcher() {
       return (
         <>
           {stopDialog}
-          <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                className="w-full justify-between text-muted-foreground border-dashed h-12 active:scale-100"
-                disabled={isLoading}
-              >
-                <span>Select Project...</span>
-                <ChevronsUpDown className="opacity-50" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              className="w-[484px] max-w-[calc(100vw-2rem)] max-h-[60vh] overflow-y-auto p-2"
-              align="start"
+          <ProjectSwitcherPalette
+            mode="dropdown"
+            isOpen={isOpen}
+            query={query}
+            results={results}
+            selectedIndex={selectedIndex}
+            onQueryChange={setQuery}
+            onSelectPrevious={selectPrevious}
+            onSelectNext={selectNext}
+            onSelect={handleSelectProject}
+            onClose={handleClose}
+            onAddProject={addProject}
+            onStopProject={handleStopProject}
+          >
+            <Button
+              variant="outline"
+              className="w-full justify-between text-muted-foreground border-dashed h-12 active:scale-100"
+              disabled={isLoading}
+              onClick={handleOpen}
             >
-              {renderGroupedProjects()}
-
-              <DropdownMenuSeparator className="my-1 bg-border/40" />
-
-              <DropdownMenuItem onClick={addProject} className="gap-3 p-2 cursor-pointer">
-                <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20">
-                  <Plus className="h-4 w-4" />
-                </div>
-                <span className="font-medium text-sm text-muted-foreground">Add Project...</span>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+              <span>Select Project...</span>
+              <ChevronsUpDown className="opacity-50" />
+            </Button>
+          </ProjectSwitcherPalette>
         </>
       );
     }
@@ -639,66 +517,61 @@ export function ProjectSwitcher() {
   return (
     <>
       {stopDialog}
-      <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
+      <ProjectSwitcherPalette
+        mode="dropdown"
+        isOpen={isOpen}
+        query={query}
+        results={results}
+        selectedIndex={selectedIndex}
+        onQueryChange={setQuery}
+        onSelectPrevious={selectPrevious}
+        onSelectNext={selectNext}
+        onSelect={handleSelectProject}
+        onClose={handleClose}
+        onAddProject={addProject}
+        onStopProject={handleStopProject}
+      >
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  className={cn(
-                    "w-full justify-between h-12 px-2.5",
-                    "rounded-[var(--radius-lg)]",
-                    "border border-white/[0.06]",
-                    "bg-white/[0.02] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
-                    "hover:bg-white/[0.04] transition-colors",
-                    "active:scale-100"
+              <Button
+                variant="ghost"
+                className={cn(
+                  "w-full justify-between h-12 px-2.5",
+                  "rounded-[var(--radius-lg)]",
+                  "border border-white/[0.06]",
+                  "bg-white/[0.02] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
+                  "hover:bg-white/[0.04] transition-colors",
+                  "active:scale-100"
+                )}
+                disabled={isLoading}
+                onClick={handleOpen}
+              >
+                <div className="flex items-center gap-3 text-left min-w-0">
+                  {renderIcon(
+                    currentProject.emoji || "🌲",
+                    currentProject.color,
+                    "h-9 w-9 text-xl"
                   )}
-                  disabled={isLoading}
-                >
-                  <div className="flex items-center gap-3 text-left min-w-0">
-                    {renderIcon(
-                      currentProject.emoji || "🌲",
-                      currentProject.color,
-                      "h-9 w-9 text-xl"
-                    )}
 
-                    <div className="flex flex-col min-w-0 gap-0.5">
-                      <span className="truncate font-semibold text-canopy-text text-sm leading-none">
-                        {currentProject.name}
-                      </span>
-                      <span className="truncate text-xs text-muted-foreground/60 font-mono">
-                        {currentProject.path.split(/[/\\]/).pop()}
-                      </span>
-                    </div>
+                  <div className="flex flex-col min-w-0 gap-0.5">
+                    <span className="truncate font-semibold text-canopy-text text-sm leading-none">
+                      {currentProject.name}
+                    </span>
+                    <span className="truncate text-xs text-muted-foreground/60 font-mono">
+                      {currentProject.path.split(/[/\\]/).pop()}
+                    </span>
                   </div>
-                  <ChevronsUpDown className="shrink-0 text-muted-foreground/40 group-hover:text-muted-foreground/70 transition-colors" />
-                </Button>
-              </DropdownMenuTrigger>
+                </div>
+                <ChevronsUpDown className="shrink-0 text-muted-foreground/40 group-hover:text-muted-foreground/70 transition-colors" />
+              </Button>
             </TooltipTrigger>
             <TooltipContent side="right">
               Switch project{projectSwitcherShortcut ? ` (${projectSwitcherShortcut})` : ""}
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
-
-        <DropdownMenuContent
-          className="w-[484px] max-w-[calc(100vw-2rem)] max-h-[60vh] overflow-y-auto p-2"
-          align="start"
-          sideOffset={8}
-        >
-          {renderGroupedProjects()}
-
-          <DropdownMenuSeparator className="my-1 bg-border/40" />
-
-          <DropdownMenuItem onClick={addProject} className="gap-3 p-2 cursor-pointer">
-            <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
-              <Plus className="h-4 w-4" />
-            </div>
-            <span className="font-medium text-sm text-muted-foreground">Add Project...</span>
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      </ProjectSwitcherPalette>
     </>
   );
 }
