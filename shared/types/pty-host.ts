@@ -86,7 +86,8 @@ export type PtyHostRequest =
   | { type: "set-analysis-enabled"; id: string; enabled: boolean }
   | { type: "get-available-terminals"; requestId: string }
   | { type: "get-terminals-by-state"; state: AgentState; requestId: string }
-  | { type: "get-all-terminals"; requestId: string };
+  | { type: "get-all-terminals"; requestId: string }
+  | { type: "set-ipc-data-mirror"; id: string; enabled: boolean };
 
 /**
  * Terminal snapshot data sent from Host → Main for state queries.

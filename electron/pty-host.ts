@@ -83,6 +83,10 @@ let analysisBuffer: SharedRingBuffer | null = null;
 const packetFramer = new PacketFramer();
 const textDecoder = new TextDecoder();
 
+// Terminals that need IPC data mirroring (e.g., dev-preview sessions that
+// need main-process URL detection even when SharedArrayBuffer is active)
+const ipcDataMirrorTerminals = new Set<string>();
+
 // MessagePort for direct Renderer ↔ Pty Host communication (bypasses Main)
 // Note: This variable holds the port reference so the message handler stays active
 let rendererPort: MessagePort | null = null;
@@ -410,6 +414,13 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
     }
   }
 
+  // IPC Data Mirror: Always send data via IPC for terminals that need main-process
+  // monitoring (e.g., DevPreviewService URL detection), even when SAB write succeeded.
+  // Skip mirroring for suspended/backgrounded terminals to respect backpressure semantics.
+  if (visualWritten && ipcDataMirrorTerminals.has(id) && !isSuspended && !isBackgrounded) {
+    sendEvent({ type: "data", id, data: toStringForIpc(data) });
+  }
+
   // Fallback: If ring buffer failed or isn't set up, use IPC with backpressure
   // Skip IPC fallback for backgrounded or suspended terminals (wake will resync via snapshot)
   if (!visualWritten && !isBackgrounded && !isSuspended) {
@@ -464,6 +475,9 @@ ptyManager.on("exit", (id: string, exitCode: number) => {
 
   // Clean up IPC backpressure state
   ipcQueueManager.clearQueue(id);
+
+  // Clean up IPC data mirror state
+  ipcDataMirrorTerminals.delete(id);
 
   sendEvent({ type: "exit", id, exitCode });
 });
@@ -929,6 +943,16 @@ port.on("message", async (rawMsg: any) => {
           ptyManager.setAnalysisEnabled(msg.id, msg.enabled);
         } else {
           console.warn("[PtyHost] Invalid set-analysis-enabled message:", msg);
+        }
+        break;
+
+      case "set-ipc-data-mirror":
+        if (typeof msg.id === "string" && typeof msg.enabled === "boolean") {
+          if (msg.enabled) {
+            ipcDataMirrorTerminals.add(msg.id);
+          } else {
+            ipcDataMirrorTerminals.delete(msg.id);
+          }
         }
         break;
 

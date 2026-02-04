@@ -22,6 +22,7 @@ interface MockPtyClient extends EventEmitter {
   write: ReturnType<typeof vi.fn>;
   resize: ReturnType<typeof vi.fn>;
   dispose: ReturnType<typeof vi.fn>;
+  setIpcDataMirror: ReturnType<typeof vi.fn>;
 }
 
 function createMockPtyClient(): MockPtyClient {
@@ -33,6 +34,7 @@ function createMockPtyClient(): MockPtyClient {
   emitter.write = vi.fn();
   emitter.resize = vi.fn();
   emitter.dispose = vi.fn();
+  emitter.setIpcDataMirror = vi.fn();
   return emitter;
 }
 

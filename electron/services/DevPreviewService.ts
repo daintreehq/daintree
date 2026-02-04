@@ -66,6 +66,8 @@ export class DevPreviewService extends EventEmitter {
 
       if (ptyMatches && cwdMatches && commandMatches) {
         existingSession.timestamp = Date.now();
+        // Re-enable IPC mirroring in case PTY host restarted
+        this.ptyClient.setIpcDataMirror(ptyId, true);
         this.emitStatus(
           panelId,
           existingSession.status,
@@ -192,9 +194,14 @@ export class DevPreviewService extends EventEmitter {
     this.ptyClient.on("data", dataListener);
     this.ptyClient.on("exit", exitListener);
 
+    // Enable IPC data mirroring so PTY data events reach this service
+    // even when SharedArrayBuffer is active (primary data path bypasses IPC)
+    this.ptyClient.setIpcDataMirror(ptyId, true);
+
     const unsubscribers: (() => void)[] = [
       () => this.ptyClient.removeListener("data", dataListener),
       () => this.ptyClient.removeListener("exit", exitListener),
+      () => this.ptyClient.setIpcDataMirror(ptyId, false),
     ];
 
     // Delay command submission to allow PTY shell to initialize
@@ -276,7 +283,16 @@ export class DevPreviewService extends EventEmitter {
 
     session.outputBuffer = (session.outputBuffer + data).slice(-4096);
 
-    const urls = extractLocalhostUrls(data);
+    // Try URL extraction on the current chunk first (fast path)
+    let urls = extractLocalhostUrls(data);
+    // Fallback: check the output buffer for URLs split across chunks or port changes
+    if (urls.length === 0) {
+      const bufferUrls = extractLocalhostUrls(session.outputBuffer);
+      // Prefer the latest URL from the buffer (last match) to catch port changes
+      if (bufferUrls.length > 0) {
+        urls = [bufferUrls[bufferUrls.length - 1]];
+      }
+    }
     if (urls.length > 0) {
       const preferredUrl = this.selectPreferredUrl(urls);
       if (preferredUrl && preferredUrl !== session.url) {

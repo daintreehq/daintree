@@ -903,6 +903,15 @@ export class PtyClient extends EventEmitter {
     this.send({ type: "set-activity-tier", id, tier });
   }
 
+  /**
+   * Enable/disable IPC data mirroring for a terminal.
+   * When enabled, PTY data is always sent via IPC in addition to SharedArrayBuffer,
+   * allowing main-process consumers (like DevPreviewService) to receive data events.
+   */
+  setIpcDataMirror(id: string, enabled: boolean): void {
+    this.send({ type: "set-ipc-data-mirror", id, enabled });
+  }
+
   async wakeTerminal(id: string): Promise<{ state: string | null; warnings?: string[] }> {
     const requestId = this.broker.generateId(`wake-${id}`);
     const promise = this.broker.register<{ state: string | null; warnings?: string[] }>(requestId);
