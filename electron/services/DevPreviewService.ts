@@ -383,6 +383,8 @@ export class DevPreviewService extends EventEmitter {
       await this.ptyClient.kill(ptyId);
     }
 
+    this.emitStatus(panelId, "installing", "Installing missing dependencies...", null);
+
     // Delete the session so the next attach() doesn't short-circuit
     this.sessions.delete(panelId);
 
