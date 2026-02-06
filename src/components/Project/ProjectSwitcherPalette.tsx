@@ -82,7 +82,9 @@ function ProjectListItem({
           <span
             className={cn(
               "truncate text-sm font-semibold leading-tight",
-              project.isActive || index === selectedIndex ? "text-canopy-text" : "text-canopy-text/85"
+              project.isActive || index === selectedIndex
+                ? "text-canopy-text"
+                : "text-canopy-text/85"
             )}
           >
             {project.name}
@@ -102,10 +104,12 @@ function ProjectListItem({
             />
 
             {(showStop || onCloseProject) && (
-              <div className={cn(
-                "flex items-center gap-1.5 transition-opacity",
-                index === selectedIndex ? "opacity-100" : "opacity-0 group-hover:opacity-100"
-              )}>
+              <div
+                className={cn(
+                  "flex items-center gap-1.5 transition-opacity",
+                  index === selectedIndex ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                )}
+              >
                 {showStop && onStopProject && (
                   <button
                     type="button"
@@ -196,9 +200,8 @@ function ProjectListContent({
   const sections = useMemo(() => {
     if (isSearching || results.length === 0) return null;
     const current = results.filter((p) => p.isActive);
-    const background = results.filter((p) => !p.isActive && p.isBackground);
-    const recent = results.filter((p) => !p.isActive && !p.isBackground);
-    return [current, background, recent].filter((s) => s.length > 0);
+    const previous = results.filter((p) => !p.isActive);
+    return [current, previous].filter((s) => s.length > 0);
   }, [results, isSearching]);
 
   const renderItem = (project: SearchableProject) => {
@@ -248,15 +251,15 @@ function ProjectListContent({
             const isLast = sectionIdx === sections.length - 1;
             return (
               <div key={sectionIdx}>
-                {sectionIdx > 0 && (
-                  <div className="h-[3px] bg-white/[0.08]" />
-                )}
-                <div className={cn(
-                  "px-2 py-1.5",
-                  sectionIdx === 0 && "pt-2",
-                  isLast && !showActions && "pb-2",
-                  isActiveSection && "bg-white/[0.02]"
-                )}>
+                {sectionIdx > 0 && <div className="h-[3px] bg-white/[0.08]" />}
+                <div
+                  className={cn(
+                    "px-2 py-1.5",
+                    sectionIdx === 0 && "pt-2",
+                    isLast && !showActions && "pb-2",
+                    isActiveSection && "bg-white/[0.02]"
+                  )}
+                >
                   {section.map(renderItem)}
                 </div>
               </div>
@@ -388,7 +391,13 @@ function ModalContent({
           }
           break;
         case "Backspace":
-          if ((e.metaKey || e.ctrlKey) && onCloseProject && results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
+          if (
+            (e.metaKey || e.ctrlKey) &&
+            onCloseProject &&
+            results.length > 0 &&
+            selectedIndex >= 0 &&
+            selectedIndex < results.length
+          ) {
             const selectedProject = results[selectedIndex];
             if (!selectedProject.isActive) {
               e.preventDefault();
@@ -404,7 +413,11 @@ function ModalContent({
 
   return (
     <AppPaletteDialog isOpen={isOpen} onClose={onClose} ariaLabel="Project switcher">
-      <AppPaletteDialog.Header label="Switch Project" keyHint={projectSwitcherShortcut} className="pb-2">
+      <AppPaletteDialog.Header
+        label="Switch Project"
+        keyHint={projectSwitcherShortcut}
+        className="pb-2"
+      >
         <AppPaletteDialog.Input
           inputRef={inputRef}
           value={query}
@@ -425,17 +438,17 @@ function ModalContent({
       </AppPaletteDialog.Header>
 
       <AppPaletteDialog.Body className="p-0">
-          <ProjectListContent
-            results={results}
-            selectedIndex={selectedIndex}
-            query={query}
-            onSelect={onSelect}
-            listRef={listRef}
-            onAddProject={onAddProject}
-            onStopProject={onStopProject}
-            onCloseProject={onCloseProject}
-            showAddProject={true}
-          />
+        <ProjectListContent
+          results={results}
+          selectedIndex={selectedIndex}
+          query={query}
+          onSelect={onSelect}
+          listRef={listRef}
+          onAddProject={onAddProject}
+          onStopProject={onStopProject}
+          onCloseProject={onCloseProject}
+          showAddProject={true}
+        />
       </AppPaletteDialog.Body>
 
       <AppPaletteDialog.Footer>
@@ -546,7 +559,13 @@ function DropdownContent({
           }
           break;
         case "Backspace":
-          if ((e.metaKey || e.ctrlKey) && onCloseProject && results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
+          if (
+            (e.metaKey || e.ctrlKey) &&
+            onCloseProject &&
+            results.length > 0 &&
+            selectedIndex >= 0 &&
+            selectedIndex < results.length
+          ) {
             const selectedProject = results[selectedIndex];
             if (!selectedProject.isActive) {
               e.preventDefault();
@@ -574,7 +593,11 @@ function DropdownContent({
           inputRef.current?.focus();
         }}
       >
-        <AppPaletteDialog.Header label="Switch Project" keyHint={projectSwitcherShortcut} className="pb-2">
+        <AppPaletteDialog.Header
+          label="Switch Project"
+          keyHint={projectSwitcherShortcut}
+          className="pb-2"
+        >
           <AppPaletteDialog.Input
             inputRef={inputRef}
             value={query}
@@ -586,9 +609,7 @@ function DropdownContent({
             aria-haspopup="listbox"
             aria-label="Search projects"
             aria-controls="project-list"
-            aria-activedescendant={
-              activeResult ? `project-option-${activeResult.id}` : undefined
-            }
+            aria-activedescendant={activeResult ? `project-option-${activeResult.id}` : undefined}
           />
         </AppPaletteDialog.Header>
 

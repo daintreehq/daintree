@@ -6,6 +6,7 @@ import { isValidBrowserUrl, normalizeBrowserUrl } from "@/components/Browser/bro
 import { useIsDragging } from "@/components/DragDrop";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { cn } from "@/lib/utils";
+import { shouldAdoptServerUrl } from "./devPreviewUrlSync";
 import { actionService } from "@/services/ActionService";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useProjectStore, useTerminalStore } from "@/store";
@@ -599,14 +600,28 @@ export function DevPreviewPane({
         return;
       }
 
-      // Only reset history if no URL is currently set (avoid overwriting restored state)
-      if (!currentUrl) {
-        setIsLoading(true);
-        setHistory({ past: [], present: resolvedUrl, future: [] });
-        lastSetUrlRef.current = resolvedUrl;
-      }
+      const shouldReplaceCurrentUrl = shouldAdoptServerUrl({
+        currentUrl,
+        nextUrl: resolvedUrl,
+        status,
+        isUrlStale,
+      });
+
+      if (!shouldReplaceCurrentUrl) return;
+
+      setIsLoading(true);
+      setHistory({ past: [], present: resolvedUrl, future: [] });
+      lastSetUrlRef.current = resolvedUrl;
     },
-    [clearAutoReload, currentUrl, isBrowserOnly, scheduleAutoReload, safeLoadUrl]
+    [
+      clearAutoReload,
+      currentUrl,
+      isBrowserOnly,
+      isUrlStale,
+      safeLoadUrl,
+      scheduleAutoReload,
+      status,
+    ]
   );
 
   const handleOpenExternal = useCallback(() => {
@@ -923,8 +938,9 @@ export function DevPreviewPane({
       setWebviewLoadError(existingInstance.loadError);
       hasLoadedRef.current = existingInstance.hasLoaded;
 
-      // Check if URL changed using lastKnownUrl (more reliable than getAttribute)
-      if (existingInstance.lastKnownUrl !== currentUrl && currentUrl && existingInstance.isReady) {
+      // Check if URL changed using lastKnownUrl (more reliable than getAttribute).
+      // Apply even before dom-ready so setAttribute("src") can queue the right URL.
+      if (existingInstance.lastKnownUrl !== currentUrl && currentUrl) {
         // URL changed - trigger reload
         try {
           safeLoadUrl(currentUrl);
