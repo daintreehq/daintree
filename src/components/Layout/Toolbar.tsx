@@ -138,6 +138,15 @@ export function Toolbar({
     [projectSwitcher]
   );
 
+  const handleCloseProject = useCallback(
+    (projectId: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      void projectSwitcher.removeProject(projectId);
+    },
+    [projectSwitcher]
+  );
+
   const getTimeSinceUpdate = (timestamp: number | null): string => {
     if (timestamp == null || !Number.isFinite(timestamp) || timestamp <= 0) {
       return "unknown";
@@ -698,6 +707,7 @@ export function Toolbar({
             onClose={handleDropdownClose}
             onAddProject={projectSwitcher.addProject}
             onStopProject={handleStopProject}
+            onCloseProject={handleCloseProject}
             onOpenProjectSettings={currentProject ? handleOpenProjectSettings : undefined}
             dropdownAlign="center"
           >

@@ -54,6 +54,15 @@ export function ProjectSwitcher() {
     [projectSwitcher]
   );
 
+  const handleCloseProject = useCallback(
+    (projectId: string, e: MouseEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      void projectSwitcher.removeProject(projectId);
+    },
+    [projectSwitcher]
+  );
+
   const stopDialog = (
     <ConfirmDialog
       isOpen={projectSwitcher.stopConfirmProjectId != null}
@@ -89,6 +98,7 @@ export function ProjectSwitcher() {
             onClose={handleDropdownClose}
             onAddProject={projectSwitcher.addProject}
             onStopProject={handleStopProject}
+            onCloseProject={handleCloseProject}
           >
             <Button
               variant="outline"
@@ -136,6 +146,7 @@ export function ProjectSwitcher() {
         onClose={handleDropdownClose}
         onAddProject={projectSwitcher.addProject}
         onStopProject={handleStopProject}
+        onCloseProject={handleCloseProject}
         onOpenProjectSettings={handleOpenSettings}
       >
         <TooltipProvider>

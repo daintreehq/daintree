@@ -15,6 +15,7 @@ export interface SearchableProject {
   path: string;
   emoji: string;
   color?: string;
+  lastOpened: number;
   status: Project["status"];
   isActive: boolean;
   isBackground: boolean;
@@ -39,6 +40,7 @@ export interface UseProjectSwitcherPaletteReturn {
   confirmSelection: () => void;
   addProject: () => Promise<void>;
   stopProject: (projectId: string) => Promise<void>;
+  removeProject: (projectId: string) => Promise<void>;
   stopConfirmProjectId: string | null;
   setStopConfirmProjectId: (projectId: string | null) => void;
   confirmStopProject: () => Promise<void>;
@@ -80,6 +82,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const loadProjects = useProjectStore((state) => state.loadProjects);
   const addProjectFn = useProjectStore((state) => state.addProject);
   const closeProject = useProjectStore((state) => state.closeProject);
+  const removeProject = useProjectStore((state) => state.removeProject);
   const { addNotification } = useNotificationStore();
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -201,6 +204,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         path: p.path,
         emoji: p.emoji || "🌲",
         color: p.color,
+        lastOpened: p.lastOpened ?? 0,
         status: p.status,
         isActive,
         isBackground,
@@ -213,10 +217,9 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
   const sortedProjects = useMemo<SearchableProject[]>(() => {
     return [...searchableProjects].sort((a, b) => {
-      if (a.isActive && !b.isActive) return -1;
-      if (!a.isActive && b.isActive) return 1;
-      if (a.isBackground && !b.isBackground) return -1;
-      if (!a.isBackground && b.isBackground) return 1;
+      if (a.lastOpened !== b.lastOpened) {
+        return b.lastOpened - a.lastOpened;
+      }
       return a.name.localeCompare(b.name);
     });
   }, [searchableProjects]);
@@ -410,6 +413,22 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     }
   }, [stopConfirmProjectId, closeProject, addNotification]);
 
+  const removeProjectFromList = useCallback(
+    async (projectId: string) => {
+      try {
+        await removeProject(projectId);
+      } catch (error) {
+        addNotification({
+          type: "error",
+          title: "Failed to remove project",
+          message: error instanceof Error ? error.message : "Unknown error",
+          duration: 5000,
+        });
+      }
+    },
+    [removeProject, addNotification]
+  );
+
   return {
     isOpen,
     mode,
@@ -426,6 +445,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     confirmSelection,
     addProject,
     stopProject,
+    removeProject: removeProjectFromList,
     stopConfirmProjectId,
     setStopConfirmProjectId,
     confirmStopProject,

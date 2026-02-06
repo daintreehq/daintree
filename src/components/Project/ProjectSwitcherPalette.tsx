@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback } from "react";
-import { Circle, Plus, Settings2, X } from "lucide-react";
+import { Circle, Plus, Settings2, Square, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
@@ -21,6 +21,7 @@ export interface ProjectSwitcherPaletteProps {
   mode?: ProjectSwitcherMode;
   onAddProject?: () => void;
   onStopProject?: (projectId: string, e: React.MouseEvent) => void;
+  onCloseProject?: (projectId: string, e: React.MouseEvent) => void;
   onOpenProjectSettings?: () => void;
   dropdownAlign?: "start" | "center" | "end";
   children?: React.ReactNode;
@@ -32,6 +33,7 @@ interface ProjectListItemProps {
   selectedIndex: number;
   onSelect: (project: SearchableProject) => void;
   onStopProject?: (projectId: string, e: React.MouseEvent) => void;
+  onCloseProject?: (projectId: string, e: React.MouseEvent) => void;
 }
 
 function ProjectListItem({
@@ -40,8 +42,10 @@ function ProjectListItem({
   selectedIndex,
   onSelect,
   onStopProject,
+  onCloseProject,
 }: ProjectListItemProps) {
   const showStop = project.processCount > 0;
+  const canClose = !project.isActive;
 
   return (
     <div
@@ -118,6 +122,27 @@ function ProjectListItem({
                 title="Stop project"
                 aria-label="Stop project"
               >
+                <Square className="w-3.5 h-3.5" aria-hidden="true" />
+              </button>
+            )}
+            {onCloseProject && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  if (!canClose) return;
+                  e.stopPropagation();
+                  onCloseProject(project.id, e);
+                }}
+                className={cn(
+                  "p-0.5 rounded transition-colors cursor-pointer",
+                  canClose
+                    ? "text-canopy-text/50 hover:bg-white/[0.06] hover:text-canopy-text/80"
+                    : "text-canopy-text/20 cursor-not-allowed"
+                )}
+                title={canClose ? "Close project" : "Can't close active project"}
+                aria-label="Close project"
+                disabled={!canClose}
+              >
                 <X className="w-3.5 h-3.5" aria-hidden="true" />
               </button>
             )}
@@ -143,6 +168,7 @@ interface ProjectListContentProps {
   onAddProject?: () => void;
   onOpenProjectSettings?: () => void;
   onStopProject?: (projectId: string, e: React.MouseEvent) => void;
+  onCloseProject?: (projectId: string, e: React.MouseEvent) => void;
   showAddProject?: boolean;
   showProjectSettings?: boolean;
 }
@@ -156,6 +182,7 @@ function ProjectListContent({
   onAddProject,
   onOpenProjectSettings,
   onStopProject,
+  onCloseProject,
   showAddProject = false,
   showProjectSettings = false,
 }: ProjectListContentProps) {
@@ -179,6 +206,7 @@ function ProjectListContent({
               selectedIndex={selectedIndex}
               onSelect={onSelect}
               onStopProject={onStopProject}
+              onCloseProject={onCloseProject}
             />
           ))
         )}
@@ -230,6 +258,7 @@ function ModalContent({
   onClose,
   onAddProject,
   onStopProject,
+  onCloseProject,
 }: Omit<ProjectSwitcherPaletteProps, "mode" | "children">) {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -314,16 +343,17 @@ function ModalContent({
       </AppPaletteDialog.Header>
 
       <AppPaletteDialog.Body>
-        <ProjectListContent
-          results={results}
-          selectedIndex={selectedIndex}
-          query={query}
-          onSelect={onSelect}
-          listRef={listRef}
-          onAddProject={onAddProject}
-          onStopProject={onStopProject}
-          showAddProject={true}
-        />
+          <ProjectListContent
+            results={results}
+            selectedIndex={selectedIndex}
+            query={query}
+            onSelect={onSelect}
+            listRef={listRef}
+            onAddProject={onAddProject}
+            onStopProject={onStopProject}
+            onCloseProject={onCloseProject}
+            showAddProject={true}
+          />
       </AppPaletteDialog.Body>
 
       <AppPaletteDialog.Footer>
@@ -366,6 +396,7 @@ function DropdownContent({
   onAddProject,
   onStopProject,
   onOpenProjectSettings,
+  onCloseProject,
   dropdownAlign = "start",
   children,
 }: Omit<ProjectSwitcherPaletteProps, "mode">) {
@@ -471,6 +502,7 @@ function DropdownContent({
             onAddProject={onAddProject}
             onOpenProjectSettings={onOpenProjectSettings}
             onStopProject={onStopProject}
+            onCloseProject={onCloseProject}
             showAddProject={true}
             showProjectSettings={!!onOpenProjectSettings}
           />
@@ -517,6 +549,7 @@ export function ProjectSwitcherPalette({
   mode = "modal",
   onAddProject,
   onStopProject,
+  onCloseProject,
   onOpenProjectSettings,
   dropdownAlign,
   children,
@@ -535,6 +568,7 @@ export function ProjectSwitcherPalette({
         onClose={onClose}
         onAddProject={onAddProject}
         onStopProject={onStopProject}
+        onCloseProject={onCloseProject}
         onOpenProjectSettings={onOpenProjectSettings}
         dropdownAlign={dropdownAlign}
       >
@@ -556,6 +590,7 @@ export function ProjectSwitcherPalette({
       onClose={onClose}
       onAddProject={onAddProject}
       onStopProject={onStopProject}
+      onCloseProject={onCloseProject}
     />
   );
 }
