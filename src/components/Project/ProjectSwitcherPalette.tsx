@@ -53,14 +53,12 @@ function ProjectListItem({
       role="option"
       aria-selected={index === selectedIndex}
       className={cn(
-        "relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border",
+        "relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border border-transparent",
         project.isActive
-          ? index === selectedIndex
-            ? "border-white/[0.06] text-canopy-text"
-            : "border-transparent text-canopy-text"
+          ? "text-canopy-text"
           : index === selectedIndex
-            ? "bg-white/[0.05] border-white/[0.06] text-canopy-text cursor-pointer"
-            : "border-transparent text-canopy-text/70 hover:bg-white/[0.03] hover:text-canopy-text cursor-pointer"
+            ? "bg-white/[0.04] text-canopy-text cursor-pointer"
+            : "text-canopy-text/70 hover:bg-white/[0.02] hover:text-canopy-text cursor-pointer"
       )}
       onClick={() => !project.isActive && onSelect(project)}
       aria-disabled={project.isActive}
@@ -185,7 +183,6 @@ function ProjectListContent({
   const showSettings = showProjectSettings && onOpenProjectSettings;
   const showAdd = showAddProject && onAddProject;
   const showActions = showSettings || showAdd;
-  const activeIndex = results.findIndex((project) => project.isActive);
 
   return (
     <>
@@ -198,7 +195,11 @@ function ProjectListContent({
           results.map((project, index) => (
             <div key={project.id} role="presentation">
               {project.isActive ? (
-                <div className="-mx-2 px-2 bg-white/[0.03]">
+                <div className={cn(
+                  "-mx-2 px-2 bg-white/[0.02]",
+                  index === 0 && "-mt-2 pt-2",
+                  index < results.length - 1 && "border-b-[3px] border-white/[0.08] mb-1"
+                )}>
                   <ProjectListItem
                     project={project}
                     index={index}
@@ -218,20 +219,13 @@ function ProjectListContent({
                   onCloseProject={onCloseProject}
                 />
               )}
-              {activeIndex >= 0 && index === activeIndex && index < results.length - 1 && (
-                <div className="-mx-2 mt-1 mb-1.5" role="presentation">
-                  <div className="h-px bg-white/[0.08]" />
-                  <div className="h-px" />
-                  <div className="h-px bg-white/[0.08]" />
-                </div>
-              )}
             </div>
           ))
         )}
       </div>
       {showActions && (
         <>
-          <div className="-mx-2 my-1.5 h-px bg-white/[0.08]" />
+          <div className="-mx-2 my-1.5 h-[3px] bg-white/[0.08]" />
           {showSettings && (
             <button
               type="button"
