@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useMemo } from "react";
 import type { WorktreeState } from "@/types";
 import { useWorktreeSelectionStore } from "@/store";
 import { useShallow } from "zustand/react/shallow";
@@ -7,6 +7,7 @@ import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSear
 export type UseWorktreePaletteReturn = UseSearchablePaletteReturn<WorktreeState> & {
   activeWorktreeId: string | null;
   selectWorktree: (worktree: WorktreeState) => void;
+  confirmSelection: () => void;
 };
 
 interface UseWorktreePaletteProps {
@@ -33,16 +34,6 @@ export function useWorktreePalette({
     });
   }, [worktrees, activeWorktreeId]);
 
-  const closeFnRef = useRef<() => void>(() => {});
-
-  const handleSelect = useCallback(
-    (worktree: WorktreeState) => {
-      selectWorktree(worktree.id);
-      closeFnRef.current();
-    },
-    [selectWorktree]
-  );
-
   const filterWorktrees = useCallback((items: WorktreeState[], query: string): WorktreeState[] => {
     if (!query.trim()) return items;
     const search = query.trim().toLowerCase();
@@ -60,25 +51,33 @@ export function useWorktreePalette({
     });
   }, []);
 
-  const palette = useSearchablePalette<WorktreeState>({
+  const { results, selectedIndex, close, ...paletteRest } = useSearchablePalette<WorktreeState>({
     items: sortedWorktrees,
     filterFn: filterWorktrees,
     maxResults: 20,
-    onSelect: handleSelect,
   });
 
-  closeFnRef.current = palette.close;
+  const handleSelect = useCallback(
+    (worktree: WorktreeState) => {
+      selectWorktree(worktree.id);
+      close();
+    },
+    [selectWorktree, close]
+  );
 
   const confirmSelection = useCallback(() => {
-    if (palette.results.length === 0) {
-      palette.close();
-      return;
+    if (results.length > 0 && selectedIndex >= 0) {
+      handleSelect(results[selectedIndex]);
+    } else {
+      close();
     }
-    palette.confirmSelection();
-  }, [palette]);
+  }, [results, selectedIndex, close, handleSelect]);
 
   return {
-    ...palette,
+    results,
+    selectedIndex,
+    close,
+    ...paletteRest,
     activeWorktreeId,
     selectWorktree: handleSelect,
     confirmSelection,

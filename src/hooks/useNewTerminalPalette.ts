@@ -16,6 +16,7 @@ interface UseNewTerminalPaletteProps {
 
 export type UseNewTerminalPaletteReturn = UseSearchablePaletteReturn<LaunchOption> & {
   handleSelect: (option: LaunchOption) => void;
+  confirmSelection: () => void;
 };
 
 function filterLaunchOptions(items: LaunchOption[], query: string): LaunchOption[] {
@@ -71,17 +72,24 @@ export function useNewTerminalPalette({
     [activeWorktreeId, worktreeMap, currentProject, launchAgent, addTerminal]
   );
 
-  const palette = useSearchablePalette<LaunchOption>({
+  const { results, selectedIndex, close, ...paletteRest } = useSearchablePalette<LaunchOption>({
     items: options,
     filterFn: filterLaunchOptions,
-    maxResults: 999,
-    onSelect: handleSelect,
+    maxResults: 20,
   });
 
-  closeFnRef.current = palette.close;
+  const confirmSelection = useCallback(() => {
+    if (results.length > 0 && selectedIndex >= 0) {
+      handleSelect(results[selectedIndex]);
+    }
+  }, [results, selectedIndex, handleSelect]);
 
   return {
-    ...palette,
+    results,
+    selectedIndex,
+    close,
+    ...paletteRest,
     handleSelect,
+    confirmSelection,
   };
 }
