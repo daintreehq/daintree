@@ -90,6 +90,7 @@ export function SearchablePalette<T>({
       const rafId = requestAnimationFrame(() => inputRef.current?.focus());
       return () => cancelAnimationFrame(rafId);
     }
+    return undefined;
   }, [isOpen]);
 
   useEffect(() => {

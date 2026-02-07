@@ -88,6 +88,28 @@ export function useSearchablePalette<T>(
     return filtered.slice(0, maxResults);
   }, [debouncedQuery, items, fuse, filterFn, maxResults]);
 
+  const findNavigable = useCallback(
+    (startIndex: number, direction: 1 | -1): number => {
+      if (results.length === 0) return 0;
+      if (!canNavigate) return startIndex;
+
+      let index = startIndex;
+      const visited = new Set<number>();
+      while (!canNavigate(results[index]) && !visited.has(index)) {
+        visited.add(index);
+        index = (index + direction + results.length) % results.length;
+      }
+
+      // If we visited all items and none are navigable, return -1
+      if (visited.size === results.length && !canNavigate(results[index])) {
+        return -1;
+      }
+
+      return index;
+    },
+    [results, canNavigate]
+  );
+
   useEffect(() => {
     if (resetOnResultsChange) {
       if (canNavigate && results.length > 0) {
@@ -120,28 +142,6 @@ export function useSearchablePalette<T>(
       open();
     }
   }, [isOpen, open, close]);
-
-  const findNavigable = useCallback(
-    (startIndex: number, direction: 1 | -1): number => {
-      if (results.length === 0) return 0;
-      if (!canNavigate) return startIndex;
-
-      let index = startIndex;
-      const visited = new Set<number>();
-      while (!canNavigate(results[index]) && !visited.has(index)) {
-        visited.add(index);
-        index = (index + direction + results.length) % results.length;
-      }
-
-      // If we visited all items and none are navigable, return -1
-      if (visited.size === results.length && !canNavigate(results[index])) {
-        return -1;
-      }
-
-      return index;
-    },
-    [results, canNavigate]
-  );
 
   const selectPrevious = useCallback(() => {
     if (results.length === 0) return;
