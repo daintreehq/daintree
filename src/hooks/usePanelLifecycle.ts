@@ -21,8 +21,5 @@ export function usePanelLifecycle(): PanelLifecycle {
     };
   }, []);
 
-  return useMemo(
-    () => ({ mountedRef, timeoutRef, isTrashing, setIsTrashing }),
-    [isTrashing]
-  );
+  return useMemo(() => ({ mountedRef, timeoutRef, isTrashing, setIsTrashing }), [isTrashing]);
 }
