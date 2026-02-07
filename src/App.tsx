@@ -22,6 +22,8 @@ import {
   useAssistantStreamProcessor,
 } from "./hooks";
 import { useActionRegistry } from "./hooks/useActionRegistry";
+import { useActionPalette } from "./hooks/useActionPalette";
+import { useDoubleShift } from "./hooks/useDoubleShift";
 import { useAssistantContextSync } from "./hooks/useAssistantContextSync";
 import { actionService } from "./services/ActionService";
 import { getAssistantContext } from "./components/Assistant/assistantContext";
@@ -48,6 +50,7 @@ import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialog
 import { TerminalPalette, NewTerminalPalette } from "./components/TerminalPalette";
 import { PanelPalette } from "./components/PanelPalette/PanelPalette";
 import { ProjectSwitcherPalette } from "./components/Project/ProjectSwitcherPalette";
+import { ActionPalette } from "./components/ActionPalette";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { RecipeEditor } from "./components/TerminalRecipe/RecipeEditor";
 import { NotesPalette } from "./components/Notes";
@@ -493,6 +496,8 @@ function App() {
   const newTerminalPalette = useNewTerminalPalette({ launchAgent, worktreeMap });
   const panelPalette = usePanelPalette();
   const projectSwitcherPalette = useProjectSwitcherPalette();
+  const actionPalette = useActionPalette();
+  useDoubleShift(actionPalette.toggle);
   const currentProject = useProjectStore((state) => state.currentProject);
   const { setActiveWorktree, selectWorktree, activeWorktreeId, focusedWorktreeId } =
     useWorktreeSelectionStore(
@@ -752,6 +757,7 @@ function App() {
     onOpenSettingsTab: handleOpenSettingsTab,
     onToggleSidebar: handleToggleSidebar,
     onToggleFocusMode: handleToggleSidebar,
+    onOpenActionPalette: actionPalette.open,
     onOpenAgentPalette: terminalPalette.open,
     onOpenWorktreePalette: openWorktreePalette,
     onToggleWorktreeOverview: toggleWorktreeOverview,
@@ -923,6 +929,19 @@ function App() {
       />
 
       <NotesPalette isOpen={isNotesPaletteOpen} onClose={closeNotesPalette} />
+
+      <ActionPalette
+        isOpen={actionPalette.isOpen}
+        query={actionPalette.query}
+        results={actionPalette.results}
+        selectedIndex={actionPalette.selectedIndex}
+        close={actionPalette.close}
+        setQuery={actionPalette.setQuery}
+        selectPrevious={actionPalette.selectPrevious}
+        selectNext={actionPalette.selectNext}
+        executeAction={actionPalette.executeAction}
+        confirmSelection={actionPalette.confirmSelection}
+      />
 
       <WorktreeOverviewModal
         isOpen={isWorktreeOverviewOpen}

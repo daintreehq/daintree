@@ -573,6 +573,14 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Project",
   },
   {
+    actionId: "action.palette.open",
+    combo: "Cmd+K Cmd+A",
+    scope: "global",
+    priority: 0,
+    description: "Open action palette",
+    category: "Navigation",
+  },
+  {
     actionId: "notes.openPalette",
     combo: "Cmd+Shift+N",
     scope: "global",
