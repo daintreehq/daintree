@@ -802,11 +802,28 @@ function App() {
       />
       <PanelPalette
         isOpen={panelPalette.isOpen}
-        kinds={panelPalette.availableKinds}
+        query={panelPalette.query}
+        results={panelPalette.results}
         selectedIndex={panelPalette.selectedIndex}
+        onQueryChange={panelPalette.setQuery}
         onSelectPrevious={panelPalette.selectPrevious}
         onSelectNext={panelPalette.selectNext}
-        onSelect={(kind) => panelPalette.selectKind(kind.id)}
+        onSelect={(kind) => {
+          panelPalette.handleSelect(kind);
+          if (kind.id.startsWith("agent:")) {
+            const agentId = kind.id.slice("agent:".length);
+            if (agentId) {
+              launchAgent(agentId);
+            }
+          } else {
+            addTerminal({
+              kind: kind.id as PanelKind,
+              cwd: defaultTerminalCwd,
+              worktreeId: activeWorktreeId ?? undefined,
+              location: "grid",
+            });
+          }
+        }}
         onConfirm={() => {
           const selected = panelPalette.confirmSelection();
           if (selected) {

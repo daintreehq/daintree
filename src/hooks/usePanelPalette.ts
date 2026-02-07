@@ -1,8 +1,9 @@
-import { useState, useCallback, useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { getPanelKindIds, getPanelKindConfig } from "@shared/config/panelKindRegistry";
 import { hasPanelComponent } from "@/registry/panelComponentRegistry";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
+import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
 
 export interface PanelKindOption {
   id: string;
@@ -12,22 +13,22 @@ export interface PanelKindOption {
   description?: string;
 }
 
-export interface UsePanelPaletteReturn {
-  isOpen: boolean;
-  availableKinds: PanelKindOption[];
-  selectedIndex: number;
-  open: () => void;
-  close: () => void;
-  toggle: () => void;
-  selectPrevious: () => void;
-  selectNext: () => void;
-  selectKind: (kindId: string) => void;
+export type UsePanelPaletteReturn = UseSearchablePaletteReturn<PanelKindOption> & {
+  handleSelect: (option: PanelKindOption) => PanelKindOption;
   confirmSelection: () => PanelKindOption | null;
+};
+
+function filterPanelKinds(items: PanelKindOption[], query: string): PanelKindOption[] {
+  if (!query.trim()) return items;
+  const lowerQuery = query.toLowerCase();
+  return items.filter(
+    (opt) =>
+      opt.name.toLowerCase().includes(lowerQuery) ||
+      (opt.description && opt.description.toLowerCase().includes(lowerQuery))
+  );
 }
 
 export function usePanelPalette(): UsePanelPaletteReturn {
-  const [isOpen, setIsOpen] = useState(false);
-  const [selectedIndex, setSelectedIndex] = useState(0);
   const userRegistry = useUserAgentRegistryStore((state) => state.registry);
 
   const availableKinds = useMemo<PanelKindOption[]>(() => {
@@ -70,68 +71,35 @@ export function usePanelPalette(): UsePanelPaletteReturn {
     return [...panelKinds, ...agentKinds];
   }, [userRegistry]);
 
-  const open = useCallback(() => {
-    setIsOpen(true);
-    setSelectedIndex(0);
-  }, []);
+  const { results, selectedIndex, close, ...paletteRest } =
+    useSearchablePalette<PanelKindOption>({
+      items: availableKinds,
+      filterFn: filterPanelKinds,
+      maxResults: 20,
+    });
 
-  const close = useCallback(() => {
-    setIsOpen(false);
-    setSelectedIndex(0);
-  }, []);
-
-  const toggle = useCallback(() => {
-    if (isOpen) {
+  const handleSelect = useCallback(
+    (option: PanelKindOption): PanelKindOption => {
       close();
-    } else {
-      open();
-    }
-  }, [isOpen, open, close]);
-
-  const selectPrevious = useCallback(() => {
-    if (availableKinds.length === 0) return;
-    setSelectedIndex((prev) => {
-      if (prev === 0) return availableKinds.length - 1;
-      return prev - 1;
-    });
-  }, [availableKinds.length]);
-
-  const selectNext = useCallback(() => {
-    if (availableKinds.length === 0) return;
-    setSelectedIndex((prev) => {
-      if (prev === availableKinds.length - 1) return 0;
-      return prev + 1;
-    });
-  }, [availableKinds.length]);
-
-  const selectKind = useCallback(
-    (kindId: string) => {
-      const index = availableKinds.findIndex((k) => k.id === kindId);
-      if (index !== -1) {
-        setSelectedIndex(index);
-      }
+      return option;
     },
-    [availableKinds]
+    [close]
   );
 
   const confirmSelection = useCallback((): PanelKindOption | null => {
-    if (availableKinds.length === 0) return null;
-    const selected = availableKinds[selectedIndex];
+    if (results.length === 0 || selectedIndex < 0) return null;
+    const selected = results[selectedIndex];
     if (!selected) return null;
     close();
     return selected;
-  }, [availableKinds, selectedIndex, close]);
+  }, [results, selectedIndex, close]);
 
   return {
-    isOpen,
-    availableKinds,
+    results,
     selectedIndex,
-    open,
     close,
-    toggle,
-    selectPrevious,
-    selectNext,
-    selectKind,
+    ...paletteRest,
+    handleSelect,
     confirmSelection,
   };
 }

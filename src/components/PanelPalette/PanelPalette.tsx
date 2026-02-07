@@ -6,8 +6,10 @@ import { PanelKindIcon } from "./PanelKindIcon";
 
 interface PanelPaletteProps {
   isOpen: boolean;
-  kinds: PanelKindOption[];
+  query: string;
+  results: PanelKindOption[];
   selectedIndex: number;
+  onQueryChange: (q: string) => void;
   onSelectPrevious: () => void;
   onSelectNext: () => void;
   onSelect: (kind: PanelKindOption) => void;
@@ -17,20 +19,22 @@ interface PanelPaletteProps {
 
 export function PanelPalette({
   isOpen,
-  kinds,
+  query,
+  results,
   selectedIndex,
+  onQueryChange,
   onSelectPrevious,
   onSelectNext,
   onSelect,
   onConfirm,
   onClose,
 }: PanelPaletteProps) {
+  const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const comboboxRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (isOpen) {
-      requestAnimationFrame(() => comboboxRef.current?.focus());
+      requestAnimationFrame(() => inputRef.current?.focus());
     }
   }, [isOpen]);
 
@@ -76,34 +80,33 @@ export function PanelPalette({
   return (
     <AppPaletteDialog isOpen={isOpen} onClose={onClose} ariaLabel="Panel palette">
       <AppPaletteDialog.Header label="New Panel" keyHint="⌘⇧P">
-        <div
-          ref={comboboxRef}
-          role="combobox"
-          tabIndex={0}
+        <AppPaletteDialog.Input
+          inputRef={inputRef}
+          value={query}
+          onChange={(e) => onQueryChange(e.target.value)}
           onKeyDown={handleKeyDown}
-          className="px-3 py-2 text-sm text-canopy-text/70"
+          placeholder="Select a panel type..."
+          role="combobox"
           aria-expanded={isOpen}
           aria-haspopup="listbox"
           aria-label="Select panel type"
           aria-controls="panel-list"
           aria-activedescendant={
-            kinds.length > 0 && selectedIndex >= 0 && selectedIndex < kinds.length
-              ? `panel-option-${kinds[selectedIndex].id}`
+            results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length
+              ? `panel-option-${results[selectedIndex].id}`
               : undefined
           }
-        >
-          Select a panel type to create
-        </div>
+        />
       </AppPaletteDialog.Header>
 
       <AppPaletteDialog.Body>
         <div ref={listRef} id="panel-list" role="listbox" aria-label="Panel types">
-          {kinds.length === 0 ? (
+          {results.length === 0 ? (
             <div className="px-3 py-8 text-center text-canopy-text/50 text-sm">
-              No panel types available
+              No panel types match "{query}"
             </div>
           ) : (
-            kinds.map((kind, index) => (
+            results.map((kind, index) => (
               <button
                 key={kind.id}
                 id={`panel-option-${kind.id}`}
