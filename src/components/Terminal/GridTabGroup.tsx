@@ -3,9 +3,7 @@ import { useTerminalStore, type TerminalInstance } from "@/store";
 import { GridPanel } from "./GridPanel";
 import type { TabGroup } from "@/types";
 import type { TabInfo } from "@/components/Panel/TabButton";
-import { generateAgentCommand } from "@shared/types";
-import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
-import { agentSettingsClient } from "@/clients";
+import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 
 export interface GridTabGroupProps {
   group: TabGroup;
@@ -136,69 +134,11 @@ export function GridTabGroup({
   const handleAddTab = useCallback(async () => {
     if (!activePanel) return;
 
-    const kind = activePanel.kind ?? "terminal";
-
     try {
-      // For agents, generate the command
-      let command: string | undefined;
-      if (activePanel.agentId && isRegisteredAgent(activePanel.agentId)) {
-        const agentConfig = getAgentConfig(activePanel.agentId);
-        if (agentConfig) {
-          try {
-            const agentSettings = await agentSettingsClient.get();
-            const entry = agentSettings?.agents?.[activePanel.agentId] ?? {};
-            command = generateAgentCommand(agentConfig.command, entry, activePanel.agentId, {
-              interactive: true,
-            });
-          } catch (error) {
-            console.warn("Failed to get agent settings, using existing command:", error);
-            command = activePanel.command;
-          }
-        } else {
-          command = activePanel.command;
-        }
-      } else {
-        command = activePanel.command;
-      }
+      const options = await buildPanelDuplicateOptions(activePanel, activePanel.location ?? "grid");
+      const newPanelId = await addTerminal(options);
 
-      // Create new panel without tab group info (will be added to group separately)
-      const baseOptions = {
-        kind,
-        type: activePanel.type,
-        agentId: activePanel.agentId,
-        cwd: activePanel.cwd || "",
-        worktreeId: activePanel.worktreeId,
-        location: activePanel.location ?? "grid",
-        exitBehavior: activePanel.exitBehavior,
-        isInputLocked: activePanel.isInputLocked,
-        command,
-      };
-
-      let kindSpecificOptions = {};
-      if (kind === "browser") {
-        kindSpecificOptions = { browserUrl: activePanel.browserUrl };
-      } else if (kind === "notes") {
-        kindSpecificOptions = {
-          notePath: (activePanel as any).notePath,
-          noteId: (activePanel as any).noteId,
-          scope: (activePanel as any).scope,
-          createdAt: Date.now(),
-        };
-      } else if (kind === "dev-preview") {
-        kindSpecificOptions = {
-          devCommand: (activePanel as any).devCommand,
-          browserUrl: activePanel.browserUrl,
-        };
-      }
-
-      const newPanelId = await addTerminal({
-        ...baseOptions,
-        ...kindSpecificOptions,
-      });
-
-      // Add the new panel to this group
       addPanelToGroup(group.id, newPanelId);
-
       setActiveTab(group.id, newPanelId);
       setFocused(newPanelId);
     } catch (error) {
