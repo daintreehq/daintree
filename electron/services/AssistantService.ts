@@ -438,7 +438,7 @@ export class AssistantService {
 
   private initializeProvider(): void {
     const config = store.get("appAgentConfig");
-    if (config.apiKey) {
+    if (config?.apiKey) {
       const baseUrl = config.baseUrl || FIREWORKS_BASE_URL;
       this.fireworks = createOpenAI({
         apiKey: config.apiKey,
@@ -451,7 +451,7 @@ export class AssistantService {
 
   hasApiKey(): boolean {
     const config = store.get("appAgentConfig");
-    return !!config.apiKey;
+    return !!config?.apiKey;
   }
 
   updateApiKey(): void {

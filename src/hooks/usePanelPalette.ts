@@ -71,12 +71,11 @@ export function usePanelPalette(): UsePanelPaletteReturn {
     return [...panelKinds, ...agentKinds];
   }, [userRegistry]);
 
-  const { results, selectedIndex, close, ...paletteRest } =
-    useSearchablePalette<PanelKindOption>({
-      items: availableKinds,
-      filterFn: filterPanelKinds,
-      maxResults: 20,
-    });
+  const { results, selectedIndex, close, ...paletteRest } = useSearchablePalette<PanelKindOption>({
+    items: availableKinds,
+    filterFn: filterPanelKinds,
+    maxResults: 20,
+  });
 
   const handleSelect = useCallback(
     (option: PanelKindOption): PanelKindOption => {
