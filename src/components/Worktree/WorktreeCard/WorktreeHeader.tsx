@@ -240,6 +240,7 @@ export interface WorktreeHeaderProps {
     onCloseFailed: () => void;
     onCloseAll: () => void;
     onEndAll: () => void;
+    onAttachIssue?: () => void;
     onDeleteWorktree?: () => void;
   };
 }
@@ -376,6 +377,7 @@ export function WorktreeHeader({
                 onRevealInFinder={menu.onRevealInFinder}
                 onOpenIssue={menu.onOpenIssue}
                 onOpenPR={menu.onOpenPR}
+                onAttachIssue={menu.onAttachIssue}
                 onRunRecipe={menu.onRunRecipe}
                 onSaveLayout={menu.onSaveLayout}
                 onTogglePin={menu.onTogglePin}

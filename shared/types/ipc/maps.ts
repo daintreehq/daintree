@@ -20,6 +20,9 @@ import type {
   WorktreeConfig,
   CreateForTaskPayload,
   CleanupTaskOptions,
+  AttachIssuePayload,
+  DetachIssuePayload,
+  IssueAssociation,
 } from "./worktree.js";
 import type {
   TerminalSpawnOptions,
@@ -150,6 +153,18 @@ export interface IpcInvokeMap {
   "worktree:cleanup-task": {
     args: [taskId: string, options?: CleanupTaskOptions];
     result: void;
+  };
+  "worktree:attach-issue": {
+    args: [payload: AttachIssuePayload];
+    result: void;
+  };
+  "worktree:detach-issue": {
+    args: [payload: DetachIssuePayload];
+    result: void;
+  };
+  "worktree:get-issue-association": {
+    args: [worktreeId: string];
+    result: IssueAssociation | null;
   };
 
   // Terminal channels

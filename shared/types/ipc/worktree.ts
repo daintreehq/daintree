@@ -50,3 +50,25 @@ export interface CleanupTaskOptions {
   /** Whether to delete the associated git branch after removing the worktree (default: true) */
   deleteBranch?: boolean;
 }
+
+/** Persisted worktree-to-issue association */
+export interface IssueAssociation {
+  issueNumber: number;
+  issueTitle: string;
+  issueState: "OPEN" | "CLOSED";
+  issueUrl: string;
+}
+
+/** Payload for attaching an issue to a worktree */
+export interface AttachIssuePayload {
+  worktreeId: string;
+  issueNumber: number;
+  issueTitle: string;
+  issueState: "OPEN" | "CLOSED";
+  issueUrl: string;
+}
+
+/** Payload for detaching an issue from a worktree */
+export interface DetachIssuePayload {
+  worktreeId: string;
+}

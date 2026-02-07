@@ -7,6 +7,9 @@ import type { PulseRangeDays, ProjectPulse } from "../../../shared/types/pulse.j
 import type {
   CreateForTaskPayload,
   CleanupTaskOptions,
+  AttachIssuePayload,
+  DetachIssuePayload,
+  IssueAssociation,
 } from "../../../shared/types/ipc/worktree.js";
 import type { WorktreeState } from "../../../shared/types/domain.js";
 import {
@@ -222,6 +225,12 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
       throw new Error("Invalid deleteBranch parameter");
     }
     await workspaceClient.deleteWorktree(payload.worktreeId, payload.force, payload.deleteBranch);
+    // Clean up persisted issue association
+    const issueMap = store.get("worktreeIssueMap", {});
+    if (issueMap[payload.worktreeId]) {
+      const { [payload.worktreeId]: _, ...rest } = issueMap;
+      store.set("worktreeIssueMap", rest);
+    }
   };
   ipcMain.handle(CHANNELS.WORKTREE_DELETE, handleWorktreeDelete);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_DELETE));
@@ -669,6 +678,82 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
   };
   ipcMain.handle(CHANNELS.WORKTREE_CLEANUP_TASK, handleWorktreeCleanupTask);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_CLEANUP_TASK));
+
+  // Issue attachment handlers
+
+  const handleWorktreeAttachIssue = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: AttachIssuePayload
+  ): Promise<void> => {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid payload for worktree:attach-issue");
+    }
+
+    const { worktreeId, issueNumber, issueTitle, issueState, issueUrl } = payload;
+
+    if (typeof worktreeId !== "string" || !worktreeId.trim()) {
+      throw new Error("Invalid worktreeId: must be a non-empty string");
+    }
+    if (typeof issueNumber !== "number" || !Number.isInteger(issueNumber) || issueNumber <= 0) {
+      throw new Error("Invalid issueNumber: must be a positive integer");
+    }
+    if (typeof issueTitle !== "string") {
+      throw new Error("Invalid issueTitle: must be a string");
+    }
+    if (issueState !== "OPEN" && issueState !== "CLOSED") {
+      throw new Error("Invalid issueState: must be 'OPEN' or 'CLOSED'");
+    }
+    if (typeof issueUrl !== "string" || !issueUrl.trim()) {
+      throw new Error("Invalid issueUrl: must be a non-empty string");
+    }
+
+    const association: IssueAssociation = {
+      issueNumber,
+      issueTitle,
+      issueState,
+      issueUrl,
+    };
+
+    const currentMap = store.get("worktreeIssueMap") ?? {};
+    store.set("worktreeIssueMap", { ...currentMap, [worktreeId]: association });
+  };
+  ipcMain.handle(CHANNELS.WORKTREE_ATTACH_ISSUE, handleWorktreeAttachIssue);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_ATTACH_ISSUE));
+
+  const handleWorktreeDetachIssue = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: DetachIssuePayload
+  ): Promise<void> => {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid payload for worktree:detach-issue");
+    }
+
+    const { worktreeId } = payload;
+
+    if (typeof worktreeId !== "string" || !worktreeId.trim()) {
+      throw new Error("Invalid worktreeId: must be a non-empty string");
+    }
+
+    const currentMap = store.get("worktreeIssueMap") ?? {};
+    const { [worktreeId]: _removed, ...rest } = currentMap;
+    store.set("worktreeIssueMap", rest);
+  };
+  ipcMain.handle(CHANNELS.WORKTREE_DETACH_ISSUE, handleWorktreeDetachIssue);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_DETACH_ISSUE));
+
+  const handleWorktreeGetIssueAssociation = async (
+    _event: Electron.IpcMainInvokeEvent,
+    worktreeId: string
+  ): Promise<IssueAssociation | null> => {
+    if (typeof worktreeId !== "string" || !worktreeId.trim()) {
+      throw new Error("Invalid worktreeId: must be a non-empty string");
+    }
+
+    const currentMap = store.get("worktreeIssueMap") ?? {};
+    return currentMap[worktreeId] ?? null;
+  };
+  ipcMain.handle(CHANNELS.WORKTREE_GET_ISSUE_ASSOCIATION, handleWorktreeGetIssueAssociation);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_GET_ISSUE_ASSOCIATION));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

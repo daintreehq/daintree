@@ -109,6 +109,9 @@ export type {
   WorktreeRemovePayload,
   WorktreeSetActivePayload,
   WorktreeDeletePayload,
+  IssueAssociation,
+  AttachIssuePayload,
+  DetachIssuePayload,
   // System IPC types
   SystemOpenExternalPayload,
   SystemOpenPathPayload,

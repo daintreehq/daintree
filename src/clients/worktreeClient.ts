@@ -1,4 +1,10 @@
-import type { WorktreeState, CreateWorktreeOptions, BranchInfo } from "@shared/types";
+import type {
+  WorktreeState,
+  CreateWorktreeOptions,
+  BranchInfo,
+  AttachIssuePayload,
+  IssueAssociation,
+} from "@shared/types";
 import type { PRServiceStatus } from "@shared/types/workspace-host";
 
 /**
@@ -53,6 +59,18 @@ export const worktreeClient = {
 
   onUpdate: (callback: (state: WorktreeState) => void): (() => void) => {
     return window.electron.worktree.onUpdate(callback);
+  },
+
+  attachIssue: (payload: AttachIssuePayload): Promise<void> => {
+    return window.electron.worktree.attachIssue(payload);
+  },
+
+  detachIssue: (worktreeId: string): Promise<void> => {
+    return window.electron.worktree.detachIssue(worktreeId);
+  },
+
+  getIssueAssociation: (worktreeId: string): Promise<IssueAssociation | null> => {
+    return window.electron.worktree.getIssueAssociation(worktreeId);
   },
 
   onRemove: (callback: (data: { worktreeId: string }) => void): (() => void) => {

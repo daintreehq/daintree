@@ -17,6 +17,8 @@ import type {
   WorktreeConfig,
   CreateForTaskPayload,
   CleanupTaskOptions,
+  AttachIssuePayload,
+  IssueAssociation,
 } from "./worktree.js";
 import type {
   TerminalSpawnOptions,
@@ -120,6 +122,9 @@ export interface ElectronAPI {
      * @param options - Optional: { force: boolean, deleteBranch: boolean } (defaults: force=true, deleteBranch=true)
      */
     cleanupTask(taskId: string, options?: CleanupTaskOptions): Promise<void>;
+    attachIssue(payload: AttachIssuePayload): Promise<void>;
+    detachIssue(worktreeId: string): Promise<void>;
+    getIssueAssociation(worktreeId: string): Promise<IssueAssociation | null>;
     onUpdate(callback: (state: WorktreeState) => void): () => void;
     onRemove(callback: (data: { worktreeId: string }) => void): () => void;
   };

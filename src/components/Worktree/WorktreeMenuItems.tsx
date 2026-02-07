@@ -7,6 +7,7 @@ import {
   Folder,
   GitPullRequest,
   Globe,
+  Link,
   Maximize2,
   Minimize2,
   Pin,
@@ -62,6 +63,7 @@ export interface WorktreeMenuItemsProps {
   onRevealInFinder: () => void;
   onOpenIssue?: () => void;
   onOpenPR?: () => void;
+  onAttachIssue?: () => void;
   onRunRecipe: (recipeId: string) => void;
   onSaveLayout?: () => void;
   onTogglePin?: () => void;
@@ -90,6 +92,7 @@ export function WorktreeMenuItems({
   onRevealInFinder,
   onOpenIssue,
   onOpenPR,
+  onAttachIssue,
   onRunRecipe,
   onSaveLayout,
   onTogglePin,
@@ -199,6 +202,12 @@ export function WorktreeMenuItems({
               Pin to Top
             </>
           )}
+        </C.Item>
+      )}
+      {onAttachIssue && (
+        <C.Item onSelect={onAttachIssue}>
+          <Link className="w-3.5 h-3.5 mr-2" />
+          {worktree.issueNumber ? "Change Issue..." : "Attach to Issue..."}
         </C.Item>
       )}
       <C.Item onSelect={onCopyContext}>

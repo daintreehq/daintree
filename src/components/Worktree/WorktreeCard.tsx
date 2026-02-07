@@ -1,7 +1,8 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type React from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { WorktreeState } from "../../types";
+import type { GitHubIssue } from "@shared/types/github";
 import { useWorktreeTerminals } from "../../hooks/useWorktreeTerminals";
 import { useDroppable } from "@dnd-kit/core";
 import {
@@ -13,8 +14,9 @@ import {
 import { useRecipeStore } from "../../store/recipeStore";
 import { useWorktreeSelectionStore } from "../../store/worktreeStore";
 import { useWorktreeFilterStore } from "../../store/worktreeFilterStore";
-import { errorsClient } from "@/clients";
+import { errorsClient, worktreeClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
+import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { cn } from "../../lib/utils";
 import { getAgentConfig, getAgentIds } from "@/config/agents";
 import { getAgentSettingsEntry } from "@/types";
@@ -181,6 +183,47 @@ export function WorktreeCard({
     void actionService.dispatch("worktree.openPR", { worktreeId: worktree.id }, { source: "user" });
   }, [worktree.id]);
 
+  const [showIssuePicker, setShowIssuePicker] = useState(false);
+
+  const handleAttachIssue = useCallback(
+    async (issue: GitHubIssue) => {
+      await worktreeClient.attachIssue({
+        worktreeId: worktree.id,
+        issueNumber: issue.number,
+        issueTitle: issue.title,
+        issueState: issue.state,
+        issueUrl: issue.url,
+      });
+      useWorktreeDataStore.setState((prev) => {
+        const existing = prev.worktrees.get(worktree.id);
+        if (!existing) return prev;
+        const next = new Map(prev.worktrees);
+        next.set(worktree.id, {
+          ...existing,
+          issueNumber: issue.number,
+          issueTitle: issue.title,
+        });
+        return { worktrees: next };
+      });
+    },
+    [worktree.id]
+  );
+
+  const handleDetachIssue = useCallback(async () => {
+    await worktreeClient.detachIssue(worktree.id);
+    useWorktreeDataStore.setState((prev) => {
+      const existing = prev.worktrees.get(worktree.id);
+      if (!existing) return prev;
+      const next = new Map(prev.worktrees);
+      next.set(worktree.id, {
+        ...existing,
+        issueNumber: undefined,
+        issueTitle: undefined,
+      });
+      return { worktrees: next };
+    });
+  }, [worktree.id]);
+
   const handleTerminalSelect = useCallback(
     (terminal: TerminalInstance) => {
       // Switch to this worktree if it isn't already active
@@ -292,6 +335,7 @@ export function WorktreeCard({
     onCloseAll: handleCloseAll,
     onEndAll: handleEndAll,
     onShowDeleteDialog: () => setShowDeleteDialog(true),
+    onShowIssuePicker: () => setShowIssuePicker(true),
   });
 
   const cardContent = (
@@ -391,6 +435,7 @@ export function WorktreeCard({
             onRevealInFinder: handlePathClick,
             onOpenIssue: worktree.issueNumber ? handleOpenIssue : undefined,
             onOpenPR: worktree.prNumber ? handleOpenPR : undefined,
+            onAttachIssue: () => setShowIssuePicker(true),
             onRunRecipe: (recipeId) => void handleRunRecipe(recipeId),
             onSaveLayout,
             onTogglePin: handleTogglePin,
@@ -437,6 +482,10 @@ export function WorktreeCard({
           onCloseConfirm={closeConfirmDialog}
           showDeleteDialog={showDeleteDialog}
           onCloseDeleteDialog={() => setShowDeleteDialog(false)}
+          showIssuePicker={showIssuePicker}
+          onCloseIssuePicker={() => setShowIssuePicker(false)}
+          onAttachIssue={(issue) => void handleAttachIssue(issue)}
+          onDetachIssue={() => void handleDetachIssue()}
         />
       </div>
     </div>

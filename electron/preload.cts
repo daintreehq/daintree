@@ -31,6 +31,9 @@ import type {
   GitStatus,
   KeyAction,
   TerminalRecipe,
+  AttachIssuePayload,
+  DetachIssuePayload,
+  IssueAssociation,
 } from "../shared/types/index.js";
 import type {
   AgentStateChangePayload,
@@ -136,6 +139,9 @@ const CHANNELS = {
   WORKTREE_CREATE_FOR_TASK: "worktree:create-for-task",
   WORKTREE_GET_BY_TASK_ID: "worktree:get-by-task-id",
   WORKTREE_CLEANUP_TASK: "worktree:cleanup-task",
+  WORKTREE_ATTACH_ISSUE: "worktree:attach-issue",
+  WORKTREE_DETACH_ISSUE: "worktree:detach-issue",
+  WORKTREE_GET_ISSUE_ASSOCIATION: "worktree:get-issue-association",
 
   // Terminal channels
   TERMINAL_SPAWN: "terminal:spawn",
@@ -462,6 +468,15 @@ const api: ElectronAPI = {
 
     cleanupTask: (taskId: string, options?: { force?: boolean; deleteBranch?: boolean }) =>
       _typedInvoke(CHANNELS.WORKTREE_CLEANUP_TASK, taskId, options),
+
+    attachIssue: (payload: AttachIssuePayload) =>
+      _typedInvoke(CHANNELS.WORKTREE_ATTACH_ISSUE, payload),
+
+    detachIssue: (worktreeId: string) =>
+      _typedInvoke(CHANNELS.WORKTREE_DETACH_ISSUE, { worktreeId }),
+
+    getIssueAssociation: (worktreeId: string): Promise<IssueAssociation | null> =>
+      _typedInvoke(CHANNELS.WORKTREE_GET_ISSUE_ASSOCIATION, worktreeId),
 
     onUpdate: (callback: (state: WorktreeState) => void) =>
       _typedOn(CHANNELS.WORKTREE_UPDATE, callback),

@@ -18,6 +18,7 @@ export function useWorktreeMenu({
   onCloseAll,
   onEndAll,
   onShowDeleteDialog,
+  onShowIssuePicker,
 }: {
   worktree: WorktreeState;
   recipes: TerminalRecipe[];
@@ -38,6 +39,7 @@ export function useWorktreeMenu({
   onCloseAll: () => void;
   onEndAll: () => void;
   onShowDeleteDialog: () => void;
+  onShowIssuePicker?: () => void;
 }): {
   contextMenuTemplate: MenuItemOption[];
   handleContextMenu: (event: React.MouseEvent) => Promise<void>;
@@ -106,6 +108,11 @@ export function useWorktreeMenu({
       { type: "separator" },
 
       { id: "label:worktree", label: "Worktree", enabled: false },
+      {
+        id: "worktree:attach-issue",
+        label: worktree.issueNumber ? "Change Issue..." : "Attach to Issue...",
+        enabled: Boolean(onShowIssuePicker),
+      },
       {
         id: "worktree:copy-context",
         label: "Copy Context",
@@ -195,6 +202,7 @@ export function useWorktreeMenu({
     launchAgents,
     onLaunchAgent,
     onSaveLayout,
+    onShowIssuePicker,
     recipes,
     runningRecipeId,
     worktree.issueNumber,
@@ -341,6 +349,9 @@ export function useWorktreeMenu({
             { source: "context-menu" }
           );
           break;
+        case "worktree:attach-issue":
+          onShowIssuePicker?.();
+          break;
         case "worktree:delete":
           onShowDeleteDialog();
           break;
@@ -352,6 +363,7 @@ export function useWorktreeMenu({
       onEndAll,
       onRestartAll,
       onShowDeleteDialog,
+      onShowIssuePicker,
       showMenu,
       worktree.id,
     ]

@@ -14,6 +14,9 @@ export const CHANNELS = {
   WORKTREE_CREATE_FOR_TASK: "worktree:create-for-task",
   WORKTREE_GET_BY_TASK_ID: "worktree:get-by-task-id",
   WORKTREE_CLEANUP_TASK: "worktree:cleanup-task",
+  WORKTREE_ATTACH_ISSUE: "worktree:attach-issue",
+  WORKTREE_DETACH_ISSUE: "worktree:detach-issue",
+  WORKTREE_GET_ISSUE_ASSOCIATION: "worktree:get-issue-association",
 
   TERMINAL_SPAWN: "terminal:spawn",
   TERMINAL_SPAWN_RESULT: "terminal:spawn-result",

@@ -56,6 +56,7 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
                   prUrl: state.prUrl ?? existing.prUrl,
                   prState: state.prState ?? existing.prState,
                   prTitle: state.prTitle ?? existing.prTitle,
+                  issueNumber: state.issueNumber ?? existing.issueNumber,
                   issueTitle: state.issueTitle ?? existing.issueTitle,
                 });
               } else {
@@ -177,6 +178,23 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
         // will be captured by the listeners we set up above
         const states = await worktreeClient.getAll();
 
+        // Load persisted issue associations for each worktree
+        const issueAssociations = await Promise.all(
+          states.map(async (s) => {
+            try {
+              const assoc = await worktreeClient.getIssueAssociation(s.id);
+              return { id: s.id, assoc };
+            } catch {
+              return { id: s.id, assoc: null };
+            }
+          })
+        );
+        const issueMap = new Map(
+          issueAssociations
+            .filter((a) => a.assoc !== null)
+            .map((a) => [a.id, a.assoc!])
+        );
+
         // Merge getAll results with any events that arrived during the fetch
         // This preserves PR/issue metadata from events that fired while we were waiting
         set((prev) => {
@@ -194,6 +212,18 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
                 prState: fetched.prState ?? existing.prState,
                 prTitle: fetched.prTitle ?? existing.prTitle,
                 issueTitle: fetched.issueTitle ?? existing.issueTitle,
+              });
+            }
+          }
+
+          // Merge persisted issue associations (manual associations take precedence)
+          for (const [id, assoc] of issueMap) {
+            const wt = map.get(id);
+            if (wt) {
+              map.set(id, {
+                ...wt,
+                issueNumber: assoc.issueNumber,
+                issueTitle: assoc.issueTitle,
               });
             }
           }
