@@ -1,5 +1,5 @@
-import { useEffect, useRef, useCallback } from "react";
-import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
+import { useCallback } from "react";
+import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { ActionPaletteItem } from "./ActionPaletteItem";
 import type {
   ActionPaletteItem as ActionPaletteItemType,
@@ -32,54 +32,6 @@ export function ActionPalette({
   executeAction,
   confirmSelection,
 }: ActionPaletteProps) {
-  const listRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (isOpen) {
-      requestAnimationFrame(() => inputRef.current?.focus());
-    }
-  }, [isOpen]);
-
-  useEffect(() => {
-    if (listRef.current && selectedIndex >= 0) {
-      const selectedItem = listRef.current.children[selectedIndex] as HTMLElement;
-      selectedItem?.scrollIntoView({ block: "nearest" });
-    }
-  }, [selectedIndex]);
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      switch (e.key) {
-        case "ArrowUp":
-          e.preventDefault();
-          selectPrevious();
-          break;
-        case "ArrowDown":
-          e.preventDefault();
-          selectNext();
-          break;
-        case "Enter":
-          e.preventDefault();
-          confirmSelection();
-          break;
-        case "Escape":
-          e.preventDefault();
-          close();
-          break;
-        case "Tab":
-          e.preventDefault();
-          if (e.shiftKey) {
-            selectPrevious();
-          } else {
-            selectNext();
-          }
-          break;
-      }
-    },
-    [selectPrevious, selectNext, confirmSelection, close]
-  );
-
   const handleSelect = useCallback(
     (item: ActionPaletteItemType) => {
       executeAction(item);
@@ -88,48 +40,34 @@ export function ActionPalette({
   );
 
   return (
-    <AppPaletteDialog isOpen={isOpen} onClose={close} ariaLabel="Action palette">
-      <AppPaletteDialog.Header label="Actions" keyHint="⇧⇧">
-        <AppPaletteDialog.Input
-          inputRef={inputRef}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Search actions..."
-          aria-label="Search actions"
-          aria-expanded={isOpen}
-          aria-haspopup="listbox"
-          aria-controls="action-palette-list"
-          aria-activedescendant={
-            results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length
-              ? `action-option-${results[selectedIndex].id}`
-              : undefined
-          }
+    <SearchablePalette<ActionPaletteItemType>
+      isOpen={isOpen}
+      query={query}
+      results={results}
+      selectedIndex={selectedIndex}
+      onQueryChange={setQuery}
+      onSelectPrevious={selectPrevious}
+      onSelectNext={selectNext}
+      onConfirm={confirmSelection}
+      onClose={close}
+      getItemId={(item) => item.id}
+      renderItem={(item, _index, isSelected) => (
+        <ActionPaletteItem
+          key={item.id}
+          item={item}
+          isSelected={isSelected}
+          onSelect={handleSelect}
         />
-      </AppPaletteDialog.Header>
-
-      <AppPaletteDialog.Body>
-        {results.length === 0 ? (
-          <AppPaletteDialog.Empty
-            query={query}
-            emptyMessage="No actions available"
-            noMatchMessage={`No actions match "${query}"`}
-          />
-        ) : (
-          <div ref={listRef} id="action-palette-list" role="listbox" aria-label="Actions">
-            {results.map((item, index) => (
-              <ActionPaletteItem
-                key={item.id}
-                item={item}
-                isSelected={index === selectedIndex}
-                onSelect={handleSelect}
-              />
-            ))}
-          </div>
-        )}
-      </AppPaletteDialog.Body>
-
-      <AppPaletteDialog.Footer />
-    </AppPaletteDialog>
+      )}
+      label="Actions"
+      keyHint="⇧⇧"
+      ariaLabel="Action palette"
+      searchPlaceholder="Search actions..."
+      searchAriaLabel="Search actions"
+      listId="action-palette-list"
+      itemIdPrefix="action-option"
+      emptyMessage="No actions available"
+      noMatchMessage={`No actions match "${query}"`}
+    />
   );
 }

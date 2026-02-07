@@ -47,7 +47,7 @@ import { getProjectGradient } from "@/lib/colorUtils";
 import { cn } from "@/lib/utils";
 import { validateProjectSvg, sanitizeSvg, svgToDataUrl } from "@/lib/svg";
 import { RecipeEditor } from "@/components/TerminalRecipe/RecipeEditor";
-import { ConfirmDialog } from "@/components/Terminal/ConfirmDialog";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import { CommandOverridesTab } from "@/components/Settings/CommandOverridesTab";
 import type { CommandOverride } from "@shared/types/commands";
@@ -1827,7 +1827,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
             void handleDeleteRecipe(recipeToDelete);
           }
         }}
-        onCancel={() => {
+        onClose={() => {
           setRecipeToDelete(null);
           setDeleteError(null);
         }}
@@ -1888,12 +1888,12 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         description="You have unsaved changes. Are you sure you want to discard them?"
         confirmLabel="Discard Changes"
         cancelLabel="Keep Editing"
-        destructive={true}
+        variant="destructive"
         onConfirm={() => {
           setShowUnsavedChangesDialog(false);
           onClose();
         }}
-        onCancel={() => {
+        onClose={() => {
           setShowUnsavedChangesDialog(false);
         }}
       />
