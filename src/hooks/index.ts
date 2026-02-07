@@ -70,3 +70,9 @@ export { useActionPalette } from "./useActionPalette";
 export type { ActionPaletteItem, UseActionPaletteReturn } from "./useActionPalette";
 
 export { useDoubleShift } from "./useDoubleShift";
+
+export { usePanelLifecycle } from "./usePanelLifecycle";
+export type { PanelLifecycle } from "./usePanelLifecycle";
+
+export { usePanelHandlers } from "./usePanelHandlers";
+export type { UsePanelHandlersConfig, PanelHandlers } from "./usePanelHandlers";

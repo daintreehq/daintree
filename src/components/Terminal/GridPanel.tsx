@@ -1,10 +1,12 @@
-import { useCallback, useState, useEffect, useRef, useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { useTerminalStore, type TerminalInstance } from "@/store";
-import { getTerminalAnimationDuration } from "@/lib/animationUtils";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { getPanelComponent, type PanelComponentProps } from "@/registry";
 import { ContentPanel, triggerPanelTransition } from "@/components/Panel";
 import type { TabInfo } from "@/components/Panel/TabButton";
+import { usePanelLifecycle } from "@/hooks/usePanelLifecycle";
+import { usePanelHandlers } from "@/hooks/usePanelHandlers";
+import { buildPanelProps } from "@/utils/panelProps";
 
 export interface GridPanelProps {
   terminal: TerminalInstance;
@@ -36,76 +38,27 @@ export function GridPanel({
   onAddTab,
   onTabReorder,
 }: GridPanelProps) {
-  const setFocused = useTerminalStore((state) => state.setFocused);
-  const trashPanelGroup = useTerminalStore((state) => state.trashPanelGroup);
-  const removeTerminal = useTerminalStore((state) => state.removeTerminal);
   const toggleMaximize = useTerminalStore((state) => state.toggleMaximize);
   const getPanelGroup = useTerminalStore((state) => state.getPanelGroup);
-  const updateTitle = useTerminalStore((state) => state.updateTitle);
   const moveTerminalToDock = useTerminalStore((state) => state.moveTerminalToDock);
 
-  const [isTrashing, setIsTrashing] = useState(false);
-  const mountedRef = useRef(true);
-  const timeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
-
-  useEffect(() => {
-    return () => {
-      mountedRef.current = false;
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-      }
-    };
-  }, []);
-
-  const handleFocus = useCallback(() => {
-    setFocused(terminal.id);
-  }, [setFocused, terminal.id]);
-
-  const handleClose = useCallback(
-    (force?: boolean) => {
-      if (force) {
-        removeTerminal(terminal.id);
-      } else {
-        const duration = getTerminalAnimationDuration();
-        setIsTrashing(true);
-        timeoutRef.current = setTimeout(() => {
-          try {
-            // trashPanelGroup handles both grouped and ungrouped panels
-            trashPanelGroup(terminal.id);
-          } catch (error) {
-            console.error("Failed to trash terminal:", error);
-          } finally {
-            if (mountedRef.current) {
-              setIsTrashing(false);
-            }
-          }
-        }, duration);
-      }
-    },
-    [removeTerminal, trashPanelGroup, terminal.id]
-  );
+  const lifecycle = usePanelLifecycle();
+  const { handleFocus, handleClose, handleTitleChange } = usePanelHandlers({
+    terminalId: terminal.id,
+    lifecycle,
+  });
 
   const handleToggleMaximize = useCallback(() => {
     toggleMaximize(terminal.id, gridCols, gridPanelCount, getPanelGroup);
   }, [toggleMaximize, terminal.id, gridCols, gridPanelCount, getPanelGroup]);
 
-  const handleTitleChange = useCallback(
-    (newTitle: string) => {
-      updateTitle(terminal.id, newTitle);
-    },
-    [updateTitle, terminal.id]
-  );
-
   const handleMinimize = useCallback(() => {
-    // Capture panel position before state change using data-panel-id attribute
     const panelElement = document.querySelector(`[data-panel-id="${terminal.id}"]`);
     if (panelElement) {
       const sourceRect = panelElement.getBoundingClientRect();
-      // Find the dock container as target
       const dockElement = document.querySelector("[data-dock-density]");
       if (dockElement) {
         const dockRect = dockElement.getBoundingClientRect();
-        // Target a small area in the dock center
         const targetRect = {
           x: dockRect.x + dockRect.width / 2 - 50,
           y: dockRect.y + dockRect.height / 2 - 16,
@@ -129,74 +82,38 @@ export function GridPanel({
     moveTerminalToDock(terminal.id);
   }, [moveTerminalToDock, terminal.id]);
 
-  // Get the registered component for this panel kind
   const kind = terminal.kind ?? "terminal";
   const registration = getPanelComponent(kind);
 
-  // Build props for the panel component
   const panelProps: PanelComponentProps = useMemo(
-    () => ({
-      // Core identity
-      id: terminal.id,
-      title: terminal.title,
-      worktreeId: terminal.worktreeId,
-
-      // Container state
-      isFocused,
-      isMaximized,
-      location: "grid" as const,
-      isTrashing,
-      gridPanelCount,
-
-      // Actions
-      onFocus: handleFocus,
-      onClose: handleClose,
-      onToggleMaximize: handleToggleMaximize,
-      onTitleChange: handleTitleChange,
-      onMinimize: handleMinimize,
-
-      // Terminal-specific
-      type: terminal.type,
-      agentId: terminal.agentId,
-      cwd: terminal.cwd,
-      agentState: terminal.agentState,
-      activity: terminal.activityHeadline
-        ? {
-            headline: terminal.activityHeadline,
-            status: terminal.activityStatus ?? "working",
-            type: terminal.activityType ?? "interactive",
-          }
-        : null,
-      lastCommand: terminal.lastCommand,
-      flowStatus: terminal.flowStatus,
-      restartKey: terminal.restartKey,
-      restartError: terminal.restartError,
-      reconnectError: terminal.reconnectError,
-      spawnError: terminal.spawnError,
-
-      // Browser-specific
-      initialUrl: terminal.browserUrl || "http://localhost:3000",
-
-      // Notes-specific
-      notePath: (terminal as any).notePath,
-      noteId: (terminal as any).noteId,
-      scope: (terminal as any).scope,
-      createdAt: (terminal as any).createdAt,
-
-      // Tab support
-      tabs,
-      groupId,
-      onTabClick,
-      onTabClose,
-      onTabRename,
-      onAddTab,
-      onTabReorder,
-    }),
+    () =>
+      buildPanelProps({
+        terminal,
+        isFocused,
+        isTrashing: lifecycle.isTrashing,
+        overrides: {
+          location: "grid" as const,
+          isMaximized,
+          gridPanelCount,
+          onFocus: handleFocus,
+          onClose: handleClose,
+          onToggleMaximize: handleToggleMaximize,
+          onTitleChange: handleTitleChange,
+          onMinimize: handleMinimize,
+          tabs,
+          groupId,
+          onTabClick,
+          onTabClose,
+          onTabRename,
+          onAddTab,
+          onTabReorder,
+        },
+      }),
     [
       terminal,
       isFocused,
       isMaximized,
-      isTrashing,
+      lifecycle.isTrashing,
       gridPanelCount,
       handleFocus,
       handleClose,
