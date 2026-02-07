@@ -1,8 +1,8 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getUiAnimationDuration } from "@/lib/animationUtils";
+import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 
 export interface ProjectSwitchOverlayProps {
   isSwitching: boolean;
@@ -12,86 +12,22 @@ export interface ProjectSwitchOverlayProps {
 const MIN_DISPLAY_DURATION = 200;
 
 export function ProjectSwitchOverlay({ isSwitching, projectName }: ProjectSwitchOverlayProps) {
-  const [isVisible, setIsVisible] = useState(false);
-  const [shouldRender, setShouldRender] = useState(false);
   const [cachedProjectName, setCachedProjectName] = useState<string | undefined>(undefined);
-  const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const minDurationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const rafRef = useRef<number | null>(null);
-  const showStartTimeRef = useRef<number>(0);
-  const pendingCloseRef = useRef(false);
+
+  const clearCachedName = useCallback(() => {
+    setCachedProjectName(undefined);
+  }, []);
+
+  const { isVisible, shouldRender } = useAnimatedPresence({
+    isOpen: isSwitching,
+    minimumDisplayDuration: MIN_DISPLAY_DURATION,
+    onAnimateOut: clearCachedName,
+  });
 
   useEffect(() => {
-    if (isSwitching) {
-      pendingCloseRef.current = false;
-      if (projectName) {
-        setCachedProjectName(projectName);
-      }
-      if (closeTimeoutRef.current) {
-        clearTimeout(closeTimeoutRef.current);
-        closeTimeoutRef.current = null;
-      }
-      if (minDurationTimeoutRef.current) {
-        clearTimeout(minDurationTimeoutRef.current);
-        minDurationTimeoutRef.current = null;
-      }
-      showStartTimeRef.current = Date.now();
-      setShouldRender(true);
-      rafRef.current = requestAnimationFrame(() => {
-        rafRef.current = null;
-        setIsVisible(true);
-      });
-    } else {
-      const elapsed = Date.now() - showStartTimeRef.current;
-      const remaining = MIN_DISPLAY_DURATION - elapsed;
-
-      const doClose = () => {
-        setIsVisible(false);
-        if (rafRef.current !== null) {
-          cancelAnimationFrame(rafRef.current);
-          rafRef.current = null;
-        }
-        const duration = getUiAnimationDuration();
-        if (duration === 0) {
-          setShouldRender(false);
-          setCachedProjectName(undefined);
-        } else {
-          closeTimeoutRef.current = setTimeout(() => {
-            closeTimeoutRef.current = null;
-            setShouldRender(false);
-            setCachedProjectName(undefined);
-          }, duration);
-        }
-      };
-
-      if (remaining > 0 && showStartTimeRef.current > 0) {
-        pendingCloseRef.current = true;
-        minDurationTimeoutRef.current = setTimeout(() => {
-          minDurationTimeoutRef.current = null;
-          if (pendingCloseRef.current) {
-            pendingCloseRef.current = false;
-            doClose();
-          }
-        }, remaining);
-      } else {
-        doClose();
-      }
+    if (isSwitching && projectName) {
+      setCachedProjectName(projectName);
     }
-
-    return () => {
-      if (closeTimeoutRef.current) {
-        clearTimeout(closeTimeoutRef.current);
-        closeTimeoutRef.current = null;
-      }
-      if (minDurationTimeoutRef.current) {
-        clearTimeout(minDurationTimeoutRef.current);
-        minDurationTimeoutRef.current = null;
-      }
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
-    };
   }, [isSwitching, projectName]);
 
   if (!shouldRender) return null;
