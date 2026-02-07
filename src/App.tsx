@@ -23,6 +23,7 @@ import {
 } from "./hooks";
 import { useActionRegistry } from "./hooks/useActionRegistry";
 import { useActionPalette } from "./hooks/useActionPalette";
+import { useWorktreePalette } from "./hooks/useWorktreePalette";
 import { useDoubleShift } from "./hooks/useDoubleShift";
 import { useAssistantContextSync } from "./hooks/useAssistantContextSync";
 import { actionService } from "./services/ActionService";
@@ -526,87 +527,7 @@ function App() {
     [activeWorktree, currentProject]
   );
 
-  const [isWorktreePaletteOpen, setIsWorktreePaletteOpen] = useState(false);
-  const [worktreePaletteQuery, setWorktreePaletteQuery] = useState("");
-  const [worktreePaletteSelectedIndex, setWorktreePaletteSelectedIndex] = useState(0);
-  const worktreePaletteResults = useMemo(() => {
-    const search = worktreePaletteQuery.trim().toLowerCase();
-    const sorted = [...worktrees].sort((a, b) => {
-      if (a.id === activeWorktreeId) return -1;
-      if (b.id === activeWorktreeId) return 1;
-      if (a.isMainWorktree && !b.isMainWorktree) return -1;
-      if (!a.isMainWorktree && b.isMainWorktree) return 1;
-      return a.name.localeCompare(b.name);
-    });
-
-    const filtered = sorted.filter((worktree) => {
-      if (!search) return true;
-      const branch = worktree.branch ?? "";
-      const issueTitle = worktree.issueTitle ?? "";
-      const prTitle = worktree.prTitle ?? "";
-      return (
-        worktree.name.toLowerCase().includes(search) ||
-        branch.toLowerCase().includes(search) ||
-        worktree.path.toLowerCase().includes(search) ||
-        issueTitle.toLowerCase().includes(search) ||
-        prTitle.toLowerCase().includes(search)
-      );
-    });
-
-    return filtered.slice(0, 20);
-  }, [worktrees, worktreePaletteQuery, activeWorktreeId]);
-
-  useEffect(() => {
-    setWorktreePaletteSelectedIndex(0);
-  }, [worktreePaletteResults]);
-
-  const closeWorktreePalette = useCallback(() => {
-    setIsWorktreePaletteOpen(false);
-    setWorktreePaletteQuery("");
-    setWorktreePaletteSelectedIndex(0);
-  }, []);
-
-  const openWorktreePalette = useCallback(() => {
-    setIsWorktreePaletteOpen(true);
-    setWorktreePaletteQuery("");
-    setWorktreePaletteSelectedIndex(0);
-  }, []);
-
-  const selectWorktreeFromPalette = useCallback(
-    (worktreeId: string) => {
-      selectWorktree(worktreeId);
-      closeWorktreePalette();
-    },
-    [selectWorktree, closeWorktreePalette]
-  );
-
-  const selectPreviousWorktreeResult = useCallback(() => {
-    if (worktreePaletteResults.length === 0) return;
-    setWorktreePaletteSelectedIndex((prev) =>
-      prev <= 0 ? worktreePaletteResults.length - 1 : prev - 1
-    );
-  }, [worktreePaletteResults]);
-
-  const selectNextWorktreeResult = useCallback(() => {
-    if (worktreePaletteResults.length === 0) return;
-    setWorktreePaletteSelectedIndex((prev) =>
-      prev >= worktreePaletteResults.length - 1 ? 0 : prev + 1
-    );
-  }, [worktreePaletteResults]);
-
-  const confirmWorktreePaletteSelection = useCallback(() => {
-    if (worktreePaletteResults.length === 0) {
-      closeWorktreePalette();
-      return;
-    }
-    const boundedIndex = Math.min(worktreePaletteSelectedIndex, worktreePaletteResults.length - 1);
-    selectWorktreeFromPalette(worktreePaletteResults[boundedIndex].id);
-  }, [
-    worktreePaletteResults,
-    worktreePaletteSelectedIndex,
-    selectWorktreeFromPalette,
-    closeWorktreePalette,
-  ]);
+  const worktreePalette = useWorktreePalette({ worktrees });
 
   const openDiagnosticsDock = useDiagnosticsStore((state) => state.openDock);
   const removeError = useErrorStore((state) => state.removeError);
@@ -759,7 +680,7 @@ function App() {
     onToggleFocusMode: handleToggleSidebar,
     onOpenActionPalette: actionPalette.open,
     onOpenAgentPalette: terminalPalette.open,
-    onOpenWorktreePalette: openWorktreePalette,
+    onOpenWorktreePalette: worktreePalette.open,
     onToggleWorktreeOverview: toggleWorktreeOverview,
     onOpenWorktreeOverview: openWorktreeOverview,
     onCloseWorktreeOverview: closeWorktreeOverview,
@@ -867,17 +788,17 @@ function App() {
         onClose={newTerminalPalette.close}
       />
       <WorktreePalette
-        isOpen={isWorktreePaletteOpen}
-        query={worktreePaletteQuery}
-        results={worktreePaletteResults}
-        activeWorktreeId={activeWorktreeId}
-        selectedIndex={worktreePaletteSelectedIndex}
-        onQueryChange={setWorktreePaletteQuery}
-        onSelectPrevious={selectPreviousWorktreeResult}
-        onSelectNext={selectNextWorktreeResult}
-        onSelect={(worktree) => selectWorktreeFromPalette(worktree.id)}
-        onConfirm={confirmWorktreePaletteSelection}
-        onClose={closeWorktreePalette}
+        isOpen={worktreePalette.isOpen}
+        query={worktreePalette.query}
+        results={worktreePalette.results}
+        activeWorktreeId={worktreePalette.activeWorktreeId}
+        selectedIndex={worktreePalette.selectedIndex}
+        onQueryChange={worktreePalette.setQuery}
+        onSelectPrevious={worktreePalette.selectPrevious}
+        onSelectNext={worktreePalette.selectNext}
+        onSelect={worktreePalette.selectWorktree}
+        onConfirm={worktreePalette.confirmSelection}
+        onClose={worktreePalette.close}
       />
       <PanelPalette
         isOpen={panelPalette.isOpen}
