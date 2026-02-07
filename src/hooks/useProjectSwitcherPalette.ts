@@ -120,48 +120,51 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       lastFetchRef.current = now;
       lastFetchIdsRef.current = projectIds;
 
-    const [statsResults, terminalsResults] = await Promise.allSettled([
-      Promise.allSettled(currentProjects.map((p) => projectClient.getStats(p.id))),
-      Promise.allSettled(currentProjects.map((p) => terminalClient.getForProject(p.id))),
-    ]);
+      const [statsResults, terminalsResults] = await Promise.allSettled([
+        Promise.allSettled(currentProjects.map((p) => projectClient.getStats(p.id))),
+        Promise.allSettled(currentProjects.map((p) => terminalClient.getForProject(p.id))),
+      ]);
 
-    if (statsResults.status === "fulfilled") {
-      const newStats = new Map<string, ProjectStats>();
-      statsResults.value.forEach((result, index) => {
-        if (result.status === "fulfilled") {
-          newStats.set(currentProjects[index].id, result.value);
-        }
-      });
-      setProjectStats(newStats);
-    }
-
-    if (terminalsResults.status === "fulfilled") {
-      const newCounts = new Map<string, { activeAgentCount: number; waitingAgentCount: number }>();
-      terminalsResults.value.forEach((result, index) => {
-        if (result.status !== "fulfilled") return;
-
-        let activeAgentCount = 0;
-        let waitingAgentCount = 0;
-
-        for (const terminal of result.value) {
-          if (!panelKindHasPty(terminal.kind ?? "terminal")) continue;
-          if (terminal.kind === "dev-preview") continue;
-          if (terminal.hasPty === false) continue; // Skip orphaned terminals without active PTY
-
-          const isAgent = isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId);
-          if (!isAgent) continue;
-
-          if (terminal.agentState === "waiting") {
-            waitingAgentCount += 1;
-          } else if (terminal.agentState === "working" || terminal.agentState === "running") {
-            activeAgentCount += 1;
+      if (statsResults.status === "fulfilled") {
+        const newStats = new Map<string, ProjectStats>();
+        statsResults.value.forEach((result, index) => {
+          if (result.status === "fulfilled") {
+            newStats.set(currentProjects[index].id, result.value);
           }
-        }
+        });
+        setProjectStats(newStats);
+      }
 
-        newCounts.set(currentProjects[index].id, { activeAgentCount, waitingAgentCount });
-      });
-      setTerminalCounts(newCounts);
-    }
+      if (terminalsResults.status === "fulfilled") {
+        const newCounts = new Map<
+          string,
+          { activeAgentCount: number; waitingAgentCount: number }
+        >();
+        terminalsResults.value.forEach((result, index) => {
+          if (result.status !== "fulfilled") return;
+
+          let activeAgentCount = 0;
+          let waitingAgentCount = 0;
+
+          for (const terminal of result.value) {
+            if (!panelKindHasPty(terminal.kind ?? "terminal")) continue;
+            if (terminal.kind === "dev-preview") continue;
+            if (terminal.hasPty === false) continue; // Skip orphaned terminals without active PTY
+
+            const isAgent = isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId);
+            if (!isAgent) continue;
+
+            if (terminal.agentState === "waiting") {
+              waitingAgentCount += 1;
+            } else if (terminal.agentState === "working" || terminal.agentState === "running") {
+              activeAgentCount += 1;
+            }
+          }
+
+          newCounts.set(currentProjects[index].id, { activeAgentCount, waitingAgentCount });
+        });
+        setTerminalCounts(newCounts);
+      }
     },
     [projects]
   );

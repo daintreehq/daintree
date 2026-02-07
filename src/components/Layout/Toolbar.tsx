@@ -245,7 +245,6 @@ export function Toolbar({
     void actionService.dispatch("app.settings.openTab", { tab }, { source: "context-menu" });
   };
 
-
   const buttonRegistry = useMemo<
     Record<ToolbarButtonId, { render: () => React.ReactNode; isAvailable: boolean }>
   >(
@@ -666,9 +665,7 @@ export function Toolbar({
 
   return (
     <>
-      <header
-        className="relative flex h-12 items-center justify-between px-4 pt-1 shrink-0 app-drag-region bg-canopy-sidebar/95 backdrop-blur-sm border-b border-divider shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
-      >
+      <header className="relative flex h-12 items-center justify-between px-4 pt-1 shrink-0 app-drag-region bg-canopy-sidebar/95 backdrop-blur-sm border-b border-divider shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
         <div className="window-resize-strip" />
 
         {/* LEFT GROUP */}

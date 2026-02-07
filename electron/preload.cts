@@ -32,7 +32,6 @@ import type {
   KeyAction,
   TerminalRecipe,
   AttachIssuePayload,
-  DetachIssuePayload,
   IssueAssociation,
 } from "../shared/types/index.js";
 import type {

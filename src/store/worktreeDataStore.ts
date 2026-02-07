@@ -190,9 +190,7 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
           })
         );
         const issueMap = new Map(
-          issueAssociations
-            .filter((a) => a.assoc !== null)
-            .map((a) => [a.id, a.assoc!])
+          issueAssociations.filter((a) => a.assoc !== null).map((a) => [a.id, a.assoc!])
         );
 
         // Merge getAll results with any events that arrived during the fetch
