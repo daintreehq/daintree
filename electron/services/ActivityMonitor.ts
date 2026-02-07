@@ -997,6 +997,16 @@ export class ActivityMonitor {
     return this.lastPatternResult;
   }
 
+  /**
+   * Called when a command is submitted via the hybrid input bar.
+   * Immediately transitions to busy state without relying on character-by-character
+   * Enter key detection, which fails when performSubmit() splits body and Enter
+   * across separate async write() calls.
+   */
+  notifySubmission(): void {
+    this.becomeBusy({ trigger: "input" });
+  }
+
   getState(): "busy" | "idle" {
     return this.state;
   }

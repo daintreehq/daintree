@@ -125,9 +125,13 @@ describe("AgentStateMachine", () => {
         expect(nextAgentState("waiting", event)).toBe("working");
       });
 
+      it("should transition idle → working on input (Issue #2185)", () => {
+        const event: AgentEvent = { type: "input" };
+        expect(nextAgentState("idle", event)).toBe("working");
+      });
+
       it("should not transition from other states on input", () => {
         const event: AgentEvent = { type: "input" };
-        expect(nextAgentState("idle", event)).toBe("idle");
         expect(nextAgentState("working", event)).toBe("working");
         expect(nextAgentState("completed", event)).toBe("completed");
         expect(nextAgentState("failed", event)).toBe("failed");

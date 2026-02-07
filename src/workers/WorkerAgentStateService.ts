@@ -59,7 +59,7 @@ function nextAgentState(current: AgentState, event: AgentEvent): AgentState {
       break;
 
     case "input":
-      if (current === "waiting") {
+      if (current === "waiting" || current === "idle") {
         return "working";
       }
       break;

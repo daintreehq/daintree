@@ -588,6 +588,15 @@ export class TerminalProcess {
     if (this.terminalInfo.isExited) {
       return;
     }
+
+    // Immediately notify activity monitor of the submission so the working
+    // state transitions before the async write sequence in performSubmit().
+    // Without this, the split between body write and Enter write causes the
+    // character-by-character detection in onInput() to miss the submission.
+    if (this.activityMonitor && text.trim().length > 0) {
+      this.activityMonitor.notifySubmission();
+    }
+
     this.submitQueue.push(text);
     if (this.submitInFlight) {
       return;
@@ -620,6 +629,13 @@ export class TerminalProcess {
 
     if (!terminal.ptyProcess) {
       return;
+    }
+
+    // Notify activity monitor at execution time (not just enqueue time) to ensure
+    // the working state transition happens even for queued submissions that execute
+    // after a potential idle transition. Issue #2185.
+    if (this.activityMonitor && text.trim().length > 0) {
+      this.activityMonitor.notifySubmission();
     }
 
     const normalized = normalizeSubmitText(text);

@@ -328,6 +328,52 @@ describe("ActivityMonitor", () => {
     });
   });
 
+  describe("notifySubmission (hybrid input bar)", () => {
+    it("should immediately transition to busy on submission (Issue #2185)", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines: () => ["> "],
+        getCursorLine: () => "> ",
+        initialState: "idle",
+        skipInitialStateEmit: true,
+      });
+
+      monitor.startPolling();
+
+      // Simulate hybrid input bar submit - should immediately go busy
+      monitor.notifySubmission();
+
+      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", { trigger: "input" });
+      expect(monitor.getState()).toBe("busy");
+
+      monitor.dispose();
+    });
+
+    it("should work without polling enabled", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange);
+
+      monitor.notifySubmission();
+
+      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", { trigger: "input" });
+      expect(monitor.getState()).toBe("busy");
+
+      monitor.dispose();
+    });
+
+    it("should not fire duplicate busy when already busy", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange);
+
+      monitor.notifySubmission();
+      monitor.notifySubmission();
+
+      expect(onStateChange).toHaveBeenCalledTimes(1);
+
+      monitor.dispose();
+    });
+  });
+
   describe("Output-driven activity", () => {
     it("should NOT trigger busy from output alone (requires Enter first) - Issue #1476", () => {
       const onStateChange = vi.fn();
