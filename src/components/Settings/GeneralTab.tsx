@@ -10,6 +10,8 @@ import {
   Wrench,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SettingsSection } from "@/components/Settings/SettingsSection";
+import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { getAgentIds, getAgentConfig } from "@/config/agents";
 import { DEFAULT_AGENT_SETTINGS, getAgentSettingsEntry } from "@shared/types";
 import type { HibernationConfig, CliAvailability, AgentSettings } from "@shared/types";
@@ -287,65 +289,27 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
           </p>
         </div>
       ) : hibernationConfig ? (
-        <div className="space-y-4">
-          <div>
-            <h4 className="text-sm font-medium text-canopy-text mb-2 flex items-center gap-2">
-              <Moon className="w-4 h-4 text-canopy-accent" />
-              Auto-Hibernation
-            </h4>
-            <p className="text-xs text-canopy-text/50 mb-4">
-              Automatically stop terminals and servers for projects that have been inactive for a
-              period of time. Reduces system resource usage.
-            </p>
-          </div>
-
-          <button
-            onClick={handleHibernationToggle}
-            disabled={isSaving}
-            role="switch"
-            aria-checked={hibernationConfig.enabled}
-            aria-label="Auto-Hibernation Toggle"
-            className={cn(
-              "w-full flex items-center justify-between p-4 rounded-[var(--radius-lg)] border transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
+        <SettingsSection
+          icon={Moon}
+          title="Auto-Hibernation"
+          description="Automatically stop terminals and servers for projects that have been inactive for a period of time. Reduces system resource usage."
+          iconColor="text-canopy-accent"
+        >
+          <SettingsSwitchCard
+            icon={Moon}
+            title={
+              hibernationConfig.enabled ? "Auto-Hibernation Enabled" : "Enable Auto-Hibernation"
+            }
+            subtitle={
               hibernationConfig.enabled
-                ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
-                : "border-canopy-border hover:bg-white/5 text-canopy-text/70"
-            )}
-          >
-            <div className="flex items-center gap-3">
-              <Moon
-                className={cn(
-                  "w-5 h-5",
-                  hibernationConfig.enabled ? "text-canopy-accent" : "text-canopy-text/50"
-                )}
-              />
-              <div className="text-left">
-                <div className="text-sm font-medium">
-                  {hibernationConfig.enabled
-                    ? "Auto-Hibernation Enabled"
-                    : "Enable Auto-Hibernation"}
-                </div>
-                <div className="text-xs opacity-70">
-                  {hibernationConfig.enabled
-                    ? `After ${hibernationConfig.inactiveThresholdHours}h of inactivity`
-                    : "Save resources by hibernating idle projects"}
-                </div>
-              </div>
-            </div>
-            <div
-              className={cn(
-                "w-11 h-6 rounded-full relative transition-colors",
-                hibernationConfig.enabled ? "bg-canopy-accent" : "bg-canopy-border"
-              )}
-            >
-              <div
-                className={cn(
-                  "absolute top-1 w-4 h-4 rounded-full bg-white transition-transform",
-                  hibernationConfig.enabled ? "translate-x-6" : "translate-x-1"
-                )}
-              />
-            </div>
-          </button>
+                ? `After ${hibernationConfig.inactiveThresholdHours}h of inactivity`
+                : "Save resources by hibernating idle projects"
+            }
+            isEnabled={hibernationConfig.enabled}
+            onChange={handleHibernationToggle}
+            ariaLabel="Auto-Hibernation Toggle"
+            disabled={isSaving}
+          />
 
           {hibernationConfig.enabled && (
             <div className="space-y-2">
@@ -372,7 +336,7 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
               </p>
             </div>
           )}
-        </div>
+        </SettingsSection>
       ) : null}
 
       <div className="space-y-3">
@@ -380,97 +344,35 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
           <Activity className="w-4 h-4 text-canopy-accent" />
           Display
         </h4>
-        <button
-          onClick={() =>
+        <SettingsSwitchCard
+          icon={Activity}
+          title="Project Pulse"
+          subtitle="Show activity heatmap on the empty panel grid"
+          isEnabled={showProjectPulse}
+          onChange={() =>
             void actionService.dispatch(
               "preferences.showProjectPulse.set",
               { show: !showProjectPulse },
               { source: "user" }
             )
           }
-          role="switch"
-          aria-checked={showProjectPulse}
-          aria-label="Project Pulse Toggle"
-          className={cn(
-            "w-full flex items-center justify-between p-4 rounded-[var(--radius-lg)] border transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
-            showProjectPulse
-              ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
-              : "border-canopy-border hover:bg-white/5 text-canopy-text/70"
-          )}
-        >
-          <div className="flex items-center gap-3">
-            <Activity
-              className={cn(
-                "w-5 h-5",
-                showProjectPulse ? "text-canopy-accent" : "text-canopy-text/50"
-              )}
-            />
-            <div className="text-left">
-              <div className="text-sm font-medium">Project Pulse</div>
-              <div className="text-xs opacity-70">
-                Show activity heatmap on the empty panel grid
-              </div>
-            </div>
-          </div>
-          <div
-            className={cn(
-              "w-11 h-6 rounded-full relative transition-colors",
-              showProjectPulse ? "bg-canopy-accent" : "bg-canopy-border"
-            )}
-          >
-            <div
-              className={cn(
-                "absolute top-1 w-4 h-4 rounded-full bg-white transition-transform",
-                showProjectPulse ? "translate-x-6" : "translate-x-1"
-              )}
-            />
-          </div>
-        </button>
+          ariaLabel="Project Pulse Toggle"
+        />
 
-        <button
-          onClick={() =>
+        <SettingsSwitchCard
+          icon={Wrench}
+          title="Developer Tools"
+          subtitle="Show problems panel button in the toolbar"
+          isEnabled={showDeveloperTools}
+          onChange={() =>
             void actionService.dispatch(
               "preferences.showDeveloperTools.set",
               { show: !showDeveloperTools },
               { source: "user" }
             )
           }
-          role="switch"
-          aria-checked={showDeveloperTools}
-          aria-label="Developer Tools Toggle"
-          className={cn(
-            "w-full flex items-center justify-between p-4 rounded-[var(--radius-lg)] border transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
-            showDeveloperTools
-              ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
-              : "border-canopy-border hover:bg-white/5 text-canopy-text/70"
-          )}
-        >
-          <div className="flex items-center gap-3">
-            <Wrench
-              className={cn(
-                "w-5 h-5",
-                showDeveloperTools ? "text-canopy-accent" : "text-canopy-text/50"
-              )}
-            />
-            <div className="text-left">
-              <div className="text-sm font-medium">Developer Tools</div>
-              <div className="text-xs opacity-70">Show problems panel button in the toolbar</div>
-            </div>
-          </div>
-          <div
-            className={cn(
-              "w-11 h-6 rounded-full relative transition-colors",
-              showDeveloperTools ? "bg-canopy-accent" : "bg-canopy-border"
-            )}
-          >
-            <div
-              className={cn(
-                "absolute top-1 w-4 h-4 rounded-full bg-white transition-transform",
-                showDeveloperTools ? "translate-x-6" : "translate-x-1"
-              )}
-            />
-          </div>
-        </button>
+          ariaLabel="Developer Tools Toggle"
+        />
       </div>
 
       <div className="border border-canopy-border rounded-[var(--radius-md)]">
