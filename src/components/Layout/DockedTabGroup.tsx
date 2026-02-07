@@ -27,13 +27,12 @@ import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { getTerminalFocusTarget } from "@/components/Terminal/terminalFocus";
 import { STATE_ICONS, STATE_COLORS } from "@/components/Worktree/terminalStateConfig";
 import { TerminalRefreshTier } from "@/types";
-import { terminalClient, agentSettingsClient } from "@/clients";
+import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useDockPanelPortal } from "./DockPanelOffscreenContainer";
 import { SortableTabButton } from "@/components/Panel/SortableTabButton";
 import type { TabGroup } from "@/types";
-import { generateAgentCommand } from "@shared/types";
-import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
+import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 
 interface DockedTabGroupProps {
   group: TabGroup;
@@ -322,81 +321,11 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const handleAddTab = useCallback(async () => {
     if (!activePanel) return;
 
-    const kind = activePanel.kind ?? "terminal";
-
     try {
-      // For agents, generate the command
-      let command: string | undefined;
-      if (activePanel.agentId && isRegisteredAgent(activePanel.agentId)) {
-        const agentConfig = getAgentConfig(activePanel.agentId);
-        if (agentConfig) {
-          try {
-            const agentSettings = await agentSettingsClient.get();
-            const entry = agentSettings?.agents?.[activePanel.agentId] ?? {};
-            command = generateAgentCommand(agentConfig.command, entry, activePanel.agentId, {
-              interactive: true,
-            });
-          } catch (error) {
-            console.warn("Failed to get agent settings, using existing command:", error);
-            command = activePanel.command;
-          }
-        } else {
-          command = activePanel.command;
-        }
-      } else {
-        command = activePanel.command;
-      }
+      const options = await buildPanelDuplicateOptions(activePanel, "dock");
+      const newPanelId = await addTerminal(options);
 
-      // Create new panel without tab group info (will be added to group separately)
-      const baseOptions = {
-        kind,
-        type: activePanel.type,
-        agentId: activePanel.agentId,
-        cwd: activePanel.cwd || "",
-        worktreeId: activePanel.worktreeId,
-        location: activePanel.location ?? "dock",
-        exitBehavior: activePanel.exitBehavior,
-        isInputLocked: activePanel.isInputLocked,
-        command,
-      };
-
-      interface NotesPanelFields {
-        notePath: string;
-        noteId: string;
-        scope: "worktree" | "project";
-      }
-
-      interface DevPreviewPanelFields {
-        devCommand?: string;
-      }
-
-      let kindSpecificOptions = {};
-      if (kind === "browser") {
-        kindSpecificOptions = { browserUrl: activePanel.browserUrl };
-      } else if (kind === "notes") {
-        const notesPanel = activePanel as TerminalInstance & NotesPanelFields;
-        kindSpecificOptions = {
-          notePath: notesPanel.notePath,
-          noteId: notesPanel.noteId,
-          scope: notesPanel.scope,
-          createdAt: Date.now(),
-        };
-      } else if (kind === "dev-preview") {
-        const devPanel = activePanel as TerminalInstance & DevPreviewPanelFields;
-        kindSpecificOptions = {
-          devCommand: devPanel.devCommand,
-          browserUrl: activePanel.browserUrl,
-        };
-      }
-
-      const newPanelId = await addTerminal({
-        ...baseOptions,
-        ...kindSpecificOptions,
-      });
-
-      // Add the new panel to this group
       addPanelToGroup(group.id, newPanelId);
-
       setActiveTab(group.id, newPanelId);
       setFocused(newPanelId);
       openDockTerminal(newPanelId);
