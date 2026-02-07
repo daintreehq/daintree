@@ -1,6 +1,6 @@
 import type { WorktreeState } from "@/types";
 import type { GitHubIssue } from "@shared/types/github";
-import { ConfirmDialog } from "@/components/Terminal/ConfirmDialog";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { WorktreeDeleteDialog } from "../WorktreeDeleteDialog";
 import { IssuePickerDialog } from "../IssuePickerDialog";
 import type { ConfirmDialogState } from "./hooks/useWorktreeActions";
@@ -35,7 +35,7 @@ export function WorktreeDialogs({
         title={confirmDialog.title}
         description={confirmDialog.description}
         onConfirm={confirmDialog.onConfirm}
-        onCancel={onCloseConfirm}
+        onClose={onCloseConfirm}
       />
 
       <WorktreeDeleteDialog
