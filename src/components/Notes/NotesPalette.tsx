@@ -12,7 +12,7 @@ import { languages } from "@codemirror/language-data";
 import { EditorView } from "@codemirror/view";
 import { canopyTheme } from "./editorTheme";
 import { Plus, Trash2, ExternalLink, X, AlertTriangle, StickyNote } from "lucide-react";
-import { ConfirmDialog } from "@/components/Terminal/ConfirmDialog";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 interface NotesPaletteProps {
   isOpen: boolean;
@@ -952,9 +952,9 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
         description={`Are you sure you want to delete "${deleteConfirmNote?.title}"? This action cannot be undone.`}
         confirmLabel="Delete"
         cancelLabel="Cancel"
-        destructive
+        variant="destructive"
         onConfirm={handleConfirmDelete}
-        onCancel={() => setDeleteConfirmNote(null)}
+        onClose={() => setDeleteConfirmNote(null)}
       />
     </>
   );

@@ -71,6 +71,9 @@ export type { ActionPaletteItem, UseActionPaletteReturn } from "./useActionPalet
 
 export { useDoubleShift } from "./useDoubleShift";
 
+export { useAnimatedPresence } from "./useAnimatedPresence";
+export type { UseAnimatedPresenceOptions, UseAnimatedPresenceReturn } from "./useAnimatedPresence";
+
 export { usePanelLifecycle } from "./usePanelLifecycle";
 export type { PanelLifecycle } from "./usePanelLifecycle";
 
