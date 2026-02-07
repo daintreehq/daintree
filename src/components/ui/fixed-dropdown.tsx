@@ -1,7 +1,7 @@
 import React, { useState, useLayoutEffect, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
-import { getUiAnimationDuration } from "@/lib/animationUtils";
+import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 
 interface FixedDropdownProps {
   open: boolean;
@@ -23,60 +23,14 @@ export function FixedDropdown({
   const [mounted, setMounted] = useState(false);
   const [position, setPosition] = useState<{ top: number; right: string } | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
-  const [isVisible, setIsVisible] = useState(false);
-  const [shouldRender, setShouldRender] = useState(false);
-  const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const rafRef = useRef<number | null>(null);
+  const { isVisible, shouldRender } = useAnimatedPresence({ isOpen: open });
 
   useEffect(() => setMounted(true), []);
-
-  useEffect(() => {
-    if (open) {
-      if (closeTimeoutRef.current) {
-        clearTimeout(closeTimeoutRef.current);
-        closeTimeoutRef.current = null;
-      }
-      setShouldRender(true);
-      rafRef.current = requestAnimationFrame(() => {
-        rafRef.current = null;
-        setIsVisible(true);
-      });
-    } else {
-      setIsVisible(false);
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
-      const duration = getUiAnimationDuration();
-      if (duration === 0) {
-        setShouldRender(false);
-      } else {
-        closeTimeoutRef.current = setTimeout(() => {
-          closeTimeoutRef.current = null;
-          setShouldRender(false);
-        }, duration);
-      }
-    }
-
-    return () => {
-      if (closeTimeoutRef.current) {
-        clearTimeout(closeTimeoutRef.current);
-        closeTimeoutRef.current = null;
-      }
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
-    };
-  }, [open]);
 
   const updatePosition = useCallback(() => {
     if (!anchorRef.current || typeof window === "undefined") return;
     const rect = anchorRef.current.getBoundingClientRect();
-    // Distance from button's right edge to viewport's right edge
     const buttonRightGap = Math.max(window.innerWidth - rect.right, 8);
-    // Position dropdown so its right edge aligns with button's right edge,
-    // BUT stays clear of the sidecar (using CSS max for reactivity)
     setPosition({
       top: rect.bottom + sideOffset,
       right: `max(${buttonRightGap}px, calc(var(--sidecar-right-offset, 0px) + 8px))`,

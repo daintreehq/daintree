@@ -1,7 +1,6 @@
-import { useState, useEffect, useRef } from "react";
 import { Ban } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getUiAnimationDuration } from "@/lib/animationUtils";
+import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 
 export interface GridFullOverlayProps {
   maxTerminals: number;
@@ -9,50 +8,7 @@ export interface GridFullOverlayProps {
 }
 
 export function GridFullOverlay({ maxTerminals, show }: GridFullOverlayProps) {
-  const [isVisible, setIsVisible] = useState(false);
-  const [shouldRender, setShouldRender] = useState(false);
-  const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const rafRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (show) {
-      if (closeTimeoutRef.current) {
-        clearTimeout(closeTimeoutRef.current);
-        closeTimeoutRef.current = null;
-      }
-      setShouldRender(true);
-      rafRef.current = requestAnimationFrame(() => {
-        rafRef.current = null;
-        setIsVisible(true);
-      });
-    } else {
-      setIsVisible(false);
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
-      const duration = getUiAnimationDuration();
-      if (duration === 0) {
-        setShouldRender(false);
-      } else {
-        closeTimeoutRef.current = setTimeout(() => {
-          closeTimeoutRef.current = null;
-          setShouldRender(false);
-        }, duration);
-      }
-    }
-
-    return () => {
-      if (closeTimeoutRef.current) {
-        clearTimeout(closeTimeoutRef.current);
-        closeTimeoutRef.current = null;
-      }
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
-    };
-  }, [show]);
+  const { isVisible, shouldRender } = useAnimatedPresence({ isOpen: show });
 
   if (!shouldRender) return null;
 

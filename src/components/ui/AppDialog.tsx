@@ -1,10 +1,10 @@
-import { useEffect, useRef, useCallback, useId, createContext, useContext, useState } from "react";
+import { useEffect, useRef, useCallback, useId, createContext, useContext } from "react";
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { useOverlayState } from "@/hooks";
 import { useSidecarStore } from "@/store";
-import { getUiAnimationDuration } from "@/lib/animationUtils";
+import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { X, Loader2 } from "lucide-react";
 import { Button } from "./button";
 
@@ -59,70 +59,39 @@ export function AppDialog({
   const previousActiveElement = useRef<HTMLElement | null>(null);
   const titleId = useId();
   const descriptionId = useId();
-  const [isVisible, setIsVisible] = useState(false);
-  const [shouldRender, setShouldRender] = useState(false);
-  const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const rafRef = useRef<number | null>(null);
 
   const { isOpen: sidecarOpen, width: sidecarWidth } = useSidecarStore(
     useShallow((s) => ({ isOpen: s.isOpen, width: s.width }))
   );
   const sidecarOffset = sidecarOpen ? sidecarWidth : 0;
 
+  const restoreFocus = useCallback(() => {
+    if (previousActiveElement.current) {
+      previousActiveElement.current.focus();
+      previousActiveElement.current = null;
+    }
+  }, []);
+
+  const { isVisible, shouldRender } = useAnimatedPresence({
+    isOpen,
+    onAnimateOut: restoreFocus,
+  });
+
   useOverlayState(isOpen || shouldRender);
 
   useEffect(() => {
     if (isOpen) {
-      if (closeTimeoutRef.current) {
-        clearTimeout(closeTimeoutRef.current);
-        closeTimeoutRef.current = null;
-      }
       previousActiveElement.current = document.activeElement as HTMLElement;
-      setShouldRender(true);
-      rafRef.current = requestAnimationFrame(() => {
-        rafRef.current = null;
-        setIsVisible(true);
-      });
     } else {
-      setIsVisible(false);
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
-      const duration = getUiAnimationDuration();
-      if (duration === 0) {
-        setShouldRender(false);
-        if (previousActiveElement.current) {
-          previousActiveElement.current.focus();
-          previousActiveElement.current = null;
-        }
-      } else {
-        closeTimeoutRef.current = setTimeout(() => {
-          closeTimeoutRef.current = null;
-          setShouldRender(false);
-          if (previousActiveElement.current) {
-            previousActiveElement.current.focus();
-            previousActiveElement.current = null;
-          }
-        }, duration);
-      }
+      restoreFocus();
     }
+  }, [isOpen, restoreFocus]);
 
+  useEffect(() => {
     return () => {
-      if (closeTimeoutRef.current) {
-        clearTimeout(closeTimeoutRef.current);
-        closeTimeoutRef.current = null;
-      }
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
-      if (previousActiveElement.current) {
-        previousActiveElement.current.focus();
-        previousActiveElement.current = null;
-      }
+      restoreFocus();
     };
-  }, [isOpen]);
+  }, [restoreFocus]);
 
   const handleClose = useCallback(() => {
     if (dismissible) {

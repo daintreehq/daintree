@@ -70,3 +70,6 @@ export { useActionPalette } from "./useActionPalette";
 export type { ActionPaletteItem, UseActionPaletteReturn } from "./useActionPalette";
 
 export { useDoubleShift } from "./useDoubleShift";
+
+export { useAnimatedPresence } from "./useAnimatedPresence";
+export type { UseAnimatedPresenceOptions, UseAnimatedPresenceReturn } from "./useAnimatedPresence";
