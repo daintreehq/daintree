@@ -3,6 +3,7 @@ import { Circle, Plus, Settings2, Square, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
+import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ProjectActionRow } from "./ProjectActionRow";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
@@ -319,6 +320,38 @@ function ProjectListContent({
   );
 }
 
+const PROJECT_FOOTER = (
+  <>
+    <span>
+      <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
+        ↑
+      </kbd>
+      <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60 ml-1">
+        ↓
+      </kbd>
+      <span className="ml-1.5">to navigate</span>
+    </span>
+    <span>
+      <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
+        Enter
+      </kbd>
+      <span className="ml-1.5">to switch</span>
+    </span>
+    <span>
+      <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
+        ⌘⌫
+      </kbd>
+      <span className="ml-1.5">to remove</span>
+    </span>
+    <span>
+      <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
+        Esc
+      </kbd>
+      <span className="ml-1.5">to close</span>
+    </span>
+  </>
+);
+
 function ModalContent({
   isOpen,
   query,
@@ -333,17 +366,8 @@ function ModalContent({
   onStopProject,
   onCloseProject,
 }: Omit<ProjectSwitcherPaletteProps, "mode" | "children">) {
-  const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const projectSwitcherShortcut = useKeybindingDisplay("project.switcherPalette");
-
-  useEffect(() => {
-    if (isOpen && inputRef.current) {
-      requestAnimationFrame(() => {
-        inputRef.current?.focus();
-      });
-    }
-  }, [isOpen]);
 
   useEffect(() => {
     if (listRef.current && selectedIndex >= 0 && selectedIndex < results.length) {
@@ -356,88 +380,55 @@ function ModalContent({
     }
   }, [selectedIndex, results]);
 
-  const handleKeyDown = useCallback(
+  const handleBackspaceKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      switch (e.key) {
-        case "ArrowUp":
+      if (
+        e.key === "Backspace" &&
+        (e.metaKey || e.ctrlKey) &&
+        onCloseProject &&
+        results.length > 0 &&
+        selectedIndex >= 0 &&
+        selectedIndex < results.length
+      ) {
+        const selectedProject = results[selectedIndex];
+        if (!selectedProject.isActive) {
           e.preventDefault();
-          e.stopPropagation();
-          onSelectPrevious();
-          break;
-        case "ArrowDown":
-          e.preventDefault();
-          e.stopPropagation();
-          onSelectNext();
-          break;
-        case "Enter":
-          e.preventDefault();
-          e.stopPropagation();
-          if (results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
-            onSelect(results[selectedIndex]);
-          }
-          break;
-        case "Escape":
-          e.preventDefault();
-          e.stopPropagation();
-          onClose();
-          break;
-        case "Tab":
-          e.preventDefault();
-          e.stopPropagation();
-          if (e.shiftKey) {
-            onSelectPrevious();
-          } else {
-            onSelectNext();
-          }
-          break;
-        case "Backspace":
-          if (
-            (e.metaKey || e.ctrlKey) &&
-            onCloseProject &&
-            results.length > 0 &&
-            selectedIndex >= 0 &&
-            selectedIndex < results.length
-          ) {
-            const selectedProject = results[selectedIndex];
-            if (!selectedProject.isActive) {
-              e.preventDefault();
-              e.stopPropagation();
-              onCloseProject(selectedProject.id);
-            }
-          }
-          break;
+          onCloseProject(selectedProject.id);
+        }
       }
     },
-    [results, selectedIndex, onSelectPrevious, onSelectNext, onSelect, onClose, onCloseProject]
+    [results, selectedIndex, onCloseProject]
   );
 
   return (
-    <AppPaletteDialog isOpen={isOpen} onClose={onClose} ariaLabel="Project switcher">
-      <AppPaletteDialog.Header
-        label="Switch Project"
-        keyHint={projectSwitcherShortcut}
-        className="pb-2"
-      >
-        <AppPaletteDialog.Input
-          inputRef={inputRef}
-          value={query}
-          onChange={(e) => onQueryChange(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Search projects..."
-          role="combobox"
-          aria-expanded={isOpen}
-          aria-haspopup="listbox"
-          aria-label="Search projects"
-          aria-controls="project-list"
-          aria-activedescendant={
-            results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length
-              ? `project-option-${results[selectedIndex].id}`
-              : undefined
-          }
-        />
-      </AppPaletteDialog.Header>
-
-      <AppPaletteDialog.Body className="p-0">
+    <SearchablePalette<SearchableProject>
+      isOpen={isOpen}
+      query={query}
+      results={results}
+      selectedIndex={selectedIndex}
+      onQueryChange={onQueryChange}
+      onSelectPrevious={onSelectPrevious}
+      onSelectNext={onSelectNext}
+      onConfirm={() => {
+        if (results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
+          onSelect(results[selectedIndex]);
+        }
+      }}
+      onClose={onClose}
+      getItemId={(project) => project.id}
+      renderItem={() => null}
+      label="Switch Project"
+      keyHint={projectSwitcherShortcut}
+      ariaLabel="Project switcher"
+      searchPlaceholder="Search projects..."
+      searchAriaLabel="Search projects"
+      listId="project-list"
+      itemIdPrefix="project-option"
+      headerClassName="pb-2"
+      bodyClassName="p-0"
+      onKeyDown={handleBackspaceKeyDown}
+      footer={PROJECT_FOOTER}
+      renderBody={() => (
         <ProjectListContent
           results={results}
           selectedIndex={selectedIndex}
@@ -449,38 +440,8 @@ function ModalContent({
           onCloseProject={onCloseProject}
           showAddProject={true}
         />
-      </AppPaletteDialog.Body>
-
-      <AppPaletteDialog.Footer>
-        <span>
-          <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
-            ↑
-          </kbd>
-          <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60 ml-1">
-            ↓
-          </kbd>
-          <span className="ml-1.5">to navigate</span>
-        </span>
-        <span>
-          <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
-            Enter
-          </kbd>
-          <span className="ml-1.5">to switch</span>
-        </span>
-        <span>
-          <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
-            ⌘⌫
-          </kbd>
-          <span className="ml-1.5">to remove</span>
-        </span>
-        <span>
-          <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
-            Esc
-          </kbd>
-          <span className="ml-1.5">to close</span>
-        </span>
-      </AppPaletteDialog.Footer>
-    </AppPaletteDialog>
+      )}
+    />
   );
 }
 
@@ -629,35 +590,7 @@ function DropdownContent({
           />
         </AppPaletteDialog.Body>
 
-        <AppPaletteDialog.Footer>
-          <span>
-            <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
-              ↑
-            </kbd>
-            <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60 ml-1">
-              ↓
-            </kbd>
-            <span className="ml-1.5">to navigate</span>
-          </span>
-          <span>
-            <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
-              Enter
-            </kbd>
-            <span className="ml-1.5">to switch</span>
-          </span>
-          <span>
-            <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
-              ⌘⌫
-            </kbd>
-            <span className="ml-1.5">to remove</span>
-          </span>
-          <span>
-            <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
-              Esc
-            </kbd>
-            <span className="ml-1.5">to close</span>
-          </span>
-        </AppPaletteDialog.Footer>
+        <AppPaletteDialog.Footer>{PROJECT_FOOTER}</AppPaletteDialog.Footer>
       </PopoverContent>
     </Popover>
   );
