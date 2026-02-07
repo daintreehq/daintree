@@ -124,6 +124,9 @@ export type KeyAction =
   // Notes actions
   | "notes.openPalette"
 
+  // Action palette
+  | "action.palette"
+
   // Project actions
   | "project.switcherPalette"
 

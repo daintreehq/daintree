@@ -144,6 +144,7 @@ export type ActionId =
   | "worktree.openEditor"
   | "worktree.overview.open"
   | "worktree.overview.close"
+  | "action.palette.open"
   | "actions.list"
   | "actions.getContext"
   | "terminal.moveToDock"

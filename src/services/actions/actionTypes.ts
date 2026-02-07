@@ -18,6 +18,7 @@ export interface ActionCallbacks {
   onOpenNewTerminalPalette: () => void;
   onOpenPanelPalette: () => void;
   onOpenProjectSwitcherPalette: () => void;
+  onOpenActionPalette: () => void;
   onOpenShortcuts: () => void;
   onLaunchAgent: (
     agentId: string,

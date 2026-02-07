@@ -17,6 +17,19 @@ export function registerNavigationActions(
     },
   }));
 
+  actions.set("action.palette.open", () => ({
+    id: "action.palette.open",
+    title: "Open Action Palette",
+    description: "Search and execute any action",
+    category: "navigation",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      callbacks.onOpenActionPalette();
+    },
+  }));
+
   actions.set("nav.toggleFocusMode", () => ({
     id: "nav.toggleFocusMode",
     title: "Toggle Focus Mode",
