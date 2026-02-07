@@ -460,7 +460,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
           createdNewGroup = true;
         }
 
-        const options = await buildPanelDuplicateOptions(panel, panel.location ?? "grid");
+        const options = await buildPanelDuplicateOptions(panel, "grid");
         const newPanelId = await addTerminal(options);
 
         addPanelToGroup(groupId, newPanelId);

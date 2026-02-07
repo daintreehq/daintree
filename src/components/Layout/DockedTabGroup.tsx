@@ -322,7 +322,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     if (!activePanel) return;
 
     try {
-      const options = await buildPanelDuplicateOptions(activePanel, activePanel.location ?? "dock");
+      const options = await buildPanelDuplicateOptions(activePanel, "dock");
       const newPanelId = await addTerminal(options);
 
       addPanelToGroup(group.id, newPanelId);

@@ -40,7 +40,7 @@ function makePanel(overrides: Partial<TerminalInstance> = {}): TerminalInstance 
 describe("panelDuplicationService", () => {
   let buildPanelDuplicateOptions: (
     panel: TerminalInstance,
-    location: "grid" | "dock" | "trash"
+    location: "grid" | "dock"
   ) => Promise<AddTerminalOptions>;
 
   beforeEach(async () => {

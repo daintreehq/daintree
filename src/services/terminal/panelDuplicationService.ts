@@ -1,6 +1,6 @@
 import type { TerminalInstance } from "@/store";
 import type { AddTerminalOptions } from "@/store/slices/terminalRegistry/types";
-import type { TerminalLocation } from "@/types";
+import type { TabGroupLocation } from "@/types";
 import { generateAgentCommand } from "@shared/types";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { agentSettingsClient } from "@/clients";
@@ -20,8 +20,12 @@ async function resolveCommandForPanel(panel: TerminalInstance): Promise<string |
         return generateAgentCommand(agentConfig.command, entry, panel.agentId, {
           interactive: true,
         });
-      } catch {
-        return panel.command;
+      } catch (error) {
+        console.warn(
+          `Failed to get agent settings for ${panel.agentId}, using existing command:`,
+          error
+        );
+        return panel.command ?? agentConfig.command;
       }
     }
   }
@@ -57,10 +61,11 @@ function buildKindSpecificOptions(panel: TerminalInstance): Partial<AddTerminalO
 /**
  * Build the full AddTerminalOptions needed to duplicate a panel.
  * Callers pass the target location since it may differ from the source.
+ * Target location must be "grid" or "dock" (not "trash").
  */
 export async function buildPanelDuplicateOptions(
   sourcePanel: TerminalInstance,
-  targetLocation: TerminalLocation
+  targetLocation: TabGroupLocation
 ): Promise<AddTerminalOptions> {
   const kind = sourcePanel.kind ?? "terminal";
   const command = await resolveCommandForPanel(sourcePanel);
