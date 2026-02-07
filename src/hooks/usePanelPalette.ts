@@ -1,6 +1,8 @@
 import { useState, useCallback, useMemo } from "react";
 import { getPanelKindIds, getPanelKindConfig } from "@shared/config/panelKindRegistry";
 import { hasPanelComponent } from "@/registry/panelComponentRegistry";
+import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 
 export interface PanelKindOption {
   id: string;
@@ -26,12 +28,14 @@ export interface UsePanelPaletteReturn {
 export function usePanelPalette(): UsePanelPaletteReturn {
   const [isOpen, setIsOpen] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const userRegistry = useUserAgentRegistryStore((state) => state.registry);
 
   const availableKinds = useMemo<PanelKindOption[]>(() => {
     const allKindIds = getPanelKindIds();
 
-    return allKindIds
+    const panelKinds = allKindIds
       .filter((kindId) => {
+        if (kindId === "agent") return false;
         const config = getPanelKindConfig(kindId);
         if (!config) return false;
         if (config.showInPalette === false) return false;
@@ -45,10 +49,26 @@ export function usePanelPalette(): UsePanelPaletteReturn {
           name: config.name,
           iconId: config.iconId,
           color: config.color,
-          description: undefined,
+          description: config.shortcut,
         };
       });
-  }, []);
+
+    const agentKinds = getEffectiveAgentIds()
+      .map((agentId): PanelKindOption | null => {
+        const agentConfig = getEffectiveAgentConfig(agentId);
+        if (!agentConfig) return null;
+        return {
+          id: `agent:${agentId}`,
+          name: agentConfig.name,
+          iconId: agentConfig.iconId,
+          color: agentConfig.color,
+          description: agentConfig.shortcut ?? agentConfig.tooltip,
+        };
+      })
+      .filter((agent): agent is PanelKindOption => agent !== null);
+
+    return [...panelKinds, ...agentKinds];
+  }, [userRegistry]);
 
   const open = useCallback(() => {
     setIsOpen(true);

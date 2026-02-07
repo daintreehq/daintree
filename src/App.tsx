@@ -883,12 +883,19 @@ function App() {
         onConfirm={() => {
           const selected = panelPalette.confirmSelection();
           if (selected) {
-            addTerminal({
-              kind: selected.id as PanelKind,
-              cwd: defaultTerminalCwd,
-              worktreeId: activeWorktreeId ?? undefined,
-              location: "grid",
-            });
+            if (selected.id.startsWith("agent:")) {
+              const agentId = selected.id.slice("agent:".length);
+              if (agentId) {
+                launchAgent(agentId);
+              }
+            } else {
+              addTerminal({
+                kind: selected.id as PanelKind,
+                cwd: defaultTerminalCwd,
+                worktreeId: activeWorktreeId ?? undefined,
+                location: "grid",
+              });
+            }
           }
         }}
         onClose={panelPalette.close}
