@@ -35,6 +35,7 @@ import {
   useTerminalStoreBootstrap,
   useSemanticWorkerLifecycle,
   useSystemWakeHandler,
+  useDevServerDiscovery,
   type HydrationCallbacks,
 } from "./hooks/app";
 import { AppLayout } from "./components/Layout";
@@ -721,6 +722,7 @@ function App() {
   useSemanticWorkerLifecycle();
   useSystemWakeHandler();
   useAssistantContextSync();
+  useDevServerDiscovery();
 
   if (!isElectronAvailable()) {
     return (

@@ -793,6 +793,10 @@ export interface ProjectSettings {
   defaultWorktreeRecipeId?: string;
   /** Dev server command (e.g., "npm run dev") for the toolbar button */
   devServerCommand?: string;
+  /** User dismissed dev server discovery for this project (not a web project) */
+  devServerDismissed?: boolean;
+  /** Dev server command was auto-detected (vs manually configured) */
+  devServerAutoDetected?: boolean;
   /** CopyTree context generation configuration */
   copyTreeSettings?: CopyTreeSettings;
   /** Command overrides for project-specific customization */

@@ -546,6 +546,12 @@ export class ProjectStore {
             : undefined,
         devServerCommand:
           typeof parsed.devServerCommand === "string" ? parsed.devServerCommand : undefined,
+        devServerDismissed:
+          typeof parsed.devServerDismissed === "boolean" ? parsed.devServerDismissed : undefined,
+        devServerAutoDetected:
+          typeof parsed.devServerAutoDetected === "boolean"
+            ? parsed.devServerAutoDetected
+            : undefined,
         copyTreeSettings:
           parsed.copyTreeSettings && typeof parsed.copyTreeSettings === "object"
             ? parsed.copyTreeSettings
@@ -635,6 +641,13 @@ export class ProjectStore {
       // Don't persist transient migration metadata
       insecureEnvironmentVariables: undefined,
       unresolvedSecureEnvironmentVariables: undefined,
+      // Validate boolean fields
+      devServerDismissed:
+        typeof settings.devServerDismissed === "boolean" ? settings.devServerDismissed : undefined,
+      devServerAutoDetected:
+        typeof settings.devServerAutoDetected === "boolean"
+          ? settings.devServerAutoDetected
+          : undefined,
     };
 
     // Sanitize SVG
