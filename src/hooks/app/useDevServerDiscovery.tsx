@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { useProjectStore } from "@/store";
+import { useProjectStore, useTerminalStore } from "@/store";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useProjectSettings } from "../useProjectSettings";
 import { useNotificationStore } from "@/store/notificationStore";
@@ -8,14 +8,29 @@ const DEV_SCRIPT_PRIORITY = ["dev", "start", "serve"];
 
 export function useDevServerDiscovery() {
   const currentProject = useProjectStore((state) => state.currentProject);
-  const { settings, allDetectedRunners } = useProjectSettingsStore();
+  const { settings, allDetectedRunners, projectId: settingsProjectId } = useProjectSettingsStore();
   const { saveSettings } = useProjectSettings();
   const { addNotification, removeNotification } = useNotificationStore();
   const lastNotifiedProjectRef = useRef<string | null>(null);
   const notificationIdRef = useRef<string | null>(null);
 
+  const hasDevPreviewPanel = useTerminalStore((state) =>
+    state.terminals.some(
+      (t) =>
+        t.kind === "dev-preview" &&
+        t.location !== "trash" &&
+        t.runtimeStatus !== "exited" &&
+        t.runtimeStatus !== "error"
+    )
+  );
+
   useEffect(() => {
-    if (!currentProject?.id || !settings || !allDetectedRunners) {
+    if (
+      !currentProject?.id ||
+      settingsProjectId !== currentProject.id ||
+      !settings ||
+      !allDetectedRunners
+    ) {
       return;
     }
 
@@ -24,6 +39,10 @@ export function useDevServerDiscovery() {
     }
 
     if (settings.devServerDismissed) {
+      return;
+    }
+
+    if (hasDevPreviewPanel) {
       return;
     }
 
@@ -121,8 +140,10 @@ export function useDevServerDiscovery() {
     };
   }, [
     currentProject?.id,
+    settingsProjectId,
     settings,
     allDetectedRunners,
+    hasDevPreviewPanel,
     saveSettings,
     addNotification,
     removeNotification,
