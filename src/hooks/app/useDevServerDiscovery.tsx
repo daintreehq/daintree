@@ -140,5 +140,12 @@ export function useDevServerDiscovery() {
         removeNotification(notificationIdRef.current);
       }
     };
-  }, [currentProject?.id, settings, allDetectedRunners, saveSettings, addNotification, removeNotification]);
+  }, [
+    currentProject?.id,
+    settings,
+    allDetectedRunners,
+    saveSettings,
+    addNotification,
+    removeNotification,
+  ]);
 }
