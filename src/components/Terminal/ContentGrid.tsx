@@ -16,6 +16,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { GridPanel } from "./GridPanel";
 import { GridTabGroup } from "./GridTabGroup";
+import { GridNotificationBar } from "./GridNotificationBar";
 import { TerminalCountWarning } from "./TerminalCountWarning";
 import { GridFullOverlay } from "./GridFullOverlay";
 import { TwoPaneSplitLayout } from "./TwoPaneSplitLayout";
@@ -738,15 +739,18 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
           }
 
           return (
-            <div className={cn("h-full relative bg-canopy-bg", className)}>
-              <GridTabGroup
-                group={group}
-                panels={groupPanels}
-                focusedId={focusedId}
-                gridPanelCount={1}
-                gridCols={1}
-                isMaximized={true}
-              />
+            <div className={cn("h-full flex flex-col bg-canopy-bg", className)}>
+              <GridNotificationBar className="mx-1 mt-1 shrink-0" />
+              <div className="relative min-h-0 flex-1">
+                <GridTabGroup
+                  group={group}
+                  panels={groupPanels}
+                  focusedId={focusedId}
+                  gridPanelCount={1}
+                  gridCols={1}
+                  isMaximized={true}
+                />
+              </div>
             </div>
           );
         }
@@ -757,13 +761,16 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
       const terminal = gridTerminals.find((t: TerminalInstance) => t.id === maximizedId);
       if (terminal) {
         return (
-          <div className={cn("h-full relative bg-canopy-bg", className)}>
-            <GridPanel
-              terminal={terminal}
-              isFocused={true}
-              isMaximized={true}
-              gridPanelCount={gridItemCount}
-            />
+          <div className={cn("h-full flex flex-col bg-canopy-bg", className)}>
+            <GridNotificationBar className="mx-1 mt-1 shrink-0" />
+            <div className="relative min-h-0 flex-1">
+              <GridPanel
+                terminal={terminal}
+                isFocused={true}
+                isMaximized={true}
+                gridPanelCount={gridItemCount}
+              />
+            </div>
           </div>
         );
       }
@@ -791,6 +798,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
     if (twoPaneTerminals.length === 2) {
       return (
         <div className={cn("h-full flex flex-col", className)}>
+          <GridNotificationBar className="mx-1 mt-1 shrink-0" />
           <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
           <div
             ref={(node) => {
@@ -818,6 +826,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
 
   return (
     <div className={cn("h-full flex flex-col", className)}>
+      <GridNotificationBar className="mx-1 mt-1 shrink-0" />
       <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
       <div className="relative flex-1 min-h-0">
         <SortableContext id="grid-container" items={terminalIds} strategy={rectSortingStrategy}>

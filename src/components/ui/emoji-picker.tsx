@@ -42,6 +42,7 @@ export function EmojiPicker({ className, onEmojiSelect }: EmojiPickerProps) {
             ),
             Emoji: ({ emoji, ...props }) => (
               <button
+                type="button"
                 className="flex size-8 items-center justify-center rounded-[var(--radius-md)] text-lg transition-colors hover:bg-canopy-border data-[active]:bg-canopy-border"
                 {...props}
               >

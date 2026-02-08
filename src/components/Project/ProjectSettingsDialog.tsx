@@ -253,6 +253,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       const initialCommandOverrides = settings.commandOverrides || [];
       const initialCopyTreeSettings = settings.copyTreeSettings || {};
 
+      setName(currentProject.name);
+      setEmoji(currentProject.emoji || "🌲");
       setRunCommands(initialRunCommands);
       setEnvironmentVariables(initialEnvVars);
       setExcludedPaths(initialExcludedPaths);
@@ -304,13 +306,6 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       hasLoadedRecipes.current = false;
     }
   }, [projectId, isOpen]);
-
-  useEffect(() => {
-    if (!isOpen || !currentProject) return;
-    if (isInitialized && isDirty) return;
-    setName(currentProject.name);
-    setEmoji(currentProject.emoji || "🌲");
-  }, [isOpen, currentProject, isInitialized, isDirty]);
 
   useEffect(() => {
     if (!isOpen) {

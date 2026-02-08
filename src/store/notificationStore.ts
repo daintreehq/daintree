@@ -4,19 +4,24 @@ import type { ReactNode } from "react";
 const uuidv4 = () => crypto.randomUUID();
 
 export type NotificationType = "success" | "error" | "info" | "warning";
+export type NotificationPlacement = "toast" | "grid-bar";
+export type NotificationActionVariant = "primary" | "secondary";
 
 export interface NotificationAction {
   label: string;
-  onClick: () => void;
+  onClick: () => void | Promise<void>;
+  variant?: NotificationActionVariant;
 }
 
 export interface Notification {
   id: string;
   type: NotificationType;
+  placement?: NotificationPlacement;
   title?: string;
   message: string | ReactNode;
   duration?: number;
   action?: NotificationAction;
+  actions?: NotificationAction[];
 }
 
 interface NotificationStore {
