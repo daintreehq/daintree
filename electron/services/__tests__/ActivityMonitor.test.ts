@@ -1399,7 +1399,7 @@ describe("ActivityMonitor", () => {
 
     it("should NOT recover via pattern when user is actively typing (echo window)", () => {
       const onStateChange = vi.fn();
-      let visibleLines = ["✽ Deliberating (esc to interrupt)", "> "];
+      const visibleLines = ["✽ Deliberating (esc to interrupt)", "> "];
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
         getVisibleLines: () => visibleLines,
         getCursorLine: () => visibleLines[visibleLines.length - 1],
