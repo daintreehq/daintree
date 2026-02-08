@@ -43,6 +43,7 @@ import type {
   ApplyPatchOptions,
   DevPreviewStatusPayload,
   DevPreviewUrlPayload,
+  DevPreviewAttachSnapshot,
 } from "../shared/types/ipc.js";
 import type { TerminalActivityPayload } from "../shared/types/terminal.js";
 import type { TerminalStatusPayload, SpawnResult } from "../shared/types/pty-host.js";
@@ -1024,8 +1025,17 @@ const api: ElectronAPI = {
 
   // Dev Preview API
   devPreview: {
-    attach: (terminalId: string, cwd: string, devCommand?: string) =>
-      _typedInvoke(CHANNELS.DEV_PREVIEW_ATTACH, terminalId, cwd, devCommand),
+    attach: (
+      terminalId: string,
+      cwd: string,
+      devCommand?: string
+    ): Promise<DevPreviewAttachSnapshot> =>
+      _typedInvoke(
+        CHANNELS.DEV_PREVIEW_ATTACH,
+        terminalId,
+        cwd,
+        devCommand
+      ) as Promise<DevPreviewAttachSnapshot>,
 
     detach: (panelId: string) => _typedInvoke(CHANNELS.DEV_PREVIEW_DETACH, panelId),
 

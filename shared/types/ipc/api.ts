@@ -75,7 +75,11 @@ import type { TerminalStatusPayload, PtyHostActivityTier, SpawnResult } from "..
 import type { ShowContextMenuPayload } from "../menu.js";
 import type { FileSearchPayload, FileSearchResult } from "./files.js";
 import type { SlashCommand, SlashCommandListRequest } from "../slashCommands.js";
-import type { DevPreviewStatusPayload, DevPreviewUrlPayload } from "./devPreview.js";
+import type {
+  DevPreviewStatusPayload,
+  DevPreviewUrlPayload,
+  DevPreviewAttachSnapshot,
+} from "./devPreview.js";
 import type {
   CommandContext,
   CommandManifestEntry,
@@ -475,7 +479,7 @@ export interface ElectronAPI {
     ): () => void;
   };
   devPreview: {
-    attach(terminalId: string, cwd: string, devCommand?: string): Promise<void>;
+    attach(terminalId: string, cwd: string, devCommand?: string): Promise<DevPreviewAttachSnapshot>;
     detach(panelId: string): Promise<void>;
     setUrl(panelId: string, url: string): Promise<void>;
     onStatus(callback: (data: DevPreviewStatusPayload) => void): () => void;

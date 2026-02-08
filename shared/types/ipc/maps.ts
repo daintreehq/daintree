@@ -85,7 +85,11 @@ import type { SystemSleepMetrics } from "./systemSleep.js";
 import type { ShowContextMenuPayload } from "../menu.js";
 import type { FileSearchPayload, FileSearchResult } from "./files.js";
 import type { SlashCommand, SlashCommandListRequest } from "../slashCommands.js";
-import type { DevPreviewStatusPayload, DevPreviewUrlPayload } from "./devPreview.js";
+import type {
+  DevPreviewStatusPayload,
+  DevPreviewUrlPayload,
+  DevPreviewAttachSnapshot,
+} from "./devPreview.js";
 import type { ProjectPulse, PulseRangeDays } from "../pulse.js";
 import type {
   GitCommitListOptions,
@@ -933,7 +937,7 @@ export interface IpcInvokeMap {
   // Dev Preview channels
   "dev-preview:attach": {
     args: [terminalId: string, cwd: string, devCommand?: string];
-    result: void;
+    result: DevPreviewAttachSnapshot;
   };
   "dev-preview:detach": {
     args: [panelId: string];

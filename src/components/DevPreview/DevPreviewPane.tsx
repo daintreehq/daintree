@@ -176,6 +176,7 @@ export function DevPreviewPane({
   const [isWebviewReady, setIsWebviewReady] = useState(false);
   const [isLoadingOverlayVisible, setIsLoadingOverlayVisible] = useState(false);
   const [isUrlStale, setIsUrlStale] = useState(false);
+  const currentSessionIdRef = useRef<string | null>(null);
   const restartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const restoredFromSwitchRef = useRef(false);
   const webviewStore = useMemo(() => getDevPreviewWebviewStore(id), [id]);
@@ -629,9 +630,8 @@ export function DevPreviewPane({
     void actionService.dispatch("browser.openExternal", { terminalId: id }, { source: "user" });
   }, [hasPreviewUrl, id]);
 
-  useEffect(() => {
-    const offStatus = window.electron.devPreview.onStatus((payload) => {
-      if (payload.panelId !== id) return;
+  const applyStatusPayload = useCallback(
+    (payload: { status: DevPreviewStatus; message: string; error?: string }) => {
       setStatus(payload.status);
       setMessage(payload.message);
       setError(
@@ -659,10 +659,49 @@ export function DevPreviewPane({
         clearAutoReload();
         clearLoadingTimeout();
       }
+    },
+    [clearAutoReload, clearLoadingTimeout]
+  );
+
+  const attachCounterRef = useRef(0);
+
+  const attachAndSync = useCallback(
+    async (devCommand?: string) => {
+      const thisAttach = ++attachCounterRef.current;
+      currentSessionIdRef.current = null;
+      try {
+        const snapshot = await window.electron.devPreview.attach(id, cwd, devCommand);
+        // Drop result if a newer attach was initiated while we were awaiting
+        if (attachCounterRef.current !== thisAttach) return;
+        currentSessionIdRef.current = snapshot.sessionId;
+        applyStatusPayload(snapshot);
+        if (snapshot.url) {
+          handleServerUrl(snapshot.url);
+        }
+      } catch {
+        // Attach failed — allow events through for any existing session
+        if (attachCounterRef.current !== thisAttach) return;
+        const existing = currentSessionIdRef.current;
+        if (!existing) {
+          setStatus("error");
+          setMessage("Failed to attach to dev server");
+          setError("Failed to attach to dev server");
+        }
+      }
+    },
+    [applyStatusPayload, cwd, handleServerUrl, id]
+  );
+
+  useEffect(() => {
+    const offStatus = window.electron.devPreview.onStatus((payload) => {
+      if (payload.panelId !== id) return;
+      if (payload.sessionId !== currentSessionIdRef.current) return;
+      applyStatusPayload(payload);
     });
 
     const offUrl = window.electron.devPreview.onUrl((payload) => {
       if (payload.panelId !== id) return;
+      if (payload.sessionId !== currentSessionIdRef.current) return;
       handleServerUrl(payload.url);
     });
 
@@ -672,7 +711,7 @@ export function DevPreviewPane({
       // and re-attach so the overlay can monitor the new process.
       // Use the recovery command (includes install) instead of terminal's devCommand.
       await restartTerminal(id);
-      void window.electron.devPreview.attach(id, cwd, payload.command);
+      await attachAndSync(payload.command);
     });
 
     return () => {
@@ -685,7 +724,15 @@ export function DevPreviewPane({
       clearAutoReload();
       clearLoadingTimeout();
     };
-  }, [clearAutoReload, clearLoadingTimeout, cwd, handleServerUrl, id, restartTerminal]);
+  }, [
+    applyStatusPayload,
+    attachAndSync,
+    clearAutoReload,
+    clearLoadingTimeout,
+    handleServerUrl,
+    id,
+    restartTerminal,
+  ]);
 
   const setupWebviewListeners = useCallback(
     (webview: Electron.WebviewTag, webviewKey: string) => {
@@ -1074,7 +1121,7 @@ export function DevPreviewPane({
 
     // Attach DevPreviewService overlay to the PTY spawned by the standard terminal pipeline.
     // Panel ID = PTY ID in the terminal-first architecture.
-    void window.electron.devPreview.attach(id, cwd, devCommand);
+    void attachAndSync(devCommand);
 
     return () => {
       // Detach overlay only when the panel is actually removed.
@@ -1086,7 +1133,15 @@ export function DevPreviewPane({
         void window.electron.devPreview.detach(id);
       }
     };
-  }, [clearAutoReload, clearLoadingTimeout, cwd, id, isProjectSwitching, worktreeId, webviewStore]);
+  }, [
+    attachAndSync,
+    clearAutoReload,
+    clearLoadingTimeout,
+    id,
+    isProjectSwitching,
+    worktreeId,
+    webviewStore,
+  ]);
 
   // (Webview cleanup handled in layout effect.)
 
@@ -1197,8 +1252,8 @@ export function DevPreviewPane({
     await window.electron.devPreview.detach(id);
     await restartTerminal(id);
     const terminal = useTerminalStore.getState().getTerminal(id);
-    void window.electron.devPreview.attach(id, cwd, terminal?.devCommand);
-  }, [clearAutoReload, clearLoadingTimeout, cwd, id, restartTerminal]);
+    await attachAndSync(terminal?.devCommand);
+  }, [attachAndSync, clearAutoReload, clearLoadingTimeout, id, restartTerminal]);
 
   const handleForceReload = useCallback(() => {
     if (!hasPreviewUrl) return;
