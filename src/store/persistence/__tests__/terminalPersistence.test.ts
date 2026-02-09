@@ -343,7 +343,7 @@ describe("TerminalPersistence", () => {
   });
 
   describe("dev-preview panels", () => {
-    it("preserves browserUrl for dev-preview panels", async () => {
+    it("preserves browser and dev server state for dev-preview panels", async () => {
       const client = createMockProjectClient();
       const persistence = new TerminalPersistence(client, { debounceMs: 100 });
 
@@ -353,6 +353,10 @@ describe("TerminalPersistence", () => {
         title: "Dev Preview",
         browserUrl: "http://localhost:5173",
         devCommand: "npm run dev",
+        devServerStatus: "running",
+        devServerUrl: "http://localhost:5173",
+        devServerError: { type: "unknown", message: "Previous warning" },
+        devServerTerminalId: "dev-preview-pty-1",
         location: "grid",
       });
 
@@ -364,6 +368,10 @@ describe("TerminalPersistence", () => {
           id: "dev-preview-1",
           kind: "dev-preview",
           browserUrl: "http://localhost:5173",
+          devServerStatus: "running",
+          devServerUrl: "http://localhost:5173",
+          devServerError: { type: "unknown", message: "Previous warning" },
+          devServerTerminalId: "dev-preview-pty-1",
         }),
       ]);
     });

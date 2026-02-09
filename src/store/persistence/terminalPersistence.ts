@@ -12,63 +12,65 @@ export interface TerminalPersistenceOptions {
   getProjectId?: () => string | null;
 }
 
+export function terminalToSnapshot(t: TerminalInstance): TerminalSnapshot {
+  // Note: tabGroupId and orderInGroup are NOT saved on terminals anymore
+  // Tab groups are stored separately in ProjectState.tabGroups
+  const base: TerminalSnapshot = {
+    id: t.id,
+    kind: t.kind,
+    title: t.title,
+    worktreeId: t.worktreeId,
+    location: t.location === "trash" ? "grid" : t.location,
+  };
+
+  if (t.kind === "dev-preview") {
+    return {
+      ...base,
+      type: t.type,
+      cwd: t.cwd,
+      command: t.devCommand?.trim() || undefined,
+      ...(t.browserUrl && { browserUrl: t.browserUrl }),
+      ...(t.browserHistory && { browserHistory: t.browserHistory }),
+      ...(t.browserZoom != null && { browserZoom: t.browserZoom }),
+      ...(t.devServerStatus && { devServerStatus: t.devServerStatus }),
+      ...(t.devServerUrl && { devServerUrl: t.devServerUrl }),
+      ...(t.devServerError && { devServerError: t.devServerError }),
+      ...(t.devServerTerminalId && { devServerTerminalId: t.devServerTerminalId }),
+    };
+  }
+
+  if (panelKindHasPty(t.kind ?? "terminal")) {
+    return {
+      ...base,
+      type: t.type,
+      agentId: t.agentId,
+      cwd: t.cwd,
+      command: t.command?.trim() || undefined,
+    };
+  } else if (t.kind === "notes") {
+    return {
+      ...base,
+      notePath: t.notePath,
+      noteId: t.noteId,
+      scope: t.scope,
+      createdAt: t.createdAt,
+    };
+  } else {
+    // Non-PTY panels: browser, assistant, etc.
+    return {
+      ...base,
+      ...(t.browserUrl && { browserUrl: t.browserUrl }),
+      ...(t.browserHistory && { browserHistory: t.browserHistory }),
+      ...(t.browserZoom != null && { browserZoom: t.browserZoom }),
+    };
+  }
+}
+
 const DEFAULT_OPTIONS: Required<Omit<TerminalPersistenceOptions, "getProjectId">> &
   Pick<TerminalPersistenceOptions, "getProjectId"> = {
   debounceMs: 500,
   filter: (t) => t.location !== "trash" && t.kind !== "assistant",
-  transform: (t) => {
-    // Note: tabGroupId and orderInGroup are NOT saved on terminals anymore
-    // Tab groups are stored separately in ProjectState.tabGroups
-    const base: TerminalSnapshot = {
-      id: t.id,
-      kind: t.kind,
-      title: t.title,
-      worktreeId: t.worktreeId,
-      location: t.location === "trash" ? "grid" : t.location,
-    };
-
-    if (t.kind === "dev-preview") {
-      return {
-        ...base,
-        type: t.type,
-        cwd: t.cwd,
-        command: t.devCommand?.trim() || undefined,
-        ...(t.browserUrl && { browserUrl: t.browserUrl }),
-        ...(t.browserHistory && { browserHistory: t.browserHistory }),
-        ...(t.browserZoom != null && { browserZoom: t.browserZoom }),
-        ...(t.devServerStatus && { devServerStatus: t.devServerStatus }),
-        ...(t.devServerUrl && { devServerUrl: t.devServerUrl }),
-        ...(t.devServerError && { devServerError: t.devServerError }),
-        ...(t.devServerTerminalId && { devServerTerminalId: t.devServerTerminalId }),
-      };
-    }
-
-    if (panelKindHasPty(t.kind ?? "terminal")) {
-      return {
-        ...base,
-        type: t.type,
-        agentId: t.agentId,
-        cwd: t.cwd,
-        command: t.command?.trim() || undefined,
-      };
-    } else if (t.kind === "notes") {
-      return {
-        ...base,
-        notePath: t.notePath,
-        noteId: t.noteId,
-        scope: t.scope,
-        createdAt: t.createdAt,
-      };
-    } else {
-      // Non-PTY panels: browser, assistant, etc.
-      return {
-        ...base,
-        ...(t.browserUrl && { browserUrl: t.browserUrl }),
-        ...(t.browserHistory && { browserHistory: t.browserHistory }),
-        ...(t.browserZoom != null && { browserZoom: t.browserZoom }),
-      };
-    }
-  },
+  transform: terminalToSnapshot,
   getProjectId: undefined,
 };
 

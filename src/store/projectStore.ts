@@ -5,10 +5,9 @@ import { projectClient } from "@/clients";
 import { resetAllStoresForProjectSwitch } from "./resetStores";
 import { forceReinitializeWorktreeDataStore } from "./worktreeDataStore";
 import { flushTerminalPersistence } from "./slices";
-import { terminalPersistence } from "./persistence/terminalPersistence";
+import { terminalPersistence, terminalToSnapshot } from "./persistence/terminalPersistence";
 import { useNotificationStore } from "./notificationStore";
 import { useTerminalStore } from "./terminalStore";
-import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { useProjectSettingsStore } from "./projectSettingsStore";
 import { logErrorWithContext } from "@/utils/errorContext";
 
@@ -206,52 +205,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         const currentTerminals = useTerminalStore.getState().terminals;
         const terminalsToSave: TerminalSnapshot[] = currentTerminals
           .filter((t) => t.location !== "trash")
-          .map((t) => {
-            const base: TerminalSnapshot = {
-              id: t.id,
-              kind: t.kind,
-              title: t.title,
-              worktreeId: t.worktreeId,
-              location: t.location === "trash" ? "grid" : t.location,
-            };
-
-            if (t.kind === "dev-preview") {
-              // Special case for dev-preview: use devCommand, not command
-              return {
-                ...base,
-                type: t.type,
-                cwd: t.cwd,
-                command: t.devCommand?.trim() || undefined,
-                ...(t.browserUrl && { browserUrl: t.browserUrl }),
-                ...(t.browserHistory && { browserHistory: t.browserHistory }),
-                ...(t.browserZoom != null && { browserZoom: t.browserZoom }),
-              };
-            } else if (panelKindHasPty(t.kind ?? "terminal")) {
-              return {
-                ...base,
-                type: t.type,
-                agentId: t.agentId,
-                cwd: t.cwd,
-                command: t.command?.trim() || undefined,
-              };
-            } else if (t.kind === "notes") {
-              return {
-                ...base,
-                notePath: t.notePath,
-                noteId: t.noteId,
-                scope: t.scope,
-                createdAt: t.createdAt,
-              };
-            } else {
-              // Non-PTY panels: browser, assistant, etc.
-              return {
-                ...base,
-                ...(t.browserUrl && { browserUrl: t.browserUrl }),
-                ...(t.browserHistory && { browserHistory: t.browserHistory }),
-                ...(t.browserZoom != null && { browserZoom: t.browserZoom }),
-              };
-            }
-          });
+          .map(terminalToSnapshot);
 
         console.log(
           `[ProjectSwitch] Saving ${terminalsToSave.length} panel(s) to per-project state`
@@ -399,52 +353,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         const currentTerminals = useTerminalStore.getState().terminals;
         const terminalsToSave: TerminalSnapshot[] = currentTerminals
           .filter((t) => t.location !== "trash")
-          .map((t) => {
-            const base: TerminalSnapshot = {
-              id: t.id,
-              kind: t.kind,
-              title: t.title,
-              worktreeId: t.worktreeId,
-              location: t.location === "trash" ? "grid" : t.location,
-            };
-
-            if (t.kind === "dev-preview") {
-              // Special case for dev-preview: use devCommand, not command
-              return {
-                ...base,
-                type: t.type,
-                cwd: t.cwd,
-                command: t.devCommand?.trim() || undefined,
-                ...(t.browserUrl && { browserUrl: t.browserUrl }),
-                ...(t.browserHistory && { browserHistory: t.browserHistory }),
-                ...(t.browserZoom != null && { browserZoom: t.browserZoom }),
-              };
-            } else if (panelKindHasPty(t.kind ?? "terminal")) {
-              return {
-                ...base,
-                type: t.type,
-                agentId: t.agentId,
-                cwd: t.cwd,
-                command: t.command?.trim() || undefined,
-              };
-            } else if (t.kind === "notes") {
-              return {
-                ...base,
-                notePath: t.notePath,
-                noteId: t.noteId,
-                scope: t.scope,
-                createdAt: t.createdAt,
-              };
-            } else {
-              // Non-PTY panels: browser, assistant, etc.
-              return {
-                ...base,
-                ...(t.browserUrl && { browserUrl: t.browserUrl }),
-                ...(t.browserHistory && { browserHistory: t.browserHistory }),
-                ...(t.browserZoom != null && { browserZoom: t.browserZoom }),
-              };
-            }
-          });
+          .map(terminalToSnapshot);
 
         console.log(`[ProjectStore] Saving ${terminalsToSave.length} panel(s) before reopen`);
         try {

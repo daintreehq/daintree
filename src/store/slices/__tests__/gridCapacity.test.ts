@@ -76,6 +76,30 @@ describe("Grid Capacity Enforcement", () => {
     });
   });
 
+  describe("dev-preview state", () => {
+    it("preserves dev server fields when adding a dev-preview panel", async () => {
+      await useTerminalStore.getState().addTerminal({
+        kind: "dev-preview",
+        requestedId: "dev-preview-1",
+        title: "Dev Preview",
+        cwd: "/test",
+        devCommand: "npm run dev",
+        devServerStatus: "running",
+        devServerUrl: "http://localhost:5173",
+        devServerError: { type: "unknown", message: "Detected warning" },
+        devServerTerminalId: "dev-preview-pty-1",
+      });
+
+      const panel = useTerminalStore.getState().getTerminal("dev-preview-1");
+
+      expect(panel?.kind).toBe("dev-preview");
+      expect(panel?.devServerStatus).toBe("running");
+      expect(panel?.devServerUrl).toBe("http://localhost:5173");
+      expect(panel?.devServerError).toEqual({ type: "unknown", message: "Detected warning" });
+      expect(panel?.devServerTerminalId).toBe("dev-preview-pty-1");
+    });
+  });
+
   describe("moveTerminalToGrid", () => {
     it("should move terminal to grid when under capacity", () => {
       const gridTerminals = createGridTerminals(14);
