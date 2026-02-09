@@ -40,7 +40,7 @@ export function useDevServer({
   const [url, setUrl] = useState<string | null>(panel?.devServerUrl ?? null);
   const [terminalId, setTerminalId] = useState<string | null>(panel?.devServerTerminalId ?? null);
   const [error, setError] = useState<{ type: DevServerErrorType; message: string } | null>(
-    panel?.devServerError ?? null
+    (panel?.devServerError as { type: DevServerErrorType; message: string }) ?? null
   );
 
   const cleanupRef = useRef<(() => void) | null>(null);
@@ -170,14 +170,20 @@ export function useDevServer({
 
       // Assign cleanup early to prevent leak if unmount happens during listener setup
       cleanupRef.current = () => {
-        window.electron.devPreview.unsubscribe(id!).catch((err) => {
-          console.error("[useDevServer] Failed to unsubscribe:", err);
-        });
+        if (id) {
+          window.electron.devPreview.unsubscribe(id).catch((err) => {
+            console.error("[useDevServer] Failed to unsubscribe:", err);
+          });
+        }
         listeners.forEach((unsub) => unsub());
       };
 
       const unsubscribeUrl = window.electron.devPreview.onUrlDetected((payload) => {
-        if (payload.terminalId === id && isMountedRef.current && sessionIdRef.current === sessionId) {
+        if (
+          payload.terminalId === id &&
+          isMountedRef.current &&
+          sessionIdRef.current === sessionId
+        ) {
           setUrl(payload.url);
           setStatus("running");
           statusRef.current = "running";
@@ -188,7 +194,11 @@ export function useDevServer({
       listeners.push(unsubscribeUrl);
 
       const unsubscribeError = window.electron.devPreview.onErrorDetected((payload) => {
-        if (payload.terminalId === id && isMountedRef.current && sessionIdRef.current === sessionId) {
+        if (
+          payload.terminalId === id &&
+          isMountedRef.current &&
+          sessionIdRef.current === sessionId
+        ) {
           const newStatus = payload.error.type === "missing-dependencies" ? "installing" : "error";
           const errorObj = { type: payload.error.type, message: payload.error.message };
           setError(errorObj);
@@ -227,13 +237,13 @@ export function useDevServer({
 
       // Check if still mounted before subscribe
       if (!isMountedRef.current || sessionIdRef.current !== sessionId) {
-        cleanupRef.current();
+        if (cleanupRef.current) cleanupRef.current();
         cleanupRef.current = null;
         isStartingRef.current = false;
         return;
       }
 
-      await window.electron.devPreview.subscribe(id);
+      await window.electron.devPreview.subscribe(id!);
 
       // Persist initial state
       if (isMountedRef.current && sessionIdRef.current === sessionId) {

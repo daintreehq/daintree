@@ -74,6 +74,14 @@ export interface TerminalState {
   createdAt?: number;
   /** Dev command override for dev-preview panels */
   devCommand?: string;
+  /** Dev server status for dev-preview panels */
+  devServerStatus?: "stopped" | "starting" | "installing" | "running" | "error";
+  /** Dev server URL for dev-preview panels */
+  devServerUrl?: string;
+  /** Dev server error for dev-preview panels */
+  devServerError?: { type: string; message: string };
+  /** Terminal ID associated with dev server for dev-preview panels */
+  devServerTerminalId?: string;
 }
 
 /** Terminal data payload for IPC */

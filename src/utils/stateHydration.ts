@@ -48,6 +48,10 @@ export interface HydrationOptions {
     scope?: "worktree" | "project"; // Note scope (kind === 'notes')
     createdAt?: number; // Note creation timestamp (kind === 'notes')
     devCommand?: string; // Dev command override for dev-preview panels
+    devServerStatus?: "stopped" | "starting" | "installing" | "running" | "error";
+    devServerUrl?: string | null;
+    devServerError?: { type: string; message: string } | null;
+    devServerTerminalId?: string | null;
   }) => Promise<string>;
   setActiveWorktree: (id: string | null) => void;
   loadRecipes: (projectId: string) => Promise<void>;

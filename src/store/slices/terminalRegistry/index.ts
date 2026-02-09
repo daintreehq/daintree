@@ -1918,9 +1918,9 @@ export const createTerminalRegistrySlice =
               ? {
                   ...t,
                   devServerStatus: status,
-                  devServerUrl: url,
-                  devServerError: error,
-                  devServerTerminalId: terminalId,
+                  devServerUrl: url ?? undefined,
+                  devServerError: error ?? undefined,
+                  devServerTerminalId: terminalId ?? undefined,
                 }
               : t
           );
