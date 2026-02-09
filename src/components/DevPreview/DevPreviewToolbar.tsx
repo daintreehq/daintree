@@ -1,27 +1,35 @@
-import { RotateCw, ExternalLink, Server } from "lucide-react";
+import { RotateCw, ExternalLink, Loader2, CheckCircle2, XCircle, Circle, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { DevPreviewStatus } from "./devPreviewTypes";
 
-const STATUS_CONFIG: Record<DevPreviewStatus, { label: string; dotClass: string }> = {
+const STATUS_CONFIG: Record<
+  DevPreviewStatus,
+  { icon: LucideIcon; iconClass: string; ariaLabel: string }
+> = {
   installing: {
-    label: "Installing",
-    dotClass: "bg-[var(--color-status-warning)]",
+    icon: Loader2,
+    iconClass: "text-[var(--color-status-warning)] animate-spin",
+    ariaLabel: "Installing dependencies",
   },
   starting: {
-    label: "Starting",
-    dotClass: "bg-[var(--color-status-info)]",
+    icon: Loader2,
+    iconClass: "text-[var(--color-status-info)] animate-spin",
+    ariaLabel: "Starting dev server",
   },
   running: {
-    label: "Running",
-    dotClass: "bg-[var(--color-status-success)]",
+    icon: CheckCircle2,
+    iconClass: "text-[var(--color-status-success)]",
+    ariaLabel: "Dev server running",
   },
   error: {
-    label: "Error",
-    dotClass: "bg-[var(--color-status-error)]",
+    icon: XCircle,
+    iconClass: "text-[var(--color-status-error)]",
+    ariaLabel: "Dev server error",
   },
   stopped: {
-    label: "Stopped",
-    dotClass: "bg-canopy-text/40",
+    icon: Circle,
+    iconClass: "text-canopy-text/40",
+    ariaLabel: "Dev server stopped",
   },
 };
 
@@ -59,13 +67,11 @@ export function DevPreviewToolbar({
   return (
     <div className="flex items-center gap-1.5 px-2 py-1.5 bg-[var(--color-surface)] border-b border-overlay">
       {/* Status indicator */}
-      <div className="flex items-center gap-2 min-w-0" role="status" aria-live="polite">
-        <Server className="w-3.5 h-3.5 text-canopy-text/40 shrink-0" />
-        <span
-          className={cn("h-2 w-2 rounded-full shrink-0", statusConfig.dotClass)}
-          title={statusConfig.label}
+      <div className="flex items-center gap-1.5 min-w-0" role="status" aria-live="polite" aria-label={statusConfig.ariaLabel}>
+        <statusConfig.icon
+          className={cn("w-3.5 h-3.5 shrink-0", statusConfig.iconClass)}
+          aria-hidden="true"
         />
-        <span className="text-xs text-canopy-text/70 font-medium">{statusConfig.label}</span>
       </div>
 
       {/* URL display */}
