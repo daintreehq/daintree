@@ -23,6 +23,8 @@ export interface UseDevServerState {
 export interface UseDevServerReturn extends UseDevServerState {
   start: () => Promise<void>;
   stop: () => void;
+  restart: () => Promise<void>;
+  isRestarting: boolean;
 }
 
 export function useDevServer({
@@ -43,9 +45,12 @@ export function useDevServer({
     (panel?.devServerError as { type: DevServerErrorType; message: string }) ?? null
   );
 
+  const [isRestarting, setIsRestarting] = useState(false);
+
   const cleanupRef = useRef<(() => void) | null>(null);
   const terminalIdRef = useRef<string | null>(panel?.devServerTerminalId ?? null);
   const isStartingRef = useRef(false);
+  const isRestartingRef = useRef(false);
   const isMountedRef = useRef(true);
 
   const disconnect = useCallback(() => {
@@ -277,6 +282,61 @@ export function useDevServer({
     }
   }, [panelId, devCommand, cwd, worktreeId, env, panel, terminalStore]);
 
+  const restart = useCallback(async () => {
+    if (isRestartingRef.current || isStartingRef.current) {
+      return;
+    }
+
+    isRestartingRef.current = true;
+    setIsRestarting(true);
+
+    // Stop the current server
+    disconnect();
+    if (terminalIdRef.current) {
+      try {
+        await terminalClient.kill(terminalIdRef.current);
+      } catch (err) {
+        console.error("[useDevServer] Failed to kill terminal during restart:", err);
+
+        // Only proceed if error is benign (terminal not found)
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        if (!errorMessage.includes("not found") && !errorMessage.includes("does not exist")) {
+          const errorObj = {
+            type: "unknown" as const,
+            message: `Failed to stop previous dev server: ${errorMessage}`,
+          };
+          setError(errorObj);
+          setStatus("error");
+          terminalStore.setDevServerState(panelId, "error", null, errorObj, null);
+          isRestartingRef.current = false;
+          setIsRestarting(false);
+          return;
+        }
+      }
+    }
+
+    setStatus("stopped");
+    setUrl(null);
+    setTerminalId(null);
+    terminalIdRef.current = null;
+    setError(null);
+    terminalStore.setDevServerState(panelId, "stopped", null, null, null);
+
+    // Small delay to ensure terminal process is fully cleaned up
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    isRestartingRef.current = false;
+    isStartingRef.current = false;
+
+    try {
+      await start();
+    } finally {
+      if (isMountedRef.current) {
+        setIsRestarting(false);
+      }
+    }
+  }, [disconnect, panelId, terminalStore, start]);
+
   useEffect(() => {
     isMountedRef.current = true;
     return () => {
@@ -293,5 +353,7 @@ export function useDevServer({
     error,
     start,
     stop,
+    restart,
+    isRestarting,
   };
 }
