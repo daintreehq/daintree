@@ -197,7 +197,6 @@ export function DevPreviewPane({
   const setBrowserUrl = useTerminalStore((state) => state.setBrowserUrl);
   const setBrowserHistory = useTerminalStore((state) => state.setBrowserHistory);
   const setBrowserZoom = useTerminalStore((state) => state.setBrowserZoom);
-  const isProjectSwitching = useProjectStore((state) => state.isSwitching);
   const webviewCleanupRefs = useRef<Map<string, () => void>>(webviewStore.cleanups);
   const restartKey = useTerminalStore(
     (state) => state.terminals.find((t) => t.id === id)?.restartKey ?? 0
@@ -944,7 +943,8 @@ export function DevPreviewPane({
     return () => {
       if (webviewStore.instances.size === 0) return;
       const stillExists = Boolean(useTerminalStore.getState().getTerminal(id));
-      if (stillExists) {
+      const switching = useProjectStore.getState().isSwitching;
+      if (stillExists || switching) {
         webviewStore.cleanups.forEach((cleanup) => cleanup());
         webviewStore.cleanups.clear();
         stashDevPreviewWebviews(webviewStore);
@@ -1052,7 +1052,8 @@ export function DevPreviewPane({
     const savedUrlPresent = savedHistoryPresent || savedUrl;
     const hasSavedUrl = Boolean(savedUrlPresent);
 
-    restoredFromSwitchRef.current = isProjectSwitching && hasSavedUrl;
+    const isSwitching = useProjectStore.getState().isSwitching;
+    restoredFromSwitchRef.current = isSwitching && hasSavedUrl;
 
     const shouldTreatSavedUrlAsStale =
       !hasSavedUrl && webviewStore.instances.size === 0 && !restoredFromSwitchRef.current;
@@ -1073,8 +1074,11 @@ export function DevPreviewPane({
             };
     setHistory(nextHistory);
     setError(undefined);
-    setStatus("starting");
-    setMessage(hasSavedUrl ? "Restoring preview..." : "Starting dev server...");
+    // Only reset status to "starting" on true init, not on remount/project-switch restoration
+    if (!hasSavedUrl) {
+      setStatus("starting");
+      setMessage("Starting dev server...");
+    }
     setIsRestarting(false);
     setIsBrowserOnly(false);
     setShowTerminal(false);
@@ -1120,10 +1124,12 @@ export function DevPreviewPane({
     return () => {
       // Detach overlay only when the panel is actually removed.
       // Layout changes (split mode, drag reparenting, dock moves) can unmount/remount
-      // the panel without destroying the terminal. In those cases, keep the session
-      // alive so we don't lose the detected URL.
+      // the panel without destroying the terminal. During project switches the store is
+      // cleared before panels unmount — skip detach so the backend session (with its
+      // detected URL and status) survives for re-attach on switch-back.
       const stillExists = Boolean(useTerminalStore.getState().getTerminal(id));
-      if (!stillExists) {
+      const switching = useProjectStore.getState().isSwitching;
+      if (!stillExists && !switching) {
         void window.electron.devPreview.detach(id);
       }
     };
@@ -1132,7 +1138,6 @@ export function DevPreviewPane({
     clearAutoReload,
     clearLoadingTimeout,
     id,
-    isProjectSwitching,
     worktreeId,
     webviewStore,
   ]);
