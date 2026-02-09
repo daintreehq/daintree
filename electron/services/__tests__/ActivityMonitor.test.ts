@@ -1370,6 +1370,7 @@ describe("ActivityMonitor", () => {
         getVisibleLines: () => visibleLines,
         getCursorLine: () => visibleLines[visibleLines.length - 1],
         idleDebounceMs: 2000,
+        workingRecoveryDelayMs: 1500, // Default debounce delay
       });
 
       monitor.startPolling();
@@ -1385,13 +1386,32 @@ describe("ActivityMonitor", () => {
       vi.advanceTimersByTime(1100);
 
       // Agent resumes working - pattern appears and output activity begins
-      visibleLines = ["✽ Deliberating (esc to interrupt)"];
+      visibleLines = ["Working... (esc to interrupt)"];
       monitor.onData("agent output chunk 1");
       vi.advanceTimersByTime(50);
       monitor.onData("agent output chunk 2");
       vi.advanceTimersByTime(50);
 
-      // Polling cycle should detect the pattern and transition to busy
+      // Pattern detected but not sustained yet - should still be idle
+      expect(monitor.getState()).toBe("idle");
+
+      // Continue emitting output to sustain the working signal
+      monitor.onData("agent output chunk 3");
+      vi.advanceTimersByTime(50);
+      monitor.onData("agent output chunk 4");
+      vi.advanceTimersByTime(50);
+      monitor.onData("agent output chunk 5");
+      vi.advanceTimersByTime(50);
+
+      // Still not sustained long enough (250ms total)
+      expect(monitor.getState()).toBe("idle");
+
+      // Advance to exceed debounce delay and emit more output
+      vi.advanceTimersByTime(1300); // Total ~1550ms sustained (enough to cross 1500ms threshold)
+      monitor.onData("agent output chunk 6");
+      vi.advanceTimersByTime(50);
+
+      // Now sustained long enough - polling cycle should trigger recovery
       expect(monitor.getState()).toBe("busy");
 
       monitor.dispose();
@@ -1447,6 +1467,195 @@ describe("ActivityMonitor", () => {
 
       expect(monitor.getState()).toBe("busy");
       expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", { trigger: "output" });
+
+      monitor.dispose();
+    });
+  });
+
+  describe("Working signal recovery debouncing (Issue #2215)", () => {
+    it("should NOT recover from single output event (terminal reflow)", () => {
+      const onStateChange = vi.fn();
+      const visibleLines = ["> "];
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines: () => visibleLines,
+        getCursorLine: () => visibleLines[visibleLines.length - 1],
+        workingRecoveryDelayMs: 1500,
+      });
+
+      monitor.startPolling();
+      vi.advanceTimersByTime(100); // Boot completes
+      vi.advanceTimersByTime(2500); // Go idle
+      expect(monitor.getState()).toBe("idle");
+
+      // Single ANSI escape sequence (e.g., from terminal reflow)
+      monitor.onData("\x1b[0m");
+      vi.advanceTimersByTime(200);
+
+      // Should still be idle - single event doesn't trigger recovery
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+
+    it("should NOT recover from brief working pattern appearance", () => {
+      const onStateChange = vi.fn();
+      let visibleLines = ["> "];
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines: () => visibleLines,
+        getCursorLine: () => visibleLines[visibleLines.length - 1],
+        workingRecoveryDelayMs: 1500,
+      });
+
+      monitor.startPolling();
+      vi.advanceTimersByTime(100); // Boot completes
+      vi.advanceTimersByTime(2500); // Go idle
+      expect(monitor.getState()).toBe("idle");
+
+      // Pattern appears briefly
+      visibleLines = ["Working (esc to interrupt)"];
+      monitor.onData("brief output");
+      vi.advanceTimersByTime(500); // Only 500ms, less than 1500ms threshold
+
+      // Should still be idle
+      expect(monitor.getState()).toBe("idle");
+
+      // Pattern disappears
+      visibleLines = ["> "];
+      vi.advanceTimersByTime(100);
+
+      // Still idle - pattern wasn't sustained
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+
+    it("should recover from sustained working signal (1.5+ seconds)", () => {
+      const onStateChange = vi.fn();
+      let visibleLines = ["> "];
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines: () => visibleLines,
+        getCursorLine: () => visibleLines[visibleLines.length - 1],
+        workingRecoveryDelayMs: 1500,
+      });
+
+      monitor.startPolling();
+      vi.advanceTimersByTime(100); // Boot completes
+      vi.advanceTimersByTime(2500); // Go idle
+      expect(monitor.getState()).toBe("idle");
+      onStateChange.mockClear();
+
+      // Sustained working pattern
+      visibleLines = ["Processing (esc to interrupt)"];
+      for (let i = 0; i < 35; i++) {
+        monitor.onData(`output chunk ${i}`);
+        vi.advanceTimersByTime(50); // 35 * 50 = 1750ms total
+      }
+
+      // Should now be busy after sustained signal
+      expect(monitor.getState()).toBe("busy");
+      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", {
+        trigger: "pattern",
+        patternConfidence: 0.9,
+      });
+
+      monitor.dispose();
+    });
+
+    it("should NOT apply debouncing during initial boot phase", () => {
+      const onStateChange = vi.fn();
+      const visibleLines = ["Starting (esc to interrupt)"];
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines: () => visibleLines,
+        getCursorLine: () => visibleLines[visibleLines.length - 1],
+        workingRecoveryDelayMs: 1500,
+      });
+
+      monitor.startPolling();
+
+      // During boot, even a single poll cycle with working signal should trigger busy immediately
+      vi.advanceTimersByTime(50);
+
+      // Should be busy immediately (no debouncing during boot)
+      expect(monitor.getState()).toBe("busy");
+
+      monitor.dispose();
+    });
+
+    it("should reset debounce timer when working signal disappears", () => {
+      const onStateChange = vi.fn();
+      let visibleLines = ["> "];
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines: () => visibleLines,
+        getCursorLine: () => visibleLines[visibleLines.length - 1],
+        workingRecoveryDelayMs: 1500,
+      });
+
+      monitor.startPolling();
+      vi.advanceTimersByTime(100); // Boot completes
+      vi.advanceTimersByTime(2500); // Go idle
+      expect(monitor.getState()).toBe("idle");
+
+      // Working pattern appears
+      visibleLines = ["Working (esc to interrupt)"];
+      monitor.onData("output 1");
+      vi.advanceTimersByTime(800); // 800ms sustained
+
+      // Pattern disappears (e.g., prompt returns)
+      visibleLines = ["> "];
+      vi.advanceTimersByTime(200);
+
+      // Pattern reappears
+      visibleLines = ["Working again (esc to interrupt)"];
+      monitor.onData("output 2");
+      vi.advanceTimersByTime(800); // Another 800ms, but timer was reset
+
+      // Should still be idle because timer was reset when pattern disappeared
+      expect(monitor.getState()).toBe("idle");
+
+      // Now sustain for full 1500ms from the reset
+      for (let i = 0; i < 15; i++) {
+        monitor.onData(`output ${i + 3}`);
+        vi.advanceTimersByTime(50);
+      }
+
+      // Now should be busy
+      expect(monitor.getState()).toBe("busy");
+
+      monitor.dispose();
+    });
+
+    it("should use configurable workingRecoveryDelayMs", () => {
+      const onStateChange = vi.fn();
+      let visibleLines = ["> "];
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines: () => visibleLines,
+        getCursorLine: () => visibleLines[visibleLines.length - 1],
+        workingRecoveryDelayMs: 2000, // Custom 2 second delay
+      });
+
+      monitor.startPolling();
+      vi.advanceTimersByTime(100); // Boot completes
+      vi.advanceTimersByTime(2500); // Go idle
+      expect(monitor.getState()).toBe("idle");
+
+      // Sustained working pattern for 1.5 seconds (not enough with 2s threshold)
+      visibleLines = ["Working (esc to interrupt)"];
+      for (let i = 0; i < 30; i++) {
+        monitor.onData(`output ${i}`);
+        vi.advanceTimersByTime(50); // 1500ms total
+      }
+
+      // Should still be idle (1500ms < 2000ms threshold)
+      expect(monitor.getState()).toBe("idle");
+
+      // Continue for another 600ms (total 2100ms)
+      for (let i = 0; i < 12; i++) {
+        monitor.onData(`output ${i + 30}`);
+        vi.advanceTimersByTime(50);
+      }
+
+      // Now should be busy
+      expect(monitor.getState()).toBe("busy");
 
       monitor.dispose();
     });
