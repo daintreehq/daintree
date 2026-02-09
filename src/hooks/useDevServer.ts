@@ -52,6 +52,9 @@ export function useDevServer({
   const isStartingRef = useRef(false);
   const isRestartingRef = useRef(false);
   const isMountedRef = useRef(true);
+  const needsTransitionRecoveryRef = useRef(
+    panel?.devServerStatus === "starting" || panel?.devServerStatus === "installing"
+  );
 
   const resetToStopped = useCallback(() => {
     if (!isMountedRef.current) return;
@@ -346,6 +349,48 @@ export function useDevServer({
       }
     }
   }, [disconnect, panelId, terminalStore, start]);
+
+  // Transitional states are not reliable across unmount/project-switch boundaries.
+  // If we rehydrate in "starting"/"installing", force a clean restart path.
+  useEffect(() => {
+    if (!needsTransitionRecoveryRef.current) return;
+    if (status !== "starting" && status !== "installing") return;
+
+    needsTransitionRecoveryRef.current = false;
+    let cancelled = false;
+
+    const reconcileTransitionState = async () => {
+      const persistedId = terminalIdRef.current;
+      if (!persistedId) {
+        if (!cancelled) resetToStopped();
+        return;
+      }
+
+      try {
+        const reconnectResult = await terminalClient.reconnect(persistedId);
+        if (cancelled || !isMountedRef.current) return;
+
+        // Always reset transitional states so the pane can re-run start(),
+        // re-subscribe listeners, and avoid stale perpetual spinners.
+        if (!reconnectResult?.exists || !reconnectResult.hasPty) {
+          resetToStopped();
+          return;
+        }
+        resetToStopped();
+      } catch (err) {
+        console.warn("[useDevServer] Failed to reconcile transitional status:", err);
+        if (!cancelled) {
+          resetToStopped();
+        }
+      }
+    };
+
+    void reconcileTransitionState();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [status, resetToStopped]);
 
   // Legacy snapshot recovery: if we have a running state but no terminal ID,
   // try panelId (historically used as the dev server PTY ID) before forcing a restart.

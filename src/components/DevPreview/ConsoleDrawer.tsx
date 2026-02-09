@@ -5,12 +5,27 @@ import { XtermAdapter } from "../Terminal/XtermAdapter";
 import { terminalInstanceService } from "../../services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 
+type DevPreviewStatus = "stopped" | "starting" | "installing" | "running" | "error";
+
 interface ConsoleDrawerProps {
   terminalId: string;
+  status?: DevPreviewStatus;
   defaultOpen?: boolean;
 }
 
-export function ConsoleDrawer({ terminalId, defaultOpen = false }: ConsoleDrawerProps) {
+const STATUS_LABEL: Record<DevPreviewStatus, { label: string; className: string }> = {
+  stopped: { label: "Stopped", className: "text-canopy-text/40" },
+  starting: { label: "Starting", className: "text-blue-400" },
+  installing: { label: "Installing", className: "text-yellow-400" },
+  running: { label: "Running", className: "text-green-400" },
+  error: { label: "Error", className: "text-red-400" },
+};
+
+export function ConsoleDrawer({
+  terminalId,
+  status = "stopped",
+  defaultOpen = false,
+}: ConsoleDrawerProps) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
 
   const toggleDrawer = useCallback(() => {
@@ -25,6 +40,8 @@ export function ConsoleDrawer({ terminalId, defaultOpen = false }: ConsoleDrawer
     return isOpen ? TerminalRefreshTier.VISIBLE : TerminalRefreshTier.BACKGROUND;
   }, [isOpen]);
 
+  const statusLabel = STATUS_LABEL[status] ?? STATUS_LABEL.stopped;
+
   return (
     <div className="flex flex-col border-t border-overlay">
       <button
@@ -35,7 +52,14 @@ export function ConsoleDrawer({ terminalId, defaultOpen = false }: ConsoleDrawer
         aria-controls={`console-drawer-${terminalId}`}
       >
         <span>{isOpen ? "Hide Logs" : "Show Logs"}</span>
-        <ChevronDown className={cn("w-3.5 h-3.5 transition-transform", isOpen && "rotate-180")} />
+        <span className="flex items-center gap-2">
+          <span
+            className={cn("text-[10px] font-medium uppercase tracking-wide", statusLabel.className)}
+          >
+            {statusLabel.label}
+          </span>
+          <ChevronDown className={cn("w-3.5 h-3.5 transition-transform", isOpen && "rotate-180")} />
+        </span>
       </button>
 
       <div
