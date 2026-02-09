@@ -642,7 +642,7 @@ export function setupTerminalStoreListeners() {
     }
 
     // exitBehavior undefined - use default behavior based on terminal type
-    // Preserve dev-preview panels so users can inspect stopped/error states and restart.
+    // Preserve dev-preview panels so users can inspect stopped/error states
     if (terminal.kind === "dev-preview") {
       return;
     }

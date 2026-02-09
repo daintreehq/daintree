@@ -118,6 +118,26 @@ export const createTerminalRegistrySlice =
               cols: 80,
               rows: 24,
             };
+          } else if (requestedKind === "dev-preview") {
+            // Dev-preview panels manage their own ephemeral PTYs via useDevServer hook
+            terminal = {
+              id,
+              kind: "dev-preview",
+              title,
+              worktreeId: options.worktreeId,
+              location,
+              isVisible: location === "grid",
+              runtimeStatus,
+              cwd: options.cwd ?? "",
+              devCommand: options.devCommand,
+              browserUrl: options.browserUrl,
+              browserHistory: options.browserHistory,
+              browserZoom: options.browserZoom,
+              exitBehavior: options.exitBehavior,
+              type: "terminal" as const,
+              cols: 80,
+              rows: 24,
+            };
           } else {
             // Generic non-PTY panel fallback for extensions
             terminal = {
@@ -239,7 +259,6 @@ export const createTerminalRegistrySlice =
           } else {
             // Spawn new process - only execute command if not skipping
             const commandToExecute = options.skipCommandExecution ? undefined : options.command;
-            const restoreSession = kind === "dev-preview" ? false : undefined;
             id = await terminalClient.spawn({
               id: options.requestedId,
               cwd: options.cwd,
@@ -253,7 +272,6 @@ export const createTerminalRegistrySlice =
               title,
               worktreeId: options.worktreeId,
               env: mergedEnv,
-              restore: restoreSession,
             });
           }
 
@@ -359,13 +377,6 @@ export const createTerminalRegistrySlice =
             runtimeStatus,
             isInputLocked: options.isInputLocked,
             exitBehavior: options.exitBehavior,
-            // Dev-preview specific fields
-            ...(kind === "dev-preview" && {
-              devCommand: options.devCommand,
-              browserUrl: options.browserUrl,
-              browserHistory: options.browserHistory,
-              browserZoom: options.browserZoom,
-            }),
           };
 
           set((state) => {
@@ -686,11 +697,6 @@ export const createTerminalRegistrySlice =
         const terminal = get().terminals.find((t) => t.id === id);
         if (!terminal) return;
 
-        if (terminal.kind === "dev-preview") {
-          get().removeTerminal(id);
-          return;
-        }
-
         const expiresAt = Date.now() + 120000;
 
         // Only 'dock' or 'grid' are valid original locations - treat undefined as 'grid'
@@ -778,26 +784,7 @@ export const createTerminalRegistrySlice =
           return;
         }
 
-        const devPreviewIds = existingPanelIds.filter((id) => {
-          const terminal = terminals.find((t) => t.id === id);
-          return terminal?.kind === "dev-preview";
-        });
-
-        const trashPanelIds = existingPanelIds.filter((id) => !devPreviewIds.includes(id));
-
-        if (devPreviewIds.length > 0) {
-          devPreviewIds.forEach((id) => get().removeTerminal(id));
-        }
-
-        if (trashPanelIds.length === 0) {
-          set((state) => {
-            const newTabGroups = new Map(state.tabGroups);
-            newTabGroups.delete(group.id);
-            saveTabGroups(newTabGroups);
-            return { tabGroups: newTabGroups };
-          });
-          return;
-        }
+        const trashPanelIds = existingPanelIds;
 
         const resolvedActiveTabId = trashPanelIds.includes(activeTabId)
           ? activeTabId
@@ -1333,7 +1320,6 @@ export const createTerminalRegistrySlice =
         }
 
         const targetLocation = currentTerminal.location;
-        const isDevPreview = currentTerminal.kind === "dev-preview";
 
         // For agent terminals, regenerate command from current settings
         // For other terminals, use the saved command
@@ -1367,13 +1353,7 @@ export const createTerminalRegistrySlice =
           }
         }
 
-        if (isDevPreview) {
-          const devCommand = currentTerminal.devCommand?.trim();
-          if (devCommand) {
-            commandToRun = devCommand;
-          }
-        }
-        const spawnCommand = isDevPreview ? undefined : commandToRun;
+        const spawnCommand = commandToRun;
 
         try {
           // CAPTURE LIVE DIMENSIONS before destroying the frontend
@@ -1871,8 +1851,7 @@ export const createTerminalRegistrySlice =
           if (!terminal) return state;
 
           const kind = terminal.kind ?? "terminal";
-          const isDevPreview = kind === "dev-preview";
-          if (panelKindUsesTerminalUi(kind) && !isDevPreview) return state;
+          if (panelKindUsesTerminalUi(kind)) return state;
 
           const newTerminals = state.terminals.map((t) =>
             t.id === id ? { ...t, browserUrl: url } : t
@@ -1889,8 +1868,7 @@ export const createTerminalRegistrySlice =
           if (!terminal) return state;
 
           const kind = terminal.kind ?? "terminal";
-          const isDevPreview = kind === "dev-preview";
-          if (panelKindUsesTerminalUi(kind) && !isDevPreview) return state;
+          if (panelKindUsesTerminalUi(kind)) return state;
 
           const newTerminals = state.terminals.map((t) =>
             t.id === id ? { ...t, browserHistory: history } : t
@@ -1907,8 +1885,7 @@ export const createTerminalRegistrySlice =
           if (!terminal) return state;
 
           const kind = terminal.kind ?? "terminal";
-          const isDevPreview = kind === "dev-preview";
-          if (panelKindUsesTerminalUi(kind) && !isDevPreview) return state;
+          if (panelKindUsesTerminalUi(kind)) return state;
 
           const newTerminals = state.terminals.map((t) =>
             t.id === id ? { ...t, browserZoom: zoom } : t

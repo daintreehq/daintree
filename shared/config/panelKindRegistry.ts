@@ -87,10 +87,10 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     name: "Dev Preview",
     iconId: "monitor",
     color: "#8b5cf6", // purple-500
-    hasPty: true,
-    canRestart: true,
+    hasPty: false, // Dev-preview panels manage their own ephemeral PTYs via useDevServer hook
+    canRestart: false, // Restart is handled internally by the dev-preview component
     canConvert: false,
-    usesTerminalUi: true,
+    usesTerminalUi: false, // Uses custom browser-based UI, not xterm.js
     keepAliveOnProjectSwitch: true,
     showInPalette: true,
   },

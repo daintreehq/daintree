@@ -185,8 +185,6 @@ export function TerminalContextMenu({
         { id: "copy-url", label: "Copy URL", enabled: hasUrl },
       ];
 
-      const serverActions: MenuItemOption[] = [{ id: "restart", label: "Restart Dev Server" }];
-
       const managementItems: MenuItemOption[] = [
         { id: "duplicate", label: "Duplicate Dev Preview" },
         { id: "rename", label: "Rename Dev Preview" },
@@ -201,8 +199,6 @@ export function TerminalContextMenu({
         ...layoutItems,
         { type: "separator" },
         ...browserActions,
-        { type: "separator" },
-        ...serverActions,
         { type: "separator" },
         ...managementItems,
         { type: "separator" },

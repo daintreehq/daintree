@@ -288,10 +288,12 @@ export function isBuiltInPanelKind(kind: PanelKind): kind is BuiltInPanelKind {
  * Check if a built-in panel kind requires PTY (terminal or agent).
  * For extension kinds, use `panelKindHasPty()` from panelKindRegistry
  * which consults the runtime registry configuration.
+ * Note: dev-preview panels manage their own ephemeral PTYs via useDevServer hook,
+ * so they are not considered registry-owned PTY panels.
  */
 export function isPtyPanelKind(kind: PanelKind): boolean {
   // Built-in kinds - for extension kinds, use panelKindHasPty() from registry
-  return kind === "terminal" || kind === "agent" || kind === "dev-preview";
+  return kind === "terminal" || kind === "agent";
 }
 
 /** Valid triggers for agent state changes */
@@ -388,7 +390,7 @@ interface BasePanelData {
 }
 
 interface PtyPanelData extends BasePanelData {
-  kind: "terminal" | "agent" | "dev-preview";
+  kind: "terminal" | "agent";
   /**
    * Legacy field retained for persistence; new code should prefer `kind`.
    * - "terminal" for default terminals
@@ -443,14 +445,6 @@ interface PtyPanelData extends BasePanelData {
   flowStatusTimestamp?: number;
   /** Whether user input is locked (read-only monitor mode) */
   isInputLocked?: boolean;
-  /** Current URL for browser/dev-preview panels */
-  browserUrl?: string;
-  /** Navigation history for browser/dev-preview panels */
-  browserHistory?: BrowserHistory;
-  /** Zoom factor for browser/dev-preview panels */
-  browserZoom?: number;
-  /** Dev command override for dev-preview panels */
-  devCommand?: string;
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely */
   exitBehavior?: PanelExitBehavior;
 }
@@ -477,11 +471,27 @@ interface NotesPanelData extends BasePanelData {
   createdAt: number;
 }
 
-export type PanelInstance = PtyPanelData | BrowserPanelData | NotesPanelData;
+interface DevPreviewPanelData extends BasePanelData {
+  kind: "dev-preview";
+  /** Current working directory for the dev server */
+  cwd: string;
+  /** Dev server command (e.g., 'npm run dev') */
+  devCommand?: string;
+  /** Current URL for the preview browser */
+  browserUrl?: string;
+  /** Navigation history for the preview browser */
+  browserHistory?: BrowserHistory;
+  /** Zoom factor for the preview browser */
+  browserZoom?: number;
+  /** Behavior when dev server exits */
+  exitBehavior?: PanelExitBehavior;
+}
+
+export type PanelInstance = PtyPanelData | BrowserPanelData | NotesPanelData | DevPreviewPanelData;
 
 export function isPtyPanel(panel: PanelInstance | TerminalInstance): panel is PtyPanelData {
   const kind = panel.kind ?? "terminal";
-  return kind === "terminal" || kind === "agent" || kind === "dev-preview";
+  return kind === "terminal" || kind === "agent";
 }
 
 export function isBrowserPanel(panel: PanelInstance | TerminalInstance): panel is BrowserPanelData {
@@ -493,7 +503,9 @@ export function isNotesPanel(panel: PanelInstance): panel is NotesPanelData {
   return panel.kind === "notes";
 }
 
-export function isDevPreviewPanel(panel: PanelInstance | TerminalInstance): panel is PtyPanelData {
+export function isDevPreviewPanel(
+  panel: PanelInstance | TerminalInstance
+): panel is DevPreviewPanelData {
   const kind = panel.kind ?? "terminal";
   return kind === "dev-preview";
 }
