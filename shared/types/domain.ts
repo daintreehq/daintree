@@ -451,6 +451,14 @@ interface PtyPanelData extends BasePanelData {
   browserZoom?: number;
   /** Dev command override for dev-preview panels */
   devCommand?: string;
+  /** Dev server status for dev-preview panels */
+  devServerStatus?: "stopped" | "starting" | "installing" | "running" | "error";
+  /** Dev server URL for dev-preview panels */
+  devServerUrl?: string;
+  /** Dev server error for dev-preview panels */
+  devServerError?: { type: string; message: string };
+  /** Terminal ID associated with dev server for dev-preview panels */
+  devServerTerminalId?: string;
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely */
   exitBehavior?: PanelExitBehavior;
 }
@@ -552,6 +560,14 @@ export interface TerminalInstance {
   createdAt?: number;
   /** Dev command override for dev-preview panels */
   devCommand?: string;
+  /** Dev server status for dev-preview panels */
+  devServerStatus?: "stopped" | "starting" | "installing" | "running" | "error";
+  /** Dev server URL for dev-preview panels */
+  devServerUrl?: string;
+  /** Dev server error for dev-preview panels */
+  devServerError?: { type: string; message: string };
+  /** Terminal ID associated with dev server for dev-preview panels */
+  devServerTerminalId?: string;
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely */
   exitBehavior?: PanelExitBehavior;
   /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */
@@ -640,6 +656,14 @@ export interface TerminalSnapshot {
   browserHistory?: BrowserHistory;
   /** Zoom factor for browser/dev-preview panes */
   browserZoom?: number;
+  /** Dev server status for dev-preview panels */
+  devServerStatus?: "stopped" | "starting" | "installing" | "running" | "error";
+  /** Dev server URL for dev-preview panels */
+  devServerUrl?: string;
+  /** Dev server error for dev-preview panels */
+  devServerError?: { type: string; message: string };
+  /** Terminal ID associated with dev server for dev-preview panels */
+  devServerTerminalId?: string;
   /** Path to note file (kind === 'notes') */
   notePath?: string;
   /** Note ID (kind === 'notes') */

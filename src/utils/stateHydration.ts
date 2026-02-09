@@ -211,6 +211,8 @@ export async function hydrateAppState(
                   title: backendTerminal.title,
                 });
 
+                const isDevPreview = backendTerminal.kind === "dev-preview";
+                const devCommand = isDevPreview ? saved.command?.trim() : undefined;
                 await addTerminal({
                   kind: backendTerminal.kind ?? (agentId ? "agent" : "terminal"),
                   type: backendTerminal.type,
@@ -222,6 +224,14 @@ export async function hydrateAppState(
                   existingId: backendTerminal.id,
                   agentState: currentAgentState,
                   lastStateChange: backendLastStateChange,
+                  devCommand,
+                  browserUrl: isDevPreview ? saved.browserUrl : undefined,
+                  browserHistory: isDevPreview ? saved.browserHistory : undefined,
+                  browserZoom: isDevPreview ? saved.browserZoom : undefined,
+                  devServerStatus: isDevPreview ? saved.devServerStatus : undefined,
+                  devServerUrl: isDevPreview ? saved.devServerUrl : undefined,
+                  devServerError: isDevPreview ? saved.devServerError : undefined,
+                  devServerTerminalId: isDevPreview ? saved.devServerTerminalId : undefined,
                 });
 
                 // Initialize frontend tier state from backend to ensure proper wake behavior
@@ -382,6 +392,10 @@ export async function hydrateAppState(
                       browserUrl: isDevPreview ? saved.browserUrl : undefined,
                       browserHistory: isDevPreview ? saved.browserHistory : undefined,
                       browserZoom: isDevPreview ? saved.browserZoom : undefined,
+                      devServerStatus: isDevPreview ? saved.devServerStatus : undefined,
+                      devServerUrl: isDevPreview ? saved.devServerUrl : undefined,
+                      devServerError: isDevPreview ? saved.devServerError : undefined,
+                      devServerTerminalId: isDevPreview ? saved.devServerTerminalId : undefined,
                     });
 
                     // Initialize frontend tier state from backend
@@ -482,6 +496,10 @@ export async function hydrateAppState(
                       browserUrl: isDevPreview ? saved.browserUrl : undefined,
                       browserHistory: isDevPreview ? saved.browserHistory : undefined,
                       browserZoom: isDevPreview ? saved.browserZoom : undefined,
+                      devServerStatus: isDevPreview ? saved.devServerStatus : undefined,
+                      devServerUrl: isDevPreview ? saved.devServerUrl : undefined,
+                      devServerError: isDevPreview ? saved.devServerError : undefined,
+                      devServerTerminalId: isDevPreview ? saved.devServerTerminalId : undefined,
                     });
                   }
                 } else {
@@ -494,6 +512,7 @@ export async function hydrateAppState(
                       ? devCommandCandidate || saved.command?.trim() || undefined
                       : undefined;
 
+                  const isDevPreview = kind === "dev-preview";
                   await addTerminal({
                     kind,
                     title: saved.title,
@@ -509,6 +528,10 @@ export async function hydrateAppState(
                     scope: saved.scope as "worktree" | "project" | undefined,
                     createdAt: saved.createdAt,
                     devCommand,
+                    devServerStatus: isDevPreview ? saved.devServerStatus : undefined,
+                    devServerUrl: isDevPreview ? saved.devServerUrl : undefined,
+                    devServerError: isDevPreview ? saved.devServerError : undefined,
+                    devServerTerminalId: isDevPreview ? saved.devServerTerminalId : undefined,
                   });
                 }
               }

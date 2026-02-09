@@ -60,6 +60,15 @@ export const AppStateTerminalEntrySchema = z
     scope: z.enum(["worktree", "project"]).optional(),
     createdAt: z.number().optional(),
     devCommand: z.string().optional(),
+    devServerStatus: z.enum(["stopped", "starting", "installing", "running", "error"]).optional(),
+    devServerUrl: z.string().optional(),
+    devServerError: z
+      .object({
+        type: z.string(),
+        message: z.string(),
+      })
+      .optional(),
+    devServerTerminalId: z.string().optional(),
   })
   .passthrough()
   .refine(
@@ -116,6 +125,15 @@ export const TerminalSnapshotSchema = z
     scope: z.enum(["worktree", "project"]).optional(),
     createdAt: z.number().optional(),
     devCommand: z.string().optional(),
+    devServerStatus: z.enum(["stopped", "starting", "installing", "running", "error"]).optional(),
+    devServerUrl: z.string().optional(),
+    devServerError: z
+      .object({
+        type: z.string(),
+        message: z.string(),
+      })
+      .optional(),
+    devServerTerminalId: z.string().optional(),
   })
   .passthrough()
   .refine(

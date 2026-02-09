@@ -56,6 +56,14 @@ export interface AddTerminalOptions {
   createdAt?: number;
   /** Dev server command override for dev-preview panels (kind === 'dev-preview') */
   devCommand?: string;
+  /** Dev server status for dev-preview panels (kind === 'dev-preview') */
+  devServerStatus?: "stopped" | "starting" | "installing" | "running" | "error";
+  /** Dev server URL for dev-preview panels (kind === 'dev-preview') */
+  devServerUrl?: string;
+  /** Dev server error for dev-preview panels (kind === 'dev-preview') */
+  devServerError?: { type: string; message: string };
+  /** Terminal ID associated with dev server for dev-preview panels (kind === 'dev-preview') */
+  devServerTerminalId?: string;
   /** Environment variables to set for this terminal */
   env?: Record<string, string>;
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely */
@@ -148,6 +156,13 @@ export interface TerminalRegistrySlice {
   setBrowserUrl: (id: string, url: string) => void;
   setBrowserHistory: (id: string, history: BrowserHistory) => void;
   setBrowserZoom: (id: string, zoom: number) => void;
+  setDevServerState: (
+    id: string,
+    status: "stopped" | "starting" | "installing" | "running" | "error",
+    url: string | null,
+    error: { type: string; message: string } | null,
+    terminalId: string | null
+  ) => void;
   setSpawnError: (id: string, error: SpawnError) => void;
   clearSpawnError: (id: string) => void;
   setReconnectError: (id: string, error: TerminalReconnectError) => void;

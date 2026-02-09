@@ -41,7 +41,7 @@ export function DevPreviewPane({
   const terminal = useTerminalStore((state) => state.getTerminal(id));
   const devCommand = terminal?.devCommand || "";
 
-  const { status, url, terminalId, error, start, stop } = useDevServer({
+  const { status, url, terminalId, error, start } = useDevServer({
     panelId: id,
     devCommand,
     cwd,
@@ -112,12 +112,6 @@ export function DevPreviewPane({
       start();
     }
   }, [devCommand, status, start]);
-
-  useEffect(() => {
-    return () => {
-      stop();
-    };
-  }, [stop]);
 
   const handleNavigate = useCallback((rawUrl: string) => {
     const normalized = normalizeBrowserUrl(rawUrl);

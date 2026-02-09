@@ -36,6 +36,10 @@ const DEFAULT_OPTIONS: Required<Omit<TerminalPersistenceOptions, "getProjectId">
         ...(t.browserUrl && { browserUrl: t.browserUrl }),
         ...(t.browserHistory && { browserHistory: t.browserHistory }),
         ...(t.browserZoom != null && { browserZoom: t.browserZoom }),
+        ...(t.devServerStatus && { devServerStatus: t.devServerStatus }),
+        ...(t.devServerUrl && { devServerUrl: t.devServerUrl }),
+        ...(t.devServerError && { devServerError: t.devServerError }),
+        ...(t.devServerTerminalId && { devServerTerminalId: t.devServerTerminalId }),
       };
     }
 
