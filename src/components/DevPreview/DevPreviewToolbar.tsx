@@ -1,4 +1,12 @@
-import { RotateCw, ExternalLink, Loader2, CheckCircle2, XCircle, Circle, type LucideIcon } from "lucide-react";
+import {
+  RotateCw,
+  ExternalLink,
+  Loader2,
+  CheckCircle2,
+  XCircle,
+  Circle,
+  type LucideIcon,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { DevPreviewStatus } from "./devPreviewTypes";
 
@@ -67,7 +75,12 @@ export function DevPreviewToolbar({
   return (
     <div className="flex items-center gap-1.5 px-2 py-1.5 bg-[var(--color-surface)] border-b border-overlay">
       {/* Status indicator */}
-      <div className="flex items-center gap-1.5 min-w-0" role="status" aria-live="polite" aria-label={statusConfig.ariaLabel}>
+      <div
+        className="flex items-center gap-1.5 min-w-0"
+        role="status"
+        aria-live="polite"
+        aria-label={statusConfig.ariaLabel}
+      >
         <statusConfig.icon
           className={cn("w-3.5 h-3.5 shrink-0", statusConfig.iconClass)}
           aria-hidden="true"

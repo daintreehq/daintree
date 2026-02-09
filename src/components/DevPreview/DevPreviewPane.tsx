@@ -1,5 +1,14 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { AlertTriangle, RotateCw, ExternalLink, Loader2, CheckCircle2, XCircle, Circle, type LucideIcon } from "lucide-react";
+import {
+  AlertTriangle,
+  RotateCw,
+  ExternalLink,
+  Loader2,
+  CheckCircle2,
+  XCircle,
+  Circle,
+  type LucideIcon,
+} from "lucide-react";
 import { useTerminalStore } from "@/store";
 import type { BrowserHistory } from "@shared/types/domain";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
@@ -294,7 +303,11 @@ export function DevPreviewPane({
       gridPanelCount={gridPanelCount}
       kind="dev-preview"
       headerContent={
-        <div className="flex items-center gap-2 px-2" role="status" aria-label={currentStatus.ariaLabel}>
+        <div
+          className="flex items-center gap-2 px-2"
+          role="status"
+          aria-label={currentStatus.ariaLabel}
+        >
           <currentStatus.icon
             className={cn("w-3.5 h-3.5", currentStatus.iconClass)}
             aria-hidden="true"
