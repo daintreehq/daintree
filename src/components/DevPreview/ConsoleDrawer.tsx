@@ -44,7 +44,11 @@ export function ConsoleDrawer({ terminalId, defaultOpen = false }: ConsoleDrawer
         aria-hidden={!isOpen}
       >
         <div className="h-[300px] bg-black">
-          <XtermAdapter terminalId={terminalId} getRefreshTier={getRefreshTier} />
+          <XtermAdapter
+            terminalId={terminalId}
+            getRefreshTier={getRefreshTier}
+            restoreOnAttach={true}
+          />
         </div>
       </div>
     </div>

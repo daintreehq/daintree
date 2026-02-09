@@ -48,6 +48,16 @@ export function useDevServer({
   const isStartingRef = useRef(false);
   const isMountedRef = useRef(true);
 
+  const resetToStopped = useCallback(() => {
+    if (!isMountedRef.current) return;
+    setStatus("stopped");
+    setUrl(null);
+    setTerminalId(null);
+    terminalIdRef.current = null;
+    setError(null);
+    terminalStore.setDevServerState(panelId, "stopped", null, null, null);
+  }, [panelId, terminalStore]);
+
   const disconnect = useCallback(() => {
     if (cleanupRef.current) {
       cleanupRef.current();
@@ -276,6 +286,69 @@ export function useDevServer({
       isStartingRef.current = false;
     }
   }, [panelId, devCommand, cwd, worktreeId, env, panel, terminalStore]);
+
+  // Legacy snapshot recovery: if we have a running state but no terminal ID,
+  // try panelId (historically used as the dev server PTY ID) before forcing a restart.
+  useEffect(() => {
+    if (status !== "running") return;
+    if (terminalIdRef.current) return;
+
+    let cancelled = false;
+
+    const recoverMissingTerminalId = async () => {
+      try {
+        const reconnectResult = await terminalClient.reconnect(panelId);
+        if (cancelled || !isMountedRef.current) return;
+
+        if (reconnectResult?.exists && reconnectResult.hasPty && reconnectResult.id) {
+          setTerminalId(reconnectResult.id);
+          terminalIdRef.current = reconnectResult.id;
+          terminalStore.setDevServerState(panelId, "running", url, error, reconnectResult.id);
+          return;
+        }
+      } catch (err) {
+        console.warn("[useDevServer] Failed to recover missing terminal ID:", err);
+      }
+
+      if (!cancelled) {
+        resetToStopped();
+      }
+    };
+
+    void recoverMissingTerminalId();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [status, panelId, terminalStore, url, error, resetToStopped]);
+
+  // Validate that persisted running terminal still exists after project switches.
+  useEffect(() => {
+    if (status !== "running") return;
+    if (!terminalIdRef.current) return;
+
+    let cancelled = false;
+    const idToValidate = terminalIdRef.current;
+
+    const validateRunningTerminal = async () => {
+      try {
+        const reconnectResult = await terminalClient.reconnect(idToValidate);
+        if (cancelled || !isMountedRef.current) return;
+
+        if (!reconnectResult?.exists || !reconnectResult.hasPty) {
+          resetToStopped();
+        }
+      } catch (err) {
+        console.warn("[useDevServer] Failed to validate running terminal:", err);
+      }
+    };
+
+    void validateRunningTerminal();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [status, terminalId, resetToStopped]);
 
   useEffect(() => {
     isMountedRef.current = true;

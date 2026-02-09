@@ -14,8 +14,12 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 }));
 
 vi.mock("../../Terminal/XtermAdapter", () => ({
-  XtermAdapter: vi.fn(({ terminalId, getRefreshTier }) => (
-    <div data-testid="xterm-adapter" data-terminal-id={terminalId}>
+  XtermAdapter: vi.fn(({ terminalId, getRefreshTier, restoreOnAttach }) => (
+    <div
+      data-testid="xterm-adapter"
+      data-terminal-id={terminalId}
+      data-restore-on-attach={restoreOnAttach ? "true" : "false"}
+    >
       {getRefreshTier && <span data-testid="refresh-tier">{getRefreshTier()}</span>}
     </div>
   )),
@@ -55,6 +59,12 @@ describe("ConsoleDrawer", () => {
 
       const adapter = screen.getByTestId("xterm-adapter");
       expect(adapter).toBeTruthy();
+    });
+
+    it("enables serialized restore on attach", () => {
+      render(<ConsoleDrawer terminalId={mockTerminalId} defaultOpen={false} />);
+      const adapter = screen.getByTestId("xterm-adapter");
+      expect(adapter.getAttribute("data-restore-on-attach")).toBe("true");
     });
   });
 

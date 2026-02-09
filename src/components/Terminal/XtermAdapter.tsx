@@ -21,6 +21,7 @@ export interface XtermAdapterProps {
   className?: string;
   getRefreshTier?: () => TerminalRefreshTier;
   cwd?: string;
+  restoreOnAttach?: boolean;
 }
 
 export { getTerminalThemeFromCSS, CANOPY_TERMINAL_THEME };
@@ -37,6 +38,7 @@ function XtermAdapterComponent({
   className,
   getRefreshTier,
   cwd,
+  restoreOnAttach = false,
 }: XtermAdapterProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const prevDimensionsRef = useRef<{ cols: number; rows: number } | null>(null);
@@ -82,6 +84,16 @@ function XtermAdapterComponent({
   );
 
   const terminalTheme = useMemo(() => getTerminalThemeFromCSS(), []);
+
+  const hasVisibleBufferContent = useCallback(() => {
+    const managed = terminalInstanceService.get(terminalId);
+    if (!managed) return false;
+
+    const buffer = managed.terminal.buffer.active;
+    if (buffer.baseY > 0) return true;
+    const firstLine = buffer.getLine(0)?.translateToString(true) ?? "";
+    return firstLine.trim().length > 0;
+  }, [terminalId]);
 
   const terminalOptions = useMemo(
     () => ({
@@ -252,6 +264,15 @@ function XtermAdapterComponent({
     });
 
     performFit();
+
+    if (restoreOnAttach && !hasVisibleBufferContent()) {
+      void terminalInstanceService.fetchAndRestore(terminalId).then((restored) => {
+        if (restored) {
+          requestAnimationFrame(() => performFit());
+        }
+      });
+    }
+
     onReady?.();
 
     return () => {
@@ -281,6 +302,8 @@ function XtermAdapterComponent({
     stableRefreshTierProvider,
     onInput,
     cwd,
+    restoreOnAttach,
+    hasVisibleBufferContent,
   ]);
 
   // Resolve current tier for dependency tracking
