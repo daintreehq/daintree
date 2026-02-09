@@ -114,6 +114,19 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
   ipcMain.handle(CHANNELS.DEV_PREVIEW_SET_URL, handleSetUrl);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.DEV_PREVIEW_SET_URL));
 
+  const handlePruneSessions = async (
+    _event: Electron.IpcMainInvokeEvent,
+    activePanelIds: string[]
+  ) => {
+    if (!devPreviewService) throw new Error("DevPreviewService not initialized");
+    if (!Array.isArray(activePanelIds) || activePanelIds.some((id) => typeof id !== "string")) {
+      throw new Error("activePanelIds must be an array of strings");
+    }
+    return devPreviewService.pruneInactiveSessions(new Set(activePanelIds));
+  };
+  ipcMain.handle(CHANNELS.DEV_PREVIEW_PRUNE_SESSIONS, handlePruneSessions);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.DEV_PREVIEW_PRUNE_SESSIONS));
+
   return () => {
     handlers.forEach((dispose) => dispose());
   };

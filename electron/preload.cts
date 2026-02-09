@@ -258,6 +258,7 @@ const CHANNELS = {
   DEV_PREVIEW_STATUS: "dev-preview:status",
   DEV_PREVIEW_URL: "dev-preview:url",
   DEV_PREVIEW_RECOVERY: "dev-preview:recovery",
+  DEV_PREVIEW_PRUNE_SESSIONS: "dev-preview:prune-sessions",
 
   // App state channels
   APP_GET_STATE: "app:get-state",
@@ -1051,6 +1052,9 @@ const api: ElectronAPI = {
     onRecovery: (
       callback: (payload: { panelId: string; command: string; attempt: number }) => void
     ) => _typedOn(CHANNELS.DEV_PREVIEW_RECOVERY, callback),
+
+    pruneSessions: (activePanelIds: string[]): Promise<number> =>
+      _typedInvoke(CHANNELS.DEV_PREVIEW_PRUNE_SESSIONS, activePanelIds) as Promise<number>,
   },
 
   // Git API

@@ -487,6 +487,7 @@ export interface ElectronAPI {
     onRecovery(
       callback: (data: { panelId: string; command: string; attempt: number }) => void
     ): () => void;
+    pruneSessions(activePanelIds: string[]): Promise<number>;
   };
   git: {
     getFileDiff(cwd: string, filePath: string, status: GitStatus): Promise<string>;

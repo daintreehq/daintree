@@ -13,6 +13,7 @@ import { useProjectStore, useTerminalStore } from "@/store";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { panelKindUsesTerminalUi } from "@shared/config/panelKindRegistry";
+import { sweepOrphanedDevPreviewStores } from "@/components/DevPreview/DevPreviewPane";
 import type { HydrationCallbacks } from "./useAppHydration";
 
 interface ProjectSwitchedEventDetail {
@@ -91,7 +92,20 @@ export function useProjectSwitchRehydration(callbacks: HydrationCallbacks) {
       } finally {
         // Only finish if this is still the current switch
         if (currentSwitchIdRef.current === switchId) {
-          useProjectStore.getState().finishProjectSwitch();
+          const activePanelIds = new Set(useTerminalStore.getState().terminals.map((t) => t.id));
+          sweepOrphanedDevPreviewStores(activePanelIds);
+          try {
+            await window.electron.devPreview.pruneSessions([...activePanelIds]);
+          } catch (error) {
+            console.error(
+              "[useProjectSwitchRehydration] Failed to prune DevPreview sessions:",
+              error
+            );
+          }
+
+          if (currentSwitchIdRef.current === switchId) {
+            useProjectStore.getState().finishProjectSwitch();
+          }
         }
       }
     };

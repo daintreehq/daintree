@@ -947,6 +947,10 @@ export interface IpcInvokeMap {
     args: [panelId: string, url: string];
     result: void;
   };
+  "dev-preview:prune-sessions": {
+    args: [activePanelIds: string[]];
+    result: number;
+  };
 
   // Agent Capabilities channels
   "agent-capabilities:get-registry": {

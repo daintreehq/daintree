@@ -47,6 +47,26 @@ function releaseDevPreviewWebviewStore(panelId: string): void {
   devPreviewWebviewStores.delete(panelId);
 }
 
+export function sweepOrphanedDevPreviewStores(activePanelIds: Set<string>): void {
+  const orphanedIds: string[] = [];
+  devPreviewWebviewStores.forEach((_, panelId) => {
+    if (!activePanelIds.has(panelId)) {
+      orphanedIds.push(panelId);
+    }
+  });
+  for (const panelId of orphanedIds) {
+    const store = devPreviewWebviewStores.get(panelId);
+    if (store) {
+      destroyDevPreviewWebviews(store);
+      devPreviewWebviewStores.delete(panelId);
+    }
+  }
+  if (devPreviewStashContainer && devPreviewWebviewStores.size === 0) {
+    devPreviewStashContainer.remove();
+    devPreviewStashContainer = null;
+  }
+}
+
 function getDevPreviewStashContainer(): HTMLDivElement | null {
   if (typeof document === "undefined") return null;
   if (devPreviewStashContainer) return devPreviewStashContainer;
@@ -941,13 +961,14 @@ export function DevPreviewPane({
 
   useLayoutEffect(() => {
     return () => {
-      if (webviewStore.instances.size === 0) return;
       const stillExists = Boolean(useTerminalStore.getState().getTerminal(id));
       const switching = useProjectStore.getState().isSwitching;
       if (stillExists || switching) {
-        webviewStore.cleanups.forEach((cleanup) => cleanup());
-        webviewStore.cleanups.clear();
-        stashDevPreviewWebviews(webviewStore);
+        if (webviewStore.instances.size > 0) {
+          webviewStore.cleanups.forEach((cleanup) => cleanup());
+          webviewStore.cleanups.clear();
+          stashDevPreviewWebviews(webviewStore);
+        }
         return;
       }
       destroyDevPreviewWebviews(webviewStore);
@@ -1133,14 +1154,7 @@ export function DevPreviewPane({
         void window.electron.devPreview.detach(id);
       }
     };
-  }, [
-    attachAndSync,
-    clearAutoReload,
-    clearLoadingTimeout,
-    id,
-    worktreeId,
-    webviewStore,
-  ]);
+  }, [attachAndSync, clearAutoReload, clearLoadingTimeout, id, worktreeId, webviewStore]);
 
   // (Webview cleanup handled in layout effect.)
 

@@ -252,6 +252,7 @@ export const CHANNELS = {
   DEV_PREVIEW_STATUS: "dev-preview:status",
   DEV_PREVIEW_URL: "dev-preview:url",
   DEV_PREVIEW_RECOVERY: "dev-preview:recovery",
+  DEV_PREVIEW_PRUNE_SESSIONS: "dev-preview:prune-sessions",
 
   COMMANDS_LIST: "commands:list",
   COMMANDS_GET: "commands:get",

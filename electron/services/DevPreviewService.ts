@@ -362,6 +362,25 @@ export class DevPreviewService extends EventEmitter {
     return this.sessions.get(panelId);
   }
 
+  pruneInactiveSessions(activePanelIds: Set<string>): number {
+    for (const [panelId, pending] of this.pendingAttaches) {
+      if (!activePanelIds.has(panelId)) {
+        pending.aborted = true;
+        this.pendingAttaches.delete(panelId);
+      }
+    }
+    const toRemove: string[] = [];
+    this.sessions.forEach((_, panelId) => {
+      if (!activePanelIds.has(panelId)) {
+        toRemove.push(panelId);
+      }
+    });
+    for (const panelId of toRemove) {
+      this.detach(panelId);
+    }
+    return toRemove.length;
+  }
+
   private handlePtyData(panelId: string, data: string): void {
     const session = this.sessions.get(panelId);
     if (!session) return;
