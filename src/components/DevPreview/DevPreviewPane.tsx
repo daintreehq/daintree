@@ -15,6 +15,7 @@ import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { BrowserToolbar } from "../Browser/BrowserToolbar";
 import { normalizeBrowserUrl } from "../Browser/browserUtils";
 import { useDevServer } from "@/hooks/useDevServer";
+import { DevPreviewToolbar } from "./DevPreviewToolbar";
 import type { DevPreviewStatus } from "./devPreviewTypes";
 import { ConsoleDrawer } from "./ConsoleDrawer";
 import { useIsDragging } from "@/components/DragDrop";
@@ -51,7 +52,7 @@ export function DevPreviewPane({
   const terminal = useTerminalStore((state) => state.getTerminal(id));
   const devCommand = terminal?.devCommand || "";
 
-  const { status, url, terminalId, error, start } = useDevServer({
+  const { status, url, terminalId, error, start, restart, isRestarting } = useDevServer({
     panelId: id,
     devCommand,
     cwd,
@@ -118,10 +119,10 @@ export function DevPreviewPane({
   }, [id, zoomFactor, setBrowserZoom]);
 
   useEffect(() => {
-    if (devCommand && status === "stopped") {
+    if (devCommand && status === "stopped" && !isRestarting) {
       start();
     }
-  }, [devCommand, status, start]);
+  }, [devCommand, status, start, isRestarting]);
 
   const handleNavigate = useCallback((rawUrl: string) => {
     const normalized = normalizeBrowserUrl(rawUrl);
@@ -179,6 +180,14 @@ export function DevPreviewPane({
       webviewRef.current.setZoomFactor(newZoom);
     }
   }, []);
+
+  const handleRestart = useCallback(() => {
+    setHistory({ past: [], present: "", future: [] });
+    lastSetUrlRef.current = "";
+    setIsLoading(false);
+    setIsWebviewReady(false);
+    restart();
+  }, [restart]);
 
   const handleRetry = useCallback(() => {
     start();
@@ -242,7 +251,7 @@ export function DevPreviewPane({
     return () => {
       webview.removeEventListener("dom-ready", handleDomReady);
     };
-  }, [zoomFactor]);
+  }, [zoomFactor, currentUrl]);
 
   useEffect(() => {
     if (isWebviewReady && currentUrl && currentUrl !== lastSetUrlRef.current) {
@@ -316,6 +325,13 @@ export function DevPreviewPane({
       }
     >
       <div className="flex flex-col h-full">
+        <DevPreviewToolbar
+          status={status}
+          url={currentUrl || null}
+          isRestarting={isRestarting}
+          onRestart={handleRestart}
+          onOpenExternal={handleOpenExternal}
+        />
         <BrowserToolbar
           terminalId={id}
           url={currentUrl}
@@ -360,10 +376,13 @@ export function DevPreviewPane({
                 )}
               </div>
             </div>
-          ) : status === "starting" || status === "installing" ? (
+          ) : status === "starting" || status === "installing" || isRestarting ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg">
               <div className="w-12 h-12 border-2 border-blue-400 border-t-transparent rounded-full animate-spin mb-4" />
-              <p className="text-sm text-canopy-text/60">{currentStatus.ariaLabel}...</p>
+              <p className="text-sm text-canopy-text/60">
+                {isRestarting ? "Restarting" : status === "installing" ? "Installing" : "Starting"}
+                ...
+              </p>
             </div>
           ) : !currentUrl ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">

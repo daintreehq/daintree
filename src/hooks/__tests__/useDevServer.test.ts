@@ -107,7 +107,6 @@ function buildSpawnPayload(opts: SpawnOptions) {
     cols: 80,
     rows: 30,
     restore: false,
-    isEphemeral: true,
     env: opts.env,
   };
 }
@@ -166,7 +165,6 @@ describe("useDevServer logic", () => {
         cols: 80,
         rows: 30,
         restore: false,
-        isEphemeral: true,
         env: { PORT: "3000" },
       });
     });
@@ -180,7 +178,6 @@ describe("useDevServer logic", () => {
 
       expect(payload.worktreeId).toBeUndefined();
       expect(payload.env).toBeUndefined();
-      expect(payload.isEphemeral).toBe(true);
     });
 
     it("transitions to starting with terminalId", () => {
@@ -526,6 +523,45 @@ describe("useDevServer logic", () => {
 
       startTerminal("term-2");
       expect(killFn).toHaveBeenCalledWith("term-1");
+    });
+
+    it("isRestarting flag prevents concurrent restarts", () => {
+      let isRestarting = false;
+      const isStarting = false;
+
+      function attemptRestart(): boolean {
+        if (isRestarting || isStarting) return false;
+        isRestarting = true;
+        return true;
+      }
+
+      function finishRestart(): void {
+        isRestarting = false;
+      }
+
+      expect(attemptRestart()).toBe(true);
+      expect(attemptRestart()).toBe(false);
+
+      finishRestart();
+      expect(attemptRestart()).toBe(true);
+    });
+
+    it("restart clears state before starting new server", () => {
+      let state = createInitialState();
+      state = startState(state, "term-1");
+      state = handleUrlDetected(state, "term-1", "http://localhost:3000/");
+      expect(state.status).toBe("running");
+      expect(state.url).toBe("http://localhost:3000/");
+
+      // Simulate restart: stop then start
+      state = stopState();
+      expect(state.status).toBe("stopped");
+      expect(state.url).toBeNull();
+      expect(state.terminalId).toBeNull();
+
+      state = startState(state, "term-2");
+      expect(state.status).toBe("starting");
+      expect(state.terminalId).toBe("term-2");
     });
   });
 
