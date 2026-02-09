@@ -527,7 +527,7 @@ describe("useDevServer logic", () => {
 
     it("isRestarting flag prevents concurrent restarts", () => {
       let isRestarting = false;
-      let isStarting = false;
+      const isStarting = false;
 
       function attemptRestart(): boolean {
         if (isRestarting || isStarting) return false;
