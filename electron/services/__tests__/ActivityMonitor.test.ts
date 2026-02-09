@@ -1729,4 +1729,230 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
   });
+
+  describe("Boot detection with Claude Code banner", () => {
+    it("should detect Claude Code v2.x.x banner and transition to waiting within 200ms", () => {
+      const onStateChange = vi.fn();
+      const visibleLines = [
+        "           Claude Code v2.1.37",
+        " ▐▛███▜▌   Opus 4.6 · Claude Max",
+        "▝▜█████▛▘  ~/Projects/Canopy/canopy-electron",
+        "  ▘▘ ▝▝    Opus 4.6 is here · $50 free extra usage",
+        "",
+        "─────────────────────────────────────────────────────────────────",
+        "❯ Try \"how does TerminalInstanceService.ts work?\"",
+        "─────────────────────────────────────────────────────────────────",
+        "  ⏵⏵ bypass permissions on (shift+tab to cycle)",
+      ];
+
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines: () => visibleLines,
+        getCursorLine: () => visibleLines[visibleLines.length - 1],
+        bootCompletePatterns: [/claude\s+code\s+v?\d/i],
+        promptPatterns: [/^\s*❯\s*/],
+        pollingIntervalMs: 50,
+        idleDebounceMs: 200,
+      });
+
+      monitor.startPolling();
+
+      // Boot detection should complete within first polling cycle (50ms)
+      vi.advanceTimersByTime(50);
+
+      // Verify no idle transition before 200ms debounce
+      let idleCalls = onStateChange.mock.calls.filter((call) => call[2] === "idle");
+      expect(idleCalls.length).toBe(0);
+
+      // Should transition to idle after 200ms debounce with prompt visible
+      vi.advanceTimersByTime(200);
+
+      // Verify idle transition occurred
+      idleCalls = onStateChange.mock.calls.filter((call) => call[2] === "idle");
+      expect(idleCalls.length).toBeGreaterThan(0);
+
+      monitor.dispose();
+    });
+
+    it("should detect Claude Code v3.x.x banner with different version format", () => {
+      const onStateChange = vi.fn();
+      const visibleLines = [
+        "           Claude Code v3.0.0",
+        " ▐▛███▜▌   Opus 5.0 · Claude Max",
+        "❯ Ready",
+      ];
+
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines: () => visibleLines,
+        getCursorLine: () => visibleLines[visibleLines.length - 1],
+        bootCompletePatterns: [/claude\s+code\s+v?\d/i],
+        promptPatterns: [/^\s*❯\s*/],
+        pollingIntervalMs: 50,
+        idleDebounceMs: 200,
+      });
+
+      monitor.startPolling();
+
+      // Advance through boot detection and debounce
+      vi.advanceTimersByTime(50);
+      vi.advanceTimersByTime(200);
+
+      // Verify final state is idle
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+
+    it("should detect boot banner with ANSI escape codes", () => {
+      const onStateChange = vi.fn();
+      const visibleLines = [
+        "\x1b[1m           Claude Code v2.1.37\x1b[0m",
+        "\x1b[36m ▐▛███▜▌   Opus 4.6 · Claude Max\x1b[0m",
+        "❯ Try something",
+      ];
+
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines: () => visibleLines,
+        getCursorLine: () => visibleLines[visibleLines.length - 1],
+        bootCompletePatterns: [/claude\s+code\s+v?\d/i],
+        promptPatterns: [/^\s*❯\s*/],
+        pollingIntervalMs: 50,
+        idleDebounceMs: 200,
+      });
+
+      monitor.startPolling();
+
+      // Advance through boot detection and debounce
+      vi.advanceTimersByTime(50);
+      vi.advanceTimersByTime(200);
+
+      // Verify final state is idle
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+
+    it("should scan 50 lines during boot to catch banner near top of viewport", () => {
+      const onStateChange = vi.fn();
+      const getVisibleLines = vi.fn((count: number) => {
+        // Banner is at line 30 (beyond the normal 15-line scan)
+        const lines = Array(count).fill("");
+        if (count >= 30) {
+          lines[29] = "Claude Code v2.1.37";
+          lines[count - 1] = "❯ Ready";
+        }
+        return lines;
+      });
+
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines,
+        getCursorLine: () => "❯ Ready",
+        bootCompletePatterns: [/claude\s+code\s+v?\d/i],
+        promptPatterns: [/^\s*❯\s*/],
+        promptScanLineCount: 10,
+        idleDebounceMs: 200,
+      });
+
+      monitor.startPolling();
+      vi.advanceTimersByTime(100);
+
+      // Should have scanned 50 lines during boot (not just 10 or 15)
+      expect(getVisibleLines).toHaveBeenCalledWith(50);
+
+      // Boot should complete after debounce
+      vi.advanceTimersByTime(250);
+
+      // Verify final state is idle
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+
+    it("should reduce scan to 15 lines after boot completes", () => {
+      const onStateChange = vi.fn();
+      const getVisibleLines = vi.fn(() => ["Claude Code v2.1.37", "❯ Ready"]);
+
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines,
+        getCursorLine: () => "❯ Ready",
+        bootCompletePatterns: [/claude\s+code\s+v?\d/i],
+        promptPatterns: [/^\s*❯\s*/],
+        promptScanLineCount: 10,
+        idleDebounceMs: 200,
+      });
+
+      monitor.startPolling();
+
+      // First poll: boot phase, should scan 50 lines
+      vi.advanceTimersByTime(100);
+      expect(getVisibleLines).toHaveBeenCalledWith(50);
+
+      getVisibleLines.mockClear();
+
+      // Advance past boot completion
+      vi.advanceTimersByTime(250);
+
+      // Next poll: post-boot, should scan max(10, 15) = 15 lines
+      vi.advanceTimersByTime(100);
+      expect(getVisibleLines).toHaveBeenCalledWith(15);
+
+      monitor.dispose();
+    });
+
+    it("should complete boot via banner detection alone (without prompt)", () => {
+      const onStateChange = vi.fn();
+      const getVisibleLines = vi.fn(() => [
+        "           Claude Code v2.1.37",
+        " ▐▛███▜▌   Opus 4.6 · Claude Max",
+        "Loading configuration...",
+      ]);
+
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines,
+        getCursorLine: () => "Loading configuration...",
+        bootCompletePatterns: [/claude\s+code\s+v?\d/i],
+        promptPatterns: [/^\s*❯\s*/], // No prompt in visible lines
+        pollingIntervalMs: 50,
+        idleDebounceMs: 2000,
+      });
+
+      monitor.startPolling();
+
+      // First poll: boot phase, should scan 50 lines and detect banner
+      vi.advanceTimersByTime(50);
+      expect(getVisibleLines).toHaveBeenCalledWith(50);
+
+      getVisibleLines.mockClear();
+
+      // Second poll: boot should have completed, scan should reduce to 15
+      vi.advanceTimersByTime(50);
+      expect(getVisibleLines).toHaveBeenCalledWith(15);
+
+      monitor.dispose();
+    });
+
+    it("should not transition to idle before boot detection timeout if no banner", () => {
+      const onStateChange = vi.fn();
+      const visibleLines = ["Starting up...", "Loading..."];
+
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines: () => visibleLines,
+        getCursorLine: () => visibleLines[visibleLines.length - 1],
+        bootCompletePatterns: [/claude\s+code\s+v?\d/i],
+        pollingMaxBootMs: 15000,
+        idleDebounceMs: 200,
+      });
+
+      monitor.startPolling();
+
+      // Should remain busy during boot timeout
+      vi.advanceTimersByTime(5000);
+      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", expect.anything());
+
+      // Verify no idle calls occurred
+      const idleCalls = onStateChange.mock.calls.filter((call) => call[2] === "idle");
+      expect(idleCalls.length).toBe(0);
+
+      monitor.dispose();
+    });
+  });
 });

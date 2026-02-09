@@ -1151,10 +1151,14 @@ export class ActivityMonitor {
 
     const now = Date.now();
 
-    const scanCount = Math.max(this.promptScanLineCount, 15);
+    // During boot, scan more lines to catch the agent banner near the top of the viewport
+    const scanCount = !this.hasExitedBootState
+      ? Math.max(this.promptScanLineCount, 50)
+      : Math.max(this.promptScanLineCount, 15);
     const lines = this.getVisibleLines!(scanCount);
     const cursorLine = this.getCursorLine?.() ?? null;
-    const text = stripAnsi(lines.join(" ")).toLowerCase();
+    const strippedText = stripAnsi(lines.join(" "));
+    const text = strippedText.toLowerCase();
     const quietForMs = now - this.lastActivityTimestamp;
     const isQuietForIdle = quietForMs >= this.IDLE_DEBOUNCE_MS;
 
@@ -1187,7 +1191,7 @@ export class ActivityMonitor {
     // Check for boot completion (agent-specific ready patterns)
     if (!this.hasExitedBootState) {
       const timeSinceBoot = now - this.pollingStartTime;
-      if (isPrompt || this.isBootComplete(text) || timeSinceBoot >= this.POLLING_MAX_BOOT_MS) {
+      if (isPrompt || this.isBootComplete(strippedText) || timeSinceBoot >= this.POLLING_MAX_BOOT_MS) {
         this.hasExitedBootState = true;
       } else {
         return; // Still booting, stay busy
