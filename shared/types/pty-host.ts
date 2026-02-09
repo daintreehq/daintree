@@ -33,6 +33,8 @@ export interface PtyHostSpawnOptions {
   projectId?: string;
   /** Whether to restore previous session content (default: true). Set to false on restart. */
   restore?: boolean;
+  /** Whether to kill the PTY when the frontend disconnects (no terminal registry entry) */
+  isEphemeral?: boolean;
 }
 
 /**

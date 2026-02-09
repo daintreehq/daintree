@@ -71,6 +71,7 @@
     "electron-store": "^11.0.2",
     "execa": "^9.6.0",
     "fix-path": "^5.0.0",
+    "framer-motion": "^12.33.0",
     "frimousse": "^0.3.0",
     "fuse.js": "^7.1.0",
     "gray-matter": "^4.0.3",

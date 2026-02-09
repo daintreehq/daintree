@@ -29,6 +29,8 @@ export interface TerminalSpawnOptions {
   command?: string;
   /** Whether to restore previous session content (default: true). Set to false on restart. */
   restore?: boolean;
+  /** Whether to kill the PTY when the frontend disconnects (no terminal registry entry) */
+  isEphemeral?: boolean;
 }
 
 /** Terminal state for app state persistence */
