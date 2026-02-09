@@ -126,6 +126,12 @@ export interface ActivityMonitorOptions {
    * Used to reduce CPU usage for background project terminals.
    */
   pollingIntervalMs?: number;
+  /**
+   * Minimum sustained working signal duration before recovering from waiting/idle state (default: 1500ms).
+   * Prevents false positives from single output events like terminal reflows or ANSI escape sequences.
+   * Only applies to pattern-based and working signal recovery; high output recovery uses its own recoveryDelayMs.
+   */
+  workingRecoveryDelayMs?: number;
 }
 
 export interface ActivityStateMetadata {
@@ -182,6 +188,10 @@ export class ActivityMonitor {
   private highOutputWindowStart = 0;
   private highOutputBytesInWindow = 0;
   private sustainedHighOutputSince = 0;
+
+  // Working signal recovery debouncing
+  private readonly workingRecoveryDelayMs: number;
+  private sustainedWorkingSignalSince = 0;
 
   private readonly processStateValidator?: ProcessStateValidator;
   private lastActivityTimestamp = Date.now();
@@ -278,6 +288,9 @@ export class ActivityMonitor {
     this.highOutputBytesPerSecond = highOutputConfig.bytesPerSecond;
     this.highOutputRecoveryEnabled = highOutputConfig.recoveryEnabled;
     this.highOutputRecoveryDelayMs = highOutputConfig.recoveryDelayMs;
+
+    // Working signal recovery delay (default 1500ms)
+    this.workingRecoveryDelayMs = options?.workingRecoveryDelayMs ?? 1500;
 
     // Initialize pattern detector if agent ID or custom config is provided
     if (options?.patternConfig || options?.agentId) {
@@ -562,11 +575,27 @@ export class ActivityMonitor {
         isWorking &&
         (this.state === "busy" || this.pendingInputUntil > 0 || !this.isRecentUserInput(now))
       ) {
-        this.becomeBusy({
-          trigger: "pattern",
-          patternConfidence: patternResult?.confidence ?? 0.9,
-        });
+        // If already busy or pending input, transition immediately
+        if (this.state === "busy" || this.pendingInputUntil > 0) {
+          this.becomeBusy({
+            trigger: "pattern",
+            patternConfidence: patternResult?.confidence ?? 0.9,
+          });
+        } else {
+          // Recovery from idle - require sustained signal (debounced)
+          // Only call with true to potentially start/continue the timer
+          if (this.shouldTriggerWorkingRecovery(now, true)) {
+            this.becomeBusy({
+              trigger: "pattern",
+              patternConfidence: patternResult?.confidence ?? 0.9,
+            });
+          }
+        }
       }
+      // Note: We don't reset the working signal tracking here in polling mode because
+      // onData only sees the rolling buffer, not the visible lines. The polling cycle
+      // has full visibility and will handle resets. This prevents false timer resets
+      // when patterns are still visible in xterm but not in the rolling buffer.
     }
 
     // Now handle busy state - reset debounce timer
@@ -718,6 +747,40 @@ export class ActivityMonitor {
     this.highOutputWindowStart = 0;
     this.highOutputBytesInWindow = 0;
     this.sustainedHighOutputSince = 0;
+  }
+
+  /**
+   * Check if working signal has been sustained long enough to trigger recovery from idle/waiting.
+   * Requires sustained working pattern/signal for at least workingRecoveryDelayMs milliseconds.
+   * Prevents false positives from single output events like terminal reflows or ANSI sequences.
+   */
+  private shouldTriggerWorkingRecovery(now: number, signalPresent: boolean): boolean {
+    if (signalPresent) {
+      // Start tracking sustained working signal if not already
+      if (this.sustainedWorkingSignalSince === 0) {
+        this.sustainedWorkingSignalSince = now;
+        if (process.env.CANOPY_VERBOSE) {
+          console.log(
+            `[ActivityMonitor] Working signal detected, starting debounce timer (${this.workingRecoveryDelayMs}ms)`
+          );
+        }
+      }
+      // Check if sustained long enough
+      const sustained = now - this.sustainedWorkingSignalSince >= this.workingRecoveryDelayMs;
+      if (sustained && process.env.CANOPY_VERBOSE) {
+        console.log(
+          `[ActivityMonitor] Working signal sustained for ${now - this.sustainedWorkingSignalSince}ms, triggering recovery`
+        );
+      }
+      return sustained;
+    } else {
+      // Reset sustained tracking when signal disappears
+      if (this.sustainedWorkingSignalSince !== 0 && process.env.CANOPY_VERBOSE) {
+        console.log(`[ActivityMonitor] Working signal lost, resetting debounce timer`);
+      }
+      this.sustainedWorkingSignalSince = 0;
+      return false;
+    }
   }
 
   /**
@@ -999,6 +1062,7 @@ export class ActivityMonitor {
     this.pasteStartTime = 0;
     this.resetOutputWindow();
     this.resetHighOutputWindow();
+    this.sustainedWorkingSignalSince = 0;
     this.patternBuffer = "";
     this.lastPatternResult = undefined;
     this.pollingStartTime = 0;
@@ -1201,15 +1265,28 @@ export class ActivityMonitor {
       // while allowing recovery when agents resume work autonomously.
       if (this.state !== "busy" && this.pendingInputUntil === 0 && this.isRecentUserInput(now)) {
         // Recent user input with no pending Enter - likely typing echoes, don't transition
+        this.shouldTriggerWorkingRecovery(now, false);
         return;
       }
       if (this.state !== "busy") {
-        const metadata = isWorkingPattern
-          ? { trigger: "pattern" as const, patternConfidence: patternResult?.confidence ?? 0.9 }
-          : { trigger: "output" as const };
-        this.becomeBusy(metadata, now);
+        // Recovery from idle - require sustained signal (debounced) only after boot
+        if (this.hasExitedBootState && this.shouldTriggerWorkingRecovery(now, true)) {
+          const metadata = isWorkingPattern
+            ? { trigger: "pattern" as const, patternConfidence: patternResult?.confidence ?? 0.9 }
+            : { trigger: "output" as const };
+          this.becomeBusy(metadata, now);
+        } else if (!this.hasExitedBootState) {
+          // During boot, allow immediate transition (no debouncing)
+          const metadata = isWorkingPattern
+            ? { trigger: "pattern" as const, patternConfidence: patternResult?.confidence ?? 0.9 }
+            : { trigger: "output" as const };
+          this.becomeBusy(metadata, now);
+        }
       }
       return;
+    } else {
+      // Reset working signal tracking when signal is not present
+      this.shouldTriggerWorkingRecovery(now, false);
     }
 
     if (
@@ -1230,6 +1307,8 @@ export class ActivityMonitor {
       clearInterval(this.pollingInterval);
       this.pollingInterval = undefined;
     }
+    // Reset working signal tracking to prevent stale timestamps on restart
+    this.sustainedWorkingSignalSince = 0;
   }
 
   /**
