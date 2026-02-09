@@ -703,6 +703,10 @@ export function Toolbar({
             onCloseProject={handleCloseProject}
             onOpenProjectSettings={currentProject ? handleOpenProjectSettings : undefined}
             dropdownAlign="center"
+            removeConfirmProject={projectSwitcher.removeConfirmProject}
+            onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
+            onConfirmRemove={projectSwitcher.confirmRemoveProject}
+            isRemovingProject={projectSwitcher.isRemovingProject}
           >
             <button
               className={cn(

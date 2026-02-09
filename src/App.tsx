@@ -859,6 +859,10 @@ function App() {
         onAddProject={projectSwitcherPalette.addProject}
         onStopProject={(projectId) => projectSwitcherPalette.stopProject(projectId)}
         onCloseProject={(projectId) => projectSwitcherPalette.removeProject(projectId)}
+        removeConfirmProject={projectSwitcherPalette.removeConfirmProject}
+        onRemoveConfirmClose={() => projectSwitcherPalette.setRemoveConfirmProject(null)}
+        onConfirmRemove={projectSwitcherPalette.confirmRemoveProject}
+        isRemovingProject={projectSwitcherPalette.isRemovingProject}
       />
       <ConfirmDialog
         isOpen={projectSwitcherPalette.stopConfirmProjectId != null}

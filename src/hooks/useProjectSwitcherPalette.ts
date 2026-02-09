@@ -45,6 +45,10 @@ export interface UseProjectSwitcherPaletteReturn {
   setStopConfirmProjectId: (projectId: string | null) => void;
   confirmStopProject: () => Promise<void>;
   isStoppingProject: boolean;
+  removeConfirmProject: SearchableProject | null;
+  setRemoveConfirmProject: (project: SearchableProject | null) => void;
+  confirmRemoveProject: () => Promise<void>;
+  isRemovingProject: boolean;
 }
 
 const FUSE_OPTIONS: IFuseOptions<SearchableProject> = {
@@ -71,6 +75,8 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   >(new Map());
   const [stopConfirmProjectId, setStopConfirmProjectId] = useState<string | null>(null);
   const [isStoppingProject, setIsStoppingProject] = useState(false);
+  const [removeConfirmProject, setRemoveConfirmProject] = useState<SearchableProject | null>(null);
+  const [isRemovingProject, setIsRemovingProject] = useState(false);
   const selectedProjectIdRef = useRef<string | null>(null);
   const lastFetchRef = useRef(0);
   const lastFetchIdsRef = useRef<string>("");
@@ -270,6 +276,14 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     setSelectedIndex(0);
   }, [debouncedQuery]);
 
+  useEffect(() => {
+    if (!removeConfirmProject) return;
+    const stillExists = searchableProjects.some((p) => p.id === removeConfirmProject.id);
+    if (!stillExists) {
+      setRemoveConfirmProject(null);
+    }
+  }, [removeConfirmProject, searchableProjects]);
+
   const open = useCallback((nextMode: ProjectSwitcherMode = "modal") => {
     setMode(nextMode);
     setIsOpen(true);
@@ -418,19 +432,48 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
   const removeProjectFromList = useCallback(
     async (projectId: string) => {
-      try {
-        await removeProject(projectId);
-      } catch (error) {
-        addNotification({
-          type: "error",
-          title: "Failed to remove project",
-          message: error instanceof Error ? error.message : "Unknown error",
-          duration: 5000,
-        });
-      }
+      const project = searchableProjects.find((p) => p.id === projectId);
+      if (!project) return;
+
+      if (project.isActive) return;
+
+      if (removeConfirmProject) return;
+
+      setRemoveConfirmProject(project);
     },
-    [removeProject, addNotification]
+    [searchableProjects, removeConfirmProject]
   );
+
+  const confirmRemoveProject = useCallback(async () => {
+    if (!removeConfirmProject) return;
+
+    if (removeConfirmProject.id === currentProject?.id) {
+      setRemoveConfirmProject(null);
+      addNotification({
+        type: "error",
+        title: "Cannot remove active project",
+        message: "Switch to a different project first",
+        duration: 3000,
+      });
+      return;
+    }
+
+    setIsRemovingProject(true);
+
+    try {
+      await removeProject(removeConfirmProject.id);
+      setRemoveConfirmProject(null);
+    } catch (error) {
+      addNotification({
+        type: "error",
+        title: "Failed to remove project",
+        message: error instanceof Error ? error.message : "Unknown error",
+        duration: 5000,
+      });
+    } finally {
+      setIsRemovingProject(false);
+    }
+  }, [removeConfirmProject, removeProject, addNotification, currentProject?.id]);
 
   return {
     isOpen,
@@ -453,5 +496,9 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     setStopConfirmProjectId,
     confirmStopProject,
     isStoppingProject,
+    removeConfirmProject,
+    setRemoveConfirmProject,
+    confirmRemoveProject,
+    isRemovingProject,
   };
 }

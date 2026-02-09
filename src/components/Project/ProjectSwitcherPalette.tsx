@@ -5,6 +5,7 @@ import { getProjectGradient } from "@/lib/colorUtils";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ProjectActionRow } from "./ProjectActionRow";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import type { ProjectSwitcherMode, SearchableProject } from "@/hooks/useProjectSwitcherPalette";
@@ -26,6 +27,10 @@ export interface ProjectSwitcherPaletteProps {
   onOpenProjectSettings?: () => void;
   dropdownAlign?: "start" | "center" | "end";
   children?: React.ReactNode;
+  removeConfirmProject?: SearchableProject | null;
+  onRemoveConfirmClose?: () => void;
+  onConfirmRemove?: () => void;
+  isRemovingProject?: boolean;
 }
 
 interface ProjectListItemProps {
@@ -613,9 +618,19 @@ export function ProjectSwitcherPalette({
   onOpenProjectSettings,
   dropdownAlign,
   children,
+  removeConfirmProject,
+  onRemoveConfirmClose,
+  onConfirmRemove,
+  isRemovingProject = false,
 }: ProjectSwitcherPaletteProps) {
-  if (mode === "dropdown") {
-    return (
+  const hasRunningProcesses = removeConfirmProject
+    ? removeConfirmProject.processCount > 0 ||
+      removeConfirmProject.activeAgentCount > 0 ||
+      removeConfirmProject.waitingAgentCount > 0
+    : false;
+
+  const content =
+    mode === "dropdown" ? (
       <DropdownContent
         isOpen={isOpen}
         query={query}
@@ -634,23 +649,68 @@ export function ProjectSwitcherPalette({
       >
         {children}
       </DropdownContent>
+    ) : (
+      <ModalContent
+        isOpen={isOpen}
+        query={query}
+        results={results}
+        selectedIndex={selectedIndex}
+        onQueryChange={onQueryChange}
+        onSelectPrevious={onSelectPrevious}
+        onSelectNext={onSelectNext}
+        onSelect={onSelect}
+        onClose={onClose}
+        onAddProject={onAddProject}
+        onStopProject={onStopProject}
+        onCloseProject={onCloseProject}
+      />
     );
-  }
 
   return (
-    <ModalContent
-      isOpen={isOpen}
-      query={query}
-      results={results}
-      selectedIndex={selectedIndex}
-      onQueryChange={onQueryChange}
-      onSelectPrevious={onSelectPrevious}
-      onSelectNext={onSelectNext}
-      onSelect={onSelect}
-      onClose={onClose}
-      onAddProject={onAddProject}
-      onStopProject={onStopProject}
-      onCloseProject={onCloseProject}
-    />
+    <>
+      {content}
+      {removeConfirmProject && onRemoveConfirmClose && onConfirmRemove && (
+        <ConfirmDialog
+          isOpen={true}
+          onClose={isRemovingProject ? undefined : onRemoveConfirmClose}
+          title="Remove Project from List?"
+          zIndex="nested"
+          confirmLabel="Remove Project"
+          cancelLabel="Cancel"
+          onConfirm={onConfirmRemove}
+          isConfirmLoading={isRemovingProject}
+          variant="destructive"
+        >
+          <div className="space-y-3">
+            <div>
+              <div className="font-medium text-sm">{removeConfirmProject.name}</div>
+              <div className="text-xs text-canopy-text/50 font-mono mt-1">
+                {removeConfirmProject.path}
+              </div>
+            </div>
+            {hasRunningProcesses && (
+              <div className="rounded-[var(--radius-md)] bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs text-amber-200">
+                <div className="font-medium">Warning: Active sessions detected</div>
+                <div className="mt-1 text-amber-200/80">
+                  {removeConfirmProject.processCount > 0 && (
+                    <div>• {removeConfirmProject.processCount} running process(es)</div>
+                  )}
+                  {removeConfirmProject.activeAgentCount > 0 && (
+                    <div>• {removeConfirmProject.activeAgentCount} active agent(s)</div>
+                  )}
+                  {removeConfirmProject.waitingAgentCount > 0 && (
+                    <div>• {removeConfirmProject.waitingAgentCount} waiting agent(s)</div>
+                  )}
+                </div>
+              </div>
+            )}
+            <div className="text-xs text-canopy-text/60">
+              This project will be removed from your list. You can add it back later, but any
+              running terminals or processes will need to be restarted.
+            </div>
+          </div>
+        </ConfirmDialog>
+      )}
+    </>
   );
 }

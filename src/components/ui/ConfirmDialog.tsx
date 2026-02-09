@@ -3,9 +3,10 @@ import { AppDialog, type DialogZIndex } from "@/components/ui/AppDialog";
 
 export interface ConfirmDialogProps {
   isOpen: boolean;
-  onClose: () => void;
+  onClose?: () => void;
   title: React.ReactNode;
   description?: React.ReactNode;
+  children?: React.ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
   onConfirm: () => void | Promise<void>;
@@ -19,6 +20,7 @@ export function ConfirmDialog({
   onClose,
   title,
   description,
+  children,
   confirmLabel = "Confirm",
   cancelLabel = "Cancel",
   onConfirm,
@@ -26,22 +28,25 @@ export function ConfirmDialog({
   variant = "destructive",
   zIndex,
 }: ConfirmDialogProps) {
+  const handleClose = onClose ?? (() => {});
+
   return (
-    <AppDialog isOpen={isOpen} onClose={onClose} size="sm" variant={variant} zIndex={zIndex}>
+    <AppDialog isOpen={isOpen} onClose={handleClose} size="sm" variant={variant} zIndex={zIndex}>
       <AppDialog.Header>
         <AppDialog.Title>{title}</AppDialog.Title>
-        <AppDialog.CloseButton />
+        {onClose && <AppDialog.CloseButton />}
       </AppDialog.Header>
 
       <AppDialog.Body className="space-y-3">
         {description && <AppDialog.Description>{description}</AppDialog.Description>}
+        {children}
       </AppDialog.Body>
 
       <AppDialog.Footer
         secondaryAction={{
           label: cancelLabel,
-          onClick: onClose,
-          disabled: isConfirmLoading,
+          onClick: handleClose,
+          disabled: isConfirmLoading || !onClose,
         }}
         primaryAction={{
           label: confirmLabel,

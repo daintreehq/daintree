@@ -94,6 +94,10 @@ export function ProjectSwitcher() {
             onAddProject={projectSwitcher.addProject}
             onStopProject={handleStopProject}
             onCloseProject={handleCloseProject}
+            removeConfirmProject={projectSwitcher.removeConfirmProject}
+            onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
+            onConfirmRemove={projectSwitcher.confirmRemoveProject}
+            isRemovingProject={projectSwitcher.isRemovingProject}
           >
             <Button
               variant="outline"
@@ -143,6 +147,10 @@ export function ProjectSwitcher() {
         onStopProject={handleStopProject}
         onCloseProject={handleCloseProject}
         onOpenProjectSettings={handleOpenSettings}
+        removeConfirmProject={projectSwitcher.removeConfirmProject}
+        onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
+        onConfirmRemove={projectSwitcher.confirmRemoveProject}
+        isRemovingProject={projectSwitcher.isRemovingProject}
       >
         <TooltipProvider>
           <Tooltip>
