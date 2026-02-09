@@ -11,7 +11,7 @@ import { actionService } from "@/services/ActionService";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useProjectStore, useTerminalStore } from "@/store";
 import type { BrowserHistory } from "@shared/types/domain";
-import type { DevPreviewStatus } from "@shared/types/ipc/devPreview";
+import type { DevPreviewStatus } from "./devPreviewTypes";
 
 interface WebviewInstance {
   element: Electron.WebviewTag;
@@ -147,7 +147,7 @@ export interface DevPreviewPaneProps extends BasePanelProps {
 export function DevPreviewPane({
   id,
   title,
-  cwd,
+  cwd: _cwd,
   worktreeId,
   isFocused,
   isMaximized = false,
@@ -196,7 +196,6 @@ export function DevPreviewPane({
   const [isWebviewReady, setIsWebviewReady] = useState(false);
   const [isLoadingOverlayVisible, setIsLoadingOverlayVisible] = useState(false);
   const [isUrlStale, setIsUrlStale] = useState(false);
-  const currentSessionIdRef = useRef<string | null>(null);
   const restartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const restoredFromSwitchRef = useRef(false);
   const webviewStore = useMemo(() => getDevPreviewWebviewStore(id), [id]);
@@ -307,6 +306,34 @@ export function DevPreviewPane({
       setWebviewLoadError("Loading timed out. The dev server may still be starting.");
     }, LOADING_TIMEOUT_MS);
   }, [clearLoadingTimeout]);
+
+  const stopRestartSpinner = useCallback(() => {
+    setIsRestarting(false);
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current);
+      restartTimeoutRef.current = null;
+    }
+  }, []);
+
+  const setStatusAndMessage = useCallback(
+    (nextStatus: DevPreviewStatus, nextMessage: string, nextError?: string) => {
+      setStatus(nextStatus);
+      setMessage(nextMessage);
+      if (nextStatus === "error") {
+        setError(nextError?.trim() || nextMessage || undefined);
+      } else {
+        setError(undefined);
+      }
+      if (nextStatus === "running" || nextStatus === "error" || nextStatus === "stopped") {
+        stopRestartSpinner();
+      }
+      if (nextStatus === "error" || nextStatus === "stopped") {
+        clearAutoReload();
+        clearLoadingTimeout();
+      }
+    },
+    [clearAutoReload, clearLoadingTimeout, stopRestartSpinner]
+  );
 
   const getActiveWebview = useCallback((): Electron.WebviewTag | null => {
     const instance = webviewMapRef.current.get(currentWebviewKey);
@@ -509,10 +536,10 @@ export function DevPreviewPane({
       }
 
       if (isBrowserOnly) {
-        void window.electron.devPreview.setUrl(id, result.url!);
+        setStatusAndMessage("running", "Running");
       }
     },
-    [clearAutoReload, id, isBrowserOnly, isWebviewReady, safeLoadUrl]
+    [clearAutoReload, id, isBrowserOnly, isWebviewReady, safeLoadUrl, setStatusAndMessage]
   );
 
   const handleBack = useCallback(() => {
@@ -649,134 +676,34 @@ export function DevPreviewPane({
     void actionService.dispatch("browser.openExternal", { terminalId: id }, { source: "user" });
   }, [hasPreviewUrl, id]);
 
-  const applyStatusPayload = useCallback(
-    (payload: { status: DevPreviewStatus; message: string; error?: string }) => {
-      setStatus(payload.status);
-      setMessage(payload.message);
-      setError(
-        payload.status === "error"
-          ? payload.error?.trim() || payload.message || undefined
-          : undefined
-      );
-      const isBrowserOnlyMessage = payload.message.includes("Browser-only mode");
-      setIsBrowserOnly((prev) => prev || isBrowserOnlyMessage);
-      if (isBrowserOnlyMessage) {
-        setIsUrlStale(false);
-      }
-      if (
-        payload.status === "running" ||
-        payload.status === "error" ||
-        payload.status === "stopped"
-      ) {
-        setIsRestarting(false);
-        if (restartTimeoutRef.current) {
-          clearTimeout(restartTimeoutRef.current);
-          restartTimeoutRef.current = null;
-        }
-      }
-      if (payload.status === "error" || payload.status === "stopped") {
-        clearAutoReload();
-        clearLoadingTimeout();
-      }
-    },
-    [clearAutoReload, clearLoadingTimeout]
-  );
-
-  const attachCounterRef = useRef(0);
-
-  const attachAndSync = useCallback(
-    async (
-      devCommand?: string,
-      options?: {
-        treatCommandAsFinal?: boolean;
-      }
-    ) => {
-      const thisAttach = ++attachCounterRef.current;
-      currentSessionIdRef.current = null;
-      const MAX_RETRIES = 3;
-      const RETRY_DELAY_MS = 150;
-
-      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        if (attachCounterRef.current !== thisAttach) return;
-        try {
-          const snapshot = await window.electron.devPreview.attach(id, cwd, devCommand, options);
-          if (attachCounterRef.current !== thisAttach) return;
-          // Retry if PTY isn't ready yet (race between spawn and attach)
-          if (
-            snapshot.status === "stopped" &&
-            snapshot.message === "Terminal not found" &&
-            attempt < MAX_RETRIES
-          ) {
-            await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * (attempt + 1)));
-            continue;
-          }
-          currentSessionIdRef.current = snapshot.sessionId;
-          applyStatusPayload(snapshot);
-          if (snapshot.url) {
-            handleServerUrl(snapshot.url);
-          }
-          return;
-        } catch {
-          if (attachCounterRef.current !== thisAttach) return;
-          if (attempt < MAX_RETRIES) {
-            await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * (attempt + 1)));
-            continue;
-          }
-          const existing = currentSessionIdRef.current;
-          if (!existing) {
-            setStatus("error");
-            setMessage("Failed to attach to dev server");
-            setError("Failed to attach to dev server");
-          }
-        }
-      }
-    },
-    [applyStatusPayload, cwd, handleServerUrl, id]
-  );
-
   useEffect(() => {
-    const offStatus = window.electron.devPreview.onStatus((payload) => {
-      if (payload.panelId !== id) return;
-      if (payload.sessionId !== currentSessionIdRef.current) return;
-      applyStatusPayload(payload);
-    });
-
-    const offUrl = window.electron.devPreview.onUrl((payload) => {
-      if (payload.panelId !== id) return;
-      if (payload.sessionId !== currentSessionIdRef.current) return;
+    const offUrlDetected = window.electron.devPreview.onUrlDetected((payload) => {
+      if (payload.terminalId !== id) return;
       handleServerUrl(payload.url);
+      setIsBrowserOnly(false);
+      setStatusAndMessage("running", "Running");
     });
 
-    const offRecovery = window.electron.devPreview.onRecovery(async (payload) => {
-      if (payload.panelId !== id) return;
-      if (payload.sessionId !== currentSessionIdRef.current) return;
-      // DevPreviewService killed the PTY for recovery. Restart via standard pipeline
-      // and re-attach so the overlay can monitor the new process.
-      await restartTerminal(id);
-      await attachAndSync(payload.command, {
-        treatCommandAsFinal: payload.treatCommandAsFinal,
-      });
+    const offErrorDetected = window.electron.devPreview.onErrorDetected((payload) => {
+      if (payload.terminalId !== id) return;
+      setIsBrowserOnly(false);
+      if (payload.error.type === "missing-dependencies") {
+        setStatusAndMessage("installing", payload.error.message);
+        return;
+      }
+      setStatusAndMessage("error", payload.error.message, payload.error.message);
     });
 
     return () => {
-      offStatus();
-      offUrl();
-      offRecovery();
+      offUrlDetected();
+      offErrorDetected();
       if (restartTimeoutRef.current) {
         clearTimeout(restartTimeoutRef.current);
       }
       clearAutoReload();
       clearLoadingTimeout();
     };
-  }, [
-    applyStatusPayload,
-    attachAndSync,
-    clearAutoReload,
-    clearLoadingTimeout,
-    handleServerUrl,
-    id,
-    restartTerminal,
-  ]);
+  }, [clearAutoReload, clearLoadingTimeout, handleServerUrl, id, setStatusAndMessage]);
 
   const setupWebviewListeners = useCallback(
     (webview: Electron.WebviewTag, webviewKey: string) => {
@@ -1119,13 +1046,20 @@ export function DevPreviewPane({
             };
     setHistory(nextHistory);
     setError(undefined);
+    const devCommand = currentTerminal?.devCommand?.trim();
+    const browserOnly = !devCommand;
     // Only reset status to "starting" on true init, not on remount/project-switch restoration
     if (!hasSavedUrl) {
-      setStatus("starting");
-      setMessage("Starting dev server...");
+      if (browserOnly) {
+        setStatus("stopped");
+        setMessage("Browser-only mode");
+      } else {
+        setStatus("starting");
+        setMessage("Starting dev server...");
+      }
     }
     setIsRestarting(false);
-    setIsBrowserOnly(false);
+    setIsBrowserOnly(browserOnly);
     setShowTerminal(false);
     setHasLoaded(hasSavedUrl && !shouldTreatSavedUrlAsStale);
     setIsLoading(false);
@@ -1146,8 +1080,6 @@ export function DevPreviewPane({
       restartTimeoutRef.current = null;
     }
 
-    const devCommand = currentTerminal?.devCommand;
-
     // Restore saved state from terminal store (preserves URL across project switches)
     isRestoringStateRef.current = true;
     if (currentTerminal?.browserHistory) {
@@ -1162,20 +1094,23 @@ export function DevPreviewPane({
     }
     isRestoringStateRef.current = false;
 
-    // Attach DevPreviewService overlay to the PTY spawned by the standard terminal pipeline.
-    // Panel ID = PTY ID in the terminal-first architecture.
-    void attachAndSync(devCommand);
+    void window.electron.devPreview.subscribe(id).catch((error) => {
+      console.error("[DevPreview] Failed to subscribe to URL detection:", error);
+      setStatus("error");
+      setMessage("Failed to start URL detection");
+      setError("Failed to start URL detection");
+    });
 
     return () => {
-      // Detach overlay only when the panel is actually removed. Layout changes
-      // can unmount/remount without destroying the terminal, so keep sessions for
+      // Unsubscribe only when the panel is actually removed. Layout changes
+      // can unmount/remount without destroying the terminal, so keep subscriptions for
       // those transitions by checking for terminal existence.
       const stillExists = Boolean(useTerminalStore.getState().getTerminal(id));
       if (!stillExists) {
-        void window.electron.devPreview.detach(id);
+        void window.electron.devPreview.unsubscribe(id);
       }
     };
-  }, [attachAndSync, clearAutoReload, clearLoadingTimeout, id, worktreeId, webviewStore]);
+  }, [clearAutoReload, clearLoadingTimeout, id, worktreeId, webviewStore]);
 
   // (Webview cleanup handled in layout effect.)
 
@@ -1281,13 +1216,8 @@ export function DevPreviewPane({
       setIsRestarting(false);
     }, 10000);
 
-    // Detach overlay, restart PTY through standard pipeline, then re-attach
-    // Await detach to prevent race where late detach severs the new attachment
-    await window.electron.devPreview.detach(id);
     await restartTerminal(id);
-    const terminal = useTerminalStore.getState().getTerminal(id);
-    await attachAndSync(terminal?.devCommand);
-  }, [attachAndSync, clearAutoReload, clearLoadingTimeout, id, restartTerminal]);
+  }, [clearAutoReload, clearLoadingTimeout, id, restartTerminal]);
 
   const handleForceReload = useCallback(() => {
     if (!hasPreviewUrl) return;

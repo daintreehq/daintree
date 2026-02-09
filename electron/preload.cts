@@ -41,11 +41,8 @@ import type {
   ArtifactDetectedPayload,
   SaveArtifactOptions,
   ApplyPatchOptions,
-  DevPreviewStatusPayload,
-  DevPreviewUrlPayload,
-  DevPreviewAttachSnapshot,
-  DevPreviewAttachOptionsPayload,
-  DevPreviewRecoveryPayload,
+  DevPreviewUrlDetectedPayload,
+  DevPreviewErrorDetectedPayload,
 } from "../shared/types/ipc.js";
 import type { TerminalActivityPayload } from "../shared/types/terminal.js";
 import type { TerminalStatusPayload, SpawnResult } from "../shared/types/pty-host.js";
@@ -254,13 +251,10 @@ const CHANNELS = {
   NOTES_UPDATED: "notes:updated",
 
   // Dev Preview channels
-  DEV_PREVIEW_ATTACH: "dev-preview:attach",
-  DEV_PREVIEW_DETACH: "dev-preview:detach",
-  DEV_PREVIEW_SET_URL: "dev-preview:set-url",
-  DEV_PREVIEW_STATUS: "dev-preview:status",
-  DEV_PREVIEW_URL: "dev-preview:url",
-  DEV_PREVIEW_RECOVERY: "dev-preview:recovery",
-  DEV_PREVIEW_PRUNE_SESSIONS: "dev-preview:prune-sessions",
+  DEV_PREVIEW_SUBSCRIBE: "dev-preview:subscribe",
+  DEV_PREVIEW_UNSUBSCRIBE: "dev-preview:unsubscribe",
+  DEV_PREVIEW_URL_DETECTED: "dev-preview:url-detected",
+  DEV_PREVIEW_ERROR_DETECTED: "dev-preview:error-detected",
 
   // App state channels
   APP_GET_STATE: "app:get-state",
@@ -1028,36 +1022,17 @@ const api: ElectronAPI = {
 
   // Dev Preview API
   devPreview: {
-    attach: (
-      terminalId: string,
-      cwd: string,
-      devCommand?: string,
-      options?: DevPreviewAttachOptionsPayload
-    ): Promise<DevPreviewAttachSnapshot> =>
-      _typedInvoke(
-        CHANNELS.DEV_PREVIEW_ATTACH,
-        terminalId,
-        cwd,
-        devCommand,
-        options
-      ) as Promise<DevPreviewAttachSnapshot>,
+    subscribe: (terminalId: string): Promise<void> =>
+      _typedInvoke(CHANNELS.DEV_PREVIEW_SUBSCRIBE, terminalId) as Promise<void>,
 
-    detach: (panelId: string) => _typedInvoke(CHANNELS.DEV_PREVIEW_DETACH, panelId),
+    unsubscribe: (terminalId: string): Promise<void> =>
+      _typedInvoke(CHANNELS.DEV_PREVIEW_UNSUBSCRIBE, terminalId) as Promise<void>,
 
-    setUrl: (panelId: string, url: string) =>
-      _typedInvoke(CHANNELS.DEV_PREVIEW_SET_URL, panelId, url),
+    onUrlDetected: (callback: (payload: DevPreviewUrlDetectedPayload) => void) =>
+      _typedOn(CHANNELS.DEV_PREVIEW_URL_DETECTED, callback),
 
-    onStatus: (callback: (payload: DevPreviewStatusPayload) => void) =>
-      _typedOn(CHANNELS.DEV_PREVIEW_STATUS, callback),
-
-    onUrl: (callback: (payload: DevPreviewUrlPayload) => void) =>
-      _typedOn(CHANNELS.DEV_PREVIEW_URL, callback),
-
-    onRecovery: (callback: (payload: DevPreviewRecoveryPayload) => void) =>
-      _typedOn(CHANNELS.DEV_PREVIEW_RECOVERY, callback),
-
-    pruneSessions: (activePanelIds: string[]): Promise<number> =>
-      _typedInvoke(CHANNELS.DEV_PREVIEW_PRUNE_SESSIONS, activePanelIds) as Promise<number>,
+    onErrorDetected: (callback: (payload: DevPreviewErrorDetectedPayload) => void) =>
+      _typedOn(CHANNELS.DEV_PREVIEW_ERROR_DETECTED, callback),
   },
 
   // Git API

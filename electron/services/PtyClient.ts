@@ -922,7 +922,7 @@ export class PtyClient extends EventEmitter {
   /**
    * Enable/disable IPC data mirroring for a terminal.
    * When enabled, PTY data is always sent via IPC in addition to SharedArrayBuffer,
-   * allowing main-process consumers (like DevPreviewService) to receive data events.
+   * allowing main-process consumers (like UrlDetector for dev preview) to receive data events.
    */
   setIpcDataMirror(id: string, enabled: boolean): void {
     this.send({ type: "set-ipc-data-mirror", id, enabled });

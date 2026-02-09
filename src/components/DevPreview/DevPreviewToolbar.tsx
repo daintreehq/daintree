@@ -1,6 +1,6 @@
 import { RotateCw, ExternalLink, Server } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { DevPreviewStatus } from "@shared/types/ipc/devPreview";
+import type { DevPreviewStatus } from "./devPreviewTypes";
 
 const STATUS_CONFIG: Record<DevPreviewStatus, { label: string; dotClass: string }> = {
   installing: {

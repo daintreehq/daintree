@@ -1,149 +1,149 @@
 import { ipcMain } from "electron";
-import { promises as fs } from "fs";
-import path from "path";
 import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
-import { DevPreviewService } from "../../services/DevPreviewService.js";
-import type { DevPreviewAttachOptionsPayload } from "../../../shared/types/ipc/devPreview.js";
-
-let devPreviewService: DevPreviewService | null = null;
+import { UrlDetector } from "../../services/UrlDetector.js";
+import type {
+  DevPreviewUrlDetectedPayload,
+  DevPreviewErrorDetectedPayload,
+} from "../../../shared/types/ipc/devPreview.js";
 
 export function registerDevPreviewHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
-  const service = new DevPreviewService(deps.ptyClient);
-  devPreviewService = service;
+  const detector = new UrlDetector();
+  const subscriptions = new Map<
+    string,
+    {
+      buffer: string;
+      lastUrl: string | null;
+      lastError: string | null;
+      listener: (id: string, data: string | Uint8Array) => void;
+      urlListener: (url: string) => void;
+      errorListener: (
+        error: import("../../../shared/utils/devServerErrors.js").DevServerError
+      ) => void;
+    }
+  >();
 
-  const forwardStatus = (data: unknown) => {
+  const sendToRenderer = (channel: string, data: unknown) => {
     if (
       deps.mainWindow &&
       !deps.mainWindow.isDestroyed() &&
       !deps.mainWindow.webContents.isDestroyed()
     ) {
       try {
-        deps.mainWindow.webContents.send(CHANNELS.DEV_PREVIEW_STATUS, data);
-      } catch {
-        // Silently ignore send failures during window disposal.
-      }
-    }
-  };
-  const forwardUrl = (data: unknown) => {
-    if (
-      deps.mainWindow &&
-      !deps.mainWindow.isDestroyed() &&
-      !deps.mainWindow.webContents.isDestroyed()
-    ) {
-      try {
-        deps.mainWindow.webContents.send(CHANNELS.DEV_PREVIEW_URL, data);
-      } catch {
-        // Silently ignore send failures during window disposal.
-      }
-    }
-  };
-  const forwardRecovery = (data: unknown) => {
-    if (
-      deps.mainWindow &&
-      !deps.mainWindow.isDestroyed() &&
-      !deps.mainWindow.webContents.isDestroyed()
-    ) {
-      try {
-        deps.mainWindow.webContents.send(CHANNELS.DEV_PREVIEW_RECOVERY, data);
+        deps.mainWindow.webContents.send(channel, data);
       } catch {
         // Silently ignore send failures during window disposal.
       }
     }
   };
 
-  service.on("status", forwardStatus);
-  service.on("url", forwardUrl);
-  service.on("recovery", forwardRecovery);
-  handlers.push(() => service.off("status", forwardStatus));
-  handlers.push(() => service.off("url", forwardUrl));
-  handlers.push(() => service.off("recovery", forwardRecovery));
+  const handleUrlDetected = (url: string, terminalId: string, worktreeId?: string) => {
+    const payload: DevPreviewUrlDetectedPayload = {
+      terminalId,
+      url,
+      worktreeId,
+    };
+    sendToRenderer(CHANNELS.DEV_PREVIEW_URL_DETECTED, payload);
+  };
 
-  const handleAttach = async (
-    _event: Electron.IpcMainInvokeEvent,
+  const handleErrorDetected = (
+    error: import("../../../shared/utils/devServerErrors.js").DevServerError,
     terminalId: string,
-    cwd: string,
-    devCommand?: string,
-    attachOptions?: DevPreviewAttachOptionsPayload
+    worktreeId?: string
   ) => {
+    const payload: DevPreviewErrorDetectedPayload = {
+      terminalId,
+      error,
+      worktreeId,
+    };
+    sendToRenderer(CHANNELS.DEV_PREVIEW_ERROR_DETECTED, payload);
+  };
+
+  const handleSubscribe = async (_event: Electron.IpcMainInvokeEvent, terminalId: string) => {
     if (!terminalId || typeof terminalId !== "string") {
       throw new Error("terminalId is required");
     }
-    if (!cwd || typeof cwd !== "string" || !path.isAbsolute(cwd)) {
-      throw new Error("cwd must be an absolute path");
-    }
-    if (devCommand !== undefined && typeof devCommand !== "string") {
-      throw new Error("devCommand must be a string if provided");
-    }
-    if (attachOptions !== undefined) {
-      if (typeof attachOptions !== "object" || attachOptions === null) {
-        throw new Error("attachOptions must be an object if provided");
-      }
-      if (
-        "treatCommandAsFinal" in attachOptions &&
-        attachOptions.treatCommandAsFinal !== undefined &&
-        typeof attachOptions.treatCommandAsFinal !== "boolean"
-      ) {
-        throw new Error("attachOptions.treatCommandAsFinal must be a boolean if provided");
-      }
+
+    if (subscriptions.has(terminalId)) {
+      return;
     }
 
-    try {
-      const stats = await fs.stat(cwd);
-      if (!stats.isDirectory()) {
-        throw new Error(`cwd is not a directory: ${cwd}`);
-      }
-    } catch (error) {
-      if (error instanceof Error && error.message.startsWith("cwd")) {
-        throw error;
-      }
-      throw new Error(`Cannot access cwd: ${cwd}`);
-    }
+    const listener = (id: string, data: string | Uint8Array) => {
+      if (id !== terminalId) return;
 
-    return await service.attach({
-      panelId: terminalId,
-      ptyId: terminalId,
-      cwd,
-      devCommand,
-      treatCommandAsFinal: attachOptions?.treatCommandAsFinal === true,
+      const sub = subscriptions.get(terminalId);
+      if (!sub) return;
+
+      const dataString = typeof data === "string" ? data : new TextDecoder().decode(data);
+      const result = detector.scanOutput(dataString, sub.buffer);
+      sub.buffer = result.buffer;
+    };
+
+    const urlListener = (url: string) => {
+      const sub = subscriptions.get(terminalId);
+      if (!sub) return;
+      if (sub.lastUrl === url) return;
+      sub.lastUrl = url;
+      handleUrlDetected(url, terminalId, undefined);
+    };
+
+    const errorListener = (
+      error: import("../../../shared/utils/devServerErrors.js").DevServerError
+    ) => {
+      const sub = subscriptions.get(terminalId);
+      if (!sub) return;
+      const errorKey = `${error.type}:${error.message}`;
+      if (sub.lastError === errorKey) return;
+      sub.lastError = errorKey;
+      handleErrorDetected(error, terminalId, undefined);
+    };
+
+    detector.on("url-detected", urlListener);
+    detector.on("error-detected", errorListener);
+
+    deps.ptyClient.on("data", listener);
+    deps.ptyClient.setIpcDataMirror(terminalId, true);
+
+    subscriptions.set(terminalId, {
+      buffer: "",
+      lastUrl: null,
+      lastError: null,
+      listener,
+      urlListener,
+      errorListener,
     });
   };
-  ipcMain.handle(CHANNELS.DEV_PREVIEW_ATTACH, handleAttach);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.DEV_PREVIEW_ATTACH));
 
-  const handleDetach = async (_event: Electron.IpcMainInvokeEvent, panelId: string) => {
-    service.detach(panelId);
-  };
-  ipcMain.handle(CHANNELS.DEV_PREVIEW_DETACH, handleDetach);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.DEV_PREVIEW_DETACH));
+  ipcMain.handle(CHANNELS.DEV_PREVIEW_SUBSCRIBE, handleSubscribe);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.DEV_PREVIEW_SUBSCRIBE));
 
-  const handleSetUrl = async (
-    _event: Electron.IpcMainInvokeEvent,
-    panelId: string,
-    url: string
-  ) => {
-    service.setUrl(panelId, url);
-  };
-  ipcMain.handle(CHANNELS.DEV_PREVIEW_SET_URL, handleSetUrl);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.DEV_PREVIEW_SET_URL));
-
-  const handlePruneSessions = async (
-    _event: Electron.IpcMainInvokeEvent,
-    activePanelIds: string[]
-  ) => {
-    if (!Array.isArray(activePanelIds) || activePanelIds.some((id) => typeof id !== "string")) {
-      throw new Error("activePanelIds must be an array of strings");
+  const handleUnsubscribe = async (_event: Electron.IpcMainInvokeEvent, terminalId: string) => {
+    if (!terminalId || typeof terminalId !== "string") {
+      throw new Error("terminalId is required");
     }
-    return service.pruneInactiveSessions(new Set(activePanelIds));
+
+    const sub = subscriptions.get(terminalId);
+    if (!sub) return;
+
+    deps.ptyClient.off("data", sub.listener);
+    detector.off("url-detected", sub.urlListener);
+    detector.off("error-detected", sub.errorListener);
+    deps.ptyClient.setIpcDataMirror(terminalId, false);
+    subscriptions.delete(terminalId);
   };
-  ipcMain.handle(CHANNELS.DEV_PREVIEW_PRUNE_SESSIONS, handlePruneSessions);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.DEV_PREVIEW_PRUNE_SESSIONS));
+
+  ipcMain.handle(CHANNELS.DEV_PREVIEW_UNSUBSCRIBE, handleUnsubscribe);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.DEV_PREVIEW_UNSUBSCRIBE));
 
   return () => {
-    handlers.forEach((dispose) => dispose());
-    if (devPreviewService === service) {
-      devPreviewService = null;
+    for (const [terminalId, sub] of subscriptions.entries()) {
+      deps.ptyClient.off("data", sub.listener);
+      detector.off("url-detected", sub.urlListener);
+      detector.off("error-detected", sub.errorListener);
+      deps.ptyClient.setIpcDataMirror(terminalId, false);
     }
+    subscriptions.clear();
+    handlers.forEach((dispose) => dispose());
   };
 }

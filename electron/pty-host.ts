@@ -415,7 +415,7 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
   }
 
   // IPC Data Mirror: Always send data via IPC for terminals that need main-process
-  // monitoring (e.g., DevPreviewService URL detection), even when SAB write succeeded.
+  // monitoring (e.g., UrlDetector for dev preview URL detection), even when SAB write succeeded.
   // Skip mirroring for suspended/backgrounded terminals to respect backpressure semantics.
   if (visualWritten && ipcDataMirrorTerminals.has(id) && !isSuspended && !isBackgrounded) {
     sendEvent({ type: "data", id, data: toStringForIpc(data) });

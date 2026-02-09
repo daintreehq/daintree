@@ -1,4 +1,4 @@
-import type { DevPreviewStatus } from "@shared/types/ipc/devPreview";
+import type { DevPreviewStatus } from "./devPreviewTypes";
 
 function getOrigin(url: string): string | null {
   try {

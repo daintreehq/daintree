@@ -144,8 +144,8 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       const terminals = [];
       for (const id of terminalIds) {
         const terminal = await ptyClient.getTerminalAsync(id);
-        // Dev preview PTYs are managed by DevPreviewService and should not be rehydrated
-        // as generic terminal panels during project switching/hydration.
+        // Dev preview PTYs should not be rehydrated as generic terminal panels
+        // during project switching/hydration.
         if (terminal && terminal.kind !== "dev-preview") {
           terminals.push({
             id: terminal.id,

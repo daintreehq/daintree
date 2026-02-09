@@ -75,13 +75,7 @@ import type { TerminalStatusPayload, PtyHostActivityTier, SpawnResult } from "..
 import type { ShowContextMenuPayload } from "../menu.js";
 import type { FileSearchPayload, FileSearchResult } from "./files.js";
 import type { SlashCommand, SlashCommandListRequest } from "../slashCommands.js";
-import type {
-  DevPreviewStatusPayload,
-  DevPreviewUrlPayload,
-  DevPreviewAttachSnapshot,
-  DevPreviewAttachOptionsPayload,
-  DevPreviewRecoveryPayload,
-} from "./devPreview.js";
+import type { DevPreviewUrlDetectedPayload, DevPreviewErrorDetectedPayload } from "./devPreview.js";
 import type {
   CommandContext,
   CommandManifestEntry,
@@ -481,18 +475,10 @@ export interface ElectronAPI {
     ): () => void;
   };
   devPreview: {
-    attach(
-      terminalId: string,
-      cwd: string,
-      devCommand?: string,
-      options?: DevPreviewAttachOptionsPayload
-    ): Promise<DevPreviewAttachSnapshot>;
-    detach(panelId: string): Promise<void>;
-    setUrl(panelId: string, url: string): Promise<void>;
-    onStatus(callback: (data: DevPreviewStatusPayload) => void): () => void;
-    onUrl(callback: (data: DevPreviewUrlPayload) => void): () => void;
-    onRecovery(callback: (data: DevPreviewRecoveryPayload) => void): () => void;
-    pruneSessions(activePanelIds: string[]): Promise<number>;
+    subscribe(terminalId: string): Promise<void>;
+    unsubscribe(terminalId: string): Promise<void>;
+    onUrlDetected(callback: (data: DevPreviewUrlDetectedPayload) => void): () => void;
+    onErrorDetected(callback: (data: DevPreviewErrorDetectedPayload) => void): () => void;
   };
   git: {
     getFileDiff(cwd: string, filePath: string, status: GitStatus): Promise<string>;
