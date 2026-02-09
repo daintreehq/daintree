@@ -1454,7 +1454,10 @@ export function DevPreviewPane({
         <div className="flex items-center justify-between gap-3 px-3 py-1.5 border-t border-canopy-border bg-[color-mix(in_oklab,var(--color-surface)_92%,transparent)] text-xs text-canopy-text/70">
           <div className="flex items-center gap-2 min-w-0" role="status" aria-live="polite">
             <Server className="w-3.5 h-3.5 text-canopy-text/40 shrink-0" aria-hidden="true" />
-            <span className={cn("h-2 w-2 rounded-full shrink-0", statusStyle.dot)} aria-hidden="true" />
+            <span
+              className={cn("h-2 w-2 rounded-full shrink-0", statusStyle.dot)}
+              aria-hidden="true"
+            />
             <span className="flex items-center gap-2 flex-1 min-w-0">
               <span className={cn("font-medium shrink-0", statusStyle.text)}>
                 {statusStyle.label}
