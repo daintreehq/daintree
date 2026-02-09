@@ -122,8 +122,6 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
   return () => {
     for (const [terminalId, sub] of subscriptions.entries()) {
       deps.ptyClient.off("data", sub.listener);
-      detector.off("url-detected", sub.urlListener);
-      detector.off("error-detected", sub.errorListener);
       deps.ptyClient.setIpcDataMirror(terminalId, false);
     }
     subscriptions.clear();

@@ -88,14 +88,20 @@ describe("UrlDetector", () => {
 
       it("extracts latest URL from buffer when port changes", () => {
         const result1 = detector.scanOutput("Server at http://localhost:3000\n", "");
-        const result2 = detector.scanOutput("Port changed, now at http://localhost:3001\n", result1.buffer);
+        const result2 = detector.scanOutput(
+          "Port changed, now at http://localhost:3001\n",
+          result1.buffer
+        );
         expect(result2.url).toBe("http://localhost:3001/");
       });
     });
 
     describe("error detection", () => {
       it("detects port conflict errors", () => {
-        const result = detector.scanOutput("Error: listen EADDRINUSE: address already in use :::3000", "");
+        const result = detector.scanOutput(
+          "Error: listen EADDRINUSE: address already in use :::3000",
+          ""
+        );
         expect(result.error?.type).toBe("port-conflict");
         expect(result.error?.port).toBe("3000");
       });
