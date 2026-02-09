@@ -113,6 +113,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         worktreeId,
         projectId,
         restore: validatedOptions.restore,
+        isEphemeral: validatedOptions.isEphemeral,
       });
 
       if (validatedOptions.command) {
