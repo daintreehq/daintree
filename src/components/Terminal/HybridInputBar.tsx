@@ -1041,8 +1041,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               "flex w-full items-center gap-1.5 rounded-sm border border-white/[0.06] bg-white/[0.03] py-1 shadow-[0_6px_12px_rgba(0,0,0,0.18)] transition-colors",
               "group-hover:border-white/[0.08] group-hover:bg-white/[0.04]",
               "focus-within:border-white/[0.12] focus-within:ring-1 focus-within:ring-white/[0.06] focus-within:bg-white/[0.05]",
-              disabled && "opacity-60",
-              isInitializing && "opacity-50"
+              disabled && "opacity-60"
             )}
             aria-disabled={disabled}
             aria-busy={isInitializing}
