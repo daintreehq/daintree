@@ -89,7 +89,7 @@ export function useDevServer({
     setTerminalId(null);
 
     let id: string | null = null;
-    let listeners: Array<() => void> = [];
+    const listeners: Array<() => void> = [];
 
     try {
       id = await terminalClient.spawn({
@@ -110,45 +110,43 @@ export function useDevServer({
 
       const statusRef = { current: "starting" as DevPreviewStatus };
 
-      const unsubscribeUrl = window.electron.devPreview.onUrlDetected(
-        (payload) => {
-          if (payload.terminalId === id) {
-            setUrl(payload.url);
-            setStatus("running");
-            statusRef.current = "running";
-            setError(null);
-          }
-        }
-      );
-      listeners.push(unsubscribeUrl);
-
-      const unsubscribeError = window.electron.devPreview.onErrorDetected(
-        (payload) => {
-          if (payload.terminalId === id) {
-            const newStatus = payload.error.type === "missing-dependencies" ? "installing" : "error";
-            setError({ type: payload.error.type, message: payload.error.message });
-            setStatus(newStatus);
-            statusRef.current = newStatus;
-          }
-        }
-      );
-      listeners.push(unsubscribeError);
-
-      const unsubscribeExit = window.electron.terminal.onExit((termId: string, exitCode: number) => {
-        if (termId === id) {
-          if (statusRef.current === "starting" || statusRef.current === "installing") {
-            setError({
-              type: "unknown",
-              message: `Dev server exited with code ${exitCode}`,
-            });
-            setStatus("error");
-            statusRef.current = "error";
-          } else {
-            setStatus("stopped");
-            statusRef.current = "stopped";
-          }
+      const unsubscribeUrl = window.electron.devPreview.onUrlDetected((payload) => {
+        if (payload.terminalId === id) {
+          setUrl(payload.url);
+          setStatus("running");
+          statusRef.current = "running";
+          setError(null);
         }
       });
+      listeners.push(unsubscribeUrl);
+
+      const unsubscribeError = window.electron.devPreview.onErrorDetected((payload) => {
+        if (payload.terminalId === id) {
+          const newStatus = payload.error.type === "missing-dependencies" ? "installing" : "error";
+          setError({ type: payload.error.type, message: payload.error.message });
+          setStatus(newStatus);
+          statusRef.current = newStatus;
+        }
+      });
+      listeners.push(unsubscribeError);
+
+      const unsubscribeExit = window.electron.terminal.onExit(
+        (termId: string, exitCode: number) => {
+          if (termId === id) {
+            if (statusRef.current === "starting" || statusRef.current === "installing") {
+              setError({
+                type: "unknown",
+                message: `Dev server exited with code ${exitCode}`,
+              });
+              setStatus("error");
+              statusRef.current = "error";
+            } else {
+              setStatus("stopped");
+              statusRef.current = "stopped";
+            }
+          }
+        }
+      );
       listeners.push(unsubscribeExit);
 
       await window.electron.devPreview.subscribe(id);
