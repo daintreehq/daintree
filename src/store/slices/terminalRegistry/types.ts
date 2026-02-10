@@ -64,6 +64,8 @@ export interface AddTerminalOptions {
   devServerError?: { type: string; message: string };
   /** Terminal ID associated with dev server for dev-preview panels (kind === 'dev-preview') */
   devServerTerminalId?: string;
+  /** Whether the dev-preview console drawer is open (kind === 'dev-preview') */
+  devPreviewConsoleOpen?: boolean;
   /** Environment variables to set for this terminal */
   env?: Record<string, string>;
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely */
@@ -156,6 +158,7 @@ export interface TerminalRegistrySlice {
   setBrowserUrl: (id: string, url: string) => void;
   setBrowserHistory: (id: string, history: BrowserHistory) => void;
   setBrowserZoom: (id: string, zoom: number) => void;
+  setDevPreviewConsoleOpen: (id: string, isOpen: boolean) => void;
   setDevServerState: (
     id: string,
     status: "stopped" | "starting" | "installing" | "running" | "error",

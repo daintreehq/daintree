@@ -74,9 +74,10 @@ export class TerminalResizeController {
     const viewport = managed.hostElement.querySelector(".xterm-viewport") as HTMLElement | null;
     const scrollbarWidth = viewport ? viewport.offsetWidth - viewport.clientWidth : 0;
 
-    // Include scrollbar in total width to prevent gap
+    // Never shrink below the container width; otherwise the viewport scrollbar
+    // can appear inset from the panel edge after fit rounding.
     const exactWidth = contentWidth + scrollbarWidth;
-    managed.hostElement.style.width = `${exactWidth}px`;
+    managed.hostElement.style.width = `max(100%, ${exactWidth}px)`;
   }
 
   resetWidthForFit(managed: ManagedTerminal): void {

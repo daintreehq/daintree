@@ -359,7 +359,6 @@ export class DevPreviewSessionService {
         if (!RUNNING_STATES.has(session.status)) {
           this.updateSession(session, { status: "starting", error: null, url: null });
         }
-        await this.replayHistory(session);
         return;
       }
       this.detachTerminal(session);
@@ -407,8 +406,6 @@ export class DevPreviewSessionService {
         console.warn("[DevPreviewSessionService] Failed to submit dev command:", err);
       }
     }, 100);
-
-    await this.replayHistory(session);
   }
 
   private createTerminalId(session: DevPreviewSession): string {
@@ -492,15 +489,6 @@ export class DevPreviewSessionService {
       return true;
     } catch {
       return false;
-    }
-  }
-
-  private async replayHistory(session: DevPreviewSession): Promise<void> {
-    if (!session.terminalId) return;
-    try {
-      await this.ptyClient.replayHistoryAsync(session.terminalId, 300);
-    } catch (err) {
-      console.warn("[DevPreviewSessionService] Failed to replay history:", err);
     }
   }
 

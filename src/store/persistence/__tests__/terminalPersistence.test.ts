@@ -357,6 +357,7 @@ describe("TerminalPersistence", () => {
         devServerUrl: "http://localhost:5173",
         devServerError: { type: "unknown", message: "Previous warning" },
         devServerTerminalId: "dev-preview-pty-1",
+        devPreviewConsoleOpen: true,
         location: "grid",
       });
 
@@ -369,6 +370,7 @@ describe("TerminalPersistence", () => {
           kind: "dev-preview",
           browserUrl: "http://localhost:5173",
           command: "npm run dev",
+          devPreviewConsoleOpen: true,
         }),
       ]);
 

@@ -143,12 +143,14 @@ describe("panelDuplicationService", () => {
       kind: "dev-preview",
       devCommand: "npm run dev",
       browserUrl: "http://localhost:3000",
+      devPreviewConsoleOpen: true,
     } as Partial<TerminalInstance>);
 
     const result = await buildPanelDuplicateOptions(panel, "grid");
 
     expect(result.devCommand).toBe("npm run dev");
     expect(result.browserUrl).toBe("http://localhost:3000");
+    expect(result.devPreviewConsoleOpen).toBe(true);
   });
 
   it("defaults kind to 'terminal' when panel.kind is undefined", async () => {

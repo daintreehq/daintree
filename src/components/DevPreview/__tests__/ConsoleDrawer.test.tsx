@@ -148,6 +148,18 @@ describe("ConsoleDrawer", () => {
       fireEvent.click(button);
       expect(button.getAttribute("aria-expanded")).toBe("false");
     });
+
+    it("uses an upward icon for 'Show Terminal' and rotates when open", () => {
+      render(<ConsoleDrawer terminalId={mockTerminalId} defaultOpen={false} />);
+      const closedButton = getToggleButton();
+      const closedIcon = closedButton.querySelector("svg");
+      expect(closedIcon?.getAttribute("class")).not.toContain("rotate-180");
+
+      fireEvent.click(closedButton);
+      const openButton = getToggleButton();
+      const openIcon = openButton.querySelector("svg");
+      expect(openIcon?.getAttribute("class")).toContain("rotate-180");
+    });
   });
 
   describe("hard restart action", () => {
@@ -288,6 +300,25 @@ describe("ConsoleDrawer", () => {
       rerender(<ConsoleDrawer terminalId="terminal-2" defaultOpen={true} />);
 
       expect(terminalInstanceService.setVisible).toHaveBeenCalledWith("terminal-2", true);
+    });
+
+    it("supports controlled open state", () => {
+      const onOpenChange = vi.fn();
+      const { rerender } = render(
+        <ConsoleDrawer terminalId={mockTerminalId} isOpen={false} onOpenChange={onOpenChange} />
+      );
+
+      const button = getToggleButton();
+      fireEvent.click(button);
+
+      expect(onOpenChange).toHaveBeenCalledWith(true);
+      expect(terminalInstanceService.setVisible).toHaveBeenLastCalledWith(mockTerminalId, false);
+
+      rerender(
+        <ConsoleDrawer terminalId={mockTerminalId} isOpen={true} onOpenChange={onOpenChange} />
+      );
+
+      expect(terminalInstanceService.setVisible).toHaveBeenLastCalledWith(mockTerminalId, true);
     });
   });
 

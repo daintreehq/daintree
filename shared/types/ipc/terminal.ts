@@ -82,6 +82,8 @@ export interface TerminalState {
   devServerError?: { type: string; message: string };
   /** Terminal ID associated with dev server for dev-preview panels */
   devServerTerminalId?: string;
+  /** Whether the dev-preview console drawer is open */
+  devPreviewConsoleOpen?: boolean;
 }
 
 /** Terminal data payload for IPC */

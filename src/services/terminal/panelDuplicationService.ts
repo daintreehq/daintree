@@ -52,6 +52,7 @@ function buildKindSpecificOptions(panel: TerminalInstance): Partial<AddTerminalO
     return {
       devCommand: panel.devCommand,
       browserUrl: panel.browserUrl,
+      devPreviewConsoleOpen: panel.devPreviewConsoleOpen,
     };
   }
 

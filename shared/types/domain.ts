@@ -461,6 +461,8 @@ interface PtyPanelData extends BasePanelData {
   devServerError?: { type: string; message: string };
   /** Terminal ID associated with dev server for dev-preview panels */
   devServerTerminalId?: string;
+  /** Whether the dev-preview console drawer is open */
+  devPreviewConsoleOpen?: boolean;
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely */
   exitBehavior?: PanelExitBehavior;
 }
@@ -499,6 +501,8 @@ interface DevPreviewPanelData extends BasePanelData {
   browserHistory?: BrowserHistory;
   /** Zoom factor for the preview browser */
   browserZoom?: number;
+  /** Whether the console drawer is open */
+  devPreviewConsoleOpen?: boolean;
   /** Behavior when dev server exits */
   exitBehavior?: PanelExitBehavior;
 }
@@ -588,6 +592,8 @@ export interface TerminalInstance {
   devServerError?: { type: string; message: string };
   /** Terminal ID associated with dev server for dev-preview panels */
   devServerTerminalId?: string;
+  /** Whether the dev-preview console drawer is open */
+  devPreviewConsoleOpen?: boolean;
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely */
   exitBehavior?: PanelExitBehavior;
   /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */
@@ -684,6 +690,8 @@ export interface TerminalSnapshot {
   devServerError?: { type: string; message: string };
   /** Terminal ID associated with dev server for dev-preview panels */
   devServerTerminalId?: string;
+  /** Whether the dev-preview console drawer is open */
+  devPreviewConsoleOpen?: boolean;
   /** Path to note file (kind === 'notes') */
   notePath?: string;
   /** Note ID (kind === 'notes') */

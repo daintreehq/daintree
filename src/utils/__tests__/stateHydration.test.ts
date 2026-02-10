@@ -131,6 +131,7 @@ describe("hydrateAppState", () => {
             devServerUrl: "http://localhost:5173",
             devServerError: { type: "unknown", message: "Previous boot warning" },
             devServerTerminalId: "dev-preview-pty-1",
+            devPreviewConsoleOpen: true,
           },
         ],
         sidebarWidth: 350,
@@ -160,6 +161,7 @@ describe("hydrateAppState", () => {
         cwd: "/project",
         devCommand: "npm run dev",
         browserUrl: "http://localhost:5173",
+        devPreviewConsoleOpen: true,
       })
     );
 

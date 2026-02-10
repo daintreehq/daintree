@@ -52,6 +52,7 @@ export interface HydrationOptions {
     devServerUrl?: string | null;
     devServerError?: { type: string; message: string } | null;
     devServerTerminalId?: string | null;
+    devPreviewConsoleOpen?: boolean;
   }) => Promise<string>;
   setActiveWorktree: (id: string | null) => void;
   loadRecipes: (projectId: string) => Promise<void>;
@@ -232,6 +233,7 @@ export async function hydrateAppState(
                   browserUrl: isDevPreview ? saved.browserUrl : undefined,
                   browserHistory: isDevPreview ? saved.browserHistory : undefined,
                   browserZoom: isDevPreview ? saved.browserZoom : undefined,
+                  devPreviewConsoleOpen: isDevPreview ? saved.devPreviewConsoleOpen : undefined,
                 });
 
                 // Initialize frontend tier state from backend to ensure proper wake behavior
@@ -392,6 +394,7 @@ export async function hydrateAppState(
                       browserUrl: isDevPreview ? saved.browserUrl : undefined,
                       browserHistory: isDevPreview ? saved.browserHistory : undefined,
                       browserZoom: isDevPreview ? saved.browserZoom : undefined,
+                      devPreviewConsoleOpen: isDevPreview ? saved.devPreviewConsoleOpen : undefined,
                     });
 
                     // Initialize frontend tier state from backend
@@ -492,6 +495,7 @@ export async function hydrateAppState(
                       browserUrl: isDevPreview ? saved.browserUrl : undefined,
                       browserHistory: isDevPreview ? saved.browserHistory : undefined,
                       browserZoom: isDevPreview ? saved.browserZoom : undefined,
+                      devPreviewConsoleOpen: isDevPreview ? saved.devPreviewConsoleOpen : undefined,
                     });
                   }
                 } else {
@@ -519,6 +523,8 @@ export async function hydrateAppState(
                     scope: saved.scope as "worktree" | "project" | undefined,
                     createdAt: saved.createdAt,
                     devCommand,
+                    devPreviewConsoleOpen:
+                      kind === "dev-preview" ? saved.devPreviewConsoleOpen : undefined,
                   });
                 }
               }

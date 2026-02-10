@@ -146,6 +146,7 @@ describe("dev preview session handlers", () => {
     expect(ensureResult.status).toBe("starting");
     expect(ensureResult.terminalId).toBeTruthy();
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    expect(ptyClient.replayHistoryAsync).not.toHaveBeenCalled();
     expect(ptyClient.spawn).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({

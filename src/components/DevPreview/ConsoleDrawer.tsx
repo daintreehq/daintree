@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
-import { ChevronDown, RotateCw } from "lucide-react";
+import { ChevronUp, RotateCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { XtermAdapter } from "../Terminal/XtermAdapter";
 import { terminalInstanceService } from "../../services/TerminalInstanceService";
@@ -9,6 +9,8 @@ import type { DevPreviewStatus } from "@/hooks/useDevServer";
 interface ConsoleDrawerProps {
   terminalId: string;
   status?: DevPreviewStatus;
+  isOpen?: boolean;
+  onOpenChange?: (isOpen: boolean) => void;
   defaultOpen?: boolean;
   isRestarting?: boolean;
   onHardRestart?: () => void;
@@ -48,15 +50,22 @@ const STATUS_LABEL: Record<
 export function ConsoleDrawer({
   terminalId,
   status = "stopped",
+  isOpen: controlledIsOpen,
+  onOpenChange,
   defaultOpen = false,
   isRestarting = false,
   onHardRestart,
 }: ConsoleDrawerProps) {
-  const [isOpen, setIsOpen] = useState(defaultOpen);
+  const [uncontrolledIsOpen, setUncontrolledIsOpen] = useState(defaultOpen);
+  const isOpen = controlledIsOpen ?? uncontrolledIsOpen;
 
   const toggleDrawer = useCallback(() => {
-    setIsOpen((prev) => !prev);
-  }, []);
+    const nextIsOpen = !isOpen;
+    if (controlledIsOpen === undefined) {
+      setUncontrolledIsOpen(nextIsOpen);
+    }
+    onOpenChange?.(nextIsOpen);
+  }, [isOpen, controlledIsOpen, onOpenChange]);
 
   useEffect(() => {
     terminalInstanceService.setVisible(terminalId, isOpen);
@@ -89,7 +98,7 @@ export function ConsoleDrawer({
           aria-controls={`console-drawer-${terminalId}`}
           aria-label={toggleLabel}
         >
-          <ChevronDown
+          <ChevronUp
             className={cn("h-4 w-4 shrink-0 transition-transform", isOpen && "rotate-180")}
             aria-hidden="true"
           />
@@ -131,6 +140,7 @@ export function ConsoleDrawer({
             terminalId={terminalId}
             getRefreshTier={getRefreshTier}
             restoreOnAttach={true}
+            className="!rounded-none !px-0 !pt-0 !pb-0"
           />
         </div>
       </div>

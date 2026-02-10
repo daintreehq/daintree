@@ -45,6 +45,7 @@ export function DevPreviewPane({
   const setBrowserUrl = useTerminalStore((state) => state.setBrowserUrl);
   const setBrowserHistory = useTerminalStore((state) => state.setBrowserHistory);
   const setBrowserZoom = useTerminalStore((state) => state.setBrowserZoom);
+  const setDevPreviewConsoleOpen = useTerminalStore((state) => state.setDevPreviewConsoleOpen);
   const currentProjectId = useProjectStore((state) => state.currentProject?.id);
   const projectSettings = useProjectSettingsStore((state) => state.settings);
   const projectEnv = projectSettings?.environmentVariables;
@@ -99,15 +100,14 @@ export function DevPreviewPane({
   const lastSetUrlRef = useRef<string>("");
   const [isWebviewReady, setIsWebviewReady] = useState(false);
   const [consoleTerminalId, setConsoleTerminalId] = useState<string | null>(terminalId);
+  const isConsoleOpen = terminal?.devPreviewConsoleOpen ?? false;
 
   const currentUrl = history.present;
   const canGoBack = history.past.length > 0;
   const canGoForward = history.future.length > 0;
 
   useEffect(() => {
-    if (terminalId) {
-      setConsoleTerminalId(terminalId);
-    }
+    setConsoleTerminalId(terminalId);
   }, [terminalId]);
 
   useEffect(() => {
@@ -202,9 +202,6 @@ export function DevPreviewPane({
     lastSetUrlRef.current = "";
     setIsLoading(false);
     setIsWebviewReady(false);
-    if (webviewRef.current) {
-      webviewRef.current.src = "about:blank";
-    }
     void restart();
   }, [id, restart, setBrowserUrl]);
 
@@ -381,7 +378,8 @@ export function DevPreviewPane({
           <ConsoleDrawer
             terminalId={consoleTerminalId}
             status={status}
-            defaultOpen={false}
+            isOpen={isConsoleOpen}
+            onOpenChange={(nextOpen) => setDevPreviewConsoleOpen(id, nextOpen)}
             isRestarting={isRestarting}
             onHardRestart={handleHardRestart}
           />

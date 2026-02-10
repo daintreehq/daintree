@@ -150,6 +150,7 @@ export const createTerminalRegistrySlice =
               devServerUrl: options.devServerUrl ?? undefined,
               devServerError: options.devServerError ?? undefined,
               devServerTerminalId: options.devServerTerminalId ?? undefined,
+              devPreviewConsoleOpen: options.devPreviewConsoleOpen,
               exitBehavior: options.exitBehavior,
               type: "terminal" as const,
               cols: 80,
@@ -404,6 +405,7 @@ export const createTerminalRegistrySlice =
               devServerUrl: options.devServerUrl,
               devServerError: options.devServerError,
               devServerTerminalId: options.devServerTerminalId,
+              devPreviewConsoleOpen: options.devPreviewConsoleOpen,
             }),
           };
 
@@ -1929,6 +1931,22 @@ export const createTerminalRegistrySlice =
 
           const newTerminals = state.terminals.map((t) =>
             t.id === id ? { ...t, browserZoom: zoom } : t
+          );
+
+          saveTerminals(newTerminals);
+          return { terminals: newTerminals };
+        });
+      },
+
+      setDevPreviewConsoleOpen: (id, isOpen) => {
+        set((state) => {
+          const terminal = state.terminals.find((t) => t.id === id);
+          if (!terminal) return state;
+          if (terminal.kind !== "dev-preview") return state;
+          if (terminal.devPreviewConsoleOpen === isOpen) return state;
+
+          const newTerminals = state.terminals.map((t) =>
+            t.id === id ? { ...t, devPreviewConsoleOpen: isOpen } : t
           );
 
           saveTerminals(newTerminals);
