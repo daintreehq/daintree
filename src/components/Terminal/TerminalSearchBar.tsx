@@ -62,7 +62,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
           managed.searchAddon.clearDecorations();
         }
         setSearchStatus(found ? "found" : "none");
-      } catch (error) {
+      } catch {
         setSearchStatus(effectiveRegexEnabled ? "invalidRegex" : "none");
         managed.searchAddon.clearDecorations();
       }

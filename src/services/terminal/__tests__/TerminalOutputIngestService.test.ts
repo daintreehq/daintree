@@ -42,12 +42,10 @@ describe("TerminalOutputIngestService", () => {
   it("retries initialization after shared-buffer bootstrap failure", async () => {
     const buffer = new SharedArrayBuffer(8);
     const signalBuffer = new SharedArrayBuffer(4);
-    getSharedBuffersMock
-      .mockRejectedValueOnce(new Error("sab unavailable"))
-      .mockResolvedValueOnce({
-        visualBuffers: [buffer],
-        signalBuffer,
-      });
+    getSharedBuffersMock.mockRejectedValueOnce(new Error("sab unavailable")).mockResolvedValueOnce({
+      visualBuffers: [buffer],
+      signalBuffer,
+    });
 
     const service = new TerminalOutputIngestService(() => {});
 

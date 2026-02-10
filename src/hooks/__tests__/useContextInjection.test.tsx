@@ -41,8 +41,12 @@ vi.mock("@/store/terminalStore", () => ({
 }));
 
 vi.mock("@/store/errorStore", () => ({
-  useErrorStore: (selector: (state: { addError: typeof addErrorMock; removeError: typeof removeErrorMock }) => unknown) =>
-    selector({ addError: addErrorMock, removeError: removeErrorMock }),
+  useErrorStore: (
+    selector: (state: {
+      addError: typeof addErrorMock;
+      removeError: typeof removeErrorMock;
+    }) => unknown
+  ) => selector({ addError: addErrorMock, removeError: removeErrorMock }),
 }));
 
 vi.mock("@/clients", () => ({

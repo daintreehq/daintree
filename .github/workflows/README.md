@@ -21,12 +21,12 @@ Automated build and publish workflow for Canopy releases to Cloudflare R2.
 
 Add these secrets in **Settings → Secrets and variables → Actions**:
 
-| Secret | Value | Example |
-|--------|-------|---------|
-| `R2_ENDPOINT` | R2 S3-compatible endpoint | `https://<account-id>.r2.cloudflarestorage.com` |
-| `R2_BUCKET` | Bucket name | `canopy-updates` |
-| `R2_ACCESS_KEY_ID` | R2 API token access key | (from step 2) |
-| `R2_SECRET_ACCESS_KEY` | R2 API token secret | (from step 2) |
+| Secret                 | Value                     | Example                                         |
+| ---------------------- | ------------------------- | ----------------------------------------------- |
+| `R2_ENDPOINT`          | R2 S3-compatible endpoint | `https://<account-id>.r2.cloudflarestorage.com` |
+| `R2_BUCKET`            | Bucket name               | `canopy-updates`                                |
+| `R2_ACCESS_KEY_ID`     | R2 API token access key   | (from step 2)                                   |
+| `R2_SECRET_ACCESS_KEY` | R2 API token secret       | (from step 2)                                   |
 
 ### 4. Update package.json
 
@@ -49,6 +49,7 @@ Ensure the `publish` URL matches your R2 public URL:
 4. Push: `git push origin main --tags`
 
 The workflow will:
+
 - Build for macOS, Windows, and Linux in parallel
 - Validate update metadata files are present
 - Upload binaries to R2 with long cache headers
@@ -59,10 +60,12 @@ The workflow will:
 ### macOS Auto-Updates
 
 **macOS builds are currently unsigned.** macOS auto-updates require:
+
 - Code signing certificate from Apple Developer account
 - Notarization with Apple
 
 **What this means:**
+
 - macOS users will see "unidentified developer" warnings
 - Auto-updates may not work on macOS until signing is configured
 
@@ -88,18 +91,21 @@ Windows builds are also unsigned. Users will see SmartScreen warnings until sign
 ### Version mismatch error
 
 If you see "Tag version does not match package.json version":
+
 - Ensure `package.json` version matches the git tag (without the `v` prefix)
 - Example: tag `v1.2.3` requires `"version": "1.2.3"` in package.json
 
 ### Missing metadata files
 
-If builds fail with "Missing release/latest*.yml":
+If builds fail with "Missing release/latest\*.yml":
+
 - Check electron-builder configuration in `package.json`
 - Ensure targets include both installers and update-friendly formats (zip for macOS, nsis for Windows)
 
 ### AWS CLI errors
 
 All GitHub-hosted runners have AWS CLI pre-installed. If you see AWS CLI errors:
+
 - Verify R2 secrets are correctly set
 - Check R2 endpoint format: `https://<account-id>.r2.cloudflarestorage.com`
 - Ensure bucket name matches exactly

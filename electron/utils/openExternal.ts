@@ -15,7 +15,7 @@ export async function openExternalUrl(url: string): Promise<void> {
   let parsed: URL;
   try {
     parsed = new URL(trimmed);
-  } catch (error) {
+  } catch {
     throw new Error(`Invalid URL: ${trimmed}`);
   }
 

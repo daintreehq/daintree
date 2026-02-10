@@ -339,9 +339,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         type: terminal.type,
         title: typeof terminal.title === "string" ? terminal.title : undefined,
         command:
-          typeof terminal.command === "string"
-            ? (terminal.command.trim() || undefined)
-            : undefined,
+          typeof terminal.command === "string" ? terminal.command.trim() || undefined : undefined,
         env: terminal.env,
         initialPrompt:
           typeof terminal.initialPrompt === "string"
@@ -349,7 +347,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             : undefined,
         devCommand:
           typeof terminal.devCommand === "string"
-            ? (terminal.devCommand.trim() || undefined)
+            ? terminal.devCommand.trim() || undefined
             : undefined,
         exitBehavior:
           terminal.exitBehavior && ALLOWED_EXIT_BEHAVIORS.includes(terminal.exitBehavior as string)

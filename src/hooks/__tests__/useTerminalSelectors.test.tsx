@@ -31,7 +31,12 @@ describe("useTerminalSelectors", () => {
     useTerminalStoreMock.mockImplementation(
       (
         selector: (state: {
-          terminals: Array<{ id: string; worktreeId?: string; agentState?: string; location?: string }>;
+          terminals: Array<{
+            id: string;
+            worktreeId?: string;
+            agentState?: string;
+            location?: string;
+          }>;
           isInTrash: (id: string) => boolean;
         }) => unknown
       ) =>

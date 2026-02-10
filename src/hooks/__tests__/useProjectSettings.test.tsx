@@ -30,10 +30,8 @@ const { projectState, projectSettingsState, useProjectStoreMock, useProjectSetti
       selector(projectState)
     );
 
-    const storeFn = vi.fn(
-      (
-        selector: (s: typeof projectSettingsState) => unknown
-      ) => selector(projectSettingsState)
+    const storeFn = vi.fn((selector: (s: typeof projectSettingsState) => unknown) =>
+      selector(projectSettingsState)
     );
     const useProjectSettingsStoreMock = Object.assign(storeFn, {
       getState: () => projectSettingsState,

@@ -73,7 +73,9 @@ describe("pulseStore", () => {
     const result = await usePulseStore.getState().fetchPulse("wt-2");
 
     expect(result).toBeNull();
-    expect(usePulseStore.getState().getError("wt-2")).toBe("This directory is not a git repository");
+    expect(usePulseStore.getState().getError("wt-2")).toBe(
+      "This directory is not a git repository"
+    );
     expect(usePulseStore.getState().getRetryCount("wt-2")).toBe(1);
     expect(usePulseStore.getState().retryTimers.has("wt-2")).toBe(true);
 

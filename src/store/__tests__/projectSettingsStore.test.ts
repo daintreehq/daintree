@@ -52,7 +52,9 @@ describe("projectSettingsStore", () => {
     const state = useProjectSettingsStore.getState();
     expect(state.settings).toEqual(SETTINGS_WITH_COMMANDS);
     expect(state.allDetectedRunners).toEqual(DETECTED_RUNNERS);
-    expect(state.detectedRunners).toEqual([{ id: "det-2", name: "Build", command: "npm run build" }]);
+    expect(state.detectedRunners).toEqual([
+      { id: "det-2", name: "Build", command: "npm run build" },
+    ]);
     expect(state.isLoading).toBe(false);
     expect(state.error).toBeNull();
   });
@@ -66,7 +68,9 @@ describe("projectSettingsStore", () => {
     getSettingsMock
       .mockReturnValueOnce(firstSettings.promise)
       .mockReturnValueOnce(secondSettings.promise);
-    detectRunnersMock.mockReturnValueOnce(firstDetect.promise).mockReturnValueOnce(secondDetect.promise);
+    detectRunnersMock
+      .mockReturnValueOnce(firstDetect.promise)
+      .mockReturnValueOnce(secondDetect.promise);
 
     const firstLoad = useProjectSettingsStore.getState().loadSettings("project-a");
     const secondLoad = useProjectSettingsStore.getState().loadSettings("project-b");
@@ -74,7 +78,9 @@ describe("projectSettingsStore", () => {
     firstSettings.resolve(SETTINGS_WITH_COMMANDS);
     firstDetect.resolve(DETECTED_RUNNERS);
 
-    secondSettings.resolve({ runCommands: [{ id: "cmd-lint", name: "Lint", command: "npm run lint" }] });
+    secondSettings.resolve({
+      runCommands: [{ id: "cmd-lint", name: "Lint", command: "npm run lint" }],
+    });
     secondDetect.resolve([{ id: "det-lint", name: "Lint", command: "npm run lint" }]);
 
     await Promise.all([firstLoad, secondLoad]);
@@ -117,6 +123,8 @@ describe("projectSettingsStore", () => {
 
     const state = useProjectSettingsStore.getState();
     expect(state.error).toBeNull();
-    expect(state.detectedRunners).toEqual([{ id: "det-2", name: "Build", command: "npm run build" }]);
+    expect(state.detectedRunners).toEqual([
+      { id: "det-2", name: "Build", command: "npm run build" },
+    ]);
   });
 });

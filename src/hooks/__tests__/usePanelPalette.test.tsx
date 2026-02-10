@@ -31,8 +31,9 @@ vi.mock("@shared/config/agentRegistry", () => ({
 }));
 
 vi.mock("@/store/userAgentRegistryStore", () => ({
-  useUserAgentRegistryStore: (selector: (state: { registry: Record<string, unknown> | null }) => unknown) =>
-    selector({ registry: {} }),
+  useUserAgentRegistryStore: (
+    selector: (state: { registry: Record<string, unknown> | null }) => unknown
+  ) => selector({ registry: {} }),
 }));
 
 import { usePanelPalette } from "../usePanelPalette";
