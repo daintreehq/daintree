@@ -69,6 +69,7 @@
     "clsx": "^2.1.1",
     "copytree": "github:gregpriday/copytree#develop",
     "electron-store": "^11.0.2",
+    "electron-updater": "^6.3.0",
     "execa": "^9.6.0",
     "fix-path": "^5.0.0",
     "framer-motion": "^12.33.0",
@@ -140,6 +141,16 @@
   },
   "build": {
     "appId": "com.canopy.commandcenter",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "gregpriday",
+        "repo": "canopy-electron",
+        "releaseType": "release"
+      }
+    ],
+    "forceCodeSigning": true,
+    "electronUpdaterCompatibility": ">=2.16",
     "productName": "Canopy",
     "npmRebuild": false,
     "directories": {
