@@ -75,3 +75,6 @@ reports/
 *.deb
 *.rpm
 .canopy/notes/
+
+# Planning docs (private)
+planning/
