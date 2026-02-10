@@ -124,6 +124,7 @@ import {
 import { initializeAgentRouter, disposeAgentRouter } from "./services/AgentRouter.js";
 import { initializeWorkflowEngine, disposeWorkflowEngine } from "./services/WorkflowEngine.js";
 import { workflowLoader } from "./services/WorkflowLoader.js";
+import { autoUpdaterService } from "./services/AutoUpdaterService.js";
 
 // Initialize logger early with userData path
 initializeLogger(app.getPath("userData"));
@@ -856,6 +857,9 @@ async function createWindow(): Promise<void> {
     }, 2000);
   });
 
+  // Initialize auto-updater (checks for updates on startup and periodically)
+  autoUpdaterService.initialize();
+
   // Initialize Deferred Services
   initializeDeferredServices(mainWindow, cliAvailabilityService!, eventBuffer!).catch((error) => {
     console.error("[MAIN] Deferred services initialization failed:", error);
@@ -893,6 +897,7 @@ async function createWindow(): Promise<void> {
 
     getSystemSleepService().dispose();
     notificationService.dispose();
+    autoUpdaterService.dispose();
 
     setLoggerWindow(null);
     mainWindow = null;
