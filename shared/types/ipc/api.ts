@@ -78,6 +78,7 @@ import type { SlashCommand, SlashCommandListRequest } from "../slashCommands.js"
 import type {
   DevPreviewEnsureRequest,
   DevPreviewSessionRequest,
+  DevPreviewStopByPanelRequest,
   DevPreviewSessionState,
   DevPreviewStateChangedPayload,
 } from "./devPreview.js";
@@ -483,6 +484,7 @@ export interface ElectronAPI {
     ensure(request: DevPreviewEnsureRequest): Promise<DevPreviewSessionState>;
     restart(request: DevPreviewSessionRequest): Promise<DevPreviewSessionState>;
     stop(request: DevPreviewSessionRequest): Promise<DevPreviewSessionState>;
+    stopByPanel(request: DevPreviewStopByPanelRequest): Promise<void>;
     getState(request: DevPreviewSessionRequest): Promise<DevPreviewSessionState>;
     onStateChanged(callback: (data: DevPreviewStateChangedPayload) => void): () => void;
   };

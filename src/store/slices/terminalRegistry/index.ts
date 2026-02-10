@@ -30,6 +30,19 @@ import { saveTerminals, saveTabGroups } from "./persistence";
 import { createTrashExpiryHelpers } from "./trash";
 import { optimizeForDock } from "./layout";
 
+function stopDevPreviewByPanelId(panelId: string): void {
+  if (typeof window === "undefined") return;
+  const stopByPanel = window.electron?.devPreview?.stopByPanel;
+  if (!stopByPanel) return;
+
+  void stopByPanel({ panelId }).catch((error) => {
+    console.error(
+      `[TerminalStore] Failed to stop dev preview session for panel ${panelId}:`,
+      error
+    );
+  });
+}
+
 // Re-exports for backward compatibility
 export type {
   TerminalInstance,
@@ -448,6 +461,10 @@ export const createTerminalRegistrySlice =
         const removedIndex = currentTerminals.findIndex((t) => t.id === id);
         const terminal = currentTerminals.find((t) => t.id === id);
 
+        if (terminal?.kind === "dev-preview") {
+          stopDevPreviewByPanelId(id);
+        }
+
         // Only call PTY operations for PTY-backed terminals
         if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
           terminalClient.kill(id).catch((error) => {
@@ -714,6 +731,10 @@ export const createTerminalRegistrySlice =
 
         const expiresAt = Date.now() + 120000;
 
+        if (terminal.kind === "dev-preview") {
+          stopDevPreviewByPanelId(id);
+        }
+
         // Only 'dock' or 'grid' are valid original locations - treat undefined as 'grid'
         const originalLocation: "dock" | "grid" = terminal.location === "dock" ? "dock" : "grid";
 
@@ -812,6 +833,10 @@ export const createTerminalRegistrySlice =
         // Trash PTY processes for all PTY-backed panels
         for (const id of trashPanelIds) {
           const terminal = terminals.find((t) => t.id === id);
+          if (terminal?.kind === "dev-preview") {
+            stopDevPreviewByPanelId(id);
+            continue;
+          }
           if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
             terminalClient.trash(id).catch((error) => {
               console.error("Failed to trash terminal:", error);

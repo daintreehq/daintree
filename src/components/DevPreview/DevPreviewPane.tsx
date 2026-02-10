@@ -1,6 +1,8 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { AlertTriangle, RotateCw, ExternalLink } from "lucide-react";
 import { useTerminalStore } from "@/store";
+import { useProjectStore } from "@/store/projectStore";
+import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import type { BrowserHistory } from "@shared/types/domain";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { BrowserToolbar } from "../Browser/BrowserToolbar";
@@ -14,6 +16,12 @@ import { shouldAdoptDetectedDevServerUrl } from "./urlSync";
 export interface DevPreviewPaneProps extends BasePanelProps {
   cwd: string;
   worktreeId?: string;
+}
+
+function sanitizePartitionToken(value: string | undefined): string {
+  const token = (value ?? "default").trim().toLowerCase();
+  const sanitized = token.replace(/[^a-z0-9_-]/g, "-").replace(/-+/g, "-");
+  return sanitized || "default";
 }
 
 export function DevPreviewPane({
@@ -37,17 +45,29 @@ export function DevPreviewPane({
   const setBrowserUrl = useTerminalStore((state) => state.setBrowserUrl);
   const setBrowserHistory = useTerminalStore((state) => state.setBrowserHistory);
   const setBrowserZoom = useTerminalStore((state) => state.setBrowserZoom);
+  const currentProjectId = useProjectStore((state) => state.currentProject?.id);
+  const projectSettings = useProjectSettingsStore((state) => state.settings);
+  const projectEnv = projectSettings?.environmentVariables;
   const isDragging = useIsDragging();
 
   const terminal = useTerminalStore((state) => state.getTerminal(id));
-  const devCommand = terminal?.devCommand || "";
+  const devCommand =
+    terminal?.devCommand?.trim() || projectSettings?.devServerCommand?.trim() || "";
 
   const { status, url, terminalId, error, start, restart, isRestarting } = useDevServer({
     panelId: id,
     devCommand,
     cwd,
     worktreeId,
+    env: projectEnv,
   });
+
+  const webviewPartition = useMemo(() => {
+    const projectToken = sanitizePartitionToken(currentProjectId);
+    const worktreeToken = sanitizePartitionToken(worktreeId ?? "main");
+    const panelToken = sanitizePartitionToken(id);
+    return `persist:dev-preview-${projectToken}-${worktreeToken}-${panelToken}`;
+  }, [currentProjectId, worktreeId, id]);
 
   const [history, setHistory] = useState<BrowserHistory>(() => {
     const saved = terminal?.browserHistory;
@@ -347,7 +367,7 @@ export function DevPreviewPane({
               <webview
                 ref={webviewRef}
                 src={currentUrl}
-                partition="persist:dev-preview"
+                partition={webviewPartition}
                 className={cn(
                   "w-full h-full border-0",
                   isDragging && "invisible pointer-events-none"

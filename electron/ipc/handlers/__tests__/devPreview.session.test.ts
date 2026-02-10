@@ -235,4 +235,46 @@ describe("dev preview session handlers", () => {
     expect(result.panelId).toBe("missing-panel");
     expect(result.projectId).toBe("missing-project");
   });
+
+  it("stops and deletes all sessions for a panel via stop-by-panel", async () => {
+    const ensureHandler = getRegisteredHandle<
+      [Electron.IpcMainInvokeEvent, Record<string, unknown>],
+      { terminalId: string | null }
+    >(CHANNELS.DEV_PREVIEW_ENSURE);
+    const stopByPanelHandler = getRegisteredHandle<
+      [Electron.IpcMainInvokeEvent, Record<string, unknown>],
+      void
+    >(CHANNELS.DEV_PREVIEW_STOP_BY_PANEL);
+    const getStateHandler = getRegisteredHandle<
+      [Electron.IpcMainInvokeEvent, Record<string, unknown>],
+      { status: string; terminalId: string | null }
+    >(CHANNELS.DEV_PREVIEW_GET_STATE);
+
+    expect(ensureHandler).toBeDefined();
+    expect(stopByPanelHandler).toBeDefined();
+    expect(getStateHandler).toBeDefined();
+
+    const started = await ensureHandler!({} as Electron.IpcMainInvokeEvent, {
+      panelId: "panel-stop-test",
+      projectId: "project-stop-test",
+      cwd: "/repo",
+      devCommand: "npm run dev",
+    });
+
+    expect(started.terminalId).toBeTruthy();
+
+    await stopByPanelHandler!({} as Electron.IpcMainInvokeEvent, {
+      panelId: "panel-stop-test",
+    });
+
+    expect(ptyClient.kill).toHaveBeenCalledWith(started.terminalId, "dev-preview:panel-closed");
+
+    const afterStop = await getStateHandler!({} as Electron.IpcMainInvokeEvent, {
+      panelId: "panel-stop-test",
+      projectId: "project-stop-test",
+    });
+
+    expect(afterStop.status).toBe("stopped");
+    expect(afterStop.terminalId).toBeNull();
+  });
 });

@@ -16,6 +16,10 @@ export interface DevPreviewSessionRequest {
   projectId: string;
 }
 
+export interface DevPreviewStopByPanelRequest {
+  panelId: string;
+}
+
 export interface DevPreviewSessionState {
   panelId: string;
   projectId: string;

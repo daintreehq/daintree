@@ -43,6 +43,7 @@ import type {
   ApplyPatchOptions,
   DevPreviewEnsureRequest,
   DevPreviewSessionRequest,
+  DevPreviewStopByPanelRequest,
   DevPreviewSessionState,
   DevPreviewStateChangedPayload,
 } from "../shared/types/ipc.js";
@@ -256,6 +257,7 @@ const CHANNELS = {
   DEV_PREVIEW_ENSURE: "dev-preview:ensure",
   DEV_PREVIEW_RESTART: "dev-preview:restart",
   DEV_PREVIEW_STOP: "dev-preview:stop",
+  DEV_PREVIEW_STOP_BY_PANEL: "dev-preview:stop-by-panel",
   DEV_PREVIEW_GET_STATE: "dev-preview:get-state",
   DEV_PREVIEW_STATE_CHANGED: "dev-preview:state-changed",
 
@@ -1033,6 +1035,9 @@ const api: ElectronAPI = {
 
     stop: (request: DevPreviewSessionRequest): Promise<DevPreviewSessionState> =>
       _typedInvoke(CHANNELS.DEV_PREVIEW_STOP, request) as Promise<DevPreviewSessionState>,
+
+    stopByPanel: (request: DevPreviewStopByPanelRequest): Promise<void> =>
+      _typedInvoke(CHANNELS.DEV_PREVIEW_STOP_BY_PANEL, request) as Promise<void>,
 
     getState: (request: DevPreviewSessionRequest): Promise<DevPreviewSessionState> =>
       _typedInvoke(CHANNELS.DEV_PREVIEW_GET_STATE, request) as Promise<DevPreviewSessionState>,

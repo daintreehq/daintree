@@ -4,6 +4,7 @@ import type { HandlerDependencies } from "../types.js";
 import type {
   DevPreviewEnsureRequest,
   DevPreviewSessionRequest,
+  DevPreviewStopByPanelRequest,
   DevPreviewStateChangedPayload,
 } from "../../../shared/types/ipc/devPreview.js";
 import { DevPreviewSessionService } from "../../services/DevPreviewSessionService.js";
@@ -56,6 +57,15 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
   };
   ipcMain.handle(CHANNELS.DEV_PREVIEW_STOP, handleStop);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.DEV_PREVIEW_STOP));
+
+  const handleStopByPanel = async (
+    _event: Electron.IpcMainInvokeEvent,
+    request: DevPreviewStopByPanelRequest
+  ) => {
+    await sessionService.stopByPanel(request);
+  };
+  ipcMain.handle(CHANNELS.DEV_PREVIEW_STOP_BY_PANEL, handleStopByPanel);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.DEV_PREVIEW_STOP_BY_PANEL));
 
   const handleGetState = async (
     _event: Electron.IpcMainInvokeEvent,

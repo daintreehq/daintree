@@ -176,6 +176,17 @@ export function useDevServer({
 
   useEffect(() => {
     if (!currentProjectId) return;
+    if (devCommand.trim()) return;
+
+    lastEnsureConfigRef.current = "";
+    void window.electron.devPreview
+      .stop({ panelId, projectId: currentProjectId })
+      .then(applyState)
+      .catch(applyInvokeError);
+  }, [panelId, currentProjectId, devCommand, applyState, applyInvokeError]);
+
+  useEffect(() => {
+    if (!currentProjectId) return;
     if (!devCommand.trim()) return;
 
     const configKey = [panelId, cwd, worktreeId ?? "", devCommand.trim(), envSignature].join("|");

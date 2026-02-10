@@ -88,6 +88,7 @@ import type { SlashCommand, SlashCommandListRequest } from "../slashCommands.js"
 import type {
   DevPreviewEnsureRequest,
   DevPreviewSessionRequest,
+  DevPreviewStopByPanelRequest,
   DevPreviewSessionState,
   DevPreviewStateChangedPayload,
 } from "./devPreview.js";
@@ -947,6 +948,10 @@ export interface IpcInvokeMap {
   "dev-preview:stop": {
     args: [request: DevPreviewSessionRequest];
     result: DevPreviewSessionState;
+  };
+  "dev-preview:stop-by-panel": {
+    args: [request: DevPreviewStopByPanelRequest];
+    result: void;
   };
   "dev-preview:get-state": {
     args: [request: DevPreviewSessionRequest];

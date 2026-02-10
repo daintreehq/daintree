@@ -3,6 +3,7 @@ import { UrlDetector } from "./UrlDetector.js";
 import type {
   DevPreviewEnsureRequest,
   DevPreviewSessionRequest,
+  DevPreviewStopByPanelRequest,
   DevPreviewSessionState,
   DevPreviewSessionStatus,
 } from "../../shared/types/ipc/devPreview.js";
@@ -181,6 +182,30 @@ export class DevPreviewSessionService {
     return this.getSessionState(request.projectId, request.panelId);
   }
 
+  async stopByPanel(request: DevPreviewStopByPanelRequest): Promise<void> {
+    this.validateStopByPanelRequest(request);
+    const targets = [...this.sessions.values()].filter(
+      (session) => session.panelId === request.panelId
+    );
+
+    await Promise.all(
+      targets.map(async (session) => {
+        const key = createSessionKey(session.projectId, session.panelId);
+        await this.runLocked(key, async () => {
+          await this.stopSessionTerminal(session, "panel-closed");
+          this.updateSession(session, {
+            status: "stopped",
+            url: null,
+            error: null,
+            terminalId: null,
+            isRestarting: false,
+          });
+          this.sessions.delete(key);
+        });
+      })
+    );
+  }
+
   getState(request: DevPreviewSessionRequest): DevPreviewSessionState {
     this.validateSessionRequest(request);
     return this.getSessionState(request.projectId, request.panelId);
@@ -219,6 +244,15 @@ export class DevPreviewSessionService {
     }
     if (typeof request.projectId !== "string" || !request.projectId.trim()) {
       throw new Error("projectId is required");
+    }
+  }
+
+  private validateStopByPanelRequest(request: DevPreviewStopByPanelRequest): void {
+    if (!request || typeof request !== "object") {
+      throw new Error("Invalid dev preview stop-by-panel request");
+    }
+    if (typeof request.panelId !== "string" || !request.panelId.trim()) {
+      throw new Error("panelId is required");
     }
   }
 
