@@ -23,8 +23,13 @@ export function registerFilesHandlers(): () => void {
       return { files: [] };
     }
 
-    const files = await fileSearchService.search({ cwd, query, limit });
-    return { files };
+    try {
+      const files = await fileSearchService.search({ cwd, query, limit });
+      return { files };
+    } catch (error) {
+      console.error("[IPC] files:search failed:", error);
+      return { files: [] };
+    }
   };
 
   ipcMain.handle(CHANNELS.FILES_SEARCH, handleSearch);

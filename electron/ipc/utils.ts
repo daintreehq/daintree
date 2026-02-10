@@ -6,12 +6,23 @@ export function sendToRenderer(
   channel: string,
   ...args: unknown[]
 ): void {
-  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
-    try {
-      mainWindow.webContents.send(channel, ...args);
-    } catch {
-      // Silently ignore send failures during window initialization/disposal.
-    }
+  const webContents = mainWindow?.webContents;
+  if (!mainWindow || mainWindow.isDestroyed() || !webContents) {
+    return;
+  }
+
+  if (typeof webContents.send !== "function") {
+    return;
+  }
+
+  if (typeof webContents.isDestroyed === "function" && webContents.isDestroyed()) {
+    return;
+  }
+
+  try {
+    webContents.send(channel, ...args);
+  } catch {
+    // Silently ignore send failures during window initialization/disposal.
   }
 }
 
@@ -32,11 +43,22 @@ export function typedSend<K extends keyof IpcEventMap>(
   channel: K,
   payload: IpcEventMap[K]
 ): void {
-  if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) {
-    try {
-      window.webContents.send(channel as string, payload);
-    } catch {
-      // Silently ignore send failures during window initialization/disposal.
-    }
+  const webContents = window?.webContents;
+  if (!window || window.isDestroyed() || !webContents) {
+    return;
+  }
+
+  if (typeof webContents.send !== "function") {
+    return;
+  }
+
+  if (typeof webContents.isDestroyed === "function" && webContents.isDestroyed()) {
+    return;
+  }
+
+  try {
+    webContents.send(channel as string, payload);
+  } catch {
+    // Silently ignore send failures during window initialization/disposal.
   }
 }

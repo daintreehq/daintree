@@ -10,11 +10,12 @@ export interface CodeBlock {
 
 export function extractCodeBlocks(text: string): CodeBlock[] {
   const blocks: CodeBlock[] = [];
-  const regex = /```(\w+)?\n([\s\S]*?)```/g;
+  const regex = /```([^\n`]*)\n([\s\S]*?)```/g;
   let match;
 
   while ((match = regex.exec(text)) !== null) {
-    const language = match[1] || "text";
+    const languageHint = match[1]?.trim();
+    const language = languageHint ? languageHint.split(/\s+/)[0] : "text";
     const content = match[2].trim();
     if (content) {
       blocks.push({ language, content });
@@ -31,8 +32,9 @@ export function extractPatches(text: string): string[] {
   let inPatch = false;
 
   for (const line of lines) {
-    if (line.startsWith("diff ") || line.startsWith("---")) {
-      if (inPatch && currentPatch.length > 0) {
+    const startsPatch = line.startsWith("diff ") || (!inPatch && line.startsWith("---"));
+    if (startsPatch) {
+      if (inPatch && currentPatch.length > 3) {
         patches.push(currentPatch.join("\n"));
       }
       currentPatch = [line];

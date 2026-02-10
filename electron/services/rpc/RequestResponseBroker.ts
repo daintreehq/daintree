@@ -53,14 +53,26 @@ export class RequestResponseBroker {
    */
   register<T>(requestId: string, timeoutMs?: number): Promise<T> {
     return new Promise((resolve, reject) => {
-      const effectiveTimeout = timeoutMs ?? this.options.defaultTimeoutMs;
+      const existing = this.pendingRequests.get(requestId);
+      if (existing) {
+        clearTimeout(existing.timeout);
+        existing.reject(new Error(`Duplicate request ID: ${requestId}`));
+        this.pendingRequests.delete(requestId);
+      }
+
+      const effectiveTimeout = this.getEffectiveTimeout(timeoutMs);
 
       const timeout = setTimeout(() => {
-        if (this.pendingRequests.has(requestId)) {
-          this.pendingRequests.delete(requestId);
+        const pending = this.pendingRequests.get(requestId);
+        if (!pending) return;
+
+        this.pendingRequests.delete(requestId);
+        try {
           this.options.onTimeout(requestId);
-          reject(new Error(`Request timeout: ${requestId}`));
+        } catch {
+          // onTimeout is a best-effort callback and must not block timeout rejection.
         }
+        pending.reject(new Error(`Request timeout: ${requestId}`));
       }, effectiveTimeout);
 
       this.pendingRequests.set(requestId, {
@@ -70,6 +82,18 @@ export class RequestResponseBroker {
         createdAt: Date.now(),
       });
     });
+  }
+
+  private getEffectiveTimeout(timeoutMs?: number): number {
+    if (timeoutMs === undefined) {
+      return this.options.defaultTimeoutMs;
+    }
+
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      return this.options.defaultTimeoutMs;
+    }
+
+    return Math.floor(timeoutMs);
   }
 
   /**

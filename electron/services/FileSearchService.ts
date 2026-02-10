@@ -182,23 +182,33 @@ async function loadGitFiles(cwd: string): Promise<string[]> {
 
 export class FileSearchService {
   async search(payload: { cwd: string; query: string; limit?: number }): Promise<string[]> {
-    const resolvedCwd = path.resolve(payload.cwd);
-    const limit = clampInt(payload.limit, 1, 100, MAX_RESULTS_DEFAULT);
+    try {
+      const resolvedCwd = path.resolve(payload.cwd);
+      const limit = clampInt(payload.limit, 1, 100, MAX_RESULTS_DEFAULT);
 
-    const cached = FILE_LIST_CACHE.get(resolvedCwd);
-    const files =
-      cached?.files ??
-      (await (async () => {
-        const loaded = await this.loadFileList(resolvedCwd);
-        FILE_LIST_CACHE.set(resolvedCwd, { files: loaded });
-        return loaded;
-      })());
+      const cached = FILE_LIST_CACHE.get(resolvedCwd);
+      const files =
+        cached?.files ??
+        (await (async () => {
+          const loaded = await this.loadFileList(resolvedCwd);
+          FILE_LIST_CACHE.set(resolvedCwd, { files: loaded });
+          return loaded;
+        })());
 
-    return pickTopMatches(files, payload.query, limit);
+      return pickTopMatches(files, payload.query, limit);
+    } catch {
+      return [];
+    }
   }
 
   private async loadFileList(cwd: string): Promise<string[]> {
-    const stats = await fs.stat(cwd);
+    let stats: Awaited<ReturnType<typeof fs.stat>>;
+    try {
+      stats = await fs.stat(cwd);
+    } catch {
+      return [];
+    }
+
     if (!stats.isDirectory()) {
       return [];
     }

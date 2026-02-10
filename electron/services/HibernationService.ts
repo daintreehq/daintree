@@ -30,7 +30,32 @@ const DEFAULT_CONFIG: HibernationConfig = {
  */
 export class HibernationService {
   private checkInterval: NodeJS.Timeout | null = null;
+  private initialCheckTimer: NodeJS.Timeout | null = null;
   private readonly CHECK_INTERVAL_MS = 60 * 60 * 1000; // Every hour
+
+  private normalizeThreshold(value: unknown, fallback: number): number {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      return fallback;
+    }
+
+    return Math.max(1, Math.min(168, Math.round(value)));
+  }
+
+  private normalizeConfig(value: unknown): HibernationConfig {
+    const raw = value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+    const candidate = (raw ?? {}) as {
+      enabled?: unknown;
+      inactiveThresholdHours?: unknown;
+    };
+
+    return {
+      enabled: typeof candidate.enabled === "boolean" ? candidate.enabled : DEFAULT_CONFIG.enabled,
+      inactiveThresholdHours: this.normalizeThreshold(
+        candidate.inactiveThresholdHours,
+        DEFAULT_CONFIG.inactiveThresholdHours
+      ),
+    };
+  }
 
   start(): void {
     if (this.checkInterval) return;
@@ -50,7 +75,12 @@ export class HibernationService {
     }, this.CHECK_INTERVAL_MS);
 
     // Initial check on start (delayed to let services fully initialize)
-    setTimeout(() => {
+    if (this.initialCheckTimer) {
+      clearTimeout(this.initialCheckTimer);
+    }
+
+    this.initialCheckTimer = setTimeout(() => {
+      this.initialCheckTimer = null;
       void this.checkAndHibernate().catch((error) => {
         console.error("[HibernationService] Initial check failed:", error);
       });
@@ -62,6 +92,11 @@ export class HibernationService {
       clearInterval(this.checkInterval);
       this.checkInterval = null;
       console.log("[HibernationService] Stopped auto-hibernation checks");
+    }
+
+    if (this.initialCheckTimer) {
+      clearTimeout(this.initialCheckTimer);
+      this.initialCheckTimer = null;
     }
   }
 
@@ -121,25 +156,19 @@ export class HibernationService {
   }
 
   getConfig(): HibernationConfig {
-    const hibernation = store.get("hibernation");
-    return {
-      enabled: hibernation?.enabled ?? DEFAULT_CONFIG.enabled,
-      inactiveThresholdHours:
-        hibernation?.inactiveThresholdHours ?? DEFAULT_CONFIG.inactiveThresholdHours,
-    };
+    return this.normalizeConfig(store.get("hibernation"));
   }
 
   updateConfig(config: Partial<HibernationConfig>): void {
-    const current = { ...(store.get("hibernation") ?? DEFAULT_CONFIG) };
+    const current = this.getConfig();
 
-    if (config.enabled !== undefined) {
+    if (typeof config.enabled === "boolean") {
       current.enabled = config.enabled;
     }
     if (config.inactiveThresholdHours !== undefined) {
-      // Clamp to valid range (1-168 hours)
-      current.inactiveThresholdHours = Math.max(
-        1,
-        Math.min(168, Math.round(config.inactiveThresholdHours))
+      current.inactiveThresholdHours = this.normalizeThreshold(
+        config.inactiveThresholdHours,
+        current.inactiveThresholdHours
       );
     }
 

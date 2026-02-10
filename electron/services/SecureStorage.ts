@@ -49,8 +49,15 @@ class SecureStorage {
   }
 
   public get(key: SecureKey): string | undefined {
-    const storedValue = store.get(key as DotNotatedUserConfigKey) as string | undefined;
-    if (!storedValue) return undefined;
+    const rawValue = store.get(key as DotNotatedUserConfigKey) as unknown;
+    if (rawValue === undefined || rawValue === null || rawValue === "") return undefined;
+    if (typeof rawValue !== "string") {
+      console.warn(`[SecureStorage] Found invalid non-string ${key}, clearing corrupted entry.`);
+      store.delete(key as DotNotatedUserConfigKey);
+      return undefined;
+    }
+
+    const storedValue = rawValue;
 
     // If it's not hex encoded, it's definitely plain text.
     if (!this.isHexEncoded(storedValue)) {

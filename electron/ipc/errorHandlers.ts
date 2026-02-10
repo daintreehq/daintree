@@ -42,6 +42,43 @@ interface RetryPayload {
   args?: Record<string, unknown>;
 }
 
+function isRetryAction(value: unknown): value is RetryAction {
+  return value === "terminal" || value === "git" || value === "worktree";
+}
+
+function normalizeTerminalDimension(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || !Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return value > 0 ? value : fallback;
+}
+
+function parseRetryPayload(payload: unknown): RetryPayload {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("Invalid retry payload");
+  }
+
+  const candidate = payload as {
+    errorId?: unknown;
+    action?: unknown;
+    args?: unknown;
+  };
+
+  if (!isRetryAction(candidate.action)) {
+    throw new Error("Invalid retry payload");
+  }
+
+  return {
+    errorId: typeof candidate.errorId === "string" ? candidate.errorId : "unknown",
+    action: candidate.action,
+    args:
+      candidate.args && typeof candidate.args === "object" && !Array.isArray(candidate.args)
+        ? (candidate.args as Record<string, unknown>)
+        : undefined,
+  };
+}
+
 function getErrorType(error: unknown): ErrorType {
   if (error instanceof GitError) return "git";
   if (error instanceof ProcessError) return "process";
@@ -104,9 +141,19 @@ class ErrorService {
   }
 
   sendError(error: AppError) {
-    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      this.mainWindow.webContents.send(CHANNELS.ERROR_NOTIFY, error);
+    if (!this.mainWindow || this.mainWindow.isDestroyed()) {
+      return;
     }
+
+    const webContents = this.mainWindow.webContents;
+    if (!webContents || typeof webContents.send !== "function") {
+      return;
+    }
+    if (typeof webContents.isDestroyed === "function" && webContents.isDestroyed()) {
+      return;
+    }
+
+    webContents.send(CHANNELS.ERROR_NOTIFY, error);
   }
 
   notifyError(error: unknown, options: Parameters<typeof createAppError>[1] = {}) {
@@ -120,11 +167,11 @@ class ErrorService {
 
     switch (action) {
       case "terminal":
-        if (this.ptyClient && args?.id && args?.cwd) {
-          this.ptyClient.spawn(args.id as string, {
-            cwd: args.cwd as string,
-            cols: (args.cols as number) || 80,
-            rows: (args.rows as number) || 30,
+        if (this.ptyClient && typeof args?.id === "string" && typeof args?.cwd === "string") {
+          this.ptyClient.spawn(args.id, {
+            cwd: args.cwd,
+            cols: normalizeTerminalDimension(args.cols, 80),
+            rows: normalizeTerminalDimension(args.rows, 30),
           });
         }
         break;
@@ -173,14 +220,20 @@ export function registerErrorHandlers(
 
   errorService.initialize(mainWindow, worktreeService, ptyClient);
 
-  const handleRetry = async (_event: Electron.IpcMainInvokeEvent, payload: RetryPayload) => {
+  const handleRetry = async (_event: Electron.IpcMainInvokeEvent, payload: unknown) => {
+    let actionForError: RetryAction | undefined;
+    let argsForError: Record<string, unknown> | undefined;
+
     try {
-      await errorService.handleRetry(payload);
+      const parsedPayload = parseRetryPayload(payload);
+      actionForError = parsedPayload.action;
+      argsForError = parsedPayload.args;
+      await errorService.handleRetry(parsedPayload);
     } catch (error) {
       errorService.notifyError(error, {
-        source: `retry-${payload.action}`,
-        retryAction: payload.action,
-        retryArgs: payload.args,
+        source: `retry-${actionForError ?? "unknown"}`,
+        retryAction: actionForError,
+        retryArgs: argsForError,
       });
       throw error;
     }

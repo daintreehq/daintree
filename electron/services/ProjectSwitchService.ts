@@ -76,10 +76,14 @@ export class ProjectSwitchService {
       return updatedProject;
     } catch (error) {
       console.error("[ProjectSwitch] Project switch failed, rolling back:", error);
-      if (previousProjectId) {
-        this.deps.ptyClient.onProjectSwitch(previousProjectId);
-      } else {
-        this.deps.ptyClient.setActiveProject(null);
+      try {
+        if (previousProjectId) {
+          this.deps.ptyClient.onProjectSwitch(previousProjectId);
+        } else {
+          this.deps.ptyClient.setActiveProject(null);
+        }
+      } catch (rollbackError) {
+        console.error("[ProjectSwitch] Rollback failed:", rollbackError);
       }
       throw error;
     }
@@ -118,13 +122,18 @@ export class ProjectSwitchService {
   private async cleanupPreviousProject(projectId: string): Promise<void> {
     console.log("[ProjectSwitch] Cleaning up previous project state...");
 
+    const safeCall = (fn: () => unknown): Promise<unknown> => Promise.resolve().then(fn);
     const cleanupResults = await Promise.allSettled([
-      this.deps.worktreeService?.onProjectSwitch() ?? Promise.resolve(),
-      Promise.resolve(this.deps.ptyClient.onProjectSwitch(projectId)),
-      Promise.resolve(logBuffer.onProjectSwitch()),
-      Promise.resolve(this.deps.eventBuffer?.onProjectSwitch()),
-      taskQueueService.onProjectSwitch(projectId),
-      Promise.resolve(assistantService.clearAllSessions()),
+      this.deps.worktreeService?.onProjectSwitch
+        ? safeCall(() => this.deps.worktreeService!.onProjectSwitch())
+        : Promise.resolve(),
+      safeCall(() => this.deps.ptyClient.onProjectSwitch(projectId)),
+      safeCall(() => logBuffer.onProjectSwitch()),
+      this.deps.eventBuffer?.onProjectSwitch
+        ? safeCall(() => this.deps.eventBuffer!.onProjectSwitch())
+        : Promise.resolve(),
+      safeCall(() => taskQueueService.onProjectSwitch(projectId)),
+      safeCall(() => assistantService.clearAllSessions()),
     ]);
 
     cleanupResults.forEach((result, index) => {

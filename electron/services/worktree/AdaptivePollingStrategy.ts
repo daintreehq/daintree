@@ -1,5 +1,32 @@
 import { DEFAULT_CONFIG } from "../../types/config.js";
 
+const DEFAULT_BASE_INTERVAL = 2000;
+const DEFAULT_MAX_INTERVAL = DEFAULT_CONFIG.monitor?.pollIntervalMax ?? 30000;
+const DEFAULT_ADAPTIVE_BACKOFF = DEFAULT_CONFIG.monitor?.adaptiveBackoff ?? true;
+const DEFAULT_CIRCUIT_BREAKER_THRESHOLD = DEFAULT_CONFIG.monitor?.circuitBreakerThreshold ?? 3;
+
+function normalizeInterval(ms: number | undefined, fallback: number): number {
+  if (typeof ms !== "number" || !Number.isFinite(ms)) {
+    return fallback;
+  }
+
+  const rounded = Math.floor(ms);
+  return rounded >= 1 ? rounded : fallback;
+}
+
+function normalizeThreshold(value: number | undefined, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+
+  const rounded = Math.floor(value);
+  return rounded >= 1 ? rounded : fallback;
+}
+
+function normalizeDuration(ms: number): number {
+  return typeof ms === "number" && Number.isFinite(ms) && ms > 0 ? ms : 0;
+}
+
 export interface AdaptivePollingConfig {
   baseInterval: number;
   maxInterval: number;
@@ -27,27 +54,37 @@ export class AdaptivePollingStrategy {
   private circuitBreakerTripped: boolean = false;
 
   constructor(config?: Partial<AdaptivePollingConfig>) {
-    this.baseInterval = config?.baseInterval ?? 2000;
-    this.maxInterval = config?.maxInterval ?? DEFAULT_CONFIG.monitor?.pollIntervalMax ?? 30000;
-    this.adaptiveBackoff =
-      config?.adaptiveBackoff ?? DEFAULT_CONFIG.monitor?.adaptiveBackoff ?? true;
-    this.circuitBreakerThreshold =
-      config?.circuitBreakerThreshold ?? DEFAULT_CONFIG.monitor?.circuitBreakerThreshold ?? 3;
+    this.baseInterval = normalizeInterval(config?.baseInterval, DEFAULT_BASE_INTERVAL);
+    this.maxInterval = Math.max(
+      this.baseInterval,
+      normalizeInterval(config?.maxInterval, DEFAULT_MAX_INTERVAL)
+    );
+    this.adaptiveBackoff = config?.adaptiveBackoff ?? DEFAULT_ADAPTIVE_BACKOFF;
+    this.circuitBreakerThreshold = normalizeThreshold(
+      config?.circuitBreakerThreshold,
+      DEFAULT_CIRCUIT_BREAKER_THRESHOLD
+    );
   }
 
   public calculateNextInterval(): number {
-    if (!this.adaptiveBackoff || this.lastOperationDuration === 0) {
+    if (!this.adaptiveBackoff || this.lastOperationDuration <= 0) {
       return this.baseInterval;
     }
 
     const adaptiveInterval = Math.ceil(this.lastOperationDuration * 1.5);
+    if (!Number.isFinite(adaptiveInterval) || adaptiveInterval < 1) {
+      return this.baseInterval;
+    }
+
+    const boundedMaxInterval = Math.max(this.maxInterval, this.baseInterval);
     const nextInterval = Math.max(this.baseInterval, adaptiveInterval);
-    return Math.min(nextInterval, this.maxInterval);
+    return Math.min(nextInterval, boundedMaxInterval);
   }
 
   public recordSuccess(durationMs: number, queueDelayMs: number = 0): void {
-    const queueDelay = Math.max(0, queueDelayMs);
-    this.lastOperationDuration = durationMs + queueDelay;
+    const duration = normalizeDuration(durationMs);
+    const queueDelay = normalizeDuration(queueDelayMs);
+    this.lastOperationDuration = duration + queueDelay;
     this.lastQueueDelay = queueDelay;
     this.consecutiveFailures = 0;
     if (this.circuitBreakerTripped) {
@@ -56,8 +93,9 @@ export class AdaptivePollingStrategy {
   }
 
   public recordFailure(durationMs: number, queueDelayMs: number = 0): boolean {
-    const queueDelay = Math.max(0, queueDelayMs);
-    this.lastOperationDuration = durationMs + queueDelay;
+    const duration = normalizeDuration(durationMs);
+    const queueDelay = normalizeDuration(queueDelayMs);
+    this.lastOperationDuration = duration + queueDelay;
     this.lastQueueDelay = queueDelay;
     this.consecutiveFailures++;
 
@@ -90,18 +128,22 @@ export class AdaptivePollingStrategy {
   }
 
   public setBaseInterval(ms: number): void {
-    this.baseInterval = ms;
+    this.baseInterval = normalizeInterval(ms, this.baseInterval);
+    if (this.maxInterval < this.baseInterval) {
+      this.maxInterval = this.baseInterval;
+    }
   }
 
   public updateConfig(adaptiveBackoff?: boolean, maxInterval?: number, threshold?: number): void {
-    if (adaptiveBackoff !== undefined) {
+    if (typeof adaptiveBackoff === "boolean") {
       this.adaptiveBackoff = adaptiveBackoff;
     }
     if (maxInterval !== undefined) {
-      this.maxInterval = maxInterval;
+      const normalizedMax = normalizeInterval(maxInterval, this.maxInterval);
+      this.maxInterval = Math.max(normalizedMax, this.baseInterval);
     }
     if (threshold !== undefined) {
-      this.circuitBreakerThreshold = threshold;
+      this.circuitBreakerThreshold = normalizeThreshold(threshold, this.circuitBreakerThreshold);
     }
   }
 }

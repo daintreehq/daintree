@@ -26,7 +26,19 @@ export class LogBuffer {
   private maxSize: number;
 
   constructor(maxSize = 500) {
-    this.maxSize = maxSize;
+    this.maxSize = this.normalizeMaxSize(maxSize);
+  }
+
+  private normalizeMaxSize(maxSize: number): number {
+    if (typeof maxSize !== "number" || !Number.isFinite(maxSize)) {
+      return 500;
+    }
+
+    if (maxSize < 1) {
+      return 1;
+    }
+
+    return Math.floor(maxSize);
   }
 
   static getInstance(): LogBuffer {

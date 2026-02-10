@@ -26,9 +26,24 @@ class ProjectEnvSecureStorage {
     return `${projectId}:${envKey}`;
   }
 
+  private getProjectEnvMap(): Record<string, string> {
+    const raw = store.get("projectEnv");
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return {};
+    }
+
+    const normalized: Record<string, string> = {};
+    for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+      if (typeof value === "string") {
+        normalized[key] = value;
+      }
+    }
+    return normalized;
+  }
+
   public set(projectId: string, envKey: string, value: string | undefined): void {
     const key = this.makeKey(projectId, envKey);
-    const projectEnv = store.get("projectEnv") || {};
+    const projectEnv = this.getProjectEnvMap();
 
     if (value === undefined) {
       delete projectEnv[key];
@@ -54,7 +69,7 @@ class ProjectEnvSecureStorage {
 
   public get(projectId: string, envKey: string): string | undefined {
     const key = this.makeKey(projectId, envKey);
-    const projectEnv = store.get("projectEnv") || {};
+    const projectEnv = this.getProjectEnvMap();
     const storedValue = projectEnv[key];
 
     if (!storedValue) return undefined;
@@ -82,13 +97,13 @@ class ProjectEnvSecureStorage {
 
   public delete(projectId: string, envKey: string): void {
     const key = this.makeKey(projectId, envKey);
-    const projectEnv = store.get("projectEnv") || {};
+    const projectEnv = this.getProjectEnvMap();
     delete projectEnv[key];
     store.set("projectEnv", projectEnv);
   }
 
   public listKeys(projectId: string): string[] {
-    const projectEnv = store.get("projectEnv") || {};
+    const projectEnv = this.getProjectEnvMap();
     const prefix = `${projectId}:`;
     return Object.keys(projectEnv)
       .filter((key) => key.startsWith(prefix))
@@ -96,7 +111,7 @@ class ProjectEnvSecureStorage {
   }
 
   public deleteAllForProject(projectId: string): void {
-    const projectEnv = store.get("projectEnv") || {};
+    const projectEnv = this.getProjectEnvMap();
     const prefix = `${projectId}:`;
     const newProjectEnv: Record<string, string> = {};
 

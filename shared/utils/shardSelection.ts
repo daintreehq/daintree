@@ -1,5 +1,7 @@
 export function selectShard(terminalId: string, shardCount: number): number {
-  if (shardCount <= 0) throw new Error("shardCount must be > 0");
+  if (!Number.isFinite(shardCount) || !Number.isInteger(shardCount) || shardCount <= 0) {
+    throw new Error("shardCount must be a positive integer");
+  }
   if (shardCount === 1) return 0;
 
   let hash = 0;

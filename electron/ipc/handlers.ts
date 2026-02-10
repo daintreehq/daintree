@@ -36,6 +36,18 @@ import { typedHandle, typedSend, sendToRenderer } from "./utils.js";
 
 export { typedHandle, typedSend, sendToRenderer };
 
+type CleanupFn = () => void;
+
+function runCleanups(cleanupFunctions: CleanupFn[]): void {
+  for (const cleanup of [...cleanupFunctions].reverse()) {
+    try {
+      cleanup();
+    } catch (error) {
+      console.error("[IPC] Handler cleanup failed:", error);
+    }
+  }
+}
+
 export function registerIpcHandlers(
   mainWindow: BrowserWindow,
   ptyClient: PtyClient,
@@ -58,34 +70,43 @@ export function registerIpcHandlers(
     events,
   };
 
-  const cleanupFunctions = [
-    registerWorktreeHandlers(deps),
-    registerTerminalHandlers(deps),
-    registerFilesHandlers(),
-    registerCopyTreeHandlers(deps),
-    registerAiHandlers(deps),
-    registerSlashCommandHandlers(),
-    registerProjectHandlers(deps),
-    registerGithubHandlers(deps),
-    registerAppHandlers(deps),
-    registerSidecarHandlers(deps),
-    registerMenuHandlers(deps),
-    registerHibernationHandlers(deps),
-    registerSystemSleepHandlers(deps),
-    registerKeybindingHandlers(deps),
-    registerWorktreeConfigHandlers(deps),
-    registerNotificationHandlers(deps),
-    registerGeminiHandlers(),
-    registerEventsHandlers(deps),
-    registerNotesHandlers(deps),
-    registerDevPreviewHandlers(deps),
-    registerCommandHandlers(),
-    registerAppAgentHandlers(deps),
-    registerAssistantHandlers(mainWindow),
-    registerAgentCapabilitiesHandlers(),
-  ];
+  const cleanupFunctions: CleanupFn[] = [];
+
+  const register = (registerFn: () => CleanupFn): void => {
+    cleanupFunctions.push(registerFn());
+  };
+
+  try {
+    register(() => registerWorktreeHandlers(deps));
+    register(() => registerTerminalHandlers(deps));
+    register(() => registerFilesHandlers());
+    register(() => registerCopyTreeHandlers(deps));
+    register(() => registerAiHandlers(deps));
+    register(() => registerSlashCommandHandlers());
+    register(() => registerProjectHandlers(deps));
+    register(() => registerGithubHandlers(deps));
+    register(() => registerAppHandlers(deps));
+    register(() => registerSidecarHandlers(deps));
+    register(() => registerMenuHandlers(deps));
+    register(() => registerHibernationHandlers(deps));
+    register(() => registerSystemSleepHandlers(deps));
+    register(() => registerKeybindingHandlers(deps));
+    register(() => registerWorktreeConfigHandlers(deps));
+    register(() => registerNotificationHandlers(deps));
+    register(() => registerGeminiHandlers());
+    register(() => registerEventsHandlers(deps));
+    register(() => registerNotesHandlers(deps));
+    register(() => registerDevPreviewHandlers(deps));
+    register(() => registerCommandHandlers());
+    register(() => registerAppAgentHandlers(deps));
+    register(() => registerAssistantHandlers(mainWindow));
+    register(() => registerAgentCapabilitiesHandlers());
+  } catch (error) {
+    runCleanups(cleanupFunctions);
+    throw error;
+  }
 
   return () => {
-    cleanupFunctions.forEach((cleanup) => cleanup());
+    runCleanups(cleanupFunctions);
   };
 }

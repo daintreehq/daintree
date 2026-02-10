@@ -74,6 +74,56 @@ const MAX_PROJECTS = 10;
 
 let instance: GitHubStatsCache | null = null;
 
+function normalizeCount(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return 0;
+  }
+  return Math.floor(value);
+}
+
+function normalizeCachedStats(entry: unknown): CachedStats | null {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+
+  const candidate = entry as Partial<CachedStats>;
+
+  if (
+    typeof candidate.lastUpdated !== "number" ||
+    !Number.isFinite(candidate.lastUpdated) ||
+    candidate.lastUpdated <= 0
+  ) {
+    return null;
+  }
+
+  if (typeof candidate.projectPath !== "string") {
+    return null;
+  }
+
+  if (
+    typeof candidate.issueCount !== "number" ||
+    !Number.isFinite(candidate.issueCount) ||
+    candidate.issueCount < 0
+  ) {
+    return null;
+  }
+
+  if (
+    typeof candidate.prCount !== "number" ||
+    !Number.isFinite(candidate.prCount) ||
+    candidate.prCount < 0
+  ) {
+    return null;
+  }
+
+  return {
+    issueCount: Math.floor(candidate.issueCount),
+    prCount: Math.floor(candidate.prCount),
+    lastUpdated: candidate.lastUpdated,
+    projectPath: candidate.projectPath,
+  };
+}
+
 export class GitHubStatsCache {
   private cacheFilePath: string;
   private memoryCache: CacheFile | null = null;
@@ -144,41 +194,43 @@ export class GitHubStatsCache {
 
   get(repoKey: string): CachedStats | null {
     const cache = this.load();
-    const entry = cache.projects[repoKey];
-
-    if (!entry) {
+    const normalized = normalizeCachedStats((cache.projects as Record<string, unknown>)[repoKey]);
+    if (!normalized) {
       return null;
     }
 
-    if (
-      typeof entry.lastUpdated !== "number" ||
-      !Number.isFinite(entry.lastUpdated) ||
-      entry.lastUpdated <= 0
-    ) {
-      return null;
-    }
-
-    const age = Date.now() - entry.lastUpdated;
+    const age = Date.now() - normalized.lastUpdated;
     if (age > MAX_CACHE_AGE_MS || age < 0) {
       return null;
     }
 
-    return entry;
+    return normalized;
   }
 
   set(repoKey: string, stats: { issueCount: number; prCount: number }, projectPath: string): void {
     const cache = this.load();
+    const normalizedProjects: Record<string, CachedStats> = {};
 
-    cache.projects[repoKey] = {
-      ...stats,
+    for (const [key, entry] of Object.entries(cache.projects as Record<string, unknown>)) {
+      const normalized = normalizeCachedStats(entry);
+      if (normalized) {
+        normalizedProjects[key] = normalized;
+      }
+    }
+
+    normalizedProjects[repoKey] = {
+      issueCount: normalizeCount(stats.issueCount),
+      prCount: normalizeCount(stats.prCount),
       lastUpdated: Date.now(),
-      projectPath,
+      projectPath: typeof projectPath === "string" ? projectPath : "",
     };
 
-    const entries = Object.entries(cache.projects);
+    const entries = Object.entries(normalizedProjects);
     if (entries.length > MAX_PROJECTS) {
       const sorted = entries.sort(([, a], [, b]) => b.lastUpdated - a.lastUpdated);
       cache.projects = Object.fromEntries(sorted.slice(0, MAX_PROJECTS));
+    } else {
+      cache.projects = normalizedProjects;
     }
 
     this.save(cache);

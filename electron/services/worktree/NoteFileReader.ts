@@ -1,5 +1,9 @@
 import { readFile, stat } from "fs/promises";
-import { join as pathJoin } from "path";
+import {
+  resolve as pathResolve,
+  relative as pathRelative,
+  isAbsolute as pathIsAbsolute,
+} from "path";
 import { DEFAULT_CONFIG } from "../../types/config.js";
 import { logWarn } from "../../utils/logger.js";
 import { getGitDir } from "../../utils/gitUtils.js";
@@ -31,6 +35,29 @@ export class NoteFileReader {
     }
   }
 
+  private resolveNotePath(gitDir: string): string | undefined {
+    if (typeof this.filename !== "string") {
+      return undefined;
+    }
+
+    const sanitizedFilename = this.filename.trim().replace(/\\/g, "/");
+    if (!sanitizedFilename) {
+      return undefined;
+    }
+
+    if (/^[a-zA-Z]:\//.test(sanitizedFilename)) {
+      return undefined;
+    }
+
+    const resolved = pathResolve(gitDir, sanitizedFilename);
+    const relative = pathRelative(gitDir, resolved);
+    if (!relative || relative.startsWith("..") || pathIsAbsolute(relative)) {
+      return undefined;
+    }
+
+    return resolved;
+  }
+
   public async read(): Promise<NoteData | undefined> {
     if (!this.enabled) {
       return undefined;
@@ -41,7 +68,14 @@ export class NoteFileReader {
       return undefined;
     }
 
-    const notePath = pathJoin(gitDir, this.filename);
+    const notePath = this.resolveNotePath(gitDir);
+    if (!notePath) {
+      logWarn("Invalid AI note filename configuration", {
+        path: this.worktreePath,
+        filename: this.filename,
+      });
+      return undefined;
+    }
 
     try {
       const fileStat = await stat(notePath);

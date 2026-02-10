@@ -27,16 +27,50 @@ export class AgentVersionService {
 
   constructor(private cliAvailabilityService: CliAvailabilityService) {}
 
+  private toErrorString(error: unknown): string {
+    if (error instanceof Error && typeof error.message === "string" && error.message.trim()) {
+      return error.message;
+    }
+    if (typeof error === "string" && error.trim()) {
+      return error;
+    }
+    return "Unknown error";
+  }
+
+  private createErrorInfo(agentId: AgentId, error: unknown): AgentVersionInfo {
+    return {
+      agentId,
+      installedVersion: null,
+      latestVersion: null,
+      updateAvailable: false,
+      lastChecked: Date.now(),
+      error: this.toErrorString(error),
+    };
+  }
+
   async getVersions(refresh = false): Promise<AgentVersionInfo[]> {
     const agentIds = getEffectiveAgentIds();
-    const results = await Promise.all(
+    const results = await Promise.allSettled(
       agentIds.map((agentId) => this.getVersion(agentId as AgentId, refresh))
     );
-    return results;
+
+    return results.map((result, index) => {
+      const agentId = agentIds[index] as AgentId;
+      if (result.status === "fulfilled") {
+        return result.value;
+      }
+
+      return this.createErrorInfo(agentId, result.reason);
+    });
   }
 
   async getVersion(agentId: AgentId, refresh = false): Promise<AgentVersionInfo> {
-    const config = getEffectiveAgentConfig(agentId);
+    let config;
+    try {
+      config = getEffectiveAgentConfig(agentId);
+    } catch (error) {
+      return this.createErrorInfo(agentId, error);
+    }
     if (!config) {
       return {
         agentId,
@@ -75,6 +109,8 @@ export class AgentVersionService {
         });
       }
       return result;
+    } catch (error) {
+      return this.createErrorInfo(agentId, error);
     } finally {
       this.inFlightChecks.delete(agentId);
     }

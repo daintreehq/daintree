@@ -16,7 +16,17 @@ class NotificationService {
   private focusHandler: (() => void) | null = null;
   private blurHandler: (() => void) | null = null;
 
+  private detachWindowListeners(): void {
+    if (!this.mainWindow || !this.focusHandler || !this.blurHandler) {
+      return;
+    }
+
+    this.mainWindow.off("focus", this.focusHandler);
+    this.mainWindow.off("blur", this.blurHandler);
+  }
+
   initialize(window: BrowserWindow): void {
+    this.detachWindowListeners();
     this.mainWindow = window;
 
     // Initialize with actual focus state
@@ -102,10 +112,7 @@ class NotificationService {
       this.debounceTimer = null;
     }
 
-    if (this.mainWindow && this.focusHandler && this.blurHandler) {
-      this.mainWindow.off("focus", this.focusHandler);
-      this.mainWindow.off("blur", this.blurHandler);
-    }
+    this.detachWindowListeners();
 
     // Clear notifications before disposing
     this.clearNotifications();

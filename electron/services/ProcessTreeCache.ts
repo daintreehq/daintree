@@ -237,7 +237,8 @@ export class ProcessTreeCache {
   }
 
   getChildPids(ppid: number): number[] {
-    return this.childrenMap.get(ppid) || [];
+    const childPids = this.childrenMap.get(ppid);
+    return childPids ? [...childPids] : [];
   }
 
   getProcess(pid: number): ProcessInfo | undefined {

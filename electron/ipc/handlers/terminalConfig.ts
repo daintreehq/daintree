@@ -2,11 +2,19 @@ import { ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 
+function getTerminalConfigObject(): Record<string, unknown> {
+  const config = store.get("terminalConfig");
+  if (config && typeof config === "object" && !Array.isArray(config)) {
+    return config as Record<string, unknown>;
+  }
+  return {};
+}
+
 export function registerTerminalConfigHandlers(): () => void {
   const handlers: Array<() => void> = [];
 
   const handleTerminalConfigGet = async () => {
-    return store.get("terminalConfig");
+    return getTerminalConfigObject();
   };
   ipcMain.handle(CHANNELS.TERMINAL_CONFIG_GET, handleTerminalConfigGet);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_GET));
@@ -25,7 +33,7 @@ export function registerTerminalConfigHandlers(): () => void {
       console.warn(error);
       throw new Error(error);
     }
-    const currentConfig = store.get("terminalConfig");
+    const currentConfig = getTerminalConfigObject();
     store.set("terminalConfig", { ...currentConfig, scrollbackLines });
   };
   ipcMain.handle(CHANNELS.TERMINAL_CONFIG_SET_SCROLLBACK, handleTerminalConfigSetScrollback);
@@ -35,8 +43,12 @@ export function registerTerminalConfigHandlers(): () => void {
     _event: Electron.IpcMainInvokeEvent,
     performanceMode: boolean
   ) => {
-    const currentConfig = store.get("terminalConfig");
-    store.set("terminalConfig", { ...currentConfig, performanceMode: Boolean(performanceMode) });
+    if (typeof performanceMode !== "boolean") {
+      console.warn("Invalid terminal performanceMode:", performanceMode);
+      return;
+    }
+    const currentConfig = getTerminalConfigObject();
+    store.set("terminalConfig", { ...currentConfig, performanceMode });
   };
   ipcMain.handle(
     CHANNELS.TERMINAL_CONFIG_SET_PERFORMANCE_MODE,
@@ -56,7 +68,7 @@ export function registerTerminalConfigHandlers(): () => void {
       console.warn("Invalid terminal fontSize (out of range 8-24):", fontSize);
       return;
     }
-    const currentConfig = store.get("terminalConfig");
+    const currentConfig = getTerminalConfigObject();
     store.set("terminalConfig", { ...currentConfig, fontSize });
   };
   ipcMain.handle(CHANNELS.TERMINAL_CONFIG_SET_FONT_SIZE, handleTerminalConfigSetFontSize);
@@ -70,8 +82,9 @@ export function registerTerminalConfigHandlers(): () => void {
       console.warn("Invalid terminal fontFamily:", fontFamily);
       return;
     }
-    const currentConfig = store.get("terminalConfig");
-    store.set("terminalConfig", { ...currentConfig, fontFamily });
+    const trimmedFontFamily = fontFamily.trim();
+    const currentConfig = getTerminalConfigObject();
+    store.set("terminalConfig", { ...currentConfig, fontFamily: trimmedFontFamily });
   };
   ipcMain.handle(CHANNELS.TERMINAL_CONFIG_SET_FONT_FAMILY, handleTerminalConfigSetFontFamily);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_FONT_FAMILY));
@@ -80,8 +93,12 @@ export function registerTerminalConfigHandlers(): () => void {
     _event: Electron.IpcMainInvokeEvent,
     enabled: boolean
   ) => {
-    const currentConfig = store.get("terminalConfig");
-    store.set("terminalConfig", { ...currentConfig, hybridInputEnabled: Boolean(enabled) });
+    if (typeof enabled !== "boolean") {
+      console.warn("Invalid terminal hybridInputEnabled:", enabled);
+      return;
+    }
+    const currentConfig = getTerminalConfigObject();
+    store.set("terminalConfig", { ...currentConfig, hybridInputEnabled: enabled });
   };
   ipcMain.handle(
     CHANNELS.TERMINAL_CONFIG_SET_HYBRID_INPUT_ENABLED,
@@ -93,8 +110,12 @@ export function registerTerminalConfigHandlers(): () => void {
     _event: Electron.IpcMainInvokeEvent,
     enabled: boolean
   ) => {
-    const currentConfig = store.get("terminalConfig");
-    store.set("terminalConfig", { ...currentConfig, hybridInputAutoFocus: Boolean(enabled) });
+    if (typeof enabled !== "boolean") {
+      console.warn("Invalid terminal hybridInputAutoFocus:", enabled);
+      return;
+    }
+    const currentConfig = getTerminalConfigObject();
+    store.set("terminalConfig", { ...currentConfig, hybridInputAutoFocus: enabled });
   };
   ipcMain.handle(
     CHANNELS.TERMINAL_CONFIG_SET_HYBRID_INPUT_AUTO_FOCUS,
