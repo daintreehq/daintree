@@ -89,10 +89,11 @@ type RenderState = "error" | "loading-spinner" | "waiting" | "webview";
 function determineRenderState(
   status: DevPreviewStatus,
   hasError: boolean,
-  currentUrl: string
+  currentUrl: string,
+  isRestarting = false
 ): RenderState {
+  if (isRestarting || status === "starting" || status === "installing") return "loading-spinner";
   if (status === "error" && hasError) return "error";
-  if (status === "starting" || status === "installing") return "loading-spinner";
   if (!currentUrl) return "waiting";
   return "webview";
 }
@@ -160,6 +161,10 @@ describe("DevPreviewPane", () => {
 
     it("shows loading spinner when installing", () => {
       expect(determineRenderState("installing", false, "")).toBe("loading-spinner");
+    });
+
+    it("shows loading spinner when restarting", () => {
+      expect(determineRenderState("error", true, "", true)).toBe("loading-spinner");
     });
 
     it("shows waiting state when stopped with no URL", () => {
@@ -415,8 +420,12 @@ describe("DevPreviewPane", () => {
   });
 
   describe("auto-start behavior", () => {
-    function shouldAutoStart(devCommand: string, status: DevPreviewStatus): boolean {
-      return !!(devCommand && status === "stopped");
+    function shouldAutoStart(
+      devCommand: string,
+      status: DevPreviewStatus,
+      isRestarting = false
+    ): boolean {
+      return !!(devCommand && status === "stopped" && !isRestarting);
     }
 
     it("should auto-start when devCommand exists and status is stopped", () => {
@@ -437,6 +446,10 @@ describe("DevPreviewPane", () => {
 
     it("should not auto-start when status is error", () => {
       expect(shouldAutoStart("npm run dev", "error")).toBe(false);
+    });
+
+    it("should not auto-start when isRestarting is true", () => {
+      expect(shouldAutoStart("npm run dev", "stopped", true)).toBe(false);
     });
   });
 

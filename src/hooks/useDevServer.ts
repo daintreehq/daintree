@@ -27,6 +27,17 @@ export interface UseDevServerReturn extends UseDevServerState {
   isRestarting: boolean;
 }
 
+const isBenignMissingTerminalError = (err: unknown): boolean => {
+  const errorMessage = err instanceof Error ? err.message : String(err);
+  const normalized = errorMessage.toLowerCase();
+  return (
+    normalized.includes("not found") ||
+    normalized.includes("does not exist") ||
+    normalized.includes("terminal not found") ||
+    normalized.includes("unknown terminal")
+  );
+};
+
 export function useDevServer({
   panelId,
   devCommand,
@@ -49,8 +60,10 @@ export function useDevServer({
 
   const cleanupRef = useRef<(() => void) | null>(null);
   const terminalIdRef = useRef<string | null>(panel?.devServerTerminalId ?? null);
+  const pendingDevPreviewUnsubscribeRef = useRef<Promise<void> | null>(null);
   const isStartingRef = useRef(false);
   const isRestartingRef = useRef(false);
+  const forceFreshSpawnRef = useRef(false);
   const isMountedRef = useRef(true);
   const needsTransitionRecoveryRef = useRef(
     panel?.devServerStatus === "starting" || panel?.devServerStatus === "installing"
@@ -72,6 +85,67 @@ export function useDevServer({
       cleanupRef.current = null;
     }
   }, []);
+
+  const unsubscribeDevPreview = useCallback(async (id: string): Promise<void> => {
+    try {
+      await window.electron.devPreview.unsubscribe(id);
+    } catch (err) {
+      console.warn("[useDevServer] Failed to unsubscribe dev preview:", err);
+    }
+  }, []);
+
+  const queueDevPreviewUnsubscribe = useCallback(
+    (id: string): Promise<void> => {
+      const queued = unsubscribeDevPreview(id).finally(() => {
+        if (pendingDevPreviewUnsubscribeRef.current === queued) {
+          pendingDevPreviewUnsubscribeRef.current = null;
+        }
+      });
+      pendingDevPreviewUnsubscribeRef.current = queued;
+      return queued;
+    },
+    [unsubscribeDevPreview]
+  );
+
+  const waitForTerminalGone = useCallback(
+    async (id: string, timeoutMs = 8000): Promise<boolean> => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        try {
+          const reconnectResult = await terminalClient.reconnect(id);
+          if (!reconnectResult?.exists || !reconnectResult.hasPty) {
+            return true;
+          }
+        } catch {
+          return true;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      return false;
+    },
+    []
+  );
+
+  const killTerminalAndWait = useCallback(
+    async (id: string, context: string): Promise<void> => {
+      try {
+        await terminalClient.kill(id);
+      } catch (err) {
+        if (!isBenignMissingTerminalError(err)) {
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          throw new Error(`Failed to kill terminal (${context}): ${errorMessage}`);
+        }
+      }
+
+      const didStop = await waitForTerminalGone(id);
+      if (!didStop) {
+        throw new Error(
+          `Timed out waiting for terminal ${id} to stop (${context}). Refusing to spawn duplicate dev server.`
+        );
+      }
+    },
+    [waitForTerminalGone]
+  );
 
   const stop = useCallback(() => {
     disconnect();
@@ -98,6 +172,8 @@ export function useDevServer({
     }
 
     isStartingRef.current = true;
+    const forceFreshSpawn = forceFreshSpawnRef.current;
+    forceFreshSpawnRef.current = false;
     const sessionId = Date.now();
     const sessionIdRef = { current: sessionId };
 
@@ -121,7 +197,7 @@ export function useDevServer({
     let id: string | null = null;
     let reconnected = false;
 
-    if (persistedTerminalId && persistedTerminalId === terminalIdRef.current) {
+    if (!forceFreshSpawn && persistedTerminalId && persistedTerminalId === terminalIdRef.current) {
       try {
         const reconnectResult = await terminalClient.reconnect(persistedTerminalId);
         if (reconnectResult?.id && reconnectResult.exists && reconnectResult.hasPty) {
@@ -150,7 +226,23 @@ export function useDevServer({
       if (!reconnected) {
         // Kill any orphaned terminal
         if (terminalIdRef.current) {
-          terminalClient.kill(terminalIdRef.current).catch(() => {});
+          try {
+            await killTerminalAndWait(terminalIdRef.current, "orphan cleanup");
+          } catch (killErr) {
+            if (isMountedRef.current && sessionIdRef.current === sessionId) {
+              const errorObj = {
+                type: "unknown" as const,
+                message: killErr instanceof Error ? killErr.message : String(killErr),
+              };
+              setError(errorObj);
+              setStatus("error");
+              setTerminalId(null);
+              terminalIdRef.current = null;
+              terminalStore.setDevServerState(panelId, "error", null, errorObj, null);
+            }
+            isStartingRef.current = false;
+            return;
+          }
           terminalIdRef.current = null;
         }
 
@@ -189,9 +281,7 @@ export function useDevServer({
       // Assign cleanup early to prevent leak if unmount happens during listener setup
       cleanupRef.current = () => {
         if (id) {
-          window.electron.devPreview.unsubscribe(id).catch((err) => {
-            console.error("[useDevServer] Failed to unsubscribe:", err);
-          });
+          void queueDevPreviewUnsubscribe(id);
         }
         listeners.forEach((unsub) => unsub());
       };
@@ -219,6 +309,18 @@ export function useDevServer({
         ) {
           const newStatus = payload.error.type === "missing-dependencies" ? "installing" : "error";
           const errorObj = { type: payload.error.type, message: payload.error.message };
+
+          // During an explicit hard restart, transient detector errors can arrive
+          // before the new server announces its URL. Keep startup state and wait
+          // for either URL detection or process exit to decide final status.
+          if (isRestartingRef.current && newStatus === "error") {
+            setError(errorObj);
+            setStatus("starting");
+            statusRef.current = "starting";
+            terminalStore.setDevServerState(panelId, "starting", null, errorObj, id);
+            return;
+          }
+
           setError(errorObj);
           setStatus(newStatus);
           statusRef.current = newStatus;
@@ -261,7 +363,17 @@ export function useDevServer({
         return;
       }
 
+      if (pendingDevPreviewUnsubscribeRef.current) {
+        await pendingDevPreviewUnsubscribeRef.current;
+      }
+
+      // Ensure a fresh detector subscription state for this terminal ID.
+      await unsubscribeDevPreview(id!);
       await window.electron.devPreview.subscribe(id!);
+      // Backfill output that may have been emitted before subscription attached.
+      await terminalClient.replayHistory(id!, 300).catch((err) => {
+        console.warn("[useDevServer] Failed to replay history after subscribe:", err);
+      });
 
       // Persist initial state
       if (isMountedRef.current && sessionIdRef.current === sessionId) {
@@ -293,7 +405,18 @@ export function useDevServer({
       }
       isStartingRef.current = false;
     }
-  }, [panelId, devCommand, cwd, worktreeId, env, panel, terminalStore]);
+  }, [
+    panelId,
+    devCommand,
+    cwd,
+    worktreeId,
+    env,
+    panel,
+    terminalStore,
+    killTerminalAndWait,
+    queueDevPreviewUnsubscribe,
+    unsubscribeDevPreview,
+  ]);
 
   const restart = useCallback(async () => {
     if (isRestartingRef.current || isStartingRef.current) {
@@ -301,30 +424,32 @@ export function useDevServer({
     }
 
     isRestartingRef.current = true;
+    forceFreshSpawnRef.current = true;
     setIsRestarting(true);
 
     // Stop the current server
     disconnect();
-    if (terminalIdRef.current) {
-      try {
-        await terminalClient.kill(terminalIdRef.current);
-      } catch (err) {
-        console.error("[useDevServer] Failed to kill terminal during restart:", err);
+    if (pendingDevPreviewUnsubscribeRef.current) {
+      await pendingDevPreviewUnsubscribeRef.current;
+    }
+    const terminalToKill = terminalIdRef.current ?? panel?.devServerTerminalId;
+    if (terminalToKill) {
+      await unsubscribeDevPreview(terminalToKill);
 
-        // Only proceed if error is benign (terminal not found)
+      try {
+        await killTerminalAndWait(terminalToKill, "restart");
+      } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
-        if (!errorMessage.includes("not found") && !errorMessage.includes("does not exist")) {
-          const errorObj = {
-            type: "unknown" as const,
-            message: `Failed to stop previous dev server: ${errorMessage}`,
-          };
-          setError(errorObj);
-          setStatus("error");
-          terminalStore.setDevServerState(panelId, "error", null, errorObj, null);
-          isRestartingRef.current = false;
-          setIsRestarting(false);
-          return;
-        }
+        const errorObj = {
+          type: "unknown" as const,
+          message: `Failed to stop previous dev server: ${errorMessage}`,
+        };
+        setError(errorObj);
+        setStatus("error");
+        terminalStore.setDevServerState(panelId, "error", null, errorObj, null);
+        isRestartingRef.current = false;
+        setIsRestarting(false);
+        return;
       }
     }
 
@@ -335,20 +460,32 @@ export function useDevServer({
     setError(null);
     terminalStore.setDevServerState(panelId, "stopped", null, null, null);
 
-    // Small delay to ensure terminal process is fully cleaned up
-    await new Promise((resolve) => setTimeout(resolve, 200));
-
-    isRestartingRef.current = false;
     isStartingRef.current = false;
 
     try {
       await start();
     } finally {
-      if (isMountedRef.current) {
-        setIsRestarting(false);
-      }
+      // Keep restart state until a definitive status (running/error) arrives.
     }
-  }, [disconnect, panelId, terminalStore, start]);
+  }, [
+    disconnect,
+    panelId,
+    terminalStore,
+    start,
+    panel,
+    killTerminalAndWait,
+    unsubscribeDevPreview,
+  ]);
+
+  useEffect(() => {
+    if (!isRestartingRef.current) return;
+    if (status !== "running" && status !== "error") return;
+
+    isRestartingRef.current = false;
+    if (isMountedRef.current) {
+      setIsRestarting(false);
+    }
+  }, [status]);
 
   // Transitional states are not reliable across unmount/project-switch boundaries.
   // If we rehydrate in "starting"/"installing", force a clean restart path.
@@ -430,6 +567,10 @@ export function useDevServer({
   // Validate that persisted running terminal still exists after project switches.
   useEffect(() => {
     if (status !== "running") return;
+    if (!url) {
+      resetToStopped();
+      return;
+    }
     if (!terminalIdRef.current) return;
 
     let cancelled = false;
@@ -445,6 +586,9 @@ export function useDevServer({
         }
       } catch (err) {
         console.warn("[useDevServer] Failed to validate running terminal:", err);
+        if (!cancelled) {
+          resetToStopped();
+        }
       }
     };
 
@@ -453,7 +597,7 @@ export function useDevServer({
     return () => {
       cancelled = true;
     };
-  }, [status, terminalId, resetToStopped]);
+  }, [status, terminalId, url, resetToStopped]);
 
   useEffect(() => {
     isMountedRef.current = true;

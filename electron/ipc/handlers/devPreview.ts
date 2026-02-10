@@ -62,6 +62,15 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
     }
 
     if (subscriptions.has(terminalId)) {
+      // Resubscribe is treated as a fresh session to avoid stale URL/error dedupe
+      // when renderer restarts a dev server quickly with the same terminal ID.
+      const existing = subscriptions.get(terminalId);
+      if (existing) {
+        existing.buffer = "";
+        existing.lastUrl = null;
+        existing.lastError = null;
+      }
+      deps.ptyClient.setIpcDataMirror(terminalId, true);
       return;
     }
 
@@ -109,7 +118,11 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
     }
 
     const sub = subscriptions.get(terminalId);
-    if (!sub) return;
+    if (!sub) {
+      // Idempotent cleanup in case local map was already cleared.
+      deps.ptyClient.setIpcDataMirror(terminalId, false);
+      return;
+    }
 
     deps.ptyClient.off("data", sub.listener);
     deps.ptyClient.setIpcDataMirror(terminalId, false);

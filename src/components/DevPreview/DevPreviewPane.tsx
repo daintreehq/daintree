@@ -41,7 +41,7 @@ export function DevPreviewPane({
   const terminal = useTerminalStore((state) => state.getTerminal(id));
   const devCommand = terminal?.devCommand || "";
 
-  const { status, url, terminalId, error, start } = useDevServer({
+  const { status, url, terminalId, error, start, restart, isRestarting } = useDevServer({
     panelId: id,
     devCommand,
     cwd,
@@ -77,10 +77,17 @@ export function DevPreviewPane({
   const [isLoading, setIsLoading] = useState(false);
   const lastSetUrlRef = useRef<string>("");
   const [isWebviewReady, setIsWebviewReady] = useState(false);
+  const [consoleTerminalId, setConsoleTerminalId] = useState<string | null>(terminalId);
 
   const currentUrl = history.present;
   const canGoBack = history.past.length > 0;
   const canGoForward = history.future.length > 0;
+
+  useEffect(() => {
+    if (terminalId) {
+      setConsoleTerminalId(terminalId);
+    }
+  }, [terminalId]);
 
   useEffect(() => {
     if (url && url !== currentUrl) {
@@ -108,10 +115,10 @@ export function DevPreviewPane({
   }, [id, zoomFactor, setBrowserZoom]);
 
   useEffect(() => {
-    if (devCommand && status === "stopped") {
+    if (devCommand && status === "stopped" && !isRestarting) {
       start();
     }
-  }, [devCommand, status, start]);
+  }, [devCommand, status, start, isRestarting]);
 
   const handleNavigate = useCallback((rawUrl: string) => {
     const normalized = normalizeBrowserUrl(rawUrl);
@@ -173,6 +180,18 @@ export function DevPreviewPane({
   const handleRetry = useCallback(() => {
     start();
   }, [start]);
+
+  const handleHardRestart = useCallback(() => {
+    setHistory({ past: [], present: "", future: [] });
+    setBrowserUrl(id, "");
+    lastSetUrlRef.current = "";
+    setIsLoading(false);
+    setIsWebviewReady(false);
+    if (webviewRef.current) {
+      webviewRef.current.src = "about:blank";
+    }
+    void restart();
+  }, [id, restart, setBrowserUrl]);
 
   useEffect(() => {
     const webview = webviewRef.current;
@@ -277,7 +296,15 @@ export function DevPreviewPane({
         />
 
         <div className="relative flex-1 min-h-0 bg-white">
-          {status === "error" && error ? (
+          {isRestarting || status === "starting" || status === "installing" ? (
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg">
+              <div className="w-12 h-12 border-2 border-blue-400 border-t-transparent rounded-full animate-spin mb-4" />
+              <p className="text-sm text-canopy-text/60">
+                {isRestarting ? "Restarting" : status === "installing" ? "Installing" : "Starting"}
+                ...
+              </p>
+            </div>
+          ) : status === "error" && error ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
               <AlertTriangle className="w-12 h-12 text-amber-400 mb-4" />
               <h3 className="text-lg font-medium mb-2">Dev Server Error</h3>
@@ -304,13 +331,6 @@ export function DevPreviewPane({
                   </button>
                 )}
               </div>
-            </div>
-          ) : status === "starting" || status === "installing" ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg">
-              <div className="w-12 h-12 border-2 border-blue-400 border-t-transparent rounded-full animate-spin mb-4" />
-              <p className="text-sm text-canopy-text/60">
-                {status === "installing" ? "Installing" : "Starting"}...
-              </p>
             </div>
           ) : !currentUrl ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
@@ -342,8 +362,14 @@ export function DevPreviewPane({
           )}
         </div>
 
-        {terminalId && (
-          <ConsoleDrawer terminalId={terminalId} status={status} defaultOpen={false} />
+        {consoleTerminalId && (
+          <ConsoleDrawer
+            terminalId={consoleTerminalId}
+            status={status}
+            defaultOpen={false}
+            isRestarting={isRestarting}
+            onHardRestart={handleHardRestart}
+          />
         )}
       </div>
     </ContentPanel>

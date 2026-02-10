@@ -149,6 +149,87 @@ describe("ConsoleDrawer", () => {
     });
   });
 
+  describe("hard restart action", () => {
+    it("does not render restart button without handler", () => {
+      render(<ConsoleDrawer terminalId={mockTerminalId} defaultOpen={false} />);
+      expect(screen.queryByRole("button", { name: "Hard restart dev preview" })).toBeNull();
+    });
+
+    it("renders restart button when handler is provided", () => {
+      render(
+        <ConsoleDrawer
+          terminalId={mockTerminalId}
+          defaultOpen={false}
+          onHardRestart={vi.fn()}
+          status="running"
+        />
+      );
+      expect(screen.getByRole("button", { name: "Hard restart dev preview" })).toBeTruthy();
+    });
+
+    it("calls onHardRestart when restart button is clicked", () => {
+      const onHardRestart = vi.fn();
+      render(
+        <ConsoleDrawer
+          terminalId={mockTerminalId}
+          defaultOpen={false}
+          onHardRestart={onHardRestart}
+          status="running"
+        />
+      );
+
+      const restartButton = screen.getByRole("button", { name: "Hard restart dev preview" });
+      fireEvent.click(restartButton);
+
+      expect(onHardRestart).toHaveBeenCalledTimes(1);
+    });
+
+    it("disables restart button while restarting", () => {
+      render(
+        <ConsoleDrawer
+          terminalId={mockTerminalId}
+          defaultOpen={false}
+          onHardRestart={vi.fn()}
+          status="running"
+          isRestarting={true}
+        />
+      );
+
+      const restartButton = screen.getByRole("button", { name: "Hard restart dev preview" });
+      expect(restartButton.getAttribute("disabled")).not.toBeNull();
+      expect(restartButton.getAttribute("aria-busy")).toBe("true");
+      expect(screen.getByText("Restarting")).toBeTruthy();
+    });
+
+    it("disables restart button while starting", () => {
+      render(
+        <ConsoleDrawer
+          terminalId={mockTerminalId}
+          defaultOpen={false}
+          onHardRestart={vi.fn()}
+          status="starting"
+        />
+      );
+
+      const restartButton = screen.getByRole("button", { name: "Hard restart dev preview" });
+      expect(restartButton.getAttribute("disabled")).not.toBeNull();
+    });
+
+    it("disables restart button while installing", () => {
+      render(
+        <ConsoleDrawer
+          terminalId={mockTerminalId}
+          defaultOpen={false}
+          onHardRestart={vi.fn()}
+          status="installing"
+        />
+      );
+
+      const restartButton = screen.getByRole("button", { name: "Hard restart dev preview" });
+      expect(restartButton.getAttribute("disabled")).not.toBeNull();
+    });
+  });
+
   describe("terminalInstanceService integration", () => {
     it("calls setVisible with false when initially closed", () => {
       render(<ConsoleDrawer terminalId={mockTerminalId} defaultOpen={false} />);
