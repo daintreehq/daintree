@@ -75,7 +75,12 @@ import type { TerminalStatusPayload, PtyHostActivityTier, SpawnResult } from "..
 import type { ShowContextMenuPayload } from "../menu.js";
 import type { FileSearchPayload, FileSearchResult } from "./files.js";
 import type { SlashCommand, SlashCommandListRequest } from "../slashCommands.js";
-import type { DevPreviewUrlDetectedPayload, DevPreviewErrorDetectedPayload } from "./devPreview.js";
+import type {
+  DevPreviewEnsureRequest,
+  DevPreviewSessionRequest,
+  DevPreviewSessionState,
+  DevPreviewStateChangedPayload,
+} from "./devPreview.js";
 import type {
   CommandContext,
   CommandManifestEntry,
@@ -475,10 +480,11 @@ export interface ElectronAPI {
     ): () => void;
   };
   devPreview: {
-    subscribe(terminalId: string): Promise<void>;
-    unsubscribe(terminalId: string): Promise<void>;
-    onUrlDetected(callback: (data: DevPreviewUrlDetectedPayload) => void): () => void;
-    onErrorDetected(callback: (data: DevPreviewErrorDetectedPayload) => void): () => void;
+    ensure(request: DevPreviewEnsureRequest): Promise<DevPreviewSessionState>;
+    restart(request: DevPreviewSessionRequest): Promise<DevPreviewSessionState>;
+    stop(request: DevPreviewSessionRequest): Promise<DevPreviewSessionState>;
+    getState(request: DevPreviewSessionRequest): Promise<DevPreviewSessionState>;
+    onStateChanged(callback: (data: DevPreviewStateChangedPayload) => void): () => void;
   };
   git: {
     getFileDiff(cwd: string, filePath: string, status: GitStatus): Promise<string>;

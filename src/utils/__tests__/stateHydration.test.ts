@@ -160,12 +160,14 @@ describe("hydrateAppState", () => {
         cwd: "/project",
         devCommand: "npm run dev",
         browserUrl: "http://localhost:5173",
-        devServerStatus: "running",
-        devServerUrl: "http://localhost:5173",
-        devServerError: { type: "unknown", message: "Previous boot warning" },
-        devServerTerminalId: "dev-preview-pty-1",
       })
     );
+
+    const addTerminalArg = addTerminal.mock.calls[0][0] as Record<string, unknown>;
+    expect(addTerminalArg.devServerStatus).toBeUndefined();
+    expect(addTerminalArg.devServerUrl).toBeUndefined();
+    expect(addTerminalArg.devServerError).toBeUndefined();
+    expect(addTerminalArg.devServerTerminalId).toBeUndefined();
   });
 
   it("rehydrates non-terminal panels like browser and notes", async () => {

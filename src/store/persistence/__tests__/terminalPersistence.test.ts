@@ -343,7 +343,7 @@ describe("TerminalPersistence", () => {
   });
 
   describe("dev-preview panels", () => {
-    it("preserves browser and dev server state for dev-preview panels", async () => {
+    it("persists config but not runtime state for dev-preview panels", async () => {
       const client = createMockProjectClient();
       const persistence = new TerminalPersistence(client, { debounceMs: 100 });
 
@@ -368,12 +368,15 @@ describe("TerminalPersistence", () => {
           id: "dev-preview-1",
           kind: "dev-preview",
           browserUrl: "http://localhost:5173",
-          devServerStatus: "running",
-          devServerUrl: "http://localhost:5173",
-          devServerError: { type: "unknown", message: "Previous warning" },
-          devServerTerminalId: "dev-preview-pty-1",
+          command: "npm run dev",
         }),
       ]);
+
+      const saved = client.setTerminals.mock.calls[0][1][0] as Record<string, unknown>;
+      expect(saved.devServerStatus).toBeUndefined();
+      expect(saved.devServerUrl).toBeUndefined();
+      expect(saved.devServerError).toBeUndefined();
+      expect(saved.devServerTerminalId).toBeUndefined();
     });
   });
 });

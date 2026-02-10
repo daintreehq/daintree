@@ -114,12 +114,6 @@ export function DevPreviewPane({
     setBrowserZoom(id, zoomFactor);
   }, [id, zoomFactor, setBrowserZoom]);
 
-  useEffect(() => {
-    if (devCommand && status === "stopped" && !isRestarting) {
-      start();
-    }
-  }, [devCommand, status, start, isRestarting]);
-
   const handleNavigate = useCallback((rawUrl: string) => {
     const normalized = normalizeBrowserUrl(rawUrl);
     if (normalized.url) {

@@ -85,7 +85,12 @@ import type { SystemSleepMetrics } from "./systemSleep.js";
 import type { ShowContextMenuPayload } from "../menu.js";
 import type { FileSearchPayload, FileSearchResult } from "./files.js";
 import type { SlashCommand, SlashCommandListRequest } from "../slashCommands.js";
-import type { DevPreviewUrlDetectedPayload, DevPreviewErrorDetectedPayload } from "./devPreview.js";
+import type {
+  DevPreviewEnsureRequest,
+  DevPreviewSessionRequest,
+  DevPreviewSessionState,
+  DevPreviewStateChangedPayload,
+} from "./devPreview.js";
 import type { ProjectPulse, PulseRangeDays } from "../pulse.js";
 import type {
   GitCommitListOptions,
@@ -931,13 +936,21 @@ export interface IpcInvokeMap {
   };
 
   // Dev Preview channels
-  "dev-preview:subscribe": {
-    args: [terminalId: string];
-    result: void;
+  "dev-preview:ensure": {
+    args: [request: DevPreviewEnsureRequest];
+    result: DevPreviewSessionState;
   };
-  "dev-preview:unsubscribe": {
-    args: [terminalId: string];
-    result: void;
+  "dev-preview:restart": {
+    args: [request: DevPreviewSessionRequest];
+    result: DevPreviewSessionState;
+  };
+  "dev-preview:stop": {
+    args: [request: DevPreviewSessionRequest];
+    result: DevPreviewSessionState;
+  };
+  "dev-preview:get-state": {
+    args: [request: DevPreviewSessionRequest];
+    result: DevPreviewSessionState;
   };
 
   // Agent Capabilities channels
@@ -1040,8 +1053,7 @@ export interface IpcEventMap {
   "notification:update": { waitingCount: number; failedCount: number };
 
   // Dev Preview events
-  "dev-preview:url-detected": DevPreviewUrlDetectedPayload;
-  "dev-preview:error-detected": DevPreviewErrorDetectedPayload;
+  "dev-preview:state-changed": DevPreviewStateChangedPayload;
 
   // Notes events
   "notes:updated": {

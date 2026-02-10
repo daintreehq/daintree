@@ -41,8 +41,10 @@ import type {
   ArtifactDetectedPayload,
   SaveArtifactOptions,
   ApplyPatchOptions,
-  DevPreviewUrlDetectedPayload,
-  DevPreviewErrorDetectedPayload,
+  DevPreviewEnsureRequest,
+  DevPreviewSessionRequest,
+  DevPreviewSessionState,
+  DevPreviewStateChangedPayload,
 } from "../shared/types/ipc.js";
 import type { TerminalActivityPayload } from "../shared/types/terminal.js";
 import type { TerminalStatusPayload, SpawnResult } from "../shared/types/pty-host.js";
@@ -251,10 +253,11 @@ const CHANNELS = {
   NOTES_UPDATED: "notes:updated",
 
   // Dev Preview channels
-  DEV_PREVIEW_SUBSCRIBE: "dev-preview:subscribe",
-  DEV_PREVIEW_UNSUBSCRIBE: "dev-preview:unsubscribe",
-  DEV_PREVIEW_URL_DETECTED: "dev-preview:url-detected",
-  DEV_PREVIEW_ERROR_DETECTED: "dev-preview:error-detected",
+  DEV_PREVIEW_ENSURE: "dev-preview:ensure",
+  DEV_PREVIEW_RESTART: "dev-preview:restart",
+  DEV_PREVIEW_STOP: "dev-preview:stop",
+  DEV_PREVIEW_GET_STATE: "dev-preview:get-state",
+  DEV_PREVIEW_STATE_CHANGED: "dev-preview:state-changed",
 
   // App state channels
   APP_GET_STATE: "app:get-state",
@@ -1022,17 +1025,20 @@ const api: ElectronAPI = {
 
   // Dev Preview API
   devPreview: {
-    subscribe: (terminalId: string): Promise<void> =>
-      _typedInvoke(CHANNELS.DEV_PREVIEW_SUBSCRIBE, terminalId) as Promise<void>,
+    ensure: (request: DevPreviewEnsureRequest): Promise<DevPreviewSessionState> =>
+      _typedInvoke(CHANNELS.DEV_PREVIEW_ENSURE, request) as Promise<DevPreviewSessionState>,
 
-    unsubscribe: (terminalId: string): Promise<void> =>
-      _typedInvoke(CHANNELS.DEV_PREVIEW_UNSUBSCRIBE, terminalId) as Promise<void>,
+    restart: (request: DevPreviewSessionRequest): Promise<DevPreviewSessionState> =>
+      _typedInvoke(CHANNELS.DEV_PREVIEW_RESTART, request) as Promise<DevPreviewSessionState>,
 
-    onUrlDetected: (callback: (payload: DevPreviewUrlDetectedPayload) => void) =>
-      _typedOn(CHANNELS.DEV_PREVIEW_URL_DETECTED, callback),
+    stop: (request: DevPreviewSessionRequest): Promise<DevPreviewSessionState> =>
+      _typedInvoke(CHANNELS.DEV_PREVIEW_STOP, request) as Promise<DevPreviewSessionState>,
 
-    onErrorDetected: (callback: (payload: DevPreviewErrorDetectedPayload) => void) =>
-      _typedOn(CHANNELS.DEV_PREVIEW_ERROR_DETECTED, callback),
+    getState: (request: DevPreviewSessionRequest): Promise<DevPreviewSessionState> =>
+      _typedInvoke(CHANNELS.DEV_PREVIEW_GET_STATE, request) as Promise<DevPreviewSessionState>,
+
+    onStateChanged: (callback: (payload: DevPreviewStateChangedPayload) => void) =>
+      _typedOn(CHANNELS.DEV_PREVIEW_STATE_CHANGED, callback),
   },
 
   // Git API
