@@ -27,6 +27,7 @@ vi.mock("../../Terminal/XtermAdapter", () => ({
 
 describe("ConsoleDrawer", () => {
   const mockTerminalId = "test-terminal-id";
+  const getToggleButton = () => screen.getByRole("button", { name: /(?:show|hide) terminal/i });
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -54,7 +55,7 @@ describe("ConsoleDrawer", () => {
     it("keeps XtermAdapter in DOM after toggling from open to closed", () => {
       render(<ConsoleDrawer terminalId={mockTerminalId} defaultOpen={true} />);
 
-      const button = screen.getByRole("button");
+      const button = getToggleButton();
       fireEvent.click(button);
 
       const adapter = screen.getByTestId("xterm-adapter");
@@ -95,7 +96,7 @@ describe("ConsoleDrawer", () => {
 
       expect(drawer?.className).toContain("h-0");
 
-      const button = screen.getByRole("button");
+      const button = getToggleButton();
       fireEvent.click(button);
 
       expect(drawer?.className).toContain("h-[300px]");
@@ -113,31 +114,31 @@ describe("ConsoleDrawer", () => {
   });
 
   describe("button state", () => {
-    it("displays 'Show Logs' when closed", () => {
+    it("displays 'Show Terminal' when closed", () => {
       render(<ConsoleDrawer terminalId={mockTerminalId} defaultOpen={false} />);
-      expect(screen.getByText("Show Logs")).toBeTruthy();
+      expect(screen.getByText("Show Terminal")).toBeTruthy();
     });
 
-    it("displays 'Hide Logs' when open", () => {
+    it("displays 'Hide Terminal' when open", () => {
       render(<ConsoleDrawer terminalId={mockTerminalId} defaultOpen={true} />);
-      expect(screen.getByText("Hide Logs")).toBeTruthy();
+      expect(screen.getByText("Hide Terminal")).toBeTruthy();
     });
 
     it("sets aria-expanded to false when closed", () => {
       render(<ConsoleDrawer terminalId={mockTerminalId} defaultOpen={false} />);
-      const button = screen.getByRole("button");
+      const button = getToggleButton();
       expect(button.getAttribute("aria-expanded")).toBe("false");
     });
 
     it("sets aria-expanded to true when open", () => {
       render(<ConsoleDrawer terminalId={mockTerminalId} defaultOpen={true} />);
-      const button = screen.getByRole("button");
+      const button = getToggleButton();
       expect(button.getAttribute("aria-expanded")).toBe("true");
     });
 
     it("toggles aria-expanded on click", () => {
       render(<ConsoleDrawer terminalId={mockTerminalId} defaultOpen={false} />);
-      const button = screen.getByRole("button");
+      const button = getToggleButton();
 
       expect(button.getAttribute("aria-expanded")).toBe("false");
 
@@ -246,7 +247,7 @@ describe("ConsoleDrawer", () => {
 
       vi.clearAllMocks();
 
-      const button = screen.getByRole("button");
+      const button = getToggleButton();
       fireEvent.click(button);
 
       expect(terminalInstanceService.setVisible).toHaveBeenCalledTimes(1);
@@ -258,7 +259,7 @@ describe("ConsoleDrawer", () => {
 
       vi.clearAllMocks();
 
-      const button = screen.getByRole("button");
+      const button = getToggleButton();
 
       fireEvent.click(button);
       expect(terminalInstanceService.setVisible).toHaveBeenCalledWith(mockTerminalId, false);
@@ -309,7 +310,7 @@ describe("ConsoleDrawer", () => {
       let tierDisplay = screen.getByTestId("refresh-tier");
       expect(tierDisplay.textContent).toBe(TerminalRefreshTier.BACKGROUND.toString());
 
-      const button = screen.getByRole("button");
+      const button = getToggleButton();
       fireEvent.click(button);
 
       tierDisplay = screen.getByTestId("refresh-tier");
@@ -341,7 +342,7 @@ describe("ConsoleDrawer", () => {
 
     it("sets correct aria-controls id", () => {
       render(<ConsoleDrawer terminalId={mockTerminalId} defaultOpen={false} />);
-      const button = screen.getByRole("button");
+      const button = getToggleButton();
       expect(button.getAttribute("aria-controls")).toBe(`console-drawer-${mockTerminalId}`);
     });
 
@@ -369,7 +370,7 @@ describe("ConsoleDrawer", () => {
 
       expect(drawer?.getAttribute("aria-hidden")).toBe("true");
 
-      const button = screen.getByRole("button");
+      const button = getToggleButton();
       fireEvent.click(button);
 
       expect(drawer?.getAttribute("aria-hidden")).toBe("false");
