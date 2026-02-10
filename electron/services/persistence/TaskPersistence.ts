@@ -135,6 +135,10 @@ export class TaskPersistence {
   }
 
   async save(projectId: string, tasks: TaskRecord[]): Promise<void> {
+    if (!this.getTasksFilePath(projectId)) {
+      throw new Error(`Invalid project ID: ${projectId}`);
+    }
+
     const state: TaskQueueState = {
       version: SCHEMA_VERSION,
       tasks,
@@ -272,6 +276,22 @@ export class TaskPersistence {
   }
 
   async clear(projectId: string): Promise<void> {
+    const pending = this.pendingSaves.get(projectId);
+    if (pending) {
+      clearTimeout(pending.timer);
+      this.pendingSaves.delete(projectId);
+      pending.resolvers.forEach((resolve) => resolve());
+    }
+
+    const inFlight = this.inFlightSaves.get(projectId);
+    if (inFlight) {
+      try {
+        await inFlight;
+      } catch {
+        // Best-effort clear: continue to file deletion even if in-flight save failed.
+      }
+    }
+
     const filePath = this.getTasksFilePath(projectId);
     if (filePath && existsSync(filePath)) {
       try {

@@ -14,10 +14,26 @@ export function getSessionDir(): string | null {
   return path.join(userData, "terminal-sessions");
 }
 
+function normalizeTerminalId(id: string): string | null {
+  const trimmed = id.trim();
+  if (!trimmed) return null;
+  if (
+    trimmed.includes("..") ||
+    trimmed.includes("/") ||
+    trimmed.includes("\\") ||
+    path.isAbsolute(trimmed)
+  ) {
+    return null;
+  }
+  return trimmed;
+}
+
 export function getSessionPath(id: string): string | null {
   const dir = getSessionDir();
   if (!dir) return null;
-  return path.join(dir, `${id}.restore`);
+  const safeId = normalizeTerminalId(id);
+  if (!safeId) return null;
+  return path.join(dir, `${safeId}.restore`);
 }
 
 export function restoreSessionFromFile(
@@ -46,6 +62,7 @@ export function persistSessionSnapshotSync(terminalId: string, state: string): v
   const sessionPath = getSessionPath(terminalId);
   const dir = getSessionDir();
   if (!sessionPath || !dir) return;
+  if (Buffer.byteLength(state, "utf8") > SESSION_SNAPSHOT_MAX_BYTES) return;
 
   mkdirSync(dir, { recursive: true });
 
@@ -61,6 +78,7 @@ export async function persistSessionSnapshotAsync(
   const sessionPath = getSessionPath(terminalId);
   const dir = getSessionDir();
   if (!sessionPath || !dir) return;
+  if (Buffer.byteLength(state, "utf8") > SESSION_SNAPSHOT_MAX_BYTES) return;
 
   await mkdir(dir, { recursive: true });
 

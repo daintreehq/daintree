@@ -19,6 +19,7 @@ export class AgentUpdateHandler {
 
   async startUpdate(payload: StartAgentUpdatePayload): Promise<StartAgentUpdateResult> {
     const { agentId, method } = payload;
+    const normalizedMethod = typeof method === "string" ? method.trim() : method;
     const config = getEffectiveAgentConfig(agentId);
 
     if (!config) {
@@ -29,10 +30,23 @@ export class AgentUpdateHandler {
       throw new Error(`Agent ${agentId} does not have update configuration`);
     }
 
-    const updateCommand = this.getUpdateCommand(agentId, method);
+    if (method !== undefined && normalizedMethod === "") {
+      throw new Error("Invalid update method");
+    }
+
+    if (normalizedMethod) {
+      const availableMethods = this.getAvailableUpdateMethods(agentId);
+      if (!availableMethods.includes(normalizedMethod)) {
+        throw new Error(
+          `No update command available for ${agentId} with method: ${normalizedMethod}`
+        );
+      }
+    }
+
+    const updateCommand = this.getUpdateCommand(agentId, normalizedMethod);
     if (!updateCommand) {
       throw new Error(
-        `No update command available for ${agentId} with method: ${method || "default"}`
+        `No update command available for ${agentId} with method: ${normalizedMethod || "default"}`
       );
     }
 
@@ -48,8 +62,23 @@ export class AgentUpdateHandler {
       title: `Update ${config.name}`,
     });
 
+    let submitTimer: NodeJS.Timeout | null = null;
+    let terminalExited = false;
+
     const dataHandler = () => {};
     const exitHandler = () => {
+      finalize();
+    };
+    const finalize = () => {
+      if (terminalExited) {
+        return;
+      }
+      terminalExited = true;
+      if (submitTimer) {
+        clearTimeout(submitTimer);
+        submitTimer = null;
+      }
+
       this.ptyClient.off(`data:${terminalId}`, dataHandler);
       this.ptyClient.off(`exit:${terminalId}`, exitHandler);
       this.versionService.clearCache(agentId);
@@ -60,8 +89,21 @@ export class AgentUpdateHandler {
     this.ptyClient.on(`exit:${terminalId}`, exitHandler);
 
     const submitDelay = 500;
-    setTimeout(() => {
-      this.ptyClient.submit(terminalId, updateCommand);
+    submitTimer = setTimeout(() => {
+      if (terminalExited) {
+        return;
+      }
+      try {
+        this.ptyClient.submit(terminalId, updateCommand);
+      } catch (error) {
+        console.error(
+          `[AgentUpdateHandler] Failed to submit update command for ${agentId}:`,
+          error
+        );
+        finalize();
+      } finally {
+        submitTimer = null;
+      }
     }, submitDelay);
 
     return {
@@ -77,15 +119,10 @@ export class AgentUpdateHandler {
     }
 
     if (method) {
-      if (method === "npm" && config.update.npm) {
-        return config.update.npm;
-      }
-      if (method === "brew" && config.update.brew) {
-        return config.update.brew;
-      }
-      if (config.update.other && config.update.other[method]) {
-        return config.update.other[method];
-      }
+      if (method === "npm") return config.update.npm ?? null;
+      if (method === "brew") return config.update.brew ?? null;
+      if (config.update.other && config.update.other[method]) return config.update.other[method];
+      return null;
     }
 
     if (config.update.npm) {
@@ -110,12 +147,15 @@ export class AgentUpdateHandler {
       return [];
     }
 
-    const methods: string[] = [];
-    if (config.update.npm) methods.push("npm");
-    if (config.update.brew) methods.push("brew");
+    const methods = new Set<string>();
+    if (config.update.npm) methods.add("npm");
+    if (config.update.brew) methods.add("brew");
     if (config.update.other) {
-      methods.push(...Object.keys(config.update.other));
+      for (const method of Object.keys(config.update.other)) {
+        if (method === "npm" || method === "brew") continue;
+        methods.add(method);
+      }
     }
-    return methods;
+    return [...methods];
   }
 }

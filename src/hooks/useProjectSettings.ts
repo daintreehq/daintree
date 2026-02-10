@@ -147,7 +147,7 @@ export function useProjectSettings(projectId?: string): UseProjectSettingsReturn
         throw err;
       }
     },
-    [targetId, useGlobalStore, setSettings, currentProject?.id]
+    [targetId, useGlobalStore, setSettings, currentProject?.id, localAllDetectedRunners]
   );
 
   const promoteToSaved = useCallback(
@@ -201,7 +201,15 @@ export function useProjectSettings(projectId?: string): UseProjectSettingsReturn
         throw err;
       }
     },
-    [useGlobalStore, storeSettings, localSettings, targetId, setSettings, currentProject?.id]
+    [
+      useGlobalStore,
+      storeSettings,
+      localSettings,
+      targetId,
+      setSettings,
+      currentProject?.id,
+      localAllDetectedRunners,
+    ]
   );
 
   const removeFromSaved = useCallback(
@@ -255,7 +263,15 @@ export function useProjectSettings(projectId?: string): UseProjectSettingsReturn
         throw err;
       }
     },
-    [useGlobalStore, storeSettings, localSettings, targetId, setSettings, currentProject?.id]
+    [
+      useGlobalStore,
+      storeSettings,
+      localSettings,
+      targetId,
+      setSettings,
+      currentProject?.id,
+      localAllDetectedRunners,
+    ]
   );
 
   const refresh = useCallback(async () => {

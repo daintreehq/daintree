@@ -68,7 +68,14 @@ export function usePanelPalette(): UsePanelPaletteReturn {
       })
       .filter((agent): agent is PanelKindOption => agent !== null);
 
-    return [...panelKinds, ...agentKinds];
+    const dedupedById = new Map<string, PanelKindOption>();
+    for (const option of [...panelKinds, ...agentKinds]) {
+      if (!dedupedById.has(option.id)) {
+        dedupedById.set(option.id, option);
+      }
+    }
+
+    return Array.from(dedupedById.values());
   }, [userRegistry]);
 
   const { results, selectedIndex, close, ...paletteRest } = useSearchablePalette<PanelKindOption>({

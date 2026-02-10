@@ -53,14 +53,25 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   const mountedRef = useRef(true);
   const lastErrorRef = useRef<string | null>(null);
   const inFlightRef = useRef(false);
+  const queuedFetchRef = useRef<{ pending: boolean; force: boolean }>({
+    pending: false,
+    force: false,
+  });
+  const activeFetchIdRef = useRef(0);
+  const invalidatedFetchIdRef = useRef<number | null>(null);
 
   const fetchStats = useCallback(async (force = false) => {
     if (inFlightRef.current) {
+      queuedFetchRef.current.pending = true;
+      queuedFetchRef.current.force = queuedFetchRef.current.force || force;
+      invalidatedFetchIdRef.current = activeFetchIdRef.current;
       return;
     }
 
     try {
       inFlightRef.current = true;
+      activeFetchIdRef.current += 1;
+      const fetchId = activeFetchIdRef.current;
 
       const project = await projectClient.getCurrent();
       if (!project) {
@@ -79,6 +90,10 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       const repoStats = await githubClient.getRepoStats(project.path, force);
 
       if (mountedRef.current) {
+        if (invalidatedFetchIdRef.current === fetchId) {
+          return;
+        }
+
         // Ignore results from previous project (race condition protection)
         if (
           lastKnownCountsRef.current.projectPath !== null &&
@@ -152,6 +167,11 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
         setLoading(false);
       }
       inFlightRef.current = false;
+      if (mountedRef.current && queuedFetchRef.current.pending) {
+        const queuedForce = queuedFetchRef.current.force;
+        queuedFetchRef.current = { pending: false, force: false };
+        void fetchStats(queuedForce);
+      }
     }
   }, []);
 
@@ -220,6 +240,8 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
 
     return () => {
       mountedRef.current = false;
+      queuedFetchRef.current = { pending: false, force: false };
+      invalidatedFetchIdRef.current = null;
       if (pollTimerRef.current) {
         clearTimeout(pollTimerRef.current);
       }

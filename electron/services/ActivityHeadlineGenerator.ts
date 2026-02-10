@@ -54,6 +54,21 @@ const COMMAND_PATTERNS: Array<{ pattern: RegExp; headline: string }> = [
 ];
 
 export class ActivityHeadlineGenerator {
+  private static readonly WRAPPER_COMMANDS = new Set([
+    "time",
+    "command",
+    "nohup",
+    "npx",
+    "pnpx",
+    "bunx",
+  ]);
+  private static readonly SUDO_VALUE_FLAGS = new Set(["-u", "-g", "-h", "-p", "-r", "-t", "-C"]);
+  private static readonly WRAPPER_VALUE_FLAGS: Record<string, Set<string>> = {
+    npx: new Set(["-p", "--package", "-c", "--call"]),
+    pnpx: new Set(["-p", "--package", "-c", "--call"]),
+    time: new Set(["-o"]),
+  };
+
   generate(context: ActivityContext): GeneratedActivity {
     // Agent terminals use agent state
     if (context.agentId) {
@@ -120,17 +135,114 @@ export class ActivityHeadlineGenerator {
     };
   }
 
+  private isEnvAssignmentToken(token: string): boolean {
+    return /^[A-Za-z_][A-Za-z0-9_]*=/.test(token);
+  }
+
+  private stripLeadingWrappers(command: string): string {
+    const tokens = command.trim().split(/\s+/).filter(Boolean);
+    let index = 0;
+
+    while (index < tokens.length) {
+      const token = tokens[index];
+      const lower = token.toLowerCase();
+
+      if (this.isEnvAssignmentToken(token)) {
+        index += 1;
+        continue;
+      }
+
+      if (lower === "sudo") {
+        index += 1;
+        while (index < tokens.length) {
+          const option = tokens[index];
+          if (option === "--") {
+            index += 1;
+            break;
+          }
+          if (!option.startsWith("-")) {
+            break;
+          }
+          index += 1;
+          if (ActivityHeadlineGenerator.SUDO_VALUE_FLAGS.has(option) && index < tokens.length) {
+            index += 1;
+          }
+        }
+        continue;
+      }
+
+      if (lower === "env") {
+        index += 1;
+        while (index < tokens.length) {
+          const option = tokens[index];
+          if (option === "--") {
+            index += 1;
+            break;
+          }
+          if (this.isEnvAssignmentToken(option)) {
+            index += 1;
+            continue;
+          }
+          if (!option.startsWith("-")) {
+            break;
+          }
+          index += 1;
+          if (option === "-u" && index < tokens.length) {
+            index += 1;
+          }
+        }
+        continue;
+      }
+
+      if (ActivityHeadlineGenerator.WRAPPER_COMMANDS.has(lower)) {
+        index += 1;
+        index = this.skipWrapperOptions(tokens, index, lower);
+        continue;
+      }
+
+      break;
+    }
+
+    return tokens.slice(index).join(" ").trim();
+  }
+
+  private skipWrapperOptions(tokens: string[], index: number, wrapper: string): number {
+    const valueFlags = ActivityHeadlineGenerator.WRAPPER_VALUE_FLAGS[wrapper] ?? new Set<string>();
+
+    while (index < tokens.length) {
+      const option = tokens[index];
+      if (option === "--") {
+        return index + 1;
+      }
+      if (!option.startsWith("-") || option === "-") {
+        return index;
+      }
+
+      index += 1;
+
+      const normalizedOption = option.split("=")[0];
+      const takesValue =
+        valueFlags.has(normalizedOption) && !option.includes("=") && index < tokens.length;
+      if (takesValue) {
+        index += 1;
+      }
+    }
+
+    return index;
+  }
+
   private getCommandHeadline(command: string): string {
     const trimmedCommand = command.trim();
+    const normalizedCommand = this.stripLeadingWrappers(trimmedCommand) || trimmedCommand;
 
     for (const { pattern, headline } of COMMAND_PATTERNS) {
-      if (pattern.test(trimmedCommand)) {
+      if (pattern.test(normalizedCommand)) {
         return headline;
       }
     }
 
     // Generic fallback: extract the base command
-    const parts = trimmedCommand.split(/\s+/);
+    const parts = normalizedCommand.split(/\s+/);
     const baseCommand = parts[0]?.replace(/^\.\//, "") || "command";
 
     const capitalizedCommand = baseCommand.charAt(0).toUpperCase() + baseCommand.slice(1);

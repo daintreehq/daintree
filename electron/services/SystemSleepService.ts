@@ -202,6 +202,8 @@ class SystemSleepService {
 
     powerMonitor.off("suspend", this.handleSuspend);
     powerMonitor.off("resume", this.handleResume);
+    // Drop any in-flight suspend state so re-initialization starts clean.
+    this.sleepStart = null;
     this.listeners.clear();
     this.initialized = false;
     console.log("[SystemSleepService] Disposed");

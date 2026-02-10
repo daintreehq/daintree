@@ -45,13 +45,20 @@ const MAX_RESULTS = 20;
 const DEBOUNCE_MS = 200;
 
 function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
+  const title =
+    typeof entry.title === "string" && entry.title.trim().length > 0 ? entry.title : entry.id;
+  const description = typeof entry.description === "string" ? entry.description : "";
+  const category = typeof entry.category === "string" ? entry.category : "General";
+  const disabledReason =
+    typeof entry.disabledReason === "string" ? entry.disabledReason : undefined;
+
   return {
     id: entry.id,
-    title: entry.title,
-    description: entry.description,
-    category: entry.category,
+    title,
+    description,
+    category,
     enabled: entry.enabled,
-    disabledReason: entry.disabledReason,
+    disabledReason,
     keybinding: keybindingService.getDisplayCombo(entry.id),
     kind: entry.kind,
   };

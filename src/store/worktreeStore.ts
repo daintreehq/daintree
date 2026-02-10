@@ -175,7 +175,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     }),
 
   openCreateDialog: (initialIssue = null) => {
-    if (useFocusStore.getState().isFocusMode) {
+    if (useFocusStore.getState().isFocusMode && typeof window !== "undefined") {
       window.dispatchEvent(new Event("canopy:toggle-focus-mode"));
     }
     set({ createDialog: { isOpen: true, initialIssue } });

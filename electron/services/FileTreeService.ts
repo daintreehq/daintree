@@ -11,10 +11,19 @@ export class FileTreeService {
       throw new Error("Invalid directory path: absolute paths not allowed");
     }
 
-    const normalizedDirPath = path
-      .normalize(dirPath)
-      .replace(new RegExp("^(\\.\\.[\\\\/])+", "g"), "");
-    const targetPath = path.resolve(resolvedBasePath, normalizedDirPath);
+    const normalizedDirPath = path.normalize(dirPath);
+    const normalizedForCheck = normalizedDirPath.replace(/\\/g, "/");
+    if (
+      normalizedForCheck === ".." ||
+      normalizedForCheck.startsWith("../") ||
+      normalizedForCheck.includes("/../")
+    ) {
+      throw new Error("Invalid directory path: path traversal not allowed");
+    }
+
+    const relativeDirPath =
+      normalizedForCheck === "." ? "" : normalizedForCheck.replace(/^\.\/+/, "");
+    const targetPath = path.resolve(resolvedBasePath, relativeDirPath);
     const relativeTarget = path.relative(resolvedBasePath, targetPath);
 
     if (relativeTarget.startsWith("..") || path.isAbsolute(relativeTarget)) {
@@ -22,6 +31,15 @@ export class FileTreeService {
     }
 
     try {
+      const resolvedBaseRealPath = await fs
+        .realpath(resolvedBasePath)
+        .catch(() => resolvedBasePath);
+      const targetRealPath = await fs.realpath(targetPath).catch(() => targetPath);
+      const relativeRealTarget = path.relative(resolvedBaseRealPath, targetRealPath);
+      if (relativeRealTarget.startsWith("..") || path.isAbsolute(relativeRealTarget)) {
+        throw new Error("Invalid directory path: path traversal not allowed");
+      }
+
       const stats = await fs.stat(targetPath);
       if (!stats.isDirectory()) {
         throw new Error(`Path is not a directory: ${targetPath}`);
@@ -30,7 +48,7 @@ export class FileTreeService {
       const entries = await fs.readdir(targetPath, { withFileTypes: true });
 
       const toGitPath = (p: string) => p.split(path.sep).join("/");
-      const pathsToCheck = entries.map((e) => toGitPath(path.join(normalizedDirPath, e.name)));
+      const pathsToCheck = entries.map((e) => toGitPath(path.join(relativeDirPath, e.name)));
       const ignoredPaths = new Set<string>();
 
       try {
@@ -45,7 +63,7 @@ export class FileTreeService {
       const nodes: FileTreeNode[] = [];
 
       for (const entry of entries) {
-        const relativePath = path.join(normalizedDirPath, entry.name);
+        const relativePath = path.join(relativeDirPath, entry.name);
         const gitRelativePath = toGitPath(relativePath);
         const absolutePath = path.join(resolvedBasePath, relativePath);
 

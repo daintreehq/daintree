@@ -56,11 +56,26 @@ export class NotesService {
   }
 
   private validatePath(notePath: string): string {
+    const normalizedPath = notePath.trim().replace(/\\/g, "/");
+
+    if (
+      normalizedPath.length === 0 ||
+      path.posix.isAbsolute(normalizedPath) ||
+      path.win32.isAbsolute(normalizedPath)
+    ) {
+      throw new Error("Path traversal detected");
+    }
+
+    const segments = normalizedPath.split("/").filter((segment) => segment && segment !== ".");
+    if (segments.includes("..")) {
+      throw new Error("Path traversal detected");
+    }
+
     const notesDir = path.resolve(this.getNotesDir());
-    const resolved = path.resolve(notesDir, notePath);
+    const resolved = path.resolve(notesDir, ...segments);
     const relative = path.relative(notesDir, resolved);
 
-    if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
       throw new Error("Path traversal detected");
     }
 
@@ -100,6 +115,37 @@ export class NotesService {
   private extractPreview(content: string, maxLength: number = 100): string {
     const firstLine = content.split("\n").find((line) => line.trim()) || "";
     return firstLine.slice(0, maxLength);
+  }
+
+  private parseMetadata(data: unknown): NoteMetadata | null {
+    if (!data || typeof data !== "object") {
+      return null;
+    }
+
+    const candidate = data as Partial<NoteMetadata>;
+    const scope = candidate.scope;
+
+    if (
+      typeof candidate.id !== "string" ||
+      typeof candidate.title !== "string" ||
+      (scope !== "worktree" && scope !== "project") ||
+      typeof candidate.createdAt !== "number" ||
+      Number.isNaN(candidate.createdAt)
+    ) {
+      return null;
+    }
+
+    if (candidate.worktreeId !== undefined && typeof candidate.worktreeId !== "string") {
+      return null;
+    }
+
+    return {
+      id: candidate.id,
+      title: candidate.title,
+      scope,
+      ...(candidate.worktreeId !== undefined && { worktreeId: candidate.worktreeId }),
+      createdAt: candidate.createdAt,
+    };
   }
 
   async create(
@@ -173,6 +219,8 @@ export class NotesService {
     expectedLastModified?: number
   ): Promise<{ lastModified: number }> {
     const absolutePath = this.validatePath(notePath);
+    await this.ensureNotesDir();
+    await fs.mkdir(path.dirname(absolutePath), { recursive: true });
 
     // Check for conflicts if expectedLastModified is provided
     if (expectedLastModified !== undefined) {
@@ -224,7 +272,11 @@ export class NotesService {
             fs.stat(filePath),
           ]);
           const { data, content } = matter(fileContent);
-          const metadata = data as NoteMetadata;
+          const metadata = this.parseMetadata(data);
+          if (!metadata) {
+            console.warn(`[NotesService] Skipping note with invalid metadata: ${file}`);
+            continue;
+          }
 
           notes.push({
             id: metadata.id,
@@ -276,7 +328,11 @@ export class NotesService {
             fs.stat(filePath),
           ]);
           const { data, content } = matter(fileContent);
-          const metadata = data as NoteMetadata;
+          const metadata = this.parseMetadata(data);
+          if (!metadata) {
+            console.warn(`[NotesService] Skipping note with invalid metadata: ${file}`);
+            continue;
+          }
 
           // Search in title and content
           const titleMatch = metadata.title.toLowerCase().includes(lowerQuery);

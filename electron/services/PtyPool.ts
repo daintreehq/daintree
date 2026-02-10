@@ -15,6 +15,8 @@ interface PooledPty {
   dataDisposable: IDisposable;
 }
 
+const DEFAULT_POOL_SIZE = 2;
+
 export class PtyPool {
   private pool: Map<string, PooledPty> = new Map();
   private readonly poolSize: number;
@@ -24,8 +26,8 @@ export class PtyPool {
   private refillInProgress = false;
 
   constructor(config: PtyPoolConfig = {}) {
-    this.poolSize = config.poolSize ?? 2;
-    this.defaultCwd = config.defaultCwd ?? this.getDefaultCwd();
+    this.poolSize = this.resolvePoolSize(config.poolSize);
+    this.defaultCwd = this.resolveCwd(config.defaultCwd, this.getDefaultCwd());
     this.defaultShell = this.getDefaultShell();
   }
 
@@ -35,8 +37,13 @@ export class PtyPool {
       return;
     }
 
-    if (cwd) {
-      this.defaultCwd = cwd;
+    if (cwd !== undefined) {
+      const nextCwd = cwd.trim();
+      if (!nextCwd) {
+        console.warn("[PtyPool] Ignoring empty cwd override");
+      } else {
+        this.defaultCwd = nextCwd;
+      }
     }
 
     const promises: Promise<void>[] = [];
@@ -180,7 +187,12 @@ export class PtyPool {
   }
 
   setDefaultCwd(cwd: string): void {
-    this.defaultCwd = cwd;
+    const nextCwd = this.resolveCwd(cwd, "");
+    if (!nextCwd) {
+      console.warn("[PtyPool] Ignoring empty cwd");
+      return;
+    }
+    this.defaultCwd = nextCwd;
   }
 
   getPoolSize(): number {
@@ -268,6 +280,26 @@ export class PtyPool {
     delete filtered.CI;
 
     return filtered;
+  }
+
+  private resolvePoolSize(poolSize: number | undefined): number {
+    if (
+      typeof poolSize === "number" &&
+      Number.isInteger(poolSize) &&
+      Number.isFinite(poolSize) &&
+      poolSize > 0
+    ) {
+      return poolSize;
+    }
+    return DEFAULT_POOL_SIZE;
+  }
+
+  private resolveCwd(cwd: string | undefined, fallback: string): string {
+    if (typeof cwd !== "string") {
+      return fallback;
+    }
+    const trimmed = cwd.trim();
+    return trimmed || fallback;
   }
 }
 

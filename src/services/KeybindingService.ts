@@ -886,7 +886,7 @@ class KeybindingService {
       }
       return undefined;
     }
-    return this.getDefaultCombo(actionId);
+    return this.bindings.get(actionId)?.combo;
   }
 
   findConflicts(combo: string, excludeActionId?: string): KeybindingConfig[] {
@@ -896,13 +896,13 @@ class KeybindingService {
     for (const binding of this.bindings.values()) {
       if (excludeActionId && binding.actionId === excludeActionId) continue;
 
+      const hasOverride = this.overrides.has(binding.actionId);
       const overrideCombos = this.overrides.get(binding.actionId) || [];
       const allCombos = [...overrideCombos];
 
-      if (overrideCombos.length === 0) {
-        const defaultCombo = this.getDefaultCombo(binding.actionId);
-        if (defaultCombo) {
-          allCombos.push(defaultCombo);
+      if (!hasOverride) {
+        if (binding.combo) {
+          allCombos.push(binding.combo);
         }
       }
 
@@ -1046,12 +1046,14 @@ class KeybindingService {
     let foundChordPrefix = false;
 
     const currentCombo = this.eventToCombo(event);
+    const normalizedCurrentCombo = currentCombo.trim().toLowerCase();
 
     for (const binding of this.bindings.values()) {
       if (!this.canExecute(binding.actionId)) continue;
 
       const effectiveCombo = this.getEffectiveCombo(binding.actionId);
       if (!effectiveCombo) continue;
+      const normalizedEffectiveCombo = effectiveCombo.trim().toLowerCase();
 
       // Check if this is a chord binding
       const chordParts = effectiveCombo.split(" ");
@@ -1060,8 +1062,9 @@ class KeybindingService {
       if (isChord) {
         // If we have a pending chord, check if this completes it
         if (this.pendingChord) {
-          const fullChord = `${this.pendingChord} ${currentCombo}`;
-          if (fullChord === effectiveCombo) {
+          const normalizedPending = this.pendingChord.trim().toLowerCase();
+          const fullChord = `${normalizedPending} ${normalizedCurrentCombo}`;
+          if (fullChord === normalizedEffectiveCombo) {
             if (binding.priority > bestPriority) {
               bestMatch = binding;
               bestPriority = binding.priority;
@@ -1069,7 +1072,7 @@ class KeybindingService {
           }
         } else {
           // Check if this is the start of a chord
-          if (currentCombo === chordParts[0]) {
+          if (normalizedCurrentCombo === chordParts[0].trim().toLowerCase()) {
             foundChordPrefix = true;
           }
         }
@@ -1137,7 +1140,7 @@ class KeybindingService {
       const effectiveCombo = this.getEffectiveCombo(binding.actionId);
       return {
         ...binding,
-        effectiveCombo: effectiveCombo !== undefined ? effectiveCombo : binding.combo,
+        effectiveCombo: effectiveCombo ?? "",
       };
     });
   }

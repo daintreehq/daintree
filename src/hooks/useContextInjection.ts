@@ -395,7 +395,12 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
     // Cancel only the current active injection (not all CopyTree operations)
     const injectionUuid = globalInjectionState.activeInjectionUuid;
     if (injectionUuid) {
-      copyTreeClient.cancel(injectionUuid).catch(console.error);
+      try {
+        const cancelResult = copyTreeClient.cancel(injectionUuid);
+        void Promise.resolve(cancelResult).catch(console.error);
+      } catch (error) {
+        console.error(error);
+      }
     }
 
     globalInjectionState.isInjecting = false;

@@ -39,6 +39,15 @@ import {
 import type { CopyTreeCancelPayload, ProjectSettings } from "../../types/index.js";
 import { projectStore } from "../../services/ProjectStore.js";
 
+function getStringField(payload: unknown, key: string): string | undefined {
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+
+  const value = (payload as Record<string, unknown>)[key];
+  return typeof value === "string" ? value : undefined;
+}
+
 /**
  * Merge project-level settings with runtime CopyTree options.
  * Runtime options take precedence over project settings.
@@ -147,7 +156,8 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     payload: CopyTreeGeneratePayload
   ): Promise<CopyTreeResult> => {
     const traceId = crypto.randomUUID();
-    console.log(`[${traceId}] CopyTree generate started for worktree ${payload.worktreeId}`);
+    const requestedWorktreeId = getStringField(payload, "worktreeId") ?? "unknown";
+    console.log(`[${traceId}] CopyTree generate started for worktree ${requestedWorktreeId}`);
 
     const parseResult = CopyTreeGeneratePayloadSchema.safeParse(payload);
     if (!parseResult.success) {
@@ -198,8 +208,9 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     payload: CopyTreeGenerateAndCopyFilePayload
   ): Promise<CopyTreeResult> => {
     const traceId = crypto.randomUUID();
+    const requestedWorktreeId = getStringField(payload, "worktreeId") ?? "unknown";
     console.log(
-      `[${traceId}] CopyTree generate-and-copy-file started for worktree ${payload.worktreeId}`
+      `[${traceId}] CopyTree generate-and-copy-file started for worktree ${requestedWorktreeId}`
     );
 
     const parseResult = CopyTreeGenerateAndCopyFilePayloadSchema.safeParse(payload);
@@ -306,8 +317,10 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     payload: CopyTreeInjectPayload
   ): Promise<CopyTreeResult> => {
     const traceId = crypto.randomUUID();
+    const requestedTerminalId = getStringField(payload, "terminalId") ?? "unknown";
+    const requestedWorktreeId = getStringField(payload, "worktreeId") ?? "unknown";
     console.log(
-      `[${traceId}] CopyTree inject started for terminal ${payload.terminalId}, worktree ${payload.worktreeId}`
+      `[${traceId}] CopyTree inject started for terminal ${requestedTerminalId}, worktree ${requestedWorktreeId}`
     );
 
     const parseResult = CopyTreeInjectPayloadSchema.safeParse(payload);
@@ -506,7 +519,8 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     payload: import("../../types/index.js").CopyTreeTestConfigPayload
   ): Promise<import("../../types/index.js").CopyTreeTestConfigResult> => {
     const traceId = crypto.randomUUID();
-    console.log(`[${traceId}] CopyTree test-config started for worktree ${payload.worktreeId}`);
+    const requestedWorktreeId = getStringField(payload, "worktreeId") ?? "unknown";
+    console.log(`[${traceId}] CopyTree test-config started for worktree ${requestedWorktreeId}`);
 
     const { CopyTreeTestConfigPayloadSchema } = await import("../../schemas/ipc.js");
     const parseResult = CopyTreeTestConfigPayloadSchema.safeParse(payload);

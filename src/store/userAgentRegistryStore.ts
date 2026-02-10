@@ -46,8 +46,10 @@ export const useUserAgentRegistryStore = create<UserAgentRegistryStore>()((set, 
         set({
           error: e instanceof Error ? e.message : "Failed to load user agent registry",
           isLoading: false,
-          isInitialized: true,
+          isInitialized: false,
         });
+      } finally {
+        initPromise = null;
       }
     })();
 
@@ -59,7 +61,7 @@ export const useUserAgentRegistryStore = create<UserAgentRegistryStore>()((set, 
     try {
       const result = await userAgentRegistryClient.add(config);
       if (result.success) {
-        const registry = await userAgentRegistryClient.get();
+        const registry = (await userAgentRegistryClient.get()) ?? {};
         setUserRegistry(registry);
         set({ registry });
       } else {
@@ -78,7 +80,7 @@ export const useUserAgentRegistryStore = create<UserAgentRegistryStore>()((set, 
     try {
       const result = await userAgentRegistryClient.update(id, config);
       if (result.success) {
-        const registry = await userAgentRegistryClient.get();
+        const registry = (await userAgentRegistryClient.get()) ?? {};
         setUserRegistry(registry);
         set({ registry });
       } else {
@@ -97,7 +99,7 @@ export const useUserAgentRegistryStore = create<UserAgentRegistryStore>()((set, 
     try {
       const result = await userAgentRegistryClient.remove(id);
       if (result.success) {
-        const registry = await userAgentRegistryClient.get();
+        const registry = (await userAgentRegistryClient.get()) ?? {};
         setUserRegistry(registry);
         set({ registry });
       } else {
@@ -114,7 +116,7 @@ export const useUserAgentRegistryStore = create<UserAgentRegistryStore>()((set, 
   refresh: async () => {
     set({ error: null });
     try {
-      const registry = await userAgentRegistryClient.get();
+      const registry = (await userAgentRegistryClient.get()) ?? {};
       setUserRegistry(registry);
       set({ registry });
     } catch (e) {
@@ -127,7 +129,7 @@ export const useUserAgentRegistryStore = create<UserAgentRegistryStore>()((set, 
 export function cleanupUserAgentRegistryStore() {
   initPromise = null;
   useUserAgentRegistryStore.setState({
-    registry: {},
+    registry: null,
     isLoading: true,
     error: null,
     isInitialized: false,

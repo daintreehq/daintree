@@ -1,38 +1,86 @@
-import * as _path from "path";
+const WINDOWS_DRIVE_PREFIX = /^[A-Za-z]:\//;
 
-// Browser-compatible path implementation
-const browserPath = {
-  isAbsolute: (p: string) => {
-    return /^([a-zA-Z]:|[\\/])/.test(p);
+const path = {
+  isAbsolute: (input: string): boolean => /^([A-Za-z]:[\\/]|[\\/])/.test(input),
+
+  normalize: (input: string): string => {
+    const source = input.replace(/\\/g, "/");
+    if (source.length === 0) return ".";
+
+    let prefix = "";
+    let rest = source;
+
+    if (WINDOWS_DRIVE_PREFIX.test(source)) {
+      prefix = source.slice(0, 3);
+      rest = source.slice(3);
+    } else if (source.startsWith("/")) {
+      prefix = "/";
+      rest = source.slice(1);
+    }
+
+    const segments = rest.split("/").filter((segment) => segment.length > 0);
+    const normalizedSegments: string[] = [];
+
+    for (const segment of segments) {
+      if (segment === ".") continue;
+      if (segment === "..") {
+        if (
+          normalizedSegments.length > 0 &&
+          normalizedSegments[normalizedSegments.length - 1] !== ".."
+        ) {
+          normalizedSegments.pop();
+        } else if (!prefix) {
+          normalizedSegments.push("..");
+        }
+        continue;
+      }
+      normalizedSegments.push(segment);
+    }
+
+    const joined = normalizedSegments.join("/");
+
+    if (prefix) {
+      if (!joined) return prefix;
+      return prefix.endsWith("/") ? `${prefix}${joined}` : `${prefix}/${joined}`;
+    }
+
+    return joined || ".";
   },
-  basename: (p: string) => {
-    return p.split(/[\\/]/).pop() || "";
+
+  basename: (input: string): string => {
+    const normalized = path.normalize(input);
+    if (normalized === "/" || WINDOWS_DRIVE_PREFIX.test(normalized)) return "";
+    const parts = normalized.split("/");
+    return parts[parts.length - 1] || "";
   },
-  dirname: (p: string) => {
-    const parts = p.split(/[\\/]/);
+
+  dirname: (input: string): string => {
+    const normalized = path.normalize(input);
+    if (normalized === "/" || WINDOWS_DRIVE_PREFIX.test(normalized)) return normalized;
+
+    const parts = normalized.split("/");
     parts.pop();
-    return parts.join("/") || ".";
+    const dir = parts.join("/");
+
+    if (!dir) {
+      return path.isAbsolute(normalized) ? "/" : ".";
+    }
+    return dir;
   },
-  resolve: (...paths: string[]) => {
+
+  resolve: (...paths: string[]): string => {
     let resolved = "";
-    for (const p of paths) {
-      if (!p) continue;
-      if (/^([a-zA-Z]:|[\\/])/.test(p)) {
-        resolved = p;
+    for (const segment of paths) {
+      if (!segment) continue;
+      if (path.isAbsolute(segment)) {
+        resolved = segment;
       } else {
-        resolved = resolved ? `${resolved}/${p}` : p;
+        resolved = resolved ? `${resolved}/${segment}` : segment;
       }
     }
-    return browserPath.normalize(resolved);
-  },
-  normalize: (p: string) => {
-    // Basic normalization for preview purposes
-    return p.replace(/\\/g, "/").replace(/\/+/g, "/");
+    return path.normalize(resolved || ".");
   },
 };
-
-// Use native path if available (Node.js), otherwise fallback to browser implementation
-const path = _path && typeof _path.isAbsolute === "function" ? _path : browserPath;
 
 export interface PathPatternVariables {
   "base-folder": string;

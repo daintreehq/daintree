@@ -46,10 +46,14 @@ export function useWorktreeActions({
           stats?: { totalSize?: number } | null;
           format?: string;
         };
+        const fileCount =
+          typeof payload.fileCount === "number" && Number.isFinite(payload.fileCount)
+            ? payload.fileCount
+            : 0;
         const stats = payload.stats ?? undefined;
         const sizeStr = stats?.totalSize ? formatBytes(stats.totalSize) : "";
         const formatStr = payload.format ? ` as ${payload.format.toUpperCase()}` : "";
-        return `Copied ${payload.fileCount} files${sizeStr ? ` (${sizeStr})` : ""}${formatStr} to clipboard`;
+        return `Copied ${fileCount} files${sizeStr ? ` (${sizeStr})` : ""}${formatStr} to clipboard`;
       } catch (e) {
         const message = e instanceof Error ? e.message : "Failed to copy context to clipboard";
         const details = e instanceof Error ? e.stack : undefined;

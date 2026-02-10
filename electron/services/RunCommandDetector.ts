@@ -3,6 +3,16 @@ import fs from "fs/promises";
 import { existsSync } from "fs";
 import type { RunCommand } from "../types/index.js";
 
+const RESERVED_SCRIPT_NAMES = new Set(["__proto__", "constructor", "prototype"]);
+const SAFE_SCRIPT_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:_./-]*$/;
+
+function isSafeScriptName(name: string): boolean {
+  if (RESERVED_SCRIPT_NAMES.has(name)) {
+    return false;
+  }
+  return SAFE_SCRIPT_NAME_PATTERN.test(name);
+}
+
 export class RunCommandDetector {
   async detect(projectPath: string): Promise<RunCommand[]> {
     const results = await Promise.all([
@@ -34,7 +44,16 @@ export class RunCommandDetector {
       }
 
       return Object.entries(pkg.scripts)
-        .filter(([_, script]) => typeof script === "string")
+        .filter(([name, script]) => {
+          if (typeof script !== "string") {
+            return false;
+          }
+          if (!isSafeScriptName(name)) {
+            console.warn(`[RunCommandDetector] Skipping npm script with unsafe name: ${name}`);
+            return false;
+          }
+          return true;
+        })
         .map(([name, script]) => ({
           id: `npm-${name}`,
           name,
@@ -54,23 +73,25 @@ export class RunCommandDetector {
 
     try {
       const content = await fs.readFile(makePath, "utf-8");
-      const targetRegex = /^([A-Za-z0-9][\w.+-]*)\s*:(?![=])/gm;
+      const targetRegex = /^([A-Za-z0-9][\w.+/-]*(?:\s+[A-Za-z0-9][\w.+/-]*)*)\s*:(?![=])/gm;
       const commands: RunCommand[] = [];
       const seen = new Set<string>();
 
       let match;
       while ((match = targetRegex.exec(content)) !== null) {
-        const target = match[1];
-        if (target.startsWith(".") || target === "PHONY" || seen.has(target)) {
-          continue;
+        const targets = match[1].trim().split(/\s+/);
+        for (const target of targets) {
+          if (target.startsWith(".") || target === "PHONY" || seen.has(target)) {
+            continue;
+          }
+          seen.add(target);
+          commands.push({
+            id: `make-${target}`,
+            name: `make ${target}`,
+            command: `make ${target}`,
+            icon: "terminal",
+          });
         }
-        seen.add(target);
-        commands.push({
-          id: `make-${target}`,
-          name: `make ${target}`,
-          command: `make ${target}`,
-          icon: "terminal",
-        });
       }
       return commands;
     } catch (error) {
@@ -115,7 +136,14 @@ export class RunCommandDetector {
             "post-root-package-install",
             "post-create-project-cmd",
           ];
-          return !lifecycleScripts.includes(name);
+          if (lifecycleScripts.includes(name)) {
+            return false;
+          }
+          if (!isSafeScriptName(name)) {
+            console.warn(`[RunCommandDetector] Skipping composer script with unsafe name: ${name}`);
+            return false;
+          }
+          return true;
         })
         .map((name) => ({
           id: `composer-${name}`,

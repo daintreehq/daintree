@@ -181,6 +181,7 @@ export const usePulseStore = create<PulseStore>()((set, get) => ({
       pulses: new Map(),
       loading: new Map(),
       errors: new Map(),
+      requestIds: new Map(),
       retryCount: new Map(),
       lastRetryTimestamp: new Map(),
       retryTimers: new Map(),

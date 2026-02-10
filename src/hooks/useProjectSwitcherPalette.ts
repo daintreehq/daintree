@@ -113,63 +113,68 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     async (force = false) => {
       if (projects.length === 0) return;
 
-      const currentProjects = projects;
-      const projectIds = currentProjects.map((project) => project.id).join("|");
-      const now = Date.now();
+      try {
+        const currentProjects = projects;
+        const projectIds = currentProjects.map((project) => project.id).join("|");
+        const now = Date.now();
 
-      if (!force) {
-        if (now - lastFetchRef.current < 5000 && projectIds === lastFetchIdsRef.current) {
-          return;
+        if (!force) {
+          if (now - lastFetchRef.current < 5000 && projectIds === lastFetchIdsRef.current) {
+            return;
+          }
         }
-      }
 
-      lastFetchRef.current = now;
-      lastFetchIdsRef.current = projectIds;
+        lastFetchRef.current = now;
+        lastFetchIdsRef.current = projectIds;
 
-      const [statsResults, terminalsResults] = await Promise.allSettled([
-        Promise.allSettled(currentProjects.map((p) => projectClient.getStats(p.id))),
-        Promise.allSettled(currentProjects.map((p) => terminalClient.getForProject(p.id))),
-      ]);
+        const [statsResults, terminalsResults] = await Promise.allSettled([
+          Promise.allSettled(currentProjects.map((p) => projectClient.getStats(p.id))),
+          Promise.allSettled(currentProjects.map((p) => terminalClient.getForProject(p.id))),
+        ]);
 
-      if (statsResults.status === "fulfilled") {
-        const newStats = new Map<string, ProjectStats>();
-        statsResults.value.forEach((result, index) => {
-          if (result.status === "fulfilled") {
-            newStats.set(currentProjects[index].id, result.value);
-          }
-        });
-        setProjectStats(newStats);
-      }
-
-      if (terminalsResults.status === "fulfilled") {
-        const newCounts = new Map<
-          string,
-          { activeAgentCount: number; waitingAgentCount: number }
-        >();
-        terminalsResults.value.forEach((result, index) => {
-          if (result.status !== "fulfilled") return;
-
-          let activeAgentCount = 0;
-          let waitingAgentCount = 0;
-
-          for (const terminal of result.value) {
-            if (!panelKindHasPty(terminal.kind ?? "terminal")) continue;
-            if (terminal.kind === "dev-preview") continue;
-            if (terminal.hasPty === false) continue; // Skip orphaned terminals without active PTY
-
-            const isAgent = isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId);
-            if (!isAgent) continue;
-
-            if (terminal.agentState === "waiting") {
-              waitingAgentCount += 1;
-            } else if (terminal.agentState === "working" || terminal.agentState === "running") {
-              activeAgentCount += 1;
+        if (statsResults.status === "fulfilled") {
+          const newStats = new Map<string, ProjectStats>();
+          statsResults.value.forEach((result, index) => {
+            if (result.status === "fulfilled") {
+              newStats.set(currentProjects[index].id, result.value);
             }
-          }
+          });
+          setProjectStats(newStats);
+        }
 
-          newCounts.set(currentProjects[index].id, { activeAgentCount, waitingAgentCount });
-        });
-        setTerminalCounts(newCounts);
+        if (terminalsResults.status === "fulfilled") {
+          const newCounts = new Map<
+            string,
+            { activeAgentCount: number; waitingAgentCount: number }
+          >();
+          terminalsResults.value.forEach((result, index) => {
+            if (result.status !== "fulfilled") return;
+            const terminals = Array.isArray(result.value) ? result.value : [];
+
+            let activeAgentCount = 0;
+            let waitingAgentCount = 0;
+
+            for (const terminal of terminals) {
+              if (!panelKindHasPty(terminal.kind ?? "terminal")) continue;
+              if (terminal.kind === "dev-preview") continue;
+              if (terminal.hasPty === false) continue; // Skip orphaned terminals without active PTY
+
+              const isAgent = isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId);
+              if (!isAgent) continue;
+
+              if (terminal.agentState === "waiting") {
+                waitingAgentCount += 1;
+              } else if (terminal.agentState === "working" || terminal.agentState === "running") {
+                activeAgentCount += 1;
+              }
+            }
+
+            newCounts.set(currentProjects[index].id, { activeAgentCount, waitingAgentCount });
+          });
+          setTerminalCounts(newCounts);
+        }
+      } catch (error) {
+        console.error("[ProjectSwitcherPalette] Failed to fetch project stats:", error);
       }
     },
     [projects]
@@ -181,9 +186,15 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     let cancelled = false;
 
     const runFetch = async () => {
-      await loadProjects();
-      if (cancelled) return;
-      await fetchStats(true);
+      try {
+        await loadProjects();
+        if (cancelled) return;
+        await fetchStats(true);
+      } catch (error) {
+        if (!cancelled) {
+          console.error("[ProjectSwitcherPalette] Failed to load projects:", error);
+        }
+      }
     };
 
     void runFetch();

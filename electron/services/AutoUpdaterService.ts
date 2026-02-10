@@ -14,6 +14,17 @@ class AutoUpdaterService {
   private progressHandler: ((progress: ProgressInfo) => void) | null = null;
   private downloadedHandler: ((info: UpdateInfo) => void) | null = null;
 
+  private runUpdateCheck(context: "Initial" | "Periodic"): void {
+    try {
+      const result = autoUpdater.checkForUpdatesAndNotify();
+      Promise.resolve(result).catch((err) => {
+        console.error(`[MAIN] ${context} update check failed:`, err);
+      });
+    } catch (err) {
+      console.error(`[MAIN] ${context} update check failed:`, err);
+    }
+  }
+
   initialize(): void {
     if (this.initialized) {
       console.log("[MAIN] Auto-updater already initialized, skipping");
@@ -30,52 +41,52 @@ class AutoUpdaterService {
       return;
     }
 
-    this.initialized = true;
+    try {
+      autoUpdater.autoDownload = true;
+      autoUpdater.autoInstallOnAppQuit = true;
 
-    autoUpdater.autoDownload = true;
-    autoUpdater.autoInstallOnAppQuit = true;
+      this.checkingHandler = () => {
+        console.log("[MAIN] Checking for update...");
+      };
+      autoUpdater.on("checking-for-update", this.checkingHandler);
 
-    this.checkingHandler = () => {
-      console.log("[MAIN] Checking for update...");
-    };
-    autoUpdater.on("checking-for-update", this.checkingHandler);
+      this.availableHandler = (info: UpdateInfo) => {
+        console.log("[MAIN] Update available:", info.version);
+      };
+      autoUpdater.on("update-available", this.availableHandler);
 
-    this.availableHandler = (info: UpdateInfo) => {
-      console.log("[MAIN] Update available:", info.version);
-    };
-    autoUpdater.on("update-available", this.availableHandler);
+      this.notAvailableHandler = (_info: UpdateInfo) => {
+        console.log("[MAIN] Update not available");
+      };
+      autoUpdater.on("update-not-available", this.notAvailableHandler);
 
-    this.notAvailableHandler = (_info: UpdateInfo) => {
-      console.log("[MAIN] Update not available");
-    };
-    autoUpdater.on("update-not-available", this.notAvailableHandler);
+      this.errorHandler = (err: Error) => {
+        console.error("[MAIN] Auto-updater error:", err);
+      };
+      autoUpdater.on("error", this.errorHandler);
 
-    this.errorHandler = (err: Error) => {
-      console.error("[MAIN] Auto-updater error:", err);
-    };
-    autoUpdater.on("error", this.errorHandler);
+      this.progressHandler = (progress: ProgressInfo) => {
+        console.log(`[MAIN] Download progress: ${Math.round(progress.percent)}%`);
+      };
+      autoUpdater.on("download-progress", this.progressHandler);
 
-    this.progressHandler = (progress: ProgressInfo) => {
-      console.log(`[MAIN] Download progress: ${Math.round(progress.percent)}%`);
-    };
-    autoUpdater.on("download-progress", this.progressHandler);
+      this.downloadedHandler = (info: UpdateInfo) => {
+        console.log("[MAIN] Update downloaded:", info.version);
+      };
+      autoUpdater.on("update-downloaded", this.downloadedHandler);
 
-    this.downloadedHandler = (info: UpdateInfo) => {
-      console.log("[MAIN] Update downloaded:", info.version);
-    };
-    autoUpdater.on("update-downloaded", this.downloadedHandler);
+      this.runUpdateCheck("Initial");
 
-    autoUpdater.checkForUpdatesAndNotify().catch((err) => {
-      console.error("[MAIN] Initial update check failed:", err);
-    });
+      this.checkInterval = setInterval(() => {
+        this.runUpdateCheck("Periodic");
+      }, CHECK_INTERVAL_MS);
 
-    this.checkInterval = setInterval(() => {
-      autoUpdater.checkForUpdatesAndNotify().catch((err) => {
-        console.error("[MAIN] Periodic update check failed:", err);
-      });
-    }, CHECK_INTERVAL_MS);
-
-    console.log("[MAIN] Auto-updater initialized");
+      this.initialized = true;
+      console.log("[MAIN] Auto-updater initialized");
+    } catch (err) {
+      console.error("[MAIN] Auto-updater initialization failed:", err);
+      this.dispose();
+    }
   }
 
   dispose(): void {

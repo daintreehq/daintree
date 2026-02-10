@@ -220,6 +220,78 @@ describe("dev preview session handlers", () => {
     expect(ptyClient.spawn).not.toHaveBeenCalled();
   });
 
+  it("rejects non-plain env payloads", async () => {
+    const ensureHandler = getRegisteredHandle<
+      [Electron.IpcMainInvokeEvent, Record<string, unknown>],
+      { status: string; error: { message: string } | null }
+    >(CHANNELS.DEV_PREVIEW_ENSURE);
+    expect(ensureHandler).toBeDefined();
+
+    await expect(
+      ensureHandler!({} as Electron.IpcMainInvokeEvent, {
+        panelId: "panel-env-array",
+        projectId: "project-env-array",
+        cwd: "/repo",
+        devCommand: "npm run dev",
+        env: ["BAD=1"],
+      })
+    ).rejects.toThrow("env must be a plain object if provided");
+
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects env entries with non-string values", async () => {
+    const ensureHandler = getRegisteredHandle<
+      [Electron.IpcMainInvokeEvent, Record<string, unknown>],
+      { status: string; error: { message: string } | null }
+    >(CHANNELS.DEV_PREVIEW_ENSURE);
+    expect(ensureHandler).toBeDefined();
+
+    await expect(
+      ensureHandler!({} as Electron.IpcMainInvokeEvent, {
+        panelId: "panel-env-value",
+        projectId: "project-env-value",
+        cwd: "/repo",
+        devCommand: "npm run dev",
+        env: { NODE_ENV: "development", PORT: 5173 },
+      })
+    ).rejects.toThrow("env values must be strings");
+
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects env entries with unsafe key names", async () => {
+    const ensureHandler = getRegisteredHandle<
+      [Electron.IpcMainInvokeEvent, Record<string, unknown>],
+      { status: string; error: { message: string } | null }
+    >(CHANNELS.DEV_PREVIEW_ENSURE);
+    expect(ensureHandler).toBeDefined();
+
+    await expect(
+      ensureHandler!({} as Electron.IpcMainInvokeEvent, {
+        panelId: "panel-env-key",
+        projectId: "project-env-key",
+        cwd: "/repo",
+        devCommand: "npm run dev",
+        env: {
+          "BAD KEY": "1",
+        },
+      })
+    ).rejects.toThrow("env contains invalid key");
+
+    await expect(
+      ensureHandler!({} as Electron.IpcMainInvokeEvent, {
+        panelId: "panel-env-key-2",
+        projectId: "project-env-key-2",
+        cwd: "/repo",
+        devCommand: "npm run dev",
+        env: {
+          "LD_PRELOAD=oops": "1",
+        },
+      })
+    ).rejects.toThrow("env contains invalid key");
+  });
+
   it("returns stopped state for unknown session on getState", async () => {
     const getStateHandler = getRegisteredHandle<
       [Electron.IpcMainInvokeEvent, Record<string, unknown>],
@@ -277,5 +349,78 @@ describe("dev preview session handlers", () => {
 
     expect(afterStop.status).toBe("stopped");
     expect(afterStop.terminalId).toBeNull();
+  });
+
+  it("keeps sessions isolated when project and panel IDs contain delimiter tokens", async () => {
+    const ensureHandler = getRegisteredHandle<
+      [Electron.IpcMainInvokeEvent, Record<string, unknown>],
+      { terminalId: string | null; panelId: string; projectId: string }
+    >(CHANNELS.DEV_PREVIEW_ENSURE);
+    const getStateHandler = getRegisteredHandle<
+      [Electron.IpcMainInvokeEvent, Record<string, unknown>],
+      { terminalId: string | null; panelId: string; projectId: string }
+    >(CHANNELS.DEV_PREVIEW_GET_STATE);
+
+    expect(ensureHandler).toBeDefined();
+    expect(getStateHandler).toBeDefined();
+
+    const firstRequest = {
+      panelId: "c",
+      projectId: "a::b",
+      cwd: "/repo/first",
+      devCommand: "npm run dev",
+    };
+    const secondRequest = {
+      panelId: "b::c",
+      projectId: "a",
+      cwd: "/repo/second",
+      devCommand: "npm run dev",
+    };
+
+    const firstState = await ensureHandler!({} as Electron.IpcMainInvokeEvent, firstRequest);
+    const secondState = await ensureHandler!({} as Electron.IpcMainInvokeEvent, secondRequest);
+
+    expect(firstState.projectId).toBe(firstRequest.projectId);
+    expect(firstState.panelId).toBe(firstRequest.panelId);
+    expect(secondState.projectId).toBe(secondRequest.projectId);
+    expect(secondState.panelId).toBe(secondRequest.panelId);
+    expect(secondState.terminalId).not.toBe(firstState.terminalId);
+
+    const firstLookup = await getStateHandler!({} as Electron.IpcMainInvokeEvent, {
+      panelId: firstRequest.panelId,
+      projectId: firstRequest.projectId,
+    });
+    const secondLookup = await getStateHandler!({} as Electron.IpcMainInvokeEvent, {
+      panelId: secondRequest.panelId,
+      projectId: secondRequest.projectId,
+    });
+
+    expect(firstLookup.projectId).toBe(firstRequest.projectId);
+    expect(firstLookup.panelId).toBe(firstRequest.panelId);
+    expect(secondLookup.projectId).toBe(secondRequest.projectId);
+    expect(secondLookup.panelId).toBe(secondRequest.panelId);
+  });
+
+  it("kills active dev preview terminals when handlers are cleaned up", async () => {
+    const ensureHandler = getRegisteredHandle<
+      [Electron.IpcMainInvokeEvent, Record<string, unknown>],
+      { terminalId: string | null }
+    >(CHANNELS.DEV_PREVIEW_ENSURE);
+    expect(ensureHandler).toBeDefined();
+
+    const state = await ensureHandler!({} as Electron.IpcMainInvokeEvent, {
+      panelId: "panel-dispose",
+      projectId: "project-dispose",
+      cwd: "/repo",
+      devCommand: "npm run dev",
+    });
+
+    expect(state.terminalId).toBeTruthy();
+
+    const disposeHandlers = cleanup;
+    cleanup = () => {};
+    disposeHandlers();
+
+    expect(ptyClient.kill).toHaveBeenCalledWith(state.terminalId, "dev-preview:dispose");
   });
 });

@@ -144,6 +144,10 @@ export class WorkflowPersistence {
   }
 
   async save(projectId: string, runs: WorkflowRun[]): Promise<void> {
+    if (!this.getWorkflowRunsFilePath(projectId)) {
+      throw new Error(`Invalid project ID: ${projectId}`);
+    }
+
     const serializedRuns: SerializedWorkflowRun[] = runs.map((run) => ({
       ...run,
       scheduledNodes: Array.from(run.scheduledNodes),
@@ -276,6 +280,22 @@ export class WorkflowPersistence {
   }
 
   async clear(projectId: string): Promise<void> {
+    const pending = this.pendingSaves.get(projectId);
+    if (pending) {
+      clearTimeout(pending.timer);
+      this.pendingSaves.delete(projectId);
+      pending.resolvers.forEach((resolve) => resolve());
+    }
+
+    const inFlight = this.inFlightSaves.get(projectId);
+    if (inFlight) {
+      try {
+        await inFlight;
+      } catch {
+        // Best-effort clear: continue to file deletion even if in-flight save failed.
+      }
+    }
+
     const filePath = this.getWorkflowRunsFilePath(projectId);
     if (filePath && existsSync(filePath)) {
       try {

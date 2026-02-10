@@ -37,8 +37,9 @@ export function useTerminalLogic({
   }, [id, restartKey]);
 
   const handleExit = useCallback((code: number) => {
+    const safeCode = Number.isFinite(code) ? code : 0;
     setIsExited(true);
-    setExitCode(code);
+    setExitCode(safeCode);
   }, []);
 
   const handleErrorRetry = useCallback(

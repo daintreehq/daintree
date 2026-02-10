@@ -66,14 +66,13 @@ export class GitHubAuth {
   }
 
   static setMemoryToken(token: string | null): void {
-    this.memoryToken = token;
+    const normalized = token?.trim() ?? null;
+    this.memoryToken = normalized && normalized.length > 0 ? normalized : null;
     this.tokenVersion++;
     this.pendingValidation = null;
-    if (!token) {
-      this.cachedUsername = null;
-      this.cachedAvatarUrl = null;
-      this.cachedScopes = [];
-    }
+    this.cachedUsername = null;
+    this.cachedAvatarUrl = null;
+    this.cachedScopes = [];
   }
 
   static hasToken(): boolean {
@@ -224,7 +223,15 @@ export class GitHubAuth {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (message.includes("ENOTFOUND") || message.includes("ETIMEDOUT")) {
+      if (
+        message.includes("ENOTFOUND") ||
+        message.includes("ETIMEDOUT") ||
+        message.includes("ECONNREFUSED") ||
+        message.includes("ECONNRESET") ||
+        message.includes("EAI_AGAIN") ||
+        message.includes("network") ||
+        message.includes("fetch failed")
+      ) {
         return {
           valid: false,
           scopes: [],

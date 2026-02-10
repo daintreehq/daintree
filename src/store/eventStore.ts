@@ -50,7 +50,13 @@ const createEventsStore: StateCreator<EventsState> = (set, get) => ({
   addEvents: (events) =>
     set((state) => {
       const existingIds = new Set(state.events.map((e) => e.id));
-      const newEvents = events.filter((e) => !existingIds.has(e.id));
+      const newEvents = events.filter((e) => {
+        if (existingIds.has(e.id)) {
+          return false;
+        }
+        existingIds.add(e.id);
+        return true;
+      });
       const merged = [...state.events, ...newEvents];
 
       if (merged.length > MAX_EVENTS) {
@@ -59,7 +65,10 @@ const createEventsStore: StateCreator<EventsState> = (set, get) => ({
       return { events: merged };
     }),
 
-  setEvents: (events) => set({ events }),
+  setEvents: (events) => {
+    const clamped = events.length > MAX_EVENTS ? events.slice(-MAX_EVENTS) : events;
+    set({ events: clamped });
+  },
 
   clearEvents: () => set({ events: [], selectedEventId: null }),
 

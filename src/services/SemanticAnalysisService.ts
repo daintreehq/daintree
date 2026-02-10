@@ -169,7 +169,7 @@ class SemanticAnalysisService {
       this.handlers.onError?.(event.message, "worker crash");
 
       // Attempt to restart worker
-      this.restartWorker();
+      void this.restartWorker();
     };
   }
 
@@ -188,7 +188,14 @@ class SemanticAnalysisService {
     // Wait a bit before restarting to avoid rapid restart loops
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
-    await this.initialize(this.handlers);
+    try {
+      await this.initialize(this.handlers);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[SemanticAnalysisService] Worker restart failed:", message);
+      this.handlers.onError?.(message, "restart");
+      return;
+    }
 
     // Re-register all previously registered terminals
     for (const [terminalId, metadata] of this.registeredTerminals.entries()) {

@@ -26,7 +26,13 @@ const RUNNING_STATES: ReadonlySet<DevPreviewSessionStatus> = new Set([
 const DEFAULT_TIMEOUT_MS = 8000;
 
 function createSessionKey(projectId: string, panelId: string): string {
-  return `${projectId}::${panelId}`;
+  return JSON.stringify([projectId, panelId]);
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object") return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function sanitizeToken(input: string): string {
@@ -82,6 +88,14 @@ export class DevPreviewSessionService {
     this.ptyClient.off("exit", this.onExitListener);
     for (const terminalId of this.terminalToSession.keys()) {
       this.ptyClient.setIpcDataMirror(terminalId, false);
+      try {
+        this.ptyClient.kill(terminalId, "dev-preview:dispose");
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (!this.isBenignMissingTerminalError(message)) {
+          console.warn("[DevPreviewSessionService] Failed to kill terminal during dispose:", err);
+        }
+      }
     }
     this.terminalToSession.clear();
     this.sessions.clear();
@@ -230,8 +244,21 @@ export class DevPreviewSessionService {
     if (request.worktreeId !== undefined && typeof request.worktreeId !== "string") {
       throw new Error("worktreeId must be a string if provided");
     }
-    if (request.env !== undefined && typeof request.env !== "object") {
-      throw new Error("env must be an object if provided");
+    if (request.env !== undefined) {
+      if (!isPlainRecord(request.env)) {
+        throw new Error("env must be a plain object if provided");
+      }
+
+      for (const [key, value] of Object.entries(request.env)) {
+        const isReserved = key === "__proto__" || key === "constructor" || key === "prototype";
+        const isValidEnvKey = /^[A-Za-z_][A-Za-z0-9_]*$/.test(key);
+        if (!key || isReserved || !isValidEnvKey) {
+          throw new Error("env contains invalid key");
+        }
+        if (typeof value !== "string") {
+          throw new Error("env values must be strings");
+        }
+      }
     }
   }
 
@@ -383,17 +410,30 @@ export class DevPreviewSessionService {
       generation: nextGeneration,
     });
 
-    this.ptyClient.spawn(terminalId, {
-      projectId: session.projectId,
-      kind: "dev-preview",
-      cwd: session.cwd,
-      worktreeId: session.worktreeId,
-      cols: 80,
-      rows: 30,
-      restore: false,
-      env: session.env,
-      isEphemeral: true,
-    });
+    try {
+      this.ptyClient.spawn(terminalId, {
+        projectId: session.projectId,
+        kind: "dev-preview",
+        cwd: session.cwd,
+        worktreeId: session.worktreeId,
+        cols: 80,
+        rows: 30,
+        restore: false,
+        env: session.env,
+        isEphemeral: true,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.detachTerminal(session);
+      this.updateSession(session, {
+        status: "error",
+        url: null,
+        error: { type: "unknown", message: `Failed to start dev server: ${message}` },
+        terminalId: null,
+        isRestarting: false,
+      });
+      return;
+    }
 
     const trimmedCommand = session.devCommand.trim();
 

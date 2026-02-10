@@ -131,14 +131,14 @@ export class ProcessDetector {
     const currentCommand = primaryProcess?.command;
 
     for (const proc of processes) {
-      const basename = proc.name.split("/").pop() || proc.name;
-      const agentType = AGENT_CLI_NAMES[basename.toLowerCase()];
+      const normalizedName = this.normalizeProcessName(proc.name);
+      const agentType = AGENT_CLI_NAMES[normalizedName.toLowerCase()];
 
       if (agentType) {
         return {
           detected: true,
           agentType,
-          processName: basename,
+          processName: normalizedName,
           isBusy,
           currentCommand,
         };
@@ -150,13 +150,13 @@ export class ProcessDetector {
       for (const child of children.slice(0, 10)) {
         const grandchildren = this.cache.getChildren(child.pid);
         for (const grandchild of grandchildren) {
-          const basename = grandchild.comm.split("/").pop() || grandchild.comm;
-          const agentType = AGENT_CLI_NAMES[basename.toLowerCase()];
+          const normalizedName = this.normalizeProcessName(grandchild.comm);
+          const agentType = AGENT_CLI_NAMES[normalizedName.toLowerCase()];
           if (agentType) {
             return {
               detected: true,
               agentType,
-              processName: basename,
+              processName: normalizedName,
               isBusy,
               currentCommand: grandchild.command || grandchild.comm,
             };
@@ -170,5 +170,10 @@ export class ProcessDetector {
 
   getLastDetected(): TerminalType | null {
     return this.lastDetected;
+  }
+
+  private normalizeProcessName(name: string): string {
+    const basename = name.split(/[\\/]/).pop() || name;
+    return basename.replace(/\.exe$/i, "");
   }
 }

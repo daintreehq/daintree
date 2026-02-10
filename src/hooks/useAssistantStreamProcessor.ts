@@ -429,7 +429,7 @@ export function useAssistantStreamProcessor() {
       }
     });
 
-    const cleanup = window.electron.assistant.onChunk((data) => {
+    const chunkCleanup = window.electron.assistant.onChunk((data) => {
       const currentState = useAssistantChatStore.getState();
       const { sessionId: currentSessionId } = currentState.conversation;
 
@@ -773,6 +773,8 @@ export function useAssistantStreamProcessor() {
     };
 
     window.addEventListener("assistant:triggerAutoResume", handleTriggerAutoResume);
+
+    const cleanup = typeof chunkCleanup === "function" ? chunkCleanup : () => {};
 
     return () => {
       cleanup();

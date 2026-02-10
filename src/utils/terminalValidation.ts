@@ -20,12 +20,21 @@ export async function validateTerminalConfig(
 
   // Only validate cwd for PTY panels that have it
   if (terminal.cwd) {
-    const cwdExists = await systemClient.checkDirectory(terminal.cwd);
-    if (!cwdExists) {
+    try {
+      const cwdExists = await systemClient.checkDirectory(terminal.cwd);
+      if (!cwdExists) {
+        errors.push({
+          type: "cwd",
+          message: `Working directory does not exist: ${terminal.cwd}`,
+          code: "ENOENT",
+          recoverable: true,
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       errors.push({
-        type: "cwd",
-        message: `Working directory does not exist: ${terminal.cwd}`,
-        code: "ENOENT",
+        type: "config",
+        message: `Failed to validate working directory "${terminal.cwd}": ${message}`,
         recoverable: true,
       });
     }
@@ -34,12 +43,21 @@ export async function validateTerminalConfig(
   // Check agent CLI availability
   const agentId = terminal.agentId ?? terminal.type;
   if (agentId && agentId !== "terminal") {
-    const cliAvailable = await systemClient.checkCommand(agentId);
-    if (!cliAvailable) {
+    try {
+      const cliAvailable = await systemClient.checkCommand(agentId);
+      if (!cliAvailable) {
+        errors.push({
+          type: "cli",
+          message: `${agentId} CLI not found in PATH`,
+          recoverable: false,
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       errors.push({
-        type: "cli",
-        message: `${agentId} CLI not found in PATH`,
-        recoverable: false,
+        type: "config",
+        message: `Failed to validate CLI "${agentId}": ${message}`,
+        recoverable: true,
       });
     }
   }
@@ -57,9 +75,23 @@ export async function validateTerminals(
 
   await Promise.all(
     terminals.map(async (terminal) => {
-      const result = await validateTerminalConfig(terminal);
-      if (!result.valid) {
-        results.set(terminal.id, result);
+      try {
+        const result = await validateTerminalConfig(terminal);
+        if (!result.valid) {
+          results.set(terminal.id, result);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        results.set(terminal.id, {
+          valid: false,
+          errors: [
+            {
+              type: "config",
+              message: `Failed to validate terminal "${terminal.id}": ${message}`,
+              recoverable: true,
+            },
+          ],
+        });
       }
     })
   );

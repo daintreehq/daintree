@@ -163,8 +163,10 @@ const createAssistantChatStore: StateCreator<AssistantChatState & AssistantChatA
 
   clearConversation: () => {
     const sessionId = get().conversation.sessionId;
-    if (sessionId) {
-      window.electron.assistant.clearSession(sessionId).catch((err) => {
+    const assistantBridge =
+      typeof window !== "undefined" ? window.electron?.assistant : undefined;
+    if (sessionId && assistantBridge?.clearSession) {
+      assistantBridge.clearSession(sessionId).catch((err) => {
         console.error("[AssistantChatStore] Failed to clear session:", err);
       });
     }

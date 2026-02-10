@@ -119,10 +119,24 @@ export function filterLogs(logs: LogEntry[], filters: LogFilterOptions): LogEntr
   if (filters.search) {
     const searchLower = filters.search.toLowerCase();
     filtered = filtered.filter(
-      (log) =>
-        log.message.toLowerCase().includes(searchLower) ||
-        (log.source && log.source.toLowerCase().includes(searchLower)) ||
-        (log.context && safeStringify(log.context).toLowerCase().includes(searchLower))
+      (log) => {
+        const message =
+          typeof log.message === "string" ? log.message : String(log.message ?? "");
+        const source = typeof log.source === "string" ? log.source : String(log.source ?? "");
+        const context =
+          log.context !== undefined
+            ? (() => {
+                const serialized = safeStringify(log.context);
+                return typeof serialized === "string" ? serialized : String(serialized ?? "");
+              })()
+            : "";
+
+        return (
+          message.toLowerCase().includes(searchLower) ||
+          source.toLowerCase().includes(searchLower) ||
+          context.toLowerCase().includes(searchLower)
+        );
+      }
     );
   }
 

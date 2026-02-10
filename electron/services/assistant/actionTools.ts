@@ -279,8 +279,12 @@ function sanitizePropertySchema(propSchema: unknown): unknown {
   // If it's an object with no type but has other properties, it might be malformed
   if (!schema["type"] && !schema["anyOf"] && !schema["oneOf"] && !schema["allOf"]) {
     // Check if it looks like an object schema (has properties)
-    if (schema["properties"]) {
-      return { type: "object", ...schema };
+    if (schema["properties"] && typeof schema["properties"] === "object") {
+      const sanitizedProps: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(schema["properties"] as Record<string, unknown>)) {
+        sanitizedProps[key] = sanitizePropertySchema(value);
+      }
+      return { type: "object", ...schema, properties: sanitizedProps };
     }
     // Otherwise, treat as a permissive object
     return { type: "object", additionalProperties: true, ...schema };
@@ -438,21 +442,33 @@ async function dispatchAction(
         result: { ok: boolean; result?: unknown; error?: { code: string; message: string } };
       }
     ) => {
-      if (payload.requestId === requestId) {
-        clearTimeout(timeout);
-        ipcMain.removeListener("app-agent:dispatch-action-response", handler);
-        resolve(payload.result);
-      }
+      if (!payload || typeof payload !== "object") return;
+      if (payload.requestId !== requestId) return;
+      if (!payload.result || typeof payload.result !== "object") return;
+      if (typeof payload.result.ok !== "boolean") return;
+
+      clearTimeout(timeout);
+      ipcMain.removeListener("app-agent:dispatch-action-response", handler);
+      resolve(payload.result);
     };
 
     ipcMain.on("app-agent:dispatch-action-response", handler);
 
-    mainWindow.webContents.send("app-agent:dispatch-action-request", {
-      requestId,
-      actionId,
-      args,
-      context,
-    });
+    try {
+      mainWindow.webContents.send("app-agent:dispatch-action-request", {
+        requestId,
+        actionId,
+        args,
+        context,
+      });
+    } catch {
+      clearTimeout(timeout);
+      ipcMain.removeListener("app-agent:dispatch-action-response", handler);
+      resolve({
+        ok: false,
+        error: { code: "DISPATCH_FAILED", message: "Action dispatch failed" },
+      });
+    }
   });
 }
 

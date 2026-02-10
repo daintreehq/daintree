@@ -299,6 +299,26 @@ describe("WorkflowPersistence", () => {
     it("does not throw when clearing non-existent project", async () => {
       await expect(persistence.clear("c".repeat(64))).resolves.not.toThrow();
     });
+
+    it("cancels pending debounced saves so cleared state is not resurrected", async () => {
+      const slowPersistence = new WorkflowPersistence(5000);
+      (slowPersistence as unknown as { projectsConfigDir: string }).projectsConfigDir = testDir;
+
+      vi.useFakeTimers();
+      try {
+        const runs = [createTestRun()];
+        const pendingSave = slowPersistence.save(testProjectId, runs);
+
+        await slowPersistence.clear(testProjectId);
+        vi.advanceTimersByTime(6000);
+
+        await expect(pendingSave).resolves.toBeUndefined();
+        const loaded = await slowPersistence.load(testProjectId);
+        expect(loaded).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe("project ID validation", () => {
@@ -310,6 +330,12 @@ describe("WorkflowPersistence", () => {
     it("rejects project IDs that could cause path traversal", async () => {
       const loaded = await persistence.load("../../../etc/passwd");
       expect(loaded).toEqual([]);
+    });
+
+    it("rejects save for invalid project IDs immediately", async () => {
+      await expect(persistence.save("invalid-project-id", [createTestRun()])).rejects.toThrow(
+        "Invalid project ID"
+      );
     });
   });
 

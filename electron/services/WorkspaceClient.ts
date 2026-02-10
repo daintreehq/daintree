@@ -96,6 +96,18 @@ export class WorkspaceClient extends EventEmitter {
     return this.readyPromise;
   }
 
+  private startHealthCheckLoop(): void {
+    if (this.healthCheckInterval || this.isHealthCheckPaused || !this.child) {
+      return;
+    }
+
+    this.healthCheckInterval = setInterval(() => {
+      if (this.isInitialized && this.child && !this.isHealthCheckPaused) {
+        this.send({ type: "health-check" });
+      }
+    }, this.config.healthCheckIntervalMs);
+  }
+
   private startHost(): void {
     if (this.isDisposed) {
       console.warn("[WorkspaceClient] Cannot start host - already disposed");
@@ -219,13 +231,7 @@ export class WorkspaceClient extends EventEmitter {
       }
     });
 
-    if (!this.isHealthCheckPaused) {
-      this.healthCheckInterval = setInterval(() => {
-        if (this.isInitialized && this.child && !this.isHealthCheckPaused) {
-          this.send({ type: "health-check" });
-        }
-      }, this.config.healthCheckIntervalMs);
-    }
+    this.startHealthCheckLoop();
 
     console.log("[WorkspaceClient] Workspace Host started");
   }
@@ -281,6 +287,7 @@ export class WorkspaceClient extends EventEmitter {
           this.readyResolve();
           this.readyResolve = null;
         }
+        this.startHealthCheckLoop();
         console.log("[WorkspaceClient] Workspace Host is ready");
         break;
       }
@@ -476,18 +483,31 @@ export class WorkspaceClient extends EventEmitter {
     };
   }
 
-  private send(request: WorkspaceHostRequest): void {
+  private send(request: WorkspaceHostRequest): boolean {
     if (!this.child) {
       console.warn("[WorkspaceClient] Cannot send - host not running");
-      return;
+      return false;
     }
-    this.child.postMessage(request);
+    try {
+      this.child.postMessage(request);
+      return true;
+    } catch (error) {
+      console.error("[WorkspaceClient] Failed to send message to host:", error);
+      return false;
+    }
   }
 
   private sendWithResponse<T>(
     request: WorkspaceHostRequest & { requestId: string },
     timeoutMs: number = 30000
   ): Promise<T> {
+    if (this.isDisposed) {
+      return Promise.reject(new Error("WorkspaceClient disposed"));
+    }
+    if (!this.child) {
+      return Promise.reject(new Error("Workspace Host not running"));
+    }
+
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         if (this.pendingRequests.has(request.requestId)) {
@@ -497,7 +517,16 @@ export class WorkspaceClient extends EventEmitter {
       }, timeoutMs);
 
       this.pendingRequests.set(request.requestId, { resolve, reject, timeout });
-      this.send(request);
+      try {
+        if (!this.child) {
+          throw new Error("Workspace Host not running");
+        }
+        this.child.postMessage(request);
+      } catch (error) {
+        clearTimeout(timeout);
+        this.pendingRequests.delete(request.requestId);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
 
@@ -869,12 +898,8 @@ export class WorkspaceClient extends EventEmitter {
     if (!this.isHealthCheckPaused) return;
     this.isHealthCheckPaused = false;
 
-    if (this.isInitialized && this.child) {
-      this.healthCheckInterval = setInterval(() => {
-        if (this.isInitialized && this.child && !this.isHealthCheckPaused) {
-          this.send({ type: "health-check" });
-        }
-      }, this.config.healthCheckIntervalMs);
+    if (this.child) {
+      this.startHealthCheckLoop();
     }
 
     console.log("[WorkspaceClient] Health check resumed");
@@ -896,6 +921,12 @@ export class WorkspaceClient extends EventEmitter {
       this.restartTimer = null;
     }
 
+    if (this.readyReject) {
+      this.readyReject(new Error("WorkspaceClient disposed"));
+      this.readyReject = null;
+      this.readyResolve = null;
+    }
+
     // Reject all pending requests and clear their timeouts
     for (const [, { reject, timeout }] of this.pendingRequests) {
       clearTimeout(timeout);
@@ -907,8 +938,13 @@ export class WorkspaceClient extends EventEmitter {
       this.send({ type: "dispose" });
       setTimeout(() => {
         if (this.child) {
-          this.child.kill();
-          this.child = null;
+          try {
+            this.child.kill();
+          } catch (error) {
+            console.warn("[WorkspaceClient] Failed to kill host process during dispose:", error);
+          } finally {
+            this.child = null;
+          }
         }
       }, 1000);
     }

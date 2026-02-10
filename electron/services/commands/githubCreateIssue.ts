@@ -115,7 +115,20 @@ export const githubCreateIssueCommand: CanopyCommand<CreateIssueArgs, CreateIssu
       };
     }
 
-    const repoContext = await getRepoContext(cwd);
+    let repoContext;
+    try {
+      repoContext = await getRepoContext(cwd);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        success: false,
+        error: {
+          code: "NOT_GIT_REPO",
+          message: `Failed to determine repository context: ${message}`,
+        },
+      };
+    }
+
     if (!repoContext) {
       return {
         success: false,

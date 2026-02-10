@@ -87,7 +87,7 @@ function slugifyTitle(title: string): string {
  */
 function generateBranchName(issueNumber: number, issueTitle: string): string {
   const slug = slugifyTitle(issueTitle);
-  return `issue-${issueNumber}-${slug}`;
+  return slug ? `issue-${issueNumber}-${slug}` : `issue-${issueNumber}`;
 }
 
 /**
@@ -502,7 +502,16 @@ export const githubWorkIssueCommand: CanopyCommand<GitHubWorkIssueArgs, GitHubWo
     }
 
     // Get issue URL (using rootPath)
-    const issueUrl = (await getIssueUrl(rootPath, issueNumber)) || issue.url;
+    let issueUrl = issue.url;
+    try {
+      const resolvedIssueUrl = await getIssueUrl(rootPath, issueNumber);
+      if (resolvedIssueUrl) {
+        issueUrl = resolvedIssueUrl;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`Failed to resolve issue URL for #${issueNumber}: ${message}`);
+    }
 
     // Build success message with warning if switch failed
     const successMessage = switchWarning

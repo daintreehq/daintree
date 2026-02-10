@@ -338,14 +338,19 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       .map((terminal) => ({
         type: terminal.type,
         title: typeof terminal.title === "string" ? terminal.title : undefined,
-        command: typeof terminal.command === "string" ? terminal.command.trim() : undefined,
+        command:
+          typeof terminal.command === "string"
+            ? (terminal.command.trim() || undefined)
+            : undefined,
         env: terminal.env,
         initialPrompt:
           typeof terminal.initialPrompt === "string"
             ? terminal.initialPrompt.replace(/\r\n/g, "\n").trimEnd()
             : undefined,
         devCommand:
-          typeof terminal.devCommand === "string" ? terminal.devCommand.trim() : undefined,
+          typeof terminal.devCommand === "string"
+            ? (terminal.devCommand.trim() || undefined)
+            : undefined,
         exitBehavior:
           terminal.exitBehavior && ALLOWED_EXIT_BEHAVIORS.includes(terminal.exitBehavior as string)
             ? (terminal.exitBehavior as "keep" | "trash" | "remove")

@@ -126,6 +126,8 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
   closeTab: (id) => {
     const state = get();
     const closingIndex = state.tabs.findIndex((t) => t.id === id);
+    if (closingIndex === -1) return;
+
     const wasActive = id === state.activeTabId;
     const newTabs = state.tabs.filter((t) => t.id !== id);
     let newActiveId = state.activeTabId;

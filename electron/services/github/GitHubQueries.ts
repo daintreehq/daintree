@@ -255,27 +255,40 @@ export const GET_PR_QUERY = `
   }
 `;
 
+function escapeGraphQLString(value: string): string {
+  return JSON.stringify(value).slice(1, -1);
+}
+
 export function buildBatchPRQuery(
   owner: string,
   repo: string,
   candidates: PRCheckCandidate[]
 ): string {
+  const escapedOwner = escapeGraphQLString(owner);
+  const escapedRepo = escapeGraphQLString(repo);
   const issueQueries: string[] = [];
   const branchQueries: string[] = [];
 
   for (let i = 0; i < candidates.length; i++) {
     const candidate = candidates[i];
+    const validIssueNumber =
+      typeof candidate.issueNumber === "number" &&
+      Number.isInteger(candidate.issueNumber) &&
+      candidate.issueNumber > 0
+        ? candidate.issueNumber
+        : undefined;
+    const branchName = candidate.branchName?.trim();
 
-    if (!candidate.issueNumber && !candidate.branchName) {
+    if (!validIssueNumber && !branchName) {
       continue;
     }
 
     const alias = `wt_${i}`;
 
-    if (candidate.issueNumber) {
+    if (validIssueNumber) {
       issueQueries.push(`
-        ${alias}_issue: repository(owner: "${owner}", name: "${repo}") {
-          issue(number: ${candidate.issueNumber}) {
+        ${alias}_issue: repository(owner: "${escapedOwner}", name: "${escapedRepo}") {
+          issue(number: ${validIssueNumber}) {
             title
             timelineItems(itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT], last: 20) {
               nodes {
@@ -312,10 +325,10 @@ export function buildBatchPRQuery(
 
     // Query by branch whenever branchName exists - enables PR detection for branches without issue numbers
     // Fetch multiple PRs to allow preference selection (open > merged > closed)
-    if (candidate.branchName) {
-      const escapedBranch = JSON.stringify(candidate.branchName).slice(1, -1);
+    if (branchName) {
+      const escapedBranch = escapeGraphQLString(branchName);
       branchQueries.push(`
-        ${alias}_branch: repository(owner: "${owner}", name: "${repo}") {
+        ${alias}_branch: repository(owner: "${escapedOwner}", name: "${escapedRepo}") {
           pullRequests(first: 10, states: [OPEN, MERGED, CLOSED], headRefName: "${escapedBranch}", orderBy: {field: UPDATED_AT, direction: DESC}) {
             nodes {
               number

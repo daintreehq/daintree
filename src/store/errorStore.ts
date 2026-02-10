@@ -101,7 +101,11 @@ const createErrorStore: StateCreator<ErrorStore> = (set, get) => ({
   },
 
   clearAll: () => {
-    set({ errors: [] });
+    set({
+      errors: [],
+      isPanelOpen: false,
+      lastErrorTime: 0,
+    });
   },
 
   removeError: (id) => {

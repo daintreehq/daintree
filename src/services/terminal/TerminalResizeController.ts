@@ -210,6 +210,7 @@ export class TerminalResizeController {
   applyDeferredResize(id: string): void {
     const managed = this.deps.getInstance(id);
     if (!managed) return;
+    if (this.isResizeLocked(id)) return;
 
     const currentCols = managed.terminal.cols;
     const currentRows = managed.terminal.rows;

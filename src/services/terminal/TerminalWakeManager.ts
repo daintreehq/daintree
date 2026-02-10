@@ -23,22 +23,38 @@ export class TerminalWakeManager {
   }
 
   async wakeAndRestore(id: string): Promise<boolean> {
-    const managed = this.deps.getInstance(id);
-    if (!managed) return false;
+    try {
+      const managed = this.deps.getInstance(id);
+      if (!managed) return false;
 
-    const { state } = await terminalClient.wake(id);
-    if (!state) return false;
+      const { state } = await terminalClient.wake(id);
+      if (!state) return false;
 
-    if (state.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes) {
-      await this.deps.restoreFromSerializedIncremental(id, state);
-    } else {
-      this.deps.restoreFromSerialized(id, state);
+      if (state.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes) {
+        await this.deps.restoreFromSerializedIncremental(id, state);
+      } else {
+        this.deps.restoreFromSerialized(id, state);
+      }
+
+      if (this.deps.getInstance(id) === managed) {
+        managed.terminal.refresh(0, managed.terminal.rows - 1);
+      }
+      return true;
+    } catch (error) {
+      console.warn(`[TerminalWakeManager] Failed to wake terminal ${id}:`, error);
+      return false;
     }
+  }
 
-    if (this.deps.getInstance(id) === managed) {
-      managed.terminal.refresh(0, managed.terminal.rows - 1);
-    }
-    return true;
+  private triggerWake(id: string): void {
+    const startedAt = Date.now();
+    void this.wakeAndRestore(id).then((success) => {
+      if (success) {
+        this.lastWakeTime.set(id, startedAt);
+      } else {
+        this.lastWakeTime.delete(id);
+      }
+    });
   }
 
   wake(id: string): void {
@@ -62,8 +78,7 @@ export class TerminalWakeManager {
       return;
     }
 
-    this.lastWakeTime.set(id, now);
-    void this.wakeAndRestore(id);
+    this.triggerWake(id);
   }
 
   private scheduleWakeRetry(id: string, retryCount: number): void {
@@ -81,8 +96,7 @@ export class TerminalWakeManager {
         const lastWake = this.lastWakeTime.get(id) ?? 0;
 
         if (now - lastWake >= WAKE_RATE_LIMIT_MS) {
-          this.lastWakeTime.set(id, now);
-          void this.wakeAndRestore(id);
+          this.triggerWake(id);
         }
       } else {
         // Still no instance, schedule another retry

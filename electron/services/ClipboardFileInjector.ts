@@ -6,6 +6,23 @@ import os from "os";
 const MAX_SAFE_SIZE = 50 * 1024 * 1024; // 50 MB
 
 export class ClipboardFileInjector {
+  private static isPathWithinRoot(candidatePath: string, rootPath: string): boolean {
+    const normalizedCandidate = path.resolve(candidatePath);
+    const normalizedRoot = path.resolve(rootPath);
+    const relativePath = path.relative(normalizedRoot, normalizedCandidate);
+
+    if (process.platform === "win32") {
+      const lowerRelative = relativePath.toLowerCase();
+      return (
+        lowerRelative === "" || (!lowerRelative.startsWith("..") && !path.isAbsolute(relativePath))
+      );
+    }
+
+    return (
+      relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath))
+    );
+  }
+
   /**
    * Synchronously check if clipboard contains file data.
    * This is a fast check to decide whether to intercept paste.
@@ -82,7 +99,11 @@ export class ClipboardFileInjector {
 
   private static async validateFilePaths(paths: string[]): Promise<string[]> {
     const validated: string[] = [];
-    const homeDir = os.homedir();
+    const homeDir = path.resolve(os.homedir());
+    const tmpDir = path.resolve(os.tmpdir());
+
+    const resolvedHomeDir = await fs.realpath(homeDir).catch(() => homeDir);
+    const resolvedTmpDir = await fs.realpath(tmpDir).catch(() => tmpDir);
 
     for (const filePath of paths) {
       try {
@@ -94,8 +115,10 @@ export class ClipboardFileInjector {
         const normalized = path.normalize(filePath);
         const realPath = await fs.realpath(normalized);
 
-        if (!realPath.startsWith(homeDir) && !realPath.startsWith("/tmp")) {
-          console.warn(`[ClipboardFileInjector] Rejecting path outside user home: ${realPath}`);
+        const inHomeDir = this.isPathWithinRoot(realPath, resolvedHomeDir);
+        const inTmpDir = this.isPathWithinRoot(realPath, resolvedTmpDir);
+        if (!inHomeDir && !inTmpDir) {
+          console.warn(`[ClipboardFileInjector] Rejecting path outside allowed roots: ${realPath}`);
           continue;
         }
 

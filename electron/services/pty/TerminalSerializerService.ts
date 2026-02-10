@@ -16,6 +16,7 @@ const ASYNC_SERIALIZATION_THRESHOLD_LINES = 1000;
 
 export class TerminalSerializerService {
   private inFlightRequests = new Map<string, Promise<string | null>>();
+  private isDisposed = false;
 
   shouldUseAsync(lineCount: number): boolean {
     return lineCount >= ASYNC_SERIALIZATION_THRESHOLD_LINES;
@@ -30,6 +31,10 @@ export class TerminalSerializerService {
    * in progress for a terminal, returns the existing promise.
    */
   async serializeAsync(id: string, serializeFn: () => string | null): Promise<string | null> {
+    if (this.isDisposed) {
+      return null;
+    }
+
     const existingRequest = this.inFlightRequests.get(id);
     if (existingRequest) {
       return existingRequest;
@@ -38,6 +43,10 @@ export class TerminalSerializerService {
     const promise = new Promise<string | null>((resolve) => {
       setImmediate(() => {
         try {
+          if (this.isDisposed) {
+            resolve(null);
+            return;
+          }
           const result = serializeFn();
           resolve(result);
         } catch (error) {
@@ -54,6 +63,7 @@ export class TerminalSerializerService {
   }
 
   dispose(): void {
+    this.isDisposed = true;
     this.inFlightRequests.clear();
 
     if (process.env.CANOPY_VERBOSE) {

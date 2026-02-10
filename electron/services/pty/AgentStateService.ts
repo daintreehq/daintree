@@ -18,6 +18,15 @@ import { ActivityHeadlineGenerator } from "../ActivityHeadlineGenerator.js";
 export class AgentStateService {
   private headlineGenerator = new ActivityHeadlineGenerator();
 
+  private normalizeConfidence(confidence: number): number {
+    if (!Number.isFinite(confidence)) {
+      return 0.5;
+    }
+    if (confidence < 0) return 0;
+    if (confidence > 1) return 1;
+    return confidence;
+  }
+
   inferTrigger(event: AgentEvent): AgentStateChangeTrigger {
     switch (event.type) {
       case "input":
@@ -112,7 +121,9 @@ export class AgentStateService {
     terminal.lastStateChange = getStateChangeTimestamp();
 
     const inferredTrigger = trigger ?? this.inferTrigger(event);
-    const inferredConfidence = confidence ?? this.inferConfidence(event, inferredTrigger);
+    const inferredConfidence = this.normalizeConfidence(
+      confidence ?? this.inferConfidence(event, inferredTrigger)
+    );
 
     // Build and validate state change payload
     const stateChangePayload = {
@@ -204,7 +215,7 @@ export class AgentStateService {
     }
 
     const completedAt = Date.now();
-    const duration = completedAt - terminal.spawnedAt;
+    const duration = Math.max(0, completedAt - terminal.spawnedAt);
 
     const completedPayload = {
       agentId: terminal.agentId,

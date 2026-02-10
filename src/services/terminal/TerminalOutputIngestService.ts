@@ -52,6 +52,7 @@ export class TerminalOutputIngestService {
           this.sabAvailable = false;
           this.worker?.terminate();
           this.worker = null;
+          this.initializePromise = null;
         };
 
         const initMessage: WorkerInboundMessage = {
@@ -66,9 +67,18 @@ export class TerminalOutputIngestService {
         );
       } else {
         console.log("[TerminalOutputIngestService] SharedArrayBuffer unavailable, using IPC");
+        this.sabAvailable = false;
+        this.pollingActive = false;
+        this.worker = null;
+        this.initializePromise = null;
       }
     } catch (error) {
       console.warn("[TerminalOutputIngestService] Failed to initialize SharedArrayBuffer:", error);
+      this.sabAvailable = false;
+      this.pollingActive = false;
+      this.worker?.terminate();
+      this.worker = null;
+      this.initializePromise = null;
     }
   }
 
@@ -128,6 +138,7 @@ export class TerminalOutputIngestService {
 
   public stopPolling(): void {
     this.pollingActive = false;
+    this.sabAvailable = false;
     if (!this.worker) return;
     const message: WorkerInboundMessage = {
       type: "STOP",
@@ -136,6 +147,7 @@ export class TerminalOutputIngestService {
     setTimeout(() => {
       this.worker?.terminate();
       this.worker = null;
+      this.initializePromise = null;
     }, 50);
   }
 }

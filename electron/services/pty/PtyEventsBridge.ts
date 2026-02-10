@@ -29,6 +29,32 @@ export interface PtyEventsBridgeConfig {
   }) => void;
 }
 
+const VALID_AGENT_STATE_CHANGE_TRIGGERS: ReadonlySet<AgentStateChangeTrigger> = new Set([
+  "input",
+  "output",
+  "heuristic",
+  "ai-classification",
+  "timeout",
+  "exit",
+  "activity",
+]);
+
+function normalizeAgentTrigger(trigger: string): AgentStateChangeTrigger {
+  if (VALID_AGENT_STATE_CHANGE_TRIGGERS.has(trigger as AgentStateChangeTrigger)) {
+    return trigger as AgentStateChangeTrigger;
+  }
+  return "activity";
+}
+
+function normalizeConfidence(confidence: number): number {
+  if (!Number.isFinite(confidence)) {
+    return 0.5;
+  }
+  if (confidence < 0) return 0;
+  if (confidence > 1) return 1;
+  return confidence;
+}
+
 /**
  * Bridge PTY Host events to the internal event bus.
  * Returns true if the event was handled as a domain event.
@@ -43,8 +69,8 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
         previousState: event.previousState,
         timestamp: event.timestamp,
         traceId: event.traceId,
-        trigger: event.trigger as AgentStateChangeTrigger,
-        confidence: event.confidence,
+        trigger: normalizeAgentTrigger(event.trigger),
+        confidence: normalizeConfidence(event.confidence),
         worktreeId: event.worktreeId,
       });
       return true;

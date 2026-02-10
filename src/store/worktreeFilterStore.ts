@@ -204,8 +204,9 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
 
       getActiveFilterCount: () => {
         const state = get();
+        const hasQuery = state.query.trim().length > 0;
         return (
-          (state.query.length > 0 ? 1 : 0) +
+          (hasQuery ? 1 : 0) +
           state.statusFilters.size +
           state.typeFilters.size +
           state.githubFilters.size +
@@ -216,8 +217,9 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
 
       hasActiveFilters: () => {
         const state = get();
+        const hasQuery = state.query.trim().length > 0;
         return (
-          state.query.length > 0 ||
+          hasQuery ||
           state.statusFilters.size > 0 ||
           state.typeFilters.size > 0 ||
           state.githubFilters.size > 0 ||
