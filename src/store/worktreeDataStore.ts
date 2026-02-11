@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { WorktreeState } from "@shared/types";
+import type { WorktreeState, IssueAssociation } from "@shared/types";
 import { worktreeClient, githubClient } from "@/clients";
 import { useWorktreeSelectionStore } from "./worktreeStore";
 import { useTerminalStore } from "./terminalStore";
@@ -24,6 +24,46 @@ type WorktreeDataStore = WorktreeDataState & WorktreeDataActions;
 
 let cleanupListeners: (() => void) | null = null;
 let initPromise: Promise<void> | null = null;
+
+function mergeFetchedWorktrees(
+  fetchedStates: WorktreeState[],
+  existingWorktrees: Map<string, WorktreeState>,
+  issueAssociations?: Map<string, IssueAssociation>
+): Map<string, WorktreeState> {
+  const map = new Map(fetchedStates.map((state) => [state.id, state]));
+
+  // Preserve event-driven metadata that may still be in-flight while we refresh.
+  for (const [id, existing] of existingWorktrees) {
+    const fetched = map.get(id);
+    if (!fetched) continue;
+
+    map.set(id, {
+      ...fetched,
+      prNumber: fetched.prNumber ?? existing.prNumber,
+      prUrl: fetched.prUrl ?? existing.prUrl,
+      prState: fetched.prState ?? existing.prState,
+      prTitle: fetched.prTitle ?? existing.prTitle,
+      issueNumber: fetched.issueNumber ?? existing.issueNumber,
+      issueTitle: fetched.issueTitle ?? existing.issueTitle,
+    });
+  }
+
+  // Persisted manual issue associations should override discovered metadata.
+  if (issueAssociations) {
+    for (const [id, assoc] of issueAssociations) {
+      const worktree = map.get(id);
+      if (!worktree) continue;
+
+      map.set(id, {
+        ...worktree,
+        issueNumber: assoc.issueNumber,
+        issueTitle: assoc.issueTitle,
+      });
+    }
+  }
+
+  return map;
+}
 
 export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
   worktrees: new Map(),
@@ -193,38 +233,8 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
           issueAssociations.filter((a) => a.assoc !== null).map((a) => [a.id, a.assoc!])
         );
 
-        // Merge getAll results with any events that arrived during the fetch
-        // This preserves PR/issue metadata from events that fired while we were waiting
         set((prev) => {
-          const map = new Map(states.map((s) => [s.id, s]));
-
-          // Merge in any PR/issue metadata from events that arrived during fetch
-          for (const [id, existing] of prev.worktrees) {
-            const fetched = map.get(id);
-            if (fetched && existing) {
-              map.set(id, {
-                ...fetched,
-                // Preserve event-driven metadata if present
-                prNumber: fetched.prNumber ?? existing.prNumber,
-                prUrl: fetched.prUrl ?? existing.prUrl,
-                prState: fetched.prState ?? existing.prState,
-                prTitle: fetched.prTitle ?? existing.prTitle,
-                issueTitle: fetched.issueTitle ?? existing.issueTitle,
-              });
-            }
-          }
-
-          // Merge persisted issue associations (manual associations take precedence)
-          for (const [id, assoc] of issueMap) {
-            const wt = map.get(id);
-            if (wt) {
-              map.set(id, {
-                ...wt,
-                issueNumber: assoc.issueNumber,
-                issueTitle: assoc.issueTitle,
-              });
-            }
-          }
+          const map = mergeFetchedWorktrees(states, prev.worktrees, issueMap);
 
           return { worktrees: map, isLoading: false, isInitialized: true };
         });
@@ -242,6 +252,12 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
     try {
       set({ error: null });
       await worktreeClient.refresh();
+      const states = await worktreeClient.getAll();
+      set((prev) => ({
+        worktrees: mergeFetchedWorktrees(states, prev.worktrees),
+        isLoading: false,
+        isInitialized: true,
+      }));
     } catch (e) {
       set({ error: e instanceof Error ? e.message : "Failed to refresh worktrees" });
     }
