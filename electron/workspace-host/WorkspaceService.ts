@@ -1,6 +1,12 @@
 import PQueue from "p-queue";
 import { mkdir, writeFile, stat } from "fs/promises";
-import { join as pathJoin, dirname, resolve as pathResolve, isAbsolute, normalize as pathNormalize } from "path";
+import {
+  join as pathJoin,
+  dirname,
+  resolve as pathResolve,
+  isAbsolute,
+  normalize as pathNormalize,
+} from "path";
 import { realpathSync } from "fs";
 import { simpleGit, SimpleGit, BranchSummary } from "simple-git";
 import type { Worktree, WorktreeChanges } from "../../shared/types/domain.js";
