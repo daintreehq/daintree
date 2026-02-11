@@ -245,6 +245,56 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     expect(webview.setZoomFactor).toHaveBeenCalledWith(1.4);
   });
 
+  it("binds loading listeners when webview mounts after initial waiting state", async () => {
+    terminalStoreState.getTerminal.mockImplementation(() => ({
+      id: "dev-preview-panel-1",
+      browserHistory: {
+        past: [],
+        present: "",
+        future: [],
+      },
+      browserZoom: 1.4,
+      devPreviewConsoleOpen: false,
+      devCommand: "npm run dev",
+    }));
+    devServerStateRef.current = {
+      status: "starting",
+      url: null,
+      terminalId: "dev-terminal-1",
+      error: null,
+      start: vi.fn(),
+      restart: vi.fn().mockResolvedValue(undefined),
+      isRestarting: false,
+    };
+
+    const { container, rerender } = render(<DevPreviewPane {...baseProps} />);
+    expect(container.querySelector("webview")).toBeNull();
+
+    devServerStateRef.current = {
+      ...devServerStateRef.current,
+      status: "running",
+      url: "http://localhost:5173/",
+    };
+    rerender(<DevPreviewPane {...baseProps} />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const webview = getWebviewElement(container);
+
+    act(() => {
+      webview.setMockLoading(true);
+      emitWebviewEvent(webview, "did-start-loading");
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(30000);
+    });
+
+    expect(webview.reload).toHaveBeenCalledTimes(1);
+  });
+
   it("reloads webview when loading remains stuck for 30s", () => {
     const { container } = render(<DevPreviewPane {...baseProps} />);
     const webview = getWebviewElement(container);

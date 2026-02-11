@@ -607,6 +607,77 @@ describe("useDevServer adversarial races", () => {
     expect(result.current.url).toBe("http://localhost:4173/");
   });
 
+  it("auto-restarts a stuck starting session once when no URL is detected", async () => {
+    vi.useFakeTimers();
+    try {
+      ensureMock.mockImplementation((request: { projectId: string }) =>
+        Promise.resolve(
+          buildState({
+            panelId: "panel-1",
+            projectId: request.projectId,
+            status: "starting",
+            terminalId: `term-${request.projectId}`,
+          })
+        )
+      );
+      getStateMock.mockImplementation((request: { projectId: string }) =>
+        Promise.resolve(
+          buildState({
+            panelId: "panel-1",
+            projectId: request.projectId,
+            status: "starting",
+            terminalId: `term-${request.projectId}`,
+          })
+        )
+      );
+      restartMock.mockImplementation((request: { projectId: string }) =>
+        Promise.resolve(
+          buildState({
+            panelId: "panel-1",
+            projectId: request.projectId,
+            status: "starting",
+            terminalId: `restart-${request.projectId}`,
+          })
+        )
+      );
+
+      const { result } = renderHook(() =>
+        useDevServer({
+          panelId: "panel-1",
+          devCommand: "npm run dev",
+          cwd: "/repo",
+        })
+      );
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(result.current.status).toBe("starting");
+      expect(ensureMock).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        vi.advanceTimersByTime(10000);
+        await Promise.resolve();
+      });
+
+      expect(restartMock).toHaveBeenCalledTimes(1);
+      expect(restartMock).toHaveBeenCalledWith(
+        expect.objectContaining({ panelId: "panel-1", projectId: "project-1" })
+      );
+
+      await act(async () => {
+        vi.advanceTimersByTime(20000);
+        await Promise.resolve();
+      });
+
+      expect(restartMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("ignores stale stop responses when command is re-enabled quickly", async () => {
     const stopDeferred = createDeferred<DevPreviewSessionState>();
 

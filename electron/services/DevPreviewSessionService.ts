@@ -26,6 +26,8 @@ const RUNNING_STATES: ReadonlySet<DevPreviewSessionStatus> = new Set([
 ]);
 
 const DEFAULT_TIMEOUT_MS = 8000;
+const STALE_START_RECOVERY_MS = 10000;
+const REPLAY_HISTORY_MAX_LINES = 300;
 
 function createSessionKey(projectId: string, panelId: string): string {
   return `${projectId}\u0000${panelId}`;
@@ -422,9 +424,23 @@ export class DevPreviewSessionService {
     if (session.terminalId) {
       const alive = await this.isTerminalAlive(session.terminalId, session.projectId);
       if (alive) {
-        this.attachTerminal(session, session.terminalId);
+        const terminalId = session.terminalId;
+        this.attachTerminal(session, terminalId);
         if (!RUNNING_STATES.has(session.status)) {
           this.updateSession(session, { status: "starting", error: null, url: null });
+        }
+
+        if ((session.status === "starting" || session.status === "installing") && !session.url) {
+          await this.replayRecentOutput(terminalId);
+        }
+
+        if (
+          session.status === "starting" &&
+          !session.url &&
+          Date.now() - session.updatedAt >= STALE_START_RECOVERY_MS
+        ) {
+          await this.stopSessionTerminal(session, "stale-start-recovery");
+          await this.spawnSessionTerminal(session);
         }
         return;
       }
@@ -433,6 +449,14 @@ export class DevPreviewSessionService {
     }
 
     await this.spawnSessionTerminal(session);
+  }
+
+  private async replayRecentOutput(terminalId: string): Promise<void> {
+    try {
+      await this.ptyClient.replayHistoryAsync(terminalId, REPLAY_HISTORY_MAX_LINES);
+    } catch {
+      // Best-effort only - missing replay support should not block ensure.
+    }
   }
 
   private async spawnSessionTerminal(session: DevPreviewSession): Promise<void> {

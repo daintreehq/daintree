@@ -48,6 +48,7 @@ export function DevPreviewPane({
   gridPanelCount,
 }: DevPreviewPaneProps) {
   const webviewRef = useRef<Electron.WebviewTag>(null);
+  const [webviewElement, setWebviewElement] = useState<Electron.WebviewTag | null>(null);
   const setBrowserUrl = useTerminalStore((state) => state.setBrowserUrl);
   const setBrowserHistory = useTerminalStore((state) => state.setBrowserHistory);
   const setBrowserZoom = useTerminalStore((state) => state.setBrowserZoom);
@@ -96,6 +97,11 @@ export function DevPreviewPane({
   const currentUrl = history.present;
   const canGoBack = history.past.length > 0;
   const canGoForward = history.future.length > 0;
+
+  const setWebviewNode = useCallback((node: Electron.WebviewTag | null) => {
+    webviewRef.current = node;
+    setWebviewElement(node);
+  }, []);
 
   useEffect(() => {
     setConsoleTerminalId(terminalId);
@@ -177,8 +183,11 @@ export function DevPreviewPane({
   }, [id, restart, setBrowserUrl]);
 
   useEffect(() => {
-    const webview = webviewRef.current;
-    if (!webview) return undefined;
+    const webview = webviewElement;
+    if (!webview) {
+      setIsWebviewReady(false);
+      return undefined;
+    }
 
     const handleDidStartLoading = () => {
       setIsLoading(true);
@@ -249,11 +258,14 @@ export function DevPreviewPane({
       webview.removeEventListener("did-navigate", handleDidNavigate as any);
       webview.removeEventListener("did-navigate-in-page", handleDidNavigateInPage as any);
     };
-  }, []);
+  }, [webviewElement]);
 
   useEffect(() => {
-    const webview = webviewRef.current;
-    if (!webview) return undefined;
+    const webview = webviewElement;
+    if (!webview) {
+      setIsWebviewReady(false);
+      return undefined;
+    }
 
     const handleDomReady = () => {
       setIsWebviewReady(true);
@@ -278,16 +290,16 @@ export function DevPreviewPane({
     return () => {
       webview.removeEventListener("dom-ready", handleDomReady);
     };
-  }, [zoomFactor]);
+  }, [zoomFactor, webviewElement]);
 
   useEffect(() => {
     if (isWebviewReady && currentUrl && currentUrl !== lastSetUrlRef.current) {
       lastSetUrlRef.current = currentUrl;
-      if (webviewRef.current && webviewRef.current.src !== currentUrl) {
-        webviewRef.current.src = currentUrl;
+      if (webviewElement && webviewElement.src !== currentUrl) {
+        webviewElement.src = currentUrl;
       }
     }
-  }, [currentUrl, isWebviewReady]);
+  }, [currentUrl, isWebviewReady, webviewElement]);
 
   useEffect(() => {
     return () => {
@@ -385,7 +397,7 @@ export function DevPreviewPane({
             <>
               {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
               <webview
-                ref={webviewRef}
+                ref={setWebviewNode}
                 src={currentUrl}
                 partition={webviewPartition}
                 className={cn(

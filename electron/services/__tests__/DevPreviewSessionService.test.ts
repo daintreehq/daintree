@@ -43,6 +43,7 @@ function createPtyClientMock(options?: { spawnError?: Error }) {
     submit: vi.fn(),
     hasTerminal: vi.fn((id: string) => terminals.get(id)?.hasPty ?? false),
     setIpcDataMirror: vi.fn(),
+    replayHistoryAsync: vi.fn(async (_id: string, _maxLines?: number) => 0),
     getTerminalAsync: vi.fn(async (id: string) => {
       const terminal = terminals.get(id);
       if (!terminal) return null;
@@ -113,6 +114,45 @@ describe("DevPreviewSessionService", () => {
     expect(first.terminalId).toBeTruthy();
     expect(second.terminalId).toBe(first.terminalId);
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    expect(ptyClient.replayHistoryAsync).toHaveBeenCalledWith(first.terminalId, 300);
+  });
+
+  it("recovers running URL from replayed history when re-attaching a starting session", async () => {
+    const first = await service.ensure(baseRequest);
+    expect(first.status).toBe("starting");
+    expect(first.url).toBeNull();
+    expect(first.terminalId).toBeTruthy();
+
+    ptyClient.replayHistoryAsync.mockImplementation(async (id: string) => {
+      ptyClient.emitData(id, "ready at http://localhost:4173\n");
+      return 1;
+    });
+
+    const second = await service.ensure(baseRequest);
+    expect(second.status).toBe("running");
+    expect(second.url).toMatch(/^http:\/\/localhost:4173\/?$/);
+    expect(second.terminalId).toBe(first.terminalId);
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("respawns stale starting sessions when URL was never detected", async () => {
+    const nowSpy = vi.spyOn(Date, "now");
+    nowSpy.mockReturnValue(1_000);
+    const first = await service.ensure(baseRequest);
+    expect(first.status).toBe("starting");
+    expect(first.terminalId).toBeTruthy();
+
+    nowSpy.mockReturnValue(12_500);
+    const second = await service.ensure(baseRequest);
+
+    expect(second.status).toBe("starting");
+    expect(second.terminalId).toBeTruthy();
+    expect(second.terminalId).not.toBe(first.terminalId);
+    expect(ptyClient.kill).toHaveBeenCalledWith(
+      first.terminalId,
+      "dev-preview:stale-start-recovery"
+    );
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
   });
 
   it("restarts terminal when env changes", async () => {

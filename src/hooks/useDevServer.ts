@@ -27,6 +27,9 @@ export interface UseDevServerReturn extends UseDevServerState {
   isRestarting: boolean;
 }
 
+const STUCK_START_RECOVERY_MS = 10000;
+const MAX_AUTO_RECOVERY_ATTEMPTS = 1;
+
 function serializeEnv(env?: Record<string, string>): string {
   if (!env) return "";
   return Object.keys(env)
@@ -66,11 +69,21 @@ export function useDevServer({
   const [terminalId, setTerminalId] = useState<string | null>(null);
   const [error, setError] = useState<{ type: DevServerErrorType; message: string } | null>(null);
   const [isRestarting, setIsRestarting] = useState(false);
+  const latestSessionRef = useRef<{
+    status: DevPreviewStatus;
+    url: string | null;
+    terminalId: string | null;
+  }>({
+    status: "stopped",
+    url: null,
+    terminalId: null,
+  });
   const isMountedRef = useRef(true);
   const isEnsuringRef = useRef(false);
   const lastEnsureConfigRef = useRef<string>("");
   const pendingEnsureConfigRef = useRef<string | null>(null);
   const requestVersionRef = useRef(0);
+  const autoRecoveryAttemptsRef = useRef(0);
 
   const latestContextRef = useRef<{
     panelId: string;
@@ -114,6 +127,11 @@ export function useDevServer({
 
   const applyState = useCallback((state: DevPreviewSessionState) => {
     if (!isMountedRef.current) return;
+    latestSessionRef.current = {
+      status: state.status,
+      url: state.url,
+      terminalId: state.terminalId,
+    };
     setStatus(state.status);
     setUrl(state.url);
     setTerminalId(state.terminalId);
@@ -131,6 +149,11 @@ export function useDevServer({
   const applyInvokeError = useCallback((err: unknown) => {
     if (!isMountedRef.current) return;
     const message = err instanceof Error ? err.message : String(err);
+    latestSessionRef.current = {
+      status: "error",
+      url: null,
+      terminalId: null,
+    };
     setStatus("error");
     setError({ type: "unknown", message });
     setTerminalId(null);
@@ -265,10 +288,16 @@ export function useDevServer({
 
   useEffect(() => {
     requestVersionRef.current += 1;
+    autoRecoveryAttemptsRef.current = 0;
   }, [panelId, currentProjectId, cwd, worktreeId, devCommand, envSignature]);
 
   useEffect(() => {
     if (!currentProjectId) {
+      latestSessionRef.current = {
+        status: "stopped",
+        url: null,
+        terminalId: null,
+      };
       setStatus("stopped");
       setUrl(null);
       setTerminalId(null);
@@ -344,6 +373,59 @@ export function useDevServer({
     if (lastEnsureConfigRef.current === configKey) return;
     void ensureLatestConfig(configKey);
   }, [panelId, currentProjectId, cwd, worktreeId, devCommand, envSignature, ensureLatestConfig]);
+
+  useEffect(() => {
+    if (status !== "starting") {
+      autoRecoveryAttemptsRef.current = 0;
+      return;
+    }
+    if (!currentProjectId || !terminalId || url || isRestarting) return;
+    if (autoRecoveryAttemptsRef.current >= MAX_AUTO_RECOVERY_ATTEMPTS) return;
+
+    const requestVersion = requestVersionRef.current;
+    const requestProjectId = currentProjectId;
+    const requestPanelId = panelId;
+
+    const timeout = window.setTimeout(() => {
+      const latestContext = latestContextRef.current;
+      const latestSession = latestSessionRef.current;
+
+      if (!isMountedRef.current) return;
+      if (autoRecoveryAttemptsRef.current >= MAX_AUTO_RECOVERY_ATTEMPTS) return;
+      if (latestContext.projectId !== requestProjectId) return;
+      if (latestContext.panelId !== requestPanelId) return;
+      if (latestSession.status !== "starting" || latestSession.url || !latestSession.terminalId)
+        return;
+
+      autoRecoveryAttemptsRef.current += 1;
+      void window.electron.devPreview
+        .restart({ panelId: requestPanelId, projectId: requestProjectId })
+        .then((nextState) => {
+          if (isRequestCurrent(requestVersion, requestProjectId, requestPanelId)) {
+            applyState(nextState);
+          }
+        })
+        .catch((err) => {
+          if (isRequestCurrent(requestVersion, requestProjectId, requestPanelId)) {
+            applyInvokeError(err);
+          }
+        });
+    }, STUCK_START_RECOVERY_MS);
+
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [
+    panelId,
+    currentProjectId,
+    status,
+    terminalId,
+    url,
+    isRestarting,
+    applyState,
+    applyInvokeError,
+    isRequestCurrent,
+  ]);
 
   return {
     status,
