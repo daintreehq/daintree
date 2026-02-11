@@ -253,10 +253,6 @@ export class WorkspaceService {
 
       pushWorktree();
 
-      if (cacheKey && this.inFlightWorktreeList.get(cacheKey) === fetchPromise) {
-        this.setCachedWorktrees(cacheKey, worktrees);
-      }
-
       return worktrees;
     })();
 
@@ -265,7 +261,13 @@ export class WorkspaceService {
     }
 
     try {
-      return this.cloneRawWorktrees(await fetchPromise);
+      const worktrees = await fetchPromise;
+
+      if (cacheKey && this.inFlightWorktreeList.get(cacheKey) === fetchPromise) {
+        this.setCachedWorktrees(cacheKey, worktrees);
+      }
+
+      return this.cloneRawWorktrees(worktrees);
     } finally {
       if (cacheKey && this.inFlightWorktreeList.get(cacheKey) === fetchPromise) {
         this.inFlightWorktreeList.delete(cacheKey);
