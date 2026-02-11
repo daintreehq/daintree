@@ -90,6 +90,8 @@ export interface MonitorConfig {
   adaptiveBackoff?: boolean;
   pollIntervalMax?: number;
   circuitBreakerThreshold?: number;
+  gitWatchEnabled?: boolean;
+  gitWatchDebounceMs?: number;
 }
 
 /**

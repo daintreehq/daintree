@@ -69,6 +69,10 @@ export interface MonitorConfig {
   adaptiveBackoff?: boolean;
   /** Number of consecutive failures before circuit breaker triggers (default: 3) */
   circuitBreakerThreshold?: number;
+  /** Enable git file watching for instant updates (default: true) */
+  gitWatchEnabled?: boolean;
+  /** Debounce time for file watch events in ms (default: 300) */
+  gitWatchDebounceMs?: number;
 }
 
 /** Agent note feature config (agents write status to .git/canopy/note) */

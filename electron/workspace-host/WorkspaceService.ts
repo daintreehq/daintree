@@ -23,6 +23,7 @@ import { events } from "../services/events.js";
 import { MonitorState, NOTE_PATH } from "./types.js";
 import { ensureSerializable } from "../../shared/utils/serialization.js";
 import { waitForPathExists } from "../utils/fs.js";
+import { GitFileWatcher } from "../utils/gitFileWatcher.js";
 
 // Configuration
 const DEFAULT_ACTIVE_WORKTREE_INTERVAL_MS = 2000;
@@ -77,6 +78,8 @@ export class WorkspaceService {
   private adaptiveBackoff: boolean = true;
   private pollIntervalMax: number = 30000;
   private circuitBreakerThreshold: number = 3;
+  private gitWatchEnabled: boolean = true;
+  private gitWatchDebounceMs: number = 300;
   private git: SimpleGit | null = null;
   private pollingEnabled: boolean = true;
   private projectRootPath: string | null = null;
@@ -298,6 +301,12 @@ export class WorkspaceService {
     if (monitorConfig?.circuitBreakerThreshold !== undefined) {
       this.circuitBreakerThreshold = monitorConfig.circuitBreakerThreshold;
     }
+    if (monitorConfig?.gitWatchEnabled !== undefined) {
+      this.gitWatchEnabled = monitorConfig.gitWatchEnabled;
+    }
+    if (monitorConfig?.gitWatchDebounceMs !== undefined) {
+      this.gitWatchDebounceMs = monitorConfig.gitWatchDebounceMs;
+    }
 
     const currentIds = new Set(worktrees.map((wt) => wt.id));
 
@@ -343,6 +352,11 @@ export class WorkspaceService {
           this.pollIntervalMax,
           this.circuitBreakerThreshold
         );
+
+        // Update watcher if branch changed
+        if (branchChanged && wt.branch && existingMonitor.gitWatcher) {
+          this.updateMonitorWatcher(existingMonitor);
+        }
 
         // Emit update if isCurrent changed
         if (isCurrentChanged && existingMonitor.hasInitialStatus) {
@@ -412,6 +426,9 @@ export class WorkspaceService {
           previousStateHash: "",
           pollingStrategy: new AdaptivePollingStrategy({ baseInterval: interval }),
           noteReader: new NoteFileReader(wt.path),
+          gitWatcher: null,
+          gitWatchDebounceTimer: null,
+          gitWatchEnabled: this.gitWatchEnabled,
         };
 
         monitor.pollingStrategy.updateConfig(
@@ -426,6 +443,10 @@ export class WorkspaceService {
           // Just mark as running - refreshAll() will do git status later
           monitor.isRunning = true;
           monitor.pollingEnabled = true;
+          // Start watcher even when skipping initial git status
+          if (monitor.gitWatchEnabled) {
+            this.startMonitorWatcher(monitor);
+          }
         } else {
           await this.startMonitor(monitor);
         }
@@ -466,6 +487,10 @@ export class WorkspaceService {
     monitor.isRunning = true;
     monitor.pollingEnabled = true;
 
+    if (monitor.gitWatchEnabled && !monitor.gitWatcher) {
+      this.startMonitorWatcher(monitor);
+    }
+
     await this.updateGitStatus(monitor, true);
 
     if (monitor.isRunning && this.pollingEnabled) {
@@ -483,6 +508,69 @@ export class WorkspaceService {
       clearTimeout(monitor.resumeTimer);
       monitor.resumeTimer = null;
     }
+    this.stopMonitorWatcher(monitor);
+  }
+
+  private startMonitorWatcher(monitor: MonitorState): void {
+    if (!this.gitWatchEnabled || monitor.gitWatcher) {
+      return;
+    }
+
+    const watcher = new GitFileWatcher({
+      worktreePath: monitor.path,
+      branch: monitor.branch,
+      debounceMs: this.gitWatchDebounceMs,
+      onChange: () => this.handleGitFileChange(monitor),
+    });
+
+    const started = watcher.start();
+    if (started) {
+      monitor.gitWatcher = () => watcher.dispose();
+    } else {
+      watcher.dispose();
+    }
+  }
+
+  private stopMonitorWatcher(monitor: MonitorState): void {
+    if (monitor.gitWatcher) {
+      monitor.gitWatcher();
+      monitor.gitWatcher = null;
+    }
+    if (monitor.gitWatchDebounceTimer) {
+      clearTimeout(monitor.gitWatchDebounceTimer);
+      monitor.gitWatchDebounceTimer = null;
+    }
+  }
+
+  private updateMonitorWatcher(monitor: MonitorState): void {
+    this.stopMonitorWatcher(monitor);
+    if (monitor.isRunning && monitor.gitWatchEnabled) {
+      this.startMonitorWatcher(monitor);
+    }
+  }
+
+  private handleGitFileChange(monitor: MonitorState): void {
+    if (!monitor.isRunning) {
+      return;
+    }
+
+    invalidateGitStatusCache(monitor.path);
+
+    if (monitor.isUpdating) {
+      // Schedule a trailing refresh after the current update finishes
+      if (!monitor.gitWatchDebounceTimer) {
+        monitor.gitWatchDebounceTimer = setTimeout(() => {
+          monitor.gitWatchDebounceTimer = null;
+          if (monitor.isRunning && !monitor.isUpdating) {
+            invalidateGitStatusCache(monitor.path);
+            void this.updateGitStatus(monitor, true);
+          }
+        }, this.gitWatchDebounceMs);
+      }
+      return;
+    }
+
+    void this.updateGitStatus(monitor, true);
   }
 
   private scheduleCircuitBreakerRetry(monitor: MonitorState): void {

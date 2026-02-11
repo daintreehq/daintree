@@ -84,6 +84,8 @@ export const DEFAULT_CONFIG: CanopyConfig = {
     pollIntervalMax: 30000,
     adaptiveBackoff: true,
     circuitBreakerThreshold: 3,
+    gitWatchEnabled: true,
+    gitWatchDebounceMs: 300,
   },
   note: {
     enabled: true,

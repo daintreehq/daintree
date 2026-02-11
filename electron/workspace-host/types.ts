@@ -14,4 +14,7 @@ export interface MonitorState extends WorktreeSnapshot {
   previousStateHash: string;
   pollingStrategy: AdaptivePollingStrategy;
   noteReader: NoteFileReader;
+  gitWatcher: (() => void) | null;
+  gitWatchDebounceTimer: NodeJS.Timeout | null;
+  gitWatchEnabled: boolean;
 }
