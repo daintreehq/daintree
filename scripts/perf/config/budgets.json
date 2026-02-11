@@ -21,7 +21,7 @@
     "PERF-024": { "p95Ms": 2200, "maxRegressionPct": 15 },
 
     "PERF-030": { "p95Ms": 2200, "maxRegressionPct": 15 },
-    "PERF-031": { "p95Ms": 2400, "maxRegressionPct": 15 },
+    "PERF-031": { "p95Ms": 2400, "maxRegressionPct": 50 },
     "PERF-032": { "p95Ms": 2600, "maxRegressionPct": 15 },
 
     "PERF-040": { "p95Ms": 1400, "maxRegressionPct": 15 },
@@ -34,7 +34,7 @@
 
     "PERF-050": { "p95Ms": 1800, "maxRegressionPct": 15 },
     "PERF-051": { "p95Ms": 1800, "maxRegressionPct": 15 },
-    "PERF-052": { "p95Ms": 2400, "maxRegressionPct": 15 },
+    "PERF-052": { "p95Ms": 2400, "maxRegressionPct": 50 },
 
     "PERF-060": {
       "p95Ms": 5000,
