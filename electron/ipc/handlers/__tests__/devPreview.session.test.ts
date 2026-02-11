@@ -170,6 +170,65 @@ describe("dev preview session handlers", () => {
     });
   });
 
+  it("keeps concurrent panel ensures isolated in the same project and worktree", async () => {
+    const ensureHandler = getRegisteredHandle<
+      [Electron.IpcMainInvokeEvent, Record<string, unknown>],
+      { terminalId: string | null; panelId: string; projectId: string }
+    >(CHANNELS.DEV_PREVIEW_ENSURE);
+    expect(ensureHandler).toBeDefined();
+
+    const [first, second] = await Promise.all([
+      ensureHandler!({} as Electron.IpcMainInvokeEvent, {
+        panelId: "panel-a",
+        projectId: "project-1",
+        cwd: "/repo",
+        devCommand: "npm run dev",
+        worktreeId: "wt-shared",
+      }),
+      ensureHandler!({} as Electron.IpcMainInvokeEvent, {
+        panelId: "panel-b",
+        projectId: "project-1",
+        cwd: "/repo",
+        devCommand: "npm run dev",
+        worktreeId: "wt-shared",
+      }),
+    ]);
+
+    expect(first.terminalId).toBeTruthy();
+    expect(second.terminalId).toBeTruthy();
+    expect(second.terminalId).not.toBe(first.terminalId);
+    expect(first.panelId).toBe("panel-a");
+    expect(second.panelId).toBe("panel-b");
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
+
+    scanOutputMock.mockReturnValue({ buffer: "", url: "http://localhost:4101/", error: null });
+    ptyClient.emitData(first.terminalId!, "ready");
+
+    scanOutputMock.mockReturnValue({ buffer: "", url: "http://localhost:4102/", error: null });
+    ptyClient.emitData(second.terminalId!, "ready");
+
+    const stateEvents = send.mock.calls
+      .filter(([channel]) => channel === CHANNELS.DEV_PREVIEW_STATE_CHANGED)
+      .map(([, payload]) => (payload as { state: Record<string, unknown> }).state);
+
+    expect(stateEvents).toContainEqual(
+      expect.objectContaining({
+        panelId: "panel-a",
+        projectId: "project-1",
+        status: "running",
+        url: "http://localhost:4101/",
+      })
+    );
+    expect(stateEvents).toContainEqual(
+      expect.objectContaining({
+        panelId: "panel-b",
+        projectId: "project-1",
+        status: "running",
+        url: "http://localhost:4102/",
+      })
+    );
+  });
+
   it("restart kills previous terminal and spawns a fresh generation", async () => {
     const ensureHandler = getRegisteredHandle<
       [Electron.IpcMainInvokeEvent, Record<string, unknown>],
@@ -349,6 +408,77 @@ describe("dev preview session handlers", () => {
 
     expect(afterStop.status).toBe("stopped");
     expect(afterStop.terminalId).toBeNull();
+  });
+
+  it("keeps stop-by-panel best-effort when one session stop fails", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const ensureHandler = getRegisteredHandle<
+      [Electron.IpcMainInvokeEvent, Record<string, unknown>],
+      { terminalId: string | null }
+    >(CHANNELS.DEV_PREVIEW_ENSURE);
+    const stopByPanelHandler = getRegisteredHandle<
+      [Electron.IpcMainInvokeEvent, Record<string, unknown>],
+      void
+    >(CHANNELS.DEV_PREVIEW_STOP_BY_PANEL);
+    const getStateHandler = getRegisteredHandle<
+      [Electron.IpcMainInvokeEvent, Record<string, unknown>],
+      { status: string; terminalId: string | null; error: { message: string } | null }
+    >(CHANNELS.DEV_PREVIEW_GET_STATE);
+
+    expect(ensureHandler).toBeDefined();
+    expect(stopByPanelHandler).toBeDefined();
+    expect(getStateHandler).toBeDefined();
+
+    const first = await ensureHandler!({} as Electron.IpcMainInvokeEvent, {
+      panelId: "panel-best-effort",
+      projectId: "project-a",
+      cwd: "/repo/a",
+      devCommand: "npm run dev",
+    });
+    const second = await ensureHandler!({} as Electron.IpcMainInvokeEvent, {
+      panelId: "panel-best-effort",
+      projectId: "project-b",
+      cwd: "/repo/b",
+      devCommand: "npm run dev",
+    });
+
+    const originalKill = ptyClient.kill.getMockImplementation();
+    ptyClient.kill.mockImplementation((id: string) => {
+      if (id === first.terminalId) {
+        throw new Error("kill failed");
+      }
+      originalKill?.(id);
+    });
+
+    await expect(
+      stopByPanelHandler!({} as Electron.IpcMainInvokeEvent, {
+        panelId: "panel-best-effort",
+      })
+    ).resolves.toBeUndefined();
+
+    const firstAfter = await getStateHandler!({} as Electron.IpcMainInvokeEvent, {
+      panelId: "panel-best-effort",
+      projectId: "project-a",
+    });
+    const secondAfter = await getStateHandler!({} as Electron.IpcMainInvokeEvent, {
+      panelId: "panel-best-effort",
+      projectId: "project-b",
+    });
+
+    expect(firstAfter.status).toBe("error");
+    expect(firstAfter.terminalId).toBeNull();
+    expect(firstAfter.error?.message).toContain("Failed to stop dev preview:");
+    expect(secondAfter.status).toBe("stopped");
+    expect(secondAfter.terminalId).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[DevPreviewSessionService] stopByPanel failed for session",
+      expect.objectContaining({
+        panelId: "panel-best-effort",
+        projectId: "project-a",
+      })
+    );
+    expect(ptyClient.kill).toHaveBeenCalledWith(second.terminalId, "dev-preview:panel-closed");
   });
 
   it("keeps sessions isolated when project and panel IDs contain delimiter tokens", async () => {

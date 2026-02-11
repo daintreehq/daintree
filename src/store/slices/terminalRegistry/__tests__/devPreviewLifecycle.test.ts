@@ -163,4 +163,57 @@ describe("dev-preview lifecycle integration", () => {
     expect(mockStopByPanel).toHaveBeenCalledWith({ panelId: "dev-panel-3" });
     expect(mockStopByPanel).toHaveBeenCalledTimes(1);
   });
+
+  it("stops all dev-preview runtimes when trashing a mixed multi-dev group", () => {
+    const group: TabGroup = {
+      id: "group-multi-dev-preview",
+      panelIds: ["dev-panel-a", "dev-panel-b", "term-2"],
+      activeTabId: "dev-panel-a",
+      location: "grid",
+    };
+
+    useTerminalStore.setState({
+      terminals: [
+        {
+          id: "dev-panel-a",
+          kind: "dev-preview",
+          type: "terminal",
+          title: "Dev Preview A",
+          cwd: "/repo",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+          devCommand: "npm run dev",
+        },
+        {
+          id: "dev-panel-b",
+          kind: "dev-preview",
+          type: "terminal",
+          title: "Dev Preview B",
+          cwd: "/repo",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+          devCommand: "pnpm dev",
+        },
+        {
+          id: "term-2",
+          kind: "terminal",
+          type: "terminal",
+          title: "Terminal",
+          cwd: "/repo",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      ],
+      tabGroups: new Map([["group-multi-dev-preview", group]]),
+    });
+
+    useTerminalStore.getState().trashPanelGroup("dev-panel-a");
+
+    expect(mockStopByPanel).toHaveBeenCalledWith({ panelId: "dev-panel-a" });
+    expect(mockStopByPanel).toHaveBeenCalledWith({ panelId: "dev-panel-b" });
+    expect(mockStopByPanel).toHaveBeenCalledTimes(2);
+  });
 });

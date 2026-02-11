@@ -132,6 +132,60 @@ describe("DevPreviewSessionService", () => {
     expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
   });
 
+  it("restarts terminal when worktree changes", async () => {
+    const first = await service.ensure({
+      ...baseRequest,
+      worktreeId: "wt-a",
+    });
+    const second = await service.ensure({
+      ...baseRequest,
+      worktreeId: "wt-b",
+    });
+
+    expect(first.terminalId).toBeTruthy();
+    expect(second.terminalId).toBeTruthy();
+    expect(second.terminalId).not.toBe(first.terminalId);
+    expect(second.worktreeId).toBe("wt-b");
+    expect(ptyClient.kill).toHaveBeenCalledWith(first.terminalId, "dev-preview:config-change");
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps simultaneous panels isolated within the same project and worktree", async () => {
+    const [first, second] = await Promise.all([
+      service.ensure({
+        panelId: "panel-a",
+        projectId: "project-1",
+        cwd: "/repo",
+        devCommand: "npm run dev",
+        worktreeId: "wt-shared",
+      }),
+      service.ensure({
+        panelId: "panel-b",
+        projectId: "project-1",
+        cwd: "/repo",
+        devCommand: "npm run dev",
+        worktreeId: "wt-shared",
+      }),
+    ]);
+
+    expect(first.terminalId).toBeTruthy();
+    expect(second.terminalId).toBeTruthy();
+    expect(second.terminalId).not.toBe(first.terminalId);
+    expect(first.worktreeId).toBe("wt-shared");
+    expect(second.worktreeId).toBe("wt-shared");
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
+
+    const firstState = service.getState({ panelId: "panel-a", projectId: "project-1" });
+    const secondState = service.getState({ panelId: "panel-b", projectId: "project-1" });
+
+    expect(firstState.panelId).toBe("panel-a");
+    expect(firstState.projectId).toBe("project-1");
+    expect(secondState.panelId).toBe("panel-b");
+    expect(secondState.projectId).toBe("project-1");
+    expect(firstState.terminalId).toBe(first.terminalId);
+    expect(secondState.terminalId).toBe(second.terminalId);
+  });
+
   it("sets error state when a starting terminal exits", async () => {
     const started = await service.ensure(baseRequest);
     expect(started.status).toBe("starting");
@@ -174,5 +228,47 @@ describe("DevPreviewSessionService", () => {
     expect(secondState.status).toBe("stopped");
     expect(firstState.terminalId).toBeNull();
     expect(secondState.terminalId).toBeNull();
+  });
+
+  it("continues stop-by-panel cleanup when one session stop fails", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const sessionOne = await service.ensure({
+      panelId: "shared-panel",
+      projectId: "project-a",
+      cwd: "/repo/a",
+      devCommand: "npm run dev",
+    });
+    await service.ensure({
+      panelId: "shared-panel",
+      projectId: "project-b",
+      cwd: "/repo/b",
+      devCommand: "npm run dev",
+    });
+
+    const originalKill = ptyClient.kill.getMockImplementation();
+    ptyClient.kill.mockImplementation((id: string) => {
+      if (id === sessionOne.terminalId) {
+        throw new Error("kill failed");
+      }
+      originalKill?.(id);
+    });
+
+    await expect(service.stopByPanel({ panelId: "shared-panel" })).resolves.toBeUndefined();
+
+    const failedState = service.getState({ panelId: "shared-panel", projectId: "project-a" });
+    const stoppedState = service.getState({ panelId: "shared-panel", projectId: "project-b" });
+
+    expect(failedState.status).not.toBe("stopped");
+    expect(failedState.error?.message).toContain("Failed to stop dev preview:");
+    expect(stoppedState.status).toBe("stopped");
+    expect(stoppedState.terminalId).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[DevPreviewSessionService] stopByPanel failed for session",
+      expect.objectContaining({
+        panelId: "shared-panel",
+        projectId: "project-a",
+      })
+    );
   });
 });

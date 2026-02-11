@@ -172,6 +172,98 @@ describe("hydrateAppState", () => {
     expect(addTerminalArg.devServerTerminalId).toBeUndefined();
   });
 
+  it("rehydrates multiple dev-preview panels in one worktree without leaking runtime state", async () => {
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "dev-preview-a",
+            kind: "dev-preview",
+            title: "Dev Preview A",
+            cwd: "/project/worktrees/feature",
+            worktreeId: "wt-feature",
+            location: "grid",
+            command: "npm run dev",
+            browserUrl: "http://localhost:5173",
+            devServerStatus: "running",
+            devServerUrl: "http://localhost:5173",
+            devServerError: null,
+            devServerTerminalId: "dev-preview-pty-a",
+            devPreviewConsoleOpen: true,
+          },
+          {
+            id: "dev-preview-b",
+            kind: "dev-preview",
+            title: "Dev Preview B",
+            cwd: "/project/worktrees/feature",
+            worktreeId: "wt-feature",
+            location: "grid",
+            command: "pnpm dev",
+            browserUrl: "http://localhost:5174",
+            devServerStatus: "error",
+            devServerUrl: null,
+            devServerError: { type: "unknown", message: "Previous crash" },
+            devServerTerminalId: "dev-preview-pty-b",
+            devPreviewConsoleOpen: false,
+          },
+        ],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+
+    const addTerminal = vi.fn().mockResolvedValue("panel-id");
+    const setActiveWorktree = vi.fn();
+    const loadRecipes = vi.fn().mockResolvedValue(undefined);
+    const openDiagnosticsDock = vi.fn();
+
+    await hydrateAppState({
+      addTerminal,
+      setActiveWorktree,
+      loadRecipes,
+      openDiagnosticsDock,
+    });
+
+    expect(addTerminal).toHaveBeenCalledTimes(2);
+    expect(addTerminal).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        kind: "dev-preview",
+        requestedId: "dev-preview-a",
+        worktreeId: "wt-feature",
+        devCommand: "npm run dev",
+        browserUrl: "http://localhost:5173",
+        devPreviewConsoleOpen: true,
+      })
+    );
+    expect(addTerminal).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        kind: "dev-preview",
+        requestedId: "dev-preview-b",
+        worktreeId: "wt-feature",
+        devCommand: "pnpm dev",
+        browserUrl: "http://localhost:5174",
+        devPreviewConsoleOpen: false,
+      })
+    );
+
+    const firstAddArg = addTerminal.mock.calls[0][0] as Record<string, unknown>;
+    const secondAddArg = addTerminal.mock.calls[1][0] as Record<string, unknown>;
+
+    expect(firstAddArg.devServerStatus).toBeUndefined();
+    expect(firstAddArg.devServerUrl).toBeUndefined();
+    expect(firstAddArg.devServerError).toBeUndefined();
+    expect(firstAddArg.devServerTerminalId).toBeUndefined();
+
+    expect(secondAddArg.devServerStatus).toBeUndefined();
+    expect(secondAddArg.devServerUrl).toBeUndefined();
+    expect(secondAddArg.devServerError).toBeUndefined();
+    expect(secondAddArg.devServerTerminalId).toBeUndefined();
+  });
+
   it("rehydrates non-terminal panels like browser and notes", async () => {
     appClientMock.hydrate.mockResolvedValue({
       appState: {

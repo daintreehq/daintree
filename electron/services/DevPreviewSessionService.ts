@@ -206,15 +206,31 @@ export class DevPreviewSessionService {
       targets.map(async (session) => {
         const key = createSessionKey(session.projectId, session.panelId);
         await this.runLocked(key, async () => {
-          await this.stopSessionTerminal(session, "panel-closed");
-          this.updateSession(session, {
-            status: "stopped",
-            url: null,
-            error: null,
-            terminalId: null,
-            isRestarting: false,
-          });
-          this.sessions.delete(key);
+          try {
+            await this.stopSessionTerminal(session, "panel-closed");
+            this.updateSession(session, {
+              status: "stopped",
+              url: null,
+              error: null,
+              terminalId: null,
+              isRestarting: false,
+            });
+            this.sessions.delete(key);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            this.updateSession(session, {
+              status: "error",
+              url: null,
+              error: { type: "unknown", message: `Failed to stop dev preview: ${message}` },
+              terminalId: null,
+              isRestarting: false,
+            });
+            console.warn("[DevPreviewSessionService] stopByPanel failed for session", {
+              panelId: session.panelId,
+              projectId: session.projectId,
+              error: message,
+            });
+          }
         });
       })
     );

@@ -35,6 +35,24 @@ function serializeEnv(env?: Record<string, string>): string {
     .join("\u0001");
 }
 
+function buildEnsureConfigKey(params: {
+  projectId: string;
+  panelId: string;
+  cwd: string;
+  worktreeId?: string;
+  devCommand: string;
+  envSignature: string;
+}): string {
+  return [
+    params.projectId,
+    params.panelId,
+    params.cwd,
+    params.worktreeId ?? "",
+    params.devCommand.trim(),
+    params.envSignature,
+  ].join("|");
+}
+
 export function useDevServer({
   panelId,
   devCommand,
@@ -51,8 +69,48 @@ export function useDevServer({
   const isMountedRef = useRef(true);
   const isEnsuringRef = useRef(false);
   const lastEnsureConfigRef = useRef<string>("");
+  const pendingEnsureConfigRef = useRef<string | null>(null);
+  const requestVersionRef = useRef(0);
+
+  const latestContextRef = useRef<{
+    panelId: string;
+    projectId: string | null;
+    cwd: string;
+    worktreeId?: string;
+    devCommand: string;
+    env?: Record<string, string>;
+  }>({
+    panelId,
+    projectId: currentProjectId,
+    cwd,
+    worktreeId,
+    devCommand,
+    env,
+  });
 
   const envSignature = useMemo(() => serializeEnv(env), [env]);
+
+  latestContextRef.current = {
+    panelId,
+    projectId: currentProjectId,
+    cwd,
+    worktreeId,
+    devCommand,
+    env,
+  };
+
+  const isRequestCurrent = useCallback(
+    (requestVersion: number, requestProjectId: string, requestPanelId: string): boolean => {
+      const latest = latestContextRef.current;
+      return (
+        isMountedRef.current &&
+        requestVersion === requestVersionRef.current &&
+        latest.projectId === requestProjectId &&
+        latest.panelId === requestPanelId
+      );
+    },
+    []
+  );
 
   const applyState = useCallback((state: DevPreviewSessionState) => {
     if (!isMountedRef.current) return;
@@ -79,58 +137,124 @@ export function useDevServer({
     setIsRestarting(false);
   }, []);
 
+  const ensureLatestConfig = useCallback(
+    async (configKey: string) => {
+      if (isEnsuringRef.current) {
+        pendingEnsureConfigRef.current = configKey;
+        return;
+      }
+
+      const latest = latestContextRef.current;
+      const requestProjectId = latest.projectId;
+      if (!requestProjectId) return;
+
+      const trimmedCommand = latest.devCommand.trim();
+      if (!trimmedCommand) return;
+
+      const requestPanelId = latest.panelId;
+      const requestVersion = requestVersionRef.current;
+
+      isEnsuringRef.current = true;
+      lastEnsureConfigRef.current = configKey;
+
+      try {
+        const nextState = await window.electron.devPreview.ensure({
+          panelId: requestPanelId,
+          projectId: requestProjectId,
+          cwd: latest.cwd,
+          devCommand: latest.devCommand,
+          worktreeId: latest.worktreeId,
+          env: latest.env,
+        });
+
+        if (isRequestCurrent(requestVersion, requestProjectId, requestPanelId)) {
+          applyState(nextState);
+        }
+      } catch (err) {
+        if (isRequestCurrent(requestVersion, requestProjectId, requestPanelId)) {
+          applyInvokeError(err);
+        }
+      } finally {
+        isEnsuringRef.current = false;
+        const pendingConfig = pendingEnsureConfigRef.current;
+        if (pendingConfig && pendingConfig !== configKey) {
+          pendingEnsureConfigRef.current = null;
+          void ensureLatestConfig(pendingConfig);
+        } else if (pendingConfig === configKey) {
+          pendingEnsureConfigRef.current = null;
+        }
+      }
+    },
+    [applyInvokeError, applyState, isRequestCurrent]
+  );
+
   const start = useCallback(async () => {
-    if (isEnsuringRef.current) return;
-    if (!currentProjectId) {
+    const latest = latestContextRef.current;
+    if (!latest.projectId) {
       applyInvokeError(new Error("No active project"));
       return;
     }
-    if (!devCommand.trim()) {
+    if (!latest.devCommand.trim()) {
       applyInvokeError(new Error("No dev command configured"));
       return;
     }
 
-    isEnsuringRef.current = true;
-    try {
-      const nextState = await window.electron.devPreview.ensure({
-        panelId,
-        projectId: currentProjectId,
-        cwd,
-        devCommand,
-        worktreeId,
-        env,
-      });
-      applyState(nextState);
-    } catch (err) {
-      applyInvokeError(err);
-    } finally {
-      isEnsuringRef.current = false;
-    }
-  }, [panelId, currentProjectId, cwd, devCommand, worktreeId, env, applyState, applyInvokeError]);
+    const configKey = buildEnsureConfigKey({
+      projectId: latest.projectId,
+      panelId: latest.panelId,
+      cwd: latest.cwd,
+      worktreeId: latest.worktreeId,
+      devCommand: latest.devCommand,
+      envSignature: serializeEnv(latest.env),
+    });
+    await ensureLatestConfig(configKey);
+  }, [applyInvokeError, ensureLatestConfig]);
 
   const stop = useCallback(() => {
-    if (!currentProjectId) return;
+    const latest = latestContextRef.current;
+    if (!latest.projectId) return;
+    const requestVersion = requestVersionRef.current;
+    const requestProjectId = latest.projectId;
+    const requestPanelId = latest.panelId;
     void window.electron.devPreview
-      .stop({ panelId, projectId: currentProjectId })
-      .then(applyState)
-      .catch(applyInvokeError);
-  }, [panelId, currentProjectId, applyState, applyInvokeError]);
+      .stop({ panelId: requestPanelId, projectId: requestProjectId })
+      .then((state) => {
+        if (isRequestCurrent(requestVersion, requestProjectId, requestPanelId)) {
+          applyState(state);
+        }
+      })
+      .catch((err) => {
+        if (isRequestCurrent(requestVersion, requestProjectId, requestPanelId)) {
+          applyInvokeError(err);
+        }
+      });
+  }, [applyInvokeError, applyState, isRequestCurrent]);
 
   const restart = useCallback(async () => {
-    if (!currentProjectId) {
+    const latest = latestContextRef.current;
+    if (!latest.projectId) {
       applyInvokeError(new Error("No active project"));
       return;
     }
+
+    const requestVersion = requestVersionRef.current;
+    const requestProjectId = latest.projectId;
+    const requestPanelId = latest.panelId;
+
     try {
       const nextState = await window.electron.devPreview.restart({
-        panelId,
-        projectId: currentProjectId,
+        panelId: requestPanelId,
+        projectId: requestProjectId,
       });
-      applyState(nextState);
+      if (isRequestCurrent(requestVersion, requestProjectId, requestPanelId)) {
+        applyState(nextState);
+      }
     } catch (err) {
-      applyInvokeError(err);
+      if (isRequestCurrent(requestVersion, requestProjectId, requestPanelId)) {
+        applyInvokeError(err);
+      }
     }
-  }, [panelId, currentProjectId, applyState, applyInvokeError]);
+  }, [applyInvokeError, applyState, isRequestCurrent]);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -140,12 +264,18 @@ export function useDevServer({
   }, []);
 
   useEffect(() => {
+    requestVersionRef.current += 1;
+  }, [panelId, currentProjectId, cwd, worktreeId, devCommand, envSignature]);
+
+  useEffect(() => {
     if (!currentProjectId) {
       setStatus("stopped");
       setUrl(null);
       setTerminalId(null);
       setError(null);
       setIsRestarting(false);
+      lastEnsureConfigRef.current = "";
+      pendingEnsureConfigRef.current = null;
       return;
     }
 
@@ -178,23 +308,42 @@ export function useDevServer({
     if (!currentProjectId) return;
     if (devCommand.trim()) return;
 
+    const requestVersion = requestVersionRef.current;
+    const requestProjectId = currentProjectId;
+    const requestPanelId = panelId;
+
     lastEnsureConfigRef.current = "";
+    pendingEnsureConfigRef.current = null;
     void window.electron.devPreview
-      .stop({ panelId, projectId: currentProjectId })
-      .then(applyState)
-      .catch(applyInvokeError);
-  }, [panelId, currentProjectId, devCommand, applyState, applyInvokeError]);
+      .stop({ panelId: requestPanelId, projectId: requestProjectId })
+      .then((state) => {
+        if (isRequestCurrent(requestVersion, requestProjectId, requestPanelId)) {
+          applyState(state);
+        }
+      })
+      .catch((err) => {
+        if (isRequestCurrent(requestVersion, requestProjectId, requestPanelId)) {
+          applyInvokeError(err);
+        }
+      });
+  }, [panelId, currentProjectId, devCommand, applyState, applyInvokeError, isRequestCurrent]);
 
   useEffect(() => {
     if (!currentProjectId) return;
     if (!devCommand.trim()) return;
 
-    const configKey = [panelId, cwd, worktreeId ?? "", devCommand.trim(), envSignature].join("|");
+    const configKey = buildEnsureConfigKey({
+      projectId: currentProjectId,
+      panelId,
+      cwd,
+      worktreeId,
+      devCommand,
+      envSignature,
+    });
 
     if (lastEnsureConfigRef.current === configKey) return;
-    lastEnsureConfigRef.current = configKey;
-    void start();
-  }, [panelId, currentProjectId, cwd, worktreeId, devCommand, envSignature, start]);
+    void ensureLatestConfig(configKey);
+  }, [panelId, currentProjectId, cwd, worktreeId, devCommand, envSignature, ensureLatestConfig]);
 
   return {
     status,
