@@ -25,6 +25,7 @@ export type KeyAction =
   | "nav.collapse"
   | "nav.primary"
   | "nav.toggleSidebar"
+  | "nav.quickSwitcher"
 
   // File operations
   | "file.open"
@@ -67,6 +68,8 @@ export type KeyAction =
   | "terminal.minimizeAll"
   | "terminal.restore"
   | "terminal.restoreAll"
+  | "terminal.toggleDock"
+  | "terminal.toggleDockAll"
   | "terminal.new"
   | "terminal.spawnPalette"
   | "terminal.palette"
@@ -107,6 +110,14 @@ export type KeyAction =
   // Assistant panel
   | "assistant.open"
 
+  // Find/Search
+  | "find.inFocusedPanel"
+
+  // Window/Zoom (keybinding targets)
+  | "window.zoomIn"
+  | "window.zoomOut"
+  | "window.zoomReset"
+
   // Panel management
   | "panel.palette"
   | "panel.toggleDiagnostics"
@@ -126,6 +137,7 @@ export type KeyAction =
 
   // Action palette
   | "action.palette"
+  | "action.palette.open"
 
   // Project actions
   | "project.switcherPalette"

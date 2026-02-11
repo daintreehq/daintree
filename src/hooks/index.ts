@@ -13,6 +13,8 @@ export { useErrors } from "./useErrors";
 
 export { useTerminalPalette } from "./useTerminalPalette";
 export type { SearchableTerminal, UseTerminalPaletteReturn } from "./useTerminalPalette";
+export { useQuickSwitcher } from "./useQuickSwitcher";
+export type { QuickSwitcherItem, UseQuickSwitcherReturn } from "./useQuickSwitcher";
 export { useNewTerminalPalette } from "./useNewTerminalPalette";
 export { usePanelPalette } from "./usePanelPalette";
 export type { PanelKindOption, UsePanelPaletteReturn } from "./usePanelPalette";

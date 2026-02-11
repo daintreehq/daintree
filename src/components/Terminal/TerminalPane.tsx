@@ -300,19 +300,22 @@ function TerminalPaneComponent({
     [id, updateLastCommand]
   );
 
+  useEffect(() => {
+    const handleFindInPanel = () => {
+      if (!isFocused) return;
+      setIsSearchOpen(true);
+      requestAnimationFrame(() => {
+        document.querySelector<HTMLInputElement>("[data-terminal-search-input]")?.focus();
+      });
+    };
+
+    window.addEventListener("canopy:find-in-panel", handleFindInPanel);
+    return () => window.removeEventListener("canopy:find-in-panel", handleFindInPanel);
+  }, [isFocused]);
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       const target = e.target as HTMLElement;
-
-      if ((e.metaKey || e.ctrlKey) && e.key === "f") {
-        e.preventDefault();
-        e.stopPropagation();
-        setIsSearchOpen(true);
-        requestAnimationFrame(() => {
-          document.querySelector<HTMLInputElement>("[data-terminal-search-input]")?.focus();
-        });
-        return;
-      }
 
       if (target.tagName === "TEXTAREA" || target.tagName === "INPUT") {
         return;

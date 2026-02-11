@@ -42,4 +42,30 @@ export function registerNavigationActions(
       callbacks.onToggleFocusMode();
     },
   }));
+
+  actions.set("nav.quickSwitcher", () => ({
+    id: "nav.quickSwitcher",
+    title: "Quick Switcher",
+    description: "Search and switch between terminals, agents, and worktrees",
+    category: "navigation",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      callbacks.onOpenQuickSwitcher();
+    },
+  }));
+
+  actions.set("find.inFocusedPanel", () => ({
+    id: "find.inFocusedPanel",
+    title: "Find in Focused Panel",
+    description: "Open find/search in the focused panel",
+    category: "navigation",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      window.dispatchEvent(new CustomEvent("canopy:find-in-panel"));
+    },
+  }));
 }

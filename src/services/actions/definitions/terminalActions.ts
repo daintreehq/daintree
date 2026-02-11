@@ -883,6 +883,56 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
     },
   }));
 
+  actions.set("terminal.toggleDock", () => ({
+    id: "terminal.toggleDock",
+    title: "Toggle Dock",
+    description: "Toggle focused terminal between grid and dock",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const state = useTerminalStore.getState();
+      const focusedId = state.focusedId;
+      if (!focusedId) return;
+      const terminal = state.terminals.find((t) => t.id === focusedId);
+      if (!terminal) return;
+      if (terminal.location === "dock") {
+        state.moveTerminalToGrid(focusedId);
+      } else {
+        const group = state.getPanelGroup(focusedId);
+        if (group && state.maximizedId && group.panelIds.includes(state.maximizedId)) {
+          state.setMaximizedId(null);
+        }
+        state.moveTerminalToDock(focusedId);
+      }
+    },
+  }));
+
+  actions.set("terminal.toggleDockAll", () => ({
+    id: "terminal.toggleDockAll",
+    title: "Toggle All Dock",
+    description: "Toggle all terminals between grid and dock",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const state = useTerminalStore.getState();
+      const activeWorktreeId = callbacks.getActiveWorktreeId();
+      const activeTerminals = state.terminals.filter(
+        (t) =>
+          t.location !== "trash" && (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+      );
+      const allDocked = activeTerminals.every((t) => t.location === "dock");
+      if (allDocked) {
+        state.bulkMoveToGrid();
+      } else {
+        state.bulkMoveToDock();
+      }
+    },
+  }));
+
   actions.set("terminal.palette", () => ({
     id: "terminal.palette",
     title: "Open Terminal Palette",

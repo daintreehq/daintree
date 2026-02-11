@@ -24,6 +24,7 @@ import {
 import { useActionRegistry } from "./hooks/useActionRegistry";
 import { useUpdateListener } from "./hooks/useUpdateListener";
 import { useActionPalette } from "./hooks/useActionPalette";
+import { useQuickSwitcher } from "./hooks/useQuickSwitcher";
 import { useWorktreePalette } from "./hooks/useWorktreePalette";
 import { useDoubleShift } from "./hooks/useDoubleShift";
 import { useAssistantContextSync } from "./hooks/useAssistantContextSync";
@@ -54,6 +55,7 @@ import { TerminalPalette, NewTerminalPalette } from "./components/TerminalPalett
 import { PanelPalette } from "./components/PanelPalette/PanelPalette";
 import { ProjectSwitcherPalette } from "./components/Project/ProjectSwitcherPalette";
 import { ActionPalette } from "./components/ActionPalette";
+import { QuickSwitcher } from "./components/QuickSwitcher";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { RecipeEditor } from "./components/TerminalRecipe/RecipeEditor";
 import { NotesPalette } from "./components/Notes";
@@ -505,6 +507,7 @@ function App() {
   const panelPalette = usePanelPalette();
   const projectSwitcherPalette = useProjectSwitcherPalette();
   const actionPalette = useActionPalette();
+  const quickSwitcher = useQuickSwitcher();
   useDoubleShift(actionPalette.toggle);
   const currentProject = useProjectStore((state) => state.currentProject);
   const { setActiveWorktree, selectWorktree, activeWorktreeId, focusedWorktreeId } =
@@ -697,6 +700,7 @@ function App() {
     onToggleSidebar: handleToggleSidebar,
     onToggleFocusMode: handleToggleSidebar,
     onOpenActionPalette: actionPalette.open,
+    onOpenQuickSwitcher: quickSwitcher.open,
     onOpenAgentPalette: terminalPalette.open,
     onOpenWorktreePalette: worktreePalette.open,
     onToggleWorktreeOverview: toggleWorktreeOverview,
@@ -797,6 +801,18 @@ function App() {
         onSelectNext={terminalPalette.selectNext}
         onSelect={terminalPalette.selectTerminal}
         onClose={terminalPalette.close}
+      />
+      <QuickSwitcher
+        isOpen={quickSwitcher.isOpen}
+        query={quickSwitcher.query}
+        results={quickSwitcher.results}
+        selectedIndex={quickSwitcher.selectedIndex}
+        close={quickSwitcher.close}
+        setQuery={quickSwitcher.setQuery}
+        selectPrevious={quickSwitcher.selectPrevious}
+        selectNext={quickSwitcher.selectNext}
+        selectItem={quickSwitcher.selectItem}
+        confirmSelection={quickSwitcher.confirmSelection}
       />
       <NewTerminalPalette
         isOpen={newTerminalPalette.isOpen}

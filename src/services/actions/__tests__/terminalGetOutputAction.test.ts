@@ -54,6 +54,7 @@ async function createRegistry() {
     onToggleFocusMode: () => {},
     onOpenAgentPalette: () => {},
     onOpenActionPalette: () => {},
+    onOpenQuickSwitcher: () => {},
     onOpenWorktreePalette: () => {},
     onToggleWorktreeOverview: () => {},
     onOpenWorktreeOverview: () => {},
