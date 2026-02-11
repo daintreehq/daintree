@@ -202,7 +202,7 @@ export function BrowserPane({
       webview.removeEventListener("did-navigate", handleDidNavigate);
       webview.removeEventListener("did-navigate-in-page", handleDidNavigateInPage);
     };
-  }, [hasValidUrl, loadError, zoomFactor, webviewRef.current]);
+  }, [hasValidUrl, loadError, zoomFactor]);
 
   const handleNavigate = useCallback(
     (url: string) => {

@@ -69,8 +69,8 @@ const {
     setBrowserZoom: vi.fn(),
     setDevPreviewConsoleOpen: vi.fn(),
   };
-  const useTerminalStoreMock = vi.fn(
-    (selector: (state: typeof terminalStoreState) => unknown) => selector(terminalStoreState)
+  const useTerminalStoreMock = vi.fn((selector: (state: typeof terminalStoreState) => unknown) =>
+    selector(terminalStoreState)
   );
 
   const projectStoreState = {

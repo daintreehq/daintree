@@ -43,27 +43,23 @@ function decorateWebviewElement(element: HTMLElement): MockWebviewElement {
   return webview;
 }
 
-const {
-  terminalStoreState,
-  useTerminalStoreMock,
-  useIsDraggingMock,
-  actionDispatchMock,
-} = vi.hoisted(() => {
-  const terminalStoreState = {
-    getTerminal: vi.fn(),
-    setBrowserUrl: vi.fn(),
-    setBrowserHistory: vi.fn(),
-    setBrowserZoom: vi.fn(),
-  };
-  const useTerminalStoreMock = vi.fn(
-    (selector: (state: typeof terminalStoreState) => unknown) => selector(terminalStoreState)
-  );
-  (useTerminalStoreMock as unknown as { getState: () => typeof terminalStoreState }).getState = () =>
-    terminalStoreState;
-  const useIsDraggingMock = vi.fn(() => false);
-  const actionDispatchMock = vi.fn();
-  return { terminalStoreState, useTerminalStoreMock, useIsDraggingMock, actionDispatchMock };
-});
+const { terminalStoreState, useTerminalStoreMock, useIsDraggingMock, actionDispatchMock } =
+  vi.hoisted(() => {
+    const terminalStoreState = {
+      getTerminal: vi.fn(),
+      setBrowserUrl: vi.fn(),
+      setBrowserHistory: vi.fn(),
+      setBrowserZoom: vi.fn(),
+    };
+    const useTerminalStoreMock = vi.fn((selector: (state: typeof terminalStoreState) => unknown) =>
+      selector(terminalStoreState)
+    );
+    (useTerminalStoreMock as unknown as { getState: () => typeof terminalStoreState }).getState =
+      () => terminalStoreState;
+    const useIsDraggingMock = vi.fn(() => false);
+    const actionDispatchMock = vi.fn();
+    return { terminalStoreState, useTerminalStoreMock, useIsDraggingMock, actionDispatchMock };
+  });
 
 vi.mock("@/store", () => ({
   useTerminalStore: useTerminalStoreMock,
@@ -84,7 +80,13 @@ vi.mock("@/components/Browser/BrowserToolbar", () => ({
 }));
 
 vi.mock("@/components/Panel", () => ({
-  ContentPanel: ({ children, toolbar }: { children: React.ReactNode; toolbar?: React.ReactNode }) => (
+  ContentPanel: ({
+    children,
+    toolbar,
+  }: {
+    children: React.ReactNode;
+    toolbar?: React.ReactNode;
+  }) => (
     <div data-testid="content-panel">
       {toolbar}
       {children}

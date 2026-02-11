@@ -245,7 +245,7 @@ export function DevPreviewPane({
       webview.removeEventListener("did-navigate", handleDidNavigate as any);
       webview.removeEventListener("did-navigate-in-page", handleDidNavigateInPage as any);
     };
-  }, [webviewRef.current]);
+  }, []);
 
   useEffect(() => {
     const webview = webviewRef.current;
@@ -270,7 +270,7 @@ export function DevPreviewPane({
     return () => {
       webview.removeEventListener("dom-ready", handleDomReady);
     };
-  }, [zoomFactor, webviewRef.current]);
+  }, [zoomFactor]);
 
   useEffect(() => {
     if (isWebviewReady && currentUrl && currentUrl !== lastSetUrlRef.current) {
