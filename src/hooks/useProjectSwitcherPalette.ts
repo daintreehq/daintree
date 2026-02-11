@@ -283,8 +283,10 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   }, [results, selectedIndex]);
 
   useEffect(() => {
-    selectedProjectIdRef.current = null;
-    setSelectedIndex(0);
+    if (debouncedQuery) {
+      selectedProjectIdRef.current = null;
+      setSelectedIndex(0);
+    }
   }, [debouncedQuery]);
 
   useEffect(() => {
@@ -295,13 +297,16 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     }
   }, [removeConfirmProject, searchableProjects]);
 
-  const open = useCallback((nextMode: ProjectSwitcherMode = "modal") => {
-    setMode(nextMode);
-    setIsOpen(true);
-    setQuery("");
-    setSelectedIndex(0);
-    setDebouncedQuery("");
-  }, []);
+  const open = useCallback(
+    (nextMode: ProjectSwitcherMode = "modal") => {
+      setMode(nextMode);
+      setIsOpen(true);
+      setQuery("");
+      setSelectedIndex(sortedProjects.length >= 2 ? 1 : 0);
+      setDebouncedQuery("");
+    },
+    [sortedProjects.length]
+  );
 
   const close = useCallback(() => {
     setIsOpen(false);
@@ -313,12 +318,20 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const toggle = useCallback(
     (nextMode: ProjectSwitcherMode = "modal") => {
       if (isOpen) {
-        close();
+        setSelectedIndex((prev) => {
+          if (results.length <= 1) return prev;
+          const next = prev + 1;
+          if (next >= results.length) {
+            const firstNonActive = results.findIndex((p) => !p.isActive);
+            return firstNonActive >= 0 ? firstNonActive : 0;
+          }
+          return next;
+        });
       } else {
         open(nextMode);
       }
     },
-    [isOpen, open, close]
+    [isOpen, open, results]
   );
 
   const selectPrevious = useCallback(() => {
