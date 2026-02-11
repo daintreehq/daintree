@@ -24,9 +24,16 @@ import { isSensitiveEnvKey } from "../../shared/utils/envVars.js";
 const SETTINGS_FILENAME = "settings.json";
 const RECIPES_FILENAME = "recipes.json";
 const WORKFLOWS_FILENAME = "workflows.json";
+const PROJECT_STATE_CACHE_TTL_MS = 60_000;
+
+interface ProjectStateCacheEntry {
+  expiresAt: number;
+  value: ProjectState | null;
+}
 
 export class ProjectStore {
   private projectsConfigDir: string;
+  private projectStateCache = new Map<string, ProjectStateCacheEntry>();
 
   constructor() {
     this.projectsConfigDir = path.join(app.getPath("userData"), "projects");
@@ -142,6 +149,7 @@ export class ProjectStore {
         logError(`Failed to remove state directory for ${projectId}`, error);
       }
     }
+    this.invalidateProjectStateCache(projectId);
 
     if (this.getCurrentProjectId() === projectId) {
       store.set("projects.currentProjectId", undefined);
@@ -317,6 +325,43 @@ export class ProjectStore {
     return path.join(stateDir, "state.json");
   }
 
+  private cloneProjectState(state: ProjectState | null): ProjectState | null {
+    if (!state) {
+      return null;
+    }
+
+    return JSON.parse(JSON.stringify(state)) as ProjectState;
+  }
+
+  private getCachedProjectState(projectId: string): ProjectState | null | undefined {
+    const cached = this.projectStateCache.get(projectId);
+    if (!cached) {
+      return undefined;
+    }
+
+    if (cached.expiresAt <= Date.now()) {
+      this.projectStateCache.delete(projectId);
+      return undefined;
+    }
+
+    return this.cloneProjectState(cached.value);
+  }
+
+  private setProjectStateCache(projectId: string, state: ProjectState | null): void {
+    this.projectStateCache.set(projectId, {
+      expiresAt: Date.now() + PROJECT_STATE_CACHE_TTL_MS,
+      value: this.cloneProjectState(state),
+    });
+  }
+
+  private invalidateProjectStateCache(projectId?: string): void {
+    if (projectId) {
+      this.projectStateCache.delete(projectId);
+      return;
+    }
+    this.projectStateCache.clear();
+  }
+
   async saveProjectState(projectId: string, state: ProjectState): Promise<void> {
     const stateDir = this.getProjectStateDir(projectId);
     if (!stateDir) {
@@ -371,6 +416,8 @@ export class ProjectStore {
         throw retryError;
       }
     }
+
+    this.setProjectStateCache(projectId, validatedState);
   }
 
   private cleanupTempFile(tempFilePath: string): void {
@@ -380,8 +427,14 @@ export class ProjectStore {
   }
 
   async getProjectState(projectId: string): Promise<ProjectState | null> {
+    const cachedState = this.getCachedProjectState(projectId);
+    if (cachedState !== undefined) {
+      return cachedState;
+    }
+
     const stateFilePath = this.getStateFilePath(projectId);
     if (!stateFilePath || !existsSync(stateFilePath)) {
+      this.setProjectStateCache(projectId, null);
       return null;
     }
 
@@ -415,7 +468,8 @@ export class ProjectStore {
             : undefined,
       };
 
-      return state;
+      this.setProjectStateCache(projectId, state);
+      return this.cloneProjectState(state);
     } catch (error) {
       console.error(`[ProjectStore] Failed to load state for project ${projectId}:`, error);
       try {
@@ -425,6 +479,7 @@ export class ProjectStore {
       } catch {
         // Ignore
       }
+      this.setProjectStateCache(projectId, null);
       return null;
     }
   }
@@ -1026,6 +1081,7 @@ export class ProjectStore {
 
     if (!stateFilePath) {
       console.warn(`[ProjectStore] Invalid project ID: ${projectId}`);
+      this.invalidateProjectStateCache(projectId);
       return;
     }
 
@@ -1033,11 +1089,13 @@ export class ProjectStore {
       if (process.env.CANOPY_VERBOSE) {
         console.log(`[ProjectStore] No state file to clear for project ${projectId}`);
       }
+      this.invalidateProjectStateCache(projectId);
       return;
     }
 
     try {
       await fs.unlink(stateFilePath);
+      this.invalidateProjectStateCache(projectId);
       if (process.env.CANOPY_VERBOSE) {
         console.log(`[ProjectStore] Cleared state for project ${projectId}`);
       }

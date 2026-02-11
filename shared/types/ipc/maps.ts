@@ -214,6 +214,10 @@ export interface IpcInvokeMap {
     args: [terminalId: string];
     result: string | null;
   };
+  "terminal:get-serialized-states": {
+    args: [terminalIds: string[]];
+    result: Record<string, string | null>;
+  };
   "terminal:get-shared-buffers": {
     args: [];
     result: {

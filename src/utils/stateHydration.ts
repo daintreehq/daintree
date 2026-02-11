@@ -40,6 +40,17 @@ async function restoreTerminalSnapshots(
     return;
   }
 
+  let serializedStateBatch: Record<string, string | null> | null = null;
+  try {
+    serializedStateBatch = await terminalClient.getSerializedStates(
+      tasks.map((task) => task.terminalId)
+    );
+  } catch (batchError) {
+    logWarn("Batch serialized state fetch failed; falling back to per-terminal requests", {
+      error: batchError,
+    });
+  }
+
   let nextIndex = 0;
   const workerCount = Math.min(RESTORE_CONCURRENCY, tasks.length);
 
@@ -56,7 +67,27 @@ async function restoreTerminalSnapshots(
 
         const task = tasks[currentIndex];
         try {
-          await terminalInstanceService.fetchAndRestore(task.terminalId);
+          if (serializedStateBatch) {
+            const hasSerializedState = Object.prototype.hasOwnProperty.call(
+              serializedStateBatch,
+              task.terminalId
+            );
+
+            if (hasSerializedState) {
+              const serializedState = serializedStateBatch[task.terminalId];
+              const restored = await terminalInstanceService.restoreFetchedState(
+                task.terminalId,
+                serializedState
+              );
+              if (!restored && serializedState === null) {
+                await terminalInstanceService.fetchAndRestore(task.terminalId);
+              }
+            } else {
+              await terminalInstanceService.fetchAndRestore(task.terminalId);
+            }
+          } else {
+            await terminalInstanceService.fetchAndRestore(task.terminalId);
+          }
         } catch (snapshotError) {
           logWarn(`Serialized state restore failed for ${task.label}`, {
             error: snapshotError,

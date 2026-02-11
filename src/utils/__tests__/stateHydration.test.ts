@@ -8,6 +8,7 @@ const appClientMock = {
 const terminalClientMock = {
   getForProject: vi.fn(),
   reconnect: vi.fn(),
+  getSerializedStates: vi.fn(),
 };
 
 const worktreeClientMock = {
@@ -47,6 +48,7 @@ const terminalStoreState = {
 const initializeMock = vi.fn().mockResolvedValue(undefined);
 const loadOverridesMock = vi.fn().mockResolvedValue(undefined);
 const fetchAndRestoreMock = vi.fn().mockResolvedValue(undefined);
+const restoreFetchedStateMock = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("@/clients", () => ({
   appClient: appClientMock,
@@ -96,6 +98,7 @@ const initializeBackendTierMock = vi.fn();
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     fetchAndRestore: fetchAndRestoreMock,
+    restoreFetchedState: restoreFetchedStateMock,
     initializeBackendTier: initializeBackendTierMock,
   },
 }));
@@ -111,6 +114,9 @@ describe("hydrateAppState", () => {
     vi.clearAllMocks();
     terminalClientMock.getForProject.mockResolvedValue([]);
     terminalClientMock.reconnect.mockResolvedValue({ exists: false });
+    terminalClientMock.getSerializedStates.mockRejectedValue(
+      new Error("Batch serialized state endpoint unavailable")
+    );
     worktreeClientMock.getAll.mockResolvedValue([]);
     projectClientMock.getTabGroups.mockResolvedValue([]);
   });
@@ -602,6 +608,74 @@ describe("hydrateAppState", () => {
 
     releaseFirstRestore();
     await hydrationPromise;
+  });
+
+  it("uses batch serialized state restore when available", async () => {
+    terminalClientMock.getSerializedStates.mockResolvedValue({
+      "terminal-1": "serialized-1",
+      "terminal-2": "serialized-2",
+    });
+
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "terminal-1",
+            kind: "terminal",
+            title: "Terminal 1",
+            cwd: "/project",
+            location: "grid",
+          },
+          {
+            id: "terminal-2",
+            kind: "terminal",
+            title: "Terminal 2",
+            cwd: "/project",
+            location: "grid",
+          },
+        ],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+
+    terminalClientMock.getForProject.mockResolvedValue([
+      {
+        id: "terminal-1",
+        hasPty: true,
+        cwd: "/project",
+        kind: "terminal",
+        title: "Terminal 1",
+      },
+      {
+        id: "terminal-2",
+        hasPty: true,
+        cwd: "/project",
+        kind: "terminal",
+        title: "Terminal 2",
+      },
+    ]);
+
+    const addTerminal = vi.fn(async (options: { existingId?: string; requestedId?: string }) => {
+      return options.existingId ?? options.requestedId ?? "terminal-id";
+    });
+
+    await hydrateAppState({
+      addTerminal,
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+    });
+
+    expect(terminalClientMock.getSerializedStates).toHaveBeenCalledWith([
+      "terminal-1",
+      "terminal-2",
+    ]);
+    expect(restoreFetchedStateMock).toHaveBeenCalledWith("terminal-1", "serialized-1");
+    expect(restoreFetchedStateMock).toHaveBeenCalledWith("terminal-2", "serialized-2");
+    expect(fetchAndRestoreMock).not.toHaveBeenCalled();
   });
 
   it("loads and hydrates persisted tab groups after terminal restore", async () => {

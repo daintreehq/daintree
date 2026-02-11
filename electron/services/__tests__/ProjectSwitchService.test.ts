@@ -213,6 +213,48 @@ describe("ProjectSwitchService", () => {
     expect(projectStoreMock.setCurrentProject).toHaveBeenCalledWith("project-new");
   });
 
+  it("short-circuits when switching to the already active project", async () => {
+    projectStoreMock.getCurrentProjectId.mockReturnValue("project-new");
+
+    const { service, ptyClient, worktreeService, eventBuffer } = createService();
+    const result = await service.switchProject("project-new");
+
+    expect(result).toMatchObject({ id: "project-new" });
+    expect(projectStoreMock.saveProjectState).not.toHaveBeenCalled();
+    expect(projectStoreMock.setCurrentProject).not.toHaveBeenCalled();
+    expect(worktreeService.onProjectSwitch).not.toHaveBeenCalled();
+    expect(worktreeService.loadProject).not.toHaveBeenCalled();
+    expect(eventBuffer.onProjectSwitch).not.toHaveBeenCalled();
+    expect(ptyClient.onProjectSwitch).not.toHaveBeenCalled();
+    expect(sendToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("starts loading new project while supporting cleanup is still in progress", async () => {
+    let resolveTaskQueue!: () => void;
+    const taskQueuePromise = new Promise<undefined>((resolve) => {
+      resolveTaskQueue = () => resolve(undefined);
+    });
+    taskQueueServiceMock.onProjectSwitch.mockReturnValue(taskQueuePromise);
+
+    const loadProjectMock = vi.fn(async () => undefined);
+    const { service } = createService({
+      worktreeService: {
+        onProjectSwitch: vi.fn(() => undefined),
+        loadProject: loadProjectMock,
+      },
+    });
+
+    const switchPromise = service.switchProject("project-new");
+    for (let i = 0; i < 20 && loadProjectMock.mock.calls.length === 0; i += 1) {
+      await Promise.resolve();
+    }
+
+    expect(loadProjectMock).toHaveBeenCalledWith("/tmp/new");
+
+    resolveTaskQueue();
+    await expect(switchPromise).resolves.toMatchObject({ id: "project-new" });
+  });
+
   it("preserves original switch error when rollback throws", async () => {
     const originalError = new Error("setCurrent failed");
     projectStoreMock.setCurrentProject.mockRejectedValue(originalError);

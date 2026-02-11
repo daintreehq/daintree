@@ -874,19 +874,23 @@ class TerminalInstanceService {
     this.rendererPolicy.dispose();
   }
 
+  async restoreFetchedState(id: string, serializedState: string | null): Promise<boolean> {
+    if (!serializedState) {
+      logWarn(`No serialized state for terminal ${id}`);
+      return false;
+    }
+
+    if (serializedState.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes) {
+      return await this.restoreFromSerializedIncremental(id, serializedState);
+    }
+
+    return this.restoreFromSerialized(id, serializedState);
+  }
+
   async fetchAndRestore(id: string): Promise<boolean> {
     try {
       const serializedState = await terminalClient.getSerializedState(id);
-      if (!serializedState) {
-        logWarn(`No serialized state for terminal ${id}`);
-        return false;
-      }
-
-      if (serializedState.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes) {
-        return await this.restoreFromSerializedIncremental(id, serializedState);
-      }
-
-      return this.restoreFromSerialized(id, serializedState);
+      return await this.restoreFetchedState(id, serializedState);
     } catch (error) {
       logError(`Failed to fetch state for terminal ${id}`, error);
       return false;

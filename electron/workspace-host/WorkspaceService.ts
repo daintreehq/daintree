@@ -27,6 +27,21 @@ import { waitForPathExists } from "../utils/fs.js";
 // Configuration
 const DEFAULT_ACTIVE_WORKTREE_INTERVAL_MS = 2000;
 const DEFAULT_BACKGROUND_WORKTREE_INTERVAL_MS = 10000;
+const WORKTREE_LIST_CACHE_TTL_MS = 60_000;
+
+interface RawWorktreeRecord {
+  path: string;
+  branch: string;
+  bare: boolean;
+  isMainWorktree: boolean;
+  head?: string;
+  isDetached?: boolean;
+}
+
+interface WorktreeListCacheEntry {
+  expiresAt: number;
+  worktrees: RawWorktreeRecord[];
+}
 
 async function ensureNoteFile(worktreePath: string): Promise<void> {
   const gitDir = getGitDir(worktreePath);
@@ -67,6 +82,8 @@ export class WorkspaceService {
   private projectRootPath: string | null = null;
   private prEventUnsubscribers: (() => void)[] = [];
   private prServiceInitializedForPath: string | null = null;
+  private worktreeListCache = new Map<string, WorktreeListCacheEntry>();
+  private inFlightWorktreeList = new Map<string, Promise<RawWorktreeRecord[]>>();
 
   constructor(private readonly sendEvent: (event: WorkspaceHostEvent) => void) {}
 
@@ -76,42 +93,23 @@ export class WorkspaceService {
       this.git = simpleGit(projectRootPath);
 
       const rawWorktrees = await this.listWorktreesFromGit();
-      const worktrees: Worktree[] = rawWorktrees.map((wt) => {
-        let name: string;
-        if (wt.isMainWorktree) {
-          name = wt.path.split(/[/\\]/).pop() || "Main";
-        } else if (wt.isDetached && wt.head) {
-          name = wt.head.substring(0, 7);
-        } else if (wt.branch) {
-          name = wt.branch;
-        } else {
-          name = wt.path.split(/[/\\]/).pop() || "Worktree";
-        }
-
-        return {
-          id: wt.path,
-          path: wt.path,
-          name: name,
-          branch: wt.branch || undefined,
-          head: wt.head,
-          isDetached: wt.isDetached,
-          isCurrent: false,
-          isMainWorktree: wt.isMainWorktree,
-          gitDir: getGitDir(wt.path) || undefined,
-        };
-      });
+      const worktrees = this.mapRawWorktrees(rawWorktrees);
 
       // Create monitors first (without waiting for git status)
       await this.syncMonitors(worktrees, this.activeWorktreeId, this.mainBranch, undefined, true);
 
-      // Start PR service immediately - GitHub API call begins now
-      // The monitors already have branch info from listWorktreesFromGit
-      const prServicePromise = this.initializePRService();
-
-      // Now do git status refresh for all monitors in parallel with PR service
-      await Promise.all([prServicePromise, this.refreshAll()]);
-
       this.sendEvent({ type: "load-project-result", requestId, success: true });
+
+      // Launch expensive post-load tasks in background so project switching isn't blocked.
+      void Promise.allSettled([this.initializePRService(), this.refreshAll()]).then((results) => {
+        const [prResult, refreshResult] = results;
+        if (prResult?.status === "rejected") {
+          console.warn("[WorkspaceHost] PR service initialization failed:", prResult.reason);
+        }
+        if (refreshResult?.status === "rejected") {
+          console.warn("[WorkspaceHost] Initial worktree refresh failed:", refreshResult.reason);
+        }
+      });
     } catch (error) {
       this.sendEvent({
         type: "load-project-result",
@@ -122,70 +120,157 @@ export class WorkspaceService {
     }
   }
 
-  private async listWorktreesFromGit(): Promise<
-    Array<{
-      path: string;
-      branch: string;
-      bare: boolean;
-      isMainWorktree: boolean;
-      head?: string;
-      isDetached?: boolean;
-    }>
-  > {
+  private cloneRawWorktrees(rawWorktrees: RawWorktreeRecord[]): RawWorktreeRecord[] {
+    return rawWorktrees.map((worktree) => ({ ...worktree }));
+  }
+
+  private mapRawWorktrees(rawWorktrees: RawWorktreeRecord[]): Worktree[] {
+    return rawWorktrees.map((wt) => {
+      let name: string;
+      if (wt.isMainWorktree) {
+        name = wt.path.split(/[/\\]/).pop() || "Main";
+      } else if (wt.isDetached && wt.head) {
+        name = wt.head.substring(0, 7);
+      } else if (wt.branch) {
+        name = wt.branch;
+      } else {
+        name = wt.path.split(/[/\\]/).pop() || "Worktree";
+      }
+
+      return {
+        id: wt.path,
+        path: wt.path,
+        name: name,
+        branch: wt.branch || undefined,
+        head: wt.head,
+        isDetached: wt.isDetached,
+        isCurrent: false,
+        isMainWorktree: wt.isMainWorktree,
+        gitDir: getGitDir(wt.path) || undefined,
+      };
+    });
+  }
+
+  private getWorktreeCacheKey(): string | null {
+    return this.projectRootPath ? pathResolve(this.projectRootPath) : null;
+  }
+
+  private getCachedWorktrees(cacheKey: string): RawWorktreeRecord[] | null {
+    const cached = this.worktreeListCache.get(cacheKey);
+    if (!cached) {
+      return null;
+    }
+
+    if (cached.expiresAt <= Date.now()) {
+      this.worktreeListCache.delete(cacheKey);
+      return null;
+    }
+
+    return this.cloneRawWorktrees(cached.worktrees);
+  }
+
+  private setCachedWorktrees(cacheKey: string, worktrees: RawWorktreeRecord[]): void {
+    this.worktreeListCache.set(cacheKey, {
+      expiresAt: Date.now() + WORKTREE_LIST_CACHE_TTL_MS,
+      worktrees: this.cloneRawWorktrees(worktrees),
+    });
+  }
+
+  private invalidateCachedWorktrees(cacheKey?: string): void {
+    if (cacheKey) {
+      this.worktreeListCache.delete(cacheKey);
+      this.inFlightWorktreeList.delete(cacheKey);
+      return;
+    }
+
+    this.worktreeListCache.clear();
+    this.inFlightWorktreeList.clear();
+  }
+
+  private async listWorktreesFromGit(options?: {
+    forceRefresh?: boolean;
+  }): Promise<RawWorktreeRecord[]> {
     if (!this.git) {
       throw new Error("Git not initialized");
     }
+    const git = this.git;
 
-    const output = await this.git.raw(["worktree", "list", "--porcelain"]);
-    const worktrees: Array<{
-      path: string;
-      branch: string;
-      bare: boolean;
-      isMainWorktree: boolean;
-      head?: string;
-      isDetached?: boolean;
-    }> = [];
-
-    let currentWorktree: Partial<{
-      path: string;
-      branch: string;
-      bare: boolean;
-      head: string;
-      isDetached: boolean;
-    }> = {};
-
-    const pushWorktree = () => {
-      if (currentWorktree.path) {
-        worktrees.push({
-          path: currentWorktree.path,
-          branch: currentWorktree.branch || "",
-          bare: currentWorktree.bare || false,
-          isMainWorktree: worktrees.length === 0,
-          head: currentWorktree.isDetached ? currentWorktree.head : undefined,
-          isDetached: currentWorktree.isDetached,
-        });
+    const cacheKey = this.getWorktreeCacheKey();
+    const forceRefresh = options?.forceRefresh === true;
+    if (cacheKey && !forceRefresh) {
+      const cached = this.getCachedWorktrees(cacheKey);
+      if (cached) {
+        return cached;
       }
-      currentWorktree = {};
-    };
 
-    for (const line of output.split("\n")) {
-      if (line.startsWith("worktree ")) {
-        currentWorktree.path = line.replace("worktree ", "").trim();
-      } else if (line.startsWith("HEAD ")) {
-        currentWorktree.head = line.replace("HEAD ", "").trim();
-      } else if (line.startsWith("branch ")) {
-        currentWorktree.branch = line.replace("branch ", "").replace("refs/heads/", "").trim();
-      } else if (line.startsWith("bare")) {
-        currentWorktree.bare = true;
-      } else if (line.trim() === "detached") {
-        currentWorktree.isDetached = true;
-      } else if (line.trim() === "") {
-        pushWorktree();
+      const inFlight = this.inFlightWorktreeList.get(cacheKey);
+      if (inFlight) {
+        return inFlight;
       }
     }
 
-    pushWorktree();
-    return worktrees;
+    const fetchPromise = (async () => {
+      const output = await git.raw(["worktree", "list", "--porcelain"]);
+      const worktrees: RawWorktreeRecord[] = [];
+
+      let currentWorktree: Partial<{
+        path: string;
+        branch: string;
+        bare: boolean;
+        head: string;
+        isDetached: boolean;
+      }> = {};
+
+      const pushWorktree = () => {
+        if (currentWorktree.path) {
+          worktrees.push({
+            path: currentWorktree.path,
+            branch: currentWorktree.branch || "",
+            bare: currentWorktree.bare || false,
+            isMainWorktree: worktrees.length === 0,
+            head: currentWorktree.isDetached ? currentWorktree.head : undefined,
+            isDetached: currentWorktree.isDetached,
+          });
+        }
+        currentWorktree = {};
+      };
+
+      for (const line of output.split("\n")) {
+        if (line.startsWith("worktree ")) {
+          currentWorktree.path = line.replace("worktree ", "").trim();
+        } else if (line.startsWith("HEAD ")) {
+          currentWorktree.head = line.replace("HEAD ", "").trim();
+        } else if (line.startsWith("branch ")) {
+          currentWorktree.branch = line.replace("branch ", "").replace("refs/heads/", "").trim();
+        } else if (line.startsWith("bare")) {
+          currentWorktree.bare = true;
+        } else if (line.trim() === "detached") {
+          currentWorktree.isDetached = true;
+        } else if (line.trim() === "") {
+          pushWorktree();
+        }
+      }
+
+      pushWorktree();
+
+      if (cacheKey) {
+        this.setCachedWorktrees(cacheKey, worktrees);
+      }
+
+      return worktrees;
+    })();
+
+    if (cacheKey) {
+      this.inFlightWorktreeList.set(cacheKey, fetchPromise);
+    }
+
+    try {
+      return this.cloneRawWorktrees(await fetchPromise);
+    } finally {
+      if (cacheKey) {
+        this.inFlightWorktreeList.delete(cacheKey);
+      }
+    }
   }
 
   async syncMonitors(
@@ -782,31 +867,8 @@ export class WorkspaceService {
       return;
     }
 
-    const rawWorktrees = await this.listWorktreesFromGit();
-    const worktrees: Worktree[] = rawWorktrees.map((wt) => {
-      let name: string;
-      if (wt.isMainWorktree) {
-        name = wt.path.split(/[/\\]/).pop() || "Main";
-      } else if (wt.isDetached && wt.head) {
-        name = wt.head.substring(0, 7);
-      } else if (wt.branch) {
-        name = wt.branch;
-      } else {
-        name = wt.path.split(/[/\\]/).pop() || "Worktree";
-      }
-
-      return {
-        id: wt.path,
-        path: wt.path,
-        name: name,
-        branch: wt.branch || undefined,
-        head: wt.head,
-        isDetached: wt.isDetached,
-        isCurrent: false,
-        isMainWorktree: wt.isMainWorktree,
-        gitDir: getGitDir(wt.path) || undefined,
-      };
-    });
+    const rawWorktrees = await this.listWorktreesFromGit({ forceRefresh: true });
+    const worktrees = this.mapRawWorktrees(rawWorktrees);
 
     await this.syncMonitors(worktrees, this.activeWorktreeId, this.mainBranch, undefined, true);
   }
@@ -869,31 +931,9 @@ export class WorkspaceService {
       await ensureNoteFile(path);
 
       // Refresh worktree list
-      const updatedWorktrees = await this.listWorktreesFromGit();
-      const worktreeList: Worktree[] = updatedWorktrees.map((wt) => {
-        let name: string;
-        if (wt.isMainWorktree) {
-          name = wt.path.split(/[/\\]/).pop() || "Main";
-        } else if (wt.isDetached && wt.head) {
-          name = wt.head.substring(0, 7);
-        } else if (wt.branch) {
-          name = wt.branch;
-        } else {
-          name = wt.path.split(/[/\\]/).pop() || "Worktree";
-        }
-
-        return {
-          id: wt.path,
-          path: wt.path,
-          name: name,
-          branch: wt.branch || undefined,
-          head: wt.head,
-          isDetached: wt.isDetached,
-          isCurrent: false,
-          isMainWorktree: wt.isMainWorktree,
-          gitDir: getGitDir(wt.path) || undefined,
-        };
-      });
+      this.invalidateCachedWorktrees(pathResolve(rootPath));
+      const updatedWorktrees = await this.listWorktreesFromGit({ forceRefresh: true });
+      const worktreeList = this.mapRawWorktrees(updatedWorktrees);
 
       await this.syncMonitors(worktreeList, this.activeWorktreeId, this.mainBranch);
 
@@ -1297,6 +1337,13 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this.projectRootPath = null;
 
     clearGitDirCache();
+    const now = Date.now();
+    for (const [cacheKey, cacheEntry] of this.worktreeListCache) {
+      if (cacheEntry.expiresAt <= now) {
+        this.worktreeListCache.delete(cacheKey);
+        this.inFlightWorktreeList.delete(cacheKey);
+      }
+    }
 
     this.sendEvent({ type: "project-switch-result", requestId, success: true });
   }
@@ -1307,5 +1354,6 @@ ${lines.map((l) => "+" + l).join("\n")}`;
       this.stopMonitor(monitor);
     }
     this.monitors.clear();
+    this.invalidateCachedWorktrees();
   }
 }

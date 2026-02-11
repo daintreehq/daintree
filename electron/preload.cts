@@ -168,6 +168,7 @@ const CHANNELS = {
   TERMINAL_RECONNECT: "terminal:reconnect",
   TERMINAL_REPLAY_HISTORY: "terminal:replay-history",
   TERMINAL_GET_SERIALIZED_STATE: "terminal:get-serialized-state",
+  TERMINAL_GET_SERIALIZED_STATES: "terminal:get-serialized-states",
   TERMINAL_GET_SHARED_BUFFERS: "terminal:get-shared-buffers",
   TERMINAL_GET_ANALYSIS_BUFFER: "terminal:get-analysis-buffer",
   TERMINAL_GET_INFO: "terminal:get-info",
@@ -582,6 +583,9 @@ const api: ElectronAPI = {
 
     getSerializedState: (terminalId: string) =>
       _typedInvoke(CHANNELS.TERMINAL_GET_SERIALIZED_STATE, terminalId),
+
+    getSerializedStates: (terminalIds: string[]) =>
+      _typedInvoke(CHANNELS.TERMINAL_GET_SERIALIZED_STATES, terminalIds),
 
     getInfo: (id: string) => _typedInvoke(CHANNELS.TERMINAL_GET_INFO, id),
 

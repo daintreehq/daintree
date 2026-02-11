@@ -184,6 +184,11 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   },
 
   switchProject: async (projectId) => {
+    const currentProjectId = get().currentProject?.id ?? null;
+    if (currentProjectId === projectId) {
+      return;
+    }
+
     const targetProject = get().projects.find((p) => p.id === projectId);
     set({
       isLoading: true,

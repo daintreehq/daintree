@@ -54,6 +54,46 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
   ipcMain.handle(CHANNELS.TERMINAL_GET_SERIALIZED_STATE, handleTerminalGetSerializedState);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_SERIALIZED_STATE));
 
+  const handleTerminalGetSerializedStates = async (
+    _event: Electron.IpcMainInvokeEvent,
+    terminalIds: string[]
+  ): Promise<Record<string, string | null>> => {
+    if (!Array.isArray(terminalIds)) {
+      throw new Error("Invalid terminal IDs: must be an array");
+    }
+
+    if (terminalIds.length > 256) {
+      throw new Error("Invalid terminal IDs: maximum 256 IDs allowed");
+    }
+
+    const normalizedIds = Array.from(
+      new Set(
+        terminalIds.map((id) => {
+          if (typeof id !== "string" || !id.trim()) {
+            throw new Error("Invalid terminal ID in batch payload");
+          }
+          return id;
+        })
+      )
+    );
+
+    const results = await Promise.all(
+      normalizedIds.map(async (terminalId) => {
+        try {
+          const serializedState = await ptyClient.getSerializedStateAsync(terminalId);
+          return [terminalId, serializedState] as const;
+        } catch (error) {
+          logWarn(`terminal:getSerializedStates(${terminalId}) failed`, { error });
+          return [terminalId, null] as const;
+        }
+      })
+    );
+
+    return Object.fromEntries(results);
+  };
+  ipcMain.handle(CHANNELS.TERMINAL_GET_SERIALIZED_STATES, handleTerminalGetSerializedStates);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_SERIALIZED_STATES));
+
   const handleTerminalGetInfo = async (
     _event: Electron.IpcMainInvokeEvent,
     id: string

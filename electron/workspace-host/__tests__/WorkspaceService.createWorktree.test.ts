@@ -322,3 +322,97 @@ describe("WorkspaceService.createWorktree", () => {
     expect(listWorktreesSpy).not.toHaveBeenCalled();
   });
 });
+
+describe("WorkspaceService.loadProject performance behavior", () => {
+  let service: WorkspaceService;
+  let mockSendEvent: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockSendEvent = vi.fn();
+    const WorkspaceServiceModule = await import("../WorkspaceService.js");
+    service = new WorkspaceServiceModule.WorkspaceService(
+      mockSendEvent as unknown as (
+        event: import("../../../shared/types/workspace-host.js").WorkspaceHostEvent
+      ) => void
+    );
+  });
+
+  it("returns load-project success without waiting for PR init and full refresh", async () => {
+    const rawWorktrees = [
+      {
+        path: "/test/worktree",
+        branch: "main",
+        head: "abc123",
+        isDetached: false,
+        isMainWorktree: true,
+        bare: false,
+      },
+    ];
+
+    let resolvePr!: () => void;
+    let resolveRefresh!: () => void;
+    const prPromise = new Promise<void>((resolve) => {
+      resolvePr = resolve;
+    });
+    const refreshPromise = new Promise<void>((resolve) => {
+      resolveRefresh = resolve;
+    });
+
+    service["listWorktreesFromGit"] = vi.fn().mockResolvedValue(rawWorktrees);
+    service["syncMonitors"] = vi.fn().mockResolvedValue(undefined);
+    service["initializePRService"] = vi.fn().mockReturnValue(prPromise);
+    service["refreshAll"] = vi.fn().mockReturnValue(refreshPromise);
+
+    await service.loadProject("req-1", "/test/root");
+
+    expect(mockSendEvent).toHaveBeenCalledWith({
+      type: "load-project-result",
+      requestId: "req-1",
+      success: true,
+    });
+    expect(service["initializePRService"]).toHaveBeenCalledTimes(1);
+    expect(service["refreshAll"]).toHaveBeenCalledTimes(1);
+
+    resolvePr();
+    resolveRefresh();
+    await Promise.resolve();
+  });
+
+  it("uses cached worktree list between repeated reads for the same project root", async () => {
+    const porcelainOutput = [
+      "worktree /repo/main",
+      "HEAD 0123456789abcdef",
+      "branch refs/heads/main",
+      "",
+    ].join("\n");
+
+    mockSimpleGit.raw.mockResolvedValue(porcelainOutput);
+    service["projectRootPath"] = "/repo";
+    service["git"] = mockSimpleGit as unknown as import("simple-git").SimpleGit;
+
+    const first = await service["listWorktreesFromGit"]();
+    const second = await service["listWorktreesFromGit"]();
+
+    expect(first).toEqual(second);
+    expect(mockSimpleGit.raw).toHaveBeenCalledTimes(1);
+  });
+
+  it("bypasses cache when forceRefresh is requested", async () => {
+    const porcelainOutput = [
+      "worktree /repo/main",
+      "HEAD 0123456789abcdef",
+      "branch refs/heads/main",
+      "",
+    ].join("\n");
+
+    mockSimpleGit.raw.mockResolvedValue(porcelainOutput);
+    service["projectRootPath"] = "/repo";
+    service["git"] = mockSimpleGit as unknown as import("simple-git").SimpleGit;
+
+    await service["listWorktreesFromGit"]();
+    await service["listWorktreesFromGit"]({ forceRefresh: true });
+
+    expect(mockSimpleGit.raw).toHaveBeenCalledTimes(2);
+  });
+});

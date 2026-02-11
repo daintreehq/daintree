@@ -50,6 +50,18 @@ export class ProjectSwitchService {
     console.log("[ProjectSwitch] Starting project switch to:", project.name);
 
     const previousProjectId = projectStore.getCurrentProjectId();
+    if (previousProjectId === projectId) {
+      console.log(
+        "[ProjectSwitch] Ignoring switch request for already active project:",
+        project.name
+      );
+      markPerformance(PERF_MARKS.PROJECT_SWITCH_END, {
+        projectId,
+        durationMs: Date.now() - startedAt,
+        noOp: true,
+      });
+      return project;
+    }
 
     // Save the current active worktree to the outgoing project's per-project state
     // This ensures the worktree selection is remembered when switching back
@@ -58,9 +70,10 @@ export class ProjectSwitchService {
     }
 
     try {
-      await this.cleanupPreviousProject(projectId);
+      await this.cleanupWorktreeService();
+      const cleanupPromise = this.cleanupSupportingServices(projectId);
 
-      console.log("[ProjectSwitch] Previous project state cleaned up");
+      console.log("[ProjectSwitch] Previous project cleanup in progress");
 
       await projectStore.setCurrentProject(projectId);
 
@@ -69,7 +82,7 @@ export class ProjectSwitchService {
         throw new Error(`Project not found after update: ${projectId}`);
       }
 
-      await this.loadNewProject(project);
+      await Promise.all([cleanupPromise, this.loadNewProject(project)]);
 
       const switchId = randomUUID();
       sendToRenderer(this.deps.mainWindow, CHANNELS.PROJECT_ON_SWITCH, {
@@ -133,14 +146,23 @@ export class ProjectSwitchService {
     }
   }
 
-  private async cleanupPreviousProject(projectId: string): Promise<void> {
+  private async cleanupWorktreeService(): Promise<void> {
+    if (!this.deps.worktreeService?.onProjectSwitch) {
+      return;
+    }
+
+    try {
+      await Promise.resolve().then(() => this.deps.worktreeService!.onProjectSwitch());
+    } catch (error) {
+      console.error("[ProjectSwitch] WorktreeService cleanup failed:", error);
+    }
+  }
+
+  private async cleanupSupportingServices(projectId: string): Promise<void> {
     console.log("[ProjectSwitch] Cleaning up previous project state...");
 
     const safeCall = (fn: () => unknown): Promise<unknown> => Promise.resolve().then(fn);
     const cleanupResults = await Promise.allSettled([
-      this.deps.worktreeService?.onProjectSwitch
-        ? safeCall(() => this.deps.worktreeService!.onProjectSwitch())
-        : Promise.resolve(),
       safeCall(() => this.deps.ptyClient.onProjectSwitch(projectId)),
       safeCall(() => logBuffer.onProjectSwitch()),
       this.deps.eventBuffer?.onProjectSwitch
@@ -153,7 +175,6 @@ export class ProjectSwitchService {
     cleanupResults.forEach((result, index) => {
       if (result.status === "rejected") {
         const serviceNames = [
-          "WorktreeService",
           "PtyClient",
           "LogBuffer",
           "EventBuffer",
