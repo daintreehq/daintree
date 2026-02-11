@@ -499,7 +499,11 @@ function PanelHeaderComponent({
                     : "hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline-canopy-accent text-canopy-text/60 hover:text-canopy-text"
                 )}
                 title={armedRestartId === id ? "Click again to confirm restart" : "Restart Session"}
-                aria-label={armedRestartId === id ? "Armed — click again to confirm restart" : "Restart Session"}
+                aria-label={
+                  armedRestartId === id
+                    ? "Armed — click again to confirm restart"
+                    : "Restart Session"
+                }
                 aria-pressed={armedRestartId === id ? "true" : "false"}
               >
                 <RotateCcw

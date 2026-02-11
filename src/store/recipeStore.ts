@@ -149,7 +149,9 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     const updatedRecipe = {
       ...recipe,
       ...updates,
-      terminals: updates.terminals ? updates.terminals.map(sanitizeRecipeTerminal) : recipe.terminals,
+      terminals: updates.terminals
+        ? updates.terminals.map(sanitizeRecipeTerminal)
+        : recipe.terminals,
     };
     const newRecipes = [...recipes];
     newRecipes[index] = updatedRecipe;
