@@ -94,13 +94,9 @@ export class GitFileWatcher {
 
   private watchFile(filePath: string): void {
     try {
-      const watcher = fsWatch(
-        filePath,
-        { persistent: false },
-        (_eventType) => {
-          this.handleFileChange();
-        }
-      );
+      const watcher = fsWatch(filePath, { persistent: false }, (_eventType) => {
+        this.handleFileChange();
+      });
 
       watcher.on("error", (error) => {
         logWarn("Git file watcher error", {
@@ -113,13 +109,9 @@ export class GitFileWatcher {
     } catch {
       const watchDir = dirname(filePath);
       try {
-        const dirWatcher = fsWatch(
-          watchDir,
-          { persistent: false },
-          (_eventType) => {
-            this.handleFileChange();
-          }
-        );
+        const dirWatcher = fsWatch(watchDir, { persistent: false }, (_eventType) => {
+          this.handleFileChange();
+        });
 
         dirWatcher.on("error", (error) => {
           logWarn("Git directory watcher error", {
