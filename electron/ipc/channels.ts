@@ -233,6 +233,13 @@ export const CHANNELS = {
 
   NOTIFICATION_UPDATE: "notification:update",
 
+  // Auto-update channels
+  UPDATE_AVAILABLE: "update:available",
+  UPDATE_DOWNLOAD_PROGRESS: "update:download-progress",
+  UPDATE_DOWNLOADED: "update:downloaded",
+  UPDATE_ERROR: "update:error",
+  UPDATE_QUIT_AND_INSTALL: "update:quit-and-install",
+
   SLASH_COMMANDS_LIST: "slash-commands:list",
 
   GEMINI_GET_STATUS: "gemini:get-status",

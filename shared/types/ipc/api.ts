@@ -586,6 +586,13 @@ export interface ElectronAPI {
     /** Update window title and dock badge based on terminal attention state */
     updateBadge(state: { waitingCount: number; failedCount: number }): void;
   };
+  update: {
+    onUpdateAvailable(callback: (info: { version: string }) => void): () => void;
+    onDownloadProgress(callback: (info: { percent: number }) => void): () => void;
+    onUpdateDownloaded(callback: (info: { version: string }) => void): () => void;
+    onUpdateError(callback: (info: { message: string }) => void): () => void;
+    quitAndInstall(): Promise<void>;
+  };
   gemini: {
     /** Get Gemini config status (exists, alternate buffer enabled) */
     getStatus(): Promise<{ exists: boolean; alternateBufferEnabled: boolean; error?: string }>;

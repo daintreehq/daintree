@@ -22,6 +22,7 @@ import {
   useAssistantStreamProcessor,
 } from "./hooks";
 import { useActionRegistry } from "./hooks/useActionRegistry";
+import { useUpdateListener } from "./hooks/useUpdateListener";
 import { useActionPalette } from "./hooks/useActionPalette";
 import { useWorktreePalette } from "./hooks/useWorktreePalette";
 import { useDoubleShift } from "./hooks/useDoubleShift";
@@ -59,6 +60,7 @@ import { NotesPalette } from "./components/Notes";
 import { SettingsDialog, type SettingsTab } from "./components/Settings";
 import { ShortcutReferenceDialog } from "./components/KeyboardShortcuts";
 import { Toaster } from "./components/ui/toaster";
+import { UpdateNotification } from "./components/UpdateNotification";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { DndProvider } from "./components/DragDrop";
 import {
@@ -482,6 +484,7 @@ function App() {
   const loadRecipes = useRecipeStore((state) => state.loadRecipes);
   useTerminalConfig();
   useWindowNotifications();
+  useUpdateListener();
   useAppAgentDispatcher(); // Enable Assistant tool calling via action dispatch
   useAssistantStreamProcessor(); // Process Assistant chunks even when pane is closed
 
@@ -924,6 +927,7 @@ function App() {
       <PanelTransitionOverlay />
 
       <Toaster />
+      <UpdateNotification />
     </ErrorBoundary>
   );
 }

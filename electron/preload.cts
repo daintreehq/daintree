@@ -401,6 +401,13 @@ const CHANNELS = {
   // Notification channels
   NOTIFICATION_UPDATE: "notification:update",
 
+  // Auto-update channels
+  UPDATE_AVAILABLE: "update:available",
+  UPDATE_DOWNLOAD_PROGRESS: "update:download-progress",
+  UPDATE_DOWNLOADED: "update:downloaded",
+  UPDATE_ERROR: "update:error",
+  UPDATE_QUIT_AND_INSTALL: "update:quit-and-install",
+
   // Slash command channels
   SLASH_COMMANDS_LIST: "slash-commands:list",
 
@@ -1199,6 +1206,23 @@ const api: ElectronAPI = {
   notification: {
     updateBadge: (state: { waitingCount: number; failedCount: number }) =>
       ipcRenderer.send(CHANNELS.NOTIFICATION_UPDATE, state),
+  },
+
+  // Auto-Update API
+  update: {
+    onUpdateAvailable: (callback: (info: { version: string }) => void) =>
+      _typedOn(CHANNELS.UPDATE_AVAILABLE, callback),
+
+    onDownloadProgress: (callback: (info: { percent: number }) => void) =>
+      _typedOn(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, callback),
+
+    onUpdateDownloaded: (callback: (info: { version: string }) => void) =>
+      _typedOn(CHANNELS.UPDATE_DOWNLOADED, callback),
+
+    onUpdateError: (callback: (info: { message: string }) => void) =>
+      _typedOn(CHANNELS.UPDATE_ERROR, callback),
+
+    quitAndInstall: () => _typedInvoke(CHANNELS.UPDATE_QUIT_AND_INSTALL),
   },
 
   // Gemini API

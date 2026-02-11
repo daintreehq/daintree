@@ -33,6 +33,9 @@ export type { PanelState } from "./focusStore";
 export { useNotificationStore } from "./notificationStore";
 export type { Notification, NotificationType } from "./notificationStore";
 
+export { useUpdateStore } from "./updateStore";
+export type { UpdateStatus } from "./updateStore";
+
 export { useDiagnosticsStore } from "./diagnosticsStore";
 export type { DiagnosticsTab } from "./diagnosticsStore";
 export {
