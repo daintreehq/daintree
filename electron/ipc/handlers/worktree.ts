@@ -19,6 +19,7 @@ import {
 } from "../../../shared/utils/pathPattern.js";
 import { GitService } from "../../services/GitService.js";
 import { logDebug, logError } from "../../utils/logger.js";
+import { fileSearchService } from "../../services/FileSearchService.js";
 
 // In-memory map to track taskId -> worktreeIds for orchestration
 // Scoped by projectId to avoid cross-project collisions
@@ -125,7 +126,13 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     if (!workspaceClient) {
       throw new Error("Workspace client not initialized");
     }
-    return await workspaceClient.createWorktree(payload.rootPath, payload.options);
+    const worktreeId = await workspaceClient.createWorktree(payload.rootPath, payload.options);
+    try {
+      fileSearchService.invalidate(payload.options.path);
+    } catch (error) {
+      console.warn("[worktree.create] Failed to invalidate file search cache:", error);
+    }
+    return worktreeId;
   };
   ipcMain.handle(CHANNELS.WORKTREE_CREATE, handleWorktreeCreate);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_CREATE));
@@ -224,7 +231,16 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     if (payload.deleteBranch !== undefined && typeof payload.deleteBranch !== "boolean") {
       throw new Error("Invalid deleteBranch parameter");
     }
+    const states = await workspaceClient.getAllStatesAsync();
+    const worktree = states.find((wt) => wt.id === payload.worktreeId);
     await workspaceClient.deleteWorktree(payload.worktreeId, payload.force, payload.deleteBranch);
+    if (worktree) {
+      try {
+        fileSearchService.invalidate(worktree.path);
+      } catch (error) {
+        console.warn("[worktree.delete] Failed to invalidate file search cache:", error);
+      }
+    }
     // Clean up persisted issue association
     const issueMap = store.get("worktreeIssueMap", {});
     if (issueMap[payload.worktreeId]) {
@@ -426,6 +442,13 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
         newBranch: availableBranchName,
         path: availablePath,
       });
+
+      // Invalidate file search cache for the new worktree path
+      try {
+        fileSearchService.invalidate(availablePath);
+      } catch (error) {
+        console.warn("[worktree.create-for-task] Failed to invalidate file search cache:", error);
+      }
 
       // Store the taskId mapping
       addTaskWorktreeMapping(project.id, taskId, worktreeId);
@@ -660,6 +683,13 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
         }
 
         await workspaceClient.deleteWorktree(worktreeId, force, deleteBranch);
+        if (targetWorktree) {
+          try {
+            fileSearchService.invalidate(targetWorktree.path);
+          } catch (error) {
+            console.warn("[worktree.cleanup-task] Failed to invalidate file search cache:", error);
+          }
+        }
 
         // Remove from tracking after successful deletion
         removeTaskWorktreeMapping(currentProjectId, taskId, worktreeId);

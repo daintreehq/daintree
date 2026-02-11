@@ -290,4 +290,4 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
   );
 });
 
-export const TabButton = React.memo(TabButtonComponent);
+export const TabButton = TabButtonComponent;

@@ -528,4 +528,4 @@ function PanelHeaderComponent({
   );
 }
 
-export const PanelHeader = React.memo(PanelHeaderComponent);
+export const PanelHeader = PanelHeaderComponent;

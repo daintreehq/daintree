@@ -66,4 +66,4 @@ function SortableTabButtonComponent({
   );
 }
 
-export const SortableTabButton = React.memo(SortableTabButtonComponent);
+export const SortableTabButton = SortableTabButtonComponent;

@@ -71,7 +71,7 @@ process.on("unhandledRejection", (reason) => {
 });
 
 const ptyManager = new PtyManager();
-const processTreeCache = new ProcessTreeCache(1000);
+const processTreeCache = new ProcessTreeCache(2500); // 2.5s poll interval (reduced CPU load)
 let ptyPool: PtyPool | null = null;
 
 // Zero-copy ring buffers for terminal I/O (set via init-buffers message)

@@ -35,7 +35,7 @@ import { GitFileWatcher } from "../utils/gitFileWatcher.js";
 // Configuration
 const DEFAULT_ACTIVE_WORKTREE_INTERVAL_MS = 2000;
 const DEFAULT_BACKGROUND_WORKTREE_INTERVAL_MS = 10000;
-const WORKTREE_LIST_CACHE_TTL_MS = 60_000;
+const WORKTREE_LIST_CACHE_TTL_MS = 15_000; // 15 seconds (reduced from 60s for faster worktree visibility)
 
 interface RawWorktreeRecord {
   path: string;

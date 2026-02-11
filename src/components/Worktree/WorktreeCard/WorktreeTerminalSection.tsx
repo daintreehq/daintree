@@ -79,8 +79,8 @@ export function WorktreeTerminalSection({
 }: WorktreeTerminalSectionProps) {
   const showMetaFooter = counts.total > 0;
 
-  const terminalsId = useMemo(() => `worktree-${worktreeId}-terminals`, [worktreeId]);
-  const terminalsPanelId = useMemo(() => `worktree-${worktreeId}-terminals-panel`, [worktreeId]);
+  const terminalsId = `worktree-${worktreeId}-terminals`;
+  const terminalsPanelId = `worktree-${worktreeId}-terminals-panel`;
 
   const topTerminalState = useMemo((): { state: AgentState; count: number } | null => {
     for (const state of STATE_PRIORITY) {

@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import type React from "react";
 import type { WorktreeState } from "@/types";
 import type { RetryAction } from "@/store";
@@ -41,8 +40,8 @@ export function WorktreeDetailsSection({
   onDismissError,
   onRetryError,
 }: WorktreeDetailsSectionProps) {
-  const detailsId = useMemo(() => `worktree-${worktree.id}-details`, [worktree.id]);
-  const detailsPanelId = useMemo(() => `worktree-${worktree.id}-details-panel`, [worktree.id]);
+  const detailsId = `worktree-${worktree.id}-details`;
+  const detailsPanelId = `worktree-${worktree.id}-details-panel`;
 
   return (
     <div

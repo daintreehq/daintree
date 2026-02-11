@@ -69,7 +69,7 @@ interface CacheFile {
   projects: Record<string, CachedStats>;
 }
 
-const MAX_CACHE_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const MAX_CACHE_AGE_MS = 10 * 60 * 1000; // 10 minutes (reduced from 7 days for better freshness)
 const MAX_PROJECTS = 10;
 
 let instance: GitHubStatsCache | null = null;

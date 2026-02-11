@@ -10,7 +10,7 @@ interface FileListCacheEntry {
 
 const FILE_LIST_CACHE = new Cache<string, FileListCacheEntry>({
   maxSize: 30,
-  defaultTTL: 30_000,
+  defaultTTL: 10_000, // 10 seconds (reduced from 30s for faster worktree updates)
 });
 
 const MAX_RESULTS_DEFAULT = 50;
@@ -199,6 +199,11 @@ export class FileSearchService {
     } catch {
       return [];
     }
+  }
+
+  invalidate(cwd: string): void {
+    const resolvedCwd = path.resolve(cwd);
+    FILE_LIST_CACHE.invalidate(resolvedCwd);
   }
 
   private async loadFileList(cwd: string): Promise<string[]> {

@@ -23,7 +23,7 @@ export class ProcessTreeCache {
   private refreshCallbacks: Set<RefreshCallback> = new Set();
   private lastError: Error | null = null;
 
-  constructor(private pollIntervalMs: number = 1000) {}
+  constructor(private pollIntervalMs: number = 2500) {} // 2.5 seconds (increased from 1s to reduce CPU load)
 
   start(): void {
     if (this.refreshInterval) {
