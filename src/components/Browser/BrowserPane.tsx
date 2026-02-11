@@ -75,6 +75,7 @@ export function BrowserPane({
   const lastSetUrlRef = useRef<string>(history.present);
   // Track if webview has been mounted and is ready
   const [isWebviewReady, setIsWebviewReady] = useState(false);
+  const loadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const currentUrl = history.present;
   const canGoBack = history.past.length > 0;
@@ -118,18 +119,38 @@ export function BrowserPane({
 
     const handleDomReady = () => {
       setIsWebviewReady(true);
+      if (loadTimeoutRef.current) {
+        clearTimeout(loadTimeoutRef.current);
+        loadTimeoutRef.current = null;
+      }
     };
 
     const handleDidStartLoading = () => {
       setIsLoading(true);
       setLoadError(null);
+      if (loadTimeoutRef.current) {
+        clearTimeout(loadTimeoutRef.current);
+      }
+      loadTimeoutRef.current = setTimeout(() => {
+        if (webview.isLoading()) {
+          webview.reload();
+        }
+      }, 30000);
     };
 
     const handleDidStopLoading = () => {
       setIsLoading(false);
+      if (loadTimeoutRef.current) {
+        clearTimeout(loadTimeoutRef.current);
+        loadTimeoutRef.current = null;
+      }
     };
 
     const handleDidFailLoad = (event: Electron.DidFailLoadEvent) => {
+      if (loadTimeoutRef.current) {
+        clearTimeout(loadTimeoutRef.current);
+        loadTimeoutRef.current = null;
+      }
       // Ignore aborted loads (e.g., navigation interrupted by another navigation)
       if (event.errorCode === -3) return;
       // Ignore cancellations
@@ -156,6 +177,16 @@ export function BrowserPane({
       }
     };
 
+    const existingUrl = webview.getURL();
+    if (existingUrl && existingUrl !== "about:blank" && !webview.isLoading()) {
+      setIsWebviewReady(true);
+      setIsLoading(false);
+      const savedZoom = zoomFactor;
+      if (Number.isFinite(savedZoom)) {
+        webview.setZoomFactor(savedZoom);
+      }
+    }
+
     webview.addEventListener("dom-ready", handleDomReady);
     webview.addEventListener("did-start-loading", handleDidStartLoading);
     webview.addEventListener("did-stop-loading", handleDidStopLoading);
@@ -171,7 +202,7 @@ export function BrowserPane({
       webview.removeEventListener("did-navigate", handleDidNavigate);
       webview.removeEventListener("did-navigate-in-page", handleDidNavigateInPage);
     };
-  }, [hasValidUrl, loadError]);
+  }, [hasValidUrl, loadError, zoomFactor, webviewRef.current]);
 
   const handleNavigate = useCallback(
     (url: string) => {
@@ -238,6 +269,15 @@ export function BrowserPane({
       webview.reload();
     }
   }, [isWebviewReady]);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (loadTimeoutRef.current) {
+        clearTimeout(loadTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Listen for action-driven browser events
   useEffect(() => {

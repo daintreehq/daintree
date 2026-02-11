@@ -90,6 +90,7 @@ export function DevPreviewPane({
   const lastSetUrlRef = useRef<string>("");
   const [isWebviewReady, setIsWebviewReady] = useState(false);
   const [consoleTerminalId, setConsoleTerminalId] = useState<string | null>(terminalId);
+  const loadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isConsoleOpen = terminal?.devPreviewConsoleOpen ?? false;
 
   const currentUrl = history.present;
@@ -163,6 +164,10 @@ export function DevPreviewPane({
   }, [start]);
 
   const handleHardRestart = useCallback(() => {
+    if (loadTimeoutRef.current) {
+      clearTimeout(loadTimeoutRef.current);
+      loadTimeoutRef.current = null;
+    }
     setHistory(initializeBrowserHistory(undefined, ""));
     setBrowserUrl(id, "");
     lastSetUrlRef.current = "";
@@ -173,11 +178,43 @@ export function DevPreviewPane({
 
   useEffect(() => {
     const webview = webviewRef.current;
-    if (!webview || !isWebviewReady) return undefined;
+    if (!webview) return undefined;
 
-    const handleDidStartLoading = () => setIsLoading(true);
-    const handleDidStopLoading = () => setIsLoading(false);
-    const handleDidFinishLoad = () => setIsLoading(false);
+    const handleDidStartLoading = () => {
+      setIsLoading(true);
+      if (loadTimeoutRef.current) {
+        clearTimeout(loadTimeoutRef.current);
+      }
+      loadTimeoutRef.current = setTimeout(() => {
+        if (webview.isLoading()) {
+          webview.reload();
+        }
+      }, 30000);
+    };
+
+    const handleDidStopLoading = () => {
+      setIsLoading(false);
+      if (loadTimeoutRef.current) {
+        clearTimeout(loadTimeoutRef.current);
+        loadTimeoutRef.current = null;
+      }
+    };
+
+    const handleDidFinishLoad = () => {
+      setIsLoading(false);
+      if (loadTimeoutRef.current) {
+        clearTimeout(loadTimeoutRef.current);
+        loadTimeoutRef.current = null;
+      }
+    };
+
+    const handleDidFailLoad = () => {
+      setIsLoading(false);
+      if (loadTimeoutRef.current) {
+        clearTimeout(loadTimeoutRef.current);
+        loadTimeoutRef.current = null;
+      }
+    };
 
     const handleDidNavigate = (e: Electron.DidNavigateEvent) => {
       const navigatedUrl = e.url;
@@ -196,6 +233,7 @@ export function DevPreviewPane({
     webview.addEventListener("did-start-loading", handleDidStartLoading);
     webview.addEventListener("did-stop-loading", handleDidStopLoading);
     webview.addEventListener("did-finish-load", handleDidFinishLoad);
+    webview.addEventListener("did-fail-load", handleDidFailLoad);
     webview.addEventListener("did-navigate", handleDidNavigate as any);
     webview.addEventListener("did-navigate-in-page", handleDidNavigateInPage as any);
 
@@ -203,10 +241,11 @@ export function DevPreviewPane({
       webview.removeEventListener("did-start-loading", handleDidStartLoading);
       webview.removeEventListener("did-stop-loading", handleDidStopLoading);
       webview.removeEventListener("did-finish-load", handleDidFinishLoad);
+      webview.removeEventListener("did-fail-load", handleDidFailLoad);
       webview.removeEventListener("did-navigate", handleDidNavigate as any);
       webview.removeEventListener("did-navigate-in-page", handleDidNavigateInPage as any);
     };
-  }, [isWebviewReady]);
+  }, [webviewRef.current]);
 
   useEffect(() => {
     const webview = webviewRef.current;
@@ -215,13 +254,23 @@ export function DevPreviewPane({
     const handleDomReady = () => {
       setIsWebviewReady(true);
       webview.setZoomFactor(zoomFactor);
+      if (loadTimeoutRef.current) {
+        clearTimeout(loadTimeoutRef.current);
+        loadTimeoutRef.current = null;
+      }
     };
+
+    const existingUrl = webview.getURL();
+    if (existingUrl && existingUrl !== "about:blank" && !webview.isLoading()) {
+      setIsWebviewReady(true);
+      webview.setZoomFactor(zoomFactor);
+    }
 
     webview.addEventListener("dom-ready", handleDomReady);
     return () => {
       webview.removeEventListener("dom-ready", handleDomReady);
     };
-  }, [zoomFactor]);
+  }, [zoomFactor, webviewRef.current]);
 
   useEffect(() => {
     if (isWebviewReady && currentUrl && currentUrl !== lastSetUrlRef.current) {
@@ -231,6 +280,14 @@ export function DevPreviewPane({
       }
     }
   }, [currentUrl, isWebviewReady]);
+
+  useEffect(() => {
+    return () => {
+      if (loadTimeoutRef.current) {
+        clearTimeout(loadTimeoutRef.current);
+      }
+    };
+  }, []);
 
   return (
     <ContentPanel
