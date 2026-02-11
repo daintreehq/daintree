@@ -60,6 +60,12 @@ export interface WorktreeSnapshot {
   name: string;
   branch?: string;
   isCurrent: boolean;
+  /**
+   * Whether this is the main worktree (project permanent worktree).
+   * Determined by canonical path match with project root, not git primary status.
+   * Main worktrees are protected from deletion and cleanup operations.
+   * False when project root path is unavailable (no protection applied).
+   */
   isMainWorktree?: boolean;
   gitDir?: string;
   summary?: string;

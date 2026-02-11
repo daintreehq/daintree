@@ -633,8 +633,32 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
 
     const errors: string[] = [];
 
+    // Fetch all worktree states once for efficient main-worktree checking
+    let allStates: Awaited<ReturnType<typeof workspaceClient.getAllStatesAsync>> = [];
+    try {
+      allStates = await workspaceClient.getAllStatesAsync();
+    } catch (error) {
+      logDebug("Could not fetch worktree states for cleanup pre-check", {
+        error: error instanceof Error ? error.message : String(error),
+        taskId,
+      });
+    }
+
     for (const worktreeId of worktreeIds) {
       try {
+        // Safeguard: Check if this is the main worktree before attempting deletion
+        const targetWorktree = allStates.find((wt) => wt.id === worktreeId);
+
+        if (targetWorktree?.isMainWorktree) {
+          logDebug("Skipping deletion of main worktree in cleanup task", {
+            worktreeId,
+            taskId,
+            projectId: currentProjectId,
+          });
+          removeTaskWorktreeMapping(currentProjectId, taskId, worktreeId);
+          continue;
+        }
+
         await workspaceClient.deleteWorktree(worktreeId, force, deleteBranch);
 
         // Remove from tracking after successful deletion

@@ -82,7 +82,12 @@ export interface Worktree {
   /** Whether this is the currently active worktree based on cwd */
   isCurrent: boolean;
 
-  /** Whether this is the main worktree (not a linked worktree) */
+  /**
+   * Whether this is the main worktree (project permanent worktree).
+   * Determined by canonical path match with project root, not git primary status.
+   * Main worktrees are protected from deletion and cleanup operations.
+   * False when project root path is unavailable (no protection applied).
+   */
   isMainWorktree?: boolean;
 
   /** Path to the .git directory */

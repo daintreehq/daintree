@@ -1,6 +1,7 @@
 import PQueue from "p-queue";
 import { mkdir, writeFile, stat } from "fs/promises";
-import { join as pathJoin, dirname, resolve as pathResolve, isAbsolute } from "path";
+import { join as pathJoin, dirname, resolve as pathResolve, isAbsolute, normalize as pathNormalize } from "path";
+import { realpathSync } from "fs";
 import { simpleGit, SimpleGit, BranchSummary } from "simple-git";
 import type { Worktree, WorktreeChanges } from "../../shared/types/domain.js";
 import type {
@@ -89,6 +90,17 @@ export class WorkspaceService {
   private inFlightWorktreeList = new Map<string, Promise<RawWorktreeRecord[]>>();
 
   constructor(private readonly sendEvent: (event: WorkspaceHostEvent) => void) {}
+
+  private canonicalizePath(p: string): string {
+    try {
+      const resolved = pathResolve(p);
+      const real = realpathSync(resolved);
+      return process.platform === "win32" ? real.toLowerCase() : real;
+    } catch {
+      const normalized = pathNormalize(pathResolve(p));
+      return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+    }
+  }
 
   async loadProject(requestId: string, projectRootPath: string): Promise<void> {
     try {
@@ -226,11 +238,18 @@ export class WorkspaceService {
 
       const pushWorktree = () => {
         if (currentWorktree.path) {
+          let isMain = false;
+          if (this.projectRootPath) {
+            const canonicalWorktreePath = this.canonicalizePath(currentWorktree.path);
+            const canonicalProjectRoot = this.canonicalizePath(this.projectRootPath);
+            isMain = canonicalWorktreePath === canonicalProjectRoot;
+          }
+
           worktrees.push({
             path: currentWorktree.path,
             branch: currentWorktree.branch || "",
             bare: currentWorktree.bare || false,
-            isMainWorktree: worktrees.length === 0,
+            isMainWorktree: isMain,
             head: currentWorktree.isDetached ? currentWorktree.head : undefined,
             isDetached: currentWorktree.isDetached,
           });
@@ -346,6 +365,7 @@ export class WorkspaceService {
         existingMonitor.branch = wt.branch;
         existingMonitor.name = wt.name;
         existingMonitor.isCurrent = isActive;
+        existingMonitor.isMainWorktree = wt.isMainWorktree;
         const interval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
         existingMonitor.pollingInterval = interval;
         existingMonitor.pollingStrategy.setBaseInterval(interval);
