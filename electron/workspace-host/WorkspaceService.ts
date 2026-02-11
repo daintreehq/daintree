@@ -253,7 +253,7 @@ export class WorkspaceService {
 
       pushWorktree();
 
-      if (cacheKey) {
+      if (cacheKey && this.inFlightWorktreeList.get(cacheKey) === fetchPromise) {
         this.setCachedWorktrees(cacheKey, worktrees);
       }
 
@@ -267,7 +267,7 @@ export class WorkspaceService {
     try {
       return this.cloneRawWorktrees(await fetchPromise);
     } finally {
-      if (cacheKey) {
+      if (cacheKey && this.inFlightWorktreeList.get(cacheKey) === fetchPromise) {
         this.inFlightWorktreeList.delete(cacheKey);
       }
     }
@@ -787,6 +787,10 @@ export class WorkspaceService {
     // Clear git caches to prevent stale data if path is reused
     clearGitDirCache(monitor.path);
     invalidateGitStatusCache(monitor.path);
+    const cacheKey = this.getWorktreeCacheKey();
+    if (cacheKey) {
+      this.invalidateCachedWorktrees(cacheKey);
+    }
 
     // Emit removal events for frontend cleanup
     this.sendEvent({ type: "worktree-removed", worktreeId });
@@ -995,6 +999,11 @@ export class WorkspaceService {
         args.push(monitor.path);
         await this.git.raw(args);
         clearGitDirCache(monitor.path);
+
+        const cacheKey = this.getWorktreeCacheKey();
+        if (cacheKey) {
+          this.invalidateCachedWorktrees(cacheKey);
+        }
 
         if (branchToDelete) {
           try {
