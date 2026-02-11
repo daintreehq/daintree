@@ -22,8 +22,10 @@ export const useUpdateStore = create<UpdateStore>((set) => ({
   progress: 0,
   error: null,
   dismissed: false,
-  setAvailable: (version) => set({ status: "available", version, progress: 0, error: null, dismissed: false }),
-  setDownloading: (percent) => set({ status: "downloading", progress: Math.min(Math.max(percent, 0), 100) }),
+  setAvailable: (version) =>
+    set({ status: "available", version, progress: 0, error: null, dismissed: false }),
+  setDownloading: (percent) =>
+    set({ status: "downloading", progress: Math.min(Math.max(percent, 0), 100) }),
   setDownloaded: (version) =>
     set({ status: "downloaded", version, progress: 100, error: null, dismissed: false }),
   setError: (message) => set({ status: "error", error: message, progress: 0 }),

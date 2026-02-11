@@ -10,7 +10,11 @@ export function UpdateNotification() {
   const dismissTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const shouldShow =
-    !dismissed && (status === "available" || status === "downloading" || status === "downloaded" || status === "error");
+    !dismissed &&
+    (status === "available" ||
+      status === "downloading" ||
+      status === "downloaded" ||
+      status === "error");
 
   useEffect(() => {
     if (dismissTimerRef.current) {
@@ -66,7 +70,12 @@ export function UpdateNotification() {
           "backdrop-blur-sm"
         )}
       >
-        <div className={cn("mt-0.5 shrink-0", status === "error" ? "text-[var(--color-status-error)]" : "text-canopy-accent")}>
+        <div
+          className={cn(
+            "mt-0.5 shrink-0",
+            status === "error" ? "text-[var(--color-status-error)]" : "text-canopy-accent"
+          )}
+        >
           {status === "downloaded" ? (
             <RefreshCw className="h-4 w-4" />
           ) : status === "error" ? (

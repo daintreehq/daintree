@@ -4,6 +4,19 @@ const appMock = vi.hoisted(() => ({
   isPackaged: true,
 }));
 
+const ipcMainMock = vi.hoisted(() => ({
+  handle: vi.fn(),
+  removeHandler: vi.fn(),
+}));
+
+const windowMock = vi.hoisted(() => ({
+  isDestroyed: vi.fn(() => false),
+  webContents: {
+    isDestroyed: vi.fn(() => false),
+    send: vi.fn(),
+  },
+}));
+
 const autoUpdaterMock = vi.hoisted(() => ({
   autoDownload: false,
   autoInstallOnAppQuit: false,
@@ -14,6 +27,7 @@ const autoUpdaterMock = vi.hoisted(() => ({
 
 vi.mock("electron", () => ({
   app: appMock,
+  ipcMain: ipcMainMock,
 }));
 
 vi.mock("electron-updater", () => ({
@@ -29,10 +43,13 @@ describe("AutoUpdaterService", () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     appMock.isPackaged = true;
+    windowMock.isDestroyed.mockReturnValue(false);
+    windowMock.webContents.isDestroyed.mockReturnValue(false);
     delete process.env.PORTABLE_EXECUTABLE_FILE;
     autoUpdaterMock.checkForUpdatesAndNotify.mockResolvedValue(undefined);
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
 
     autoUpdaterService.dispose();
   });
@@ -48,7 +65,7 @@ describe("AutoUpdaterService", () => {
       throw new Error("sync initial failure");
     });
 
-    expect(() => autoUpdaterService.initialize()).not.toThrow();
+    expect(() => autoUpdaterService.initialize(windowMock as any)).not.toThrow();
   });
 
   it("does not crash on synchronous throw during periodic checks", () => {
@@ -61,13 +78,13 @@ describe("AutoUpdaterService", () => {
       throw new Error("sync periodic failure");
     });
 
-    autoUpdaterService.initialize();
+    autoUpdaterService.initialize(windowMock as any);
 
     expect(() => vi.advanceTimersByTime(CHECK_INTERVAL_MS + 1)).not.toThrow();
   });
 
   it("detaches every registered listener on dispose", () => {
-    autoUpdaterService.initialize();
+    autoUpdaterService.initialize(windowMock as any);
     autoUpdaterService.dispose();
 
     const expectedEvents = [
@@ -89,10 +106,10 @@ describe("AutoUpdaterService", () => {
       throw new Error("listener registration failed");
     });
 
-    expect(() => autoUpdaterService.initialize()).not.toThrow();
+    expect(() => autoUpdaterService.initialize(windowMock as any)).not.toThrow();
 
     (autoUpdaterMock.on as Mock).mockClear();
-    expect(() => autoUpdaterService.initialize()).not.toThrow();
+    expect(() => autoUpdaterService.initialize(windowMock as any)).not.toThrow();
     expect((autoUpdaterMock.on as Mock).mock.calls.length).toBeGreaterThan(0);
   });
 });
