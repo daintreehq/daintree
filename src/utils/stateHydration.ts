@@ -26,10 +26,81 @@ import { markRendererPerformance } from "@/utils/performance";
 
 const RECONNECT_TIMEOUT_MS = 10000;
 const RESTORE_CONCURRENCY = 4;
+const DEFERRED_RESTORE_IDLE_TIMEOUT_MS = 1200;
+const DEFERRED_RESTORE_FALLBACK_DELAY_MS = 32;
+
+let hydrationBootstrapPromise: Promise<void> | null = null;
 
 interface TerminalRestoreTask {
   terminalId: string;
   label: string;
+  worktreeId?: string;
+  location: "grid" | "dock";
+}
+
+async function ensureHydrationBootstrap(): Promise<void> {
+  if (!hydrationBootstrapPromise) {
+    hydrationBootstrapPromise = (async () => {
+      await keybindingService.loadOverrides();
+      await useUserAgentRegistryStore.getState().initialize();
+    })().catch((error) => {
+      hydrationBootstrapPromise = null;
+      throw error;
+    });
+  }
+
+  await hydrationBootstrapPromise;
+}
+
+function splitSnapshotRestoreTasks(
+  tasks: TerminalRestoreTask[],
+  activeWorktreeId: string | null,
+  enableDeferredRestore: boolean
+): { criticalTasks: TerminalRestoreTask[]; deferredTasks: TerminalRestoreTask[] } {
+  if (!enableDeferredRestore || tasks.length <= 1) {
+    return { criticalTasks: tasks, deferredTasks: [] };
+  }
+
+  const criticalTasks: TerminalRestoreTask[] = [];
+  const deferredTasks: TerminalRestoreTask[] = [];
+
+  for (const task of tasks) {
+    const isDockTask = task.location === "dock";
+    const isProjectScopedTask = task.worktreeId == null;
+    const isActiveWorktreeTask = task.worktreeId === activeWorktreeId;
+
+    if (isDockTask || isProjectScopedTask || isActiveWorktreeTask) {
+      criticalTasks.push(task);
+    } else {
+      deferredTasks.push(task);
+    }
+  }
+
+  if (criticalTasks.length === 0 && deferredTasks.length > 0) {
+    const fallbackTask = deferredTasks.shift();
+    if (fallbackTask) {
+      criticalTasks.push(fallbackTask);
+    }
+  }
+
+  return { criticalTasks, deferredTasks };
+}
+
+function scheduleDeferredSnapshotRestore(runRestore: () => Promise<void>): void {
+  const execute = () => {
+    void runRestore().catch((error) => {
+      logWarn("Deferred terminal snapshot restore failed", { error });
+    });
+  };
+
+  if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
+    window.requestIdleCallback(() => execute(), {
+      timeout: DEFERRED_RESTORE_IDLE_TIMEOUT_MS,
+    });
+    return;
+  }
+
+  setTimeout(execute, DEFERRED_RESTORE_FALLBACK_DELAY_MS);
 }
 
 async function restoreTerminalSnapshots(
@@ -162,12 +233,7 @@ export async function hydrateAppState(
   };
 
   try {
-    await keybindingService.loadOverrides();
-    if (!checkCurrent()) return;
-
-    // Initialize user agent registry for existing user-defined agents
-    // (no UI exposure, but allows existing agents to function)
-    await useUserAgentRegistryStore.getState().initialize();
+    await ensureHydrationBootstrap();
     if (!checkCurrent()) return;
 
     // Batch fetch initial state
@@ -218,6 +284,29 @@ export async function hydrateAppState(
     // Terminals stay running across project switches - we just reconnect to them
     const currentProjectId = currentProject?.id;
     const projectRoot = currentProject?.path;
+    const shouldDeferSnapshotRestore = Boolean(_switchId);
+
+    const worktreesPromise = worktreeClient.getAll().catch((error) => {
+      logWarn("Failed to prefetch worktrees during hydration", { error });
+      return null;
+    });
+
+    const tabGroupsPromise =
+      currentProjectId && options.hydrateTabGroups
+        ? projectClient
+            .getTabGroups(currentProjectId)
+            .then((tabGroups) => tabGroups ?? [])
+            .catch((error) => {
+              logWarn("Failed to prefetch tab groups", { error });
+              return null;
+            })
+        : null;
+
+    const recipeLoadPromise = currentProjectId
+      ? loadRecipes(currentProjectId).catch((error) => {
+          logWarn("Failed to load recipes", { error });
+        })
+      : null;
 
     if (currentProjectId) {
       try {
@@ -337,6 +426,8 @@ export async function hydrateAppState(
                 restoreTasks.push({
                   terminalId: restoredTerminalId,
                   label: saved.id,
+                  worktreeId: backendTerminal.worktreeId,
+                  location,
                 });
 
                 // Mark as restored
@@ -492,6 +583,8 @@ export async function hydrateAppState(
                     restoreTasks.push({
                       terminalId: restoredTerminalId,
                       label: saved.id,
+                      worktreeId: reconnectedTerminal.worktreeId ?? saved.worktreeId,
+                      location,
                     });
                   } else {
                     // Terminal doesn't exist in backend or timed out - respawn
@@ -676,6 +769,8 @@ export async function hydrateAppState(
               restoreTasks.push({
                 terminalId: restoredTerminalId,
                 label: terminal.id,
+                worktreeId: terminal.worktreeId,
+                location: "grid",
               });
             } catch (error) {
               logWarn(`Failed to reconnect to orphaned terminal ${terminal.id}`, { error });
@@ -683,13 +778,39 @@ export async function hydrateAppState(
           }
         }
 
-        await restoreTerminalSnapshots(restoreTasks, checkCurrent);
+        const { criticalTasks, deferredTasks } = splitSnapshotRestoreTasks(
+          restoreTasks,
+          appState.activeWorktreeId ?? null,
+          shouldDeferSnapshotRestore
+        );
+
+        await restoreTerminalSnapshots(criticalTasks, checkCurrent);
         if (!checkCurrent()) return;
+
+        if (deferredTasks.length > 0) {
+          markRendererPerformance("hydrate_restore_snapshots_deferred_scheduled", {
+            deferredSnapshotCount: deferredTasks.length,
+            switchId: _switchId ?? null,
+          });
+
+          scheduleDeferredSnapshotRestore(async () => {
+            if (!checkCurrent()) return;
+            await restoreTerminalSnapshots(deferredTasks, checkCurrent);
+            if (!checkCurrent()) return;
+
+            markRendererPerformance("hydrate_restore_snapshots_deferred_complete", {
+              deferredSnapshotCount: deferredTasks.length,
+              switchId: _switchId ?? null,
+            });
+          });
+        }
 
         if (panelRestoreStartedAt !== null) {
           markRendererPerformance(PERF_MARKS.HYDRATE_RESTORE_PANELS_END, {
             panelCount: panelRestoreCount,
             durationMs: Date.now() - panelRestoreStartedAt,
+            criticalSnapshotCount: criticalTasks.length,
+            deferredSnapshotCount: deferredTasks.length,
           });
         }
       } catch (error) {
@@ -699,20 +820,29 @@ export async function hydrateAppState(
       // Restore tab groups after terminals are restored
       if (options.hydrateTabGroups) {
         try {
-          const tabGroups = await projectClient.getTabGroups(currentProjectId);
+          const tabGroups = tabGroupsPromise ? await tabGroupsPromise : [];
           if (!checkCurrent()) return;
 
-          // Always call hydrateTabGroups, even with empty array, to clear stale groups
-          if (tabGroups && tabGroups.length > 0) {
-            logInfo(`Restoring ${tabGroups.length} tab group(s)`);
+          if (tabGroups === null) {
+            options.hydrateTabGroups([], { skipPersist: true });
+            tabGroupRestoreCount = 0;
+            markRendererPerformance(PERF_MARKS.HYDRATE_RESTORE_TAB_GROUPS_END, {
+              tabGroupCount: tabGroupRestoreCount,
+              fallback: "prefetch-error-clear",
+            });
           } else {
-            logInfo("Clearing stale tab groups (no groups for project)");
+            // Always call hydrateTabGroups, even with empty array, to clear stale groups
+            if (tabGroups.length > 0) {
+              logInfo(`Restoring ${tabGroups.length} tab group(s)`);
+            } else {
+              logInfo("Clearing stale tab groups (no groups for project)");
+            }
+            tabGroupRestoreCount = tabGroups.length;
+            options.hydrateTabGroups(tabGroups);
+            markRendererPerformance(PERF_MARKS.HYDRATE_RESTORE_TAB_GROUPS_END, {
+              tabGroupCount: tabGroupRestoreCount,
+            });
           }
-          tabGroupRestoreCount = tabGroups?.length ?? 0;
-          options.hydrateTabGroups(tabGroups ?? []);
-          markRendererPerformance(PERF_MARKS.HYDRATE_RESTORE_TAB_GROUPS_END, {
-            tabGroupCount: tabGroupRestoreCount,
-          });
         } catch (error) {
           logWarn("Failed to restore tab groups", { error });
           // Check staleness before clearing to prevent race condition
@@ -737,45 +867,46 @@ export async function hydrateAppState(
       logWarn("Failed to cleanup orphaned terminals", { error });
     }
 
-    // Restore active worktree with validation
-    // Fetch worktrees to validate the saved activeWorktreeId still exists
-    try {
-      const worktrees = await worktreeClient.getAll();
-      const savedActiveId = appState.activeWorktreeId;
+    // Restore active worktree with validation.
+    // Worktree fetch starts earlier to overlap with terminal restoration.
+    const worktrees = await worktreesPromise;
+    const savedActiveId = appState.activeWorktreeId;
 
-      if (worktrees.length > 0) {
-        // Check if the saved active worktree still exists
-        const worktreeExists = savedActiveId && worktrees.some((wt) => wt.id === savedActiveId);
-
-        if (worktreeExists) {
-          // Restore the saved active worktree
-          setActiveWorktree(savedActiveId);
-        } else {
-          // Fallback to the first worktree (main worktree is typically first)
-          const sortedWorktrees = [...worktrees].sort((a, b) => {
-            if (a.isMainWorktree && !b.isMainWorktree) return -1;
-            if (!a.isMainWorktree && b.isMainWorktree) return 1;
-            return a.name.localeCompare(b.name);
-          });
-          const fallbackWorktree = sortedWorktrees[0];
-          logInfo(
-            `Active worktree ${savedActiveId ?? "(none)"} not found, falling back to: ${fallbackWorktree.name}`
-          );
-          setActiveWorktree(fallbackWorktree.id);
-        }
+    if (worktrees === null) {
+      if (savedActiveId) {
+        setActiveWorktree(savedActiveId);
       }
-      // If no worktrees exist, we don't set any active worktree (handled gracefully)
-    } catch (error) {
-      logWarn("Failed to validate active worktree", { error });
-      // On error, still try to use the saved ID if present
-      if (appState.activeWorktreeId) {
-        setActiveWorktree(appState.activeWorktreeId);
+    } else if (worktrees.length > 0) {
+      // Check if the saved active worktree still exists
+      const worktreeExists = savedActiveId && worktrees.some((wt) => wt.id === savedActiveId);
+
+      if (worktreeExists) {
+        // Restore the saved active worktree
+        setActiveWorktree(savedActiveId);
+      } else {
+        // Fallback to the first worktree (main worktree is typically first)
+        const sortedWorktrees = [...worktrees].sort((a, b) => {
+          if (a.isMainWorktree && !b.isMainWorktree) return -1;
+          if (!a.isMainWorktree && b.isMainWorktree) return 1;
+          return a.name.localeCompare(b.name);
+        });
+        const fallbackWorktree = sortedWorktrees[0];
+        logInfo(
+          `Active worktree ${savedActiveId ?? "(none)"} not found, falling back to: ${fallbackWorktree.name}`
+        );
+        setActiveWorktree(fallbackWorktree.id);
       }
     }
+    // If no worktrees exist, we don't set any active worktree (handled gracefully)
 
-    // Load recipes for the current project
-    if (currentProjectId) {
-      await loadRecipes(currentProjectId);
+    // Recipe load starts earlier to overlap with hydration work.
+    // During project switch we don't block switch completion on recipes.
+    if (recipeLoadPromise) {
+      if (_switchId) {
+        void recipeLoadPromise;
+      } else {
+        await recipeLoadPromise;
+      }
     }
 
     if (appState.developerMode?.enabled && appState.developerMode.autoOpenDiagnostics) {

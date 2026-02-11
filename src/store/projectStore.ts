@@ -202,9 +202,17 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
 
       // Save current project's panel state BEFORE switching
       if (oldProjectId) {
-        // Flush any pending persistence and wait for completion
+        // Flush persistence in the background, but don't block switch latency.
+        // We persist from in-memory store state below.
         flushTerminalPersistence();
-        await terminalPersistence.whenIdle();
+        void terminalPersistence.whenIdle().catch((error) => {
+          logErrorWithContext(error, {
+            operation: "wait_terminal_persistence_before_switch",
+            component: "projectStore",
+            errorType: "filesystem",
+            details: { oldProjectId },
+          });
+        });
 
         // Get current terminals from store and save to per-project state
         const currentTerminals = useTerminalStore.getState().terminals;
@@ -243,7 +251,8 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       console.log("[ProjectSwitch] Reinitializing worktree data store...");
       forceReinitializeWorktreeDataStore();
 
-      await get().loadProjects();
+      // Refresh in the background so switch completion isn't blocked by project list I/O.
+      void get().loadProjects();
 
       // Note: State re-hydration is triggered by PROJECT_ON_SWITCH IPC event
       // which is handled in useProjectSwitchRehydration. We don't dispatch
@@ -350,9 +359,17 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
 
       // Save current project's panel state BEFORE switching (same as switchProject)
       if (oldProjectId) {
-        // Flush any pending persistence and wait for completion
+        // Flush persistence in the background, but don't block switch latency.
+        // We persist from in-memory store state below.
         flushTerminalPersistence();
-        await terminalPersistence.whenIdle();
+        void terminalPersistence.whenIdle().catch((error) => {
+          logErrorWithContext(error, {
+            operation: "wait_terminal_persistence_before_reopen",
+            component: "projectStore",
+            errorType: "filesystem",
+            details: { oldProjectId },
+          });
+        });
 
         // Get current terminals from store and save to per-project state
         const currentTerminals = useTerminalStore.getState().terminals;
@@ -389,7 +406,8 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       console.log("[ProjectStore] Reinitializing worktree data store...");
       forceReinitializeWorktreeDataStore();
 
-      await get().loadProjects();
+      // Refresh in the background so switch completion isn't blocked by project list I/O.
+      void get().loadProjects();
 
       // Note: State re-hydration is triggered by PROJECT_ON_SWITCH IPC event
       // which is handled in useProjectSwitchRehydration. We don't dispatch

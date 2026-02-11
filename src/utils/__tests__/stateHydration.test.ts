@@ -678,6 +678,234 @@ describe("hydrateAppState", () => {
     expect(fetchAndRestoreMock).not.toHaveBeenCalled();
   });
 
+  it("prefetches worktrees and tab groups while snapshot restoration is in progress", async () => {
+    let releaseRestore!: () => void;
+    fetchAndRestoreMock.mockImplementation((terminalId: string) => {
+      if (terminalId === "terminal-1") {
+        return new Promise<void>((resolve) => {
+          releaseRestore = resolve;
+        });
+      }
+      return Promise.resolve();
+    });
+
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "terminal-1",
+            kind: "terminal",
+            title: "Terminal 1",
+            cwd: "/project",
+            location: "grid",
+            worktreeId: "wt-active",
+          },
+        ],
+        activeWorktreeId: "wt-active",
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+
+    terminalClientMock.getForProject.mockResolvedValue([
+      {
+        id: "terminal-1",
+        hasPty: true,
+        cwd: "/project",
+        kind: "terminal",
+        title: "Terminal 1",
+        worktreeId: "wt-active",
+      },
+    ]);
+
+    const addTerminal = vi.fn(async (options: { existingId?: string }) => {
+      return options.existingId ?? "terminal-id";
+    });
+
+    const hydrationPromise = hydrateAppState({
+      addTerminal,
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+      hydrateTabGroups: vi.fn(),
+    });
+
+    for (let i = 0; i < 30; i += 1) {
+      if (fetchAndRestoreMock.mock.calls.length > 0) {
+        break;
+      }
+      await Promise.resolve();
+    }
+
+    expect(worktreeClientMock.getAll).toHaveBeenCalledTimes(1);
+    expect(projectClientMock.getTabGroups).toHaveBeenCalledWith("project-1");
+
+    releaseRestore();
+    await hydrationPromise;
+  });
+
+  it("defers non-critical snapshot restoration during project-switch hydration", async () => {
+    vi.useFakeTimers();
+    try {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [
+            {
+              id: "terminal-active",
+              kind: "terminal",
+              title: "Active",
+              cwd: "/project",
+              location: "grid",
+              worktreeId: "wt-active",
+            },
+            {
+              id: "terminal-background",
+              kind: "terminal",
+              title: "Background",
+              cwd: "/project",
+              location: "grid",
+              worktreeId: "wt-background",
+            },
+            {
+              id: "terminal-dock",
+              kind: "terminal",
+              title: "Dock",
+              cwd: "/project",
+              location: "dock",
+              worktreeId: "wt-background",
+            },
+          ],
+          activeWorktreeId: "wt-active",
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([
+        {
+          id: "terminal-active",
+          hasPty: true,
+          cwd: "/project",
+          kind: "terminal",
+          title: "Active",
+          worktreeId: "wt-active",
+        },
+        {
+          id: "terminal-background",
+          hasPty: true,
+          cwd: "/project",
+          kind: "terminal",
+          title: "Background",
+          worktreeId: "wt-background",
+        },
+        {
+          id: "terminal-dock",
+          hasPty: true,
+          cwd: "/project",
+          kind: "terminal",
+          title: "Dock",
+          worktreeId: "wt-background",
+        },
+      ]);
+
+      const addTerminal = vi.fn(async (options: { existingId?: string; requestedId?: string }) => {
+        return options.existingId ?? options.requestedId ?? "terminal-id";
+      });
+
+      await hydrateAppState(
+        {
+          addTerminal,
+          setActiveWorktree: vi.fn(),
+          loadRecipes: vi.fn().mockResolvedValue(undefined),
+          openDiagnosticsDock: vi.fn(),
+        },
+        "switch-1",
+        () => true
+      );
+
+      expect(fetchAndRestoreMock).toHaveBeenCalledWith("terminal-active");
+      expect(fetchAndRestoreMock).toHaveBeenCalledWith("terminal-dock");
+      expect(fetchAndRestoreMock).not.toHaveBeenCalledWith("terminal-background");
+
+      await vi.advanceTimersByTimeAsync(40);
+      await Promise.resolve();
+
+      expect(fetchAndRestoreMock).toHaveBeenCalledWith("terminal-background");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not block project-switch hydration on recipe loading", async () => {
+    let resolveRecipes!: () => void;
+    const pendingRecipes = new Promise<void>((resolve) => {
+      resolveRecipes = resolve;
+    });
+
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+
+    const hydratePromise = hydrateAppState(
+      {
+        addTerminal: vi.fn().mockResolvedValue("terminal-id"),
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockReturnValue(pendingRecipes),
+        openDiagnosticsDock: vi.fn(),
+      },
+      "switch-2",
+      () => true
+    );
+
+    await expect(hydratePromise).resolves.toBeUndefined();
+    resolveRecipes();
+    await pendingRecipes;
+  });
+
+  it("waits for recipe loading during initial hydration", async () => {
+    let resolveRecipes!: () => void;
+    const pendingRecipes = new Promise<void>((resolve) => {
+      resolveRecipes = resolve;
+    });
+
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+
+    let hydrationComplete = false;
+    const hydratePromise = hydrateAppState({
+      addTerminal: vi.fn().mockResolvedValue("terminal-id"),
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockReturnValue(pendingRecipes),
+      openDiagnosticsDock: vi.fn(),
+    }).then(() => {
+      hydrationComplete = true;
+    });
+
+    await Promise.resolve();
+    expect(hydrationComplete).toBe(false);
+
+    resolveRecipes();
+    await hydratePromise;
+    expect(hydrationComplete).toBe(true);
+  });
+
   it("loads and hydrates persisted tab groups after terminal restore", async () => {
     // This test verifies that tab groups are loaded from project storage
     // and passed to the hydrateTabGroups callback after terminals are restored.
