@@ -858,7 +858,7 @@ async function createWindow(): Promise<void> {
   });
 
   // Initialize auto-updater (checks for updates on startup and periodically)
-  autoUpdaterService.initialize();
+  autoUpdaterService.initialize(mainWindow);
 
   // Initialize Deferred Services
   initializeDeferredServices(mainWindow, cliAvailabilityService!, eventBuffer!).catch((error) => {

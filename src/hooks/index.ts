@@ -71,6 +71,8 @@ export type { ActionPaletteItem, UseActionPaletteReturn } from "./useActionPalet
 
 export { useDoubleShift } from "./useDoubleShift";
 
+export { useUpdateListener } from "./useUpdateListener";
+
 export { useAnimatedPresence } from "./useAnimatedPresence";
 export type { UseAnimatedPresenceOptions, UseAnimatedPresenceReturn } from "./useAnimatedPresence";
 

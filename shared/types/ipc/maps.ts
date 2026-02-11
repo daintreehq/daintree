@@ -958,6 +958,12 @@ export interface IpcInvokeMap {
     result: DevPreviewSessionState;
   };
 
+  // Auto-update channels
+  "update:quit-and-install": {
+    args: [];
+    result: void;
+  };
+
   // Agent Capabilities channels
   "agent-capabilities:get-registry": {
     args: [];
@@ -1056,6 +1062,12 @@ export interface IpcEventMap {
 
   // Notification events
   "notification:update": { waitingCount: number; failedCount: number };
+
+  // Auto-update events
+  "update:available": { version: string };
+  "update:download-progress": { percent: number };
+  "update:downloaded": { version: string };
+  "update:error": { message: string };
 
   // Dev Preview events
   "dev-preview:state-changed": DevPreviewStateChangedPayload;
