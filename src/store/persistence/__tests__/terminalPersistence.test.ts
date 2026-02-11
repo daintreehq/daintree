@@ -227,6 +227,39 @@ describe("TerminalPersistence", () => {
 
       expect(client.setTerminals).toHaveBeenCalledWith("from-option", expect.any(Array));
     });
+
+    it("skips redundant persist when transformed payload is unchanged", async () => {
+      const client = createMockProjectClient();
+      const persistence = new TerminalPersistence(client, { debounceMs: 100 });
+      const terminal = createMockTerminal();
+
+      persistence.save([terminal], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(client.setTerminals).toHaveBeenCalledTimes(1);
+
+      persistence.save([createMockTerminal()], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(client.setTerminals).toHaveBeenCalledTimes(1);
+    });
+
+    it("persists again when transformed payload changes", async () => {
+      const client = createMockProjectClient();
+      const persistence = new TerminalPersistence(client, { debounceMs: 100 });
+
+      persistence.save([createMockTerminal({ id: "term-1", title: "One" })], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(client.setTerminals).toHaveBeenCalledTimes(1);
+
+      persistence.save([createMockTerminal({ id: "term-1", title: "Two" })], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(client.setTerminals).toHaveBeenCalledTimes(2);
+      expect(client.setTerminals).toHaveBeenLastCalledWith(
+        projectId,
+        expect.arrayContaining([expect.objectContaining({ title: "Two" })])
+      );
+    });
   });
 
   describe("flush", () => {

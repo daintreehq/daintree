@@ -16,6 +16,7 @@ export interface WakeManagerDeps {
 export class TerminalWakeManager {
   private lastWakeTime = new Map<string, number>();
   private pendingWakes = new Map<string, { retries: number; timeoutId: NodeJS.Timeout }>();
+  private inFlightWakes = new Map<string, Promise<boolean>>();
   private deps: WakeManagerDeps;
 
   constructor(deps: WakeManagerDeps) {
@@ -23,27 +24,42 @@ export class TerminalWakeManager {
   }
 
   async wakeAndRestore(id: string): Promise<boolean> {
-    try {
-      const managed = this.deps.getInstance(id);
-      if (!managed) return false;
-
-      const { state } = await terminalClient.wake(id);
-      if (!state) return false;
-
-      if (state.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes) {
-        await this.deps.restoreFromSerializedIncremental(id, state);
-      } else {
-        this.deps.restoreFromSerialized(id, state);
-      }
-
-      if (this.deps.getInstance(id) === managed) {
-        managed.terminal.refresh(0, managed.terminal.rows - 1);
-      }
-      return true;
-    } catch (error) {
-      console.warn(`[TerminalWakeManager] Failed to wake terminal ${id}:`, error);
-      return false;
+    const inFlight = this.inFlightWakes.get(id);
+    if (inFlight) {
+      return inFlight;
     }
+
+    const wakePromise = (async () => {
+      try {
+        const managed = this.deps.getInstance(id);
+        if (!managed) return false;
+
+        const { state } = await terminalClient.wake(id);
+        if (!state) return false;
+
+        if (state.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes) {
+          await this.deps.restoreFromSerializedIncremental(id, state);
+        } else {
+          this.deps.restoreFromSerialized(id, state);
+        }
+
+        if (this.deps.getInstance(id) === managed) {
+          managed.terminal.refresh(0, managed.terminal.rows - 1);
+        }
+        return true;
+      } catch (error) {
+        console.warn(`[TerminalWakeManager] Failed to wake terminal ${id}:`, error);
+        return false;
+      }
+    })();
+
+    this.inFlightWakes.set(id, wakePromise);
+    void wakePromise.finally(() => {
+      if (this.inFlightWakes.get(id) === wakePromise) {
+        this.inFlightWakes.delete(id);
+      }
+    });
+    return wakePromise;
   }
 
   private triggerWake(id: string): void {
@@ -109,6 +125,7 @@ export class TerminalWakeManager {
 
   clearWakeState(id: string): void {
     this.lastWakeTime.delete(id);
+    this.inFlightWakes.delete(id);
 
     const pending = this.pendingWakes.get(id);
     if (pending) {
@@ -119,6 +136,7 @@ export class TerminalWakeManager {
 
   dispose(): void {
     this.lastWakeTime.clear();
+    this.inFlightWakes.clear();
 
     // Clear all pending wake retries
     for (const [, pending] of this.pendingWakes) {

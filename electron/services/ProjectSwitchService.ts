@@ -110,8 +110,12 @@ export class ProjectSwitchService {
 
       // Get existing project state to preserve all fields
       const existingState = await projectStore.getProjectState(projectId);
+      if (existingState?.activeWorktreeId === activeWorktreeId) {
+        return;
+      }
 
-      // Always save to ensure cleared worktree IDs are persisted (when activeWorktreeId is null/undefined)
+      // Persist only when the active worktree changed to avoid unnecessary disk writes.
+      // Null/undefined changes are still persisted because the equality check above compares exact values.
       await projectStore.saveProjectState(projectId, {
         ...existingState,
         projectId,

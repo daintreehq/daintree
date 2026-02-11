@@ -520,6 +520,90 @@ describe("hydrateAppState", () => {
     expect(fetchAndRestoreMock).toHaveBeenCalledWith("agent-1");
   });
 
+  it("restores backend terminal snapshots concurrently during hydration", async () => {
+    let releaseFirstRestore!: () => void;
+    const firstRestore = new Promise<void>((resolve) => {
+      releaseFirstRestore = resolve;
+    });
+    fetchAndRestoreMock.mockImplementation((terminalId: string) => {
+      if (terminalId === "terminal-1") {
+        return firstRestore;
+      }
+      return Promise.resolve();
+    });
+
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "terminal-1",
+            kind: "terminal",
+            type: "terminal",
+            title: "Terminal 1",
+            cwd: "/project",
+            location: "grid",
+          },
+          {
+            id: "terminal-2",
+            kind: "terminal",
+            type: "terminal",
+            title: "Terminal 2",
+            cwd: "/project",
+            location: "grid",
+          },
+        ],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+
+    terminalClientMock.getForProject.mockResolvedValue([
+      {
+        id: "terminal-1",
+        hasPty: true,
+        cwd: "/project",
+        kind: "terminal",
+        title: "Terminal 1",
+      },
+      {
+        id: "terminal-2",
+        hasPty: true,
+        cwd: "/project",
+        kind: "terminal",
+        title: "Terminal 2",
+      },
+    ]);
+
+    const addTerminal = vi.fn(async (options: { existingId?: string; requestedId?: string }) => {
+      return options.existingId ?? options.requestedId ?? "terminal-id";
+    });
+    const setActiveWorktree = vi.fn();
+    const loadRecipes = vi.fn().mockResolvedValue(undefined);
+    const openDiagnosticsDock = vi.fn();
+
+    const hydrationPromise = hydrateAppState({
+      addTerminal,
+      setActiveWorktree,
+      loadRecipes,
+      openDiagnosticsDock,
+    });
+
+    for (let i = 0; i < 30; i += 1) {
+      if (fetchAndRestoreMock.mock.calls.length >= 2) {
+        break;
+      }
+      await Promise.resolve();
+    }
+
+    expect(fetchAndRestoreMock).toHaveBeenCalledWith("terminal-1");
+    expect(fetchAndRestoreMock).toHaveBeenCalledWith("terminal-2");
+
+    releaseFirstRestore();
+    await hydrationPromise;
+  });
+
   it("loads and hydrates persisted tab groups after terminal restore", async () => {
     // This test verifies that tab groups are loaded from project storage
     // and passed to the hydrateTabGroups callback after terminals are restored.

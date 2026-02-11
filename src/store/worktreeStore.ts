@@ -36,19 +36,57 @@ interface WorktreeSelectionState {
   reset: () => void;
 }
 
+type ClientsModule = typeof import("@/clients");
+type TerminalStoreModule = typeof import("@/store/terminalStore");
+
+let clientsModulePromise: Promise<ClientsModule> | null = null;
+let terminalStoreModulePromise: Promise<TerminalStoreModule> | null = null;
+let lastPersistedActiveWorktreeId: string | null | undefined;
+let pendingPersistActiveWorktreeId: string | null | undefined;
+let persistRequestVersion = 0;
+
+function loadClientsModule(): Promise<ClientsModule> {
+  clientsModulePromise ??= import("@/clients");
+  return clientsModulePromise;
+}
+
+function loadTerminalStoreModule(): Promise<TerminalStoreModule> {
+  terminalStoreModulePromise ??= import("@/store/terminalStore");
+  return terminalStoreModulePromise;
+}
+
 function persistActiveWorktree(id: string | null): void {
-  void import("@/clients")
-    .then(({ appClient }) => {
-      const payload = { activeWorktreeId: id ?? undefined };
-      return appClient.setState(payload);
+  if (id === lastPersistedActiveWorktreeId || id === pendingPersistActiveWorktreeId) {
+    return;
+  }
+
+  pendingPersistActiveWorktreeId = id;
+  const requestVersion = ++persistRequestVersion;
+
+  const payload = { activeWorktreeId: id ?? undefined };
+
+  void loadClientsModule()
+    .then(({ appClient }) => appClient.setState(payload))
+    .then(() => {
+      if (requestVersion === persistRequestVersion) {
+        lastPersistedActiveWorktreeId = id;
+      }
     })
     .catch((error) => {
+      if (requestVersion === persistRequestVersion) {
+        pendingPersistActiveWorktreeId = undefined;
+      }
       logErrorWithContext(error, {
         operation: "persist_active_worktree",
         component: "worktreeStore",
         errorType: "filesystem",
         details: { worktreeId: id },
       });
+    })
+    .finally(() => {
+      if (pendingPersistActiveWorktreeId === id) {
+        pendingPersistActiveWorktreeId = undefined;
+      }
     });
 }
 
@@ -129,7 +167,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     // Restore the last focused terminal for this worktree
     const lastFocusedTerminalId = get().lastFocusedTerminalByWorktree.get(id);
     if (lastFocusedTerminalId) {
-      void import("@/store/terminalStore")
+      void loadTerminalStoreModule()
         .then(({ useTerminalStore }) => {
           // Check generation to ensure we're not applying stale focus from a previous switch
           if (get()._policyGeneration !== generation) return;
@@ -248,7 +286,7 @@ export function setupWorktreeFocusTracking() {
     };
   }
 
-  void import("@/store/terminalStore")
+  void loadTerminalStoreModule()
     .then(({ useTerminalStore }) => {
       let previousFocusedId: string | null = null;
 
@@ -297,7 +335,7 @@ function applyWorktreeTerminalPolicy(
   // Reliability: terminals from inactive worktrees should not stream output to the renderer.
   // They remain alive in the backend headless model and will be restored on wake.
   // Terminals in the active worktree must be activated to resume streaming.
-  void import("@/store/terminalStore")
+  void loadTerminalStoreModule()
     .then(({ useTerminalStore }) => {
       // Check generation to ensure we're not applying a stale policy from a previous switch
       if (get()._policyGeneration !== generation) return;

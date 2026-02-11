@@ -15,9 +15,10 @@ const SHOULD_CAPTURE = process.env.CANOPY_PERF_CAPTURE === "1";
 const METRICS_FILE = process.env.CANOPY_PERF_METRICS_FILE
   ? path.resolve(process.cwd(), process.env.CANOPY_PERF_METRICS_FILE)
   : null;
+const CAPTURE_ENABLED = SHOULD_CAPTURE && Boolean(METRICS_FILE);
 
 function appendPayload(payload: MarkPayload): void {
-  if (!SHOULD_CAPTURE || !METRICS_FILE) return;
+  if (!CAPTURE_ENABLED || !METRICS_FILE) return;
 
   try {
     fs.mkdirSync(path.dirname(METRICS_FILE), { recursive: true });
@@ -28,6 +29,10 @@ function appendPayload(payload: MarkPayload): void {
 }
 
 export function markPerformance(mark: PerfMarkName | string, meta?: Record<string, unknown>): void {
+  if (!CAPTURE_ENABLED) {
+    return;
+  }
+
   const payload: MarkPayload = {
     mark,
     timestamp: new Date().toISOString(),
@@ -36,6 +41,10 @@ export function markPerformance(mark: PerfMarkName | string, meta?: Record<strin
   };
 
   appendPayload(payload);
+}
+
+export function isPerformanceCaptureEnabled(): boolean {
+  return CAPTURE_ENABLED;
 }
 
 export function startPerformanceSpan(
@@ -68,6 +77,8 @@ export async function withPerformanceSpan<T>(
 }
 
 export function sampleIpcTiming(channel: string, durationMs: number): void {
+  if (!CAPTURE_ENABLED) return;
+
   const sampleRateRaw = Number(process.env.CANOPY_PERF_IPC_SAMPLE_RATE ?? "0.1");
   const sampleRate = Number.isFinite(sampleRateRaw) ? Math.max(0, Math.min(1, sampleRateRaw)) : 0.1;
 
@@ -81,6 +92,10 @@ export function sampleIpcTiming(channel: string, durationMs: number): void {
 }
 
 export function startEventLoopLagMonitor(intervalMs = 1000, thresholdMs = 100): () => void {
+  if (!CAPTURE_ENABLED) {
+    return () => {};
+  }
+
   let expected = performance.now() + intervalMs;
 
   const timer = setInterval(() => {

@@ -167,6 +167,20 @@ describe("ProjectSwitchService", () => {
     );
   });
 
+  it("skips outgoing project state persist when active worktree did not change", async () => {
+    projectStoreMock.getProjectState.mockResolvedValue({
+      projectId: "project-old",
+      activeWorktreeId: "wt-old",
+      sidebarWidth: 350,
+      terminals: [],
+    });
+
+    const { service } = createService();
+    await service.switchProject("project-new");
+
+    expect(projectStoreMock.saveProjectState).not.toHaveBeenCalled();
+  });
+
   it("continues switch even when cleanup services throw synchronously", async () => {
     const { service } = createService({
       ptyClient: {

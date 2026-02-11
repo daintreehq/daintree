@@ -21,6 +21,9 @@ export class TerminalRendererPolicy {
   }
 
   setBackendTier(id: string, tier: "active" | "background"): void {
+    if (this.lastBackendTier.get(id) === tier) {
+      return;
+    }
     this.lastBackendTier.set(id, tier);
     terminalClient.setActivityTier(id, tier);
   }

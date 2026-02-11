@@ -218,6 +218,27 @@ describe("TerminalPersistence.saveTabGroups", () => {
       expect(client.setTabGroups).toHaveBeenCalledTimes(1);
       expect(client.setTabGroups).toHaveBeenCalledWith(projectId, [group1]);
     });
+
+    it("skips redundant tab group persist when payload is unchanged", async () => {
+      const client = createMockProjectClient();
+      const persistence = new TerminalPersistence(client, { debounceMs: 100 });
+
+      const group: TabGroup = {
+        id: "group-1",
+        panelIds: ["term-1", "term-2"],
+        activeTabId: "term-1",
+        location: "grid",
+      };
+
+      persistence.saveTabGroups(new Map([["group-1", group]]), projectId);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(client.setTabGroups).toHaveBeenCalledTimes(1);
+
+      persistence.saveTabGroups(new Map([["group-1", { ...group }]]), projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(client.setTabGroups).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("cancel and flush", () => {

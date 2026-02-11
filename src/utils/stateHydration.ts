@@ -25,6 +25,47 @@ import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 
 const RECONNECT_TIMEOUT_MS = 10000;
+const RESTORE_CONCURRENCY = 4;
+
+interface TerminalRestoreTask {
+  terminalId: string;
+  label: string;
+}
+
+async function restoreTerminalSnapshots(
+  tasks: TerminalRestoreTask[],
+  isCurrent: () => boolean
+): Promise<void> {
+  if (tasks.length === 0) {
+    return;
+  }
+
+  let nextIndex = 0;
+  const workerCount = Math.min(RESTORE_CONCURRENCY, tasks.length);
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (true) {
+        if (!isCurrent()) return;
+
+        const currentIndex = nextIndex;
+        if (currentIndex >= tasks.length) {
+          return;
+        }
+        nextIndex += 1;
+
+        const task = tasks[currentIndex];
+        try {
+          await terminalInstanceService.fetchAndRestore(task.terminalId);
+        } catch (snapshotError) {
+          logWarn(`Serialized state restore failed for ${task.label}`, {
+            error: snapshotError,
+          });
+        }
+      }
+    })
+  );
+}
 
 export interface HydrationOptions {
   addTerminal: (options: {
@@ -77,6 +118,7 @@ export async function hydrateAppState(
   let panelRestoreStartedAt: number | null = null;
   let panelRestoreCount = 0;
   let tabGroupRestoreCount = 0;
+  const restoreTasks: TerminalRestoreTask[] = [];
 
   markRendererPerformance(PERF_MARKS.HYDRATE_START, {
     switchId: _switchId ?? null,
@@ -233,7 +275,7 @@ export async function hydrateAppState(
 
                 const isDevPreview = backendTerminal.kind === "dev-preview";
                 const devCommand = isDevPreview ? saved.command?.trim() : undefined;
-                await addTerminal({
+                const restoredTerminalId = await addTerminal({
                   kind: backendTerminal.kind ?? (agentId ? "agent" : "terminal"),
                   type: backendTerminal.type,
                   agentId,
@@ -256,19 +298,15 @@ export async function hydrateAppState(
                 // proper wake when transitioning from background to active tier.
                 if (backendTerminal.activityTier) {
                   terminalInstanceService.initializeBackendTier(
-                    backendTerminal.id,
+                    restoredTerminalId,
                     backendTerminal.activityTier
                   );
                 }
 
-                // Restore terminal content from backend headless state
-                try {
-                  await terminalInstanceService.fetchAndRestore(backendTerminal.id);
-                } catch (snapshotError) {
-                  logWarn(`Serialized state restore failed for ${saved.id}`, {
-                    error: snapshotError,
-                  });
-                }
+                restoreTasks.push({
+                  terminalId: restoredTerminalId,
+                  label: saved.id,
+                });
 
                 // Mark as restored
                 backendTerminalMap.delete(saved.id);
@@ -394,7 +432,7 @@ export async function hydrateAppState(
 
                     const isDevPreview = reconnectedKind === "dev-preview";
                     const devCommand = isDevPreview ? saved.command?.trim() : undefined;
-                    await addTerminal({
+                    const restoredTerminalId = await addTerminal({
                       kind: reconnectedKind ?? (agentId ? "agent" : "terminal"),
                       type: reconnectedTerminal.type ?? saved.type,
                       agentId,
@@ -415,19 +453,15 @@ export async function hydrateAppState(
                     // Initialize frontend tier state from backend
                     if (reconnectedTerminal.activityTier) {
                       terminalInstanceService.initializeBackendTier(
-                        reconnectedTerminal.id!,
+                        restoredTerminalId,
                         reconnectedTerminal.activityTier
                       );
                     }
 
-                    // Restore terminal content from backend headless state
-                    try {
-                      await terminalInstanceService.fetchAndRestore(reconnectedTerminal.id!);
-                    } catch (snapshotError) {
-                      logWarn(`Serialized state restore failed for ${saved.id}`, {
-                        error: snapshotError,
-                      });
-                    }
+                    restoreTasks.push({
+                      terminalId: restoredTerminalId,
+                      label: saved.id,
+                    });
                   } else {
                     // Terminal doesn't exist in backend or timed out - respawn
                     let effectiveAgentId =
@@ -587,7 +621,7 @@ export async function hydrateAppState(
                 }
               }
 
-              await addTerminal({
+              const restoredTerminalId = await addTerminal({
                 kind: terminal.kind ?? (agentId ? "agent" : "terminal"),
                 type: terminal.type,
                 agentId,
@@ -602,22 +636,24 @@ export async function hydrateAppState(
 
               // Initialize frontend tier state from backend to ensure proper wake behavior
               if (terminal.activityTier) {
-                terminalInstanceService.initializeBackendTier(terminal.id, terminal.activityTier);
+                terminalInstanceService.initializeBackendTier(
+                  restoredTerminalId,
+                  terminal.activityTier
+                );
               }
 
-              // Restore terminal content from backend headless state
-              try {
-                await terminalInstanceService.fetchAndRestore(terminal.id);
-              } catch (snapshotError) {
-                logWarn(`Serialized state restore failed for ${terminal.id}`, {
-                  error: snapshotError,
-                });
-              }
+              restoreTasks.push({
+                terminalId: restoredTerminalId,
+                label: terminal.id,
+              });
             } catch (error) {
               logWarn(`Failed to reconnect to orphaned terminal ${terminal.id}`, { error });
             }
           }
         }
+
+        await restoreTerminalSnapshots(restoreTasks, checkCurrent);
+        if (!checkCurrent()) return;
 
         if (panelRestoreStartedAt !== null) {
           markRendererPerformance(PERF_MARKS.HYDRATE_RESTORE_PANELS_END, {

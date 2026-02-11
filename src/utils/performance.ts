@@ -15,11 +15,25 @@ declare global {
 
 const RENDERER_T0 = typeof performance !== "undefined" ? performance.now() : Date.now();
 
+function isRendererPerfCaptureEnabled(): boolean {
+  return (
+    typeof process !== "undefined" &&
+    typeof process.env !== "undefined" &&
+    process.env.CANOPY_PERF_CAPTURE === "1"
+  );
+}
+
 export function markRendererPerformance(
   mark: PerfMarkName | string,
   meta?: Record<string, unknown>
 ): void {
   if (typeof window === "undefined") return;
+
+  const captureEnabled = isRendererPerfCaptureEnabled();
+  const hasConsumerBuffer = Array.isArray(window.__CANOPY_PERF_MARKS__);
+  if (!captureEnabled && !hasConsumerBuffer) {
+    return;
+  }
 
   const elapsedMs =
     typeof performance !== "undefined" ? performance.now() - RENDERER_T0 : Date.now() - RENDERER_T0;
@@ -36,11 +50,6 @@ export function markRendererPerformance(
   }
 
   window.__CANOPY_PERF_MARKS__.push(payload);
-
-  const captureEnabled =
-    typeof process !== "undefined" &&
-    typeof process.env !== "undefined" &&
-    process.env.CANOPY_PERF_CAPTURE === "1";
 
   if (captureEnabled) {
     console.debug("[perf]", payload.mark, payload.meta ?? {});

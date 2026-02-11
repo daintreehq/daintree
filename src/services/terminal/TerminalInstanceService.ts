@@ -146,16 +146,24 @@ class TerminalInstanceService {
     this.unseenTracker.incrementUnseen(id, managed.isUserScrolledBack);
 
     const shouldAck = !this.dataBuffer.isPolling();
-
-    const dataBytes =
-      typeof data === "string" ? this.textEncoder.encode(data).length : data.byteLength;
     this.perfWriteSampleCounter += 1;
     const shouldSample = this.perfWriteSampleCounter % 64 === 0;
+
+    const sampledBytes = shouldSample
+      ? typeof data === "string"
+        ? data.length
+        : data.byteLength
+      : 0;
+    const acknowledgedBytes = shouldAck
+      ? typeof data === "string"
+        ? this.textEncoder.encode(data).length
+        : data.byteLength
+      : 0;
 
     if (shouldSample) {
       markRendererPerformance(PERF_MARKS.TERMINAL_DATA_PARSED, {
         terminalId: id,
-        bytes: dataBytes,
+        bytes: sampledBytes,
       });
     }
 
@@ -167,13 +175,13 @@ class TerminalInstanceService {
       managed.pendingWrites = Math.max(0, (managed.pendingWrites ?? 1) - 1);
 
       if (shouldAck) {
-        terminalClient.acknowledgeData(id, dataBytes);
+        terminalClient.acknowledgeData(id, acknowledgedBytes);
       }
 
       if (shouldSample) {
         markRendererPerformance(PERF_MARKS.TERMINAL_DATA_RENDERED, {
           terminalId: id,
-          bytes: dataBytes,
+          bytes: sampledBytes,
         });
       }
     });

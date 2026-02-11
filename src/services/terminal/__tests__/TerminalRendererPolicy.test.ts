@@ -122,6 +122,20 @@ describe("TerminalRendererPolicy", () => {
       // - Condition "prevBackendTier !== 'active'" is false
       expect(mockDeps.wakeAndRestore).not.toHaveBeenCalled();
     });
+
+    it("does not resend backend tier when switching within active renderer tiers", async () => {
+      const { terminalClient } = await import("@/clients");
+
+      policy.initializeBackendTier("test-id", "background");
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
+      expect(terminalClient.setActivityTier).toHaveBeenCalledWith("test-id", "active");
+
+      vi.clearAllMocks();
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.BURST);
+
+      expect(terminalClient.setActivityTier).not.toHaveBeenCalled();
+    });
   });
 
   describe("clearTierState", () => {

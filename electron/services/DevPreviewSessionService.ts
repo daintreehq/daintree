@@ -28,7 +28,7 @@ const RUNNING_STATES: ReadonlySet<DevPreviewSessionStatus> = new Set([
 const DEFAULT_TIMEOUT_MS = 8000;
 
 function createSessionKey(projectId: string, panelId: string): string {
-  return JSON.stringify([projectId, panelId]);
+  return `${projectId}\u0000${panelId}`;
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -115,16 +115,19 @@ export class DevPreviewSessionService {
     const key = createSessionKey(request.projectId, request.panelId);
     await this.runLocked(key, async () => {
       const session = this.getOrCreateSession(request.projectId, request.panelId);
+      const envChanged = !envEquals(session.env, request.env);
       const configChanged =
         session.cwd !== request.cwd ||
         session.worktreeId !== request.worktreeId ||
         session.devCommand !== request.devCommand ||
-        !envEquals(session.env, request.env);
+        envChanged;
 
       session.cwd = request.cwd;
       session.worktreeId = request.worktreeId;
       session.devCommand = request.devCommand;
-      session.env = cloneEnv(request.env);
+      if (envChanged) {
+        session.env = cloneEnv(request.env);
+      }
 
       const commandError = getInvalidCommandMessage(session.devCommand);
       if (commandError) {
