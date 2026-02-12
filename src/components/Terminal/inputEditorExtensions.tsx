@@ -12,12 +12,24 @@ export const inputTheme = EditorView.theme({
     backgroundColor: "transparent",
     height: "auto",
   },
+  "&.cm-focused": {
+    outline: "none",
+  },
   ".cm-content": {
     fontFamily: "var(--font-mono, monospace)",
     fontSize: "12px",
     lineHeight: "20px",
     padding: "0 4px 0 0",
     caretColor: "var(--color-canopy-accent)",
+  },
+  "&.cm-focused .cm-cursor": {
+    borderLeft: "2px solid var(--color-canopy-accent)",
+  },
+  "&.cm-focused .cm-selectionBackground": {
+    backgroundColor: "rgba(96, 211, 224, 0.22)",
+  },
+  ".cm-dropCursor": {
+    borderLeftColor: "var(--color-canopy-accent)",
   },
   ".cm-placeholder": {
     color: "rgba(255,255,255,0.25)",

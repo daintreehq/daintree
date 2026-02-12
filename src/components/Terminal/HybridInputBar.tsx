@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { EditorView } from "@codemirror/view";
+import { EditorView, drawSelection } from "@codemirror/view";
 import { Compartment, EditorSelection, EditorState } from "@codemirror/state";
 import type { LegacyAgentType } from "@shared/types";
 import { getAgentConfig } from "@/config/agents";
@@ -203,11 +203,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     const placeholder = useMemo(() => {
       const agentName = agentId ? getAgentConfig(agentId)?.name : null;
-      if (isInitializing && agentName) {
-        return `${agentName} is starting — you can type now`;
-      }
-      return agentName ? `Enter your command for ${agentName}…` : "Enter your command…";
-    }, [agentId, isInitializing]);
+      return agentName ? `Type a command for ${agentName}…` : "Type a command…";
+    }, [agentId]);
 
     const activeMode = slashContext ? "command" : atContext ? "file" : null;
     const isAutocompleteOpen = activeMode !== null && !disabled;
@@ -940,6 +937,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         extensions: [
           inputTheme,
           EditorView.lineWrapping,
+          drawSelection(),
           createContentAttributes(),
           createAutoSize(),
           placeholderCompartmentRef.current.of(createPlaceholder(placeholder)),

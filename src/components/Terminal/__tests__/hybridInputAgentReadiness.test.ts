@@ -4,7 +4,7 @@ import type { AgentState } from "@/types";
 type InitializationState = "initializing" | "initialized";
 
 // Updated: Input is now always enabled regardless of initialization state
-// The isInitializing flag is only used for placeholder text and aria-busy (no visual disabled state)
+// The isInitializing flag is metadata only (no visual disabled state or input blocking)
 function computeHybridSubmitEnabled(_params: {
   isAgentTerminal: boolean;
   agentState?: AgentState;
