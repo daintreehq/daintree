@@ -303,15 +303,17 @@ export async function hydrateAppState(
             })
         : null;
 
-    const terminalSizesPromise = currentProjectId
+    type TerminalSizeMap = Record<string, { cols: number; rows: number }>;
+    const emptyTerminalSizes: TerminalSizeMap = {};
+    const terminalSizesPromise: Promise<TerminalSizeMap> = currentProjectId
       ? projectClient
           .getTerminalSizes(currentProjectId)
-          .then((sizes) => sizes ?? {})
+          .then((sizes) => sizes ?? emptyTerminalSizes)
           .catch((error) => {
             logWarn("Failed to prefetch terminal sizes", { error });
-            return {};
+            return emptyTerminalSizes;
           })
-      : Promise.resolve({});
+      : Promise.resolve(emptyTerminalSizes);
 
     const recipeLoadPromise = currentProjectId
       ? loadRecipes(currentProjectId).catch((error) => {
