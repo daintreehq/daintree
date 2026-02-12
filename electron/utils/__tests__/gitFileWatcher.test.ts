@@ -71,9 +71,9 @@ describe("GitFileWatcher", () => {
 
     expect(gitWatcher.start()).toBe(true);
 
-    const dotGitCall = vi
-      .mocked(watch)
-      .mock.calls.find(([path]) => path === "/repo/.git") as [unknown, unknown, unknown] | undefined;
+    const dotGitCall = vi.mocked(watch).mock.calls.find(([path]) => path === "/repo/.git") as
+      | [unknown, unknown, unknown]
+      | undefined;
     expect(dotGitCall).toBeDefined();
     const dotGitCallback = dotGitCall?.[2] as
       | ((eventType: string, filename: string | Buffer | null) => void)
@@ -93,6 +93,46 @@ describe("GitFileWatcher", () => {
     dotGitCallback?.("rename", "HEAD");
     dotGitCallback?.("rename", "index");
     await vi.advanceTimersByTimeAsync(200);
+    expect(onChange).toHaveBeenCalledTimes(2);
+  });
+
+  it("treats git lock-file events as matching changes", async () => {
+    const onChange = vi.fn();
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "main",
+      debounceMs: 150,
+      onChange,
+    });
+
+    expect(gitWatcher.start()).toBe(true);
+
+    const dotGitCall = vi.mocked(watch).mock.calls.find(([path]) => path === "/repo/.git") as
+      | [unknown, unknown, unknown]
+      | undefined;
+    expect(dotGitCall).toBeDefined();
+    const dotGitCallback = dotGitCall?.[2] as
+      | ((eventType: string, filename: string | Buffer | null) => void)
+      | undefined;
+    expect(dotGitCallback).toBeDefined();
+
+    const refsCall = vi
+      .mocked(watch)
+      .mock.calls.find(([path]) => path === "/repo/.git/refs/heads") as
+      | [unknown, unknown, unknown]
+      | undefined;
+    expect(refsCall).toBeDefined();
+    const refsCallback = refsCall?.[2] as
+      | ((eventType: string, filename: string | Buffer | null) => void)
+      | undefined;
+    expect(refsCallback).toBeDefined();
+
+    dotGitCallback?.("rename", "index.lock");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(onChange).toHaveBeenCalledTimes(1);
+
+    refsCallback?.("rename", "main.lock");
+    await vi.advanceTimersByTimeAsync(150);
     expect(onChange).toHaveBeenCalledTimes(2);
   });
 });

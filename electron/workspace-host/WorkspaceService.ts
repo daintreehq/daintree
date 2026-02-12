@@ -968,11 +968,39 @@ export class WorkspaceService {
 
     for (const [id, monitor] of this.monitors) {
       const isActive = id === worktreeId;
+      const wasCurrent = monitor.isCurrent;
       const interval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
+      const intervalChanged = monitor.pollingInterval !== interval;
+
       monitor.pollingInterval = interval;
       monitor.pollingStrategy.setBaseInterval(interval);
       monitor.isCurrent = isActive;
-      if (monitor.hasInitialStatus) {
+
+      if (intervalChanged || wasCurrent !== isActive) {
+        if (monitor.pollingTimer) {
+          clearTimeout(monitor.pollingTimer);
+          monitor.pollingTimer = null;
+        }
+        if (monitor.resumeTimer) {
+          clearTimeout(monitor.resumeTimer);
+          monitor.resumeTimer = null;
+        }
+
+        if (monitor.isRunning && monitor.pollingEnabled && this.pollingEnabled) {
+          this.scheduleNextPoll(monitor);
+        }
+      }
+
+      if (isActive && monitor.isRunning) {
+        invalidateGitStatusCache(monitor.path);
+        if (monitor.isUpdating) {
+          monitor.gitWatchRefreshPending = true;
+        } else {
+          void this.updateGitStatus(monitor, true);
+        }
+      }
+
+      if (monitor.hasInitialStatus && wasCurrent !== isActive) {
         this.emitUpdate(monitor);
       }
     }

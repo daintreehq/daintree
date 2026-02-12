@@ -1,4 +1,4 @@
-import { Profiler, useCallback, useEffect, useMemo, useState } from "react";
+import { Profiler, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { FolderOpen, FilterX, Maximize2 } from "lucide-react";
 import {
@@ -78,7 +78,7 @@ import {
 import { useShallow } from "zustand/react/shallow";
 import { useRecipeStore } from "./store/recipeStore";
 import type { RecipeTerminal } from "./types";
-import { systemClient, errorsClient } from "@/clients";
+import { errorsClient, systemClient, worktreeClient } from "@/clients";
 import { registerBuiltInPanelComponents } from "./registry";
 
 // Register built-in panel components before any renders
@@ -519,6 +519,10 @@ function App() {
         focusedWorktreeId: state.focusedWorktreeId,
       }))
     );
+  const lastSyncedActiveRef = useRef<{ projectId: string | null; worktreeId: string | null }>({
+    projectId: null,
+    worktreeId: null,
+  });
   const activeWorktree = useMemo(
     () => worktrees.find((w) => w.id === activeWorktreeId) ?? null,
     [worktrees, activeWorktreeId]
@@ -532,6 +536,37 @@ function App() {
       selectWorktree(mainWorktree.id);
     }
   }, [worktrees, activeWorktreeId, selectWorktree]);
+  useEffect(() => {
+    const projectId = currentProject?.id ?? null;
+    const selectedWorktreeId = activeWorktreeId ?? null;
+
+    if (!projectId || !selectedWorktreeId) {
+      lastSyncedActiveRef.current = { projectId, worktreeId: null };
+      return;
+    }
+
+    const worktreeExists = worktrees.some((w) => w.id === selectedWorktreeId);
+    if (!worktreeExists) {
+      return;
+    }
+
+    if (
+      lastSyncedActiveRef.current.projectId === projectId &&
+      lastSyncedActiveRef.current.worktreeId === selectedWorktreeId
+    ) {
+      return;
+    }
+
+    lastSyncedActiveRef.current = { projectId, worktreeId: selectedWorktreeId };
+    worktreeClient.setActive(selectedWorktreeId).catch(() => {
+      if (
+        lastSyncedActiveRef.current.projectId === projectId &&
+        lastSyncedActiveRef.current.worktreeId === selectedWorktreeId
+      ) {
+        lastSyncedActiveRef.current = { projectId, worktreeId: null };
+      }
+    });
+  }, [activeWorktreeId, currentProject?.id, worktrees]);
   const defaultTerminalCwd = useMemo(
     () => activeWorktree?.path ?? currentProject?.path ?? "",
     [activeWorktree, currentProject]

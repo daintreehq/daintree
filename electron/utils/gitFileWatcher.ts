@@ -107,15 +107,11 @@ export class GitFileWatcher {
 
     try {
       const trackedFiles = new Set<string>([fileName]);
-      const watcher = fsWatch(
-        watchDir,
-        { persistent: false },
-        (_eventType, changedFileName) => {
-          if (this.shouldHandleDirectoryEvent(changedFileName, trackedFiles)) {
-            this.handleFileChange();
-          }
+      const watcher = fsWatch(watchDir, { persistent: false }, (_eventType, changedFileName) => {
+        if (this.shouldHandleDirectoryEvent(changedFileName, trackedFiles)) {
+          this.handleFileChange();
         }
-      );
+      });
 
       watcher.on("error", (error) => {
         logWarn("Git directory watcher error", {
@@ -140,14 +136,22 @@ export class GitFileWatcher {
     }
 
     const changedName = changedFileName.toString().replaceAll("\\", "/");
-    if (trackedFiles.has(changedName)) {
+    for (const trackedFile of trackedFiles) {
+      if (this.matchesTrackedFile(changedName, trackedFile)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private matchesTrackedFile(changedName: string, trackedFile: string): boolean {
+    if (changedName === trackedFile || changedName === `${trackedFile}.lock`) {
       return true;
     }
 
-    for (const trackedFile of trackedFiles) {
-      if (changedName.endsWith(`/${trackedFile}`)) {
-        return true;
-      }
+    if (changedName.endsWith(`/${trackedFile}`) || changedName.endsWith(`/${trackedFile}.lock`)) {
+      return true;
     }
 
     return false;
