@@ -1,6 +1,7 @@
 import { Terminal } from "@xterm/xterm";
 import { terminalClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
+import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import type { ManagedTerminal, ResizeJobId } from "./types";
 import type { TerminalOutputIngestService } from "./TerminalOutputIngestService";
 
@@ -9,6 +10,7 @@ const HORIZONTAL_DEBOUNCE_MS = 100;
 const VERTICAL_THROTTLE_MS = 150;
 const IDLE_CALLBACK_TIMEOUT_MS = 1000;
 const RESIZE_LOCK_TTL_MS = 5000;
+const SETTLED_RESIZE_DELAY_MS = 500;
 
 export function getXtermCellDimensions(
   terminal: Terminal
@@ -37,6 +39,7 @@ export interface ResizeControllerDeps {
 
 export class TerminalResizeController {
   private resizeLocks = new Map<string, number>();
+  private settledResizeTimers = new Map<string, number>();
   private deps: ResizeControllerDeps;
 
   constructor(deps: ResizeControllerDeps) {
@@ -87,6 +90,7 @@ export class TerminalResizeController {
   fit(id: string): { cols: number; rows: number } | null {
     const managed = this.deps.getInstance(id);
     if (!managed) return null;
+    if (this.isResizeLocked(id)) return null;
 
     const rect = managed.hostElement.getBoundingClientRect();
     if (rect.left < -10000 || rect.width < 50 || rect.height < 50) {
@@ -99,7 +103,7 @@ export class TerminalResizeController {
       const { cols, rows } = managed.terminal;
       managed.latestCols = cols;
       managed.latestRows = rows;
-      terminalClient.resize(id, cols, rows);
+      this.sendPtyResize(id, cols, rows);
       this.updateExactWidth(managed);
       return { cols, rows };
     } catch (error) {
@@ -158,7 +162,7 @@ export class TerminalResizeController {
         managed.latestRows = rows;
         managed.latestWasAtBottom = wasAtBottom;
         managed.isUserScrolledBack = !wasAtBottom;
-        terminalClient.resize(id, cols, rows);
+        this.sendPtyResize(id, cols, rows);
         this.updateExactWidth(managed);
         return { cols, rows };
       }
@@ -219,7 +223,7 @@ export class TerminalResizeController {
 
     if (currentCols !== targetCols || currentRows !== targetRows) {
       managed.terminal.resize(targetCols, targetRows);
-      terminalClient.resize(id, targetCols, targetRows);
+      this.sendPtyResize(id, targetCols, targetRows);
     }
     this.updateExactWidth(managed);
   }
@@ -235,7 +239,7 @@ export class TerminalResizeController {
     this.deps.dataBuffer.flushForTerminal(id);
     this.deps.dataBuffer.resetForTerminal(id);
     this.resizeTerminal(managed, cols, rows);
-    terminalClient.resize(id, cols, rows);
+    this.sendPtyResize(id, cols, rows);
     this.updateExactWidth(managed);
   }
 
@@ -252,6 +256,41 @@ export class TerminalResizeController {
 
   clearResizeLock(id: string): void {
     this.resizeLocks.delete(id);
+  }
+
+  sendPtyResize(id: string, cols: number, rows: number): void {
+    const managed = this.deps.getInstance(id);
+    if (!managed) {
+      terminalClient.resize(id, cols, rows);
+      return;
+    }
+
+    if (this.getResizeStrategy(managed) === "settled") {
+      const existing = this.settledResizeTimers.get(id);
+      if (existing !== undefined) clearTimeout(existing);
+
+      const timer = globalThis.setTimeout(() => {
+        this.settledResizeTimers.delete(id);
+        terminalClient.resize(id, cols, rows);
+      }, SETTLED_RESIZE_DELAY_MS) as unknown as number;
+      this.settledResizeTimers.set(id, timer);
+    } else {
+      terminalClient.resize(id, cols, rows);
+    }
+  }
+
+  clearSettledTimer(id: string): void {
+    const timer = this.settledResizeTimers.get(id);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      this.settledResizeTimers.delete(id);
+    }
+  }
+
+  private getResizeStrategy(managed: ManagedTerminal): "default" | "settled" {
+    if (!managed.agentId) return "default";
+    const config = getEffectiveAgentConfig(managed.agentId);
+    return config?.capabilities?.resizeStrategy ?? "default";
   }
 
   private clearJob(job: ResizeJobId): void {
@@ -281,7 +320,7 @@ export class TerminalResizeController {
               this.deps.dataBuffer.flushForTerminal(id);
               this.deps.dataBuffer.resetForTerminal(id);
               this.resizeTerminal(current, current.latestCols, current.terminal.rows);
-              terminalClient.resize(id, current.latestCols, current.terminal.rows);
+              this.sendPtyResize(id, current.latestCols, current.terminal.rows);
               this.updateExactWidth(current);
               current.resizeXJob = undefined;
             }
@@ -296,7 +335,7 @@ export class TerminalResizeController {
             this.deps.dataBuffer.flushForTerminal(id);
             this.deps.dataBuffer.resetForTerminal(id);
             this.resizeTerminal(current, current.latestCols, current.terminal.rows);
-            terminalClient.resize(id, current.latestCols, current.terminal.rows);
+            this.sendPtyResize(id, current.latestCols, current.terminal.rows);
             this.updateExactWidth(current);
             current.resizeXJob = undefined;
           }
@@ -314,7 +353,7 @@ export class TerminalResizeController {
               this.deps.dataBuffer.flushForTerminal(id);
               this.deps.dataBuffer.resetForTerminal(id);
               this.resizeTerminal(current, current.latestCols, current.latestRows);
-              terminalClient.resize(id, current.latestCols, current.latestRows);
+              this.sendPtyResize(id, current.latestCols, current.latestRows);
               this.updateExactWidth(current);
               current.resizeYJob = undefined;
             }
@@ -329,7 +368,7 @@ export class TerminalResizeController {
             this.deps.dataBuffer.flushForTerminal(id);
             this.deps.dataBuffer.resetForTerminal(id);
             this.resizeTerminal(current, current.latestCols, current.latestRows);
-            terminalClient.resize(id, current.latestCols, current.latestRows);
+            this.sendPtyResize(id, current.latestCols, current.latestRows);
             this.updateExactWidth(current);
             current.resizeYJob = undefined;
           }
@@ -351,7 +390,7 @@ export class TerminalResizeController {
         this.deps.dataBuffer.flushForTerminal(id);
         this.deps.dataBuffer.resetForTerminal(id);
         this.resizeTerminal(current, cols, current.terminal.rows);
-        terminalClient.resize(id, cols, current.terminal.rows);
+        this.sendPtyResize(id, cols, current.terminal.rows);
         this.updateExactWidth(current);
         current.resizeXJob = undefined;
       }
@@ -372,7 +411,7 @@ export class TerminalResizeController {
       this.deps.dataBuffer.flushForTerminal(id);
       this.deps.dataBuffer.resetForTerminal(id);
       this.resizeTerminal(managed, managed.latestCols, rows);
-      terminalClient.resize(id, managed.latestCols, rows);
+      this.sendPtyResize(id, managed.latestCols, rows);
       this.updateExactWidth(managed);
       return;
     }
@@ -386,7 +425,7 @@ export class TerminalResizeController {
           this.deps.dataBuffer.flushForTerminal(id);
           this.deps.dataBuffer.resetForTerminal(id);
           this.resizeTerminal(current, current.latestCols, current.latestRows);
-          terminalClient.resize(id, current.latestCols, current.latestRows);
+          this.sendPtyResize(id, current.latestCols, current.latestRows);
           this.updateExactWidth(current);
           current.resizeYJob = undefined;
         }

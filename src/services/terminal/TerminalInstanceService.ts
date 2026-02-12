@@ -560,13 +560,23 @@ class TerminalInstanceService {
           this.clearResizeSuppression(id);
         }
 
-        if (managed.targetCols && managed.targetRows) {
-          this.resizeController.applyResize(id, managed.targetCols, managed.targetRows);
-          managed.targetCols = undefined;
-          managed.targetRows = undefined;
-        } else {
-          this.resizeController.fit(id);
-        }
+        // TODO: Terminals can appear slightly narrow then widen on project switch.
+        // The first RAF fires before container layout fully settles, so fit()
+        // measures a smaller width than the final layout. The ResizeObserver then
+        // corrects it one frame later. A "layout settled" guard (e.g. waiting for
+        // stable container dimensions across 2 frames) would eliminate this, but
+        // requires reworking the attach→resize coordination.
+        requestAnimationFrame(() => {
+          if (this.instances.get(id) !== managed) return;
+
+          if (managed.targetCols && managed.targetRows) {
+            this.resizeController.applyResize(id, managed.targetCols, managed.targetRows);
+            managed.targetCols = undefined;
+            managed.targetRows = undefined;
+          } else {
+            this.resizeController.fit(id);
+          }
+        });
       });
     } else {
       managed.isAttaching = false;
@@ -770,10 +780,7 @@ class TerminalInstanceService {
       managed.terminal.clearTextureAtlas();
       managed.terminal.refresh(0, managed.terminal.rows - 1);
 
-      const dims = this.resizeController.fit(id);
-      if (dims) {
-        terminalClient.resize(id, dims.cols, dims.rows);
-      }
+      this.resizeController.fit(id);
     } catch (error) {
       logError(`resetRenderer failed for ${id}`, error);
     }
@@ -891,6 +898,7 @@ class TerminalInstanceService {
 
     this.resizeController.clearResizeJobs(managed);
     this.resizeController.clearResizeLock(id);
+    this.resizeController.clearSettledTimer(id);
     this.dataBuffer.resetForTerminal(id);
     this.unseenTracker.destroy(id);
 

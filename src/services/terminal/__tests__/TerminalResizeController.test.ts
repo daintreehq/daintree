@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalRefreshTier } from "@/types";
 
-const { resizeMock } = vi.hoisted(() => ({
+const { resizeMock, getEffectiveAgentConfigMock } = vi.hoisted(() => ({
   resizeMock: vi.fn(),
+  getEffectiveAgentConfigMock: vi.fn(),
 }));
 
 vi.mock("@/clients", () => ({
@@ -10,6 +11,14 @@ vi.mock("@/clients", () => ({
     resize: resizeMock,
   },
 }));
+
+vi.mock("@shared/config/agentRegistry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@shared/config/agentRegistry")>();
+  return {
+    ...actual,
+    getEffectiveAgentConfig: getEffectiveAgentConfigMock,
+  };
+});
 
 import { TerminalResizeController } from "../TerminalResizeController";
 
@@ -130,6 +139,99 @@ describe("TerminalResizeController", () => {
     controller.applyDeferredResize("term-1");
 
     expect(managed.terminal.resize).not.toHaveBeenCalled();
+    expect(resizeMock).not.toHaveBeenCalled();
+  });
+
+  it("does not run fit while resize lock is active", () => {
+    const managed = createManagedTerminal();
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+      } as any,
+    });
+
+    controller.lockResize("term-1", true);
+    const result = controller.fit("term-1");
+
+    expect(result).toBeNull();
+    expect(managed.fitAddon.fit).not.toHaveBeenCalled();
+    expect(resizeMock).not.toHaveBeenCalled();
+  });
+
+  it("settled strategy batches rapid resizes into a single PTY resize", () => {
+    const managed = createManagedTerminal();
+    managed.agentId = "codex";
+
+    getEffectiveAgentConfigMock.mockReturnValue({
+      capabilities: { resizeStrategy: "settled" },
+    });
+
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+      } as any,
+    });
+
+    controller.sendPtyResize("term-1", 100, 30);
+    controller.sendPtyResize("term-1", 110, 35);
+    controller.sendPtyResize("term-1", 120, 40);
+
+    expect(resizeMock).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(500);
+
+    expect(resizeMock).toHaveBeenCalledTimes(1);
+    expect(resizeMock).toHaveBeenCalledWith("term-1", 120, 40);
+  });
+
+  it("default strategy sends PTY resize immediately", () => {
+    const managed = createManagedTerminal();
+    managed.agentId = "claude";
+
+    getEffectiveAgentConfigMock.mockReturnValue({
+      capabilities: { resizeStrategy: "default" },
+    });
+
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+      } as any,
+    });
+
+    controller.sendPtyResize("term-1", 100, 30);
+
+    expect(resizeMock).toHaveBeenCalledTimes(1);
+    expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 30);
+  });
+
+  it("clearSettledTimer cancels a pending settled resize", () => {
+    const managed = createManagedTerminal();
+    managed.agentId = "codex";
+
+    getEffectiveAgentConfigMock.mockReturnValue({
+      capabilities: { resizeStrategy: "settled" },
+    });
+
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+      } as any,
+    });
+
+    controller.sendPtyResize("term-1", 120, 40);
+    expect(resizeMock).not.toHaveBeenCalled();
+
+    controller.clearSettledTimer("term-1");
+    vi.advanceTimersByTime(500);
+
     expect(resizeMock).not.toHaveBeenCalled();
   });
 });

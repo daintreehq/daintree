@@ -107,6 +107,7 @@ export interface AgentConfig {
     blockScrollRegion?: boolean;
     blockClearScreen?: boolean;
     blockCursorToTop?: boolean;
+    resizeStrategy?: "default" | "settled";
   };
   /**
    * Configuration for pattern-based working state detection.
@@ -391,6 +392,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       blockScrollRegion: false,
       blockClearScreen: false,
       blockCursorToTop: false,
+      resizeStrategy: "settled",
     },
     detection: {
       primaryPatterns: [
