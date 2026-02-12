@@ -571,7 +571,9 @@ export interface IpcInvokeMap {
     result: Record<string, { cols: number; rows: number }>;
   };
   "project:set-terminal-sizes": {
-    args: [payload: { projectId: string; terminalSizes: Record<string, { cols: number; rows: number }> }];
+    args: [
+      payload: { projectId: string; terminalSizes: Record<string, { cols: number; rows: number }> },
+    ];
     result: void;
   };
   "project:get-tab-groups": {

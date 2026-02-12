@@ -6,7 +6,6 @@ import { useTerminalStore } from "./terminalStore";
 import { useNotificationStore } from "./notificationStore";
 import { usePulseStore } from "./pulseStore";
 
-
 interface WorktreeDataState {
   worktrees: Map<string, WorktreeState>;
   isLoading: boolean;

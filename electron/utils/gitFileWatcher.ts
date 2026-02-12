@@ -135,7 +135,10 @@ export class GitFileWatcher {
           }
 
           // Ignore node_modules to avoid noise from package installs
-          if (changedName.startsWith("node_modules" + sep) || changedName.startsWith("node_modules/")) {
+          if (
+            changedName.startsWith("node_modules" + sep) ||
+            changedName.startsWith("node_modules/")
+          ) {
             return;
           }
 
@@ -172,7 +175,7 @@ export class GitFileWatcher {
     try {
       const trackedFiles = new Set<string>([fileName]);
       const watcher = fsWatch(watchDir, { persistent: false }, (_eventType, changedFileName) => {
-        if (this.shouldHandleDirectoryEvent(changedFileName, trackedFiles, watchDir)) {
+        if (this.shouldHandleDirectoryEvent(changedFileName, trackedFiles)) {
           this.handleGitFileChange();
         }
       });
@@ -193,8 +196,7 @@ export class GitFileWatcher {
 
   private shouldHandleDirectoryEvent(
     changedFileName: string | Buffer | null,
-    trackedFiles: Set<string>,
-    watchDir?: string
+    trackedFiles: Set<string>
   ): boolean {
     if (!changedFileName) {
       return true;

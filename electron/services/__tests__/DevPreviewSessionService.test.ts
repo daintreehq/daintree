@@ -10,30 +10,37 @@ vi.mock("node:https", () => ({ default: { request: vi.fn() }, request: vi.fn() }
 
 type DataListener = (id: string, data: string | Uint8Array) => void;
 type ExitListener = (id: string, exitCode: number) => void;
+type MockIncomingMessage = {
+  statusCode?: number;
+  resume: () => void;
+};
+type MockRequest = {
+  on: (event: "error" | "timeout", handler: (...args: unknown[]) => void) => MockRequest;
+  end: () => void;
+  destroy: () => void;
+};
 
 function mockHttpResponse(statusCode: number) {
-  const impl = (_url: any, _opts: any, cb: any) => {
-    const handlers = new Map<string, Function>();
-    const req: any = {
-      on: (event: string, handler: Function) => {
-        handlers.set(event, handler);
+  const impl = ((_: unknown, __: unknown, cb: (res: MockIncomingMessage) => void) => {
+    const req: MockRequest = {
+      on: () => {
         return req;
       },
       end: () => cb({ statusCode, resume: () => {} }),
       destroy: () => {},
     };
     return req;
-  };
+  }) as unknown as typeof http.request;
   vi.mocked(http.request).mockImplementation(impl);
   vi.mocked(https.request).mockImplementation(impl);
 }
 
 function mockHttpError() {
-  const impl = (_url: any, _opts: any, _cb: any) => {
-    let errorHandler: Function | undefined;
-    const req: any = {
-      on: (event: string, handler: Function) => {
-        if (event === "error") errorHandler = handler;
+  const impl = ((_: unknown, __: unknown, ___: unknown) => {
+    let errorHandler: ((error: Error) => void) | undefined;
+    const req: MockRequest = {
+      on: (event, handler) => {
+        if (event === "error") errorHandler = handler as (error: Error) => void;
         return req;
       },
       end: () => {
@@ -42,7 +49,7 @@ function mockHttpError() {
       destroy: () => {},
     };
     return req;
-  };
+  }) as unknown as typeof http.request;
   vi.mocked(http.request).mockImplementation(impl);
   vi.mocked(https.request).mockImplementation(impl);
 }
@@ -310,6 +317,24 @@ describe("DevPreviewSessionService", () => {
     });
   });
 
+  it("treats HTTP 5xx responses as ready once the server is reachable", async () => {
+    mockHttpResponse(500);
+
+    const started = await service.ensure(baseRequest);
+    expect(started.terminalId).toBeTruthy();
+
+    ptyClient.emitData(started.terminalId!, "ready at http://localhost:4173\n");
+
+    await vi.waitFor(() => {
+      const updated = service.getState({
+        panelId: baseRequest.panelId,
+        projectId: baseRequest.projectId,
+      });
+      expect(updated.status).toBe("running");
+      expect(updated.url).toMatch(/^http:\/\/localhost:4173\/?$/);
+    });
+  });
+
   it("stays in starting status while readiness poll is in progress", async () => {
     mockHttpError();
 
@@ -410,6 +435,76 @@ describe("DevPreviewSessionService", () => {
     expect(afterTimeout.error?.message).toContain("Dev server exited with code 1");
   });
 
+  it("cancels the previous readiness poll when restart spawns a new generation", async () => {
+    vi.useFakeTimers();
+    mockHttpError();
+
+    const started = await service.ensure(baseRequest);
+    expect(started.terminalId).toBeTruthy();
+
+    ptyClient.emitData(started.terminalId!, "ready at http://localhost:4173\n");
+
+    const restarted = await service.restart({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(restarted.status).toBe("starting");
+    expect(restarted.terminalId).toBeTruthy();
+    expect(restarted.terminalId).not.toBe(started.terminalId);
+
+    mockHttpResponse(200);
+    ptyClient.emitData(restarted.terminalId!, "ready at http://localhost:4174\n");
+    await vi.advanceTimersByTimeAsync(10);
+
+    const running = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(running.status).toBe("running");
+    expect(running.url).toMatch(/^http:\/\/localhost:4174\/?$/);
+
+    await vi.advanceTimersByTimeAsync(31_000);
+
+    const afterOldTimeout = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(afterOldTimeout.status).toBe("running");
+    expect(afterOldTimeout.url).toMatch(/^http:\/\/localhost:4174\/?$/);
+    expect(afterOldTimeout.error).toBeNull();
+  });
+
+  it("cancels stale readiness poll when a new URL is detected", async () => {
+    vi.useFakeTimers();
+    mockHttpError();
+
+    const started = await service.ensure(baseRequest);
+    expect(started.terminalId).toBeTruthy();
+
+    ptyClient.emitData(started.terminalId!, "ready at http://localhost:4173\n");
+
+    mockHttpResponse(200);
+    ptyClient.emitData(started.terminalId!, "ready at http://localhost:4174\n");
+    await vi.advanceTimersByTimeAsync(10);
+
+    const running = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(running.status).toBe("running");
+    expect(running.url).toMatch(/^http:\/\/localhost:4174\/?$/);
+
+    await vi.advanceTimersByTimeAsync(31_000);
+
+    const afterOldTimeout = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(afterOldTimeout.status).toBe("running");
+    expect(afterOldTimeout.url).toMatch(/^http:\/\/localhost:4174\/?$/);
+    expect(afterOldTimeout.error).toBeNull();
+  });
+
   it("does not trigger stale-start recovery while readiness poll is active", async () => {
     mockHttpError();
 
@@ -495,12 +590,12 @@ describe("DevPreviewSessionService", () => {
 
   it("retries transient errors before succeeding", async () => {
     let callCount = 0;
-    const impl = (_url: any, _opts: any, cb: any) => {
+    const impl = ((_: unknown, __: unknown, cb: (res: MockIncomingMessage) => void) => {
       callCount++;
-      let errorHandler: Function | undefined;
-      const req: any = {
-        on: (event: string, handler: Function) => {
-          if (event === "error") errorHandler = handler;
+      let errorHandler: ((error: Error) => void) | undefined;
+      const req: MockRequest = {
+        on: (event, handler) => {
+          if (event === "error") errorHandler = handler as (error: Error) => void;
           return req;
         },
         end: () => {
@@ -515,7 +610,7 @@ describe("DevPreviewSessionService", () => {
         destroy: () => {},
       };
       return req;
-    };
+    }) as unknown as typeof http.request;
     vi.mocked(http.request).mockImplementation(impl);
     vi.mocked(https.request).mockImplementation(impl);
 

@@ -806,9 +806,9 @@ export class DevPreviewSessionService {
             (res) => {
               res.resume();
               const status = res.statusCode ?? 0;
-              if (status >= 200 && status < 400) {
-                settle(true);
-              } else if (status < 500) {
+              // Any HTTP response means the server is listening and can process requests.
+              // We only keep polling on transport-level failures (connection refused, timeout, etc.).
+              if (status >= 100 && status < 600) {
                 settle(true);
               } else {
                 settle(false);

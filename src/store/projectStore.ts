@@ -1,5 +1,10 @@
 import { create, type StateCreator } from "zustand";
-import { persist, subscribeWithSelector } from "zustand/middleware";
+import {
+  persist,
+  subscribeWithSelector,
+  createJSONStorage,
+  type StateStorage,
+} from "zustand/middleware";
 import type { Project, ProjectCloseResult, TerminalSnapshot } from "@shared/types";
 import { projectClient } from "@/clients";
 import { resetAllStoresForProjectSwitch } from "./resetStores";
@@ -37,6 +42,38 @@ interface ProjectState {
   ) => Promise<ProjectCloseResult>;
   reopenProject: (projectId: string) => Promise<void>;
   finishProjectSwitch: () => void;
+}
+
+const memoryStorage: StateStorage = (() => {
+  const storage = new Map<string, string>();
+  return {
+    getItem: (name) => storage.get(name) ?? null,
+    setItem: (name, value) => {
+      storage.set(name, value);
+    },
+    removeItem: (name) => {
+      storage.delete(name);
+    },
+  };
+})();
+
+function getSafeStorage(): StateStorage {
+  if (typeof localStorage !== "undefined") {
+    const storage = localStorage as unknown as Partial<StateStorage>;
+    const hasStorageApi =
+      typeof storage.getItem === "function" &&
+      typeof storage.setItem === "function" &&
+      typeof storage.removeItem === "function";
+    if (hasStorageApi) {
+      try {
+        storage.getItem!("__test__");
+        return storage as StateStorage;
+      } catch {
+        return memoryStorage;
+      }
+    }
+  }
+  return memoryStorage;
 }
 
 function getProjectOpenErrorMessage(error: unknown): string {
@@ -529,6 +566,7 @@ export const useProjectStore = create<ProjectState>()(
       }),
       {
         name: "project-storage",
+        storage: createJSONStorage(() => getSafeStorage()),
         partialize: (state) => ({
           projects: state.projects,
           currentProject: state.currentProject,

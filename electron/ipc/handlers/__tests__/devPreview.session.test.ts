@@ -25,15 +25,25 @@ import { CHANNELS } from "../../channels.js";
 import { registerDevPreviewHandlers } from "../devPreview.js";
 import type { HandlerDependencies } from "../../types.js";
 
+type MockIncomingMessage = {
+  statusCode?: number;
+  resume: () => void;
+};
+type MockRequest = {
+  on: (event: "error" | "timeout", handler: (...args: unknown[]) => void) => MockRequest;
+  end: () => void;
+  destroy: () => void;
+};
+
 function mockHttpResponse(statusCode: number) {
-  const impl = (_url: any, _opts: any, cb: any) => {
-    const req: any = {
-      on: (_event: string, _handler: Function) => req,
+  const impl = ((_: unknown, __: unknown, cb: (res: MockIncomingMessage) => void) => {
+    const req: MockRequest = {
+      on: () => req,
       end: () => cb({ statusCode, resume: () => {} }),
       destroy: () => {},
     };
     return req;
-  };
+  }) as unknown as typeof http.request;
   vi.mocked(http.request).mockImplementation(impl);
   vi.mocked(https.request).mockImplementation(impl);
 }

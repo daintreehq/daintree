@@ -247,16 +247,22 @@ export function DevPreviewPane({
     webview.addEventListener("did-stop-loading", handleDidStopLoading);
     webview.addEventListener("did-finish-load", handleDidFinishLoad);
     webview.addEventListener("did-fail-load", handleDidFailLoad);
-    webview.addEventListener("did-navigate", handleDidNavigate as any);
-    webview.addEventListener("did-navigate-in-page", handleDidNavigateInPage as any);
+    webview.addEventListener("did-navigate", handleDidNavigate as unknown as EventListener);
+    webview.addEventListener(
+      "did-navigate-in-page",
+      handleDidNavigateInPage as unknown as EventListener
+    );
 
     return () => {
       webview.removeEventListener("did-start-loading", handleDidStartLoading);
       webview.removeEventListener("did-stop-loading", handleDidStopLoading);
       webview.removeEventListener("did-finish-load", handleDidFinishLoad);
       webview.removeEventListener("did-fail-load", handleDidFailLoad);
-      webview.removeEventListener("did-navigate", handleDidNavigate as any);
-      webview.removeEventListener("did-navigate-in-page", handleDidNavigateInPage as any);
+      webview.removeEventListener("did-navigate", handleDidNavigate as unknown as EventListener);
+      webview.removeEventListener(
+        "did-navigate-in-page",
+        handleDidNavigateInPage as unknown as EventListener
+      );
     };
   }, [webviewElement]);
 
