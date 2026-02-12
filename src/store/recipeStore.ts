@@ -5,15 +5,24 @@ import { projectClient, agentSettingsClient } from "@/clients";
 import { getAgentConfig } from "@/config/agents";
 import { generateAgentCommand } from "@shared/types";
 
+function isAgentRecipeType(type: RecipeTerminalType): boolean {
+  return type !== "terminal" && type !== "dev-preview";
+}
+
 function sanitizeRecipeTerminal(terminal: RecipeTerminal): RecipeTerminal {
+  const isAgent = isAgentRecipeType(terminal.type);
+  const command = terminal.command?.trim() || undefined;
+  const devCommand = terminal.devCommand?.trim() || undefined;
+  const initialPrompt =
+    typeof terminal.initialPrompt === "string"
+      ? terminal.initialPrompt.replace(/\r\n/g, "\n").trimEnd() || undefined
+      : undefined;
+
   return {
     ...terminal,
-    command: terminal.command?.trim() || undefined,
-    initialPrompt:
-      typeof terminal.initialPrompt === "string"
-        ? terminal.initialPrompt.replace(/\r\n/g, "\n").trimEnd() || undefined
-        : undefined,
-    devCommand: terminal.devCommand?.trim() || undefined,
+    command: isAgent ? undefined : command,
+    initialPrompt: isAgent ? initialPrompt : undefined,
+    devCommand: terminal.type === "dev-preview" ? devCommand : undefined,
   };
 }
 
@@ -146,12 +155,15 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     }
 
     const recipe = recipes[index];
+    const sanitizedTerminals = updates.terminals?.map(sanitizeRecipeTerminal);
+    const sanitizedUpdates = sanitizedTerminals
+      ? { ...updates, terminals: sanitizedTerminals }
+      : updates;
+
     const updatedRecipe = {
       ...recipe,
-      ...updates,
-      terminals: updates.terminals
-        ? updates.terminals.map(sanitizeRecipeTerminal)
-        : recipe.terminals,
+      ...sanitizedUpdates,
+      terminals: sanitizedTerminals ?? recipe.terminals,
     };
     const newRecipes = [...recipes];
     newRecipes[index] = updatedRecipe;
@@ -159,7 +171,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     set({ recipes: newRecipes });
 
     try {
-      await projectClient.updateRecipe(recipe.projectId, id, updates);
+      await projectClient.updateRecipe(recipe.projectId, id, sanitizedUpdates);
     } catch (error) {
       console.error("Failed to persist recipe update:", error);
       // Rollback on failure
@@ -242,29 +254,18 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           continue;
         }
 
-        const isAgent = terminal.type !== "terminal";
+        const isAgent = isAgentRecipeType(terminal.type);
         let command = terminal.command?.trim() || "";
 
         // For agent terminals, build command with settings/flags and optional initial prompt
         if (isAgent) {
           const agentConfig = getAgentConfig(terminal.type);
-          if (agentConfig) {
-            const initialPrompt = terminal.initialPrompt?.trim();
-            if (!command) {
-              // No custom command - build from agent config
-              const baseCommand = agentConfig.command;
-              const entry = agentSettings?.agents?.[terminal.type] ?? {};
-              command = generateAgentCommand(baseCommand, entry, terminal.type, {
-                initialPrompt,
-              });
-            } else if (initialPrompt) {
-              // Custom command with initial prompt - append the prompt
-              const entry = agentSettings?.agents?.[terminal.type] ?? {};
-              command = generateAgentCommand(command, entry, terminal.type, {
-                initialPrompt,
-              });
-            }
-          }
+          const baseCommand = agentConfig?.command || terminal.type;
+          const initialPrompt = terminal.initialPrompt?.trim();
+          const entry = agentSettings?.agents?.[terminal.type] ?? {};
+          command = generateAgentCommand(baseCommand, entry, terminal.type, {
+            initialPrompt,
+          });
         }
 
         await terminalStore.addTerminal({
@@ -358,14 +359,18 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         type: terminal.type,
         title: typeof terminal.title === "string" ? terminal.title : undefined,
         command:
-          typeof terminal.command === "string" ? terminal.command.trim() || undefined : undefined,
+          terminal.type === "terminal" && typeof terminal.command === "string"
+            ? terminal.command.trim() || undefined
+            : undefined,
         env: terminal.env,
         initialPrompt:
+          terminal.type !== "terminal" &&
+          terminal.type !== "dev-preview" &&
           typeof terminal.initialPrompt === "string"
             ? terminal.initialPrompt.replace(/\r\n/g, "\n").trimEnd()
             : undefined,
         devCommand:
-          typeof terminal.devCommand === "string"
+          terminal.type === "dev-preview" && typeof terminal.devCommand === "string"
             ? terminal.devCommand.trim() || undefined
             : undefined,
         exitBehavior:
