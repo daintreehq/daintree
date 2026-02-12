@@ -16,5 +16,6 @@ export interface MonitorState extends WorktreeSnapshot {
   noteReader: NoteFileReader;
   gitWatcher: (() => void) | null;
   gitWatchDebounceTimer: NodeJS.Timeout | null;
+  gitWatchRefreshPending: boolean;
   gitWatchEnabled: boolean;
 }

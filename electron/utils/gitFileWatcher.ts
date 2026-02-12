@@ -1,5 +1,5 @@
 import { watch as fsWatch, FSWatcher, readFileSync } from "fs";
-import { join as pathJoin, dirname, isAbsolute } from "path";
+import { join as pathJoin, dirname, isAbsolute, basename } from "path";
 import { getGitDir } from "./gitUtils.js";
 import { logWarn } from "./logger.js";
 
@@ -12,6 +12,7 @@ export interface GitFileWatcherOptions {
 
 export class GitFileWatcher {
   private watchers: FSWatcher[] = [];
+  private readonly watchedFilesByDirectory = new Map<string, Set<string>>();
   private debounceTimer: NodeJS.Timeout | null = null;
   private disposed = false;
   private readonly worktreePath: string;
@@ -43,6 +44,7 @@ export class GitFileWatcher {
 
       this.watchFile(headPath);
       this.watchFile(indexPath);
+      this.watchFile(pathJoin(commonDir, "packed-refs"));
 
       if (this.currentBranch) {
         const branchRefPath = pathJoin(commonDir, "refs", "heads", this.currentBranch);
@@ -80,6 +82,7 @@ export class GitFileWatcher {
     }
 
     this.watchers = [];
+    this.watchedFilesByDirectory.clear();
   }
 
   private resolveCommonDir(gitDir: string): string {
@@ -93,38 +96,61 @@ export class GitFileWatcher {
   }
 
   private watchFile(filePath: string): void {
+    const watchDir = dirname(filePath);
+    const fileName = basename(filePath);
+    const watchedFiles = this.watchedFilesByDirectory.get(watchDir);
+
+    if (watchedFiles) {
+      watchedFiles.add(fileName);
+      return;
+    }
+
     try {
-      const watcher = fsWatch(filePath, { persistent: false }, (_eventType) => {
-        this.handleFileChange();
-      });
+      const trackedFiles = new Set<string>([fileName]);
+      const watcher = fsWatch(
+        watchDir,
+        { persistent: false },
+        (_eventType, changedFileName) => {
+          if (this.shouldHandleDirectoryEvent(changedFileName, trackedFiles)) {
+            this.handleFileChange();
+          }
+        }
+      );
 
       watcher.on("error", (error) => {
-        logWarn("Git file watcher error", {
-          path: filePath,
+        logWarn("Git directory watcher error", {
+          path: watchDir,
           error: error.message,
         });
       });
 
       this.watchers.push(watcher);
+      this.watchedFilesByDirectory.set(watchDir, trackedFiles);
     } catch {
-      const watchDir = dirname(filePath);
-      try {
-        const dirWatcher = fsWatch(watchDir, { persistent: false }, (_eventType) => {
-          this.handleFileChange();
-        });
+      // Silent fallback to polling
+    }
+  }
 
-        dirWatcher.on("error", (error) => {
-          logWarn("Git directory watcher error", {
-            path: watchDir,
-            error: error.message,
-          });
-        });
+  private shouldHandleDirectoryEvent(
+    changedFileName: string | Buffer | null,
+    trackedFiles: Set<string>
+  ): boolean {
+    if (!changedFileName) {
+      return true;
+    }
 
-        this.watchers.push(dirWatcher);
-      } catch {
-        // Silent fallback to polling
+    const changedName = changedFileName.toString().replaceAll("\\", "/");
+    if (trackedFiles.has(changedName)) {
+      return true;
+    }
+
+    for (const trackedFile of trackedFiles) {
+      if (changedName.endsWith(`/${trackedFile}`)) {
+        return true;
       }
     }
+
+    return false;
   }
 
   private handleFileChange(): void {

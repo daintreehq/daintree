@@ -380,9 +380,19 @@ export class WorkspaceService {
           this.pollIntervalMax,
           this.circuitBreakerThreshold
         );
+        existingMonitor.gitWatchEnabled = this.gitWatchEnabled;
+        if (!existingMonitor.gitWatchEnabled && existingMonitor.gitWatcher) {
+          this.stopMonitorWatcher(existingMonitor);
+        } else if (
+          existingMonitor.gitWatchEnabled &&
+          existingMonitor.isRunning &&
+          !existingMonitor.gitWatcher
+        ) {
+          this.startMonitorWatcher(existingMonitor);
+        }
 
         // Update watcher if branch changed
-        if (branchChanged && wt.branch && existingMonitor.gitWatcher) {
+        if (branchChanged && existingMonitor.gitWatcher) {
           this.updateMonitorWatcher(existingMonitor);
         }
 
@@ -456,6 +466,7 @@ export class WorkspaceService {
           noteReader: new NoteFileReader(wt.path),
           gitWatcher: null,
           gitWatchDebounceTimer: null,
+          gitWatchRefreshPending: false,
           gitWatchEnabled: this.gitWatchEnabled,
         };
 
@@ -540,7 +551,7 @@ export class WorkspaceService {
   }
 
   private startMonitorWatcher(monitor: MonitorState): void {
-    if (!this.gitWatchEnabled || monitor.gitWatcher) {
+    if (!monitor.isRunning || !monitor.gitWatchEnabled || monitor.gitWatcher) {
       return;
     }
 
@@ -568,6 +579,7 @@ export class WorkspaceService {
       clearTimeout(monitor.gitWatchDebounceTimer);
       monitor.gitWatchDebounceTimer = null;
     }
+    monitor.gitWatchRefreshPending = false;
   }
 
   private updateMonitorWatcher(monitor: MonitorState): void {
@@ -582,22 +594,31 @@ export class WorkspaceService {
       return;
     }
 
+    monitor.gitWatchRefreshPending = true;
     invalidateGitStatusCache(monitor.path);
 
     if (monitor.isUpdating) {
-      // Schedule a trailing refresh after the current update finishes
-      if (!monitor.gitWatchDebounceTimer) {
-        monitor.gitWatchDebounceTimer = setTimeout(() => {
-          monitor.gitWatchDebounceTimer = null;
-          if (monitor.isRunning && !monitor.isUpdating) {
-            invalidateGitStatusCache(monitor.path);
-            void this.updateGitStatus(monitor, true);
-          }
-        }, this.gitWatchDebounceMs);
+      // Keep a trailing refresh queued; it will run after update completion.
+      if (monitor.gitWatchDebounceTimer) {
+        clearTimeout(monitor.gitWatchDebounceTimer);
       }
+      monitor.gitWatchDebounceTimer = setTimeout(() => {
+        monitor.gitWatchDebounceTimer = null;
+        this.flushPendingGitWatchRefresh(monitor);
+      }, this.gitWatchDebounceMs);
       return;
     }
 
+    this.flushPendingGitWatchRefresh(monitor);
+  }
+
+  private flushPendingGitWatchRefresh(monitor: MonitorState): void {
+    if (!monitor.isRunning || monitor.isUpdating || !monitor.gitWatchRefreshPending) {
+      return;
+    }
+
+    monitor.gitWatchRefreshPending = false;
+    invalidateGitStatusCache(monitor.path);
     void this.updateGitStatus(monitor, true);
   }
 
@@ -805,6 +826,9 @@ export class WorkspaceService {
       throw error;
     } finally {
       monitor.isUpdating = false;
+      if (monitor.gitWatchRefreshPending && !monitor.gitWatchDebounceTimer) {
+        this.flushPendingGitWatchRefresh(monitor);
+      }
     }
   }
 

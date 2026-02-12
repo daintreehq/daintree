@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
 import type { WorkspaceService } from "../WorkspaceService.js";
+import type { MonitorState } from "../types.js";
+import type { WorktreeChanges } from "../../types/index.js";
 
 // Mocks need to be hoisted or defined in vi.mock
 const mockSimpleGit = {
@@ -414,5 +416,125 @@ describe("WorkspaceService.loadProject performance behavior", () => {
     await service["listWorktreesFromGit"]({ forceRefresh: true });
 
     expect(mockSimpleGit.raw).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("WorkspaceService git watcher refresh behavior", () => {
+  let service: WorkspaceService;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+
+    const WorkspaceServiceModule = await import("../WorkspaceService.js");
+    service = new WorkspaceServiceModule.WorkspaceService(vi.fn());
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function createMonitorState(): MonitorState {
+    const changes = [
+      {
+        path: "/test/worktree/file.ts",
+        status: "modified" as const,
+        insertions: 2,
+        deletions: 1,
+      },
+    ];
+
+    return {
+      id: "/test/worktree",
+      path: "/test/worktree",
+      name: "feature/test",
+      branch: "feature/test",
+      isCurrent: true,
+      isMainWorktree: false,
+      gitDir: "/test/worktree/.git",
+      worktreeId: "/test/worktree",
+      summary: "Working",
+      modifiedCount: 1,
+      changes,
+      mood: "stable",
+      worktreeChanges: {
+        head: "abc123",
+        isDirty: true,
+        stagedFileCount: 1,
+        unstagedFileCount: 0,
+        untrackedFileCount: 0,
+        conflictedFileCount: 0,
+        changedFileCount: 1,
+        changes,
+      },
+      lastActivityTimestamp: null,
+      createdAt: Date.now(),
+      pollingTimer: null,
+      resumeTimer: null,
+      pollingInterval: 2000,
+      isRunning: true,
+      isUpdating: false,
+      pollingEnabled: true,
+      hasInitialStatus: true,
+      previousStateHash: "seed",
+      pollingStrategy: {
+        updateConfig: vi.fn(),
+        setBaseInterval: vi.fn(),
+        isCircuitBreakerTripped: vi.fn().mockReturnValue(false),
+        calculateNextInterval: vi.fn().mockReturnValue(2000),
+        recordSuccess: vi.fn(),
+        recordFailure: vi.fn(),
+      },
+      noteReader: { read: vi.fn().mockResolvedValue(null) },
+      gitWatcher: null,
+      gitWatchDebounceTimer: null,
+      gitWatchRefreshPending: false,
+      gitWatchEnabled: true,
+    } as unknown as MonitorState;
+  }
+
+  it("does not drop git watch refreshes when debounce fires during an in-flight update", async () => {
+    const gitModule = await import("../../utils/git.js");
+    const getWorktreeChangesWithStatsMock = vi.mocked(gitModule.getWorktreeChangesWithStats);
+    const monitor = createMonitorState();
+    service["gitWatchDebounceMs"] = 50;
+
+    const firstResult: WorktreeChanges = {
+      head: "def456",
+      isDirty: true,
+      stagedFileCount: 1,
+      unstagedFileCount: 0,
+      untrackedFileCount: 0,
+      conflictedFileCount: 0,
+      changedFileCount: 1,
+      changes: monitor.changes,
+    };
+
+    let resolveFirstUpdate!: (value: typeof firstResult) => void;
+    const firstUpdateResult = new Promise<typeof firstResult>((resolve) => {
+      resolveFirstUpdate = resolve;
+    });
+
+    getWorktreeChangesWithStatsMock.mockReset();
+    getWorktreeChangesWithStatsMock.mockImplementationOnce(() => firstUpdateResult);
+    getWorktreeChangesWithStatsMock.mockResolvedValue(firstResult);
+
+    const inFlightUpdate = service["updateGitStatus"](monitor, true);
+    expect(monitor.isUpdating).toBe(true);
+
+    service["handleGitFileChange"](monitor);
+    await vi.advanceTimersByTimeAsync(60);
+
+    expect(monitor.gitWatchRefreshPending).toBe(true);
+    expect(getWorktreeChangesWithStatsMock).toHaveBeenCalledTimes(1);
+
+    resolveFirstUpdate(firstResult);
+    await inFlightUpdate;
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(getWorktreeChangesWithStatsMock).toHaveBeenCalledTimes(2);
+    expect(monitor.gitWatchRefreshPending).toBe(false);
   });
 });
