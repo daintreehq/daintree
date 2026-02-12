@@ -29,6 +29,7 @@ import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { useBackgroundPanelStats } from "@/hooks";
 import { TabButton, type TabInfo } from "./TabButton";
 import { SortableTabButton } from "./SortableTabButton";
+import { panelKindCanRestart } from "@shared/config/panelKindRegistry";
 
 export interface PanelHeaderProps {
   id: string;
@@ -115,12 +116,16 @@ function PanelHeaderComponent({
   onAddTab,
   onTabReorder,
 }: PanelHeaderProps) {
-  const isBrowser = kind === "browser";
   const dragHandle = useDragHandle();
 
-  // Armed restart confirmation state
+  // Check if panel kind supports restart via registry
+  const canRestart = panelKindCanRestart(kind);
+
+  // Armed restart confirmation state (2-click pattern with 3s timeout)
   const [armedRestartId, setArmedRestartId] = useState<string | null>(null);
+  const [countdown, setCountdown] = useState<number | null>(null);
   const armedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastClickTimeRef = useRef<number>(0);
   const ARMED_TIMEOUT_MS = 3000;
   const MIN_CLICK_INTERVAL_MS = 300;
@@ -130,44 +135,83 @@ function PanelHeaderComponent({
       if (armedTimerRef.current) {
         clearTimeout(armedTimerRef.current);
       }
+      if (countdownIntervalRef.current) {
+        clearInterval(countdownIntervalRef.current);
+      }
     };
   }, []);
 
   useEffect(() => {
-    if (armedRestartId !== null && armedRestartId !== id) {
+    if (armedRestartId !== null && (armedRestartId !== id || !canRestart || !onRestart)) {
       setArmedRestartId(null);
+      setCountdown(null);
       if (armedTimerRef.current) {
         clearTimeout(armedTimerRef.current);
         armedTimerRef.current = null;
       }
-      lastClickTimeRef.current = 0;
+      if (countdownIntervalRef.current) {
+        clearInterval(countdownIntervalRef.current);
+        countdownIntervalRef.current = null;
+      }
     }
-  }, [id, armedRestartId]);
+    // Reset click throttle when panel ID changes to prevent cross-panel throttling
+    lastClickTimeRef.current = 0;
+  }, [id, armedRestartId, canRestart, onRestart]);
 
   const handleRestartClick = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
 
       const now = Date.now();
-      if (now - lastClickTimeRef.current < MIN_CLICK_INTERVAL_MS) {
+      // Skip throttle check when already armed (allow fast confirmation)
+      if (armedRestartId !== id && now - lastClickTimeRef.current < MIN_CLICK_INTERVAL_MS) {
         return;
       }
       lastClickTimeRef.current = now;
 
       if (armedRestartId === id) {
+        // Second click - confirm and execute restart
         setArmedRestartId(null);
+        setCountdown(null);
         if (armedTimerRef.current) {
           clearTimeout(armedTimerRef.current);
           armedTimerRef.current = null;
         }
+        if (countdownIntervalRef.current) {
+          clearInterval(countdownIntervalRef.current);
+          countdownIntervalRef.current = null;
+        }
         onRestart?.();
       } else {
+        // First click - arm confirmation with countdown
         setArmedRestartId(id);
+        setCountdown(3);
+
+        // Clear any existing timers
         if (armedTimerRef.current) {
           clearTimeout(armedTimerRef.current);
         }
+        if (countdownIntervalRef.current) {
+          clearInterval(countdownIntervalRef.current);
+        }
+
+        // Start countdown interval (updates every second)
+        let currentCount = 3;
+        countdownIntervalRef.current = setInterval(() => {
+          currentCount -= 1;
+          if (currentCount > 0) {
+            setCountdown(currentCount);
+          }
+        }, 1000);
+
+        // Disarm after timeout
         armedTimerRef.current = setTimeout(() => {
           setArmedRestartId(null);
+          setCountdown(null);
+          if (countdownIntervalRef.current) {
+            clearInterval(countdownIntervalRef.current);
+            countdownIntervalRef.current = null;
+          }
           armedTimerRef.current = null;
         }, ARMED_TIMEOUT_MS);
       }
@@ -488,32 +532,38 @@ function PanelHeaderComponent({
           {/* Window controls - hover only */}
           <div className="flex items-center gap-1.5 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity motion-reduce:transition-none">
             {headerActions}
-            {!isBrowser && onRestart && (
+            {/* Restart button - only shown for panel kinds that declare canRestart capability */}
+            {canRestart && onRestart && (
               <button
                 type="button"
                 onClick={handleRestartClick}
                 className={cn(
-                  "p-1.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 transition-colors",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 transition-colors flex items-center gap-1.5",
                   armedRestartId === id
-                    ? "bg-amber-500/20 text-amber-500 animate-pulse motion-reduce:animate-none ring-2 ring-amber-500/50 focus-visible:outline-amber-500"
-                    : "hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline-canopy-accent text-canopy-text/60 hover:text-canopy-text"
+                    ? "px-2 py-1 bg-amber-500/20 text-amber-500 ring-2 ring-amber-500/50 focus-visible:outline-amber-500"
+                    : "p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline-canopy-accent text-canopy-text/60 hover:text-canopy-text"
                 )}
                 title={armedRestartId === id ? "Click again to confirm restart" : "Restart Session"}
                 aria-label={
                   armedRestartId === id
-                    ? "Armed — click again to confirm restart"
+                    ? `Armed — click again to confirm restart. ${countdown !== null ? `${countdown} seconds remaining` : ""}`
                     : "Restart Session"
                 }
                 aria-pressed={armedRestartId === id ? "true" : "false"}
               >
                 <RotateCcw
-                  className={cn("w-3 h-3", armedRestartId === id && "animate-spin-slow")}
+                  className="w-3 h-3"
                   aria-hidden="true"
                 />
                 {armedRestartId === id && (
-                  <span className="sr-only" role="status" aria-live="polite">
-                    Restart armed. Click again to confirm.
-                  </span>
+                  <>
+                    <span className="text-[10px] font-semibold uppercase tracking-wide">
+                      Click to Confirm
+                    </span>
+                    {countdown !== null && (
+                      <span className="text-[10px] font-bold min-w-[1ch]" aria-hidden="true">{countdown}</span>
+                    )}
+                  </>
                 )}
               </button>
             )}

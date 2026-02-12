@@ -194,6 +194,38 @@ export function panelKindHasPty(kind: PanelKind): boolean {
 }
 
 /**
+ * Check if a panel kind can be restarted via the UI.
+ * Uses the panel kind registry's canRestart property as the source of truth.
+ *
+ * This indicates the panel kind's restart capability at the architecture level.
+ * UI components should still gate restart affordances on both this capability flag
+ * AND the availability of an onRestart handler for the specific panel instance.
+ *
+ * @param kind - The panel kind to check
+ * @returns True if the panel kind supports restart, false otherwise (including unregistered kinds)
+ *
+ * @example
+ * // Terminal and agent panels can be restarted
+ * panelKindCanRestart('terminal') // true
+ * panelKindCanRestart('agent')    // true
+ *
+ * // Browser panels cannot be restarted
+ * panelKindCanRestart('browser')  // false
+ *
+ * // Dev-preview panels manage their own restart internally
+ * panelKindCanRestart('dev-preview') // false
+ *
+ * @example
+ * // UI usage - gate on both capability and handler
+ * const canRestart = panelKindCanRestart(kind);
+ * {canRestart && onRestart && <button onClick={onRestart}>Restart</button>}
+ */
+export function panelKindCanRestart(kind: PanelKind): boolean {
+  const config = getPanelKindConfig(kind);
+  return config?.canRestart ?? false;
+}
+
+/**
  * Check if a panel kind uses the standard terminal UI.
  */
 export function panelKindUsesTerminalUi(kind: PanelKind): boolean {
