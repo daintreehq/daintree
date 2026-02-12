@@ -225,23 +225,52 @@ export interface AutoSizeConfig {
   maxHeightPx?: number;
 }
 
-export function computeAutoSize(contentHeight: number, lineHeightPx: number, maxHeightPx: number) {
+const EPSILON_PX = 2;
+
+export function computeAutoSize(
+  contentHeight: number,
+  lineHeightPx: number,
+  maxHeightPx: number,
+  isEmpty: boolean = false
+) {
   // Guard against invalid configuration
   if (lineHeightPx <= 0) {
     return { next: maxHeightPx, shouldScroll: false };
   }
 
-  // Use Math.ceil to avoid clipping the last line when content isn't an exact multiple
-  const lines = Math.max(1, Math.ceil(contentHeight / lineHeightPx));
+  // Always return single-line height for empty documents
+  if (isEmpty) {
+    return { next: lineHeightPx, shouldScroll: false };
+  }
+
+  // Add epsilon tolerance to prevent zoom-induced fractional rounding from inflating line count
+  const adjustedHeight = contentHeight - EPSILON_PX;
+  const lines = Math.max(1, Math.ceil(adjustedHeight / lineHeightPx));
   const snapped = lines * lineHeightPx;
   const next = Math.min(snapped, maxHeightPx);
-  return { next, shouldScroll: contentHeight > maxHeightPx };
+  // Align overflow behavior with epsilon-adjusted snapping to avoid
+  // zoom-only fractional overflow toggling scrollbars at the max boundary
+  return { next, shouldScroll: snapped > maxHeightPx };
+}
+
+function measureLineHeight(view: EditorView, fallback: number): number {
+  try {
+    const lineElement = view.dom.querySelector(".cm-line");
+    if (lineElement) {
+      const height = lineElement.getBoundingClientRect().height;
+      if (height > 0) return height;
+    }
+  } catch {
+    // Fall through to fallback
+  }
+  return fallback;
 }
 
 export function createAutoSize(config: AutoSizeConfig = {}) {
-  const lineHeightPx = config.lineHeightPx ?? LINE_HEIGHT_PX;
+  const configLineHeightPx = config.lineHeightPx ?? LINE_HEIGHT_PX;
   const maxHeightPx = config.maxHeightPx ?? MAX_TEXTAREA_HEIGHT_PX;
   let lastHeight = 0;
+  let cachedLineHeight: number | null = null;
 
   return EditorView.updateListener.of((update) => {
     if (!update.docChanged && !update.viewportChanged && !update.geometryChanged) return;
@@ -251,8 +280,15 @@ export function createAutoSize(config: AutoSizeConfig = {}) {
     // Use requestMeasure to ensure we read contentHeight after CodeMirror's layout pass
     view.requestMeasure({
       read() {
+        // Measure actual line height from DOM (cache for performance)
+        if (cachedLineHeight === null || update.geometryChanged) {
+          cachedLineHeight = measureLineHeight(view, configLineHeightPx);
+        }
+
+        const isEmpty = view.state.doc.length === 0;
+
         // Read phase: measure contentHeight after layout is complete
-        return computeAutoSize(view.contentHeight, lineHeightPx, maxHeightPx);
+        return computeAutoSize(view.contentHeight, cachedLineHeight, maxHeightPx, isEmpty);
       },
       write(measured) {
         // Write phase: apply DOM updates

@@ -274,7 +274,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       if (value.length > 0) return;
 
       const rafId = requestAnimationFrame(() => {
-        const next = Math.ceil(el.getBoundingClientRect().height);
+        const rawHeight = el.getBoundingClientRect().height;
+        // Round instead of ceil to avoid zoom-induced fractional inflation
+        const next = Math.round(rawHeight);
         if (next > 0) setCollapsedHeightPx(next);
       });
       return () => cancelAnimationFrame(rafId);
