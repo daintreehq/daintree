@@ -501,14 +501,11 @@ describe("WorkspaceService git watcher refresh behavior", () => {
     service["gitWatchDebounceMs"] = 50;
 
     const firstResult: WorktreeChanges = {
-      head: "def456",
-      isDirty: true,
-      stagedFileCount: 1,
-      unstagedFileCount: 0,
-      untrackedFileCount: 0,
-      conflictedFileCount: 0,
+      worktreeId: monitor.id,
+      rootPath: monitor.path,
       changedFileCount: 1,
-      changes: monitor.changes,
+      changes: monitor.changes ?? [],
+      lastCommitMessage: "feat: update",
     };
 
     let resolveFirstUpdate!: (value: typeof firstResult) => void;
