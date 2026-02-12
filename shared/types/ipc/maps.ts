@@ -566,6 +566,14 @@ export interface IpcInvokeMap {
     args: [payload: { projectId: string; terminals: TerminalSnapshot[] }];
     result: void;
   };
+  "project:get-terminal-sizes": {
+    args: [projectId: string];
+    result: Record<string, { cols: number; rows: number }>;
+  };
+  "project:set-terminal-sizes": {
+    args: [payload: { projectId: string; terminalSizes: Record<string, { cols: number; rows: number }> }];
+    result: void;
+  };
   "project:get-tab-groups": {
     args: [projectId: string];
     result: TabGroup[];
