@@ -61,14 +61,6 @@ vi.mock("../utils/openExternal.js", () => ({
   openExternalUrl: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../ClipboardFileInjector.js", () => ({
-  ClipboardFileInjector: {
-    hasFileDataInClipboard: vi.fn().mockReturnValue(false),
-    getFilePathsFromClipboard: vi.fn().mockResolvedValue([]),
-    injectFileIntoPaste: vi.fn().mockResolvedValue(undefined),
-  },
-}));
-
 describe("SidecarManager", () => {
   let SidecarManagerClass: typeof import("../SidecarManager.js").SidecarManager;
   let mockWindow: InstanceType<typeof import("electron").BrowserWindow>;

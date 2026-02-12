@@ -2,7 +2,6 @@ import { BrowserWindow, Menu, WebContentsView, app, clipboard } from "electron";
 import type { SidecarBounds, SidecarNavEvent } from "../../shared/types/sidecar.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
-import { ClipboardFileInjector } from "./ClipboardFileInjector.js";
 
 export class SidecarManager {
   private window: BrowserWindow;
@@ -12,33 +11,6 @@ export class SidecarManager {
 
   constructor(window: BrowserWindow) {
     this.window = window;
-  }
-
-  private async pasteFromClipboard(webContents: Electron.WebContents): Promise<void> {
-    const hasFileData = ClipboardFileInjector.hasFileDataInClipboard();
-    if (!hasFileData) {
-      webContents.paste();
-      return;
-    }
-
-    try {
-      const filePaths = await ClipboardFileInjector.getFilePathsFromClipboard();
-      if (filePaths.length === 0) {
-        webContents.paste();
-        return;
-      }
-
-      if (filePaths.length > 1) {
-        console.warn(
-          `[SidecarManager] Multiple files in clipboard (${filePaths.length}), pasting first only`
-        );
-      }
-
-      await ClipboardFileInjector.injectFileIntoPaste(webContents, filePaths[0]);
-    } catch (error) {
-      console.error("[SidecarManager] Failed to paste from clipboard:", error);
-      webContents.paste();
-    }
   }
 
   createTab(tabId: string, url: string): void {
@@ -129,25 +101,6 @@ export class SidecarManager {
         }
       });
 
-      view.webContents.on("before-input-event", (event, input) => {
-        const isMac = process.platform === "darwin";
-        const isPasteShortcut =
-          input.key.toLowerCase() === "v" &&
-          ((isMac && input.meta && !input.control) || (!isMac && input.control && !input.meta)) &&
-          !input.alt &&
-          !input.shift &&
-          input.type === "keyDown";
-
-        if (isPasteShortcut) {
-          // Check synchronously if clipboard has file data before intercepting
-          const hasFileData = ClipboardFileInjector.hasFileDataInClipboard();
-          if (!hasFileData) return;
-
-          event.preventDefault();
-          void this.pasteFromClipboard(view.webContents);
-        }
-      });
-
       view.webContents.on("context-menu", (_event, params) => {
         const win = this.window;
         if (!win || win.isDestroyed()) return;
@@ -170,7 +123,7 @@ export class SidecarManager {
               {
                 label: "Paste",
                 enabled: canPaste,
-                click: () => void this.pasteFromClipboard(view.webContents),
+                click: () => view.webContents.paste(),
               },
               { role: "selectAll" }
             );
