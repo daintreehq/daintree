@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { getAgentConfig } from "@/config/agents";
 import type React from "react";
-import { useNativeContextMenu } from "@/hooks";
+import { useNativeContextMenu, useKeybindingDisplay } from "@/hooks";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import type { MenuItemOption } from "@/types";
 import { actionService } from "@/services/ActionService";
@@ -20,6 +20,7 @@ interface AgentButtonProps {
 export function AgentButton({ type, availability, isEnabled, onOpenSettings }: AgentButtonProps) {
   const { showMenu } = useNativeContextMenu();
   const { worktrees } = useWorktrees();
+  const displayCombo = useKeybindingDisplay(`agent.${type}`);
 
   if (!isEnabled) return null;
 
@@ -27,7 +28,7 @@ export function AgentButton({ type, availability, isEnabled, onOpenSettings }: A
   if (!config) return null;
 
   const tooltipDetails = config.tooltip ? ` — ${config.tooltip}` : "";
-  const shortcut = config.shortcut ? ` (${config.shortcut})` : "";
+  const shortcut = displayCombo ? ` (${displayCombo})` : "";
   const isLoading = availability === undefined;
   const isAvailable = availability ?? false;
 

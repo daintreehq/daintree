@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from "react";
+import { useEffect, useCallback, useState } from "react";
 import { keybindingService, type KeyScope } from "../services/KeybindingService";
 
 export interface UseKeybindingOptions {
@@ -104,7 +104,20 @@ export function useKeybindingScope(scope: KeyScope, active: boolean = true): voi
 }
 
 export function useKeybindingDisplay(actionId: string): string {
-  return keybindingService.getDisplayCombo(actionId);
+  const [displayCombo, setDisplayCombo] = useState(() =>
+    keybindingService.getDisplayCombo(actionId)
+  );
+
+  useEffect(() => {
+    const updateDisplay = () => {
+      setDisplayCombo(keybindingService.getDisplayCombo(actionId));
+    };
+
+    updateDisplay();
+    return keybindingService.subscribe(updateDisplay);
+  }, [actionId]);
+
+  return displayCombo;
 }
 
 export { keybindingService };

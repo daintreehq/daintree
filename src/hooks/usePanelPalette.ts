@@ -1,9 +1,11 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { getPanelKindIds, getPanelKindConfig } from "@shared/config/panelKindRegistry";
 import { hasPanelComponent } from "@/registry/panelComponentRegistry";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
+import { keybindingService } from "@/services/KeybindingService";
+import type { KeyAction } from "@shared/types/keymap";
 
 export interface PanelKindOption {
   id: string;
@@ -18,6 +20,13 @@ export type UsePanelPaletteReturn = UseSearchablePaletteReturn<PanelKindOption> 
   confirmSelection: () => PanelKindOption | null;
 };
 
+const AGENT_LAUNCH_ACTIONS: Record<string, KeyAction> = {
+  claude: "agent.claude",
+  gemini: "agent.gemini",
+  codex: "agent.codex",
+  opencode: "agent.opencode",
+};
+
 function filterPanelKinds(items: PanelKindOption[], query: string): PanelKindOption[] {
   if (!query.trim()) return items;
   const lowerQuery = query.toLowerCase();
@@ -30,6 +39,11 @@ function filterPanelKinds(items: PanelKindOption[], query: string): PanelKindOpt
 
 export function usePanelPalette(): UsePanelPaletteReturn {
   const userRegistry = useUserAgentRegistryStore((state) => state.registry);
+  const [keybindingVersion, setKeybindingVersion] = useState(0);
+
+  useEffect(() => {
+    return keybindingService.subscribe(() => setKeybindingVersion((v) => v + 1));
+  }, []);
 
   const availableKinds = useMemo<PanelKindOption[]>(() => {
     const allKindIds = getPanelKindIds();
@@ -58,12 +72,14 @@ export function usePanelPalette(): UsePanelPaletteReturn {
       .map((agentId): PanelKindOption | null => {
         const agentConfig = getEffectiveAgentConfig(agentId);
         if (!agentConfig) return null;
+        const actionId = AGENT_LAUNCH_ACTIONS[agentId];
+        const displayCombo = actionId ? keybindingService.getDisplayCombo(actionId) : "";
         return {
           id: `agent:${agentId}`,
           name: agentConfig.name,
           iconId: agentConfig.iconId,
           color: agentConfig.color,
-          description: agentConfig.shortcut ?? agentConfig.tooltip,
+          description: displayCombo || agentConfig.shortcut || agentConfig.tooltip,
         };
       })
       .filter((agent): agent is PanelKindOption => agent !== null);
@@ -76,7 +92,7 @@ export function usePanelPalette(): UsePanelPaletteReturn {
     }
 
     return Array.from(dedupedById.values());
-  }, [userRegistry]);
+  }, [userRegistry, keybindingVersion]);
 
   const { results, selectedIndex, close, ...paletteRest } = useSearchablePalette<PanelKindOption>({
     items: availableKinds,
