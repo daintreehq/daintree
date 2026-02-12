@@ -244,10 +244,7 @@ class TerminalInstanceService {
     this.resizeController.lockResize(id, locked);
   }
 
-  suppressResizesDuringProjectSwitch(
-    terminalIds: string[],
-    durationMs: number
-  ): void {
+  suppressResizesDuringProjectSwitch(terminalIds: string[], durationMs: number): void {
     terminalIds.forEach((id) => {
       const instance = this.instances.get(id);
       if (!instance) return;

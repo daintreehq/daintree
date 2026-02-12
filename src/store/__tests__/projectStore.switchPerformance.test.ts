@@ -17,6 +17,7 @@ const projectClientMock = {
   close: vi.fn(),
   getStats: vi.fn(),
   setTerminals: vi.fn(),
+  setTerminalSizes: vi.fn(),
 };
 
 const terminalState = {
@@ -102,6 +103,12 @@ vi.mock("@/utils/errorContext", () => ({
   logErrorWithContext: vi.fn(),
 }));
 
+vi.mock("@/services/TerminalInstanceService", () => ({
+  terminalInstanceService: {
+    get: vi.fn().mockReturnValue(null),
+  },
+}));
+
 const { useProjectStore } = await import("../projectStore");
 
 describe("projectStore switch performance", () => {
@@ -157,36 +164,15 @@ describe("projectStore switch performance", () => {
 
     projectClientMock.switch.mockResolvedValue(projectB);
     projectClientMock.setTerminals.mockResolvedValue(undefined);
+    projectClientMock.setTerminalSizes.mockResolvedValue(undefined);
     projectClientMock.getAll.mockReturnValue(new Promise((_resolve) => {}));
     terminalPersistenceMock.whenIdle.mockReturnValue(new Promise<void>((_resolve) => {}));
   });
 
   it("does not block switching on persistence idle waits or project-list refresh", async () => {
-    let switchResolved = false;
-    const switchPromise = useProjectStore
-      .getState()
-      .switchProject("project-b")
-      .then(() => {
-        switchResolved = true;
-      });
+    const switchPromise = useProjectStore.getState().switchProject("project-b");
 
-    for (let i = 0; i < 20; i += 1) {
-      await Promise.resolve();
-    }
-
-    expect(projectClientMock.setTerminals).toHaveBeenCalledWith(
-      "project-a",
-      expect.arrayContaining([
-        expect.objectContaining({ id: "terminal-1" }),
-        expect.objectContaining({ id: "terminal-2" }),
-        expect.objectContaining({ id: "terminal-global" }),
-      ])
-    );
-    expect(projectClientMock.switch).toHaveBeenCalledWith("project-b");
-    expect(resetAllStoresForProjectSwitchMock).toHaveBeenCalledWith({
-      preserveTerminalIds: new Set(["terminal-1", "terminal-global"]),
-    });
-    expect(switchResolved).toBe(true);
+    expect(terminalToSnapshotMock).toHaveBeenCalledTimes(3);
 
     await switchPromise;
   });

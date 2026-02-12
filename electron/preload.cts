@@ -887,13 +887,16 @@ const api: ElectronAPI = {
       terminals: import("../shared/types/index.js").TerminalSnapshot[]
     ): Promise<void> => _typedInvoke(CHANNELS.PROJECT_SET_TERMINALS, { projectId, terminals }),
 
-    getTerminalSizes: (projectId: string): Promise<Record<string, { cols: number; rows: number }>> =>
+    getTerminalSizes: (
+      projectId: string
+    ): Promise<Record<string, { cols: number; rows: number }>> =>
       _typedInvoke(CHANNELS.PROJECT_GET_TERMINAL_SIZES, projectId),
 
     setTerminalSizes: (
       projectId: string,
       terminalSizes: Record<string, { cols: number; rows: number }>
-    ): Promise<void> => _typedInvoke(CHANNELS.PROJECT_SET_TERMINAL_SIZES, { projectId, terminalSizes }),
+    ): Promise<void> =>
+      _typedInvoke(CHANNELS.PROJECT_SET_TERMINAL_SIZES, { projectId, terminalSizes }),
 
     getTabGroups: (projectId: string): Promise<import("../shared/types/index.js").TabGroup[]> =>
       _typedInvoke(CHANNELS.PROJECT_GET_TAB_GROUPS, projectId),

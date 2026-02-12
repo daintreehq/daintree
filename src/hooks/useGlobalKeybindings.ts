@@ -58,12 +58,19 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
         if (result.match) {
           // Dispatch through ActionService
           void actionService
-            .dispatch(result.match.actionId as Parameters<typeof actionService.dispatch>[0], undefined, {
-              source: "keybinding",
-            })
+            .dispatch(
+              result.match.actionId as Parameters<typeof actionService.dispatch>[0],
+              undefined,
+              {
+                source: "keybinding",
+              }
+            )
             .then((dispatchResult) => {
               if (!dispatchResult.ok) {
-                console.error(`[GlobalKeybinding] Action "${result.match!.actionId}" failed:`, dispatchResult.error);
+                console.error(
+                  `[GlobalKeybinding] Action "${result.match!.actionId}" failed:`,
+                  dispatchResult.error
+                );
               }
             });
         }

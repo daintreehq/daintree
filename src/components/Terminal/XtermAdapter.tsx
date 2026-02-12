@@ -250,12 +250,19 @@ function XtermAdapterComponent({
             if (result.match) {
               // Dispatch the matched action
               void actionService
-                .dispatch(result.match.actionId as Parameters<typeof actionService.dispatch>[0], undefined, {
-                  source: "keybinding",
-                })
+                .dispatch(
+                  result.match.actionId as Parameters<typeof actionService.dispatch>[0],
+                  undefined,
+                  {
+                    source: "keybinding",
+                  }
+                )
                 .then((dispatchResult) => {
                   if (!dispatchResult.ok) {
-                    console.error(`[XtermKeybinding] Action "${result.match!.actionId}" failed:`, dispatchResult.error);
+                    console.error(
+                      `[XtermKeybinding] Action "${result.match!.actionId}" failed:`,
+                      dispatchResult.error
+                    );
                   }
                 })
                 .catch((error) => {

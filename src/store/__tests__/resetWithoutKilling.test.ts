@@ -37,6 +37,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     applyRendererPolicy: vi.fn(),
     destroy: vi.fn(),
     setVisible: vi.fn(),
+    suppressResizesDuringProjectSwitch: vi.fn(),
   },
 }));
 

@@ -17,6 +17,7 @@ const worktreeClientMock = {
 
 const projectClientMock = {
   getTabGroups: vi.fn(),
+  getTerminalSizes: vi.fn(),
 };
 
 const terminalConfigClientMock = {
@@ -128,6 +129,7 @@ describe("hydrateAppState", () => {
     );
     worktreeClientMock.getAll.mockResolvedValue([]);
     projectClientMock.getTabGroups.mockResolvedValue([]);
+    projectClientMock.getTerminalSizes.mockResolvedValue({});
   });
 
   it("rehydrates dev-preview panels without backend terminals", async () => {
