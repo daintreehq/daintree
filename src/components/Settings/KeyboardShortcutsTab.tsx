@@ -7,6 +7,7 @@ import {
   normalizeKeyForBinding,
 } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 interface ShortcutBinding extends KeybindingConfig {
   effectiveCombo: string;
@@ -273,6 +274,8 @@ export function KeyboardShortcutsTab() {
   const [editingActionId, setEditingActionId] = useState<string | null>(null);
   const [bindings, setBindings] = useState<ShortcutBinding[]>([]);
   const [, setUpdateKey] = useState(0);
+  const [isResetDialogOpen, setIsResetDialogOpen] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
 
   const loadBindings = useCallback(() => {
     const allBindings = keybindingService.getAllBindingsWithEffectiveCombos();
@@ -345,14 +348,34 @@ export function KeyboardShortcutsTab() {
     loadBindings();
   };
 
-  const handleResetAll = async () => {
-    const result = await actionService.dispatch("keybinding.resetAll", undefined, {
-      source: "user",
-    });
-    if (!result.ok) {
-      console.error("Failed to reset all keybinding overrides:", result.error);
+  const handleOpenResetDialog = () => {
+    setEditingActionId(null);
+    setIsResetDialogOpen(true);
+  };
+
+  const handleConfirmReset = async () => {
+    if (isResetting) return;
+    setIsResetting(true);
+    try {
+      const result = await actionService.dispatch("keybinding.resetAll", undefined, {
+        source: "user",
+        confirmed: true,
+      });
+      if (!result.ok) {
+        console.error("Failed to reset all keybinding overrides:", result.error);
+        return;
+      }
+      await keybindingService.loadOverrides();
+      loadBindings();
+      setIsResetDialogOpen(false);
+    } finally {
+      setIsResetting(false);
     }
-    loadBindings();
+  };
+
+  const handleCancelReset = () => {
+    if (isResetting) return;
+    setIsResetDialogOpen(false);
   };
 
   const hasOverrides = bindings.some((b) => b.isOverridden);
@@ -370,15 +393,21 @@ export function KeyboardShortcutsTab() {
             className="w-full pl-9 pr-3 py-2 bg-canopy-bg border border-canopy-border rounded text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:border-canopy-accent"
           />
         </div>
-        {hasOverrides && (
-          <button
-            onClick={handleResetAll}
-            className="flex items-center gap-1.5 px-3 py-2 text-sm text-canopy-text/60 hover:text-canopy-text border border-canopy-border rounded hover:border-canopy-accent transition-colors"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            Reset All
-          </button>
-        )}
+        <button
+          onClick={handleOpenResetDialog}
+          disabled={isResetting}
+          className={cn(
+            "flex items-center gap-1.5 px-3 py-2 text-sm border border-canopy-border rounded transition-colors",
+            isResetting
+              ? "opacity-50 cursor-not-allowed text-canopy-text/40"
+              : hasOverrides
+              ? "text-canopy-text/60 hover:text-canopy-text hover:border-canopy-accent"
+              : "text-canopy-text/40 hover:text-canopy-text/60 hover:border-canopy-border"
+          )}
+        >
+          <RotateCcw className="w-3.5 h-3.5" />
+          Reset All
+        </button>
       </div>
 
       <div className="space-y-4">
@@ -409,6 +438,22 @@ export function KeyboardShortcutsTab() {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        isOpen={isResetDialogOpen}
+        onClose={isResetting ? undefined : handleCancelReset}
+        title="Reset Keyboard Shortcuts?"
+        description={
+          hasOverrides
+            ? "All keyboard shortcuts will be reset to their default values. Any customized shortcuts will be removed."
+            : "There are no customized shortcuts to reset. All shortcuts are already at their default values."
+        }
+        confirmLabel="Reset to Defaults"
+        cancelLabel="Cancel"
+        onConfirm={handleConfirmReset}
+        isConfirmLoading={isResetting}
+        variant="destructive"
+      />
     </div>
   );
 }
