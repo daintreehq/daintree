@@ -534,4 +534,35 @@ describe("WorkspaceService git watcher refresh behavior", () => {
     expect(getWorktreeChangesWithStatsMock).toHaveBeenCalledTimes(2);
     expect(monitor.gitWatchRefreshPending).toBe(false);
   });
+
+  it("retries git watch refresh after index.lock conflicts", async () => {
+    const gitModule = await import("../../utils/git.js");
+    const getWorktreeChangesWithStatsMock = vi.mocked(gitModule.getWorktreeChangesWithStats);
+    const monitor = createMonitorState();
+    service["gitWatchDebounceMs"] = 40;
+
+    const lockedError = new Error("fatal: Unable to create '/repo/.git/index.lock': File exists.");
+    const recoveredResult: WorktreeChanges = {
+      worktreeId: monitor.id,
+      rootPath: monitor.path,
+      changedFileCount: 0,
+      changes: [],
+      lastCommitMessage: "fix: commit completed",
+    };
+
+    getWorktreeChangesWithStatsMock.mockReset();
+    getWorktreeChangesWithStatsMock.mockRejectedValueOnce(lockedError);
+    getWorktreeChangesWithStatsMock.mockResolvedValue(recoveredResult);
+
+    service["handleGitFileChange"](monitor);
+    await Promise.resolve();
+    expect(getWorktreeChangesWithStatsMock).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(45);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(getWorktreeChangesWithStatsMock).toHaveBeenCalledTimes(2);
+    expect(monitor.gitWatchDebounceTimer).toBeNull();
+  });
 });

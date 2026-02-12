@@ -817,7 +817,14 @@ export class WorkspaceService {
 
       const errorMessage = (error as Error).message || "";
       if (errorMessage.includes("index.lock")) {
-        // Git index locked, skip this cycle
+        // Git index locked, queue a trailing retry so git-watch updates are not lost.
+        monitor.gitWatchRefreshPending = true;
+        if (!monitor.gitWatchDebounceTimer) {
+          monitor.gitWatchDebounceTimer = setTimeout(() => {
+            monitor.gitWatchDebounceTimer = null;
+            this.flushPendingGitWatchRefresh(monitor);
+          }, this.gitWatchDebounceMs);
+        }
         return;
       }
 
