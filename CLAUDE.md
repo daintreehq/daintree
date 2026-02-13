@@ -10,6 +10,7 @@
 3. **Code Style:** Minimal comments. No decorative headers. High signal-to-noise ratio.
 4. **Codex MCP:** When calling `mcp__codex__codex`, always set `model: "gpt-5.3-codex"`. Do NOT use any other model—ignore examples in the MCP definition like `o3`, `o4-mini`, etc. Only `gpt-5.3-codex` is valid. Include file paths in prompts—Codex reads files directly and gives better advice when it can see the actual code.
 5. **Human-Review Label:** The `human-review` label marks issues that cannot be solved autonomously—they require a developer checking logs, observing runtime behavior, or making subjective UX judgments. Adding this label makes an issue 10-20x more expensive (human time vs agent time), so use it sparingly. Only apply when the issue genuinely requires human observation or iterative debugging that an agent cannot perform. Most issues should NOT have this label. When working issues, skip any labeled `human-review`.
+6. **GitHub Access:** This is a private repo (`gregpriday/canopy-electron`). Always use the `gh` CLI for all GitHub operations (issues, PRs, checks, releases, API calls). Do NOT use HTTP fetches or web scraping to access GitHub URLs—they will fail due to authentication. Examples: `gh issue list`, `gh pr view 123`, `gh api repos/gregpriday/canopy-electron/issues`.
 
 ## Development
 

@@ -29,6 +29,7 @@ npm run fix              # Auto-fix lint/format
 3. **Commits:** Conventional Commits (`feat(scope):`, `fix(scope):`, `chore:`).
 4. **PRs:** Include brief summary, key changes, linked issues. Run `npm run check` first.
 5. **Security:** No secrets in commits. Validate IPC inputs. Type all main/renderer boundaries.
+6. **GitHub Access:** This is a private repo (`gregpriday/canopy-electron`). Always use the `gh` CLI for all GitHub operations (issues, PRs, checks, releases, API calls). Do NOT use HTTP fetches or web scraping to access GitHub URLs—they will fail due to authentication. Examples: `gh issue list`, `gh pr view 123`, `gh api repos/gregpriday/canopy-electron/issues`.
 
 ## Key Architecture
 
