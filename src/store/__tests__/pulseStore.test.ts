@@ -17,7 +17,7 @@ function resetPulseStore() {
   usePulseStore.setState({
     pulses: new Map(),
     loading: new Map(),
-    errors: new Map(),
+    errors: new Map<string, string | null>(),
     rangeDays: 60,
     requestIds: new Map(),
     retryCount: new Map(),
@@ -82,6 +82,20 @@ describe("pulseStore", () => {
     const retryResult = await usePulseStore.getState().fetchPulse("wt-2", false, true);
     expect(retryResult).toBeNull();
     expect(dispatchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats empty repositories as non-errors and skips retries", async () => {
+    dispatchMock.mockResolvedValueOnce({
+      ok: false,
+      error: { message: "fatal: ambiguous argument 'HEAD'" },
+    });
+
+    const result = await usePulseStore.getState().fetchPulse("wt-empty");
+
+    expect(result).toBeNull();
+    expect(usePulseStore.getState().getError("wt-empty")).toBeNull();
+    expect(usePulseStore.getState().getRetryCount("wt-empty")).toBe(0);
+    expect(usePulseStore.getState().retryTimers.has("wt-empty")).toBe(false);
   });
 
   it("clears stale request ids when range changes", () => {

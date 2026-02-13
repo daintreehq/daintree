@@ -3,7 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import type { PulseRangeDays, ProjectPulse } from "@shared/types";
 import { usePulseStore, useProjectStore } from "@/store";
 import { cn } from "@/lib/utils";
-import { Loader2, AlertCircle, RefreshCw, Activity } from "lucide-react";
+import { Loader2, AlertCircle, RefreshCw, Activity, GitBranch } from "lucide-react";
 import { PulseHeatmap } from "./PulseHeatmap";
 import { PulseSummary } from "./PulseSummary";
 import {
@@ -100,6 +100,24 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
         >
           <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
           <span className="text-xs">Loading activity data...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!pulse && error === null) {
+    return (
+      <div
+        className={cn(
+          "p-4 bg-[var(--color-surface)] rounded-[var(--radius-lg)] border border-canopy-border",
+          className
+        )}
+      >
+        <div className="flex items-center gap-2 text-canopy-text/50">
+          <GitBranch className="w-4 h-4 text-blue-400/70" aria-hidden="true" />
+          <span className="text-xs">
+            New repository — make your first commit to start tracking activity
+          </span>
         </div>
       </div>
     );

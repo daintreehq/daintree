@@ -53,6 +53,7 @@ import { NewWorktreeDialog } from "./components/Worktree/NewWorktreeDialog";
 import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
 import { TerminalPalette, NewTerminalPalette } from "./components/TerminalPalette";
 import { PanelPalette } from "./components/PanelPalette/PanelPalette";
+import { GitInitDialog } from "./components/Project";
 import { ProjectSwitcherPalette } from "./components/Project/ProjectSwitcherPalette";
 import { ActionPalette } from "./components/ActionPalette";
 import { QuickSwitcher } from "./components/QuickSwitcher";
@@ -510,6 +511,10 @@ function App() {
   const quickSwitcher = useQuickSwitcher();
   useDoubleShift(actionPalette.toggle);
   const currentProject = useProjectStore((state) => state.currentProject);
+  const gitInitDialogOpen = useProjectStore((state) => state.gitInitDialogOpen);
+  const gitInitDirectoryPath = useProjectStore((state) => state.gitInitDirectoryPath);
+  const closeGitInitDialog = useProjectStore((state) => state.closeGitInitDialog);
+  const handleGitInitSuccess = useProjectStore((state) => state.handleGitInitSuccess);
   const { setActiveWorktree, selectWorktree, activeWorktreeId, focusedWorktreeId } =
     useWorktreeSelectionStore(
       useShallow((state) => ({
@@ -992,6 +997,15 @@ function App() {
       <ShortcutReferenceDialog isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
 
       <TerminalInfoDialogHost />
+
+      {gitInitDirectoryPath && (
+        <GitInitDialog
+          isOpen={gitInitDialogOpen}
+          directoryPath={gitInitDirectoryPath}
+          onSuccess={handleGitInitSuccess}
+          onCancel={closeGitInitDialog}
+        />
+      )}
 
       <PanelTransitionOverlay />
 

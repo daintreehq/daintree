@@ -29,6 +29,8 @@ const createMockProjectClient = () => ({
   reopen: vi.fn().mockResolvedValue({}),
   getStats: vi.fn().mockResolvedValue({}),
   initGit: vi.fn().mockResolvedValue(undefined),
+  initGitGuided: vi.fn().mockResolvedValue({ success: true, completedSteps: [] }),
+  onInitGitProgress: vi.fn().mockReturnValue(() => {}),
   getRecipes: vi.fn().mockResolvedValue([]),
   saveRecipes: vi.fn().mockResolvedValue(undefined),
   addRecipe: vi.fn().mockResolvedValue(undefined),

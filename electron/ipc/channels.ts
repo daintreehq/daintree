@@ -156,6 +156,8 @@ export const CHANNELS = {
   PROJECT_REOPEN: "project:reopen",
   PROJECT_GET_STATS: "project:get-stats",
   PROJECT_INIT_GIT: "project:init-git",
+  PROJECT_INIT_GIT_GUIDED: "project:init-git-guided",
+  PROJECT_INIT_GIT_PROGRESS: "project:init-git-progress",
   PROJECT_GET_RECIPES: "project:get-recipes",
   PROJECT_SAVE_RECIPES: "project:save-recipes",
   PROJECT_ADD_RECIPE: "project:add-recipe",

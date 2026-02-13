@@ -15,6 +15,9 @@ const projectClientMock = {
   detectRunners: vi.fn(),
   close: vi.fn(),
   getStats: vi.fn(),
+  initGit: vi.fn().mockResolvedValue(undefined),
+  initGitGuided: vi.fn().mockResolvedValue({ success: true, completedSteps: [] }),
+  onInitGitProgress: vi.fn(() => () => {}),
 };
 
 const appClientMock = {
@@ -22,11 +25,16 @@ const appClientMock = {
   setState: vi.fn(),
 };
 
+const terminalClientMock = {
+  getSharedBuffers: vi.fn().mockResolvedValue({ visualBuffers: [], signalBuffer: null }),
+};
+
 const addNotificationMock = vi.fn();
 
 vi.mock("@/clients", () => ({
   projectClient: projectClientMock,
   appClient: appClientMock,
+  terminalClient: terminalClientMock,
 }));
 
 vi.mock("../notificationStore", () => ({
@@ -66,26 +74,25 @@ const { useProjectStore } = await import("../projectStore");
 describe("projectStore addProject", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    useProjectStore.setState({ projects: [], currentProject: null, isLoading: false, error: null });
+    useProjectStore.setState({
+      projects: [],
+      currentProject: null,
+      isLoading: false,
+      error: null,
+      gitInitDialogOpen: false,
+      gitInitDirectoryPath: null,
+    });
   });
 
-  it("shows a warning with action when add fails for non-git directories", async () => {
+  it("opens the guided git init dialog when add fails for non-git directories", async () => {
     projectClientMock.openDialog.mockResolvedValueOnce("/tmp/not-a-repo");
     projectClientMock.add.mockRejectedValueOnce(new Error("Not a git repository: /tmp/not-a-repo"));
 
     await useProjectStore.getState().addProject();
 
-    expect(addNotificationMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "warning",
-        title: "Not a Git repository",
-        message: "Would you like to initialize a Git repository in this directory?",
-        action: expect.objectContaining({
-          label: "Initialize Git",
-        }),
-      })
-    );
-
+    expect(addNotificationMock).not.toHaveBeenCalled();
+    expect(useProjectStore.getState().gitInitDialogOpen).toBe(true);
+    expect(useProjectStore.getState().gitInitDirectoryPath).toBe("/tmp/not-a-repo");
     expect(useProjectStore.getState().isLoading).toBe(false);
     expect(useProjectStore.getState().error).toBeNull();
   });
@@ -96,7 +103,24 @@ describe("projectStore addProject", () => {
     await useProjectStore.getState().addProject();
 
     expect(addNotificationMock).not.toHaveBeenCalled();
+    expect(useProjectStore.getState().gitInitDialogOpen).toBe(false);
+    expect(useProjectStore.getState().gitInitDirectoryPath).toBeNull();
     expect(useProjectStore.getState().isLoading).toBe(false);
     expect(useProjectStore.getState().error).toBeNull();
+  });
+
+  it("retries adding the project after successful initialization", async () => {
+    const addProjectByPathMock = vi.fn().mockResolvedValue(undefined);
+    useProjectStore.setState({
+      gitInitDialogOpen: true,
+      gitInitDirectoryPath: "/tmp/repo",
+      addProjectByPath: addProjectByPathMock as (path: string) => Promise<void>,
+    });
+
+    await useProjectStore.getState().handleGitInitSuccess();
+
+    expect(addProjectByPathMock).toHaveBeenCalledWith("/tmp/repo");
+    expect(useProjectStore.getState().gitInitDialogOpen).toBe(false);
+    expect(useProjectStore.getState().gitInitDirectoryPath).toBeNull();
   });
 });

@@ -313,6 +313,8 @@ const CHANNELS = {
   PROJECT_REOPEN: "project:reopen",
   PROJECT_GET_STATS: "project:get-stats",
   PROJECT_INIT_GIT: "project:init-git",
+  PROJECT_INIT_GIT_GUIDED: "project:init-git-guided",
+  PROJECT_INIT_GIT_PROGRESS: "project:init-git-progress",
   PROJECT_GET_RECIPES: "project:get-recipes",
   PROJECT_SAVE_RECIPES: "project:save-recipes",
   PROJECT_ADD_RECIPE: "project:add-recipe",
@@ -857,6 +859,20 @@ const api: ElectronAPI = {
 
     initGit: (directoryPath: string) =>
       ipcRenderer.invoke(CHANNELS.PROJECT_INIT_GIT, directoryPath),
+
+    initGitGuided: (options: import("../shared/types/ipc/gitInit.js").GitInitOptions) =>
+      _typedInvoke(CHANNELS.PROJECT_INIT_GIT_GUIDED, options),
+
+    onInitGitProgress: (
+      callback: (event: import("../shared/types/ipc/gitInit.js").GitInitProgressEvent) => void
+    ) => {
+      const listener = (
+        _event: unknown,
+        data: import("../shared/types/ipc/gitInit.js").GitInitProgressEvent
+      ) => callback(data);
+      ipcRenderer.on(CHANNELS.PROJECT_INIT_GIT_PROGRESS, listener);
+      return () => ipcRenderer.removeListener(CHANNELS.PROJECT_INIT_GIT_PROGRESS, listener);
+    },
 
     getRecipes: (projectId: string): Promise<TerminalRecipe[]> =>
       _typedInvoke(CHANNELS.PROJECT_GET_RECIPES, projectId),

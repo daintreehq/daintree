@@ -28,6 +28,8 @@ interface ProjectState {
   isSwitching: boolean;
   switchingToProjectName: string | null;
   error: string | null;
+  gitInitDialogOpen: boolean;
+  gitInitDirectoryPath: string | null;
 
   loadProjects: () => Promise<void>;
   getCurrentProject: () => Promise<void>;
@@ -42,6 +44,9 @@ interface ProjectState {
   ) => Promise<ProjectCloseResult>;
   reopenProject: (projectId: string) => Promise<void>;
   finishProjectSwitch: () => void;
+  openGitInitDialog: (directoryPath: string) => void;
+  closeGitInitDialog: () => void;
+  handleGitInitSuccess: () => Promise<void>;
 }
 
 const memoryStorage: StateStorage = (() => {
@@ -137,6 +142,8 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   isLoading: false,
   isSwitching: false,
   switchingToProjectName: null,
+  gitInitDialogOpen: false,
+  gitInitDirectoryPath: null,
   error: null,
 
   addProjectByPath: async (path) => {
@@ -164,35 +171,8 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       if (errorMessage.includes("Not a git repository")) {
         const resolvedPath = path.trim() || errorMessage.match(/Not a git repository: (.+)/)?.[1];
         if (resolvedPath) {
-          useNotificationStore.getState().addNotification({
-            type: "warning",
-            title: "Not a Git repository",
-            message: "Would you like to initialize a Git repository in this directory?",
-            duration: 0,
-            action: {
-              label: "Initialize Git",
-              onClick: async () => {
-                try {
-                  await projectClient.initGit(resolvedPath);
-                  await get().addProjectByPath(resolvedPath);
-                } catch (initError) {
-                  logErrorWithContext(initError, {
-                    operation: "initialize_git",
-                    component: "projectStore",
-                    details: { path: resolvedPath },
-                  });
-                  useNotificationStore.getState().addNotification({
-                    type: "error",
-                    title: "Failed to initialize Git",
-                    message:
-                      initError instanceof Error ? initError.message : "Unknown error occurred",
-                    duration: 6000,
-                  });
-                }
-              },
-            },
-          });
           set({ isLoading: false });
+          get().openGitInitDialog(resolvedPath);
           return;
         }
       }
@@ -555,6 +535,22 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
 
   finishProjectSwitch: () => {
     set({ isSwitching: false, switchingToProjectName: null });
+  },
+
+  openGitInitDialog: (directoryPath: string) => {
+    set({ gitInitDialogOpen: true, gitInitDirectoryPath: directoryPath });
+  },
+
+  closeGitInitDialog: () => {
+    set({ gitInitDialogOpen: false, gitInitDirectoryPath: null });
+  },
+
+  handleGitInitSuccess: async () => {
+    const directoryPath = get().gitInitDirectoryPath;
+    get().closeGitInitDialog();
+    if (directoryPath) {
+      await get().addProjectByPath(directoryPath);
+    }
   },
 });
 

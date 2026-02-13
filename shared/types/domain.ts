@@ -860,6 +860,17 @@ export interface ProjectSettings {
   copyTreeSettings?: CopyTreeSettings;
   /** Command overrides for project-specific customization */
   commandOverrides?: import("./commands.js").CommandOverride[];
+  /** Git initialization defaults */
+  gitInitDefaults?: {
+    /** Create an initial commit (default: true) */
+    createInitialCommit?: boolean;
+    /** Initial commit message (default: "Initial commit") */
+    initialCommitMessage?: string;
+    /** Create a .gitignore file (default: true) */
+    createGitignore?: boolean;
+    /** Gitignore template to use (default: "node") */
+    gitignoreTemplate?: "node" | "python" | "minimal" | "none";
+  };
 }
 
 // Toolbar Customization Types

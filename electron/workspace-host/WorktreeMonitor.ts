@@ -344,7 +344,7 @@ export class WorktreeMonitor {
     try {
       await this.updateGitStatus();
       this.pollingStrategy.recordSuccess(Date.now() - startTime);
-    } catch (error) {
+    } catch (_error) {
       const tripped = this.pollingStrategy.recordFailure(Date.now() - startTime);
 
       if (tripped) {

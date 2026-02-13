@@ -58,6 +58,7 @@ import type { LogEntry, LogFilterOptions } from "./logs.js";
 import type { RetryAction, AppError } from "./errors.js";
 import type { EventRecord, EventFilterOptions } from "./events.js";
 import type { ProjectCloseResult, ProjectStats } from "./project.js";
+import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitInit.js";
 import type {
   RepositoryStats,
   GitHubCliStatus,
@@ -293,6 +294,10 @@ export interface ElectronAPI {
     reopen(projectId: string): Promise<Project>;
     getStats(projectId: string): Promise<ProjectStats>;
     initGit(directoryPath: string): Promise<void>;
+    /** Initialize git repository with progress events */
+    initGitGuided(options: GitInitOptions): Promise<GitInitResult>;
+    /** Subscribe to git init progress events */
+    onInitGitProgress(callback: (event: GitInitProgressEvent) => void): () => void;
     getRecipes(projectId: string): Promise<TerminalRecipe[]>;
     saveRecipes(projectId: string, recipes: TerminalRecipe[]): Promise<void>;
     addRecipe(projectId: string, recipe: TerminalRecipe): Promise<void>;

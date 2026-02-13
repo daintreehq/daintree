@@ -709,7 +709,7 @@ export class WorkspaceService {
         const forceRefresh = monitor.isCurrent && !monitor.gitWatcher;
         await this.updateGitStatus(monitor, forceRefresh);
         monitor.pollingStrategy.recordSuccess(Date.now() - startTime, queueDelayMs);
-      } catch (error) {
+      } catch (_error) {
         tripped = monitor.pollingStrategy.recordFailure(Date.now() - startTime, queueDelayMs);
 
         if (tripped) {

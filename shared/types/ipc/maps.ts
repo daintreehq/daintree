@@ -8,6 +8,7 @@ import type {
   TerminalSnapshot,
   TabGroup,
 } from "../domain.js";
+import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitInit.js";
 import type { AgentSettings } from "../agentSettings.js";
 import type { UserAgentRegistry, UserAgentConfig } from "../userAgentRegistry.js";
 import type { KeyAction } from "../keymap.js";
@@ -530,7 +531,11 @@ export interface IpcInvokeMap {
   };
   "project:init-git": {
     args: [directoryPath: string];
-    result: { success: boolean; error?: string };
+    result: void;
+  };
+  "project:init-git-guided": {
+    args: [options: GitInitOptions];
+    result: GitInitResult;
   };
   "project:get-recipes": {
     args: [projectId: string];
@@ -1035,6 +1040,9 @@ export interface IpcEventMap {
 
   // CopyTree events
   "copytree:progress": CopyTreeProgress;
+
+  // Git init events
+  "project:init-git-progress": GitInitProgressEvent;
 
   // PR detection events
   "pr:detected": PRDetectedPayload;

@@ -8,6 +8,11 @@ import type {
   TerminalSnapshot,
   TabGroup,
 } from "@shared/types";
+import type {
+  GitInitOptions,
+  GitInitResult,
+  GitInitProgressEvent,
+} from "@shared/types/ipc/gitInit";
 
 /**
  * @example
@@ -80,6 +85,14 @@ export const projectClient = {
 
   initGit: (directoryPath: string): Promise<void> => {
     return window.electron.project.initGit(directoryPath);
+  },
+
+  initGitGuided: (options: GitInitOptions): Promise<GitInitResult> => {
+    return window.electron.project.initGitGuided(options);
+  },
+
+  onInitGitProgress: (callback: (event: GitInitProgressEvent) => void): (() => void) => {
+    return window.electron.project.onInitGitProgress(callback);
   },
 
   getRecipes: (projectId: string): Promise<TerminalRecipe[]> => {
