@@ -78,7 +78,8 @@ async function readTomlDescription(filePath: string): Promise<string | null> {
 async function scanCommandDirectory(
   dirPath: string,
   scope: SlashCommand["scope"],
-  agentId: SlashCommand["agentId"]
+  agentId: SlashCommand["agentId"],
+  isPromptDirectory = false
 ): Promise<SlashCommand[]> {
   try {
     const stats = await fs.stat(dirPath);
@@ -113,11 +114,12 @@ async function scanCommandDirectory(
         const relPath = path.relative(dirPath, fullPath);
         const relNoExt = relPath.slice(0, -3); // remove ".md"
         const name = relNoExt.split(path.sep).join(":");
-        const label = `/${name}`;
+        const label = isPromptDirectory ? `/prompts:${name}` : `/${name}`;
+        const id = isPromptDirectory ? `${scope}:prompts:${name}` : `${scope}:${name}`;
         const description = (await readFrontmatterDescription(fullPath)) ?? "Custom command";
 
         results.push({
-          id: `${scope}:${name}`,
+          id,
           label,
           description,
           scope,
@@ -135,7 +137,8 @@ async function scanCommandDirectory(
 async function scanTomlCommandDirectory(
   dirPath: string,
   scope: SlashCommand["scope"],
-  agentId: SlashCommand["agentId"]
+  agentId: SlashCommand["agentId"],
+  isPromptDirectory = false
 ): Promise<SlashCommand[]> {
   try {
     const stats = await fs.stat(dirPath);
@@ -173,11 +176,12 @@ async function scanTomlCommandDirectory(
         const relExt = path.extname(relPath);
         const relNoExt = relPath.slice(0, -relExt.length);
         const name = relNoExt.split(path.sep).join(":");
-        const label = `/${name}`;
+        const label = isPromptDirectory ? `/prompts:${name}` : `/${name}`;
+        const id = isPromptDirectory ? `${scope}:prompts:${name}` : `${scope}:${name}`;
         const description = (await readTomlDescription(fullPath)) ?? "Custom command";
 
         results.push({
-          id: `${scope}:${name}`,
+          id,
           label,
           description,
           scope,
@@ -301,12 +305,22 @@ function getGeminiCommandSearchPaths(projectPath?: string): Array<{
 function getCodexCommandSearchPaths(projectPath?: string): Array<{
   dirPath: string;
   scope: SlashCommand["scope"];
+  isPromptDirectory: boolean;
 }> {
-  const dirs: Array<{ dirPath: string; scope: SlashCommand["scope"] }> = [];
+  const dirs: Array<{ dirPath: string; scope: SlashCommand["scope"]; isPromptDirectory: boolean }> =
+    [];
 
   if (projectPath) {
-    dirs.push({ dirPath: path.join(projectPath, ".codex", "commands"), scope: "project" });
-    dirs.push({ dirPath: path.join(projectPath, ".codex", "prompts"), scope: "project" });
+    dirs.push({
+      dirPath: path.join(projectPath, ".codex", "commands"),
+      scope: "project",
+      isPromptDirectory: false,
+    });
+    dirs.push({
+      dirPath: path.join(projectPath, ".codex", "prompts"),
+      scope: "project",
+      isPromptDirectory: true,
+    });
   }
 
   const home = os.homedir();
@@ -314,53 +328,95 @@ function getCodexCommandSearchPaths(projectPath?: string): Array<{
     ? path.resolve(process.env.CODEX_HOME)
     : path.join(home, ".codex");
 
-  dirs.push({ dirPath: path.join(codexHome, "commands"), scope: "user" });
-  dirs.push({ dirPath: path.join(codexHome, "prompts"), scope: "user" });
+  dirs.push({
+    dirPath: path.join(codexHome, "commands"),
+    scope: "user",
+    isPromptDirectory: false,
+  });
+  dirs.push({ dirPath: path.join(codexHome, "prompts"), scope: "user", isPromptDirectory: true });
 
   const xdgConfigHome = process.env.XDG_CONFIG_HOME;
   if (xdgConfigHome) {
-    dirs.push({ dirPath: path.join(xdgConfigHome, "codex", "commands"), scope: "user" });
-    dirs.push({ dirPath: path.join(xdgConfigHome, "codex", "prompts"), scope: "user" });
+    dirs.push({
+      dirPath: path.join(xdgConfigHome, "codex", "commands"),
+      scope: "user",
+      isPromptDirectory: false,
+    });
+    dirs.push({
+      dirPath: path.join(xdgConfigHome, "codex", "prompts"),
+      scope: "user",
+      isPromptDirectory: true,
+    });
   } else {
-    dirs.push({ dirPath: path.join(home, ".config", "codex", "commands"), scope: "user" });
-    dirs.push({ dirPath: path.join(home, ".config", "codex", "prompts"), scope: "user" });
+    dirs.push({
+      dirPath: path.join(home, ".config", "codex", "commands"),
+      scope: "user",
+      isPromptDirectory: false,
+    });
+    dirs.push({
+      dirPath: path.join(home, ".config", "codex", "prompts"),
+      scope: "user",
+      isPromptDirectory: true,
+    });
   }
 
   if (process.platform === "darwin") {
     dirs.push({
       dirPath: path.join(home, "Library", "Application Support", "Codex", "commands"),
       scope: "global",
+      isPromptDirectory: false,
     });
     dirs.push({
       dirPath: path.join(home, "Library", "Application Support", "Codex", "prompts"),
       scope: "global",
+      isPromptDirectory: true,
     });
     dirs.push({
       dirPath: path.join("/", "Library", "Application Support", "Codex", "commands"),
       scope: "global",
+      isPromptDirectory: false,
     });
     dirs.push({
       dirPath: path.join("/", "Library", "Application Support", "Codex", "prompts"),
       scope: "global",
+      isPromptDirectory: true,
     });
   }
 
   if (process.platform === "win32") {
     const programData = process.env.ProgramData ?? "C:\\ProgramData";
-    dirs.push({ dirPath: path.join(programData, "Codex", "commands"), scope: "global" });
-    dirs.push({ dirPath: path.join(programData, "Codex", "prompts"), scope: "global" });
+    dirs.push({
+      dirPath: path.join(programData, "Codex", "commands"),
+      scope: "global",
+      isPromptDirectory: false,
+    });
+    dirs.push({
+      dirPath: path.join(programData, "Codex", "prompts"),
+      scope: "global",
+      isPromptDirectory: true,
+    });
   }
 
   if (process.platform === "linux") {
-    dirs.push({ dirPath: path.join("/", "etc", "codex", "commands"), scope: "global" });
-    dirs.push({ dirPath: path.join("/", "etc", "codex", "prompts"), scope: "global" });
+    dirs.push({
+      dirPath: path.join("/", "etc", "codex", "commands"),
+      scope: "global",
+      isPromptDirectory: false,
+    });
+    dirs.push({
+      dirPath: path.join("/", "etc", "codex", "prompts"),
+      scope: "global",
+      isPromptDirectory: true,
+    });
     dirs.push({
       dirPath: path.join("/", "usr", "local", "share", "codex", "commands"),
       scope: "global",
+      isPromptDirectory: false,
     });
     dirs.push({
       dirPath: path.join("/", "usr", "local", "share", "codex", "prompts"),
       scope: "global",
+      isPromptDirectory: true,
     });
   }
 
@@ -426,7 +482,9 @@ export class SlashCommandService {
 
       const searchPaths = getCodexCommandSearchPaths(effectiveProjectPath);
       const scanned = await Promise.all(
-        searchPaths.map(({ dirPath, scope }) => scanCommandDirectory(dirPath, scope, "codex"))
+        searchPaths.map(({ dirPath, scope, isPromptDirectory }) =>
+          scanCommandDirectory(dirPath, scope, "codex", isPromptDirectory)
+        )
       );
 
       for (const scope of priority) {

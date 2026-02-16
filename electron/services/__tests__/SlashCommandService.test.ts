@@ -95,7 +95,10 @@ Do the thing.
     const service = new SlashCommandService();
 
     const prevHome = process.env.HOME;
+    const prevXdgConfigHome = process.env.XDG_CONFIG_HOME;
+
     process.env.HOME = homeRoot;
+    delete process.env.XDG_CONFIG_HOME;
 
     try {
       await fs.mkdir(path.join(projectRoot, ".git"));
@@ -125,16 +128,17 @@ prompt = "Run the tests"
       const commands = await service.list("gemini", path.join(projectRoot, "nested", "dir"));
 
       const commit = commands.find((c) => c.label === "/git:commit");
-      expect(commit).toBeTruthy();
+      expect(commit).toBeDefined();
       expect(commit?.scope).toBe("project");
       expect(commit?.description).toBe("Project commit description");
 
       const nested = commands.find((c) => c.label === "/testing:integration:run");
-      expect(nested).toBeTruthy();
+      expect(nested).toBeDefined();
       expect(nested?.scope).toBe("project");
       expect(nested?.description).toBe("Run the integration test suite.\nUse project conventions.");
     } finally {
       process.env.HOME = prevHome;
+      if (prevXdgConfigHome !== undefined) process.env.XDG_CONFIG_HOME = prevXdgConfigHome;
       await fs.rm(homeRoot, { recursive: true, force: true });
       await fs.rm(projectRoot, { recursive: true, force: true });
     }
@@ -146,7 +150,12 @@ prompt = "Run the tests"
     const service = new SlashCommandService();
 
     const prevHome = process.env.HOME;
+    const prevCodexHome = process.env.CODEX_HOME;
+    const prevXdgConfigHome = process.env.XDG_CONFIG_HOME;
+
     process.env.HOME = homeRoot;
+    delete process.env.CODEX_HOME;
+    delete process.env.XDG_CONFIG_HOME;
 
     try {
       await fs.mkdir(path.join(projectRoot, ".git"));
@@ -172,14 +181,147 @@ Do the project thing.
       );
 
       const commands = await service.list("codex", path.join(projectRoot, "nested", "dir"));
-      const cmd = commands.find((c) => c.label === "/git:work-issue");
+      const cmd = commands.find((c) => c.label === "/prompts:git:work-issue");
+      const oldLabel = commands.find((c) => c.label === "/git:work-issue");
+
+      expect(cmd).toBeDefined();
+      expect(cmd?.scope).toBe("project");
+      expect(cmd?.description).toBe("Project work issue prompt");
+      expect(oldLabel).toBeUndefined();
+    } finally {
+      process.env.HOME = prevHome;
+      if (prevCodexHome !== undefined) process.env.CODEX_HOME = prevCodexHome;
+      if (prevXdgConfigHome !== undefined) process.env.XDG_CONFIG_HOME = prevXdgConfigHome;
+      await fs.rm(homeRoot, { recursive: true, force: true });
+      await fs.rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("prefixes simple Codex prompts with /prompts:", async () => {
+    const projectRoot = await makeTempDir();
+    const service = new SlashCommandService();
+
+    try {
+      await fs.mkdir(path.join(projectRoot, ".git"));
+
+      await writeFile(
+        path.join(projectRoot, ".codex", "prompts", "merge-prs.md"),
+        `---
+description: "Merge all PRs"
+---
+
+Merge them all.
+`
+      );
+
+      const commands = await service.list("codex", projectRoot);
+      const cmd = commands.find((c) => c.label === "/prompts:merge-prs");
 
       expect(cmd).toBeTruthy();
       expect(cmd?.scope).toBe("project");
-      expect(cmd?.description).toBe("Project work issue prompt");
+      expect(cmd?.description).toBe("Merge all PRs");
     } finally {
-      process.env.HOME = prevHome;
-      await fs.rm(homeRoot, { recursive: true, force: true });
+      await fs.rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not prefix Codex commands from commands directory", async () => {
+    const projectRoot = await makeTempDir();
+    const service = new SlashCommandService();
+
+    try {
+      await fs.mkdir(path.join(projectRoot, ".git"));
+
+      await writeFile(
+        path.join(projectRoot, ".codex", "commands", "my-command.md"),
+        `---
+description: "My custom command"
+---
+
+Do the command.
+`
+      );
+
+      const commands = await service.list("codex", projectRoot);
+      const cmd = commands.find((c) => c.label === "/my-command");
+
+      expect(cmd).toBeTruthy();
+      expect(cmd?.scope).toBe("project");
+      expect(cmd?.description).toBe("My custom command");
+    } finally {
+      await fs.rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("handles deeply nested Codex prompts", async () => {
+    const projectRoot = await makeTempDir();
+    const service = new SlashCommandService();
+
+    try {
+      await fs.mkdir(path.join(projectRoot, ".git"));
+
+      await writeFile(
+        path.join(projectRoot, ".codex", "prompts", "github", "issues", "create.md"),
+        `---
+description: "Create a GitHub issue"
+---
+
+Create an issue.
+`
+      );
+
+      const commands = await service.list("codex", projectRoot);
+      const cmd = commands.find((c) => c.label === "/prompts:github:issues:create");
+
+      expect(cmd).toBeDefined();
+      expect(cmd?.scope).toBe("project");
+      expect(cmd?.description).toBe("Create a GitHub issue");
+    } finally {
+      await fs.rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("allows same basename in commands and prompts with distinct IDs", async () => {
+    const projectRoot = await makeTempDir();
+    const service = new SlashCommandService();
+
+    try {
+      await fs.mkdir(path.join(projectRoot, ".git"));
+
+      await writeFile(
+        path.join(projectRoot, ".codex", "commands", "deploy.md"),
+        `---
+description: "Deploy command"
+---
+
+Deploy the app.
+`
+      );
+
+      await writeFile(
+        path.join(projectRoot, ".codex", "prompts", "deploy.md"),
+        `---
+description: "Deploy prompt"
+---
+
+Deploy prompt content.
+`
+      );
+
+      const commands = await service.list("codex", projectRoot);
+      const command = commands.find((c) => c.label === "/deploy");
+      const prompt = commands.find((c) => c.label === "/prompts:deploy");
+
+      expect(command).toBeDefined();
+      expect(command?.id).toBe("project:deploy");
+      expect(command?.description).toBe("Deploy command");
+
+      expect(prompt).toBeDefined();
+      expect(prompt?.id).toBe("project:prompts:deploy");
+      expect(prompt?.description).toBe("Deploy prompt");
+
+      expect(command?.id).not.toBe(prompt?.id);
+    } finally {
       await fs.rm(projectRoot, { recursive: true, force: true });
     }
   });
