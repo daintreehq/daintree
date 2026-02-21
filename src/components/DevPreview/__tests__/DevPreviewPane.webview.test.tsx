@@ -81,10 +81,18 @@ const {
   );
 
   const projectSettingsStoreState = {
+    projectId: "project-1",
     settings: {
       devServerCommand: "npm run dev",
       environmentVariables: { API_URL: "http://localhost:9000" },
+      runCommands: [],
     },
+    detectedRunners: [],
+    allDetectedRunners: [],
+    isLoading: false,
+    error: null,
+    loadSettings: vi.fn(),
+    setSettings: vi.fn(),
   };
   const useProjectSettingsStoreMock = vi.fn(
     (selector: (state: typeof projectSettingsStoreState) => unknown) =>
