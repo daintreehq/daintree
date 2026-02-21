@@ -3,8 +3,7 @@ import { useProjectStore, useTerminalStore } from "@/store";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useProjectSettings } from "../useProjectSettings";
 import { useNotificationStore } from "@/store/notificationStore";
-
-const DEV_SCRIPT_PRIORITY = ["dev", "start", "serve"];
+import { findDevServerCandidate } from "@/utils/devServerDetection";
 
 export function useDevServerDiscovery() {
   const currentProject = useProjectStore((state) => state.currentProject);
@@ -50,9 +49,7 @@ export function useDevServerDiscovery() {
       return;
     }
 
-    const devServerCandidate = DEV_SCRIPT_PRIORITY.map((name) =>
-      allDetectedRunners.find((runner) => runner.name === name)
-    ).find((runner) => runner !== undefined);
+    const devServerCandidate = findDevServerCandidate(allDetectedRunners);
 
     if (!devServerCandidate) {
       return;

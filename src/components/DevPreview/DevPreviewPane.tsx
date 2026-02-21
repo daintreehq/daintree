@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { AlertTriangle, RotateCw, ExternalLink } from "lucide-react";
+import { AlertTriangle, RotateCw, ExternalLink, Settings, Wand2 } from "lucide-react";
 import { useTerminalStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
@@ -18,6 +18,10 @@ import { ConsoleDrawer } from "./ConsoleDrawer";
 import { useIsDragging } from "@/components/DragDrop";
 import { cn } from "@/lib/utils";
 import { shouldAdoptDetectedDevServerUrl } from "./urlSync";
+import { findDevServerCandidate } from "@/utils/devServerDetection";
+import { useProjectSettings } from "@/hooks/useProjectSettings";
+import { projectClient } from "@/clients";
+import { actionService } from "@/services/ActionService";
 
 export interface DevPreviewPaneProps extends BasePanelProps {
   cwd: string;
@@ -93,14 +97,26 @@ export function DevPreviewPane({
   const [consoleTerminalId, setConsoleTerminalId] = useState<string | null>(terminalId);
   const loadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isConsoleOpen = terminal?.devPreviewConsoleOpen ?? false;
+  const [isAutoDetecting, setIsAutoDetecting] = useState(false);
+  const { saveSettings } = useProjectSettings();
+  const allDetectedRunners = useProjectSettingsStore((state) => state.allDetectedRunners);
+  const isSettingsLoading = useProjectSettingsStore((state) => state.isLoading);
+  const isMountedRef = useRef(true);
 
   const currentUrl = history.present;
   const canGoBack = history.past.length > 0;
   const canGoForward = history.future.length > 0;
+  const isUnconfigured = Boolean(currentProjectId) && !isSettingsLoading && !devCommand;
 
   const setWebviewNode = useCallback((node: Electron.WebviewTag | null) => {
     webviewRef.current = node;
     setWebviewElement(node);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -181,6 +197,42 @@ export function DevPreviewPane({
     setIsWebviewReady(false);
     void restart();
   }, [id, restart, setBrowserUrl]);
+
+  const handleAutoDetect = useCallback(async () => {
+    if (!currentProjectId || isAutoDetecting) return;
+
+    setIsAutoDetecting(true);
+    try {
+      const freshRunners = await projectClient.detectRunners(currentProjectId);
+      const candidate = findDevServerCandidate(freshRunners);
+
+      if (!candidate) {
+        return;
+      }
+
+      const latestSettings = await projectClient.getSettings(currentProjectId);
+      if (!latestSettings) {
+        return;
+      }
+
+      await saveSettings({
+        ...latestSettings,
+        devServerCommand: candidate.command,
+        devServerAutoDetected: true,
+        devServerDismissed: false,
+      });
+    } catch (err) {
+      console.error("Failed to auto-detect dev server:", err);
+    } finally {
+      if (isMountedRef.current) {
+        setIsAutoDetecting(false);
+      }
+    }
+  }, [currentProjectId, isAutoDetecting, saveSettings]);
+
+  const handleOpenSettings = useCallback(() => {
+    void actionService.dispatch("project.settings.open", undefined, { source: "user" });
+  }, []);
 
   useEffect(() => {
     const webview = webviewElement;
@@ -387,17 +439,47 @@ export function DevPreviewPane({
             </div>
           ) : !currentUrl ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
-              <div className="flex flex-col items-center text-center max-w-md">
-                <h3 className="text-lg font-medium mb-2">Waiting for Dev Server</h3>
-                <p className="text-sm text-canopy-text/60 mb-6 leading-relaxed">
-                  The development server will appear here once it starts and a URL is detected.
-                </p>
-                {!devCommand && (
-                  <p className="text-xs text-amber-400/80">
-                    No dev command configured for this panel.
+              {isUnconfigured ? (
+                <div className="flex flex-col items-center text-center max-w-md">
+                  <h3 className="text-lg font-medium mb-2">Configure Dev Server</h3>
+                  <p className="text-sm text-canopy-text/60 mb-6 leading-relaxed">
+                    No dev server command is configured for this project.
+                    {allDetectedRunners && findDevServerCandidate(allDetectedRunners)
+                      ? " We found a script in your package.json that looks like a dev server."
+                      : " Configure one to preview your application."}
                   </p>
-                )}
-              </div>
+                  <div className="flex flex-col gap-3 w-full">
+                    {allDetectedRunners && findDevServerCandidate(allDetectedRunners) && (
+                      <button
+                        type="button"
+                        onClick={handleAutoDetect}
+                        disabled={isAutoDetecting || isSettingsLoading}
+                        className="flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 rounded-lg border border-blue-500/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <Wand2 className="w-4 h-4" />
+                        {isAutoDetecting
+                          ? "Detecting..."
+                          : `Use \`${findDevServerCandidate(allDetectedRunners)?.command}\``}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleOpenSettings}
+                      className="flex items-center justify-center gap-2 px-4 py-2.5 bg-gray-500/20 hover:bg-gray-500/30 text-gray-400 rounded-lg border border-gray-500/30 transition-colors"
+                    >
+                      <Settings className="w-4 h-4" />
+                      Open Project Settings
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center text-center max-w-md">
+                  <h3 className="text-lg font-medium mb-2">Waiting for Dev Server</h3>
+                  <p className="text-sm text-canopy-text/60 mb-6 leading-relaxed">
+                    The development server will appear here once it starts and a URL is detected.
+                  </p>
+                </div>
+              )}
             </div>
           ) : (
             <>

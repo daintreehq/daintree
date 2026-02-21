@@ -11,8 +11,8 @@ export function registerDevServerActions(
 ): void {
   actions.set("devServer.start", () => ({
     id: "devServer.start",
-    title: "Start Dev Server",
-    description: "Start the configured dev server and open a dev preview panel",
+    title: "Open Dev Preview",
+    description: "Open a dev preview panel and start the dev server when configured",
     category: "devServer",
     kind: "command",
     danger: "safe",
@@ -25,11 +25,6 @@ export function registerDevServerActions(
 
       const settings = await projectClient.getSettings(currentProject.id);
       const devServerCommand = settings?.devServerCommand?.trim();
-      if (!devServerCommand) {
-        throw new Error(
-          "No dev server command configured. Open project settings to configure one."
-        );
-      }
 
       const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
       const activeWorktree = activeWorktreeId
@@ -43,7 +38,7 @@ export function registerDevServerActions(
         cwd,
         worktreeId: activeWorktreeId ?? undefined,
         location: "grid",
-        devCommand: devServerCommand,
+        devCommand: devServerCommand || undefined,
       });
     },
   }));

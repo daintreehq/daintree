@@ -355,14 +355,27 @@ export function Toolbar({
             onClick={() => {
               void actionService.dispatch("devServer.start", undefined, { source: "user" });
             }}
+            disabled={!currentProject}
             className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
-            title="Start Dev Server"
-            aria-label="Start Dev Server"
+            title={
+              !currentProject
+                ? "Open a project to use Dev Preview"
+                : devServerCommand
+                  ? "Start Dev Server"
+                  : "Open Dev Preview"
+            }
+            aria-label={
+              !currentProject
+                ? "Open a project to use Dev Preview"
+                : devServerCommand
+                  ? "Start Dev Server"
+                  : "Open Dev Preview"
+            }
           >
             <Monitor />
           </Button>
         ),
-        isAvailable: !!devServerCommand,
+        isAvailable: true,
       },
       "github-stats": {
         render: () =>
