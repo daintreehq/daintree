@@ -1326,6 +1326,7 @@ const api: ElectronAPI = {
           focusedWorktreeId?: string;
           focusedTerminalId?: string;
         };
+        confirmed?: boolean;
       }) => void
     ) => {
       const handler = (
@@ -1340,6 +1341,7 @@ const api: ElectronAPI = {
             focusedWorktreeId?: string;
             focusedTerminalId?: string;
           };
+          confirmed?: boolean;
         }
       ) => callback(payload);
       ipcRenderer.on("app-agent:dispatch-action-request", handler);
@@ -1351,6 +1353,34 @@ const api: ElectronAPI = {
       requestId: string;
       result: { ok: boolean; result?: unknown; error?: { code: string; message: string } };
     }) => ipcRenderer.send("app-agent:dispatch-action-response", payload),
+
+    // Listen for action confirmation requests from main process
+    onConfirmationRequest: (
+      callback: (payload: {
+        requestId: string;
+        actionId: string;
+        actionName?: string;
+        args?: Record<string, unknown>;
+        danger: "safe" | "confirm" | "restricted";
+      }) => void
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        payload: {
+          requestId: string;
+          actionId: string;
+          actionName?: string;
+          args?: Record<string, unknown>;
+          danger: "safe" | "confirm" | "restricted";
+        }
+      ) => callback(payload);
+      ipcRenderer.on("app-agent:confirmation-request", handler);
+      return () => ipcRenderer.removeListener("app-agent:confirmation-request", handler);
+    },
+
+    // Send confirmation response back to main process
+    sendConfirmationResponse: (payload: { requestId: string; approved: boolean }) =>
+      ipcRenderer.send("app-agent:confirmation-response", payload),
   },
 
   // Assistant API

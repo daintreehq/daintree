@@ -16,13 +16,15 @@ export function useAppAgentDispatcher(): void {
     }
 
     const cleanup = window.electron.appAgent.onDispatchActionRequest(async (payload) => {
-      const { requestId, actionId, args } = payload;
+      const { requestId, actionId, args, context, confirmed } = payload;
 
       try {
         // Dispatch the action through ActionService with agent source
+        // Use the context provided in the payload to prevent confused-deputy attacks
         const result = await actionService.dispatch(actionId as ActionId, args, {
           source: "agent",
-          confirmed: true, // Agent-dispatched actions are pre-confirmed
+          confirmed,
+          contextOverride: context,
         });
 
         // Send the result back to main process

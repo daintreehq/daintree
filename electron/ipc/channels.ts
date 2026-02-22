@@ -275,6 +275,10 @@ export const CHANNELS = {
   APP_AGENT_HAS_API_KEY: "app-agent:has-api-key",
   APP_AGENT_TEST_API_KEY: "app-agent:test-api-key",
   APP_AGENT_TEST_MODEL: "app-agent:test-model",
+  APP_AGENT_DISPATCH_ACTION_REQUEST: "app-agent:dispatch-action-request",
+  APP_AGENT_DISPATCH_ACTION_RESPONSE: "app-agent:dispatch-action-response",
+  APP_AGENT_CONFIRMATION_REQUEST: "app-agent:confirmation-request",
+  APP_AGENT_CONFIRMATION_RESPONSE: "app-agent:confirmation-response",
 
   // Assistant channels
   ASSISTANT_SEND_MESSAGE: "assistant:send-message",

@@ -66,6 +66,7 @@ import { Toaster } from "./components/ui/toaster";
 import { UpdateNotification } from "./components/UpdateNotification";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { DndProvider } from "./components/DragDrop";
+import { AssistantActionConfirmationHost } from "./components/Assistant/AssistantActionConfirmationHost";
 import {
   useTerminalStore,
   useWorktreeSelectionStore,
@@ -796,7 +797,12 @@ function App() {
   }
 
   if (!isStateLoaded) {
-    return <div className="h-screen w-screen bg-canopy-bg" />;
+    return (
+      <>
+        <div className="h-screen w-screen bg-canopy-bg" />
+        <AssistantActionConfirmationHost />
+      </>
+    );
   }
 
   return (
@@ -1008,6 +1014,8 @@ function App() {
       )}
 
       <PanelTransitionOverlay />
+
+      <AssistantActionConfirmationHost />
 
       <Toaster />
       <UpdateNotification />

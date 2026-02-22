@@ -420,7 +420,8 @@ function truncateResult(result: unknown): unknown {
 async function dispatchAction(
   actionId: string,
   args: Record<string, unknown> | undefined,
-  context: ActionContext
+  context: ActionContext,
+  confirmed?: boolean
 ): Promise<{ ok: boolean; result?: unknown; error?: { code: string; message: string } }> {
   const mainWindow = BrowserWindow.getAllWindows()[0];
   if (!mainWindow || mainWindow.isDestroyed()) {
@@ -460,6 +461,7 @@ async function dispatchAction(
         actionId,
         args,
         context,
+        confirmed,
       });
     } catch {
       clearTimeout(timeout);
@@ -468,6 +470,56 @@ async function dispatchAction(
         ok: false,
         error: { code: "DISPATCH_FAILED", message: "Action dispatch failed" },
       });
+    }
+  });
+}
+
+async function requestUserConfirmation(
+  actionId: string,
+  actionName: string | undefined,
+  args: Record<string, unknown> | undefined,
+  danger: "safe" | "confirm" | "restricted"
+): Promise<boolean> {
+  const mainWindow = BrowserWindow.getAllWindows()[0];
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return false;
+  }
+
+  const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      ipcMain.removeListener("app-agent:confirmation-response", handler);
+      resolve(false);
+    }, 120000);
+
+    const handler = (
+      _event: Electron.IpcMainEvent,
+      payload: { requestId: string; approved: boolean }
+    ) => {
+      if (!payload || typeof payload !== "object") return;
+      if (payload.requestId !== requestId) return;
+      if (typeof payload.approved !== "boolean") return;
+
+      clearTimeout(timeout);
+      ipcMain.removeListener("app-agent:confirmation-response", handler);
+      resolve(payload.approved);
+    };
+
+    ipcMain.on("app-agent:confirmation-response", handler);
+
+    try {
+      mainWindow.webContents.send("app-agent:confirmation-request", {
+        requestId,
+        actionId,
+        actionName,
+        args,
+        danger,
+      });
+    } catch {
+      clearTimeout(timeout);
+      ipcMain.removeListener("app-agent:confirmation-response", handler);
+      resolve(false);
     }
   });
 }
@@ -495,7 +547,26 @@ export function createActionTools(actions: ActionManifestEntry[], context: Actio
       description: `[${action.kind}] ${action.description}${action.danger !== "safe" ? ` (${action.danger})` : ""}`,
       inputSchema: jsonSchema<Record<string, unknown>>(sanitizedSchema),
       execute: async (args: Record<string, unknown>) => {
-        const result = await dispatchAction(action.id, args, context);
+        let result = await dispatchAction(action.id, args, context);
+
+        if (!result.ok && result.error?.code === "CONFIRMATION_REQUIRED") {
+          const approved = await requestUserConfirmation(
+            action.id,
+            action.name,
+            args,
+            action.danger
+          );
+
+          if (!approved) {
+            return {
+              success: false,
+              error: "User denied the action. The action requires explicit user approval.",
+              code: "CONFIRMATION_DENIED",
+            };
+          }
+
+          result = await dispatchAction(action.id, args, context, true);
+        }
 
         if (!result.ok) {
           return {
