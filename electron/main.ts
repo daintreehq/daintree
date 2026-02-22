@@ -479,9 +479,17 @@ async function createWindow(): Promise<void> {
   lockdownTrustedPermissions(session.defaultSession);
 
   // Lock down known untrusted sessions
-  for (const partition of ["persist:browser", "persist:sidecar"]) {
-    lockdownUntrustedPermissions(session.fromPartition(partition));
-  }
+  lockdownUntrustedPermissions(session.fromPartition("persist:browser"));
+
+  // Sidecar needs clipboard access for AI chat copy buttons (navigator.clipboard.writeText)
+  // but all other permissions (camera, mic, geolocation, etc.) remain denied
+  const sidecarSession = session.fromPartition("persist:sidecar");
+  sidecarSession.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(permission === "clipboard-sanitized-write");
+  });
+  sidecarSession.setPermissionCheckHandler((_wc, permission) => {
+    return permission === "clipboard-sanitized-write";
+  });
 
   // Catch all dynamically created sessions (e.g., persist:dev-preview-*)
   app.on("session-created", (ses) => {
