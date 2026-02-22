@@ -59,8 +59,12 @@ export function AssistantActionConfirmationHost() {
     return null;
   }
 
-  const actionDisplay = formatActionName(pendingConfirmation.actionId, pendingConfirmation.actionName);
-  const dangerLabel = pendingConfirmation.danger === "confirm" ? "Requires Confirmation" : "Restricted";
+  const actionDisplay = formatActionName(
+    pendingConfirmation.actionId,
+    pendingConfirmation.actionName
+  );
+  const dangerLabel =
+    pendingConfirmation.danger === "confirm" ? "Requires Confirmation" : "Restricted";
 
   return (
     <ConfirmDialog
@@ -81,9 +85,7 @@ export function AssistantActionConfirmationHost() {
               <div className="text-xs font-semibold mb-1 text-[var(--vscode-descriptionForeground)]">
                 Parameters:
               </div>
-              <div className="font-mono text-xs">
-                {formatArgsPreview(pendingConfirmation.args)}
-              </div>
+              <div className="font-mono text-xs">{formatArgsPreview(pendingConfirmation.args)}</div>
             </div>
           </div>
           <div className="flex items-center gap-2 text-sm">

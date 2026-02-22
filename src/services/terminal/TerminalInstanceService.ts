@@ -572,8 +572,10 @@ class TerminalInstanceService {
 
           if (wasDetached) {
             const rect = container.getBoundingClientRect();
-            const widthMatch = managed.lastWidth > 0 && Math.abs(managed.lastWidth - rect.width) < 2;
-            const heightMatch = managed.lastHeight > 0 && Math.abs(managed.lastHeight - rect.height) < 2;
+            const widthMatch =
+              managed.lastWidth > 0 && Math.abs(managed.lastWidth - rect.width) < 2;
+            const heightMatch =
+              managed.lastHeight > 0 && Math.abs(managed.lastHeight - rect.height) < 2;
             if (widthMatch && heightMatch) {
               logDebug(`[TIS.attach] Skipping resize for ${id} — dimensions match after detach`);
               managed.targetCols = undefined;

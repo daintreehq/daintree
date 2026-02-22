@@ -4,7 +4,6 @@
  */
 
 import { create } from "zustand";
-import { TerminalRefreshTier } from "@/types";
 import {
   createTerminalRegistrySlice,
   createTerminalFocusSlice,
@@ -15,11 +14,18 @@ import {
   type TerminalFocusSlice,
   type TerminalCommandQueueSlice,
   type TerminalBulkActionsSlice,
-  type TerminalInstance,
   type AddTerminalOptions,
   type QueuedCommand,
   isAgentReady,
 } from "./slices";
+import type {
+  TerminalInstance,
+  TerminalRefreshTier,
+  AgentStateChangePayload,
+  TerminalActivityPayload,
+  TerminalStatusPayload,
+} from "@shared/types";
+import { TerminalRefreshTier as TerminalRefreshTierEnum } from "@/types";
 import { terminalRegistryController } from "@/controllers";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useTerminalInputStore } from "./terminalInputStore";
@@ -48,20 +54,20 @@ export function getTerminalRefreshTier(
   isFocused: boolean
 ): TerminalRefreshTier {
   if (!terminal) {
-    return TerminalRefreshTier.VISIBLE;
+    return TerminalRefreshTierEnum.VISIBLE;
   }
 
   // Always use maximum refresh rate when agent is working to prevent render jitter
   if (terminal.agentState === "working") {
-    return TerminalRefreshTier.FOCUSED;
+    return TerminalRefreshTierEnum.FOCUSED;
   }
 
   if (isFocused) {
-    return TerminalRefreshTier.FOCUSED;
+    return TerminalRefreshTierEnum.FOCUSED;
   }
 
   // All terminals stay at VISIBLE minimum - we don't use BACKGROUND for reliability.
-  return TerminalRefreshTier.VISIBLE;
+  return TerminalRefreshTierEnum.VISIBLE;
 }
 
 export type BackendStatus = "connected" | "disconnected" | "recovering";
@@ -434,7 +440,9 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
         }
       }
 
-      logInfo(`Detached ${state.terminals.length} terminal instances for project switch (processes preserved)`);
+      logInfo(
+        `Detached ${state.terminals.length} terminal instances for project switch (processes preserved)`
+      );
 
       set({
         terminals: [],
@@ -528,7 +536,7 @@ export function setupTerminalStoreListeners() {
     return cleanupTerminalStoreListeners;
   }
 
-  agentStateUnsubscribe = terminalRegistryController.onAgentStateChanged((data) => {
+  agentStateUnsubscribe = terminalRegistryController.onAgentStateChanged((data: AgentStateChangePayload) => {
     const { terminalId, state, timestamp, trigger, confidence } = data;
 
     if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) {
@@ -568,14 +576,14 @@ export function setupTerminalStoreListeners() {
     }
   });
 
-  activityUnsubscribe = terminalRegistryController.onActivity((data) => {
+  activityUnsubscribe = terminalRegistryController.onActivity((data: TerminalActivityPayload) => {
     const { terminalId, headline, status, type, timestamp, lastCommand } = data;
     useTerminalStore
       .getState()
       .updateActivity(terminalId, headline, status, type, timestamp, lastCommand);
   });
 
-  trashedUnsubscribe = terminalRegistryController.onTrashed((data) => {
+  trashedUnsubscribe = terminalRegistryController.onTrashed((data: { id: string; expiresAt: number }) => {
     const { id, expiresAt } = data;
     const state = useTerminalStore.getState();
     const terminal = state.terminals.find((t) => t.id === id);
@@ -595,7 +603,7 @@ export function setupTerminalStoreListeners() {
     }
   });
 
-  restoredUnsubscribe = terminalRegistryController.onRestored((data) => {
+  restoredUnsubscribe = terminalRegistryController.onRestored((data: { id: string }) => {
     const { id } = data;
     useTerminalStore.getState().markAsRestored(id);
     useTerminalStore.setState({ focusedId: id });
@@ -663,7 +671,7 @@ export function setupTerminalStoreListeners() {
     state.trashTerminal(id);
   });
 
-  flowStatusUnsubscribe = terminalRegistryController.onStatus((data) => {
+  flowStatusUnsubscribe = terminalRegistryController.onStatus((data: TerminalStatusPayload) => {
     const { id, status, timestamp } = data;
     useTerminalStore.getState().updateFlowStatus(id, status, timestamp);
 

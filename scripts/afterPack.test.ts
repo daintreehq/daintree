@@ -236,10 +236,7 @@ describe("afterPack", () => {
     });
 
     it("should throw error when Electron binary is missing", async () => {
-      mockExistsSync
-        .mockReturnValueOnce(true)
-        .mockReturnValueOnce(true)
-        .mockReturnValueOnce(false);
+      mockExistsSync.mockReturnValueOnce(true).mockReturnValueOnce(true).mockReturnValueOnce(false);
 
       const context = {
         appOutDir: "/build/mac",

@@ -15,7 +15,13 @@
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import type { TerminalType, TerminalLocation, AgentState } from "@/types";
-import type { TerminalSpawnOptions } from "@shared/types";
+import type {
+  TerminalSpawnOptions,
+  AgentStateChangePayload,
+  TerminalActivityPayload,
+  TerminalStatusPayload,
+  SpawnResult,
+} from "@shared/types";
 import { isRegisteredAgent, getAgentConfig } from "@/config/agents";
 import { getTerminalThemeFromCSS } from "@/utils/terminalTheme";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
@@ -288,19 +294,19 @@ class TerminalRegistryController {
 
   // --- Subscriptions ---
 
-  onAgentStateChanged(handler: (data: { terminalId: string; state: AgentState }) => void) {
+  onAgentStateChanged(handler: (data: AgentStateChangePayload) => void) {
     return terminalClient.onAgentStateChanged(handler);
   }
 
-  onActivity(handler: (data: { terminalId: string; timestamp: number }) => void) {
+  onActivity(handler: (data: TerminalActivityPayload) => void) {
     return terminalClient.onActivity(handler);
   }
 
-  onTrashed(handler: (data: { terminalId: string }) => void) {
+  onTrashed(handler: (data: { id: string; expiresAt: number }) => void) {
     return terminalClient.onTrashed(handler);
   }
 
-  onRestored(handler: (data: { terminalId: string }) => void) {
+  onRestored(handler: (data: { id: string }) => void) {
     return terminalClient.onRestored(handler);
   }
 
@@ -308,11 +314,18 @@ class TerminalRegistryController {
     return terminalClient.onExit(handler);
   }
 
-  onStatus(handler: (data: { terminalId: string; status: string }) => void) {
+  onStatus(handler: (data: TerminalStatusPayload) => void) {
     return terminalClient.onStatus(handler);
   }
 
-  onBackendCrashed(handler: (details: { code: number; signal: string }) => void) {
+  onBackendCrashed(
+    handler: (data: {
+      crashType: string;
+      code: number | null;
+      signal: string | null;
+      timestamp: number;
+    }) => void
+  ) {
     return terminalClient.onBackendCrashed(handler);
   }
 
@@ -320,7 +333,7 @@ class TerminalRegistryController {
     return terminalClient.onBackendReady(handler);
   }
 
-  onSpawnResult(handler: (id: string, result: { success: boolean; error?: string }) => void) {
+  onSpawnResult(handler: (id: string, result: SpawnResult) => void) {
     return terminalClient.onSpawnResult(handler);
   }
 }

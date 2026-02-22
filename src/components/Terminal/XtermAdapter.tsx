@@ -203,7 +203,9 @@ function XtermAdapterComponent({
     terminalInstanceService.setInputLocked(terminalId, !!isInputLocked);
 
     terminalInstanceService.attach(terminalId, container);
-    console.log(`[XtermAdapter] Attached ${terminalId} to container, wasDetached=${wasDetachedForSwitch}`);
+    console.log(
+      `[XtermAdapter] Attached ${terminalId} to container, wasDetached=${wasDetachedForSwitch}`
+    );
 
     // Force visibility immediately on mount - don't wait for IntersectionObserver.
     // This prevents data from being dropped during the brief window before the observer fires.
