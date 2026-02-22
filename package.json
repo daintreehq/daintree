@@ -102,6 +102,7 @@
     "node-gyp": "^10.3.1"
   },
   "devDependencies": {
+    "@electron/fuses": "^2.0.0",
     "@electron/rebuild": "^3.7.1",
     "@eslint/js": "^9.39.1",
     "@tailwindcss/typography": "^0.5.19",
@@ -145,6 +146,7 @@
     "wait-on": "^8.0.1"
   },
   "build": {
+    "asar": true,
     "appId": "com.canopy.commandcenter",
     "publish": [
       {
@@ -152,7 +154,6 @@
         "url": "https://updates.canopy.dev/releases/"
       }
     ],
-    "forceCodeSigning": false,
     "electronUpdaterCompatibility": ">=2.16",
     "productName": "Canopy",
     "npmRebuild": false,
@@ -179,6 +180,7 @@
     ],
     "afterPack": "./scripts/afterPack.cjs",
     "mac": {
+      "forceCodeSigning": true,
       "category": "public.app-category.developer-tools",
       "icon": "build/icon.icns",
       "extendInfo": {
@@ -218,6 +220,7 @@
       ]
     },
     "win": {
+      "forceCodeSigning": true,
       "icon": "build/icon.ico",
       "target": [
         {

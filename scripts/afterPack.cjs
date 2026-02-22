@@ -1,5 +1,6 @@
 const path = require("path");
 const fs = require("fs");
+const { flipFuses, FuseVersion, FuseV1Options } = require("@electron/fuses");
 
 /**
  * Get the path to unpacked resources for the platform
@@ -10,6 +11,24 @@ function getUnpackedResourcesPath(appOutDir, electronPlatformName, appName) {
   }
   // Windows and Linux
   return path.join(appOutDir, "resources/app.asar.unpacked");
+}
+
+/**
+ * Get the path to the Electron binary for fuse flipping
+ */
+function getElectronBinaryPath(appOutDir, electronPlatformName, appName, executableName) {
+  if (electronPlatformName === "darwin") {
+    return path.join(appOutDir, `${appName}.app`, "Contents/MacOS", appName);
+  } else if (electronPlatformName === "win32") {
+    return path.join(appOutDir, `${appName}.exe`);
+  } else if (electronPlatformName === "linux") {
+    return path.join(appOutDir, executableName);
+  } else {
+    throw new Error(
+      `[afterPack] Unsupported platform: ${electronPlatformName}. ` +
+        "Electron fuses can only be configured for darwin, win32, or linux."
+    );
+  }
 }
 
 /**
@@ -60,5 +79,38 @@ exports.default = async function afterPack(context) {
     console.log("[afterPack] Native modules will be signed during code signing phase");
   }
 
-  console.log("[afterPack] Complete - all native modules validated");
+  // Flip Electron fuses for security hardening
+  const executableName = packager.executableName;
+  const electronBinaryPath = getElectronBinaryPath(
+    appOutDir,
+    electronPlatformName,
+    appName,
+    executableName
+  );
+
+  if (!fs.existsSync(electronBinaryPath)) {
+    throw new Error(
+      `[afterPack] CRITICAL: Electron binary not found at ${electronBinaryPath}. ` +
+        "Cannot flip fuses. Check electron-builder output directory structure."
+    );
+  }
+
+  console.log(`[afterPack] Flipping Electron fuses for: ${electronBinaryPath}`);
+
+  await flipFuses(electronBinaryPath, {
+    version: FuseVersion.V1,
+    strictlyRequireAllFuses: true,
+    resetAdHocDarwinSignature: electronPlatformName === "darwin",
+    [FuseV1Options.RunAsNode]: false,
+    [FuseV1Options.EnableCookieEncryption]: true,
+    [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
+    [FuseV1Options.EnableNodeCliInspectArguments]: false,
+    [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
+    [FuseV1Options.OnlyLoadAppFromAsar]: true,
+    [FuseV1Options.LoadBrowserProcessSpecificV8Snapshot]: true,
+    [FuseV1Options.GrantFileProtocolExtraPrivileges]: false,
+  });
+
+  console.log("[afterPack] Electron fuses flipped successfully");
+  console.log("[afterPack] Complete - native modules validated and fuses configured");
 };
