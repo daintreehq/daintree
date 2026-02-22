@@ -38,6 +38,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     destroy: vi.fn(),
     setVisible: vi.fn(),
     suppressResizesDuringProjectSwitch: vi.fn(),
+    detachForProjectSwitch: vi.fn(),
   },
 }));
 
@@ -246,7 +247,7 @@ describe("resetWithoutKilling", () => {
     expect(terminalClient.kill).not.toHaveBeenCalled();
   });
 
-  it("should destroy xterm.js instances", async () => {
+  it("should detach xterm.js instances instead of destroying them", async () => {
     useTerminalStore.setState({
       terminals: [
         {
@@ -273,9 +274,10 @@ describe("resetWithoutKilling", () => {
 
     await useTerminalStore.getState().resetWithoutKilling();
 
-    // Should destroy xterm.js instances for cleanup
-    expect(terminalInstanceService.destroy).toHaveBeenCalledWith("term-1");
-    expect(terminalInstanceService.destroy).toHaveBeenCalledWith("term-2");
+    // Should detach xterm.js instances (keep alive) instead of destroying
+    expect(terminalInstanceService.detachForProjectSwitch).toHaveBeenCalledWith("term-1");
+    expect(terminalInstanceService.detachForProjectSwitch).toHaveBeenCalledWith("term-2");
+    expect(terminalInstanceService.destroy).not.toHaveBeenCalled();
   });
 
   it("suppresses terminal resizes for the full project-switch window", async () => {
@@ -311,7 +313,7 @@ describe("resetWithoutKilling", () => {
     );
   });
 
-  it("preserves warmed terminal instances when explicitly requested", async () => {
+  it("detaches all terminal instances during project switch regardless of preserve list", async () => {
     useTerminalStore.setState({
       terminals: [
         {
@@ -340,9 +342,10 @@ describe("resetWithoutKilling", () => {
       preserveTerminalIds: new Set(["term-keep"]),
     });
 
-    expect(terminalInstanceService.setVisible).toHaveBeenCalledWith("term-keep", false);
-    expect(terminalInstanceService.destroy).not.toHaveBeenCalledWith("term-keep");
-    expect(terminalInstanceService.destroy).toHaveBeenCalledWith("term-drop");
+    // All terminals should be detached (kept alive), none destroyed
+    expect(terminalInstanceService.detachForProjectSwitch).toHaveBeenCalledWith("term-keep");
+    expect(terminalInstanceService.detachForProjectSwitch).toHaveBeenCalledWith("term-drop");
+    expect(terminalInstanceService.destroy).not.toHaveBeenCalled();
   });
 
   it("should clear trashedTerminals", async () => {

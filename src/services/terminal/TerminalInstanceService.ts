@@ -533,9 +533,11 @@ class TerminalInstanceService {
       return null;
     }
 
+    const wasDetached = managed.isDetached === true;
     const wasReparented = managed.hostElement.parentElement !== container;
     logDebug(`[TIS.attach] ${id}`, {
       wasReparented,
+      wasDetached,
       isOpened: managed.isOpened,
       bufferRows: managed.terminal.buffer?.active?.length ?? 0,
       containerRect: container.getBoundingClientRect(),
@@ -551,27 +553,34 @@ class TerminalInstanceService {
       logDebug(`[TIS.attach] Opened terminal ${id}`);
     }
     managed.lastAttachAt = Date.now();
+    managed.isDetached = false;
 
     if (wasReparented && managed.isOpened) {
       requestAnimationFrame(() => {
         if (this.instances.get(id) !== managed) return;
         managed.isAttaching = false;
         if (!managed.terminal.element) return;
-        logDebug(`[TIS.attach] Refreshing and fitting ${id} after reparent`);
+
         managed.terminal.refresh(0, managed.terminal.rows - 1);
 
         if (managed.isResizeSuppressed) {
           this.clearResizeSuppression(id);
         }
 
-        // TODO: Terminals can appear slightly narrow then widen on project switch.
-        // The first RAF fires before container layout fully settles, so fit()
-        // measures a smaller width than the final layout. The ResizeObserver then
-        // corrects it one frame later. A "layout settled" guard (e.g. waiting for
-        // stable container dimensions across 2 frames) would eliminate this, but
-        // requires reworking the attach→resize coordination.
         requestAnimationFrame(() => {
           if (this.instances.get(id) !== managed) return;
+
+          if (wasDetached) {
+            const rect = container.getBoundingClientRect();
+            const widthMatch = managed.lastWidth > 0 && Math.abs(managed.lastWidth - rect.width) < 2;
+            const heightMatch = managed.lastHeight > 0 && Math.abs(managed.lastHeight - rect.height) < 2;
+            if (widthMatch && heightMatch) {
+              logDebug(`[TIS.attach] Skipping resize for ${id} — dimensions match after detach`);
+              managed.targetCols = undefined;
+              managed.targetRows = undefined;
+              return;
+            }
+          }
 
           if (managed.targetCols && managed.targetRows) {
             this.resizeController.applyResize(id, managed.targetCols, managed.targetRows);
@@ -618,6 +627,28 @@ class TerminalInstanceService {
         }
       }
     }
+    managed.lastDetachAt = Date.now();
+  }
+
+  detachForProjectSwitch(id: string): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+
+    logDebug(`[TIS.detachForProjectSwitch] ${id}`);
+
+    managed.isVisible = false;
+    managed.isDetached = true;
+
+    this.resizeController.clearResizeJobs(managed);
+    this.clearPostWakeTimers(id);
+
+    if (managed.hostElement.parentElement) {
+      const hiddenContainer = this.offscreenManager.ensureHiddenContainer();
+      if (hiddenContainer && managed.hostElement.parentElement !== hiddenContainer) {
+        hiddenContainer.appendChild(managed.hostElement);
+      }
+    }
+
     managed.lastDetachAt = Date.now();
   }
 

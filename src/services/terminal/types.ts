@@ -84,6 +84,9 @@ export interface ManagedTerminal {
   // reflow artifacts in TUI applications (OpenCode, vim, htop, etc.)
   isAltBuffer?: boolean;
   altBufferListeners: Set<(isAltBuffer: boolean) => void>;
+
+  // Project-switch detach state: instance is alive but not in any visible container
+  isDetached?: boolean;
 }
 
 export const TIER_DOWNGRADE_HYSTERESIS_MS = 500;

@@ -198,11 +198,12 @@ function XtermAdapterComponent({
 
     console.log(`[XtermAdapter] Got managed instance for ${terminalId}, attaching...`);
 
+    const wasDetachedForSwitch = managed.isDetached === true;
     managed.isAttaching = true;
     terminalInstanceService.setInputLocked(terminalId, !!isInputLocked);
 
     terminalInstanceService.attach(terminalId, container);
-    console.log(`[XtermAdapter] Attached ${terminalId} to container`);
+    console.log(`[XtermAdapter] Attached ${terminalId} to container, wasDetached=${wasDetachedForSwitch}`);
 
     // Force visibility immediately on mount - don't wait for IntersectionObserver.
     // This prevents data from being dropped during the brief window before the observer fires.
@@ -332,9 +333,11 @@ function XtermAdapterComponent({
       onExit?.(code);
     });
 
-    performFit();
+    if (!wasDetachedForSwitch) {
+      performFit();
+    }
 
-    if (restoreOnAttach && !hasVisibleBufferContent()) {
+    if (restoreOnAttach && !wasDetachedForSwitch && !hasVisibleBufferContent()) {
       void terminalInstanceService.fetchAndRestore(terminalId).then((restored) => {
         if (restored) {
           requestAnimationFrame(() => performFit());

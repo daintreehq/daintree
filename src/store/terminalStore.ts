@@ -413,13 +413,11 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       });
     },
 
-    resetWithoutKilling: async (options) => {
+    resetWithoutKilling: async (_options) => {
       const state = get();
-      const preserveTerminalIds = options?.preserveTerminalIds ?? new Set<string>();
 
       flushTerminalPersistence();
 
-      // Destroy xterm.js instances (renderer-side cleanup only)
       const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
 
       const allTerminalIds = state.terminals.map((t) => t.id);
@@ -429,20 +427,14 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       );
 
       for (const terminal of state.terminals) {
-        if (preserveTerminalIds.has(terminal.id)) {
-          terminalInstanceService.setVisible(terminal.id, false);
-          continue;
-        }
-
         try {
-          terminalInstanceService.destroy(terminal.id);
+          terminalInstanceService.detachForProjectSwitch(terminal.id);
         } catch (error) {
-          logWarn(`Failed to destroy terminal instance ${terminal.id}`, { error });
+          logWarn(`Failed to detach terminal instance ${terminal.id}`, { error });
         }
       }
 
-      // DO NOT send kill commands to backend - processes stay alive from Phase 1
-      logInfo(`Reset UI state for ${state.terminals.length} terminals (processes preserved)`);
+      logInfo(`Detached ${state.terminals.length} terminal instances for project switch (processes preserved)`);
 
       set({
         terminals: [],
