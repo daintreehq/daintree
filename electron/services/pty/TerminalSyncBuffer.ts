@@ -76,6 +76,9 @@ export class TerminalSyncBuffer {
   // Sync mode timeout - if we never get the end sequence, force emit
   private syncTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // Bypass mode - passthrough when in alt screen buffer
+  private bypassed = false;
+
   // Interactive mode
   private interactiveUntil = 0;
 
@@ -130,11 +133,27 @@ export class TerminalSyncBuffer {
     this.emitCallback = null;
   }
 
+  setBypass(bypass: boolean): void {
+    if (this.bypassed === bypass) return;
+    this.bypassed = bypass;
+    if (bypass && this.buffer.length > 0) {
+      this.cancelAllTimers();
+      this.inSyncMode = false;
+      this.emit(this.buffer, "bypass-flush");
+      this.buffer = "";
+    }
+  }
+
   markInteractive(ttlMs: number = INTERACTIVE_WINDOW_MS): void {
     this.interactiveUntil = Date.now() + ttlMs;
   }
 
   ingest(data: string): void {
+    if (this.bypassed) {
+      this.emit(data, "bypass");
+      return;
+    }
+
     this.debugLog("INGEST", data.slice(0, 500));
 
     // Append all data to buffer first

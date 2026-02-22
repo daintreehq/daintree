@@ -119,6 +119,7 @@ export class TerminalProcess {
   private readonly isAgentTerminal: boolean;
   private forensicsBuffer = new TerminalForensicsBuffer();
   private _activityTier: "active" | "background" = "active";
+  private bufferChangeDisposable: { dispose: () => void } | null = null;
 
   private restoreSessionIfPresent(headlessTerminal: HeadlessTerminalType): void {
     if (!TERMINAL_SESSION_PERSISTENCE_ENABLED) return;
@@ -388,6 +389,13 @@ export class TerminalProcess {
         if (this.terminalInfo.wasKilled) return;
         this.emitDataDirect(data);
       });
+
+      // Bypass SyncBuffer while in alt screen
+      const bufferChangeDisposable = headlessTerminal.buffer.onBufferChange(() => {
+        const inAltBuffer = headlessTerminal.buffer.active.type === "alternate";
+        this.syncBuffer?.setBypass(inAltBuffer);
+      });
+      this.bufferChangeDisposable = bufferChangeDisposable;
     }
 
     this.setupPtyHandlers(ptyProcess);
@@ -466,6 +474,14 @@ export class TerminalProcess {
     const terminal = this.terminalInfo;
     if (!terminal.headlessTerminal) {
       return;
+    }
+    if (this.bufferChangeDisposable) {
+      try {
+        this.bufferChangeDisposable.dispose();
+      } catch {
+        // Ignore disposal errors
+      }
+      this.bufferChangeDisposable = null;
     }
     if (this.syncBuffer) {
       this.syncBuffer.detach();

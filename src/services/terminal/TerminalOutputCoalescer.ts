@@ -53,9 +53,14 @@ export type CoalescerOutput = {
 };
 
 export class TerminalOutputCoalescer {
+  // Alt screen enter sequences (modes 47, 1047, 1049)
+  private static readonly ALT_ENTER = ["\x1b[?1049h", "\x1b[?1047h", "\x1b[?47h"];
+  private static readonly ALT_EXIT = ["\x1b[?1049l", "\x1b[?1047l", "\x1b[?47l"];
+
   private buffers = new Map<string, BufferEntry>();
   private frameQueues = new Map<string, FrameQueue>();
   private interactiveUntil = new Map<string, number>();
+  private directModeIds = new Set<string>();
 
   // Debug stats
   private stats = {
@@ -70,6 +75,11 @@ export class TerminalOutputCoalescer {
     private readonly onOutput: (output: CoalescerOutput) => void
   ) {}
 
+  public setDirectMode(id: string, enabled: boolean): void {
+    if (enabled) this.directModeIds.add(id);
+    else this.directModeIds.delete(id);
+  }
+
   public bufferData(id: string, data: string | Uint8Array): void {
     const now = this.getNow();
     let entry = this.buffers.get(id);
@@ -79,7 +89,25 @@ export class TerminalOutputCoalescer {
     const prevBytes = entry ? entry.bytesSinceStart : 0;
     const combinedRecent = (prevRecent + stringData).slice(-REDRAW_LOOKBACK_CHARS);
     const bytesSinceStart = prevBytes + dataLength;
-    const isRedraw = this.detectRedrawPatternInStream(prevRecent, stringData, bytesSinceStart);
+    let isRedraw = this.detectRedrawPatternInStream(prevRecent, stringData, bytesSinceStart);
+
+    // Auto-detect alt screen enter/exit to toggle direct mode
+    for (const seq of TerminalOutputCoalescer.ALT_ENTER) {
+      if (this.hasNewAnsiSequence(prevRecent, stringData, seq)) {
+        this.directModeIds.add(id);
+        break;
+      }
+    }
+    for (const seq of TerminalOutputCoalescer.ALT_EXIT) {
+      if (this.hasNewAnsiSequence(prevRecent, stringData, seq)) {
+        this.directModeIds.delete(id);
+        break;
+      }
+    }
+
+    if (this.directModeIds.has(id)) {
+      isRedraw = false;
+    }
 
     if (!entry) {
       entry = {
@@ -238,6 +266,7 @@ export class TerminalOutputCoalescer {
       this.buffers.delete(id);
     }
     this.interactiveUntil.delete(id);
+    this.directModeIds.delete(id);
 
     const queue = this.frameQueues.get(id);
     if (queue) {
@@ -270,6 +299,7 @@ export class TerminalOutputCoalescer {
     this.buffers.clear();
     this.frameQueues.clear();
     this.interactiveUntil.clear();
+    this.directModeIds.clear();
   }
 
   private rescheduleFrameTimers(id: string, entry: BufferEntry): void {

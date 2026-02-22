@@ -129,6 +129,19 @@ export class TerminalOutputIngestService {
     this.worker.postMessage(message);
   }
 
+  public setDirectMode(id: string, enabled: boolean): void {
+    if (this.pollingActive && this.worker) {
+      const message: WorkerInboundMessage = {
+        type: "SET_DIRECT_MODE",
+        id,
+        enabled,
+      };
+      this.worker.postMessage(message);
+    } else {
+      this.ipcCoalescer.setDirectMode(id, enabled);
+    }
+  }
+
   public flushForTerminal(id: string): void {
     if (!this.pollingActive || !this.worker) {
       this.ipcCoalescer.flushForTerminal(id);

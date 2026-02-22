@@ -250,6 +250,11 @@ self.onmessage = (event: MessageEvent<WorkerInboundMessage>) => {
       break;
     }
 
+    case "SET_DIRECT_MODE": {
+      coalescer?.setDirectMode(message.id, message.enabled);
+      break;
+    }
+
     case "STOP": {
       isRunning = false;
       coalescer?.flushAll();
