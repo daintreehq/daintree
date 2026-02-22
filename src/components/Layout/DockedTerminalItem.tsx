@@ -18,6 +18,7 @@ import { STATE_ICONS, STATE_COLORS } from "@/components/Worktree/terminalStateCo
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useDockPanelPortal } from "./DockPanelOffscreenContainer";
+import { DockPopupScrim } from "./DockPopupScrim";
 
 interface DockedTerminalItemProps {
   terminal: TerminalInstance;
@@ -264,8 +265,10 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
         </PopoverTrigger>
       </TerminalContextMenu>
 
+      <DockPopupScrim isOpen={isOpen} />
+
       <PopoverContent
-        className="w-[700px] max-w-[90vw] h-[500px] max-h-[80vh] p-0 bg-canopy-bg/95 backdrop-blur-sm border border-[var(--border-overlay)] shadow-[var(--shadow-dock-popover)] rounded-[var(--radius-lg)] overflow-hidden"
+        className="w-[700px] max-w-[90vw] h-[500px] max-h-[80vh] p-0 bg-canopy-bg/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-popover)] rounded-[var(--radius-lg)] overflow-hidden"
         side="top"
         align="start"
         sideOffset={10}
