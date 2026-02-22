@@ -8,6 +8,38 @@ import {
   sampleIpcTiming,
 } from "../utils/performance.js";
 
+const rateLimitTimestamps = new Map<string, number[]>();
+
+type RateLimitCategory = "fileOps" | "gitOps" | "terminalSpawn";
+
+const channelToCategory: Record<string, RateLimitCategory> = {
+  "copytree:generate": "fileOps",
+  "copytree:generate-and-copy-file": "fileOps",
+  "copytree:inject": "fileOps",
+  "copytree:get-file-tree": "fileOps",
+  "copytree:test-config": "fileOps",
+  "worktree:create": "gitOps",
+  "worktree:delete": "gitOps",
+  "worktree:create-for-task": "gitOps",
+  "worktree:cleanup-task": "gitOps",
+  "git:get-file-diff": "gitOps",
+  "git:get-project-pulse": "gitOps",
+  "git:list-commits": "gitOps",
+  "terminal:spawn": "terminalSpawn",
+};
+
+export function checkRateLimit(channel: string, maxCalls: number, windowMs: number): void {
+  const category = channelToCategory[channel];
+  const key = category ?? channel;
+  const now = Date.now();
+  const timestamps = (rateLimitTimestamps.get(key) ?? []).filter((t) => now - t < windowMs);
+  if (timestamps.length >= maxCalls) {
+    throw new Error("Rate limit exceeded");
+  }
+  timestamps.push(now);
+  rateLimitTimestamps.set(key, timestamps);
+}
+
 export function sendToRenderer(
   mainWindow: BrowserWindow,
   channel: string,

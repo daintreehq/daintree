@@ -42,7 +42,21 @@ function enforceIpcSenderValidation() {
           `IPC call from untrusted origin rejected: channel=${channel}, url=${senderUrl || "unknown"}`
         );
       }
-      return listener(event, ...args);
+      try {
+        return await listener(event, ...args);
+      } catch (error) {
+        if (app.isPackaged) {
+          console.error(`[IPC] Error on channel ${channel}:`, error);
+          const msg = (error instanceof Error ? error.message : String(error))
+            .replace(/\/(?:Users|home|tmp|private|var)\/[^\s:]+/gi, "<path>")
+            .replace(/[A-Z]:[\/\\](?:Users|Program Files|Windows|ProgramData)[^\s:]*/gi, "<path>")
+            .replace(/\\\\[^\s\\]+\\[^\s:]+/g, "<path>");
+          const safe = new Error(msg);
+          safe.stack = undefined;
+          throw safe;
+        }
+        throw error;
+      }
     });
   } as typeof ipcMain.handle;
 
@@ -58,7 +72,21 @@ function enforceIpcSenderValidation() {
             `IPC call from untrusted origin rejected: channel=${channel}, url=${senderUrl || "unknown"}`
           );
         }
-        return listener(event, ...args);
+        try {
+          return await listener(event, ...args);
+        } catch (error) {
+          if (app.isPackaged) {
+            console.error(`[IPC] Error on channel ${channel}:`, error);
+            const msg = (error instanceof Error ? error.message : String(error))
+              .replace(/\/(?:Users|home|tmp|private|var)\/[^\s:]+/gi, "<path>")
+              .replace(/[A-Z]:[\/\\](?:Users|Program Files|Windows|ProgramData)[^\s:]*/gi, "<path>")
+              .replace(/\\\\[^\s\\]+\\[^\s:]+/g, "<path>");
+            const safe = new Error(msg);
+            safe.stack = undefined;
+            throw safe;
+          }
+          throw error;
+        }
       });
     } as typeof ipcMain.handleOnce;
   }

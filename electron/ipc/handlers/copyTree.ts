@@ -2,7 +2,7 @@ import { ipcMain, clipboard } from "electron";
 import crypto from "crypto";
 import path from "path";
 import { CHANNELS } from "../channels.js";
-import { sendToRenderer } from "../utils.js";
+import { sendToRenderer, checkRateLimit } from "../utils.js";
 import type { HandlerDependencies } from "../types.js";
 import type {
   CopyTreeGeneratePayload,
@@ -155,6 +155,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     _event: Electron.IpcMainInvokeEvent,
     payload: CopyTreeGeneratePayload
   ): Promise<CopyTreeResult> => {
+    checkRateLimit(CHANNELS.COPYTREE_GENERATE, 5, 10_000);
     const traceId = crypto.randomUUID();
     const requestedWorktreeId = getStringField(payload, "worktreeId") ?? "unknown";
     console.log(`[${traceId}] CopyTree generate started for worktree ${requestedWorktreeId}`);
@@ -207,6 +208,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     _event: Electron.IpcMainInvokeEvent,
     payload: CopyTreeGenerateAndCopyFilePayload
   ): Promise<CopyTreeResult> => {
+    checkRateLimit(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE, 5, 10_000);
     const traceId = crypto.randomUUID();
     const requestedWorktreeId = getStringField(payload, "worktreeId") ?? "unknown";
     console.log(
@@ -316,6 +318,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     _event: Electron.IpcMainInvokeEvent,
     payload: CopyTreeInjectPayload
   ): Promise<CopyTreeResult> => {
+    checkRateLimit(CHANNELS.COPYTREE_INJECT, 5, 10_000);
     const traceId = crypto.randomUUID();
     const requestedTerminalId = getStringField(payload, "terminalId") ?? "unknown";
     const requestedWorktreeId = getStringField(payload, "worktreeId") ?? "unknown";
@@ -482,6 +485,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     _event: Electron.IpcMainInvokeEvent,
     payload: CopyTreeGetFileTreePayload
   ): Promise<FileTreeNode[]> => {
+    checkRateLimit(CHANNELS.COPYTREE_GET_FILE_TREE, 5, 10_000);
     const parseResult = CopyTreeGetFileTreePayloadSchema.safeParse(payload);
     if (!parseResult.success) {
       throw new Error(`Invalid file tree request: ${parseResult.error.message}`);
@@ -518,6 +522,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     _event: Electron.IpcMainInvokeEvent,
     payload: import("../../types/index.js").CopyTreeTestConfigPayload
   ): Promise<import("../../types/index.js").CopyTreeTestConfigResult> => {
+    checkRateLimit(CHANNELS.COPYTREE_TEST_CONFIG, 5, 10_000);
     const traceId = crypto.randomUUID();
     const requestedWorktreeId = getStringField(payload, "worktreeId") ?? "unknown";
     console.log(`[${traceId}] CopyTree test-config started for worktree ${requestedWorktreeId}`);

@@ -20,6 +20,7 @@ import {
 import { GitService } from "../../services/GitService.js";
 import { logDebug, logError } from "../../utils/logger.js";
 import { fileSearchService } from "../../services/FileSearchService.js";
+import { checkRateLimit } from "../utils.js";
 
 // In-memory map to track taskId -> worktreeIds for orchestration
 // Scoped by projectId to avoid cross-project collisions
@@ -123,6 +124,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
       options: { baseBranch: string; newBranch: string; path: string; fromRemote?: boolean };
     }
   ): Promise<string> => {
+    checkRateLimit(CHANNELS.WORKTREE_CREATE, 10, 10_000);
     if (!workspaceClient) {
       throw new Error("Workspace client not initialized");
     }
@@ -216,6 +218,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     _event: Electron.IpcMainInvokeEvent,
     payload: WorktreeDeletePayload
   ) => {
+    checkRateLimit(CHANNELS.WORKTREE_DELETE, 10, 10_000);
     if (!workspaceClient) {
       throw new Error("Workspace client not initialized");
     }
@@ -255,6 +258,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     _event: Electron.IpcMainInvokeEvent,
     payload: { cwd: string; filePath: string; status: string }
   ): Promise<string> => {
+    checkRateLimit(CHANNELS.GIT_GET_FILE_DIFF, 10, 10_000);
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
@@ -296,6 +300,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
       forceRefresh?: boolean;
     }
   ): Promise<ProjectPulse> => {
+    checkRateLimit(CHANNELS.GIT_GET_PROJECT_PULSE, 10, 10_000);
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
@@ -354,6 +359,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
       limit?: number;
     }
   ) => {
+    checkRateLimit(CHANNELS.GIT_LIST_COMMITS, 10, 10_000);
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
@@ -377,6 +383,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     _event: Electron.IpcMainInvokeEvent,
     payload: CreateForTaskPayload
   ): Promise<WorktreeState> => {
+    checkRateLimit(CHANNELS.WORKTREE_CREATE_FOR_TASK, 10, 10_000);
     if (!workspaceClient) {
       throw new Error("Workspace client not initialized");
     }
@@ -621,6 +628,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     taskId: string,
     options?: CleanupTaskOptions
   ): Promise<void> => {
+    checkRateLimit(CHANNELS.WORKTREE_CLEANUP_TASK, 10, 10_000);
     if (!workspaceClient) {
       throw new Error("Workspace client not initialized");
     }
