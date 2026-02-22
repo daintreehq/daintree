@@ -20,6 +20,7 @@ import {
   useTerminalInputStore,
   useTerminalStore,
   useSidecarStore,
+  useFocusStore,
   type TerminalInstance,
 } from "@/store";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
@@ -95,15 +96,17 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     useShallow((s) => ({ isOpen: s.isOpen, width: s.width }))
   );
 
+  const isFocusMode = useFocusStore((s) => s.isFocusMode);
+
   const collisionPadding = useMemo(() => {
     const basePadding = 32;
     return {
       top: basePadding,
-      left: basePadding,
+      left: isFocusMode ? 8 : basePadding,
       bottom: basePadding,
       right: sidecarOpen ? sidecarWidth + basePadding : basePadding,
     };
-  }, [sidecarOpen, sidecarWidth]);
+  }, [isFocusMode, sidecarOpen, sidecarWidth]);
 
   // Toggle buffering based on popover open state
   useEffect(() => {
