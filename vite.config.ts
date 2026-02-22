@@ -17,8 +17,7 @@ const DEV_CSP = [
 const PROD_CSP = [
   "default-src 'self'",
   "script-src 'self' 'wasm-unsafe-eval'",
-  "style-src 'self'",
-  "style-src-attr 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline'",
   "font-src 'self' data:",
   "connect-src 'self'",
   "img-src 'self' https://avatars.githubusercontent.com data: blob:",
