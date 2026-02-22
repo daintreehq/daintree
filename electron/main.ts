@@ -133,6 +133,12 @@ import { createWindowWithState } from "./windowState.js";
 import { setLoggerWindow, initializeLogger } from "./utils/logger.js";
 import { initializeAssistantLogger } from "./utils/assistantLogger.js";
 import { openExternalUrl } from "./utils/openExternal.js";
+import {
+  classifyPartition,
+  getLocalhostDevCSP,
+  mergeCspHeaders,
+  isDevPreviewPartition,
+} from "./utils/webviewCsp.js";
 import { EventBuffer } from "./services/EventBuffer.js";
 import { CHANNELS } from "./ipc/channels.js";
 import { createApplicationMenu } from "./menu.js";
@@ -215,9 +221,15 @@ if (!gotTheLock) {
     }
   });
 
-  app.whenReady().then(() => {
-    registerAppProtocol();
-    createWindow();
+  app.whenReady().then(async () => {
+    try {
+      registerAppProtocol();
+      setupWebviewCSP();
+      await createWindow();
+    } catch (error) {
+      console.error("[MAIN] Startup failed:", error);
+      app.exit(1);
+    }
   });
 
   app.on("window-all-closed", () => {
@@ -290,6 +302,54 @@ if (!gotTheLock) {
         console.error("[MAIN] Error during cleanup:", error);
         app.exit(1);
       });
+  });
+}
+
+/**
+ * Configures CSP headers for webview partitions.
+ * Applies idempotent CSP injection to prevent multiple registrations.
+ * Sidecar is excluded to preserve origin CSP from external sites.
+ */
+function setupWebviewCSP(): void {
+  const configuredPartitions = new Set<string>();
+
+  const applyCSP = (partition: string): void => {
+    if (configuredPartitions.has(partition)) {
+      return;
+    }
+
+    const partitionType = classifyPartition(partition);
+    if (partitionType === "unknown" || partitionType === "sidecar") {
+      // Skip unknown partitions and sidecar (external sites keep their own CSP)
+      return;
+    }
+
+    const ses = session.fromPartition(partition);
+    const cspPolicy = getLocalhostDevCSP();
+
+    ses.webRequest.onHeadersReceived((details, callback) => {
+      callback({
+        responseHeaders: mergeCspHeaders(details, cspPolicy),
+      });
+    });
+
+    configuredPartitions.add(partition);
+    console.log(`[MAIN] CSP configured for partition: ${partition} (${partitionType})`);
+  };
+
+  // Configure static partitions (browser only - sidecar excluded)
+  applyCSP("persist:browser");
+
+  // Monitor for dynamic dev-preview partitions
+  // Dev preview uses dynamic partitions like "persist:dev-preview-project-worktree-panel"
+  // We intercept will-attach-webview to detect and configure them
+  app.on("web-contents-created", (_event, contents) => {
+    contents.on("will-attach-webview", (_event, _webPreferences, params) => {
+      const partition = params.partition;
+      if (partition && isDevPreviewPartition(partition)) {
+        applyCSP(partition);
+      }
+    });
   });
 }
 
