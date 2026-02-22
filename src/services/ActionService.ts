@@ -73,7 +73,7 @@ export class ActionService {
       return { ok: false, error };
     }
 
-    const context = this.getActionContext();
+    const context = options?.contextOverride ?? this.getActionContext();
 
     let validatedArgs = args;
     if (definition.argsSchema) {

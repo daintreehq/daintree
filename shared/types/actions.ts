@@ -304,6 +304,11 @@ export interface ActionDispatchOptions {
    * Agent sources MUST explicitly set this flag to confirm destructive actions.
    */
   confirmed?: boolean;
+  /**
+   * Override the action context instead of using current UI state.
+   * Used by agent dispatch to bind context at dispatch time and prevent confused-deputy attacks.
+   */
+  contextOverride?: ActionContext;
 }
 
 export interface ActionDispatchPayload {

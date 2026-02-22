@@ -646,6 +646,7 @@ export interface ElectronAPI {
         actionId: string;
         args?: Record<string, unknown>;
         context: ActionContext;
+        confirmed?: boolean;
       }) => void
     ): () => void;
     /** Send action dispatch response back to main process */
@@ -653,6 +654,18 @@ export interface ElectronAPI {
       requestId: string;
       result: { ok: boolean; result?: unknown; error?: { code: string; message: string } };
     }): void;
+    /** Listen for action confirmation requests from main process */
+    onConfirmationRequest(
+      callback: (payload: {
+        requestId: string;
+        actionId: string;
+        actionName?: string;
+        args?: Record<string, unknown>;
+        danger: "safe" | "confirm" | "restricted";
+      }) => void
+    ): () => void;
+    /** Send confirmation response back to main process */
+    sendConfirmationResponse(payload: { requestId: string; approved: boolean }): void;
   };
   assistant: {
     /** Send a message to the assistant and receive streaming response with optional tool calling */
