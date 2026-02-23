@@ -709,7 +709,8 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
       cancelled = true;
       clearTimeout(timeoutId);
     };
-  }, [gridCols, terminalIds, gridTerminals, sidecarOpen, sidecarLayoutMode]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- gridTerminals intentionally excluded to prevent redundant fit cycles on worktree switch
+  }, [gridCols, terminalIds, sidecarOpen, sidecarLayoutMode]);
 
   // Show "grid full" overlay when trying to drag from dock to a full grid
   const showGridFullOverlay = sourceContainer === "dock" && isGridFull;

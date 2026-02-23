@@ -214,14 +214,16 @@ class TerminalInstanceService {
       managed.lastActiveTime = Date.now();
 
       if (isVisible) {
+        if (managed.isAttaching) return;
+
         const rect = managed.hostElement.getBoundingClientRect();
         if (rect.width > 0 && rect.height > 0) {
           const widthChanged = Math.abs(managed.lastWidth - rect.width) >= 1;
           const heightChanged = Math.abs(managed.lastHeight - rect.height) >= 1;
 
           if (widthChanged || heightChanged) {
-            managed.lastWidth = 0;
-            managed.lastHeight = 0;
+            managed.lastWidth = rect.width;
+            managed.lastHeight = rect.height;
           }
         }
 
@@ -563,12 +565,12 @@ class TerminalInstanceService {
 
         managed.terminal.refresh(0, managed.terminal.rows - 1);
 
-        if (managed.isResizeSuppressed) {
-          this.clearResizeSuppression(id);
-        }
-
         requestAnimationFrame(() => {
           if (this.instances.get(id) !== managed) return;
+
+          if (managed.isResizeSuppressed) {
+            this.clearResizeSuppression(id);
+          }
 
           if (wasDetached) {
             const rect = container.getBoundingClientRect();
@@ -630,6 +632,7 @@ class TerminalInstanceService {
       }
     }
     managed.lastDetachAt = Date.now();
+    managed.isDetached = true;
   }
 
   detachForProjectSwitch(id: string): void {
