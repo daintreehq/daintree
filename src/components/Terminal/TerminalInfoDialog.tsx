@@ -131,16 +131,33 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
   const copyToClipboard = async () => {
     if (!info) return;
 
+    const syncBufferInfo = info.syncBuffer
+      ? `  Sync Buffer: Enabled
+  Alt Screen Bypass: ${info.syncBuffer.bypassed ? "Active (bypassed)" : "Inactive"}
+  DEC 2026 Sync Mode: ${info.syncBuffer.inSyncMode ? "In sync update" : "Idle"}
+  Frames Emitted: ${info.syncBuffer.framesEmitted}`
+      : `  Sync Buffer: Disabled`;
+
     const diagnosticInfo = `Terminal Diagnostic Information
 =====================================
 
 Session Metadata:
   ID: ${info.id}
+  Kind: ${info.kind || "terminal"}
   Type: ${info.type || "N/A"}
+  Agent ID: ${info.agentId || "N/A"}
+  Detected Agent: ${info.detectedAgentType || "N/A"}
   Title: ${info.title || "N/A"}
+  Shell: ${info.shell || "N/A"}
   Project ID: ${info.projectId || "N/A"}
   Worktree ID: ${info.worktreeId || "N/A"}
   CWD: ${info.cwd}
+
+Terminal Classification:
+  Agent Terminal: ${info.isAgentTerminal ? "Yes" : "No"}
+  PTY Active: ${info.hasPty ? "Yes" : "No"}
+  Analysis Enabled: ${info.analysisEnabled ? "Yes" : "No"}
+  Resize Strategy: ${info.resizeStrategy || "default"}
 
 Runtime Statistics:
   Running Time: ${formatDuration(Date.now() - info.spawnedAt)}
@@ -157,6 +174,7 @@ Activity Metrics:
 Performance & Diagnostics:
   Output Buffer Size: ${info.outputBufferSize} lines
   Semantic Buffer: ${info.semanticBufferLines} lines
+${syncBufferInfo}
 `;
 
     try {
@@ -194,11 +212,27 @@ Performance & Diagnostics:
           <div className="space-y-6">
             <InfoSection title="Session Metadata">
               <InfoRow label="Terminal ID" value={info.id} mono />
+              <InfoRow label="Kind" value={info.kind || "terminal"} />
               <InfoRow label="Type" value={info.type || "terminal"} />
+              {info.agentId && <InfoRow label="Agent ID" value={info.agentId} />}
+              {info.detectedAgentType && (
+                <InfoRow label="Detected Agent" value={info.detectedAgentType} />
+              )}
               <InfoRow label="Title" value={info.title} />
+              <InfoRow label="Shell" value={info.shell} mono />
               <InfoRow label="Project ID" value={info.projectId} mono />
               <InfoRow label="Worktree ID" value={info.worktreeId} mono />
               <InfoRow label="Current Directory" value={info.cwd} mono />
+            </InfoSection>
+
+            <InfoSection title="Terminal Classification">
+              <InfoRow label="Agent Terminal" value={info.isAgentTerminal ? "Yes" : "No"} />
+              <InfoRow label="PTY Active" value={info.hasPty ? "Yes" : "No"} />
+              <InfoRow
+                label="Analysis Enabled"
+                value={info.analysisEnabled ? "Yes" : "No"}
+              />
+              <InfoRow label="Resize Strategy" value={info.resizeStrategy || "default"} />
             </InfoSection>
 
             <InfoSection title="Runtime Statistics">
@@ -231,6 +265,22 @@ Performance & Diagnostics:
             <InfoSection title="Performance & Diagnostics">
               <InfoRow label="Output Buffer Size" value={`${info.outputBufferSize} lines`} />
               <InfoRow label="Semantic Buffer" value={`${info.semanticBufferLines} lines`} />
+              {info.syncBuffer != null ? (
+                <>
+                  <InfoRow label="Sync Buffer" value="Enabled" />
+                  <InfoRow
+                    label="Alt Screen Bypass"
+                    value={info.syncBuffer.bypassed ? "Active (bypassed)" : "Inactive"}
+                  />
+                  <InfoRow
+                    label="DEC 2026 Sync Mode"
+                    value={info.syncBuffer.inSyncMode ? "In sync update" : "Idle"}
+                  />
+                  <InfoRow label="Frames Emitted" value={info.syncBuffer.framesEmitted} />
+                </>
+              ) : (
+                <InfoRow label="Sync Buffer" value="Disabled" />
+              )}
             </InfoSection>
           </div>
         )}

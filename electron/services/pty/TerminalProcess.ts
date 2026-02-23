@@ -541,6 +541,33 @@ export class TerminalProcess {
     };
   }
 
+  getSyncBufferState(): {
+    enabled: boolean;
+    bypassed: boolean;
+    inSyncMode: boolean;
+    framesEmitted: number;
+  } | null {
+    if (!this.syncBuffer) return null;
+    const debug = this.syncBuffer.getDebugState();
+    return {
+      enabled: true,
+      bypassed: debug.bypassed,
+      inSyncMode: debug.inSyncMode,
+      framesEmitted: debug.framesEmitted,
+    };
+  }
+
+  getIsAgentTerminal(): boolean {
+    return this.isAgentTerminal;
+  }
+
+  getResizeStrategy(): "default" | "settled" {
+    const agentId = this.terminalInfo.agentId;
+    if (!agentId) return "default";
+    const config = getEffectiveAgentConfig(agentId);
+    return config?.capabilities?.resizeStrategy ?? "default";
+  }
+
   get analysisEnabled(): boolean {
     return this.terminalInfo.analysisEnabled;
   }

@@ -162,8 +162,10 @@ export interface TerminalInfoPayload {
   projectId?: string;
   kind?: TerminalKind;
   type?: TerminalType;
+  agentId?: AgentId;
   title?: string;
   cwd: string;
+  shell?: string;
   worktreeId?: string;
   agentState?: AgentState;
   spawnedAt: number;
@@ -176,6 +178,24 @@ export interface TerminalInfoPayload {
   restartCount: number;
   /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */
   hasPty?: boolean;
+  /** Whether this terminal is classified as an agent terminal */
+  isAgentTerminal?: boolean;
+  /** Runtime-detected agent type (from process tree analysis) */
+  detectedAgentType?: TerminalType;
+  /** Whether semantic analysis is enabled for this terminal */
+  analysisEnabled?: boolean;
+  /** Resize strategy: "default" (immediate) or "settled" (batched for TUI agents) */
+  resizeStrategy?: "default" | "settled";
+  /** DEC 2026 sync buffer state (null if not enabled) */
+  syncBuffer?: {
+    enabled: boolean;
+    /** Whether sync buffer is bypassed (alt screen active) */
+    bypassed: boolean;
+    /** Whether currently inside a DEC 2026 synchronized update */
+    inSyncMode: boolean;
+    /** Total frames emitted through the sync buffer */
+    framesEmitted: number;
+  } | null;
 }
 
 import type { TerminalActivityPayload } from "../terminal.js";

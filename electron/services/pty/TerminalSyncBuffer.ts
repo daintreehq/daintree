@@ -372,12 +372,16 @@ export class TerminalSyncBuffer {
     pendingBytes: number;
     framesEmitted: number;
     isInteractive: boolean;
+    bypassed: boolean;
+    inSyncMode: boolean;
   } {
     return {
       hasPending: this.buffer.length > 0,
       pendingBytes: this.buffer.length,
       framesEmitted: this.framesEmitted,
       isInteractive: this.isInteractive(),
+      bypassed: this.bypassed,
+      inSyncMode: this.inSyncMode,
     };
   }
 }

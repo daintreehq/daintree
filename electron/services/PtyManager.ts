@@ -381,9 +381,12 @@ export class PtyManager extends EventEmitter {
     return {
       id: terminalInfo.id,
       projectId: terminalInfo.projectId,
+      kind: terminalInfo.kind,
       type: terminalInfo.type,
+      agentId: terminalInfo.agentId,
       title: terminalInfo.title,
       cwd: terminalInfo.cwd,
+      shell: terminalInfo.shell,
       worktreeId: terminalInfo.worktreeId,
       agentState: terminalInfo.agentState,
       spawnedAt: terminalInfo.spawnedAt,
@@ -394,6 +397,12 @@ export class PtyManager extends EventEmitter {
       outputBufferSize: terminalInfo.outputBuffer.length,
       semanticBufferLines: terminalInfo.semanticBuffer.length,
       restartCount: terminalInfo.restartCount,
+      hasPty: !terminalInfo.wasKilled && !terminalInfo.isExited,
+      isAgentTerminal: terminal.getIsAgentTerminal(),
+      detectedAgentType: terminalInfo.detectedAgentType,
+      analysisEnabled: terminalInfo.analysisEnabled,
+      resizeStrategy: terminal.getResizeStrategy(),
+      syncBuffer: terminal.getSyncBufferState(),
     };
   }
 
