@@ -260,10 +260,12 @@ class TerminalInstanceService {
       }
 
       instance.isResizeSuppressed = true;
+      instance.resizeSuppressionEndTime = Date.now() + durationMs;
       this.resizeController.lockResize(id, true);
 
       instance.resizeSuppressionTimer = window.setTimeout(() => {
         instance.isResizeSuppressed = false;
+        instance.resizeSuppressionEndTime = undefined;
         instance.resizeSuppressionTimer = undefined;
         this.resizeController.lockResize(id, false);
       }, durationMs);
@@ -299,6 +301,7 @@ class TerminalInstanceService {
     }
 
     instance.isResizeSuppressed = false;
+    instance.resizeSuppressionEndTime = undefined;
     this.resizeController.lockResize(id, false);
   }
 
@@ -568,10 +571,6 @@ class TerminalInstanceService {
         requestAnimationFrame(() => {
           if (this.instances.get(id) !== managed) return;
 
-          if (managed.isResizeSuppressed) {
-            this.clearResizeSuppression(id);
-          }
-
           if (wasDetached) {
             const rect = container.getBoundingClientRect();
             const widthMatch =
@@ -586,12 +585,33 @@ class TerminalInstanceService {
             }
           }
 
-          if (managed.targetCols && managed.targetRows) {
-            this.resizeController.applyResize(id, managed.targetCols, managed.targetRows);
-            managed.targetCols = undefined;
-            managed.targetRows = undefined;
-          } else {
-            this.resizeController.fit(id);
+          // Temporarily bypass resize lock for the initial attach fit, then re-lock.
+          // Don't call clearResizeSuppression() — the suppression window must remain
+          // active to block ResizeObserver and batch-fit events while layout settles.
+          const needsLockBypass = managed.isResizeSuppressed;
+          let remainingSuppressionMs = 0;
+
+          if (needsLockBypass) {
+            // Calculate remaining suppression time to use for re-lock
+            if (managed.resizeSuppressionEndTime) {
+              remainingSuppressionMs = Math.max(0, managed.resizeSuppressionEndTime - Date.now());
+            }
+            this.resizeController.lockResize(id, false);
+          }
+
+          try {
+            if (managed.targetCols && managed.targetRows) {
+              this.resizeController.applyResize(id, managed.targetCols, managed.targetRows);
+              managed.targetCols = undefined;
+              managed.targetRows = undefined;
+            } else {
+              this.resizeController.fit(id);
+            }
+          } finally {
+            if (needsLockBypass) {
+              // Re-lock with remaining suppression time to maintain full protection window
+              this.resizeController.lockResize(id, true, remainingSuppressionMs);
+            }
           }
         });
       });

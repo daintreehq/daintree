@@ -402,6 +402,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const showProjectPulse = usePreferencesStore((state) => state.showProjectPulse);
   const currentProject = useProjectStore((state) => state.currentProject);
+  const isProjectSwitching = useProjectStore((state) => state.isSwitching);
   const { projectIconSvg } = useProjectBranding(currentProject?.id);
   const { worktreeMap } = useWorktrees();
   const activeWorktree = activeWorktreeId ? worktreeMap.get(activeWorktreeId) : null;
@@ -881,7 +882,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
               gridAutoRows: `minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`,
               gap: "4px",
               backgroundColor: "var(--color-grid-bg)",
-              transition: "grid-template-columns 200ms ease-out",
+              transition: isProjectSwitching ? "none" : "grid-template-columns 200ms ease-out",
               overflowY: "auto",
             }}
             role="grid"

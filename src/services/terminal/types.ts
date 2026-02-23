@@ -56,6 +56,7 @@ export interface ManagedTerminal {
   // Project-switch resize suppression
   resizeSuppressionTimer?: number;
   isResizeSuppressed?: boolean;
+  resizeSuppressionEndTime?: number;
   targetCols?: number;
   targetRows?: number;
   isAttaching?: boolean;

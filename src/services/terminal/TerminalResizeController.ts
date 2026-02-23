@@ -46,9 +46,10 @@ export class TerminalResizeController {
     this.deps = deps;
   }
 
-  lockResize(id: string, locked: boolean): void {
+  lockResize(id: string, locked: boolean, customTtlMs?: number): void {
     if (locked) {
-      this.resizeLocks.set(id, Date.now() + RESIZE_LOCK_TTL_MS);
+      const ttl = customTtlMs ?? RESIZE_LOCK_TTL_MS;
+      this.resizeLocks.set(id, Date.now() + ttl);
     } else {
       this.resizeLocks.delete(id);
     }
