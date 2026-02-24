@@ -43,7 +43,6 @@ export const BASE_TERMINAL_OPTIONS = {
   allowProposedApi: true,
   macOptionIsMeta: true,
   scrollOnUserInput: false,
-  fastScrollModifier: "alt" as const,
   fastScrollSensitivity: 5,
   scrollSensitivity: 1.5,
 } satisfies Partial<ITerminalOptions> & { fontLigatures: boolean };

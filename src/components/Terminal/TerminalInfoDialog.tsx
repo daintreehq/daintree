@@ -134,7 +134,6 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
     const syncBufferInfo = info.syncBuffer
       ? `  Sync Buffer: Enabled
   Alt Screen Bypass: ${info.syncBuffer.bypassed ? "Active (bypassed)" : "Inactive"}
-  DEC 2026 Sync Mode: ${info.syncBuffer.inSyncMode ? "In sync update" : "Idle"}
   Frames Emitted: ${info.syncBuffer.framesEmitted}`
       : `  Sync Buffer: Disabled`;
 
@@ -268,10 +267,6 @@ ${syncBufferInfo}
                   <InfoRow
                     label="Alt Screen Bypass"
                     value={info.syncBuffer.bypassed ? "Active (bypassed)" : "Inactive"}
-                  />
-                  <InfoRow
-                    label="DEC 2026 Sync Mode"
-                    value={info.syncBuffer.inSyncMode ? "In sync update" : "Idle"}
                   />
                   <InfoRow label="Frames Emitted" value={info.syncBuffer.framesEmitted} />
                 </>

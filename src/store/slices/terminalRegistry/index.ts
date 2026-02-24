@@ -321,7 +321,6 @@ export const createTerminalRegistrySlice =
               scrollback: effectiveScrollback,
               macOptionIsMeta: true,
               scrollOnUserInput: false,
-              fastScrollModifier: "alt" as const,
               fastScrollSensitivity: 5,
               scrollSensitivity: 1.5,
             };
