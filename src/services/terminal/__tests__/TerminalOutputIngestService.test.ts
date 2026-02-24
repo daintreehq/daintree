@@ -88,4 +88,73 @@ describe("TerminalOutputIngestService", () => {
 
     vi.useRealTimers();
   });
+
+  it("batches IPC writes and flushes after standard delay", () => {
+    vi.useFakeTimers();
+    const writeToTerminal = vi.fn();
+    const service = new TerminalOutputIngestService(writeToTerminal);
+
+    service.bufferData("term-1", "hello");
+
+    expect(writeToTerminal).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(7);
+    expect(writeToTerminal).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(writeToTerminal).toHaveBeenCalledTimes(1);
+    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "hello");
+
+    vi.useRealTimers();
+  });
+
+  it("extends IPC flush window for split Ink erase-line redraw sequences", () => {
+    vi.useFakeTimers();
+    const writeToTerminal = vi.fn();
+    const service = new TerminalOutputIngestService(writeToTerminal);
+
+    service.bufferData("term-1", "\x1b[2K");
+    vi.advanceTimersByTime(6);
+    service.bufferData("term-1", "\x1b[1Acontent");
+
+    vi.advanceTimersByTime(2);
+    expect(writeToTerminal).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(23);
+    expect(writeToTerminal).toHaveBeenCalledTimes(1);
+    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "\x1b[2K\x1b[1Acontent");
+
+    vi.useRealTimers();
+  });
+
+  it("flushForTerminal writes pending IPC buffer immediately", () => {
+    vi.useFakeTimers();
+    const writeToTerminal = vi.fn();
+    const service = new TerminalOutputIngestService(writeToTerminal);
+
+    service.bufferData("term-1", "a");
+    service.bufferData("term-1", "b");
+    service.flushForTerminal("term-1");
+
+    expect(writeToTerminal).toHaveBeenCalledTimes(1);
+    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "ab");
+
+    vi.advanceTimersByTime(100);
+    expect(writeToTerminal).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+  });
+
+  it("resetForTerminal drops pending IPC buffer without writing", () => {
+    vi.useFakeTimers();
+    const writeToTerminal = vi.fn();
+    const service = new TerminalOutputIngestService(writeToTerminal);
+
+    service.bufferData("term-1", "pending");
+    service.resetForTerminal("term-1");
+    vi.advanceTimersByTime(100);
+
+    expect(writeToTerminal).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+  });
 });

@@ -46,6 +46,7 @@ function XtermAdapterComponent({
   const prevDimensionsRef = useRef<{ cols: number; rows: number } | null>(null);
   const exitUnsubRef = useRef<(() => void) | null>(null);
   const rafIdRef = useRef<number | null>(null);
+  const resizeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Store the latest getRefreshTier in a ref to prevent stale closures.
   // This ensures the service always calls the current version of the callback.
@@ -177,11 +178,6 @@ function XtermAdapterComponent({
     const container = containerRef.current;
     if (!container) return;
 
-    console.log(`[XtermAdapter] useLayoutEffect running for ${terminalId}`, {
-      containerRect: container.getBoundingClientRect(),
-      containerClientSize: { width: container.clientWidth, height: container.clientHeight },
-    });
-
     const managed = terminalInstanceService.getOrCreate(
       terminalId,
       terminalType,
@@ -191,17 +187,11 @@ function XtermAdapterComponent({
       cwd ? () => cwd : undefined
     );
 
-    console.log(`[XtermAdapter] Got managed instance for ${terminalId}, attaching...`);
-
     const wasDetachedForSwitch = managed.isDetached === true;
     managed.isAttaching = true;
     terminalInstanceService.setInputLocked(terminalId, !!isInputLocked);
 
     terminalInstanceService.attach(terminalId, container);
-    console.log(
-      `[XtermAdapter] Attached ${terminalId} to container, wasDetached=${wasDetachedForSwitch}`
-    );
-
     // Force visibility immediately on mount - don't wait for IntersectionObserver.
     // This prevents data from being dropped during the brief window before the observer fires.
     terminalInstanceService.setVisible(terminalId, true);
@@ -345,7 +335,6 @@ function XtermAdapterComponent({
     onReady?.();
 
     return () => {
-      console.log(`[XtermAdapter] Cleanup/unmount for ${terminalId}`);
       terminalInstanceService.setVisible(terminalId, false);
 
       // Flush pending resizes before unmount
@@ -408,26 +397,36 @@ function XtermAdapterComponent({
     if (!container) return;
 
     const resizeObserver = new ResizeObserver((entries) => {
-      // Cancel any pending RAF before scheduling a new one
+      // xterm.js v6's DomScrollableElement triggers layout mutations that can
+      // re-enter the ResizeObserver synchronously. Debounce with a short delay
+      // to let the DOM settle, then sync with the paint cycle via rAF.
+      if (resizeDebounceRef.current !== null) {
+        clearTimeout(resizeDebounceRef.current);
+      }
       if (rafIdRef.current !== null) {
         cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
       }
 
-      // Wrap in requestAnimationFrame to align with render cycle
-      // and prevent "ResizeObserver loop limit exceeded" errors
-      rafIdRef.current = requestAnimationFrame(() => {
-        rafIdRef.current = null;
-        for (const entry of entries) {
-          handleResizeEntry(entry);
-        }
-      });
+      // Capture entries for the closure
+      const latestEntries = entries;
+      resizeDebounceRef.current = setTimeout(() => {
+        resizeDebounceRef.current = null;
+        rafIdRef.current = requestAnimationFrame(() => {
+          rafIdRef.current = null;
+          for (const entry of latestEntries) {
+            handleResizeEntry(entry);
+          }
+        });
+      }, 50);
     });
     resizeObserver.observe(container);
 
-    // No need for window.addEventListener("resize") - ResizeObserver handles this
-
     return () => {
-      // Cancel pending RAF to prevent post-unmount execution
+      if (resizeDebounceRef.current !== null) {
+        clearTimeout(resizeDebounceRef.current);
+        resizeDebounceRef.current = null;
+      }
       if (rafIdRef.current !== null) {
         cancelAnimationFrame(rafIdRef.current);
         rafIdRef.current = null;
@@ -447,7 +446,7 @@ function XtermAdapterComponent({
         className
       )}
     >
-      <div ref={containerRef} className="w-full h-full" />
+      <div ref={containerRef} className="w-full h-full min-h-0 min-w-0" />
     </div>
   );
 }

@@ -9,10 +9,6 @@
  */
 
 import { SharedRingBuffer, PacketParser } from "../../shared/utils/SharedRingBuffer.js";
-import {
-  TerminalOutputCoalescer,
-  type CoalescerOutput,
-} from "../services/terminal/TerminalOutputCoalescer.js";
 import type {
   WorkerInboundMessage,
   WorkerOutboundMessage,
@@ -22,19 +18,24 @@ const MAX_SAB_READ_BYTES = 256 * 1024;
 const MAX_SAB_BYTES_PER_TICK = 2 * 1024 * 1024;
 const MAX_READS_PER_TICK = 50;
 const ATOMICS_WAIT_TIMEOUT_MS = 100;
-const BATCH_POST_INTERVAL_MS = 50;
+const STANDARD_BATCH_POST_INTERVAL_MS = 8;
+const INK_BATCH_POST_INTERVAL_MS = 25;
+const INK_PATTERN_LOOKBACK_CHARS = 32;
+const INK_ERASE_LINE_PATTERN = "\x1b[2K\x1b[1A";
 
 let ringBuffers: SharedRingBuffer[] = [];
 let signalView: Int32Array | null = null;
 let lastSeenSignal = 0;
 const packetParsers: PacketParser[] = [];
-let coalescer: TerminalOutputCoalescer | null = null;
 let isRunning = false;
-let pendingOutputs: CoalescerOutput[] = [];
+type WorkerOutput = { id: string; data: string | Uint8Array };
+let pendingOutputs: WorkerOutput[] = [];
 let lastBatchPostTime = 0;
 let batchTimeoutId: number | null = null;
+let batchPostDeadline = 0;
 let atomicsWaitSupported: boolean | null = null;
 const scheduledDeadlines = new Map<number, number>();
+const recentCharsByTerminal = new Map<string, string>();
 let nextShardIndex = 0;
 
 function scheduleTimeout(callback: () => void, delayMs: number): number {
@@ -71,12 +72,14 @@ function resetWorkerState(): void {
     clearScheduledTimeout(batchTimeoutId);
     batchTimeoutId = null;
   }
+  batchPostDeadline = 0;
   for (const timeoutId of scheduledDeadlines.keys()) {
     self.clearTimeout(timeoutId);
   }
   scheduledDeadlines.clear();
   pendingOutputs = [];
   lastBatchPostTime = 0;
+  recentCharsByTerminal.clear();
   for (const parser of packetParsers) {
     parser.reset();
   }
@@ -84,36 +87,48 @@ function resetWorkerState(): void {
   ringBuffers = [];
   signalView = null;
   lastSeenSignal = 0;
-  coalescer?.dispose();
-  coalescer = null;
   nextShardIndex = 0;
 }
 
-function onCoalescerOutput(output: CoalescerOutput): void {
-  pendingOutputs.push(output);
-  scheduleBatchPost();
-}
+function scheduleBatchPost(delayMs: number): void {
+  if (pendingOutputs.length === 0) return;
 
-function scheduleBatchPost(): void {
-  if (batchTimeoutId !== null) {
+  const now = Date.now();
+  const minIntervalDeadline = lastBatchPostTime + STANDARD_BATCH_POST_INTERVAL_MS;
+  const targetDeadline = Math.max(minIntervalDeadline, now + delayMs);
+
+  if (batchTimeoutId === null) {
+    if (targetDeadline <= now) {
+      postBatch();
+      return;
+    }
+    batchPostDeadline = targetDeadline;
+    batchTimeoutId = scheduleTimeout(() => {
+      batchTimeoutId = null;
+      batchPostDeadline = 0;
+      postBatch();
+    }, targetDeadline - now);
     return;
   }
 
-  const now = Date.now();
-  const timeSinceLastPost = now - lastBatchPostTime;
-
-  if (timeSinceLastPost >= BATCH_POST_INTERVAL_MS) {
-    postBatch();
-  } else {
-    const delay = BATCH_POST_INTERVAL_MS - timeSinceLastPost;
+  if (targetDeadline > batchPostDeadline) {
+    clearScheduledTimeout(batchTimeoutId);
+    batchPostDeadline = targetDeadline;
     batchTimeoutId = scheduleTimeout(() => {
       batchTimeoutId = null;
+      batchPostDeadline = 0;
       postBatch();
-    }, delay);
+    }, targetDeadline - now);
   }
 }
 
 function postBatch(): void {
+  if (batchTimeoutId !== null) {
+    clearScheduledTimeout(batchTimeoutId);
+    batchTimeoutId = null;
+  }
+  batchPostDeadline = 0;
+
   if (pendingOutputs.length === 0) return;
 
   const batches = pendingOutputs.splice(0);
@@ -126,10 +141,20 @@ function postBatch(): void {
   self.postMessage(message);
 }
 
+function detectInkRedrawPattern(id: string, data: string | Uint8Array): boolean {
+  if (typeof data !== "string") return false;
+  const previous = recentCharsByTerminal.get(id) ?? "";
+  const combined = previous + data;
+  recentCharsByTerminal.set(id, combined.slice(-INK_PATTERN_LOOKBACK_CHARS));
+  return combined.includes(INK_ERASE_LINE_PATTERN);
+}
+
 function drainRingBuffer(): boolean {
   if (ringBuffers.length === 0) return false;
 
   let hasData = false;
+  let hasOutput = false;
+  let postDelayMs = STANDARD_BATCH_POST_INTERVAL_MS;
   let reads = 0;
   let bytesReadThisTick = 0;
   let consecutiveEmptyShards = 0;
@@ -161,8 +186,16 @@ function drainRingBuffer(): boolean {
 
     const packets = parser.parse(data);
     for (const packet of packets) {
-      coalescer?.bufferData(packet.id, packet.data);
+      pendingOutputs.push({ id: packet.id, data: packet.data });
+      if (detectInkRedrawPattern(packet.id, packet.data)) {
+        postDelayMs = INK_BATCH_POST_INTERVAL_MS;
+      }
+      hasOutput = true;
     }
+  }
+
+  if (hasOutput) {
+    scheduleBatchPost(postDelayMs);
   }
 
   return hasData;
@@ -222,42 +255,33 @@ self.onmessage = (event: MessageEvent<WorkerInboundMessage>) => {
         packetParsers.push(new PacketParser());
       }
 
-      coalescer = new TerminalOutputCoalescer(
-        scheduleTimeout,
-        clearScheduledTimeout,
-        getNow,
-        onCoalescerOutput
-      );
-
       isRunning = true;
       mainLoop();
       break;
     }
 
-    case "SET_INTERACTIVE": {
-      coalescer?.markInteractive(message.id, message.ttlMs);
+    case "SET_INTERACTIVE":
+    case "SET_DIRECT_MODE":
+      break;
+
+    case "RESET_TERMINAL": {
+      pendingOutputs = pendingOutputs.filter((output) => output.id !== message.id);
+      recentCharsByTerminal.delete(message.id);
+      if (pendingOutputs.length === 0 && batchTimeoutId !== null) {
+        clearScheduledTimeout(batchTimeoutId);
+        batchTimeoutId = null;
+        batchPostDeadline = 0;
+      }
       break;
     }
 
     case "FLUSH_TERMINAL": {
-      coalescer?.flushForTerminal(message.id);
       postBatch();
-      break;
-    }
-
-    case "RESET_TERMINAL": {
-      coalescer?.resetForTerminal(message.id);
-      break;
-    }
-
-    case "SET_DIRECT_MODE": {
-      coalescer?.setDirectMode(message.id, message.enabled);
       break;
     }
 
     case "STOP": {
       isRunning = false;
-      coalescer?.flushAll();
       postBatch();
       resetWorkerState();
       break;

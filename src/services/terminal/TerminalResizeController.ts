@@ -66,22 +66,12 @@ export class TerminalResizeController {
     return true;
   }
 
-  updateExactWidth(managed: ManagedTerminal): void {
-    const cellDims = getXtermCellDimensions(managed.terminal);
-    if (!cellDims) return;
-
-    const cols = managed.terminal.cols;
-    const contentWidth = Math.ceil(cols * cellDims.width);
-
-    // Detect scrollbar width by querying the actual viewport element
-    // offsetWidth includes scrollbar, clientWidth excludes it
-    const viewport = managed.hostElement.querySelector(".xterm-viewport") as HTMLElement | null;
-    const scrollbarWidth = viewport ? viewport.offsetWidth - viewport.clientWidth : 0;
-
-    // Never shrink below the container width; otherwise the viewport scrollbar
-    // can appear inset from the panel edge after fit rounding.
-    const exactWidth = contentWidth + scrollbarWidth;
-    managed.hostElement.style.width = `max(100%, ${exactWidth}px)`;
+  updateExactWidth(_managed: ManagedTerminal): void {
+    // No-op in xterm.js v6. The DomScrollableElement manages its own layout
+    // and scrollbar overlay. Modifying the host element's width after each resize
+    // fights with v6's internal measurements and triggers dimension oscillation
+    // that causes resize loops (manifesting as idle re-render warnings in
+    // Ink-based TUIs like Gemini CLI).
   }
 
   resetWidthForFit(managed: ManagedTerminal): void {
@@ -150,10 +140,14 @@ export class TerminalResizeController {
     const wasAtBottom = buffer.baseY - buffer.viewportY < 1;
 
     try {
-      // @ts-expect-error - internal API
-      const proposed = managed.fitAddon.proposeDimensions?.({ width, height });
+      // Calculate cols/rows directly from the passed dimensions and cell metrics.
+      // xterm.js 6's proposeDimensions() takes no arguments and reads from the DOM,
+      // which may not reflect the ResizeObserver dimensions yet. Computing manually
+      // avoids stale-DOM mismatches and the feedback loop with updateExactWidth.
+      const cellDims = getXtermCellDimensions(managed.terminal);
 
-      if (!proposed) {
+      if (!cellDims || cellDims.width === 0 || cellDims.height === 0) {
+        this.resetWidthForFit(managed);
         managed.fitAddon.fit();
         const cols = managed.terminal.cols;
         const rows = managed.terminal.rows;
@@ -168,8 +162,8 @@ export class TerminalResizeController {
         return { cols, rows };
       }
 
-      const cols = proposed.cols;
-      const rows = proposed.rows;
+      const cols = Math.max(2, Math.floor(width / cellDims.width));
+      const rows = Math.max(1, Math.floor(height / cellDims.height));
 
       if (managed.terminal.cols === cols && managed.terminal.rows === rows) {
         return null;
@@ -206,9 +200,6 @@ export class TerminalResizeController {
   }
 
   resizeTerminal(managed: ManagedTerminal, cols: number, rows: number): void {
-    if (managed.isAltBuffer) {
-      managed.terminal.write("\x1b[2J\x1b[H");
-    }
     managed.terminal.resize(cols, rows);
   }
 

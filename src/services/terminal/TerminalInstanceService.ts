@@ -350,8 +350,8 @@ class TerminalInstanceService {
     const hostElement = document.createElement("div");
     hostElement.style.width = "100%";
     hostElement.style.height = "100%";
-    hostElement.style.display = "flex";
-    hostElement.style.flexDirection = "column";
+    hostElement.style.overflow = "hidden";
+    hostElement.style.position = "relative";
 
     const listeners: Array<() => void> = [];
     const exitSubscribers = new Set<(exitCode: number) => void>();
@@ -413,9 +413,9 @@ class TerminalInstanceService {
       altBufferListeners: new Set(),
     };
 
-    // Agent terminals should bypass redraw-detection frame mode.
-    // In xterm.js 6 this coalescer path introduces stale/flush cycles and dropped
-    // frame artifacts for CLI TUIs (including non-DEC-2026 redraw styles).
+    // Compatibility no-op while coalescer routing is disabled.
+    // Keep this call so per-agent routing can be reintroduced without
+    // touching terminal creation flow.
     if (kind === "agent") {
       this.dataBuffer.setDirectMode(id, true);
     }
@@ -855,15 +855,12 @@ class TerminalInstanceService {
       }
     }
 
-    requestAnimationFrame(() => {
-      if (this.instances.get(id) !== managed) return;
-
-      this.resizeController.clearResizeJobs(managed);
-
-      if (!this.resizeController.isResizeLocked(id)) {
-        this.resizeController.fit(id);
-      }
-    });
+    // Don't call fit() here. The alt buffer listeners update React state which
+    // changes container padding, and the ResizeObserver on the container handles
+    // the resulting layout change. Calling fit() in a rAF would double-trigger
+    // the resize path, sending redundant PTY resize events that cause Ink-based
+    // TUIs (Gemini CLI) to detect idle re-render loops.
+    this.resizeController.clearResizeJobs(managed);
   }
 
   addAltBufferListener(id: string, callback: (isAltBuffer: boolean) => void): () => void {

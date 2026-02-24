@@ -145,10 +145,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
 
   it("enables direct mode for agent terminals", () => {
     const id = "test-agent-direct-mode";
-    const setDirectModeSpy = vi.spyOn(
-      (terminalInstanceService as any).dataBuffer,
-      "setDirectMode"
-    );
+    const setDirectModeSpy = vi.spyOn((terminalInstanceService as any).dataBuffer, "setDirectMode");
 
     terminalInstanceService.getOrCreate(id, "gemini", {}, () => 3 as any, undefined);
 
@@ -161,10 +158,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
 
   it("does not enable direct mode for non-agent terminals", () => {
     const id = "test-standard-no-direct-mode";
-    const setDirectModeSpy = vi.spyOn(
-      (terminalInstanceService as any).dataBuffer,
-      "setDirectMode"
-    );
+    const setDirectModeSpy = vi.spyOn((terminalInstanceService as any).dataBuffer, "setDirectMode");
 
     terminalInstanceService.getOrCreate(id, "terminal", {}, () => 3 as any, undefined);
 

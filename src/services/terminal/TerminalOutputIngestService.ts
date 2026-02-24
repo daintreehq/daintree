@@ -1,5 +1,4 @@
 import { terminalClient } from "@/clients";
-import { TerminalOutputCoalescer } from "./TerminalOutputCoalescer";
 import type {
   WorkerInboundMessage,
   WorkerOutboundMessage,
@@ -7,23 +6,27 @@ import type {
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 
+const IPC_STANDARD_FLUSH_DELAY_MS = 8;
+const IPC_INK_REDRAW_FLUSH_DELAY_MS = 25;
+const IPC_LOOKBACK_CHARS = 32;
+const INK_ERASE_LINE_PATTERN = "\x1b[2K\x1b[1A";
+
+type IpcBufferEntry = {
+  chunks: Array<string | Uint8Array>;
+  recentChars: string;
+  timeoutId: number | null;
+  flushAt: number;
+};
+
 export class TerminalOutputIngestService {
   private worker: Worker | null = null;
   private sabAvailable = false;
   private pollingActive = false;
   private initializePromise: Promise<void> | null = null;
-  private ipcCoalescer: TerminalOutputCoalescer;
   private perfSampleCounter = 0;
-  private directModeIds = new Set<string>();
+  private ipcBuffers = new Map<string, IpcBufferEntry>();
 
-  constructor(private readonly writeToTerminal: (id: string, data: string | Uint8Array) => void) {
-    this.ipcCoalescer = new TerminalOutputCoalescer(
-      (cb, ms) => window.setTimeout(cb, ms),
-      (id) => window.clearTimeout(id),
-      () => Date.now(),
-      ({ id, data }) => this.writeToTerminal(id, data)
-    );
-  }
+  constructor(private readonly writeToTerminal: (id: string, data: string | Uint8Array) => void) {}
 
   public async initialize(): Promise<void> {
     if (this.initializePromise) return this.initializePromise;
@@ -58,9 +61,6 @@ export class TerminalOutputIngestService {
           this.worker?.terminate();
           this.worker = null;
           this.initializePromise = null;
-          for (const id of this.directModeIds) {
-            this.ipcCoalescer.setDirectMode(id, true);
-          }
         };
 
         const initMessage: WorkerInboundMessage = {
@@ -70,14 +70,6 @@ export class TerminalOutputIngestService {
         };
         this.worker.postMessage(initMessage);
         this.pollingActive = true;
-        for (const id of this.directModeIds) {
-          const message: WorkerInboundMessage = {
-            type: "SET_DIRECT_MODE",
-            id,
-            enabled: true,
-          };
-          this.worker.postMessage(message);
-        }
         console.log(
           `[TerminalOutputIngestService] Worker-based SAB ingestion enabled (${visualBuffers.length} shards)`
         );
@@ -113,26 +105,16 @@ export class TerminalOutputIngestService {
   public bufferData(id: string, data: string | Uint8Array): void {
     if (this.pollingActive) return;
     this.markTerminalDataReceived(id, data);
-    this.ipcCoalescer.bufferData(id, data);
+    this.bufferIpcData(id, data);
   }
 
-  public markInteractive(id: string, ttlMs: number = 1000): void {
-    if (!this.pollingActive || !this.worker) {
-      this.ipcCoalescer.markInteractive(id, ttlMs);
-      return;
-    }
-    const message: WorkerInboundMessage = {
-      type: "SET_INTERACTIVE",
-      id,
-      ttlMs,
-    };
-    this.worker.postMessage(message);
+  public markInteractive(_id: string, _ttlMs: number = 1000): void {
+    // Coalescer removed from active pipeline; keep method for API compatibility.
   }
 
   public resetForTerminal(id: string): void {
-    this.directModeIds.delete(id);
     if (!this.pollingActive || !this.worker) {
-      this.ipcCoalescer.resetForTerminal(id);
+      this.clearIpcBuffer(id);
       return;
     }
     const message: WorkerInboundMessage = {
@@ -142,25 +124,13 @@ export class TerminalOutputIngestService {
     this.worker.postMessage(message);
   }
 
-  public setDirectMode(id: string, enabled: boolean): void {
-    if (enabled) this.directModeIds.add(id);
-    else this.directModeIds.delete(id);
-
-    if (this.pollingActive && this.worker) {
-      const message: WorkerInboundMessage = {
-        type: "SET_DIRECT_MODE",
-        id,
-        enabled,
-      };
-      this.worker.postMessage(message);
-    } else {
-      this.ipcCoalescer.setDirectMode(id, enabled);
-    }
+  public setDirectMode(_id: string, _enabled: boolean): void {
+    // Coalescer removed from active pipeline; keep method for API compatibility.
   }
 
   public flushForTerminal(id: string): void {
     if (!this.pollingActive || !this.worker) {
-      this.ipcCoalescer.flushForTerminal(id);
+      this.flushIpcBuffer(id);
       return;
     }
     const message: WorkerInboundMessage = {
@@ -171,6 +141,9 @@ export class TerminalOutputIngestService {
   }
 
   public stopPolling(): void {
+    for (const id of this.ipcBuffers.keys()) {
+      this.flushIpcBuffer(id);
+    }
     this.pollingActive = false;
     this.sabAvailable = false;
     if (!this.worker) return;
@@ -178,9 +151,6 @@ export class TerminalOutputIngestService {
       type: "STOP",
     };
     this.worker.postMessage(message);
-    for (const id of this.directModeIds) {
-      this.ipcCoalescer.setDirectMode(id, true);
-    }
     setTimeout(() => {
       this.worker?.terminate();
       this.worker = null;
@@ -196,5 +166,75 @@ export class TerminalOutputIngestService {
       terminalId: id,
       bytes: typeof data === "string" ? data.length : data.byteLength,
     });
+  }
+
+  private bufferIpcData(id: string, data: string | Uint8Array): void {
+    const now = Date.now();
+    const entry = this.ipcBuffers.get(id) ?? {
+      chunks: [],
+      recentChars: "",
+      timeoutId: null,
+      flushAt: 0,
+    };
+    const stringData = typeof data === "string" ? data : "";
+    const scanWindow = entry.recentChars + stringData;
+    const containsInkErase = scanWindow.includes(INK_ERASE_LINE_PATTERN);
+    const combinedRecent = scanWindow.slice(-IPC_LOOKBACK_CHARS);
+    const delayMs = containsInkErase ? IPC_INK_REDRAW_FLUSH_DELAY_MS : IPC_STANDARD_FLUSH_DELAY_MS;
+    const targetFlushAt = now + delayMs;
+
+    entry.recentChars = combinedRecent;
+    entry.chunks.push(data);
+
+    if (entry.timeoutId === null) {
+      entry.flushAt = targetFlushAt;
+      entry.timeoutId = globalThis.setTimeout(
+        () => this.flushIpcBuffer(id),
+        Math.max(0, entry.flushAt - Date.now())
+      ) as unknown as number;
+    } else if (targetFlushAt > entry.flushAt) {
+      globalThis.clearTimeout(entry.timeoutId);
+      entry.flushAt = targetFlushAt;
+      entry.timeoutId = globalThis.setTimeout(
+        () => this.flushIpcBuffer(id),
+        Math.max(0, entry.flushAt - Date.now())
+      ) as unknown as number;
+    }
+
+    this.ipcBuffers.set(id, entry);
+  }
+
+  private clearIpcBuffer(id: string): void {
+    const entry = this.ipcBuffers.get(id);
+    if (!entry) return;
+    if (entry.timeoutId !== null) {
+      globalThis.clearTimeout(entry.timeoutId);
+    }
+    this.ipcBuffers.delete(id);
+  }
+
+  private flushIpcBuffer(id: string): void {
+    const entry = this.ipcBuffers.get(id);
+    if (!entry) return;
+    if (entry.timeoutId !== null) {
+      globalThis.clearTimeout(entry.timeoutId);
+    }
+    this.ipcBuffers.delete(id);
+
+    if (entry.chunks.length === 0) return;
+    if (entry.chunks.length === 1) {
+      this.writeToTerminal(id, entry.chunks[0]);
+      return;
+    }
+
+    const allStrings = entry.chunks.every((chunk) => typeof chunk === "string");
+    if (allStrings) {
+      this.writeToTerminal(id, (entry.chunks as string[]).join(""));
+      return;
+    }
+
+    for (const chunk of entry.chunks) {
+      this.writeToTerminal(id, chunk);
+    }
   }
 }
