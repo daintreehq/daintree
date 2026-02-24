@@ -290,6 +290,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       scrollback: 10000,
       blockAltScreen: true,
       blockMouseReporting: true,
+      resizeStrategy: "settled",
     },
     detection: {
       primaryPatterns: [

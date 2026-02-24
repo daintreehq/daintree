@@ -232,6 +232,15 @@ export class ActivityMonitor {
   private rewriteWindowStart = 0;
   private rewriteCount = 0;
 
+  // Status line noise filter patterns (token counts, costs, progress indicators)
+  private static readonly STATUS_LINE_PATTERNS: RegExp[] = [
+    /\b\d+\s*tokens?\b/i,
+    /\$\d+\.\d+/,
+    /\b\d+%\b/,
+    /\[\d+\/\d+\]/,
+    /⏱️?\s*\d+[smh]/,
+  ];
+
   // State preservation for project switch
   private readonly skipInitialStateEmit: boolean;
 
@@ -612,6 +621,13 @@ export class ActivityMonitor {
       return;
     }
 
+    // Filter status line rewrites (token counts, costs, progress) from volume-based activity.
+    // These CR-based single-line updates don't represent real agent output.
+    // Debounce timer is already reset above to keep busy state alive.
+    if (this.isStatusLineRewrite(data)) {
+      return;
+    }
+
     // Update pattern buffer and check for working patterns (non-polling terminals only)
     if (!this.getVisibleLines && this.patternDetector) {
       this.updatePatternBuffer(data);
@@ -840,6 +856,31 @@ export class ActivityMonitor {
       count++;
     }
     return count;
+  }
+
+  private isStatusLineRewrite(data: string): boolean {
+    // Must contain a carriage return that isn't part of \r\n or line-clear sequences
+    let hasRewrite = false;
+    for (let i = 0; i < data.length; i++) {
+      if (data[i] === "\r") {
+        // Check if next char exists and is not newline
+        if (i + 1 < data.length && data[i + 1] !== "\n") {
+          hasRewrite = true;
+          break;
+        }
+        // If \r is at end of chunk, we can't determine if it's part of \r\n split
+        // across chunks. Be conservative and don't classify as rewrite.
+        if (i + 1 === data.length) {
+          return false;
+        }
+      }
+    }
+    if (!hasRewrite && !data.includes("\x1b[2K") && !data.includes("\x1b[K")) {
+      return false;
+    }
+
+    const stripped = stripAnsi(data);
+    return ActivityMonitor.STATUS_LINE_PATTERNS.some((pattern) => pattern.test(stripped));
   }
 
   private detectPrompt(
