@@ -172,21 +172,25 @@ class TerminalRegistryController {
         scrollSensitivity: 1.5,
       };
 
-      if (kind !== "agent") {
-        terminalInstanceService.prewarmTerminal(id, type, terminalOptions, {
-          offscreen: location === "dock",
-          widthPx: location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH,
-          heightPx: location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT,
-        });
-      } else {
-        // Agent terminals: set better initial PTY geometry
-        const widthPx = location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH;
-        const heightPx = location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT;
+      const offscreen = location === "dock";
+      const widthPx = location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH;
+      const heightPx = location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT;
+
+      terminalInstanceService.prewarmTerminal(id, type, terminalOptions, {
+        offscreen,
+        widthPx,
+        heightPx,
+      });
+
+      // For offscreen agents, prewarmTerminal's fit() already handles initial
+      // PTY resize through settled strategy. Only send explicit resize for
+      // active grid spawns where fit() is skipped.
+      if (kind === "agent" && !offscreen) {
         const cellWidth = Math.max(6, Math.floor(fontSize * 0.6));
         const cellHeight = Math.max(10, Math.floor(fontSize * 1.1));
         const cols = Math.max(20, Math.min(500, Math.floor(widthPx / cellWidth)));
         const rows = Math.max(10, Math.min(200, Math.floor(heightPx / cellHeight)));
-        terminalClient.resize(id, cols, rows);
+        terminalInstanceService.sendPtyResize(id, cols, rows);
       }
     } catch (error) {
       console.warn(`[TerminalRegistryController] Failed to prewarm terminal ${id}:`, error);

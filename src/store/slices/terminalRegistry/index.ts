@@ -352,12 +352,16 @@ export const createTerminalRegistrySlice =
                 heightPx,
               });
 
-              // Also set initial PTY geometry for agent TUI initialization
-              const cellWidth = Math.max(6, Math.floor(fontSize * 0.6));
-              const cellHeight = Math.max(10, Math.floor(fontSize * 1.1));
-              const cols = Math.max(20, Math.min(500, Math.floor(widthPx / cellWidth)));
-              const rows = Math.max(10, Math.min(200, Math.floor(heightPx / cellHeight)));
-              terminalClient.resize(id, cols, rows);
+              // For offscreen/inactive agents, prewarmTerminal's fit() already handles
+              // initial PTY resize through settled strategy. Only send explicit resize
+              // for active grid spawns where fit() is skipped.
+              if (!offscreenOrInactive) {
+                const cellWidth = Math.max(6, Math.floor(fontSize * 0.6));
+                const cellHeight = Math.max(10, Math.floor(fontSize * 1.1));
+                const cols = Math.max(20, Math.min(500, Math.floor(widthPx / cellWidth)));
+                const rows = Math.max(10, Math.min(200, Math.floor(heightPx / cellHeight)));
+                terminalInstanceService.sendPtyResize(id, cols, rows);
+              }
             }
           } catch (error) {
             console.warn(`[TerminalStore] Failed to prewarm terminal ${id}:`, error);

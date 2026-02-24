@@ -239,8 +239,19 @@ export class TerminalResizeController {
 
     this.deps.dataBuffer.flushForTerminal(id);
     this.deps.dataBuffer.resetForTerminal(id);
-    this.resizeTerminal(managed, cols, rows);
-    this.sendPtyResize(id, cols, rows);
+
+    if (this.getResizeStrategy(managed) === "settled") {
+      // For settled agents, defer xterm.js resize to fire atomically
+      // with the PTY resize inside the settled timer callback.
+      // This avoids a 500ms mismatch where xterm.js shows new dimensions
+      // while the agent is still rendering at old dimensions.
+      managed.latestCols = cols;
+      managed.latestRows = rows;
+      this.sendPtyResize(id, cols, rows);
+    } else {
+      this.resizeTerminal(managed, cols, rows);
+      this.sendPtyResize(id, cols, rows);
+    }
     this.updateExactWidth(managed);
   }
 
@@ -272,6 +283,17 @@ export class TerminalResizeController {
 
       const timer = globalThis.setTimeout(() => {
         this.settledResizeTimers.delete(id);
+
+        const current = this.deps.getInstance(id);
+        if (!current) {
+          return;
+        }
+
+        // Sync xterm.js dimensions and clear display atomically with PTY resize.
+        // Clear via xterm.js (not PTY stdin) to give Ratatui's diff engine
+        // a clean slate without injecting unwanted input to the process.
+        this.resizeTerminal(current, cols, rows);
+        current.terminal.write("\x1b[2J\x1b[H");
         terminalClient.resize(id, cols, rows);
       }, SETTLED_RESIZE_DELAY_MS) as unknown as number;
       this.settledResizeTimers.set(id, timer);

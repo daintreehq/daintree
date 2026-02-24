@@ -17,6 +17,7 @@ import { TerminalLinkHandler } from "./TerminalLinkHandler";
 import { TerminalResizeController } from "./TerminalResizeController";
 import { TerminalRendererPolicy } from "./TerminalRendererPolicy";
 import { TerminalWakeManager } from "./TerminalWakeManager";
+import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { logDebug, logWarn, logError } from "@/utils/logger";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
@@ -675,6 +676,7 @@ class TerminalInstanceService {
     managed.isDetached = true;
 
     this.resizeController.clearResizeJobs(managed);
+    this.resizeController.clearSettledTimer(id);
     this.clearPostWakeTimers(id);
 
     if (managed.hostElement.parentElement) {
@@ -693,6 +695,10 @@ class TerminalInstanceService {
 
   flushResize(id: string): void {
     this.resizeController.flushResize(id);
+  }
+
+  sendPtyResize(id: string, cols: number, rows: number): void {
+    this.resizeController.sendPtyResize(id, cols, rows);
   }
 
   resize(
@@ -750,6 +756,20 @@ class TerminalInstanceService {
     if (!managed) return;
 
     this.clearPostWakeTimers(id);
+
+    // For agents with settled resize strategy, skip the bounce entirely.
+    // The attach-time fit() already queued a settled resize that will fire
+    // after 500ms. Sending additional rapid resizes corrupts Ratatui/Ink TUIs.
+    if (this.getResizeStrategyForTerminal(managed) === "settled") {
+      const cols = managed.latestCols;
+      const rows = managed.latestRows;
+      if (Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0) {
+        this.resizeController.sendPtyResize(id, cols, rows);
+      }
+      return;
+    }
+
+    // Default behavior for non-settled agents: immediate + bounce
     this.resizeController.forceImmediateResize(id);
 
     const firstTimer = setTimeout(() => {
@@ -789,6 +809,12 @@ class TerminalInstanceService {
       this.trackPostWakeTimer(id, secondTimer);
     }, POST_WAKE_RESIZE_BOUNCE_DELAY_MS);
     this.trackPostWakeTimer(id, firstTimer);
+  }
+
+  private getResizeStrategyForTerminal(managed: ManagedTerminal): "default" | "settled" {
+    if (!managed.agentId) return "default";
+    const config = getEffectiveAgentConfig(managed.agentId);
+    return config?.capabilities?.resizeStrategy ?? "default";
   }
 
   private trackPostWakeTimer(id: string, timer: ReturnType<typeof setTimeout>): void {
