@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -71,16 +71,25 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
   const [isSaving, setIsSaving] = useState(false);
   const [configError, setConfigError] = useState<string | null>(null);
   const [cliAvailability, setCliAvailability] = useState<CliAvailability | null>(null);
+  const [cliCheckFailed, setCliCheckFailed] = useState(false);
   const [agentSettings, setAgentSettings] = useState<AgentSettings | null>(null);
   const [shortcuts, setShortcuts] = useState<ShortcutCategory[]>([]);
+  const isMountedRef = useRef(true);
 
   const showProjectPulse = usePreferencesStore((s) => s.showProjectPulse);
   const showDeveloperTools = usePreferencesStore((s) => s.showDeveloperTools);
 
   useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
     actionService
       .dispatch("hibernation.getConfig", undefined, { source: "user" })
       .then((result) => {
+        if (!isMountedRef.current) return;
         if (!result.ok) {
           throw new Error(result.error.message);
         }
@@ -88,6 +97,7 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
         setConfigError(null);
       })
       .catch((error) => {
+        if (!isMountedRef.current) return;
         console.error("Failed to load hibernation config:", error);
         setConfigError(error instanceof Error ? error.message : "Failed to load settings");
       });
@@ -99,6 +109,7 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
       actionService.dispatch("agentSettings.get", undefined, { source: "user" }),
     ])
       .then(([availabilityResult, settingsResult]) => {
+        if (!isMountedRef.current) return;
         if (!availabilityResult.ok) {
           throw new Error(availabilityResult.error.message);
         }
@@ -106,10 +117,13 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
           throw new Error(settingsResult.error.message);
         }
         setCliAvailability(availabilityResult.result as CliAvailability);
+        setCliCheckFailed(false);
         setAgentSettings((settingsResult.result as AgentSettings) ?? DEFAULT_AGENT_SETTINGS);
       })
       .catch((error) => {
-        console.error("Failed to load agent availability:", error);
+        if (!isMountedRef.current) return;
+        console.error("[GeneralTab] Failed to load agent availability:", error);
+        setCliCheckFailed(true);
       });
   }, []);
 
@@ -168,14 +182,18 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
         { enabled: !hibernationConfig.enabled },
         { source: "user" }
       );
+      if (!isMountedRef.current) return;
       if (!result.ok) {
         throw new Error(result.error.message);
       }
       setHibernationConfig(result.result as HibernationConfig);
     } catch (error) {
+      if (!isMountedRef.current) return;
       console.error("Failed to update hibernation config:", error);
     } finally {
-      setIsSaving(false);
+      if (isMountedRef.current) {
+        setIsSaving(false);
+      }
     }
   };
 
@@ -188,14 +206,18 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
         { inactiveThresholdHours: value },
         { source: "user" }
       );
+      if (!isMountedRef.current) return;
       if (!result.ok) {
         throw new Error(result.error.message);
       }
       setHibernationConfig(result.result as HibernationConfig);
     } catch (error) {
+      if (!isMountedRef.current) return;
       console.error("Failed to update hibernation threshold:", error);
     } finally {
-      setIsSaving(false);
+      if (isMountedRef.current) {
+        setIsSaving(false);
+      }
     }
   };
 
@@ -238,7 +260,11 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
       <div className="space-y-2">
         <h4 className="text-sm font-medium text-canopy-text">System Status</h4>
         <div className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] p-4 space-y-3">
-          {!cliAvailability || !agentSettings ? (
+          {cliCheckFailed ? (
+            <div className="text-sm text-[var(--color-status-error)]/80">
+              Failed to check agent status
+            </div>
+          ) : !cliAvailability || !agentSettings ? (
             <div className="text-sm text-canopy-text/40">Loading agent status...</div>
           ) : (
             getAgentIds().map((id) => {

@@ -28,11 +28,13 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
     reset,
   } = useAgentSettingsStore();
   const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
-  const [cliAvailability, setCliAvailability] = useState<Record<string, boolean>>({});
+  const [cliAvailability, setCliAvailability] = useState<Record<string, boolean> | null>(null);
   const [isRefreshingCli, setIsRefreshingCli] = useState(false);
+  const [cliCheckError, setCliCheckError] = useState<string | null>(null);
   const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
   const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isMountedRef = useRef(true);
+  const refreshRequestIdRef = useRef(0);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const activePillRef = useRef<HTMLButtonElement | null>(null);
 
@@ -46,10 +48,13 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
         const availability = await cliAvailabilityClient.get();
         if (isMountedRef.current) {
           setCliAvailability(availability);
+          setCliCheckError(null);
         }
-      } catch {
+      } catch (error) {
+        console.error("[AgentSettings] Failed to load CLI availability:", error);
         if (isMountedRef.current) {
           setCliAvailability({});
+          setCliCheckError("Failed to check CLI availability");
         }
       }
     };
@@ -66,22 +71,27 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
   }, []);
 
   const handleRefreshCliAvailability = useCallback(async () => {
+    if (isRefreshingCli) return;
+
+    const requestId = ++refreshRequestIdRef.current;
     setIsRefreshingCli(true);
+    setCliCheckError(null);
     try {
       const availability = await cliAvailabilityClient.refresh();
-      if (isMountedRef.current) {
+      if (isMountedRef.current && refreshRequestIdRef.current === requestId) {
         setCliAvailability(availability);
       }
-    } catch {
-      if (isMountedRef.current) {
-        setCliAvailability({});
+    } catch (error) {
+      console.error("[AgentSettings] Failed to refresh CLI availability:", error);
+      if (isMountedRef.current && refreshRequestIdRef.current === requestId) {
+        setCliCheckError("Re-check failed. Try again or restart the app.");
       }
     } finally {
-      if (isMountedRef.current) {
+      if (isMountedRef.current && refreshRequestIdRef.current === requestId) {
         setIsRefreshingCli(false);
       }
     }
-  }, []);
+  }, [isRefreshingCli]);
 
   const handleCopyCommand = useCallback(async (command: string) => {
     try {
@@ -420,12 +430,21 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
             {/* Installation Section */}
             {(() => {
               const agentConfig = getAgentConfig(activeAgent.id);
-              const isCliAvailable = cliAvailability[activeAgent.id];
+              const isCliAvailable = cliAvailability?.[activeAgent.id];
+              const isLoading = cliAvailability === null;
               const installBlocks = agentConfig ? getInstallBlocksForCurrentOS(agentConfig) : null;
               const hasInstallConfig = agentConfig?.install;
 
               if (isCliAvailable === true) {
                 return null;
+              }
+
+              if (isLoading) {
+                return (
+                  <div className="pt-4 border-t border-canopy-border">
+                    <div className="text-xs text-canopy-text/40">Checking CLI availability...</div>
+                  </div>
+                );
               }
 
               return (
@@ -451,6 +470,12 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
                       Re-check
                     </Button>
                   </div>
+
+                  {cliCheckError && (
+                    <div className="px-3 py-2 rounded-[var(--radius-md)] bg-[var(--color-status-error)]/10 border border-[var(--color-status-error)]/20">
+                      <p className="text-xs text-[var(--color-status-error)]">{cliCheckError}</p>
+                    </div>
+                  )}
 
                   {installBlocks && installBlocks.length > 0 ? (
                     <div className="space-y-3">
