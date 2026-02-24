@@ -268,17 +268,21 @@ export class AgentStateService {
    */
   handleActivityState(
     terminal: TerminalInfo,
-    activity: "busy" | "idle",
+    activity: "busy" | "idle" | "completed",
     metadata?: { trigger: "input" | "output" | "pattern"; patternConfidence?: number }
   ): void {
     if (!terminal.agentId) {
       return;
     }
 
-    const event: AgentEvent = activity === "busy" ? { type: "busy" } : { type: "prompt" };
+    const event: AgentEvent =
+      activity === "busy"
+        ? { type: "busy" }
+        : activity === "completed"
+          ? { type: "completion" }
+          : { type: "prompt" };
 
     if (metadata?.trigger === "pattern") {
-      // Pattern-based detection has its own confidence
       const confidence = metadata.patternConfidence ?? 0.9;
       this.updateAgentState(terminal, event, "heuristic", confidence);
     } else if (metadata?.trigger === "output") {

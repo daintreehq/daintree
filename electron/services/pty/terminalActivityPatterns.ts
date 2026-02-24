@@ -68,6 +68,19 @@ export function buildPromptHintPatterns(
   return promptHintPatterns.length ? promptHintPatterns : undefined;
 }
 
+export function buildCompletionPatterns(
+  detection: AgentDetectionConfig | undefined,
+  agentId: string | undefined
+): RegExp[] | undefined {
+  if (!detection?.completionPatterns || detection.completionPatterns.length === 0) {
+    return undefined;
+  }
+
+  const completionPatterns = compilePatterns(detection.completionPatterns, agentId, "completion");
+
+  return completionPatterns.length ? completionPatterns : undefined;
+}
+
 export function compilePatterns(
   patterns: string[],
   agentId: string | undefined,

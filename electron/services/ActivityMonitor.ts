@@ -94,6 +94,15 @@ export interface ActivityMonitorOptions {
    */
   promptHintPatterns?: RegExp[];
   /**
+   * Patterns that indicate the agent successfully completed a task.
+   * When detected, briefly transition to "completed" state before settling to idle.
+   */
+  completionPatterns?: RegExp[];
+  /**
+   * Confidence level when completion pattern matches (default: 0.90).
+   */
+  completionConfidence?: number;
+  /**
    * Number of lines to scan for prompt detection (default: 6).
    */
   promptScanLineCount?: number;
@@ -225,6 +234,13 @@ export class ActivityMonitor {
   private readonly promptScanLineCount: number;
   private readonly promptConfidence: number;
 
+  // Completion detection
+  private readonly completionPatterns: RegExp[];
+  private readonly completionConfidence: number;
+  private readonly COMPLETION_HOLD_MS = 500;
+  private completionEmitted = false;
+  private completionIdleTimer: NodeJS.Timeout | null = null;
+
   // Line rewrite detection
   private readonly rewriteDetectionEnabled: boolean;
   private readonly rewriteWindowMs: number;
@@ -263,7 +279,7 @@ export class ActivityMonitor {
     private onStateChange: (
       id: string,
       spawnedAt: number,
-      state: "busy" | "idle",
+      state: "busy" | "idle" | "completed",
       metadata?: ActivityStateMetadata
     ) => void,
     options?: ActivityMonitorOptions
@@ -323,6 +339,9 @@ export class ActivityMonitor {
     this.promptHintPatterns = options?.promptHintPatterns ?? [];
     this.promptScanLineCount = options?.promptScanLineCount ?? 6;
     this.promptConfidence = options?.promptConfidence ?? 0.85;
+
+    this.completionPatterns = options?.completionPatterns ?? [];
+    this.completionConfidence = options?.completionConfidence ?? 0.9;
 
     const rewriteDefaults = { enabled: true, windowMs: 500, minRewrites: 2 };
     const rewriteConfig = { ...rewriteDefaults, ...options?.lineRewriteDetection };
@@ -957,6 +976,52 @@ export class ActivityMonitor {
     return { isPrompt: false, confidence: 0 };
   }
 
+  private detectCompletion(lines: string[]): { isCompletion: boolean; confidence: number } {
+    if (this.completionPatterns.length === 0) {
+      return { isCompletion: false, confidence: 0 };
+    }
+
+    const scanCount = Math.min(this.promptScanLineCount, lines.length);
+    const scanLines = lines.slice(-scanCount);
+    for (const line of scanLines) {
+      const cleanLine = stripAnsi(line);
+      for (const pattern of this.completionPatterns) {
+        if (pattern.test(cleanLine)) {
+          return { isCompletion: true, confidence: this.completionConfidence };
+        }
+      }
+    }
+
+    return { isCompletion: false, confidence: 0 };
+  }
+
+  private transitionToCompleted(confidence: number): void {
+    this.completionEmitted = true;
+
+    this.onStateChange(this.terminalId, this.spawnedAt, "completed", {
+      trigger: "pattern",
+      patternConfidence: confidence,
+    });
+
+    if (this.completionIdleTimer) {
+      clearTimeout(this.completionIdleTimer);
+    }
+    this.completionIdleTimer = setTimeout(() => {
+      this.completionIdleTimer = null;
+      // Guard: ignore stale timer if a new busy cycle started or completion was reset
+      if (!this.completionEmitted || this.state !== "busy") {
+        return;
+      }
+      this.completionEmitted = false;
+      this.state = "idle";
+      this.patternBuffer = "";
+      this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
+        trigger: "pattern",
+        patternConfidence: 0.85,
+      });
+    }, this.COMPLETION_HOLD_MS);
+  }
+
   private isSpinnerActive(now: number): boolean {
     return (
       this.lastSpinnerDetectedAt > 0 && now - this.lastSpinnerDetectedAt <= this.SPINNER_ACTIVE_MS
@@ -1012,6 +1077,13 @@ export class ActivityMonitor {
     }
     this.recordWorkingSignal(now);
     this.resetDebounceTimer();
+
+    // Reset completion state for the new work cycle
+    this.completionEmitted = false;
+    if (this.completionIdleTimer) {
+      clearTimeout(this.completionIdleTimer);
+      this.completionIdleTimer = null;
+    }
 
     if (this.state !== "busy") {
       this.state = "busy";
@@ -1103,6 +1175,11 @@ export class ActivityMonitor {
       clearTimeout(this.debounceTimer);
       this.debounceTimer = null;
     }
+    if (this.completionIdleTimer) {
+      clearTimeout(this.completionIdleTimer);
+      this.completionIdleTimer = null;
+    }
+    this.completionEmitted = false;
     this.inBracketedPaste = false;
     this.partialEscape = "";
     this.pasteStartTime = 0;
@@ -1343,8 +1420,22 @@ export class ActivityMonitor {
       this.shouldTriggerWorkingRecovery(now, false);
     }
 
+    // Completion detection: when busy, no working signal, and not yet emitted
     if (
       this.state === "busy" &&
+      !this.completionEmitted &&
+      this.completionPatterns.length > 0
+    ) {
+      const completionResult = this.detectCompletion(lines);
+      if (completionResult.isCompletion) {
+        this.transitionToCompleted(completionResult.confidence);
+        return;
+      }
+    }
+
+    if (
+      this.state === "busy" &&
+      !this.completionEmitted && // Block idle during completion hold
       isQuietForIdle &&
       now >= this.workingHoldUntil &&
       !hasHighOutputActivity && // Prevent premature idle during high output - Issue #1498

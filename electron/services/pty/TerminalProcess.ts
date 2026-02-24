@@ -62,6 +62,7 @@ import {
   buildBootCompletePatterns,
   buildPromptPatterns,
   buildPromptHintPatterns,
+  buildCompletionPatterns,
   createProcessStateValidator,
 } from "./terminalActivityPatterns.js";
 import { TerminalForensicsBuffer } from "./TerminalForensicsBuffer.js";
@@ -1044,6 +1045,7 @@ export class TerminalProcess {
     const bootCompletePatterns = buildBootCompletePatterns(detection, effectiveAgentId);
     const promptPatterns = buildPromptPatterns(detection, effectiveAgentId);
     const promptHintPatterns = buildPromptHintPatterns(detection, effectiveAgentId);
+    const completionPatterns = buildCompletionPatterns(detection, effectiveAgentId);
 
     const outputActivityDetection = {
       enabled: true,
@@ -1065,6 +1067,8 @@ export class TerminalProcess {
       bootCompletePatterns,
       promptPatterns,
       promptHintPatterns,
+      completionPatterns,
+      completionConfidence: detection?.completionConfidence,
       promptScanLineCount: detection?.promptScanLineCount,
       promptConfidence: detection?.promptConfidence,
       idleDebounceMs: effectiveAgentId ? (detection?.debounceMs ?? 2000) : undefined,

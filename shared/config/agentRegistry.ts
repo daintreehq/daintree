@@ -86,6 +86,18 @@ export interface AgentDetectionConfig {
    * Confidence level when prompt pattern matches (default: 0.85).
    */
   promptConfidence?: number;
+
+  /**
+   * Patterns that indicate the agent successfully completed a task.
+   * When detected, briefly transition to "completed" state before settling to "waiting".
+   * Use strings that will be converted to RegExp with case-insensitive flag.
+   */
+  completionPatterns?: string[];
+
+  /**
+   * Confidence level when completion pattern matches (default: 0.90).
+   */
+  completionConfidence?: number;
 }
 
 export interface AgentConfig {
@@ -222,6 +234,11 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       bootCompletePatterns: ["claude\\s+code\\s+v?\\d"],
       promptPatterns: ["^\\s*>\\s*", "^\\s*❯\\s*"],
       promptHintPatterns: ["bypass permissions", "^\\s*>\\s+Try\\b"],
+      completionPatterns: [
+        "\\$\\d+\\.\\d+\\s*·\\s*\\d+\\s*tokens",
+        "Task\\s+completed",
+      ],
+      completionConfidence: 0.9,
       scanLineCount: 10,
       primaryConfidence: 0.95,
       fallbackConfidence: 0.75,
@@ -318,6 +335,11 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       bootCompletePatterns: ["type\\s+your\\s+message"],
       promptPatterns: ["^\\s*>\\s*", "type\\s+your\\s+message"],
       promptHintPatterns: ["type\\s+your\\s+message"],
+      completionPatterns: [
+        "Response\\s+complete",
+        "Finished\\s+processing",
+      ],
+      completionConfidence: 0.9,
       scanLineCount: 10,
       primaryConfidence: 0.95,
       fallbackConfidence: 0.7,
@@ -415,6 +437,12 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       bootCompletePatterns: ["openai[-\\s]+codex", "codex\\s+v"],
       promptPatterns: ["^\\s*[›❯>]\\s*", "^\\s*codex\\s*>\\s*"],
       promptHintPatterns: ["context\\s+left"],
+      completionPatterns: [
+        "Task\\s+completed\\s+successfully",
+        "\\d+\\s+files?\\s+changed",
+        "Created\\s+\\d+\\s+files?",
+      ],
+      completionConfidence: 0.9,
       scanLineCount: 10,
       primaryConfidence: 0.95,
       fallbackConfidence: 0.75,
@@ -539,6 +567,11 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       bootCompletePatterns: ["Ask anything", "Build\\s+OpenCode"],
       promptPatterns: ["^\\s*[›❯>]\\s*", "Ask anything"],
       promptHintPatterns: ["Ask anything"],
+      completionPatterns: [
+        "Task\\s+completed",
+        "\\d+\\s+files?\\s+changed",
+      ],
+      completionConfidence: 0.9,
       scanLineCount: 10,
       primaryConfidence: 0.95,
       fallbackConfidence: 0.7,
