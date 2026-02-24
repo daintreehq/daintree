@@ -22,6 +22,7 @@ import {
   Monitor,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { createTooltipWithShortcut, formatShortcutForTooltip } from "@/lib/platform";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { GitHubResourceList, CommitList } from "@/components/GitHub";
 import { AgentButton } from "./AgentButton";
@@ -257,7 +258,7 @@ export function Toolbar({
             size="icon"
             onClick={onToggleFocusMode}
             className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
-            title={isFocusMode ? "Show Sidebar (Cmd+B)" : "Hide Sidebar (Cmd+B)"}
+            title={createTooltipWithShortcut(isFocusMode ? "Show Sidebar" : "Hide Sidebar", "Cmd+B")}
             aria-label="Toggle Sidebar"
             aria-pressed={!isFocusMode}
           >
@@ -322,7 +323,7 @@ export function Toolbar({
             size="icon"
             onClick={() => onLaunchAgent("terminal")}
             className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
-            title="Open Terminal (⌘T for palette)"
+            title={formatShortcutForTooltip("Open Terminal (Cmd+T for palette)")}
             aria-label="Open Terminal"
           >
             <Terminal />
@@ -590,7 +591,7 @@ export function Toolbar({
               "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent relative transition-colors",
               errorCount > 0 && "text-[var(--color-status-error)]"
             )}
-            title="Show Problems Panel (Ctrl+Shift+M)"
+            title={createTooltipWithShortcut("Show Problems Panel", "Ctrl+Shift+M")}
             aria-label={`Problems: ${errorCount} error${errorCount !== 1 ? "s" : ""}`}
           >
             <AlertCircle />

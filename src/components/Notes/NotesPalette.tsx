@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
+import { createTooltipWithShortcut } from "@/lib/platform";
+import { keybindingService } from "@/services/KeybindingService";
 import { useOverlayState } from "@/hooks";
 import { useNotesStore } from "@/store/notesStore";
 import { useTerminalStore } from "@/store/terminalStore";
@@ -689,14 +691,16 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
             <div className="px-3 py-2 border-b border-canopy-border flex items-center justify-between shrink-0">
               <div className="flex items-center gap-3">
                 <span className="text-[11px] text-canopy-text/50">Notes</span>
-                <span className="text-[11px] text-canopy-text/50 font-mono">⌘⇧N</span>
+                <span className="text-[11px] text-canopy-text/50 font-mono">
+                  {keybindingService.getDisplayCombo("notes.openPalette") || "⌘⇧N"}
+                </span>
               </div>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => handleCreateNote()}
                   className="px-2.5 py-1 rounded-[var(--radius-md)] bg-canopy-accent hover:bg-canopy-accent/90 text-canopy-bg font-medium text-xs transition-colors flex items-center gap-1 active:scale-[0.98]"
-                  title="Create new note (Cmd+N)"
+                  title={createTooltipWithShortcut("Create new note", "Cmd+N")}
                 >
                   <Plus size={14} />
                   New

@@ -1,5 +1,6 @@
 import { forwardRef } from "react";
 import { cn } from "@/lib/utils";
+import { createTooltipWithShortcut } from "@/lib/platform";
 import { Terminal } from "lucide-react";
 
 interface CommandPickerButtonProps {
@@ -25,7 +26,7 @@ export const CommandPickerButton = forwardRef<HTMLButtonElement, CommandPickerBu
           disabled && "opacity-50 cursor-not-allowed",
           className
         )}
-        title="Open command picker (⌘K)"
+        title={createTooltipWithShortcut("Open command picker", "Cmd+K")}
         aria-label="Open command picker"
       >
         <Terminal className="h-3.5 w-3.5" />
