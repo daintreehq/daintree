@@ -1421,11 +1421,7 @@ export class ActivityMonitor {
     }
 
     // Completion detection: when busy, no working signal, and not yet emitted
-    if (
-      this.state === "busy" &&
-      !this.completionEmitted &&
-      this.completionPatterns.length > 0
-    ) {
+    if (this.state === "busy" && !this.completionEmitted && this.completionPatterns.length > 0) {
       const completionResult = this.detectCompletion(lines);
       if (completionResult.isCompletion) {
         this.transitionToCompleted(completionResult.confidence);

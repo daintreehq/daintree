@@ -1,4 +1,12 @@
-import { Profiler, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  Profiler,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import "@xterm/xterm/css/xterm.css";
 import { FolderOpen, FilterX, Maximize2 } from "lucide-react";
 import { ScrollIndicator } from "./components/Worktree/ScrollIndicator";
