@@ -2,12 +2,11 @@ import { Terminal } from "@xterm/xterm";
 import { terminalClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
-import type { ManagedTerminal, ResizeJobId } from "./types";
+import type { ManagedTerminal } from "./types";
 import type { TerminalOutputIngestService } from "./TerminalOutputIngestService";
 
 const START_DEBOUNCING_THRESHOLD = 200;
-const HORIZONTAL_DEBOUNCE_MS = 100;
-const VERTICAL_THROTTLE_MS = 150;
+const RESIZE_DEBOUNCE_MS = 100;
 const IDLE_CALLBACK_TIMEOUT_MS = 1000;
 const RESIZE_LOCK_TTL_MS = 5000;
 const SETTLED_RESIZE_DELAY_MS = 500;
@@ -66,18 +65,6 @@ export class TerminalResizeController {
     return true;
   }
 
-  updateExactWidth(_managed: ManagedTerminal): void {
-    // No-op in xterm.js v6. The DomScrollableElement manages its own layout
-    // and scrollbar overlay. Modifying the host element's width after each resize
-    // fights with v6's internal measurements and triggers dimension oscillation
-    // that causes resize loops (manifesting as idle re-render warnings in
-    // Ink-based TUIs like Gemini CLI).
-  }
-
-  resetWidthForFit(managed: ManagedTerminal): void {
-    managed.hostElement.style.width = "100%";
-  }
-
   fit(id: string): { cols: number; rows: number } | null {
     const managed = this.deps.getInstance(id);
     if (!managed) return null;
@@ -89,13 +76,11 @@ export class TerminalResizeController {
     }
 
     try {
-      this.resetWidthForFit(managed);
       managed.fitAddon.fit();
       const { cols, rows } = managed.terminal;
       managed.latestCols = cols;
       managed.latestRows = rows;
       this.sendPtyResize(id, cols, rows);
-      this.updateExactWidth(managed);
       return { cols, rows };
     } catch (error) {
       console.warn("Terminal fit failed:", error);
@@ -107,8 +92,8 @@ export class TerminalResizeController {
     const managed = this.deps.getInstance(id);
     if (!managed) return;
 
-    if (managed.resizeXJob || managed.resizeYJob) {
-      this.clearResizeJobs(managed);
+    if (managed.resizeJob !== undefined) {
+      this.clearResizeJob(managed);
       this.applyResize(id, managed.latestCols, managed.latestRows);
     }
   }
@@ -143,11 +128,10 @@ export class TerminalResizeController {
       // Calculate cols/rows directly from the passed dimensions and cell metrics.
       // xterm.js 6's proposeDimensions() takes no arguments and reads from the DOM,
       // which may not reflect the ResizeObserver dimensions yet. Computing manually
-      // avoids stale-DOM mismatches and the feedback loop with updateExactWidth.
+      // avoids stale-DOM mismatches.
       const cellDims = getXtermCellDimensions(managed.terminal);
 
       if (!cellDims || cellDims.width === 0 || cellDims.height === 0) {
-        this.resetWidthForFit(managed);
         managed.fitAddon.fit();
         const cols = managed.terminal.cols;
         const rows = managed.terminal.rows;
@@ -158,7 +142,6 @@ export class TerminalResizeController {
         managed.latestWasAtBottom = wasAtBottom;
         managed.isUserScrolledBack = !wasAtBottom;
         this.sendPtyResize(id, cols, rows);
-        this.updateExactWidth(managed);
         return { cols, rows };
       }
 
@@ -179,7 +162,7 @@ export class TerminalResizeController {
       const bufferLineCount = this.getBufferLineCount(id);
 
       if (options.immediate || managed.isFocused || bufferLineCount < START_DEBOUNCING_THRESHOLD) {
-        this.clearResizeJobs(managed);
+        this.clearResizeJob(managed);
         this.applyResize(id, cols, rows);
         return { cols, rows };
       }
@@ -189,8 +172,7 @@ export class TerminalResizeController {
         return { cols, rows };
       }
 
-      this.throttleResizeY(id, managed, rows);
-      this.debounceResizeX(id, managed, cols);
+      this.debounceResize(id, managed, cols, rows);
 
       return { cols, rows };
     } catch (error) {
@@ -217,7 +199,6 @@ export class TerminalResizeController {
       managed.terminal.resize(targetCols, targetRows);
       this.sendPtyResize(id, targetCols, targetRows);
     }
-    this.updateExactWidth(managed);
   }
 
   applyResize(id: string, cols: number, rows: number): void {
@@ -243,17 +224,12 @@ export class TerminalResizeController {
       this.resizeTerminal(managed, cols, rows);
       this.sendPtyResize(id, cols, rows);
     }
-    this.updateExactWidth(managed);
   }
 
-  clearResizeJobs(managed: ManagedTerminal): void {
-    if (managed.resizeXJob) {
-      this.clearJob(managed.resizeXJob);
-      managed.resizeXJob = undefined;
-    }
-    if (managed.resizeYJob) {
-      this.clearJob(managed.resizeYJob);
-      managed.resizeYJob = undefined;
+  clearResizeJob(managed: ManagedTerminal): void {
+    if (managed.resizeJob !== undefined) {
+      clearTimeout(managed.resizeJob);
+      managed.resizeJob = undefined;
     }
   }
 
@@ -280,10 +256,6 @@ export class TerminalResizeController {
           return;
         }
 
-        // Sync xterm.js dimensions with the delayed PTY resize.
-        // Do not inject a synthetic clear-screen sequence here:
-        // if PTY dimensions are unchanged, many CLIs will not redraw and the
-        // display can appear blank until the next user interaction/output.
         this.resizeTerminal(current, cols, rows);
         terminalClient.resize(id, cols, rows);
       }, SETTLED_RESIZE_DELAY_MS) as unknown as number;
@@ -321,145 +293,39 @@ export class TerminalResizeController {
     return config?.capabilities?.resizeStrategy ?? "default";
   }
 
-  private clearJob(job: ResizeJobId): void {
-    if (job.type === "idle") {
-      const win = window as typeof window & {
-        cancelIdleCallback?: (handle: number) => void;
-      };
-      win.cancelIdleCallback?.(job.id);
-    } else {
-      clearTimeout(job.id);
-    }
-  }
-
   private scheduleIdleResize(id: string, managed: ManagedTerminal): void {
-    const win = window as typeof window & {
-      requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
-      cancelIdleCallback?: (handle: number) => void;
-    };
-    const hasIdleCallback = typeof win.requestIdleCallback === "function";
+    if (managed.resizeJob !== undefined) return;
 
-    if (!managed.resizeXJob) {
-      if (hasIdleCallback && win.requestIdleCallback) {
-        const idleId = win.requestIdleCallback(
-          () => {
-            const current = this.deps.getInstance(id);
-            if (current) {
-              this.deps.dataBuffer.flushForTerminal(id);
-              this.deps.dataBuffer.resetForTerminal(id);
-              this.resizeTerminal(current, current.latestCols, current.terminal.rows);
-              this.sendPtyResize(id, current.latestCols, current.terminal.rows);
-              this.updateExactWidth(current);
-              current.resizeXJob = undefined;
-            }
-          },
-          { timeout: IDLE_CALLBACK_TIMEOUT_MS }
-        );
-        managed.resizeXJob = { type: "idle", id: idleId };
-      } else {
-        const timeoutId = window.setTimeout(() => {
-          const current = this.deps.getInstance(id);
-          if (current) {
-            this.deps.dataBuffer.flushForTerminal(id);
-            this.deps.dataBuffer.resetForTerminal(id);
-            this.resizeTerminal(current, current.latestCols, current.terminal.rows);
-            this.sendPtyResize(id, current.latestCols, current.terminal.rows);
-            this.updateExactWidth(current);
-            current.resizeXJob = undefined;
-          }
-        }, IDLE_CALLBACK_TIMEOUT_MS);
-        managed.resizeXJob = { type: "timeout", id: timeoutId };
-      }
-    }
-
-    if (!managed.resizeYJob) {
-      if (hasIdleCallback && win.requestIdleCallback) {
-        const idleId = win.requestIdleCallback(
-          () => {
-            const current = this.deps.getInstance(id);
-            if (current) {
-              this.deps.dataBuffer.flushForTerminal(id);
-              this.deps.dataBuffer.resetForTerminal(id);
-              this.resizeTerminal(current, current.latestCols, current.latestRows);
-              this.sendPtyResize(id, current.latestCols, current.latestRows);
-              this.updateExactWidth(current);
-              current.resizeYJob = undefined;
-            }
-          },
-          { timeout: IDLE_CALLBACK_TIMEOUT_MS }
-        );
-        managed.resizeYJob = { type: "idle", id: idleId };
-      } else {
-        const timeoutId = window.setTimeout(() => {
-          const current = this.deps.getInstance(id);
-          if (current) {
-            this.deps.dataBuffer.flushForTerminal(id);
-            this.deps.dataBuffer.resetForTerminal(id);
-            this.resizeTerminal(current, current.latestCols, current.latestRows);
-            this.sendPtyResize(id, current.latestCols, current.latestRows);
-            this.updateExactWidth(current);
-            current.resizeYJob = undefined;
-          }
-        }, IDLE_CALLBACK_TIMEOUT_MS);
-        managed.resizeYJob = { type: "timeout", id: timeoutId };
-      }
-    }
-  }
-
-  private debounceResizeX(id: string, managed: ManagedTerminal, cols: number): void {
-    if (managed.resizeXJob) {
-      this.clearJob(managed.resizeXJob);
-      managed.resizeXJob = undefined;
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      const current = this.deps.getInstance(id);
-      if (current) {
-        this.deps.dataBuffer.flushForTerminal(id);
-        this.deps.dataBuffer.resetForTerminal(id);
-        this.resizeTerminal(current, cols, current.terminal.rows);
-        this.sendPtyResize(id, cols, current.terminal.rows);
-        this.updateExactWidth(current);
-        current.resizeXJob = undefined;
-      }
-    }, HORIZONTAL_DEBOUNCE_MS);
-    managed.resizeXJob = { type: "timeout", id: timeoutId };
-  }
-
-  private throttleResizeY(id: string, managed: ManagedTerminal, rows: number): void {
-    const now = Date.now();
-    const timeSinceLastY = now - managed.lastYResizeTime;
-
-    if (timeSinceLastY >= VERTICAL_THROTTLE_MS) {
-      managed.lastYResizeTime = now;
-      if (managed.resizeYJob) {
-        this.clearJob(managed.resizeYJob);
-        managed.resizeYJob = undefined;
-      }
-      this.deps.dataBuffer.flushForTerminal(id);
-      this.deps.dataBuffer.resetForTerminal(id);
-      this.resizeTerminal(managed, managed.latestCols, rows);
-      this.sendPtyResize(id, managed.latestCols, rows);
-      this.updateExactWidth(managed);
-      return;
-    }
-
-    if (!managed.resizeYJob) {
-      const remainingTime = VERTICAL_THROTTLE_MS - timeSinceLastY;
-      const timeoutId = window.setTimeout(() => {
+    const idleId = requestIdleCallback(
+      () => {
         const current = this.deps.getInstance(id);
         if (current) {
-          current.lastYResizeTime = Date.now();
+          current.resizeJob = undefined;
           this.deps.dataBuffer.flushForTerminal(id);
           this.deps.dataBuffer.resetForTerminal(id);
           this.resizeTerminal(current, current.latestCols, current.latestRows);
           this.sendPtyResize(id, current.latestCols, current.latestRows);
-          this.updateExactWidth(current);
-          current.resizeYJob = undefined;
         }
-      }, remainingTime);
-      managed.resizeYJob = { type: "timeout", id: timeoutId };
-    }
+      },
+      { timeout: IDLE_CALLBACK_TIMEOUT_MS }
+    );
+    managed.resizeJob = idleId as unknown as number;
+  }
+
+  private debounceResize(id: string, managed: ManagedTerminal, cols: number, rows: number): void {
+    this.clearResizeJob(managed);
+
+    const timeoutId = window.setTimeout(() => {
+      const current = this.deps.getInstance(id);
+      if (current) {
+        current.resizeJob = undefined;
+        this.deps.dataBuffer.flushForTerminal(id);
+        this.deps.dataBuffer.resetForTerminal(id);
+        this.resizeTerminal(current, cols, rows);
+        this.sendPtyResize(id, cols, rows);
+      }
+    }, RESIZE_DEBOUNCE_MS);
+    managed.resizeJob = timeoutId;
   }
 
   private getBufferLineCount(id: string): number {

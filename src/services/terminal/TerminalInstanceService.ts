@@ -152,9 +152,7 @@ class TerminalInstanceService {
         : data.byteLength
       : 0;
     const acknowledgedBytes =
-      typeof data === "string"
-        ? this.textEncoder.encode(data).length
-        : data.byteLength;
+      typeof data === "string" ? this.textEncoder.encode(data).length : data.byteLength;
 
     if (shouldSample) {
       markRendererPerformance(PERF_MARKS.TERMINAL_DATA_PARSED, {
@@ -388,7 +386,6 @@ class TerminalInstanceService {
       lastActiveTime: Date.now(),
       lastWidth: 0,
       lastHeight: 0,
-      lastYResizeTime: 0,
       latestCols: 0,
       latestRows: 0,
       latestWasAtBottom: true,
@@ -654,7 +651,7 @@ class TerminalInstanceService {
     managed.isVisible = false;
     managed.isDetached = true;
 
-    this.resizeController.clearResizeJobs(managed);
+    this.resizeController.clearResizeJob(managed);
     this.resizeController.clearSettledTimer(id);
 
     if (managed.hostElement.parentElement) {
@@ -771,7 +768,7 @@ class TerminalInstanceService {
     // the resulting layout change. Calling fit() in a rAF would double-trigger
     // the resize path, sending redundant PTY resize events that cause Ink-based
     // TUIs (Gemini CLI) to detect idle re-render loops.
-    this.resizeController.clearResizeJobs(managed);
+    this.resizeController.clearResizeJob(managed);
   }
 
   addAltBufferListener(id: string, callback: (isAltBuffer: boolean) => void): () => void {
@@ -973,7 +970,7 @@ class TerminalInstanceService {
     }
     managed.listeners.length = 0;
 
-    this.resizeController.clearResizeJobs(managed);
+    this.resizeController.clearResizeJob(managed);
     this.resizeController.clearResizeLock(id);
     this.resizeController.clearSettledTimer(id);
     this.dataBuffer.resetForTerminal(id);
@@ -1200,11 +1197,7 @@ class TerminalInstanceService {
 
   private yieldToUI(): Promise<void> {
     return new Promise((resolve) => {
-      if (typeof requestIdleCallback !== "undefined") {
-        requestIdleCallback(() => resolve(), { timeout: INCREMENTAL_RESTORE_CONFIG.timeBudgetMs });
-      } else {
-        setTimeout(resolve, 0);
-      }
+      requestIdleCallback(() => resolve(), { timeout: INCREMENTAL_RESTORE_CONFIG.timeBudgetMs });
     });
   }
 

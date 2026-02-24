@@ -23,12 +23,11 @@ import type {
   SpawnResult,
 } from "@shared/types";
 import { isRegisteredAgent, getAgentConfig } from "@/config/agents";
-import { getTerminalThemeFromCSS } from "@/utils/terminalTheme";
-import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
 import { useScrollbackStore } from "@/store/scrollbackStore";
 import { usePerformanceModeStore } from "@/store/performanceModeStore";
 import { useTerminalFontStore } from "@/store/terminalFontStore";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
+import { getXtermOptions } from "@/config/xtermConfig";
 import { TerminalRefreshTier } from "@/types";
 
 // Dock terminal dimensions
@@ -150,26 +149,12 @@ class TerminalRegistryController {
         ? PERFORMANCE_MODE_SCROLLBACK
         : getScrollbackForType(type, scrollbackLines);
 
-      const terminalOptions = {
-        cursorBlink: true,
-        cursorStyle: "block" as const,
-        cursorInactiveStyle: "block" as const,
+      const terminalOptions = getXtermOptions({
         fontSize,
-        lineHeight: 1.1,
-        letterSpacing: 0,
-        fontFamily: fontFamily || DEFAULT_TERMINAL_FONT_FAMILY,
-        fontLigatures: false,
-        fontWeight: "normal" as const,
-        fontWeightBold: "700" as const,
-        theme: getTerminalThemeFromCSS(),
-        allowProposedApi: true,
-        smoothScrollDuration: performanceMode ? 0 : 0,
+        fontFamily,
         scrollback: effectiveScrollback,
-        macOptionIsMeta: true,
-        scrollOnUserInput: false,
-        fastScrollSensitivity: 5,
-        scrollSensitivity: 1.5,
-      };
+        performanceMode,
+      });
 
       const offscreen = location === "dock";
       const widthPx = location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH;

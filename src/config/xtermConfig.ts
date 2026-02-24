@@ -42,6 +42,7 @@ export const BASE_TERMINAL_OPTIONS = {
   fontWeightBold: "700" as const,
   allowProposedApi: true,
   macOptionIsMeta: true,
+  macOptionClickForcesSelection: true,
   scrollOnUserInput: false,
   fastScrollSensitivity: 5,
   scrollSensitivity: 1.5,
@@ -64,7 +65,7 @@ export function getXtermOptions(config: TerminalAppearanceConfig): ITerminalOpti
     theme,
     scrollback: config.scrollback,
     // Performance mode disables smooth scrolling
-    smoothScrollDuration: config.performanceMode ? 0 : 0, // Currently always 0, but kept for future
+    smoothScrollDuration: 0,
   };
 }
 

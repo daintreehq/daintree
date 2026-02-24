@@ -7,8 +7,7 @@ import type { TerminalType } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useScrollbackStore, usePerformanceModeStore, useTerminalFontStore } from "@/store";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
-import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
-import { CANOPY_TERMINAL_THEME, getTerminalThemeFromCSS } from "@/utils/terminalTheme";
+import { getXtermOptions } from "@/config/xtermConfig";
 import { getSoftNewlineSequence } from "../../../shared/utils/terminalInputProtocol.js";
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
@@ -25,8 +24,6 @@ export interface XtermAdapterProps {
   cwd?: string;
   restoreOnAttach?: boolean;
 }
-
-export { getTerminalThemeFromCSS, CANOPY_TERMINAL_THEME };
 
 const MIN_CONTAINER_SIZE = 50;
 
@@ -82,8 +79,6 @@ function XtermAdapterComponent({
     terminalInstanceService.getAltBufferState(terminalId)
   );
 
-  const terminalTheme = useMemo(() => getTerminalThemeFromCSS(), []);
-
   const hasVisibleBufferContent = useCallback(() => {
     const managed = terminalInstanceService.get(terminalId);
     if (!managed) return false;
@@ -95,28 +90,14 @@ function XtermAdapterComponent({
   }, [terminalId]);
 
   const terminalOptions = useMemo(
-    () => ({
-      cursorBlink: true,
-      cursorStyle: "block" as const,
-      cursorInactiveStyle: "block" as const,
-      fontSize,
-      lineHeight: 1.1,
-      letterSpacing: 0,
-      fontFamily: fontFamily || DEFAULT_TERMINAL_FONT_FAMILY,
-      fontLigatures: false,
-      fontWeight: "normal" as const,
-      fontWeightBold: "700" as const,
-      theme: terminalTheme,
-      allowProposedApi: true,
-      smoothScrollDuration: performanceMode ? 0 : 0, // Already 0, but keep explicit
-      scrollback: effectiveScrollback,
-      macOptionIsMeta: true,
-      macOptionClickForcesSelection: true,
-      scrollOnUserInput: false,
-      fastScrollSensitivity: 5,
-      scrollSensitivity: 1.5,
-    }),
-    [effectiveScrollback, performanceMode, fontSize, fontFamily, terminalTheme]
+    () =>
+      getXtermOptions({
+        fontSize,
+        fontFamily,
+        scrollback: effectiveScrollback,
+        performanceMode,
+      }),
+    [effectiveScrollback, performanceMode, fontSize, fontFamily]
   );
 
   // Push-based resize handler using ResizeObserver dimensions directly

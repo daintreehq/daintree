@@ -58,8 +58,7 @@ export function getTerminalThemeFromCSS(): typeof CANOPY_TERMINAL_THEME_FALLBACK
       "--color-canopy-text",
       CANOPY_TERMINAL_THEME_FALLBACK.selectionForeground
     ),
-    selectionInactiveBackground:
-      CANOPY_TERMINAL_THEME_FALLBACK.selectionInactiveBackground,
+    selectionInactiveBackground: CANOPY_TERMINAL_THEME_FALLBACK.selectionInactiveBackground,
     black: getVar("--color-canopy-bg", CANOPY_TERMINAL_THEME_FALLBACK.black),
     red: getVar("--color-status-error", CANOPY_TERMINAL_THEME_FALLBACK.red),
     green: getVar("--color-canopy-accent", CANOPY_TERMINAL_THEME_FALLBACK.green),

@@ -8,8 +8,6 @@ import { TerminalRefreshTier, TerminalType, TerminalKind, AgentState } from "@/t
 
 export type RefreshTierProvider = () => TerminalRefreshTier;
 
-export type ResizeJobId = { type: "timeout"; id: number } | { type: "idle"; id: number };
-
 export type AgentStateCallback = (state: AgentState) => void;
 
 export interface ManagedTerminal {
@@ -29,7 +27,7 @@ export interface ManagedTerminal {
   isOpened: boolean;
   listeners: Array<() => void>;
   exitSubscribers: Set<(exitCode: number) => void>;
-  parserHandler?: { dispose: () => void; setAllowResets?: (allow: boolean) => void };
+  parserHandler?: { dispose: () => void };
   getRefreshTier: RefreshTierProvider;
   keyHandlerInstalled: boolean;
   lastAttachAt: number;
@@ -45,9 +43,7 @@ export interface ManagedTerminal {
   pendingTier?: TerminalRefreshTier; // Target tier for scheduled downgrade
   tierChangeTimer?: number;
   // Resize debouncing state
-  resizeXJob?: ResizeJobId;
-  resizeYJob?: ResizeJobId;
-  lastYResizeTime: number;
+  resizeJob?: number;
   latestCols: number;
   latestRows: number;
   latestWasAtBottom: boolean;
@@ -81,8 +77,7 @@ export interface ManagedTerminal {
   deferredOutput: Array<string | Uint8Array>;
 
   // Alternate screen buffer state (tracked via xterm.js onBufferChange).
-  // When true, resize operations clear the screen before resizing to avoid
-  // reflow artifacts in TUI applications (OpenCode, vim, htop, etc.)
+  // Used to adapt UI (remove padding) and resize strategy for TUI applications.
   isAltBuffer?: boolean;
   altBufferListeners: Set<(isAltBuffer: boolean) => void>;
 

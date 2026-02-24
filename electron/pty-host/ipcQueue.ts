@@ -153,9 +153,7 @@ export class IpcQueueManager {
     if (terminal?.ptyProcess) {
       try {
         terminal.ptyProcess.resume();
-        console.log(
-          `[PtyHost] IPC queue cleared to ${utilization.toFixed(1)}%. Resumed PTY ${id}`
-        );
+        console.log(`[PtyHost] IPC queue cleared to ${utilization.toFixed(1)}%. Resumed PTY ${id}`);
         this.deps.emitTerminalStatus(id, "running", utilization, pauseDuration);
         this.deps.emitReliabilityMetric({
           terminalId: id,

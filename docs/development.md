@@ -38,18 +38,18 @@ Main Process (electron/)     Renderer (src/)
 
 **Key Services:**
 
-| Service                    | Responsibility                     |
-| -------------------------- | ---------------------------------- |
-| `PtyManager`               | Terminal process pool, spawn/kill  |
-| `pty/TerminalProcess`      | Single PTY wrapper, data flow      |
-| `pty/AgentStateService`    | Idle/working/waiting detection     |
-| `pty/terminalInput`        | Input submission and timing         |
-| `GitService`               | Git operations via simple-git      |
-| `worktree/WorktreeService` | Worktree polling and status        |
-| `CopyTreeService`          | Context generation for agents      |
-| `SidecarManager`           | Localhost browser, log viewer      |
-| `ProjectStore`             | Multi-project persistence          |
-| `HibernationService`       | Terminal state save/restore        |
+| Service                    | Responsibility                    |
+| -------------------------- | --------------------------------- |
+| `PtyManager`               | Terminal process pool, spawn/kill |
+| `pty/TerminalProcess`      | Single PTY wrapper, data flow     |
+| `pty/AgentStateService`    | Idle/working/waiting detection    |
+| `pty/terminalInput`        | Input submission and timing       |
+| `GitService`               | Git operations via simple-git     |
+| `worktree/WorktreeService` | Worktree polling and status       |
+| `CopyTreeService`          | Context generation for agents     |
+| `SidecarManager`           | Localhost browser, log viewer     |
+| `ProjectStore`             | Multi-project persistence         |
+| `HibernationService`       | Terminal state save/restore       |
 
 ### Renderer (`src/`)
 

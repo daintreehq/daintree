@@ -7,12 +7,11 @@ import { TerminalRefreshTier } from "@/types";
 import { validateTerminalConfig } from "@/utils/terminalValidation";
 import { isRegisteredAgent, getAgentConfig } from "@/config/agents";
 import { panelKindHasPty, panelKindUsesTerminalUi } from "@shared/config/panelKindRegistry";
-import { getTerminalThemeFromCSS } from "@/utils/terminalTheme";
-import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
 import { useScrollbackStore } from "@/store/scrollbackStore";
 import { usePerformanceModeStore } from "@/store/performanceModeStore";
 import { useTerminalFontStore } from "@/store/terminalFontStore";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
+import { getXtermOptions } from "@/config/xtermConfig";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { markTerminalRestarting, unmarkTerminalRestarting } from "@/store/restartExitSuppression";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
@@ -304,26 +303,12 @@ export const createTerminalRegistrySlice =
               ? PERFORMANCE_MODE_SCROLLBACK
               : getScrollbackForType(legacyType, scrollbackLines);
 
-            const terminalOptions = {
-              cursorBlink: true,
-              cursorStyle: "block" as const,
-              cursorInactiveStyle: "block" as const,
+            const terminalOptions = getXtermOptions({
               fontSize,
-              lineHeight: 1.1,
-              letterSpacing: 0,
-              fontFamily: fontFamily || DEFAULT_TERMINAL_FONT_FAMILY,
-              fontLigatures: false,
-              fontWeight: "normal" as const,
-              fontWeightBold: "700" as const,
-              theme: getTerminalThemeFromCSS(),
-              allowProposedApi: true,
-              smoothScrollDuration: performanceMode ? 0 : 0,
+              fontFamily,
               scrollback: effectiveScrollback,
-              macOptionIsMeta: true,
-              scrollOnUserInput: false,
-              fastScrollSensitivity: 5,
-              scrollSensitivity: 1.5,
-            };
+              performanceMode,
+            });
 
             // Prewarm ALL terminal types to ensure managed instance exists.
             // This is critical for terminals in inactive worktrees - they need a managed

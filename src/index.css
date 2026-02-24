@@ -323,14 +323,10 @@
     background: transparent;
   }
 
-  /* Xterm font - required for correct font measurement in canvas renderer */
+  /* Xterm font - required for correct font measurement */
   .xterm {
     font-family: "JetBrains Mono", monospace;
   }
-
-  /* xterm.js v6 uses a custom VS Code-style overlay scrollbar (DomScrollableElement).
-     Native scrollbar CSS on .xterm-viewport is no longer applicable and can cause
-     layout dimension mismatches that trigger resize loops. */
 
   /* Consistent monospace font stack */
   code,

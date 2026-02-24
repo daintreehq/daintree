@@ -223,13 +223,7 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
             const dur = Date.now() - pauseStartTime;
 
             if (backpressureManager.hasPendingSegments(id)) {
-              backpressureManager.suspendVisualStream(
-                id,
-                `${dur}ms ack timeout`,
-                util,
-                dur,
-                si
-              );
+              backpressureManager.suspendVisualStream(id, `${dur}ms ack timeout`, util, dur, si);
             } else {
               // No pending segments — just resume
               const terminal = ptyManager.getTerminal(id);
