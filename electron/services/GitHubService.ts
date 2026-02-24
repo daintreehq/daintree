@@ -144,7 +144,44 @@ export async function getRepoContext(cwd: string): Promise<RepoContext | null> {
   }
 }
 
-export async function getRepoStats(cwd: string, bypassCache = false): Promise<RepoStatsResult> {
+function isRepoNotFoundError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const lower = message.toLowerCase();
+  // Broad pattern match - includes both repo-level and resource-level "not found" errors.
+  // This is acceptable because withRepoContextRetry only retries when repo context actually
+  // changes after invalidation, preventing false retries on genuine resource 404s.
+  return lower.includes("not found") || lower.includes("could not resolve");
+}
+
+async function withRepoContextRetry<T>(
+  cwd: string,
+  fn: (context: RepoContext) => Promise<T>
+): Promise<T> {
+  const context = await getRepoContext(cwd);
+  if (!context) throw new Error("Not a GitHub repository");
+
+  try {
+    return await fn(context);
+  } catch (error) {
+    if (isRepoNotFoundError(error)) {
+      repoContextCache.invalidate(cwd);
+      const freshContext = await getRepoContext(cwd);
+      if (
+        freshContext &&
+        (freshContext.owner !== context.owner || freshContext.repo !== context.repo)
+      ) {
+        return await fn(freshContext);
+      }
+    }
+    throw error;
+  }
+}
+
+export async function getRepoStats(
+  cwd: string,
+  bypassCache = false,
+  _retried = false
+): Promise<RepoStatsResult> {
   const context = await getRepoContext(cwd);
   if (!context) {
     return { stats: null, error: "Not a GitHub repository" };
@@ -211,6 +248,16 @@ export async function getRepoStats(cwd: string, bypassCache = false): Promise<Re
 
     return { stats };
   } catch (error) {
+    if (!_retried && isRepoNotFoundError(error)) {
+      repoContextCache.invalidate(cwd);
+      const freshContext = await getRepoContext(cwd);
+      if (
+        freshContext &&
+        (freshContext.owner !== context.owner || freshContext.repo !== context.repo)
+      ) {
+        return getRepoStats(cwd, bypassCache, true);
+      }
+    }
     const diskCached = persistentCache.get(cacheKey);
     if (diskCached) {
       return {
@@ -378,6 +425,22 @@ export async function batchCheckLinkedPRs(
     const results = parseBatchPRResponse(response, candidates);
     return { results };
   } catch (error) {
+    if (isRepoNotFoundError(error)) {
+      repoContextCache.invalidate(cwd);
+      const freshContext = await getRepoContext(cwd);
+      if (
+        freshContext &&
+        (freshContext.owner !== context.owner || freshContext.repo !== context.repo)
+      ) {
+        try {
+          const retryQuery = buildBatchPRQuery(freshContext.owner, freshContext.repo, candidates);
+          const retryResponse = (await client(retryQuery)) as Record<string, unknown>;
+          return { results: parseBatchPRResponse(retryResponse, candidates) };
+        } catch (retryError) {
+          return { results: new Map(), error: parseGitHubError(retryError) };
+        }
+      }
+    }
     return { results: new Map(), error: parseGitHubError(error) };
   }
 }
@@ -409,69 +472,64 @@ export async function assignIssue(
     throw new Error("GitHub token not configured");
   }
 
-  const context = await getRepoContext(cwd);
-  if (!context) {
-    throw new Error("Not a GitHub repository");
-  }
+  return withRepoContextRetry(cwd, async (context) => {
+    const url = `https://api.github.com/repos/${context.owner}/${context.repo}/issues/${issueNumber}/assignees`;
 
-  const url = `https://api.github.com/repos/${context.owner}/${context.repo}/issues/${issueNumber}/assignees`;
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ assignees: [username] }),
+      });
 
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ assignees: [username] }),
-    });
+      if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error("Invalid GitHub token. Please update in Settings.");
+        }
+        if (response.status === 403) {
+          throw new Error("Token lacks required permissions. Required scopes: repo, read:org");
+        }
+        if (response.status === 404) {
+          throw new Error("Issue not found or you don't have access to this repository");
+        }
+        if (response.status === 422) {
+          throw new Error(`Cannot assign user "${username}" - they may not be a collaborator`);
+        }
+        throw new Error(`GitHub API error: ${response.statusText}`);
+      }
 
-    if (!response.ok) {
-      if (response.status === 401) {
-        throw new Error("Invalid GitHub token. Please update in Settings.");
+      const data = (await response.json()) as {
+        assignees?: Array<{ login?: string; avatar_url?: string }>;
+      };
+
+      if (!Array.isArray(data.assignees)) {
+        throw new Error("Invalid GitHub API response: assignees field missing or malformed");
       }
-      if (response.status === 403) {
-        throw new Error("Token lacks required permissions. Required scopes: repo, read:org");
+
+      const assignee = data.assignees.find(
+        (a) => a.login?.toLowerCase() === username.toLowerCase()
+      );
+      if (!assignee?.login) {
+        throw new Error(`Assignment succeeded but user "${username}" not found in response`);
       }
-      if (response.status === 404) {
-        throw new Error("Issue not found or you don't have access to this repository");
-      }
-      if (response.status === 422) {
-        throw new Error(`Cannot assign user "${username}" - they may not be a collaborator`);
-      }
-      throw new Error(`GitHub API error: ${response.statusText}`);
+
+      const assigneeData = {
+        login: assignee.login,
+        avatarUrl: assignee.avatar_url ?? "",
+      };
+
+      updateIssueAssigneeInCache(context.owner, context.repo, issueNumber, assigneeData);
+
+      return { username: assigneeData.login, avatarUrl: assigneeData.avatarUrl };
+    } catch (error) {
+      throw new Error(parseGitHubError(error));
     }
-
-    // Parse the response to get the updated assignee info
-    const data = (await response.json()) as {
-      assignees?: Array<{ login?: string; avatar_url?: string }>;
-    };
-
-    // Validate response structure
-    if (!Array.isArray(data.assignees)) {
-      throw new Error("Invalid GitHub API response: assignees field missing or malformed");
-    }
-
-    // Find the assignee we just added
-    const assignee = data.assignees.find((a) => a.login?.toLowerCase() === username.toLowerCase());
-    if (!assignee?.login) {
-      throw new Error(`Assignment succeeded but user "${username}" not found in response`);
-    }
-
-    const assigneeData = {
-      login: assignee.login,
-      avatarUrl: assignee.avatar_url ?? "",
-    };
-
-    // Optimistically update the issue cache
-    updateIssueAssigneeInCache(context.owner, context.repo, issueNumber, assigneeData);
-
-    return { username: assigneeData.login, avatarUrl: assigneeData.avatarUrl };
-  } catch (error) {
-    throw new Error(parseGitHubError(error));
-  }
+  });
 }
 
 function updateIssueAssigneeInCache(
@@ -748,105 +806,100 @@ export async function listIssues(
     throw new Error("GitHub token not configured");
   }
 
-  const context = await getRepoContext(options.cwd);
-  if (!context) {
-    throw new Error("Not a GitHub repository");
-  }
+  return withRepoContextRetry(options.cwd, async (context) => {
+    const cacheKey = buildListCacheKey(
+      "issue",
+      context.owner,
+      context.repo,
+      options.state ?? "open",
+      options.search ?? "",
+      options.cursor ?? ""
+    );
 
-  const cacheKey = buildListCacheKey(
-    "issue",
-    context.owner,
-    context.repo,
-    options.state ?? "open",
-    options.search ?? "",
-    options.cursor ?? ""
-  );
-
-  if (!options.search) {
-    const cached = issueListCache.get(cacheKey);
-    if (cached) return cached;
-  }
-
-  try {
-    let result: GitHubListResponse<GitHubIssue>;
-
-    if (options.search) {
-      const stateFilter =
-        options.state === "closed" ? "is:closed" : options.state === "all" ? "" : "is:open";
-      const searchQuery =
-        `repo:${context.owner}/${context.repo} is:issue ${stateFilter} sort:updated-desc ${options.search}`.trim();
-
-      const response = (await client(SEARCH_QUERY, {
-        searchQuery,
-        type: "ISSUE",
-        cursor: options.cursor,
-        limit: 20,
-      })) as GraphQlQueryResponseData;
-
-      const search = response?.search;
-      const nodes = (search?.nodes ?? []) as Array<Record<string, unknown>>;
-
-      result = {
-        items: nodes.filter(Boolean).map(parseIssueNode),
-        pageInfo: {
-          hasNextPage: search?.pageInfo?.hasNextPage ?? false,
-          endCursor: search?.pageInfo?.endCursor ?? null,
-        },
-      };
-    } else {
-      const states = mapIssueStates(options.state);
-
-      const response = (await client(LIST_ISSUES_QUERY, {
-        owner: context.owner,
-        repo: context.repo,
-        states,
-        cursor: options.cursor,
-        limit: 20,
-      })) as GraphQlQueryResponseData;
-
-      const issues = response?.repository?.issues;
-      const nodes = (issues?.nodes ?? []) as Array<Record<string, unknown>>;
-      const totalCount = (issues?.totalCount as number) ?? undefined;
-
-      result = {
-        items: nodes.filter(Boolean).map(parseIssueNode),
-        pageInfo: {
-          hasNextPage: issues?.pageInfo?.hasNextPage ?? false,
-          endCursor: issues?.pageInfo?.endCursor ?? null,
-        },
-      };
-
-      issueListCache.set(cacheKey, result);
-
-      // Sync totalCount to repoStatsCache when fetching open issues (first page only)
-      if (
-        (!options.state || options.state === "open") &&
-        !options.cursor &&
-        totalCount !== undefined
-      ) {
-        const statsCacheKey = `${context.owner}/${context.repo}`;
-        updateRepoStatsCount(statsCacheKey, "issue", totalCount);
-
-        // Also update persistent cache if we have both counts in memory
-        const memoryStats = repoStatsCache.get(statsCacheKey);
-        if (memoryStats && memoryStats.issueCount > 0 && memoryStats.prCount > 0) {
-          const persistentCache = GitHubStatsCache.getInstance();
-          persistentCache.set(
-            statsCacheKey,
-            {
-              issueCount: memoryStats.issueCount,
-              prCount: memoryStats.prCount,
-            },
-            options.cwd
-          );
-        }
-      }
+    if (!options.search) {
+      const cached = issueListCache.get(cacheKey);
+      if (cached) return cached;
     }
 
-    return result;
-  } catch (error) {
-    throw new Error(parseGitHubError(error));
-  }
+    try {
+      let result: GitHubListResponse<GitHubIssue>;
+
+      if (options.search) {
+        const stateFilter =
+          options.state === "closed" ? "is:closed" : options.state === "all" ? "" : "is:open";
+        const searchQuery =
+          `repo:${context.owner}/${context.repo} is:issue ${stateFilter} sort:updated-desc ${options.search}`.trim();
+
+        const response = (await client(SEARCH_QUERY, {
+          searchQuery,
+          type: "ISSUE",
+          cursor: options.cursor,
+          limit: 20,
+        })) as GraphQlQueryResponseData;
+
+        const search = response?.search;
+        const nodes = (search?.nodes ?? []) as Array<Record<string, unknown>>;
+
+        result = {
+          items: nodes.filter(Boolean).map(parseIssueNode),
+          pageInfo: {
+            hasNextPage: search?.pageInfo?.hasNextPage ?? false,
+            endCursor: search?.pageInfo?.endCursor ?? null,
+          },
+        };
+      } else {
+        const states = mapIssueStates(options.state);
+
+        const response = (await client(LIST_ISSUES_QUERY, {
+          owner: context.owner,
+          repo: context.repo,
+          states,
+          cursor: options.cursor,
+          limit: 20,
+        })) as GraphQlQueryResponseData;
+
+        const issues = response?.repository?.issues;
+        const nodes = (issues?.nodes ?? []) as Array<Record<string, unknown>>;
+        const totalCount = (issues?.totalCount as number) ?? undefined;
+
+        result = {
+          items: nodes.filter(Boolean).map(parseIssueNode),
+          pageInfo: {
+            hasNextPage: issues?.pageInfo?.hasNextPage ?? false,
+            endCursor: issues?.pageInfo?.endCursor ?? null,
+          },
+        };
+
+        issueListCache.set(cacheKey, result);
+
+        if (
+          (!options.state || options.state === "open") &&
+          !options.cursor &&
+          totalCount !== undefined
+        ) {
+          const statsCacheKey = `${context.owner}/${context.repo}`;
+          updateRepoStatsCount(statsCacheKey, "issue", totalCount);
+
+          const memoryStats = repoStatsCache.get(statsCacheKey);
+          if (memoryStats && memoryStats.issueCount > 0 && memoryStats.prCount > 0) {
+            const persistentCache = GitHubStatsCache.getInstance();
+            persistentCache.set(
+              statsCacheKey,
+              {
+                issueCount: memoryStats.issueCount,
+                prCount: memoryStats.prCount,
+              },
+              options.cwd
+            );
+          }
+        }
+      }
+
+      return result;
+    } catch (error) {
+      throw new Error(parseGitHubError(error));
+    }
+  });
 }
 
 export async function listPullRequests(
@@ -857,108 +910,103 @@ export async function listPullRequests(
     throw new Error("GitHub token not configured");
   }
 
-  const context = await getRepoContext(options.cwd);
-  if (!context) {
-    throw new Error("Not a GitHub repository");
-  }
+  return withRepoContextRetry(options.cwd, async (context) => {
+    const cacheKey = buildListCacheKey(
+      "pr",
+      context.owner,
+      context.repo,
+      options.state ?? "open",
+      options.search ?? "",
+      options.cursor ?? ""
+    );
 
-  const cacheKey = buildListCacheKey(
-    "pr",
-    context.owner,
-    context.repo,
-    options.state ?? "open",
-    options.search ?? "",
-    options.cursor ?? ""
-  );
-
-  if (!options.search) {
-    const cached = prListCache.get(cacheKey);
-    if (cached) return cached;
-  }
-
-  try {
-    let result: GitHubListResponse<GitHubPR>;
-
-    if (options.search) {
-      let stateFilter = "";
-      if (options.state === "open") stateFilter = "is:open";
-      else if (options.state === "closed") stateFilter = "is:closed is:unmerged";
-      else if (options.state === "merged") stateFilter = "is:merged";
-
-      const searchQuery =
-        `repo:${context.owner}/${context.repo} is:pr ${stateFilter} sort:updated-desc ${options.search}`.trim();
-
-      const response = (await client(SEARCH_QUERY, {
-        searchQuery,
-        type: "ISSUE",
-        cursor: options.cursor,
-        limit: 20,
-      })) as GraphQlQueryResponseData;
-
-      const search = response?.search;
-      const nodes = (search?.nodes ?? []) as Array<Record<string, unknown>>;
-
-      result = {
-        items: nodes.filter(Boolean).map(parsePRNode),
-        pageInfo: {
-          hasNextPage: search?.pageInfo?.hasNextPage ?? false,
-          endCursor: search?.pageInfo?.endCursor ?? null,
-        },
-      };
-    } else {
-      const states = mapPRStates(options.state);
-
-      const response = (await client(LIST_PRS_QUERY, {
-        owner: context.owner,
-        repo: context.repo,
-        states,
-        cursor: options.cursor,
-        limit: 20,
-      })) as GraphQlQueryResponseData;
-
-      const pullRequests = response?.repository?.pullRequests;
-      const nodes = (pullRequests?.nodes ?? []) as Array<Record<string, unknown>>;
-      const totalCount = (pullRequests?.totalCount as number) ?? undefined;
-
-      result = {
-        items: nodes.filter(Boolean).map(parsePRNode),
-        pageInfo: {
-          hasNextPage: pullRequests?.pageInfo?.hasNextPage ?? false,
-          endCursor: pullRequests?.pageInfo?.endCursor ?? null,
-        },
-      };
-
-      prListCache.set(cacheKey, result);
-
-      // Sync totalCount to repoStatsCache when fetching open PRs (first page only)
-      if (
-        (!options.state || options.state === "open") &&
-        !options.cursor &&
-        totalCount !== undefined
-      ) {
-        const statsCacheKey = `${context.owner}/${context.repo}`;
-        updateRepoStatsCount(statsCacheKey, "pr", totalCount);
-
-        // Also update persistent cache if we have both counts in memory
-        const memoryStats = repoStatsCache.get(statsCacheKey);
-        if (memoryStats && memoryStats.issueCount > 0 && memoryStats.prCount > 0) {
-          const persistentCache = GitHubStatsCache.getInstance();
-          persistentCache.set(
-            statsCacheKey,
-            {
-              issueCount: memoryStats.issueCount,
-              prCount: memoryStats.prCount,
-            },
-            options.cwd
-          );
-        }
-      }
+    if (!options.search) {
+      const cached = prListCache.get(cacheKey);
+      if (cached) return cached;
     }
 
-    return result;
-  } catch (error) {
-    throw new Error(parseGitHubError(error));
-  }
+    try {
+      let result: GitHubListResponse<GitHubPR>;
+
+      if (options.search) {
+        let stateFilter = "";
+        if (options.state === "open") stateFilter = "is:open";
+        else if (options.state === "closed") stateFilter = "is:closed is:unmerged";
+        else if (options.state === "merged") stateFilter = "is:merged";
+
+        const searchQuery =
+          `repo:${context.owner}/${context.repo} is:pr ${stateFilter} sort:updated-desc ${options.search}`.trim();
+
+        const response = (await client(SEARCH_QUERY, {
+          searchQuery,
+          type: "ISSUE",
+          cursor: options.cursor,
+          limit: 20,
+        })) as GraphQlQueryResponseData;
+
+        const search = response?.search;
+        const nodes = (search?.nodes ?? []) as Array<Record<string, unknown>>;
+
+        result = {
+          items: nodes.filter(Boolean).map(parsePRNode),
+          pageInfo: {
+            hasNextPage: search?.pageInfo?.hasNextPage ?? false,
+            endCursor: search?.pageInfo?.endCursor ?? null,
+          },
+        };
+      } else {
+        const states = mapPRStates(options.state);
+
+        const response = (await client(LIST_PRS_QUERY, {
+          owner: context.owner,
+          repo: context.repo,
+          states,
+          cursor: options.cursor,
+          limit: 20,
+        })) as GraphQlQueryResponseData;
+
+        const pullRequests = response?.repository?.pullRequests;
+        const nodes = (pullRequests?.nodes ?? []) as Array<Record<string, unknown>>;
+        const totalCount = (pullRequests?.totalCount as number) ?? undefined;
+
+        result = {
+          items: nodes.filter(Boolean).map(parsePRNode),
+          pageInfo: {
+            hasNextPage: pullRequests?.pageInfo?.hasNextPage ?? false,
+            endCursor: pullRequests?.pageInfo?.endCursor ?? null,
+          },
+        };
+
+        prListCache.set(cacheKey, result);
+
+        if (
+          (!options.state || options.state === "open") &&
+          !options.cursor &&
+          totalCount !== undefined
+        ) {
+          const statsCacheKey = `${context.owner}/${context.repo}`;
+          updateRepoStatsCount(statsCacheKey, "pr", totalCount);
+
+          const memoryStats = repoStatsCache.get(statsCacheKey);
+          if (memoryStats && memoryStats.issueCount > 0 && memoryStats.prCount > 0) {
+            const persistentCache = GitHubStatsCache.getInstance();
+            persistentCache.set(
+              statsCacheKey,
+              {
+                issueCount: memoryStats.issueCount,
+                prCount: memoryStats.prCount,
+              },
+              options.cwd
+            );
+          }
+        }
+      }
+
+      return result;
+    } catch (error) {
+      throw new Error(parseGitHubError(error));
+    }
+  });
 }
 
 function truncateBody(body: string | null | undefined, maxLength = 150): string {
@@ -977,57 +1025,54 @@ export async function getIssueTooltip(
     return null;
   }
 
-  const context = await getRepoContext(cwd);
-  if (!context) {
-    return null;
-  }
-
-  const cacheKey = `${context.owner}/${context.repo}:${issueNumber}`;
-  const cached = issueTooltipCache.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
-
   try {
-    const response = (await client(GET_ISSUE_QUERY, {
-      owner: context.owner,
-      repo: context.repo,
-      number: issueNumber,
-    })) as GraphQlQueryResponseData;
+    return await withRepoContextRetry(cwd, async (context) => {
+      const cacheKey = `${context.owner}/${context.repo}:${issueNumber}`;
+      const cached = issueTooltipCache.get(cacheKey);
+      if (cached) {
+        return cached;
+      }
 
-    const issue = response?.repository?.issue;
-    if (!issue) {
-      return null;
-    }
+      const response = (await client(GET_ISSUE_QUERY, {
+        owner: context.owner,
+        repo: context.repo,
+        number: issueNumber,
+      })) as GraphQlQueryResponseData;
 
-    const author = issue.author as { login?: string; avatarUrl?: string } | null;
-    const assigneesData = issue.assignees as {
-      nodes?: Array<{ login?: string; avatarUrl?: string }>;
-    };
-    const labelsData = issue.labels as { nodes?: Array<{ name?: string; color?: string }> };
+      const issue = response?.repository?.issue;
+      if (!issue) {
+        return null;
+      }
 
-    const tooltipData: IssueTooltipData = {
-      number: issue.number as number,
-      title: issue.title as string,
-      bodyExcerpt: truncateBody(issue.bodyText as string | null),
-      state: issue.state as "OPEN" | "CLOSED",
-      createdAt: issue.createdAt as string,
-      author: {
-        login: author?.login ?? "unknown",
-        avatarUrl: author?.avatarUrl ?? "",
-      },
-      assignees: (assigneesData?.nodes ?? []).filter(Boolean).map((a) => ({
-        login: a.login ?? "unknown",
-        avatarUrl: a.avatarUrl ?? "",
-      })),
-      labels: (labelsData?.nodes ?? []).filter(Boolean).map((l) => ({
-        name: l.name ?? "",
-        color: l.color ?? "",
-      })),
-    };
+      const author = issue.author as { login?: string; avatarUrl?: string } | null;
+      const assigneesData = issue.assignees as {
+        nodes?: Array<{ login?: string; avatarUrl?: string }>;
+      };
+      const labelsData = issue.labels as { nodes?: Array<{ name?: string; color?: string }> };
 
-    issueTooltipCache.set(cacheKey, tooltipData);
-    return tooltipData;
+      const tooltipData: IssueTooltipData = {
+        number: issue.number as number,
+        title: issue.title as string,
+        bodyExcerpt: truncateBody(issue.bodyText as string | null),
+        state: issue.state as "OPEN" | "CLOSED",
+        createdAt: issue.createdAt as string,
+        author: {
+          login: author?.login ?? "unknown",
+          avatarUrl: author?.avatarUrl ?? "",
+        },
+        assignees: (assigneesData?.nodes ?? []).filter(Boolean).map((a) => ({
+          login: a.login ?? "unknown",
+          avatarUrl: a.avatarUrl ?? "",
+        })),
+        labels: (labelsData?.nodes ?? []).filter(Boolean).map((l) => ({
+          name: l.name ?? "",
+          color: l.color ?? "",
+        })),
+      };
+
+      issueTooltipCache.set(cacheKey, tooltipData);
+      return tooltipData;
+    });
   } catch {
     return null;
   }
@@ -1039,65 +1084,62 @@ export async function getPRTooltip(cwd: string, prNumber: number): Promise<PRToo
     return null;
   }
 
-  const context = await getRepoContext(cwd);
-  if (!context) {
-    return null;
-  }
-
-  const cacheKey = `${context.owner}/${context.repo}:${prNumber}`;
-  const cached = prTooltipCache.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
-
   try {
-    const response = (await client(GET_PR_QUERY, {
-      owner: context.owner,
-      repo: context.repo,
-      number: prNumber,
-    })) as GraphQlQueryResponseData;
+    return await withRepoContextRetry(cwd, async (context) => {
+      const cacheKey = `${context.owner}/${context.repo}:${prNumber}`;
+      const cached = prTooltipCache.get(cacheKey);
+      if (cached) {
+        return cached;
+      }
 
-    const pr = response?.repository?.pullRequest;
-    if (!pr) {
-      return null;
-    }
+      const response = (await client(GET_PR_QUERY, {
+        owner: context.owner,
+        repo: context.repo,
+        number: prNumber,
+      })) as GraphQlQueryResponseData;
 
-    const author = pr.author as { login?: string; avatarUrl?: string } | null;
-    const assigneesData = pr.assignees as {
-      nodes?: Array<{ login?: string; avatarUrl?: string }>;
-    };
-    const labelsData = pr.labels as { nodes?: Array<{ name?: string; color?: string }> };
-    const merged = pr.merged as boolean;
-    const rawState = pr.state as string;
+      const pr = response?.repository?.pullRequest;
+      if (!pr) {
+        return null;
+      }
 
-    let state: "OPEN" | "CLOSED" | "MERGED" = rawState as "OPEN" | "CLOSED" | "MERGED";
-    if (merged) {
-      state = "MERGED";
-    }
+      const author = pr.author as { login?: string; avatarUrl?: string } | null;
+      const assigneesData = pr.assignees as {
+        nodes?: Array<{ login?: string; avatarUrl?: string }>;
+      };
+      const labelsData = pr.labels as { nodes?: Array<{ name?: string; color?: string }> };
+      const merged = pr.merged as boolean;
+      const rawState = pr.state as string;
 
-    const tooltipData: PRTooltipData = {
-      number: pr.number as number,
-      title: pr.title as string,
-      bodyExcerpt: truncateBody(pr.bodyText as string | null),
-      state,
-      isDraft: (pr.isDraft as boolean) ?? false,
-      createdAt: pr.createdAt as string,
-      author: {
-        login: author?.login ?? "unknown",
-        avatarUrl: author?.avatarUrl ?? "",
-      },
-      assignees: (assigneesData?.nodes ?? []).filter(Boolean).map((a) => ({
-        login: a.login ?? "unknown",
-        avatarUrl: a.avatarUrl ?? "",
-      })),
-      labels: (labelsData?.nodes ?? []).filter(Boolean).map((l) => ({
-        name: l.name ?? "",
-        color: l.color ?? "",
-      })),
-    };
+      let state: "OPEN" | "CLOSED" | "MERGED" = rawState as "OPEN" | "CLOSED" | "MERGED";
+      if (merged) {
+        state = "MERGED";
+      }
 
-    prTooltipCache.set(cacheKey, tooltipData);
-    return tooltipData;
+      const tooltipData: PRTooltipData = {
+        number: pr.number as number,
+        title: pr.title as string,
+        bodyExcerpt: truncateBody(pr.bodyText as string | null),
+        state,
+        isDraft: (pr.isDraft as boolean) ?? false,
+        createdAt: pr.createdAt as string,
+        author: {
+          login: author?.login ?? "unknown",
+          avatarUrl: author?.avatarUrl ?? "",
+        },
+        assignees: (assigneesData?.nodes ?? []).filter(Boolean).map((a) => ({
+          login: a.login ?? "unknown",
+          avatarUrl: a.avatarUrl ?? "",
+        })),
+        labels: (labelsData?.nodes ?? []).filter(Boolean).map((l) => ({
+          name: l.name ?? "",
+          color: l.color ?? "",
+        })),
+      };
+
+      prTooltipCache.set(cacheKey, tooltipData);
+      return tooltipData;
+    });
   } catch {
     return null;
   }
@@ -1112,26 +1154,26 @@ export async function getIssueByNumber(
     throw new Error("GitHub token not configured");
   }
 
-  const context = await getRepoContext(cwd);
-  if (!context) {
-    throw new Error("Not a GitHub repository");
-  }
-
   try {
-    const response = (await client(GET_ISSUE_QUERY, {
-      owner: context.owner,
-      repo: context.repo,
-      number: issueNumber,
-    })) as GraphQlQueryResponseData;
+    return await withRepoContextRetry(cwd, async (context) => {
+      const response = (await client(GET_ISSUE_QUERY, {
+        owner: context.owner,
+        repo: context.repo,
+        number: issueNumber,
+      })) as GraphQlQueryResponseData;
 
-    const issue = response?.repository?.issue;
-    if (!issue) {
-      return null;
-    }
+      const issue = response?.repository?.issue;
+      if (!issue) {
+        return null;
+      }
 
-    return parseIssueNode(issue as Record<string, unknown>);
+      return parseIssueNode(issue as Record<string, unknown>);
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (message === "Not a GitHub repository") {
+      throw error;
+    }
     if (message.includes("Could not resolve to") || message.includes("Could not resolve")) {
       return null;
     }
@@ -1145,26 +1187,26 @@ export async function getPRByNumber(cwd: string, prNumber: number): Promise<GitH
     throw new Error("GitHub token not configured");
   }
 
-  const context = await getRepoContext(cwd);
-  if (!context) {
-    throw new Error("Not a GitHub repository");
-  }
-
   try {
-    const response = (await client(GET_PR_QUERY, {
-      owner: context.owner,
-      repo: context.repo,
-      number: prNumber,
-    })) as GraphQlQueryResponseData;
+    return await withRepoContextRetry(cwd, async (context) => {
+      const response = (await client(GET_PR_QUERY, {
+        owner: context.owner,
+        repo: context.repo,
+        number: prNumber,
+      })) as GraphQlQueryResponseData;
 
-    const pr = response?.repository?.pullRequest;
-    if (!pr) {
-      return null;
-    }
+      const pr = response?.repository?.pullRequest;
+      if (!pr) {
+        return null;
+      }
 
-    return parsePRNode(pr as Record<string, unknown>);
+      return parsePRNode(pr as Record<string, unknown>);
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (message === "Not a GitHub repository") {
+      throw error;
+    }
     if (message.includes("Could not resolve to") || message.includes("Could not resolve")) {
       return null;
     }
