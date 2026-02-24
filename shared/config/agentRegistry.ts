@@ -144,6 +144,19 @@ export interface AgentConfig {
    * Used by orchestrators to select the best agent for a given task.
    */
   routing?: AgentRoutingConfig;
+  /**
+   * Environment variables to set for this agent at spawn time.
+   *
+   * Precedence order (lowest to highest):
+   * 1. process.env (system environment)
+   * 2. options.env (passed to spawn)
+   * 3. buildNonInteractiveEnv defaults (CI=1, FORCE_COLOR=3, etc.)
+   * 4. agentConfig.env (this field - highest priority)
+   *
+   * Note: Agent-specific exclusions (e.g., CI/NONINTERACTIVE for Gemini)
+   * are enforced and cannot be overridden by this field.
+   */
+  env?: Record<string, string>;
 }
 
 export const AGENT_REGISTRY: Record<string, AgentConfig> = {
@@ -239,6 +252,9 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       maxConcurrent: 2,
       enabled: true,
     },
+    env: {
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    },
   },
   gemini: {
     id: "gemini",
@@ -329,6 +345,9 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       },
       maxConcurrent: 2,
       enabled: true,
+    },
+    env: {
+      GEMINI_CLI_ALT_SCREEN: "false",
     },
   },
   codex: {

@@ -65,7 +65,12 @@ import {
   createProcessStateValidator,
 } from "./terminalActivityPatterns.js";
 import { TerminalForensicsBuffer } from "./TerminalForensicsBuffer.js";
-import { getDefaultShell, getDefaultShellArgs, buildNonInteractiveEnv } from "./terminalShell.js";
+import {
+  getDefaultShell,
+  getDefaultShellArgs,
+  buildNonInteractiveEnv,
+  AGENT_ENV_EXCLUSIONS,
+} from "./terminalShell.js";
 
 type CursorBuffer = {
   cursorY?: number;
@@ -250,8 +255,19 @@ export class TerminalProcess {
     // For agent terminals, use non-interactive environment to suppress prompts
     // (oh-my-zsh updates, Homebrew notifications, etc.)
     // Pass agentId for agent-specific exclusions (e.g., Gemini CLI is sensitive to CI=1)
+    // Then merge agent-specific env vars from the agent registry config,
+    // filtering out any excluded vars to prevent bypassing agent-specific safeguards
+    const agentConfig = agentId ? getEffectiveAgentConfig(agentId) : undefined;
+    const agentEnv = agentConfig?.env ?? {};
+    const normalizedAgentId = agentId?.toLowerCase();
+    const exclusions = new Set(
+      normalizedAgentId ? (AGENT_ENV_EXCLUSIONS[normalizedAgentId] ?? []) : []
+    );
+    const filteredAgentEnv = Object.fromEntries(
+      Object.entries(agentEnv).filter(([key]) => !exclusions.has(key))
+    );
     const env = this.isAgentTerminal
-      ? buildNonInteractiveEnv(mergedEnv, shell, agentId)
+      ? { ...buildNonInteractiveEnv(mergedEnv, shell, agentId), ...filteredAgentEnv }
       : (Object.fromEntries(
           Object.entries(mergedEnv).filter(([_, value]) => value !== undefined)
         ) as Record<string, string>);

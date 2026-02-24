@@ -49,7 +49,7 @@ export function getDefaultShellArgs(shell: string, _options?: ShellArgsOptions):
  * mode and the CLI fails to display its input prompt.
  * See: https://github.com/google-gemini/gemini-cli/issues/1563
  */
-const AGENT_ENV_EXCLUSIONS: Record<string, string[]> = {
+export const AGENT_ENV_EXCLUSIONS: Record<string, string[]> = {
   gemini: ["CI", "NONINTERACTIVE"],
 };
 
