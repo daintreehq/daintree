@@ -6,139 +6,106 @@ prompt = """
 
 **CRITICAL: BIAS TOWARDS ACTION**
 
-This command is **fully automated**. Your job is to merge as many PRs as possible with minimal hesitation. You
- are acting as both the automation engineer and the expert reviewer.
+This command is **fully automated**. Your job is to merge as many PRs as possible with minimal hesitation. You are acting as both the automation engineer and the expert reviewer.
 
 - **DO NOT** ask for confirmation before merging.
-- **DO NOT** wait unnecessarily — if CI is running, proceed and fix issues post-merge.
+- **DO NOT** wait unnecessarily.
 - **DO NOT** over-analyze mechanical fixes — make decisions quickly.
+- **DO NOT** run tests, linting, or formatting during the merge loop — only at the very end.
 - **DO** fix issues yourself instead of deferring to the user.
 - **DO** continue to the next PR if one fails — never stop the batch.
-- **DO NOT** run tests on the feature branch. Only run tests **AFTER** merging into the target branch.
 
-**Default stance:** Act first, report results at the end. The user wants PRs merged, not status updates.
+**Default stance:** Merge everything first, fix quality issues once at the end. The user wants PRs merged, not status updates.
 
 ---
 
-Review, test, and merge all open pull requests in a logical order based on dependencies, file conflicts, prior
-ity, and age.
+Review and merge all open pull requests in a logical order. Quality checks run once after all merges are complete.
 
-**This is a batch operation** that processes multiple PRs sequentially using an optimized workflow that works 
-directly in the main repository.
+**This is a batch operation** that processes multiple PRs sequentially using an optimized workflow that works directly in the main repository.
 
-### Step 0: Plan & Setup
+### Step 0: Setup
 
-1.  **Worktree Cleanup:** Worktrees are deleted on-demand in Step 2.2.
+1.  **Enable `git rerere`:** `git config rerere.enabled true && git config rerere.autoupdate true`. This makes Git remember conflict resolutions and auto-apply them if the same conflict recurs in later PRs.
 2.  **Environment Check:**
-    *   Check current location: `pwd`
     *   Record current branch: `git branch --show-current`
     *   Check status: `git status --short`
-    *   **If dirty:** Stash changes: `git stash push -u -m "review-all-prs-autostash"` and record this for res
-toration later.
+    *   **If dirty:** `git stash push -u -m "review-all-prs-autostash"` and record for restoration later.
     *   **If not on main/master/develop:** Warn but continue.
 
-### Step 1: Fetch & Analyze PRs
+### Step 1: Fetch & Plan Merge Order
 
 1.  **Fetch Open PRs:**
-    Use `gh pr list --state open --json number,title,headRefName,baseRefName,labels,createdAt,updatedAt,isDraf
-t,author` to get the list.
+    `gh pr list --state open --json number,title,headRefName,baseRefName,labels,createdAt,updatedAt,isDraft,author`
     *   If no PRs, exit.
 
 2.  **Analyze Files:**
-    For each PR, identify modified files: `gh pr diff {number} --name-only`.
+    For each PR: `gh pr diff {number} --name-only`.
 
-3.  **Determine Merge Order:**
-    Analyze PRs and create a sorted list based on:
+3.  **Determine Merge Order** using these criteria (highest priority first):
     *   **Exclude Drafts.**
+    *   **Topological / Dependency order:** Infrastructure and config changes first, then shared/API layers, then business logic, then UI. PRs that are depended on by others must merge first.
     *   **Priority Labels:** (P1 > P2 > P3).
     *   **Base Branch:** (hotfix > bugfix > main/master > develop).
-    *   **Dependencies:** (PRs blocking others must go first).
-    *   **File Conflicts:** (Group conflicting PRs, merge oldest first).
-    *   **Size & Age:** (Smallest and Oldest preferred as tiebreakers).
+    *   **File Conflicts:** Group conflicting PRs together, merge oldest first to establish the baseline.
+    *   **Size & Age:** Smallest and oldest as tiebreakers — clearing small PRs first reduces queue size quickly.
 
-4.  **Display Order:**
-    Print the proposed merge order clearly. **Proceed immediately.**
+4.  **Display Order:** Print the proposed merge order. **Proceed immediately.**
 
-### Step 2: Sequential Review & Merge Loop
+### Step 2: Merge Loop
 
 For each PR in the calculated order:
 
-#### 2.1: Deep Analysis & Review (The Gatekeeper)
+#### 2.1: Review
 *   **Log:** `🔄 Processing PR #{number}: {title}`
 *   **Fetch Context:**
-    *   Get PR body and comments: `gh pr view {number} --json body,title,url,comments,reviews`
+    *   `gh pr view {number} --json body,title,url,comments,reviews`
     *   **Identify Linked Issue:** Scan for "Closes #X" or "Fixes #Y".
-    *   **Fetch Issue Details:** If found, `gh issue view {issue_number} --json body,title`.
-*   **Active Code Review (CRITICAL):**
-    *   **Analyze Changes:** Use `gh pr diff {number}` to see the code.
-    *   **Verify Requirements:** Does the code actually solve the problem described in the issue?
-    *   **Quality Check:**
-        *   Are there obvious bugs or logic errors?
-        *   Is error handling present?
-        *   Does it follow project patterns (e.g., naming, structure)?
-    *   **Pass/Fail Decision:**
-        *   If MAJOR flaws (wrong architecture, missing core logic): **Reject.** Comment on PR and skip.
-        *   If MINOR flaws (bugs, typos, edge cases): **Plan to Fix** in Step 2.3.
+    *   If found, `gh issue view {issue_number} --json body,title`.
+*   **Code Review:**
+    *   Use `gh pr diff {number}` to analyze the changes.
+    *   **Reject only for MAJOR flaws** (wrong architecture, missing core logic). Comment on PR and skip.
+    *   Minor issues (bugs, typos, edge cases) — note for fixing before merge.
 
-#### 2.2: Delete Worktree (CRITICAL)
-*   **Identify Worktree:** Check if a git worktree exists for the PR branch: `git worktree list`.
-*   **DELETE IT:** If found, remove it immediately: `git worktree remove --force {path}`.
-*   **Verify:** Ensure the worktree is gone. The merge **MUST** happen in the main directory.
+#### 2.2: Prepare Branch
+*   **Delete Worktree:** If `git worktree list` shows one for this branch, remove it: `git worktree remove --force {path}`.
+*   **Fetch & Checkout:** `git fetch origin` -> `git checkout {headRefName}` -> `git pull origin {headRefName}`.
+*   **Apply Fixes:** If the review noted minor issues or PR comments need addressing, fix them now.
+*   **Commit Fixes:** `git commit -am "fix: address review feedback"` (only if changes were made).
+*   **DO NOT** merge target into the feature branch. **DO NOT REBASE.**
 
-#### 2.3: Checkout & Fix (The Builder)
-*   **Fetch & Checkout:** `git fetch origin` -> `git checkout {headRefName}` -> `git pull origin {headRefName}
-`.
-*   **Apply Fixes:**
-    *   **Execute the "Plan to Fix"** from Step 2.1.
-    *   Address any existing PR comments (P1/P2 priority).
-    *   Use `replace` or `write_file` to improve the code.
-*   **Commit Fixes:** `git commit -am "fix: address review feedback and polish code"`
-*   **DO NOT** merge `main` into the feature branch here.
-*   **DO NOT REBASE** unless absolutely necessary.
-*   **DO NOT** run tests here.
-
-#### 2.4: Merge into Target
-*   **Identify Target:** Default to current branch, or `develop`/`main` if Gitflow is detected (based on PR ba
-seRefName).
-*   **Checkout Target:** `git checkout {target_branch}`.
-*   **Pull Target:** `git pull origin {target_branch}`.
+#### 2.3: Merge into Target
+*   **Checkout Target:** `git checkout {target_branch}` -> `git pull origin {target_branch}`.
 *   **Execute Merge:** `git merge --no-ff {headRefName} -m "Merge pull request #{number}: {title}"`
 *   **Handle Conflicts:**
-    *   **Simple (lockfiles, whitespace):** Resolve automatically (e.g., `checkout --theirs package-lock.json`
-).
-    *   **Complex:** Use `read_file` to inspect markers (`<<<<<<<`). Use your **Expert Judgment** to resolve. 
-If you cannot resolve it safely, abort the merge (`git merge --abort`) and mark PR as FAILED.
-*   **Cleanup Artifacts:**
-    *   Grep for `<<<<<<<`, `=======`. If found, fix them immediately.
+    *   **Check `git rerere` first** — it may have auto-resolved from a previous conflict in this batch.
+    *   **Lockfiles (`package-lock.json`, etc.):** `git checkout --theirs {file}` then regenerate later in Step 3.
+    *   **Simple (whitespace, imports):** Resolve automatically.
+    *   **Complex:** Inspect conflict markers with `read_file`. Use expert judgment. If unresolvable, `git merge --abort` and mark as FAILED.
+*   **Verify:** Grep for `<<<<<<<` or `=======`. If found, fix immediately.
+*   **DO NOT push yet.** Continue to the next PR.
 
-#### 2.5: Post-Merge Verification (CRITICAL - Canopy Specific)
-**Run tests/lint/format ONLY HERE (after merge).**
-1.  **Install Dependencies:** `npm install` (dependencies might have changed).
-2.  **Rebuild Native Modules:** `npm run rebuild` (Crucial for `node-pty`).
-3.  **Run Quality Checks:** `npm run check` (Linting, Type-checking, Formatting).
+#### 2.4: Cleanup PR
+*   **Close PR:** `gh pr close {number}` (if not auto-closed by merge).
+*   **Close Linked Issues:** If PR references "Closes #X" / "Fixes #X", check with `gh issue view {issue_number} --json state`. If still open: `gh issue close {issue_number} --comment "Fixed via merge of PR #{number}"`.
+*   **Delete Remote Branch:** `git push origin --delete {headRefName}`.
+*   **Delete Local Branch:** `git branch -D {headRefName}`.
+*   **Return to target:** `git checkout {target_branch}`.
+
+### Step 3: Post-Merge Quality Pass (ONE TIME)
+
+After **all** PRs have been merged (or attempted):
+
+1.  **Install Dependencies:** `npm install` (dependencies may have changed across PRs — this also regenerates `package-lock.json` if lockfile conflicts were resolved with `--theirs`).
+2.  **Rebuild Native Modules:** `npm run rebuild` (crucial for `node-pty`).
+3.  **Run Quality Checks:** `npm run check` (linting, type-checking, formatting).
 4.  **Run Tests:** `npm run test` (Vitest).
 5.  **Fix Loop (Max 3 attempts):**
     *   If failure: Analyze output -> Fix code -> Re-run checks/tests.
-    *   If still failing after 3 attempts: **Abort.** `git reset --hard origin/{target-branch}`. Mark PR as FA
-ILED.
-6.  **Commit Fixes:** Check `git status`. If ANY changes remain (from merge resolution, linting, or manual fixes), commit them: `git commit -am "chore: post-merge fixes"`. The goal is zero uncommitted changes.
-    **Push Fixes:** `git push origin {target_branch}`.
+    *   If still failing after 3 attempts: Stop fixing and report the failures.
+6.  **Commit & Push:** If ANY changes were made (formatting, lint fixes, type fixes, lockfile regeneration): `git commit -am "chore: post-merge fixes"` -> `git push origin {target_branch}`.
 
-#### 2.6: Finalize
-*   **Push:** `git push origin {target-branch}`
-*   **Verify Issues Closed:**
-    *   Check if the PR description closes any issues (look for 'Closes #123', 'Fixes #123').
-    *   If yes, verify the issue is closed: `gh issue view {issue_number} --json state`.
-    *   If open, close it manually: `gh issue close {issue_number} --comment "Fixed via manual merge of PR #{n
-umber}"`.
-*   **Close PR:** `gh pr close {number}` (if not auto-closed).
-*   **Delete Branch:** `git push origin --delete {headRefName}` && `git branch -D {headRefName}`.
-*   **Update Session Context:** Record what was merged to inform the next PRs.
-*   **Return:** `git checkout {starting-branch}`.
+### Step 4: Final Report
 
-### Step 3: Final Report
-
-After all PRs are processed:
 1.  Restore original state (pop stash if created).
 2.  Display a single list of all processed PRs with status emojis:
     *   Format: `{emoji} PR #{number}: {title}`

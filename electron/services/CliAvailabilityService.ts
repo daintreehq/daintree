@@ -27,7 +27,7 @@ export class CliAvailabilityService {
           })
         );
 
-        let timeoutHandle: NodeJS.Timeout;
+        let timeoutHandle: NodeJS.Timeout | undefined;
         const timeoutPromise = new Promise<never>((_, reject) => {
           timeoutHandle = setTimeout(
             () => reject(new Error("CLI availability check timed out")),
@@ -53,7 +53,9 @@ export class CliAvailabilityService {
           console.warn("[CliAvailabilityService]", error instanceof Error ? error.message : error);
           availabilityEntries = entries.map(([id]) => [id, false]);
         } finally {
-          clearTimeout(timeoutHandle);
+          if (timeoutHandle) {
+            clearTimeout(timeoutHandle);
+          }
         }
 
         const result: CliAvailability = Object.fromEntries(availabilityEntries);
