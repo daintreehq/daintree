@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AGENT_REGISTRY } from "../config/agentRegistry.js";
+import { AGENT_REGISTRY, getEffectiveAgentConfig } from "../config/agentRegistry.js";
 import { escapeShellArg } from "../utils/shellEscape.js";
 
 /**
@@ -162,6 +162,21 @@ export function generateAgentCommand(
 ): string {
   const flags = generateAgentFlags(entry, agentId);
   const parts: string[] = [baseCommand];
+
+  // Add default args from agent registry (before user flags)
+  if (agentId) {
+    const agentConfig = getEffectiveAgentConfig(agentId);
+    if (agentConfig?.args?.length) {
+      // Apply same escaping logic as user flags
+      for (const arg of agentConfig.args) {
+        if (arg.startsWith("-")) {
+          parts.push(arg);
+        } else {
+          parts.push(escapeShellArg(arg));
+        }
+      }
+    }
+  }
 
   // Add flags, escaping non-flag values
   for (const flag of flags) {

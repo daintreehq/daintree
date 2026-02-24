@@ -92,6 +92,8 @@ export interface AgentConfig {
   id: string;
   name: string;
   command: string;
+  /** Default CLI arguments to pass at spawn (before user flags) */
+  args?: string[];
   color: string;
   iconId: string;
   supportsContextInjection: boolean;
@@ -376,6 +378,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     },
     capabilities: {
       scrollback: 10000,
+      blockAltScreen: true,
       resizeStrategy: "settled",
     },
     detection: {

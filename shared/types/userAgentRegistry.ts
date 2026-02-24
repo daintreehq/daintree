@@ -8,6 +8,16 @@ export const UserAgentConfigSchema = z
     id: z.string().min(1),
     name: z.string().min(1),
     command: z.string().min(1),
+    args: z
+      .array(
+        z
+          .string()
+          .min(1)
+          .refine((arg) => !/[\r\n\0]/.test(arg), {
+            message: "Args cannot contain control characters (\\r, \\n, \\0)",
+          })
+      )
+      .optional(),
     color: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
     iconId: z.string().min(1),
     supportsContextInjection: z.boolean(),
