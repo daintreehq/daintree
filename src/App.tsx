@@ -1,6 +1,7 @@
-import { Profiler, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Profiler, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { FolderOpen, FilterX, Maximize2 } from "lucide-react";
+import { ScrollIndicator } from "./components/Worktree/ScrollIndicator";
 import {
   isElectronAvailable,
   useAgentLauncher,
@@ -161,6 +162,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // Error store for derived metadata
   const getWorktreeErrors = useErrorStore((state) => state.getWorktreeErrors);
 
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const scrollContentRef = useRef<HTMLDivElement>(null);
+  const [hiddenAbove, setHiddenAbove] = useState(0);
+  const [hiddenBelow, setHiddenBelow] = useState(0);
+
   const [isRecipeEditorOpen, setIsRecipeEditorOpen] = useState(false);
   const [recipeEditorWorktreeId, setRecipeEditorWorktreeId] = useState<string | undefined>(
     undefined
@@ -266,6 +272,79 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     derivedMetaMap,
     activeWorktreeId,
   ]);
+
+  const updateScrollIndicators = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const { scrollTop, scrollHeight, clientHeight } = container;
+    const totalItems = filteredWorktrees.length;
+
+    if (scrollHeight <= clientHeight + 1) {
+      setHiddenAbove(0);
+      setHiddenBelow(0);
+      return;
+    }
+
+    const scrollableHeight = scrollHeight - clientHeight;
+    if (scrollableHeight <= 0) {
+      setHiddenAbove(0);
+      setHiddenBelow(0);
+      return;
+    }
+
+    const scrollFraction = Math.min(1, Math.max(0, scrollTop / scrollableHeight));
+    const visibleFraction = clientHeight / scrollHeight;
+    const approxVisible = Math.max(1, Math.round(totalItems * visibleFraction));
+    const totalHidden = Math.max(0, totalItems - approxVisible);
+
+    const above = Math.round(totalHidden * scrollFraction);
+    const below = totalHidden - above;
+
+    setHiddenAbove(above);
+    setHiddenBelow(below);
+  }, [filteredWorktrees.length]);
+
+  useLayoutEffect(() => {
+    updateScrollIndicators();
+  }, [updateScrollIndicators, filteredWorktrees, groupedSections]);
+
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    const content = scrollContentRef.current;
+    if (!container) return;
+
+    let rafId: number | null = null;
+    const handleScroll = () => {
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        updateScrollIndicators();
+        rafId = null;
+      });
+    };
+
+    container.addEventListener("scroll", handleScroll, { passive: true });
+    const resizeObserver = new ResizeObserver(() => updateScrollIndicators());
+    resizeObserver.observe(container);
+    if (content) resizeObserver.observe(content);
+
+    return () => {
+      container.removeEventListener("scroll", handleScroll);
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      resizeObserver.disconnect();
+    };
+  }, [updateScrollIndicators]);
+
+  const scrollToTop = useCallback(() => {
+    scrollContainerRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (container) {
+      container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+    }
+  }, []);
 
   const handleOpenRecipeEditor = useCallback(
     (worktreeId: string, initialTerminals?: RecipeTerminal[]) => {
@@ -418,32 +497,38 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       </div>
 
       {/* List Section */}
-      <div className="flex-1 overflow-y-auto">
-        {filteredWorktrees.length === 0 && hasActiveFilters() ? (
-          <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
-            <FilterX className="w-10 h-10 text-canopy-text/40 mb-3" />
-            <p className="text-sm text-canopy-text/60 mb-3">No worktrees match your filters</p>
-            <button
-              onClick={clearAllFilters}
-              className="text-xs px-3 py-1.5 text-canopy-accent hover:bg-canopy-accent/10 rounded transition-colors"
-            >
-              Clear filters
-            </button>
-          </div>
-        ) : groupedSections ? (
-          <div className="flex flex-col">
-            {groupedSections.map((section) => (
-              <div key={section.type}>
-                <div className="sticky top-0 z-10 px-4 py-2 text-[10px] font-medium text-canopy-text/50 uppercase tracking-wide bg-canopy-sidebar border-b border-divider">
-                  {section.displayName} ({section.worktrees.length})
-                </div>
-                {section.worktrees.map(renderWorktreeCard)}
+      <div className="relative flex-1 min-h-0">
+        <div ref={scrollContainerRef} className="h-full overflow-y-auto">
+          <div ref={scrollContentRef}>
+            {filteredWorktrees.length === 0 && hasActiveFilters() ? (
+              <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+                <FilterX className="w-10 h-10 text-canopy-text/40 mb-3" />
+                <p className="text-sm text-canopy-text/60 mb-3">No worktrees match your filters</p>
+                <button
+                  onClick={clearAllFilters}
+                  className="text-xs px-3 py-1.5 text-canopy-accent hover:bg-canopy-accent/10 rounded transition-colors"
+                >
+                  Clear filters
+                </button>
               </div>
-            ))}
+            ) : groupedSections ? (
+              <div className="flex flex-col">
+                {groupedSections.map((section) => (
+                  <div key={section.type}>
+                    <div className="sticky top-0 z-10 px-4 py-2 text-[10px] font-medium text-canopy-text/50 uppercase tracking-wide bg-canopy-sidebar border-b border-divider">
+                      {section.displayName} ({section.worktrees.length})
+                    </div>
+                    {section.worktrees.map(renderWorktreeCard)}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-col">{filteredWorktrees.map(renderWorktreeCard)}</div>
+            )}
           </div>
-        ) : (
-          <div className="flex flex-col">{filteredWorktrees.map(renderWorktreeCard)}</div>
-        )}
+        </div>
+        <ScrollIndicator direction="above" count={hiddenAbove} onClick={scrollToTop} />
+        <ScrollIndicator direction="below" count={hiddenBelow} onClick={scrollToBottom} />
       </div>
 
       <RecipeEditor
