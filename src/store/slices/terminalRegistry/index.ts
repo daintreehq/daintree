@@ -1,7 +1,7 @@
 import type { StateCreator } from "zustand";
 import type { TerminalRuntimeStatus, TerminalLocation, TabGroup, TabGroupLocation } from "@/types";
 import { terminalClient, agentSettingsClient, projectClient } from "@/clients";
-import { generateAgentFlags } from "@shared/types";
+import { generateAgentCommand } from "@shared/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { validateTerminalConfig } from "@/utils/terminalValidation";
@@ -1380,12 +1380,11 @@ export const createTerminalRegistrySlice =
             if (agentSettings) {
               const agentConfig = getAgentConfig(effectiveAgentId);
               const baseCommand = agentConfig?.command || effectiveAgentId;
-              let flags: string[] = [];
-              flags = generateAgentFlags(
+              commandToRun = generateAgentCommand(
+                baseCommand,
                 agentSettings.agents?.[effectiveAgentId] ?? {},
                 effectiveAgentId
               );
-              commandToRun = flags.length > 0 ? `${baseCommand} ${flags.join(" ")}` : baseCommand;
             }
           } catch (error) {
             console.warn(
@@ -1758,11 +1757,11 @@ export const createTerminalRegistrySlice =
             if (agentSettings) {
               const agentConfig = getAgentConfig(effectiveAgentId);
               const baseCommand = agentConfig?.command || effectiveAgentId;
-              const flags = generateAgentFlags(
+              commandToRun = generateAgentCommand(
+                baseCommand,
                 agentSettings.agents?.[effectiveAgentId] ?? {},
                 effectiveAgentId
               );
-              commandToRun = flags.length > 0 ? `${baseCommand} ${flags.join(" ")}` : baseCommand;
             }
           } catch (error) {
             console.warn(

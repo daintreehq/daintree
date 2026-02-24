@@ -92,6 +92,8 @@ export interface AgentConfig {
   id: string;
   name: string;
   command: string;
+  /** Default CLI arguments to pass at spawn (before user flags) */
+  args?: string[];
   color: string;
   iconId: string;
   supportsContextInjection: boolean;
@@ -105,6 +107,8 @@ export interface AgentConfig {
     blockAltScreen?: boolean;
     blockMouseReporting?: boolean;
     resizeStrategy?: "default" | "settled";
+    /** CLI flag to disable alt-screen and use inline rendering (e.g., "--no-alt-screen") */
+    inlineModeFlag?: string;
   };
   /**
    * Configuration for pattern-based working state detection.
@@ -376,7 +380,10 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     },
     capabilities: {
       scrollback: 10000,
+      blockAltScreen: true,
+      blockMouseReporting: true,
       resizeStrategy: "settled",
+      inlineModeFlag: "--no-alt-screen",
     },
     detection: {
       primaryPatterns: [
