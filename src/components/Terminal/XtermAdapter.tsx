@@ -116,7 +116,6 @@ function XtermAdapterComponent({
       macOptionIsMeta: true,
       macOptionClickForcesSelection: true,
       scrollOnUserInput: false,
-      fastScrollModifier: "alt" as const,
       fastScrollSensitivity: 5,
       scrollSensitivity: 1.5,
     }),

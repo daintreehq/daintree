@@ -555,7 +555,6 @@ export class TerminalProcess {
   getSyncBufferState(): {
     enabled: boolean;
     bypassed: boolean;
-    inSyncMode: boolean;
     framesEmitted: number;
   } | null {
     if (!this.syncBuffer) return null;
@@ -563,7 +562,6 @@ export class TerminalProcess {
     return {
       enabled: true,
       bypassed: debug.bypassed,
-      inSyncMode: debug.inSyncMode,
       framesEmitted: debug.framesEmitted,
     };
   }

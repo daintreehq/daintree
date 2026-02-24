@@ -191,8 +191,6 @@ export interface TerminalInfoPayload {
     enabled: boolean;
     /** Whether sync buffer is bypassed (alt screen active) */
     bypassed: boolean;
-    /** Whether currently inside a DEC 2026 synchronized update */
-    inSyncMode: boolean;
     /** Total frames emitted through the sync buffer */
     framesEmitted: number;
   } | null;

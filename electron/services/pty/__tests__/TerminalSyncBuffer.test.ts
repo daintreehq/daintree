@@ -58,74 +58,7 @@ describe("TerminalSyncBuffer", () => {
     });
   });
 
-  describe("synchronized output mode", () => {
-    it("buffers during sync mode and emits on sync end", () => {
-      const stabilizer = new TerminalSyncBuffer();
-      const emits: string[] = [];
-
-      stabilizer.attach({} as any, (data: string) => emits.push(data));
-
-      // Start sync mode
-      stabilizer.ingest("\x1b[?2026h");
-      expect(emits).toHaveLength(0); // Still buffering
-
-      // Add content during sync mode
-      stabilizer.ingest("\x1b[2K\x1b[1Acontent");
-      expect(emits).toHaveLength(0); // Still buffering
-
-      // End sync mode - should emit complete frame
-      stabilizer.ingest("\x1b[?2026l");
-      expect(emits).toHaveLength(1);
-      expect(emits[0]).toBe("\x1b[?2026h\x1b[2K\x1b[1Acontent\x1b[?2026l");
-    });
-
-    it("handles multiple sync frames in one chunk", () => {
-      const stabilizer = new TerminalSyncBuffer();
-      const emits: string[] = [];
-
-      stabilizer.attach({} as any, (data: string) => emits.push(data));
-
-      // Two complete sync frames in one chunk
-      stabilizer.ingest("\x1b[?2026hFrame1\x1b[?2026l\x1b[?2026hFrame2\x1b[?2026l");
-
-      expect(emits).toHaveLength(2);
-      expect(emits[0]).toBe("\x1b[?2026hFrame1\x1b[?2026l");
-      expect(emits[1]).toBe("\x1b[?2026hFrame2\x1b[?2026l");
-    });
-
-    it("emits content before sync mode starts", () => {
-      const stabilizer = new TerminalSyncBuffer();
-      const emits: string[] = [];
-
-      stabilizer.attach({} as any, (data: string) => emits.push(data));
-
-      // Content before sync start
-      stabilizer.ingest("prefix\x1b[?2026hcontent\x1b[?2026l");
-
-      // Should emit prefix immediately (pre-sync), then complete frame
-      expect(emits).toHaveLength(2);
-      expect(emits[0]).toBe("prefix");
-      expect(emits[1]).toBe("\x1b[?2026hcontent\x1b[?2026l");
-    });
-
-    it("times out sync mode after 500ms and appends ESU", () => {
-      const stabilizer = new TerminalSyncBuffer();
-      const emits: string[] = [];
-
-      stabilizer.attach({} as any, (data: string) => emits.push(data));
-
-      // Start sync mode but never end it
-      stabilizer.ingest("\x1b[?2026hhanging content");
-      expect(emits).toHaveLength(0);
-
-      // Wait for sync timeout - should append ESU to close the block
-      vi.advanceTimersByTime(500);
-      expect(emits).toHaveLength(1);
-      expect(emits[0]).toBe("\x1b[?2026hhanging content\x1b[?2026l");
-    });
-  });
-
-  describe("traditional frame boundaries (non-sync TUIs)", () => {
+  describe("traditional frame boundaries (non-DEC-2026 TUIs)", () => {
     it("emits on clear screen boundary", () => {
       const stabilizer = new TerminalSyncBuffer();
       const emits: string[] = [];
@@ -224,7 +157,7 @@ describe("TerminalSyncBuffer", () => {
         vi.advanceTimersByTime(60); // Reset stability timer each time
       }
 
-      // Should have hit max hold (500ms) by now
+      // Should have hit max hold (200ms) by now
       expect(emits.length).toBeGreaterThan(0);
     });
   });
@@ -257,6 +190,57 @@ describe("TerminalSyncBuffer", () => {
 
       expect(emits).toHaveLength(1);
       expect(emits[0]).toBe("pending");
+    });
+  });
+
+  describe("bypass mode", () => {
+    it("passes through data immediately when bypassed", () => {
+      const stabilizer = new TerminalSyncBuffer();
+      const emits: string[] = [];
+
+      stabilizer.attach({} as any, (data: string) => emits.push(data));
+      stabilizer.setBypass(true);
+
+      stabilizer.ingest("immediate output");
+
+      // Should emit immediately without buffering
+      expect(emits).toHaveLength(1);
+      expect(emits[0]).toBe("immediate output");
+    });
+
+    it("flushes buffered data when entering bypass mode", () => {
+      const stabilizer = new TerminalSyncBuffer();
+      const emits: string[] = [];
+
+      stabilizer.attach({} as any, (data: string) => emits.push(data));
+
+      // Buffer some data
+      stabilizer.ingest("buffered data");
+      expect(emits).toHaveLength(0);
+
+      // Enter bypass mode - should flush immediately
+      stabilizer.setBypass(true);
+      expect(emits).toHaveLength(1);
+      expect(emits[0]).toBe("buffered data");
+    });
+
+    it("resumes normal buffering after bypass disabled", () => {
+      const stabilizer = new TerminalSyncBuffer();
+      const emits: string[] = [];
+
+      stabilizer.attach({} as any, (data: string) => emits.push(data));
+
+      // Enter and exit bypass
+      stabilizer.setBypass(true);
+      stabilizer.setBypass(false);
+
+      // New data should buffer normally
+      stabilizer.ingest("new data");
+      expect(emits).toHaveLength(0);
+
+      vi.advanceTimersByTime(100);
+      expect(emits).toHaveLength(1);
+      expect(emits[0]).toBe("new data");
     });
   });
 

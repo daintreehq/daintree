@@ -1,24 +1,22 @@
 /**
- * TerminalSyncBuffer - DEC 2026 Synchronized Output Implementation
+ * TerminalSyncBuffer - Legacy Frame Detection for Agent Terminals
  *
- * Implements the DEC private mode 2026 "Synchronized Output" protocol for
- * modern AI terminal agents (Claude Code, Gemini CLI, Codex, etc.).
+ * Buffers PTY output and detects frame boundaries for AI terminal agents
+ * (Claude Code, Gemini CLI, Codex, etc.) that don't use DEC 2026 protocol.
  *
  * WHY THIS EXISTS:
- * xterm.js doesn't support DEC 2026, so it renders output immediately as it
- * arrives. When TUIs send rapid screen updates wrapped in sync sequences,
- * users see flickering/tearing as partial frames are rendered. This buffer
- * implements the missing protocol support.
+ * xterm.js 6.0.0+ handles DEC 2026 (Synchronized Output) natively, but some
+ * TUIs don't use this protocol. This buffer detects traditional frame
+ * boundaries to reduce flicker for those applications.
  *
  * HOW IT WORKS:
- * - \x1b[?2026h (BSU) = "Begin Synchronized Update" - start buffering
- * - \x1b[?2026l (ESU) = "End Synchronized Update" - emit complete frame
- * - Between BSU and ESU, all output is buffered and emitted atomically
+ * - Detects traditional frame boundaries (clear screen \x1b[2J, alt buffer)
+ * - Stability timeout (100ms quiet = frame complete)
+ * - Safety valve: 200ms max hold before force flush
  *
- * FALLBACKS:
- * - For TUIs without DEC 2026: detects traditional frame boundaries (\x1b[2J)
- * - For unknown patterns: stability timeout (100ms quiet = frame complete)
- * - Safety valve: 500ms max sync hold, 200ms max general hold
+ * WHAT IT DOESN'T DO:
+ * - DEC 2026 protocol handling (xterm.js 6.0.0+ handles this natively)
+ * - BSU/ESU sequences pass through unchanged to xterm.js
  *
  * SCOPE:
  * Only enabled for agent terminals (isAgentTerminal). Normal shells bypass
@@ -29,12 +27,7 @@ import type { Terminal as HeadlessTerminal } from "@xterm/headless";
 import { appendFileSync, mkdirSync } from "fs";
 import { join } from "path";
 
-// Synchronized output mode (DEC private mode 2026)
-// BSU = Begin Synchronized Update, ESU = End Synchronized Update
-const SYNC_OUTPUT_START = "\x1b[?2026h"; // BSU
-const SYNC_OUTPUT_END = "\x1b[?2026l"; // ESU
-
-// Traditional frame boundaries (for TUIs that don't use sync mode)
+// Traditional frame boundaries (for TUIs that don't use DEC 2026)
 const CLEAR_SCREEN = "\x1b[2J";
 const ALT_BUFFER_ON = "\x1b[?1049h";
 
@@ -64,17 +57,11 @@ export class TerminalSyncBuffer {
   // Current frame being built
   private buffer = "";
 
-  // Synchronized output mode - don't emit while active
-  private inSyncMode = false;
-
   // Stability timer
   private stabilityTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Max hold timer
   private maxHoldTimer: ReturnType<typeof setTimeout> | null = null;
-
-  // Sync mode timeout - if we never get the end sequence, force emit
-  private syncTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Bypass mode - passthrough when in alt screen buffer
   private bypassed = false;
@@ -123,8 +110,6 @@ export class TerminalSyncBuffer {
   detach(): void {
     this.cancelStabilityTimer();
     this.cancelMaxHoldTimer();
-    this.cancelSyncTimeoutTimer();
-    this.inSyncMode = false;
     // Emit any pending data
     if (this.buffer) {
       this.emit(this.buffer, "detach");
@@ -138,7 +123,6 @@ export class TerminalSyncBuffer {
     this.bypassed = bypass;
     if (bypass && this.buffer.length > 0) {
       this.cancelAllTimers();
-      this.inSyncMode = false;
       this.emit(this.buffer, "bypass-flush");
       this.buffer = "";
     }
@@ -159,29 +143,16 @@ export class TerminalSyncBuffer {
     // Append all data to buffer first
     this.buffer += data;
 
-    // Check for synchronized output mode transitions
-    this.processSyncMode();
-
     // Force flush if buffer too large
     if (this.buffer.length >= MAX_BUFFER_SIZE) {
       this.cancelAllTimers();
-      this.inSyncMode = false;
       this.emit(this.buffer, "overflow");
       this.buffer = "";
       return;
     }
 
-    // In sync mode - just wait for sync end (with timeout backup)
-    if (this.inSyncMode) {
-      // Schedule sync timeout if not already scheduled
-      if (!this.syncTimeoutTimer) {
-        this.scheduleSyncTimeout();
-      }
-      return;
-    }
-
-    // Not in sync mode - check for traditional frame boundaries
-    // This handles TUIs that don't use synchronized output (Gemini, Codex, etc.)
+    // Check for traditional frame boundaries
+    // This handles TUIs that don't use DEC 2026 (Gemini, Codex, etc.)
     this.processFrameBoundaries();
 
     // Schedule timers for remaining buffered content
@@ -190,48 +161,6 @@ export class TerminalSyncBuffer {
         this.scheduleMaxHoldFlush();
       }
       this.scheduleStabilityFlush();
-    }
-  }
-
-  /**
-   * Process the buffer for sync mode start/end sequences.
-   * Emits complete frames when sync mode ends.
-   */
-  private processSyncMode(): void {
-    // Look for sync START in buffer
-    const syncStartIdx = this.buffer.indexOf(SYNC_OUTPUT_START);
-    if (syncStartIdx !== -1 && !this.inSyncMode) {
-      // Emit anything before the sync start
-      if (syncStartIdx > 0) {
-        const beforeSync = this.buffer.substring(0, syncStartIdx);
-        this.buffer = this.buffer.substring(syncStartIdx);
-        this.cancelAllTimers();
-        this.emit(beforeSync, "pre-sync");
-      }
-
-      // Enter sync mode
-      this.inSyncMode = true;
-    }
-
-    // Look for sync END in buffer (only if in sync mode)
-    if (this.inSyncMode) {
-      const syncEndIdx = this.buffer.indexOf(SYNC_OUTPUT_END);
-      if (syncEndIdx !== -1) {
-        // Found end - emit everything including the end sequence
-        const endOfSequence = syncEndIdx + SYNC_OUTPUT_END.length;
-        const completeFrame = this.buffer.substring(0, endOfSequence);
-        this.buffer = this.buffer.substring(endOfSequence);
-
-        // Exit sync mode and emit
-        this.inSyncMode = false;
-        this.cancelAllTimers();
-        this.emit(completeFrame, "sync-complete");
-
-        // Process any remaining data (might have more sync sequences)
-        if (this.buffer.length > 0) {
-          this.processSyncMode();
-        }
-      }
     }
   }
 
@@ -320,34 +249,9 @@ export class TerminalSyncBuffer {
     }
   }
 
-  private scheduleSyncTimeout(): void {
-    this.cancelSyncTimeoutTimer();
-
-    // Give sync mode 500ms before force emitting
-    // This is a safety valve in case we never get the end sequence
-    this.syncTimeoutTimer = setTimeout(() => {
-      this.syncTimeoutTimer = null;
-      if (this.inSyncMode && this.buffer.length > 0) {
-        this.inSyncMode = false;
-        // Append ESU to close the sync block - prevents renderer from getting
-        // stuck in sync mode if it ever supports DEC 2026
-        this.emit(this.buffer + SYNC_OUTPUT_END, "sync-timeout");
-        this.buffer = "";
-      }
-    }, 500);
-  }
-
-  private cancelSyncTimeoutTimer(): void {
-    if (this.syncTimeoutTimer) {
-      clearTimeout(this.syncTimeoutTimer);
-      this.syncTimeoutTimer = null;
-    }
-  }
-
   private cancelAllTimers(): void {
     this.cancelStabilityTimer();
     this.cancelMaxHoldTimer();
-    this.cancelSyncTimeoutTimer();
   }
 
   private emit(data: string, reason: string): void {
@@ -373,7 +277,6 @@ export class TerminalSyncBuffer {
     framesEmitted: number;
     isInteractive: boolean;
     bypassed: boolean;
-    inSyncMode: boolean;
   } {
     return {
       hasPending: this.buffer.length > 0,
@@ -381,7 +284,6 @@ export class TerminalSyncBuffer {
       framesEmitted: this.framesEmitted,
       isInteractive: this.isInteractive(),
       bypassed: this.bypassed,
-      inSyncMode: this.inSyncMode,
     };
   }
 }
