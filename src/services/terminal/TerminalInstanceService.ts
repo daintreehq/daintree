@@ -143,7 +143,6 @@ class TerminalInstanceService {
 
     this.unseenTracker.incrementUnseen(id, managed.isUserScrolledBack);
 
-    const shouldAck = !this.dataBuffer.isPolling();
     this.perfWriteSampleCounter += 1;
     const shouldSample = this.perfWriteSampleCounter % 64 === 0;
 
@@ -152,11 +151,10 @@ class TerminalInstanceService {
         ? data.length
         : data.byteLength
       : 0;
-    const acknowledgedBytes = shouldAck
-      ? typeof data === "string"
+    const acknowledgedBytes =
+      typeof data === "string"
         ? this.textEncoder.encode(data).length
-        : data.byteLength
-      : 0;
+        : data.byteLength;
 
     if (shouldSample) {
       markRendererPerformance(PERF_MARKS.TERMINAL_DATA_PARSED, {
@@ -177,9 +175,7 @@ class TerminalInstanceService {
 
       managed.pendingWrites = Math.max(0, (managed.pendingWrites ?? 1) - 1);
 
-      if (shouldAck) {
-        terminalClient.acknowledgeData(id, acknowledgedBytes);
-      }
+      terminalClient.acknowledgeData(id, acknowledgedBytes);
 
       if (shouldSample) {
         const writeDurationMs =

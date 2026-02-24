@@ -6,12 +6,9 @@ import type {
 } from "../../shared/types/pty-host.js";
 
 export const MAX_PACKET_PAYLOAD = 65535;
-export const STREAM_STALL_SUSPEND_MS = 2000;
 export const MAX_PENDING_BYTES_PER_TERMINAL = 4 * 1024 * 1024;
 export const MAX_TOTAL_PENDING_BYTES = 16 * 1024 * 1024;
-export const BACKPRESSURE_RESUME_THRESHOLD = 80;
-export const BACKPRESSURE_CHECK_INTERVAL_MS = 100;
-export const BACKPRESSURE_MAX_PAUSE_MS = 5000;
+export const BACKPRESSURE_SAFETY_TIMEOUT_MS = 10000;
 
 export type PendingVisualSegment = {
   data: Uint8Array;
@@ -227,7 +224,7 @@ export class BackpressureManager {
 
     const checkInterval = this.pausedTerminals.get(id);
     if (checkInterval) {
-      clearInterval(checkInterval);
+      clearTimeout(checkInterval);
       this.pausedTerminals.delete(id);
     }
     this.pauseStartTimes.delete(id);
@@ -258,7 +255,7 @@ export class BackpressureManager {
   cleanupTerminal(id: string): void {
     const checkInterval = this.pausedTerminals.get(id);
     if (checkInterval) {
-      clearInterval(checkInterval);
+      clearTimeout(checkInterval);
       this.pausedTerminals.delete(id);
     }
     this.pauseStartTimes.delete(id);
@@ -270,7 +267,7 @@ export class BackpressureManager {
 
   dispose(): void {
     for (const [id, checkInterval] of this.pausedTerminals) {
-      clearInterval(checkInterval);
+      clearTimeout(checkInterval);
       console.log(`[PtyHost] Cleared backpressure monitor for terminal ${id}`);
     }
     this.pausedTerminals.clear();
