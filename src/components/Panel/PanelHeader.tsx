@@ -22,6 +22,7 @@ import { SortableContext, horizontalListSortingStrategy, arrayMove } from "@dnd-
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import type { PanelKind, TerminalType } from "@/types";
 import { cn, getBaseTitle } from "@/lib/utils";
+import { createTooltipWithShortcut, formatShortcutForTooltip } from "@/lib/platform";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
@@ -600,7 +601,7 @@ function PanelHeaderComponent({
                   onToggleMaximize();
                 }}
                 className="flex items-center gap-1.5 px-2 py-1 bg-canopy-accent/10 text-canopy-accent hover:bg-canopy-accent/20 rounded transition-colors mr-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
-                title="Restore Grid View (Ctrl+Shift+F)"
+                title={createTooltipWithShortcut("Restore Grid View", "Ctrl+Shift+F")}
                 aria-label="Exit Focus mode and restore grid view"
               >
                 <Minimize2 className="w-3.5 h-3.5" aria-hidden="true" />
@@ -615,7 +616,7 @@ function PanelHeaderComponent({
                     onToggleMaximize();
                   }}
                   className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
-                  title="Maximize (Ctrl+Shift+F)"
+                  title={createTooltipWithShortcut("Maximize", "Ctrl+Shift+F")}
                   aria-label="Maximize"
                 >
                   <Maximize2 className="w-3 h-3" aria-hidden="true" />
@@ -635,8 +636,8 @@ function PanelHeaderComponent({
                 }
               }}
               className="p-1.5 hover:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-status-error)] focus-visible:outline-offset-2 text-canopy-text/60 hover:text-[var(--color-status-error)] transition-colors"
-              title="Close Session (Alt+Click to force close)"
-              aria-label="Close session. Hold Alt and click to force close without recovery."
+              title={formatShortcutForTooltip("Close Session (Alt+Click to force close)")}
+              aria-label={formatShortcutForTooltip("Close session. Hold Alt and click to force close without recovery.")}
             >
               <X className="w-3 h-3" aria-hidden="true" />
             </button>
