@@ -128,4 +128,79 @@ describe("WorkspaceClient resilience", () => {
       (client as never as { pendingRequests: Map<string, unknown> }).pendingRequests.size
     ).toBe(0);
   });
+
+  it("discards getAllStatesAsync response when project scope changed before response arrives", async () => {
+    const clientPrivate = client as never as {
+      currentProjectScopeId: string | null;
+    };
+
+    clientPrivate.currentProjectScopeId = "scope-project-a";
+
+    // getAllStatesAsync calls sendWithResponse which synchronously calls postMessage
+    const getAllPromise = client.getAllStatesAsync();
+
+    // Capture the requestId from the postMessage call
+    const lastCall = child.postMessage.mock.calls.at(-1)!;
+    const requestId = (lastCall[0] as { requestId: string }).requestId;
+
+    // Simulate project switch: scope is cleared
+    clientPrivate.currentProjectScopeId = null;
+
+    // Deliver the stale all-states response
+    child.emit("message", {
+      type: "all-states",
+      requestId,
+      states: [{ id: "stale-worktree", name: "Stale Worktree" }],
+    });
+
+    const result = await getAllPromise;
+    expect(result).toEqual([]);
+  });
+
+  it("discards getAllStatesAsync response when scope was null at call time (no project loaded)", async () => {
+    const clientPrivate = client as never as {
+      currentProjectScopeId: string | null;
+    };
+
+    // Scope is null both before and after the request (switch window)
+    clientPrivate.currentProjectScopeId = null;
+
+    const getAllPromise = client.getAllStatesAsync();
+
+    const lastCall = child.postMessage.mock.calls.at(-1)!;
+    const requestId = (lastCall[0] as { requestId: string }).requestId;
+
+    child.emit("message", {
+      type: "all-states",
+      requestId,
+      states: [{ id: "no-scope-worktree", name: "No Scope Worktree" }],
+    });
+
+    const result = await getAllPromise;
+    expect(result).toEqual([]);
+  });
+
+  it("returns getAllStatesAsync results when project scope is unchanged", async () => {
+    const clientPrivate = client as never as {
+      currentProjectScopeId: string | null;
+    };
+
+    clientPrivate.currentProjectScopeId = "scope-project-a";
+
+    const getAllPromise = client.getAllStatesAsync();
+
+    const lastCall = child.postMessage.mock.calls.at(-1)!;
+    const requestId = (lastCall[0] as { requestId: string }).requestId;
+
+    // Scope has NOT changed - deliver a valid response
+    child.emit("message", {
+      type: "all-states",
+      requestId,
+      states: [{ id: "valid-worktree", name: "Valid Worktree" }],
+    });
+
+    const result = await getAllPromise;
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("valid-worktree");
+  });
 });

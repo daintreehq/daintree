@@ -648,12 +648,20 @@ export class WorkspaceClient extends EventEmitter {
   }
 
   async getAllStatesAsync(): Promise<WorktreeSnapshot[]> {
+    const scopeAtStart = this.currentProjectScopeId;
     const requestId = this.generateRequestId();
 
     const result = await this.sendWithResponse<{ states: WorktreeSnapshot[] }>({
       type: "get-all-states",
       requestId,
     });
+
+    if (scopeAtStart === null || scopeAtStart !== this.currentProjectScopeId) {
+      console.warn(
+        "[WorkspaceClient] Discarding stale getAllStatesAsync response - project scope changed"
+      );
+      return [];
+    }
 
     return result.states;
   }
