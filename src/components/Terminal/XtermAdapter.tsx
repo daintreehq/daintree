@@ -423,7 +423,7 @@ function XtermAdapterComponent({
         "w-full h-full text-white overflow-hidden bg-canopy-bg",
         // In normal buffer mode: apply padding and rounded corners
         // In alt buffer mode (TUI apps like OpenCode, vim, htop): remove padding for tight full-screen fit
-        !isAltBuffer && "pl-3 pt-3 pb-3 pr-4 rounded-b-[var(--radius-lg)]",
+        !isAltBuffer && "pl-3 pt-3 pb-3 pr-3 rounded-b-[var(--radius-lg)]",
         className
       )}
     >

@@ -328,6 +328,14 @@
     font-family: "JetBrains Mono", monospace;
   }
 
+  /* Hide native viewport scrollbar — xterm v6 provides its own overlay scrollbar */
+  .xterm .xterm-viewport {
+    scrollbar-width: none;
+  }
+  .xterm .xterm-viewport::-webkit-scrollbar {
+    display: none;
+  }
+
   /* Consistent monospace font stack */
   code,
   kbd,

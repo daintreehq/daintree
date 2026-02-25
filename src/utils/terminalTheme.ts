@@ -22,6 +22,9 @@ const CANOPY_TERMINAL_THEME_FALLBACK = {
   brightMagenta: "#c084fc",
   brightCyan: "#67e8f9",
   brightWhite: "#fafafa",
+  scrollbarSliderBackground: "rgba(82, 82, 91, 0.4)",
+  scrollbarSliderHoverBackground: "rgba(82, 82, 91, 0.6)",
+  scrollbarSliderActiveBackground: "rgba(82, 82, 91, 0.8)",
 };
 
 export const CANOPY_TERMINAL_THEME = CANOPY_TERMINAL_THEME_FALLBACK;
@@ -75,5 +78,8 @@ export function getTerminalThemeFromCSS(): typeof CANOPY_TERMINAL_THEME_FALLBACK
     brightMagenta: "#c084fc",
     brightCyan: "#67e8f9",
     brightWhite: "#fafafa",
+    scrollbarSliderBackground: "rgba(82, 82, 91, 0.4)",
+    scrollbarSliderHoverBackground: "rgba(82, 82, 91, 0.6)",
+    scrollbarSliderActiveBackground: "rgba(82, 82, 91, 0.8)",
   };
 }
