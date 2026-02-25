@@ -28,6 +28,7 @@ import type {
   PRDetectedPayload,
   PRClearedPayload,
   IssueDetectedPayload,
+  IssueNotFoundPayload,
   GitStatus,
   KeyAction,
   TerminalRecipe,
@@ -224,6 +225,7 @@ const CHANNELS = {
   PR_DETECTED: "pr:detected",
   PR_CLEARED: "pr:cleared",
   ISSUE_DETECTED: "issue:detected",
+  ISSUE_NOT_FOUND: "issue:not-found",
 
   // GitHub channels
   GITHUB_GET_REPO_STATS: "github:get-repo-stats",
@@ -1028,6 +1030,9 @@ const api: ElectronAPI = {
 
     onIssueDetected: (callback: (data: IssueDetectedPayload) => void) =>
       _typedOn(CHANNELS.ISSUE_DETECTED, callback),
+
+    onIssueNotFound: (callback: (data: IssueNotFoundPayload) => void) =>
+      _typedOn(CHANNELS.ISSUE_NOT_FOUND, callback),
   },
 
   // Notes API

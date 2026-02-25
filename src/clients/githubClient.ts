@@ -6,6 +6,7 @@ import type {
   PRDetectedPayload,
   PRClearedPayload,
   IssueDetectedPayload,
+  IssueNotFoundPayload,
 } from "../types";
 import type {
   GitHubIssue,
@@ -81,6 +82,10 @@ export const githubClient = {
 
   onIssueDetected: (callback: (data: IssueDetectedPayload) => void): (() => void) => {
     return window.electron.github.onIssueDetected(callback);
+  },
+
+  onIssueNotFound: (callback: (data: IssueNotFoundPayload) => void): (() => void) => {
+    return window.electron.github.onIssueNotFound(callback);
   },
 
   getIssueUrl: (cwd: string, issueNumber: number): Promise<string | null> => {

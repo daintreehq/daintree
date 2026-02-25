@@ -79,6 +79,7 @@ import type {
   PRDetectedPayload,
   PRClearedPayload,
   IssueDetectedPayload,
+  IssueNotFoundPayload,
 } from "./github.js";
 import type { GitGetFileDiffPayload } from "./git.js";
 import type { TerminalConfig } from "./config.js";
@@ -1050,6 +1051,7 @@ export interface IpcEventMap {
 
   // Issue detection events
   "issue:detected": IssueDetectedPayload;
+  "issue:not-found": IssueNotFoundPayload;
 
   // Error events
   "error:notify": AppError;

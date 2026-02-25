@@ -107,6 +107,12 @@ export const EVENT_META: Record<keyof CanopyEventMap, EventMetadata> = {
     requiresTimestamp: true,
     description: "Issue metadata detected for worktree branch",
   },
+  "sys:issue:not-found": {
+    category: "system",
+    requiresContext: true,
+    requiresTimestamp: true,
+    description: "GitHub confirmed issue does not exist on current repo",
+  },
 
   // File events
   "file:open": {
@@ -489,6 +495,12 @@ export type CanopyEventMap = {
     timestamp: number;
   };
 
+  "sys:issue:not-found": {
+    worktreeId: string;
+    issueNumber: number;
+    timestamp: number;
+  };
+
   /**
    * Emitted when a new AI agent (Claude, Gemini, etc.) is spawned in a terminal.
    * Use this to track agent creation and associate agents with worktrees.
@@ -822,6 +834,7 @@ export const ALL_EVENT_TYPES: Array<keyof CanopyEventMap> = [
   "sys:pr:detected",
   "sys:pr:cleared",
   "sys:issue:detected",
+  "sys:issue:not-found",
   "agent:spawned",
   "agent:state-changed",
   "agent:detected",

@@ -1514,6 +1514,28 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     );
 
     this.prEventUnsubscribers.push(
+      events.on("sys:issue:not-found", (data) => {
+        const monitor = this.monitors.get(data.worktreeId);
+        if (monitor && monitor.issueNumber === data.issueNumber) {
+          monitor.issueNumber = undefined;
+          monitor.issueTitle = undefined;
+          if (monitor.hasInitialStatus) {
+            this.emitUpdate(monitor);
+          }
+        }
+
+        if (this.projectScopeId) {
+          this.sendEvent({
+            type: "issue-not-found",
+            worktreeId: data.worktreeId,
+            issueNumber: data.issueNumber,
+            projectScopeId: this.projectScopeId,
+          });
+        }
+      })
+    );
+
+    this.prEventUnsubscribers.push(
       events.on("sys:pr:cleared", (data: any) => {
         const monitor = this.monitors.get(data.worktreeId);
         if (monitor) {

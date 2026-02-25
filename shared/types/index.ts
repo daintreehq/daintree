@@ -125,6 +125,7 @@ export type {
   PRClearedPayload,
   // Issue detection IPC types
   IssueDetectedPayload,
+  IssueNotFoundPayload,
   // Project close IPC types
   ProjectCloseResult,
   ProjectStats,

@@ -67,6 +67,7 @@ import type {
   PRDetectedPayload,
   PRClearedPayload,
   IssueDetectedPayload,
+  IssueNotFoundPayload,
 } from "./github.js";
 import type { TerminalConfig } from "./config.js";
 import type { HibernationConfig } from "./hibernation.js";
@@ -418,6 +419,7 @@ export interface ElectronAPI {
     onPRDetected(callback: (data: PRDetectedPayload) => void): () => void;
     onPRCleared(callback: (data: PRClearedPayload) => void): () => void;
     onIssueDetected(callback: (data: IssueDetectedPayload) => void): () => void;
+    onIssueNotFound(callback: (data: IssueNotFoundPayload) => void): () => void;
   };
   notes: {
     create(

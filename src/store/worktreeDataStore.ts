@@ -186,7 +186,24 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
           const next = new Map(prev.worktrees);
           next.set(data.worktreeId, {
             ...worktree,
+            issueNumber: data.issueNumber,
             issueTitle: data.issueTitle,
+          });
+          return { worktrees: next };
+        });
+      });
+
+      const unsubIssueNotFound = githubClient.onIssueNotFound((data) => {
+        set((prev) => {
+          const worktree = prev.worktrees.get(data.worktreeId);
+          if (!worktree) return prev;
+          if (worktree.issueNumber !== data.issueNumber) return prev;
+
+          const next = new Map(prev.worktrees);
+          next.set(data.worktreeId, {
+            ...worktree,
+            issueNumber: undefined,
+            issueTitle: undefined,
           });
           return { worktrees: next };
         });
@@ -198,6 +215,7 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
         unsubPRDetected();
         unsubPRCleared();
         unsubIssueDetected();
+        unsubIssueNotFound();
       };
     }
 

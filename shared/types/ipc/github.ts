@@ -74,3 +74,10 @@ export interface IssueDetectedPayload {
   issueNumber: number;
   issueTitle: string;
 }
+
+/** Issue not found payload - emitted when GitHub confirms issue doesn't exist on current repo */
+export interface IssueNotFoundPayload {
+  worktreeId: string;
+  issueNumber: number;
+  timestamp: number;
+}

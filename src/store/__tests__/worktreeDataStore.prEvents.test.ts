@@ -1,10 +1,16 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { WorktreeState } from "@shared/types";
-import type { PRDetectedPayload, PRClearedPayload, IssueDetectedPayload } from "../../types";
+import type {
+  PRDetectedPayload,
+  PRClearedPayload,
+  IssueDetectedPayload,
+  IssueNotFoundPayload,
+} from "../../types";
 
 let mockOnPRDetectedCallback: ((data: PRDetectedPayload) => void) | null = null;
 let mockOnPRClearedCallback: ((data: PRClearedPayload) => void) | null = null;
 let mockOnIssueDetectedCallback: ((data: IssueDetectedPayload) => void) | null = null;
+let mockOnIssueNotFoundCallback: ((data: IssueNotFoundPayload) => void) | null = null;
 
 vi.mock("@/clients", () => ({
   worktreeClient: {
@@ -30,6 +36,12 @@ vi.mock("@/clients", () => ({
       mockOnIssueDetectedCallback = callback;
       return () => {
         mockOnIssueDetectedCallback = null;
+      };
+    }),
+    onIssueNotFound: vi.fn((callback) => {
+      mockOnIssueNotFoundCallback = callback;
+      return () => {
+        mockOnIssueNotFoundCallback = null;
       };
     }),
   },
@@ -71,6 +83,7 @@ async function waitForInitialized() {
       expect(mockOnPRDetectedCallback).toBeTypeOf("function");
       expect(mockOnPRClearedCallback).toBeTypeOf("function");
       expect(mockOnIssueDetectedCallback).toBeTypeOf("function");
+      expect(mockOnIssueNotFoundCallback).toBeTypeOf("function");
     },
     { timeout: 1000 }
   );
@@ -101,6 +114,7 @@ describe("worktreeDataStore PR events", () => {
     mockOnPRDetectedCallback = null;
     mockOnPRClearedCallback = null;
     mockOnIssueDetectedCallback = null;
+    mockOnIssueNotFoundCallback = null;
   });
 
   it("merges PR detected event into existing worktree", async () => {
@@ -199,12 +213,14 @@ describe("worktreeDataStore PR events", () => {
     expect(mockOnPRDetectedCallback).toBeTruthy();
     expect(mockOnPRClearedCallback).toBeTruthy();
     expect(mockOnIssueDetectedCallback).toBeTruthy();
+    expect(mockOnIssueNotFoundCallback).toBeTruthy();
 
     cleanupWorktreeDataStore();
 
     expect(mockOnPRDetectedCallback).toBeNull();
     expect(mockOnPRClearedCallback).toBeNull();
     expect(mockOnIssueDetectedCallback).toBeNull();
+    expect(mockOnIssueNotFoundCallback).toBeNull();
   });
 
   it("handles merged PR state", async () => {
@@ -277,5 +293,92 @@ describe("worktreeDataStore PR events", () => {
     expect(updated?.prUrl).toBe("https://github.com/test/repo/pull/200");
     expect(updated?.prState).toBe("open");
     expect(updated?.prTitle).toBe("Updated PR");
+  });
+
+  it("clears issueNumber when issue not found event fires", async () => {
+    const store = useWorktreeDataStore;
+    const mockWorktree: WorktreeState = {
+      ...createMockWorktree("wt-6"),
+      issueNumber: 2348,
+      issueTitle: undefined,
+    };
+
+    vi.mocked(worktreeClient.getAll).mockResolvedValueOnce([mockWorktree]);
+    store.getState().initialize();
+    await waitForInitialized();
+
+    expect(store.getState().worktrees.get("wt-6")?.issueNumber).toBe(2348);
+
+    mockOnIssueNotFoundCallback!({
+      worktreeId: "wt-6",
+      issueNumber: 2348,
+      timestamp: Date.now(),
+    });
+
+    const updated = store.getState().worktrees.get("wt-6");
+    expect(updated?.issueNumber).toBeUndefined();
+    expect(updated?.issueTitle).toBeUndefined();
+    expect(updated?.name).toBe("worktree-wt-6");
+  });
+
+  it("ignores issue not found event for non-existent worktree", async () => {
+    const store = useWorktreeDataStore;
+
+    store.getState().initialize();
+    await waitForInitialized();
+
+    const initialWorktrees = new Map(store.getState().worktrees);
+
+    mockOnIssueNotFoundCallback!({
+      worktreeId: "non-existent",
+      issueNumber: 9999,
+      timestamp: Date.now(),
+    });
+
+    expect(store.getState().worktrees).toEqual(initialWorktrees);
+  });
+
+  it("ignores issue not found event when issueNumber does not match current worktree", async () => {
+    const store = useWorktreeDataStore;
+    const mockWorktree: WorktreeState = {
+      ...createMockWorktree("wt-7"),
+      issueNumber: 100,
+      issueTitle: "Real issue",
+    };
+
+    vi.mocked(worktreeClient.getAll).mockResolvedValueOnce([mockWorktree]);
+    store.getState().initialize();
+    await waitForInitialized();
+
+    expect(store.getState().worktrees.get("wt-7")?.issueNumber).toBe(100);
+
+    mockOnIssueNotFoundCallback!({
+      worktreeId: "wt-7",
+      issueNumber: 999,
+      timestamp: Date.now(),
+    });
+
+    const updated = store.getState().worktrees.get("wt-7");
+    expect(updated?.issueNumber).toBe(100);
+    expect(updated?.issueTitle).toBe("Real issue");
+  });
+
+  it("updates issueNumber on issue detected event", async () => {
+    const store = useWorktreeDataStore;
+    const mockWorktree = createMockWorktree("wt-8");
+
+    vi.mocked(worktreeClient.getAll).mockResolvedValueOnce([mockWorktree]);
+    store.getState().initialize();
+    await waitForInitialized();
+
+    mockOnIssueDetectedCallback!({
+      worktreeId: "wt-8",
+      issueNumber: 42,
+      issueTitle: "Fix the thing",
+    });
+
+    const updated = store.getState().worktrees.get("wt-8");
+    expect(updated?.issueNumber).toBe(42);
+    expect(updated?.issueTitle).toBe("Fix the thing");
   });
 });

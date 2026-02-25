@@ -251,6 +251,12 @@ export type WorkspaceHostEvent =
       issueTitle: string;
       projectScopeId: string;
     }
+  | {
+      type: "issue-not-found";
+      worktreeId: string;
+      issueNumber: number;
+      projectScopeId: string;
+    }
   // CopyTree events
   | { type: "copytree:progress"; operationId: string; progress: CopyTreeProgress }
   | {

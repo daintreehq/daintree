@@ -459,6 +459,20 @@ export class WorkspaceClient extends EventEmitter {
         break;
       }
 
+      case "issue-not-found": {
+        if (!this.isCurrentProjectEvent(event.projectScopeId)) {
+          return;
+        }
+        const notFoundPayload = {
+          worktreeId: event.worktreeId,
+          issueNumber: event.issueNumber,
+          timestamp: Date.now(),
+        };
+        events.emit("sys:issue:not-found", notFoundPayload);
+        this.sendToRenderer(CHANNELS.ISSUE_NOT_FOUND, notFoundPayload);
+        break;
+      }
+
       // CopyTree events
       case "copytree:progress": {
         const callback = this.copyTreeProgressCallbacks.get(event.operationId);

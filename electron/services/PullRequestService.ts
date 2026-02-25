@@ -413,6 +413,12 @@ class PullRequestService {
             issueTitle: checkResult.issueTitle,
             timestamp: Date.now(),
           });
+        } else if (issueNumber && !checkResult.issueTitle) {
+          events.emit("sys:issue:not-found", {
+            worktreeId,
+            issueNumber,
+            timestamp: Date.now(),
+          });
         }
 
         if (checkResult.pr) {
