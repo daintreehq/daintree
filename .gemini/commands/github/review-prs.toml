@@ -4,6 +4,10 @@ prompt = """
 
 **Arguments:** {{args}}
 
+**CRITICAL: NEVER DELETE UNPUSHED WORK**
+
+Before deleting ANY worktree or local branch, you MUST first push all local commits to origin. This is the #1 safety rule and overrides all other instructions including speed. Losing local work is catastrophic and unrecoverable. If a push fails, STOP and leave the worktree intact.
+
 **CRITICAL: BIAS TOWARDS ACTION**
 
 This command is **fully automated**. Your job is to merge as many PRs as possible with minimal hesitation. You are acting as both the automation engineer and the expert reviewer.
@@ -14,6 +18,7 @@ This command is **fully automated**. Your job is to merge as many PRs as possibl
 - **DO NOT** run tests, linting, or formatting during the merge loop — only at the very end.
 - **DO** fix issues yourself instead of deferring to the user.
 - **DO** continue to the next PR if one fails — never stop the batch.
+- **DO** always push local commits to origin before deleting worktrees or branches.
 
 **Default stance:** Merge everything first, fix quality issues once at the end. The user wants PRs merged, not status updates.
 
@@ -98,7 +103,19 @@ For each PR in the calculated order:
 *   **Sync Local:** `git pull origin {baseRefName}` to keep local branch up to date for the next PR.
 
 #### 2.4: Cleanup
-*   **Delete Worktree:** If `git worktree list` shows a worktree for this branch, remove it: `git worktree remove --force {path}`.
+
+**⚠️ CRITICAL: PUSH BEFORE DELETE — DATA LOSS PREVENTION ⚠️**
+
+Before removing ANY worktree, you MUST ensure all local work is pushed to origin. Worktree removal with `--force` destroys unpushed commits permanently. This is non-negotiable.
+
+*   **Find Worktree:** Check if `git worktree list` shows a worktree for this branch. If not, skip to branch cleanup.
+*   **Push Unpushed Work:** For each worktree being removed:
+    1.  `cd {worktree_path}`
+    2.  **Check for uncommitted changes:** `git status --short`. If dirty: `git add -A && git commit -m "chore: save uncommitted work before cleanup"`.
+    3.  **Check for unpushed commits:** `git log origin/{headRefName}..HEAD --oneline 2>/dev/null`. If there are unpushed commits (any output), you MUST push: `git push origin {headRefName}`.
+    4.  **Verify push succeeded:** If `git push` fails, do NOT delete the worktree. Log the failure and continue to the next PR. Never delete a worktree with unpushed commits.
+    5.  `cd` back to the main repo root.
+*   **Delete Worktree:** Only after confirming all commits are pushed: `git worktree remove --force {path}`.
 *   **Delete Local Branch:** `git branch -D {headRefName}` (remote branch already deleted by `--delete-branch`).
 *   **Close Linked Issues:** If the PR body references "Closes #X" / "Fixes #X", GitHub should auto-close them. Verify with `gh issue view {issue_number} --json state`. If still open: `gh issue close {issue_number} --comment "Fixed via merge of PR #{number}"`.
 

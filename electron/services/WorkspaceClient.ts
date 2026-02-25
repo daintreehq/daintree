@@ -79,6 +79,7 @@ export class WorkspaceClient extends EventEmitter {
   // Cached state
   private currentRootPath: string | null = null;
   private currentProjectScopeId: string | null = null;
+  private lastScopeMismatchWarnAt = 0;
 
   constructor(config: WorkspaceClientConfig = {}) {
     super();
@@ -210,9 +211,21 @@ export class WorkspaceClient extends EventEmitter {
         this.restartTimer = setTimeout(() => {
           this.restartTimer = null;
           this.startHost();
-          // Re-load project if we had one
+          // Re-load project if we had one, preserving the existing scope ID
+          // so that events from the restarted host still match the client's scope.
+          // Wait for the host to be ready before sending loadProject to avoid
+          // racing with the 'ready' handshake (token-order contract).
           if (this.currentRootPath) {
-            void this.loadProject(this.currentRootPath);
+            const rootPath = this.currentRootPath;
+            const preservedScopeId = this.currentProjectScopeId ?? undefined;
+            void this.waitForReady()
+              .then(() => this.loadProject(rootPath, preservedScopeId))
+              .catch((err) => {
+                console.error(
+                  "[WorkspaceClient] Failed to reload project after host restart:",
+                  err
+                );
+              });
           }
         }, delay);
       } else {
@@ -241,7 +254,22 @@ export class WorkspaceClient extends EventEmitter {
     if (!this.currentProjectScopeId || !eventScopeId) {
       return false;
     }
-    return eventScopeId === this.currentProjectScopeId;
+    const isMatch = eventScopeId === this.currentProjectScopeId;
+    if (!isMatch) {
+      const now = Date.now();
+      if (now - this.lastScopeMismatchWarnAt > 5000) {
+        this.lastScopeMismatchWarnAt = now;
+        console.warn(
+          "[WorkspaceClient] Event scope mismatch (further mismatches suppressed for 5s)",
+          {
+            eventScopeId,
+            currentScopeId: this.currentProjectScopeId,
+            currentPath: this.currentRootPath,
+          }
+        );
+      }
+    }
+    return isMatch;
   }
 
   private handleHostEvent(event: WorkspaceHostEvent): void {
@@ -574,9 +602,9 @@ export class WorkspaceClient extends EventEmitter {
 
   // Public API - matches WorktreeService interface
 
-  async loadProject(rootPath: string): Promise<void> {
+  async loadProject(rootPath: string, scopeId?: string): Promise<void> {
     this.currentRootPath = rootPath;
-    this.currentProjectScopeId = crypto.randomUUID();
+    this.currentProjectScopeId = scopeId ?? crypto.randomUUID();
     const requestId = this.generateRequestId();
 
     await this.sendWithResponse({

@@ -1580,13 +1580,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this.projectRootPath = null;
 
     clearGitDirCache();
-    const now = Date.now();
-    for (const [cacheKey, cacheEntry] of this.worktreeListCache) {
-      if (cacheEntry.expiresAt <= now) {
-        this.worktreeListCache.delete(cacheKey);
-        this.inFlightWorktreeList.delete(cacheKey);
-      }
-    }
+    this.invalidateCachedWorktrees();
 
     this.sendEvent({ type: "project-switch-result", requestId, success: true });
   }
