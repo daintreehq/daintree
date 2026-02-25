@@ -74,9 +74,11 @@ export function NewWorktreeDialog({
 
   const assignWorktreeToSelf = usePreferencesStore((s) => s.assignWorktreeToSelf);
   const setAssignWorktreeToSelf = usePreferencesStore((s) => s.setAssignWorktreeToSelf);
-  const lastSelectedWorktreeRecipeId = usePreferencesStore((s) => s.lastSelectedWorktreeRecipeId);
-  const setLastSelectedWorktreeRecipeId = usePreferencesStore(
-    (s) => s.setLastSelectedWorktreeRecipeId
+  const lastSelectedWorktreeRecipeIdByProject = usePreferencesStore(
+    (s) => s.lastSelectedWorktreeRecipeIdByProject
+  );
+  const setLastSelectedWorktreeRecipeIdByProject = usePreferencesStore(
+    (s) => s.setLastSelectedWorktreeRecipeIdByProject
   );
   const githubConfig = useGitHubConfigStore((s) => s.config);
   const initializeGitHubConfig = useGitHubConfigStore((s) => s.initialize);
@@ -84,6 +86,8 @@ export function NewWorktreeDialog({
   const addNotification = useNotificationStore((s) => s.addNotification);
   const { recipes, runRecipe, loadRecipes } = useRecipeStore();
   const currentProject = useProjectStore((s) => s.currentProject);
+  const projectId = currentProject?.id ?? "";
+  const lastSelectedWorktreeRecipeId = lastSelectedWorktreeRecipeIdByProject[projectId];
 
   const currentUser = githubConfig?.username;
   const currentUserAvatar = githubConfig?.avatarUrl;
@@ -130,6 +134,7 @@ export function NewWorktreeDialog({
 
   useEffect(() => {
     if (!isOpen) return;
+    if (!projectId) return;
     if (globalRecipes.length === 0) return;
     if (recipeSelectionTouchedRef.current) return;
 
@@ -144,7 +149,7 @@ export function NewWorktreeDialog({
         setSelectedRecipeId(lastSelectedWorktreeRecipeId);
       } else {
         // Previously selected recipe no longer exists - clear it and fall back to default
-        setLastSelectedWorktreeRecipeId(undefined);
+        if (projectId) setLastSelectedWorktreeRecipeIdByProject(projectId, undefined);
         if (defaultRecipeId && globalRecipes.some((r) => r.id === defaultRecipeId)) {
           setSelectedRecipeId(defaultRecipeId);
         }
@@ -158,7 +163,8 @@ export function NewWorktreeDialog({
     globalRecipes,
     lastSelectedWorktreeRecipeId,
     defaultRecipeId,
-    setLastSelectedWorktreeRecipeId,
+    projectId,
+    setLastSelectedWorktreeRecipeIdByProject,
   ]);
 
   useEffect(() => {
@@ -166,8 +172,8 @@ export function NewWorktreeDialog({
     if (globalRecipes.some((recipe) => recipe.id === selectedRecipeId)) return;
     // Selected recipe no longer exists - clear both local and persisted state
     setSelectedRecipeId(null);
-    setLastSelectedWorktreeRecipeId(undefined);
-  }, [globalRecipes, selectedRecipeId, setLastSelectedWorktreeRecipeId]);
+    if (projectId) setLastSelectedWorktreeRecipeIdByProject(projectId, undefined);
+  }, [globalRecipes, selectedRecipeId, projectId, setLastSelectedWorktreeRecipeIdByProject]);
 
   const newBranchInputRef = useRef<HTMLInputElement>(null);
   const branchInputRef = useRef<HTMLInputElement>(null);
@@ -1075,14 +1081,16 @@ export function NewWorktreeDialog({
                               event.preventDefault();
                               recipeSelectionTouchedRef.current = true;
                               setSelectedRecipeId(null);
-                              setLastSelectedWorktreeRecipeId(null);
+                              if (projectId)
+                                setLastSelectedWorktreeRecipeIdByProject(projectId, null);
                               setRecipePickerOpen(false);
                             }
                           }}
                           onClick={() => {
                             recipeSelectionTouchedRef.current = true;
                             setSelectedRecipeId(null);
-                            setLastSelectedWorktreeRecipeId(null);
+                            if (projectId)
+                              setLastSelectedWorktreeRecipeIdByProject(projectId, null);
                             setRecipePickerOpen(false);
                           }}
                           className={cn(
@@ -1106,14 +1114,16 @@ export function NewWorktreeDialog({
                                 event.preventDefault();
                                 recipeSelectionTouchedRef.current = true;
                                 setSelectedRecipeId(recipe.id);
-                                setLastSelectedWorktreeRecipeId(recipe.id);
+                                if (projectId)
+                                  setLastSelectedWorktreeRecipeIdByProject(projectId, recipe.id);
                                 setRecipePickerOpen(false);
                               }
                             }}
                             onClick={() => {
                               recipeSelectionTouchedRef.current = true;
                               setSelectedRecipeId(recipe.id);
-                              setLastSelectedWorktreeRecipeId(recipe.id);
+                              if (projectId)
+                                setLastSelectedWorktreeRecipeIdByProject(projectId, recipe.id);
                               setRecipePickerOpen(false);
                             }}
                             className={cn(

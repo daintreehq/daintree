@@ -28,8 +28,11 @@ interface PreferencesState {
   setShowDeveloperTools: (show: boolean) => void;
   assignWorktreeToSelf: boolean;
   setAssignWorktreeToSelf: (value: boolean) => void;
-  lastSelectedWorktreeRecipeId: string | null | undefined;
-  setLastSelectedWorktreeRecipeId: (id: string | null | undefined) => void;
+  lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>;
+  setLastSelectedWorktreeRecipeIdByProject: (
+    projectId: string,
+    id: string | null | undefined
+  ) => void;
 }
 
 export const usePreferencesStore = create<PreferencesState>()(
@@ -41,12 +44,31 @@ export const usePreferencesStore = create<PreferencesState>()(
       setShowDeveloperTools: (show) => set({ showDeveloperTools: show }),
       assignWorktreeToSelf: false,
       setAssignWorktreeToSelf: (value) => set({ assignWorktreeToSelf: value }),
-      lastSelectedWorktreeRecipeId: undefined,
-      setLastSelectedWorktreeRecipeId: (id) => set({ lastSelectedWorktreeRecipeId: id }),
+      lastSelectedWorktreeRecipeIdByProject: {},
+      setLastSelectedWorktreeRecipeIdByProject: (projectId, id) =>
+        set((state) => ({
+          lastSelectedWorktreeRecipeIdByProject: {
+            ...state.lastSelectedWorktreeRecipeIdByProject,
+            [projectId]: id,
+          },
+        })),
     }),
     {
       name: "canopy-preferences",
       storage: createJSONStorage(() => getSafeStorage()),
+      version: 1,
+      migrate: (persisted, version) => {
+        if (version === 0 || version === undefined) {
+          if (persisted && typeof persisted === "object") {
+            const state = persisted as Record<string, unknown>;
+            delete state.lastSelectedWorktreeRecipeId;
+            state.lastSelectedWorktreeRecipeIdByProject = {};
+          } else {
+            return { lastSelectedWorktreeRecipeIdByProject: {} } as PreferencesState;
+          }
+        }
+        return persisted as PreferencesState;
+      },
     }
   )
 );
