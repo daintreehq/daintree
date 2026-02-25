@@ -21,7 +21,7 @@ describe("TerminalWakeManager", () => {
   it("returns false when wake request fails instead of rejecting", async () => {
     wakeMock.mockRejectedValueOnce(new Error("wake failed"));
     const managed = {
-      terminal: { rows: 24, refresh: vi.fn() },
+      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) },
     };
     const deps: WakeManagerDeps = {
       getInstance: vi.fn(() => managed as any),
@@ -37,7 +37,7 @@ describe("TerminalWakeManager", () => {
   it("allows retry after a failed wakeAndRestore call", async () => {
     wakeMock.mockRejectedValue(new Error("wake failed"));
     const managed = {
-      terminal: { rows: 24, refresh: vi.fn() },
+      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) },
     };
     const deps: WakeManagerDeps = {
       getInstance: vi.fn(() => managed as any),
@@ -61,7 +61,7 @@ describe("TerminalWakeManager", () => {
     wakeMock.mockReturnValue(wakePromise);
 
     const managed = {
-      terminal: { rows: 24, refresh: vi.fn() },
+      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) },
     };
     const deps: WakeManagerDeps = {
       getInstance: vi.fn(() => managed as any),
@@ -85,7 +85,7 @@ describe("TerminalWakeManager", () => {
   it("skips serialized state restore for alt-screen terminals", async () => {
     wakeMock.mockResolvedValueOnce({ state: "serialized-state" });
     const managed = {
-      terminal: { rows: 24, refresh: vi.fn() },
+      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) },
       isAltBuffer: true,
     } as unknown as ManagedTerminal;
     const deps: WakeManagerDeps = {
@@ -106,7 +106,7 @@ describe("TerminalWakeManager", () => {
   it("treats alt-screen wake as successful even when serialized state is missing", async () => {
     wakeMock.mockResolvedValueOnce({ state: null });
     const managed = {
-      terminal: { rows: 24, refresh: vi.fn() },
+      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) },
       isAltBuffer: true,
     } as unknown as ManagedTerminal;
     const deps: WakeManagerDeps = {
@@ -127,7 +127,7 @@ describe("TerminalWakeManager", () => {
   it("restores serialized state for non-alt-screen terminals", async () => {
     wakeMock.mockResolvedValueOnce({ state: "serialized-state" });
     const managed = {
-      terminal: { rows: 24, refresh: vi.fn() },
+      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) },
       isAltBuffer: false,
     } as unknown as ManagedTerminal;
     const deps: WakeManagerDeps = {
@@ -147,7 +147,7 @@ describe("TerminalWakeManager", () => {
   it("fails wake for non-alt-screen terminals when serialized state is missing", async () => {
     wakeMock.mockResolvedValueOnce({ state: null });
     const managed = {
-      terminal: { rows: 24, refresh: vi.fn() },
+      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) },
       isAltBuffer: false,
     } as unknown as ManagedTerminal;
     const deps: WakeManagerDeps = {
@@ -173,7 +173,7 @@ describe("TerminalWakeManager", () => {
     wakeMock.mockReturnValue(wakePromise);
 
     const managed = {
-      terminal: { rows: 24, refresh: vi.fn() },
+      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) },
     };
     const deps: WakeManagerDeps = {
       getInstance: vi.fn(() => managed as any),
