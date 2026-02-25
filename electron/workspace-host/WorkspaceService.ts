@@ -1572,7 +1572,10 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     }
     this.monitors.clear();
 
-    await this.pollQueue.onIdle();
+    // Drop pending queued polls immediately. In-flight tasks will complete in the
+    // background but discard their results: stopMonitor() sets isRunning=false,
+    // and updateGitStatus() guards on that flag before emitting any state update.
+    this.pollQueue.clear();
 
     this.activeWorktreeId = null;
     this.mainBranch = "main";

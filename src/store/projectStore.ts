@@ -279,17 +279,22 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         console.log(
           `[ProjectSwitch] Saving ${terminalsToSave.length} panel(s) to per-project state`
         );
-        try {
-          await projectClient.setTerminals(oldProjectId, terminalsToSave);
-          await projectClient.setTerminalSizes(oldProjectId, terminalSizes);
-        } catch (saveError) {
-          logErrorWithContext(saveError, {
-            operation: "save_panel_state_before_switch",
-            component: "projectStore",
-            errorType: "filesystem",
-            details: { oldProjectId, terminalCount: terminalsToSave.length },
+        // Fire saves sequentially in the background — don't block the switch on their completion.
+        // Sequential chaining is required: both IPC handlers do a read-modify-write of the full
+        // ProjectState JSON, so running them concurrently would cause a last-writer-wins race.
+        // They only need to finish before the old project is re-opened.
+        // Risk: data loss if the app crashes between fire and persist — acceptable trade-off.
+        void projectClient
+          .setTerminals(oldProjectId, terminalsToSave)
+          .then(() => projectClient.setTerminalSizes(oldProjectId, terminalSizes))
+          .catch((saveError) => {
+            logErrorWithContext(saveError, {
+              operation: "save_panel_state_before_switch",
+              component: "projectStore",
+              errorType: "filesystem",
+              details: { oldProjectId, terminalCount: terminalsToSave.length },
+            });
           });
-        }
 
         const preparedCache = prepareProjectSwitchRendererCache({
           outgoingProjectId: oldProjectId,

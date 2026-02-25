@@ -26,7 +26,7 @@ import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 
 const RECONNECT_TIMEOUT_MS = 10000;
-const RESTORE_CONCURRENCY = 4;
+const RESTORE_CONCURRENCY = 8;
 const DEFERRED_RESTORE_IDLE_TIMEOUT_MS = 1200;
 const DEFERRED_RESTORE_FALLBACK_DELAY_MS = 32;
 
