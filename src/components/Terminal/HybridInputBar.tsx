@@ -707,6 +707,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               return true;
             }
 
+            const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
+            if (text.trim().length === 0) {
+              if (latest.onSendKey) latest.onSendKey("enter");
+              return true;
+            }
+
             queueSend();
             return true;
           },
@@ -786,6 +792,17 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             }
 
             if (latest.disabled) return true;
+
+            const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
+            if (text.trim().length === 0) {
+              handledEnterRef.current = true;
+              setTimeout(() => {
+                handledEnterRef.current = false;
+              }, 0);
+
+              if (latest.onSendKey) latest.onSendKey("enter");
+              return true;
+            }
 
             handledEnterRef.current = true;
             setTimeout(() => {
