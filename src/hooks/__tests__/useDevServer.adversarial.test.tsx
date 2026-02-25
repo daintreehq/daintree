@@ -678,7 +678,7 @@ describe("useDevServer adversarial races", () => {
     }
   });
 
-  it("auto-restarts a stuck installing session once after 60s timeout", async () => {
+  it("does not auto-restart a stuck installing session (backend handles install lifecycle)", async () => {
     vi.useFakeTimers();
     try {
       ensureMock.mockImplementation((request: { projectId: string }) =>
@@ -701,17 +701,6 @@ describe("useDevServer adversarial races", () => {
           })
         )
       );
-      restartMock.mockImplementation((request: { projectId: string }) =>
-        Promise.resolve(
-          buildState({
-            panelId: "panel-1",
-            projectId: request.projectId,
-            status: "running",
-            terminalId: `restart-${request.projectId}`,
-            url: "http://localhost:3000/",
-          })
-        )
-      );
 
       const { result } = renderHook(() =>
         useDevServer({
@@ -730,28 +719,11 @@ describe("useDevServer adversarial races", () => {
       expect(ensureMock).toHaveBeenCalledTimes(1);
 
       await act(async () => {
-        vi.advanceTimersByTime(10000);
-        await Promise.resolve();
-      });
-
-      expect(restartMock).not.toHaveBeenCalled();
-
-      await act(async () => {
-        vi.advanceTimersByTime(50000);
-        await Promise.resolve();
-      });
-
-      expect(restartMock).toHaveBeenCalledTimes(1);
-      expect(restartMock).toHaveBeenCalledWith(
-        expect.objectContaining({ panelId: "panel-1", projectId: "project-1" })
-      );
-
-      await act(async () => {
         vi.advanceTimersByTime(120000);
         await Promise.resolve();
       });
 
-      expect(restartMock).toHaveBeenCalledTimes(1);
+      expect(restartMock).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

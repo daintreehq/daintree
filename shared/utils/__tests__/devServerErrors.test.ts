@@ -51,7 +51,7 @@ describe("devServerErrors", () => {
         const error = detectDevServerError(output);
         expect(error).toEqual({
           type: "missing-dependencies",
-          message: "Missing dependency: vite. Installing dependencies...",
+          message: "Missing dependency: vite",
           module: "vite",
         });
       });
@@ -61,7 +61,7 @@ describe("devServerErrors", () => {
         const error = detectDevServerError(output);
         expect(error).toEqual({
           type: "missing-dependencies",
-          message: "Missing dependencies detected. Installing...",
+          message: "Missing dependencies detected",
           module: undefined,
         });
       });
@@ -71,7 +71,7 @@ describe("devServerErrors", () => {
         const error = detectDevServerError(output);
         expect(error).toEqual({
           type: "missing-dependencies",
-          message: "Missing dependencies detected. Installing...",
+          message: "Missing dependencies detected",
           module: undefined,
         });
       });
@@ -81,7 +81,7 @@ describe("devServerErrors", () => {
         const error = detectDevServerError(output);
         expect(error).toEqual({
           type: "missing-dependencies",
-          message: "Missing dependency: react. Installing dependencies...",
+          message: "Missing dependency: react",
           module: "react",
         });
       });
@@ -91,7 +91,7 @@ describe("devServerErrors", () => {
         const error = detectDevServerError(output);
         expect(error).toEqual({
           type: "missing-dependencies",
-          message: "Missing dependencies detected. Installing...",
+          message: "Missing dependencies detected",
           module: undefined,
         });
       });
@@ -101,7 +101,7 @@ describe("devServerErrors", () => {
         const error = detectDevServerError(output);
         expect(error).toEqual({
           type: "missing-dependencies",
-          message: "Missing dependency: node-pty. Installing dependencies...",
+          message: "Missing dependency: node-pty",
           module: "node-pty",
         });
       });
@@ -112,7 +112,7 @@ describe("devServerErrors", () => {
         const error = detectDevServerError(output);
         expect(error).toEqual({
           type: "missing-dependencies",
-          message: "Missing dependencies detected. Installing...",
+          message: "Missing dependencies detected",
           module: undefined,
         });
       });

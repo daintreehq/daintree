@@ -64,8 +64,8 @@ export function detectDevServerError(output: string): DevServerError | null {
       return {
         type: "missing-dependencies",
         message: module
-          ? `Missing dependency: ${module}. Installing dependencies...`
-          : "Missing dependencies detected. Installing...",
+          ? `Missing dependency: ${module}`
+          : "Missing dependencies detected",
         module,
       };
     }

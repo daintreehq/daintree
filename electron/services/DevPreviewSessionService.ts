@@ -1,5 +1,7 @@
+import { existsSync } from "node:fs";
 import http from "node:http";
 import https from "node:https";
+import path from "node:path";
 import type { PtyClient } from "./PtyClient.js";
 import { UrlDetector } from "./UrlDetector.js";
 import type {
@@ -21,6 +23,9 @@ interface DevPreviewSession extends DevPreviewSessionState {
   lastErrorKey: string | null;
   pendingUrl: string | null;
   readinessAbort: AbortController | null;
+  needsInstall: boolean;
+  isRunningInstall: boolean;
+  installAttemptedGeneration: number | null;
 }
 
 const RUNNING_STATES: ReadonlySet<DevPreviewSessionStatus> = new Set([
@@ -358,6 +363,9 @@ export class DevPreviewSessionService {
       lastErrorKey: null,
       pendingUrl: null,
       readinessAbort: null,
+      needsInstall: false,
+      isRunningInstall: false,
+      installAttemptedGeneration: null,
     };
     this.sessions.set(key, session);
     return session;
@@ -461,6 +469,8 @@ export class DevPreviewSessionService {
       session.readinessAbort?.abort();
       session.readinessAbort = null;
       session.pendingUrl = null;
+      session.needsInstall = false;
+      session.isRunningInstall = false;
       this.updateSession(session, { terminalId: null, url: null });
     }
 
@@ -563,6 +573,8 @@ export class DevPreviewSessionService {
     session.readinessAbort?.abort();
     session.readinessAbort = null;
     session.pendingUrl = null;
+    session.needsInstall = false;
+    session.isRunningInstall = false;
 
     const terminalId = session.terminalId;
     if (!terminalId) return;
@@ -627,6 +639,8 @@ export class DevPreviewSessionService {
     const session = this.sessions.get(sessionKey);
     if (!session || session.terminalId !== id) return;
 
+    if (session.isRunningInstall) return;
+
     const dataString = typeof data === "string" ? data : this.textDecoder.decode(data);
     const result = this.detector.scanOutput(dataString, session.buffer);
     session.buffer = result.buffer;
@@ -652,12 +666,20 @@ export class DevPreviewSessionService {
     if (errorKey === session.lastErrorKey) return;
     session.lastErrorKey = errorKey;
 
-    const nextStatus: DevPreviewSessionStatus =
-      result.error.type === "missing-dependencies" ? "installing" : "error";
+    if (result.error.type === "missing-dependencies") {
+      session.needsInstall = true;
+      this.updateSession(session, {
+        status: "installing",
+        error: result.error,
+        isRestarting: false,
+      });
+      return;
+    }
+
     this.updateSession(session, {
-      status: nextStatus,
+      status: "error",
       error: result.error,
-      url: nextStatus === "error" ? null : session.url,
+      url: null,
       isRestarting: false,
     });
   }
@@ -675,6 +697,35 @@ export class DevPreviewSessionService {
     this.detachTerminal(session);
     session.buffer = "";
     session.lastErrorKey = null;
+
+    if (session.isRunningInstall) {
+      session.isRunningInstall = false;
+      if (exitCode === 0) {
+        void this.spawnSessionTerminal(session);
+        return;
+      }
+      this.updateSession(session, {
+        status: "error",
+        url: null,
+        error: {
+          type: "missing-dependencies",
+          message: `Dependency installation failed (exit code ${exitCode})`,
+        },
+        terminalId: null,
+        isRestarting: false,
+      });
+      return;
+    }
+
+    if (
+      session.needsInstall &&
+      session.installAttemptedGeneration !== session.generation
+    ) {
+      session.needsInstall = false;
+      void this.runInstall(session);
+      return;
+    }
+    session.needsInstall = false;
 
     if (session.status === "starting" || session.status === "installing") {
       const error: DevServerError = {
@@ -700,6 +751,69 @@ export class DevPreviewSessionService {
     });
   }
 
+  private async runInstall(session: DevPreviewSession): Promise<void> {
+    session.installAttemptedGeneration = session.generation;
+    session.isRunningInstall = true;
+
+    const installCommand = this.detectInstallCommand(session.cwd);
+
+    const terminalId = this.createTerminalId(session);
+    session.buffer = "";
+    session.lastErrorKey = null;
+    this.attachTerminal(session, terminalId);
+    this.updateSession(session, {
+      terminalId,
+      status: "installing",
+      error: {
+        type: "missing-dependencies",
+        message: `Running ${installCommand}...`,
+      },
+    });
+
+    try {
+      this.ptyClient.spawn(terminalId, {
+        projectId: session.projectId,
+        kind: "dev-preview",
+        cwd: session.cwd,
+        worktreeId: session.worktreeId,
+        cols: 80,
+        rows: 30,
+        restore: false,
+        env: session.env,
+        isEphemeral: true,
+      });
+    } catch (error) {
+      session.isRunningInstall = false;
+      const message = error instanceof Error ? error.message : String(error);
+      this.detachTerminal(session);
+      this.updateSession(session, {
+        status: "error",
+        url: null,
+        error: { type: "unknown", message: `Failed to start dependency install: ${message}` },
+        terminalId: null,
+        isRestarting: false,
+      });
+      return;
+    }
+
+    setTimeout(() => {
+      try {
+        if (this.ptyClient.hasTerminal(terminalId)) {
+          this.ptyClient.submit(terminalId, installCommand);
+        }
+      } catch (err) {
+        console.warn("[DevPreviewSessionService] Failed to submit install command:", err);
+      }
+    }, 100);
+  }
+
+  private detectInstallCommand(cwd: string): string {
+    if (existsSync(path.join(cwd, "bun.lockb"))) return "bun install";
+    if (existsSync(path.join(cwd, "pnpm-lock.yaml"))) return "pnpm install";
+    if (existsSync(path.join(cwd, "yarn.lock"))) return "yarn install";
+    return "npm install";
+  }
+
   private pollServerReadiness(
     session: DevPreviewSession,
     url: string,
@@ -715,6 +829,7 @@ export class DevPreviewSessionService {
         session.readinessAbort = null;
 
         if (ready) {
+          session.needsInstall = false;
           this.updateSession(session, {
             status: "running",
             url,

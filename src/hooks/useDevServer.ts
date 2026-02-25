@@ -28,7 +28,6 @@ export interface UseDevServerReturn extends UseDevServerState {
 }
 
 const STUCK_START_RECOVERY_MS = 10000;
-const STUCK_INSTALL_RECOVERY_MS = 60000;
 const MAX_AUTO_RECOVERY_ATTEMPTS = 1;
 
 function serializeEnv(env?: Record<string, string>): string {
@@ -84,9 +83,8 @@ export function useDevServer({
   const lastEnsureConfigRef = useRef<string>("");
   const pendingEnsureConfigRef = useRef<string | null>(null);
   const requestVersionRef = useRef(0);
-  const autoRecoveryAttemptsRef = useRef<{ starting: number; installing: number }>({
+  const autoRecoveryAttemptsRef = useRef<{ starting: number }>({
     starting: 0,
-    installing: 0,
   });
 
   const latestContextRef = useRef<{
@@ -292,7 +290,7 @@ export function useDevServer({
 
   useEffect(() => {
     requestVersionRef.current += 1;
-    autoRecoveryAttemptsRef.current = { starting: 0, installing: 0 };
+    autoRecoveryAttemptsRef.current = { starting: 0 };
   }, [panelId, currentProjectId, cwd, worktreeId, devCommand, envSignature]);
 
   useEffect(() => {
@@ -379,8 +377,8 @@ export function useDevServer({
   }, [panelId, currentProjectId, cwd, worktreeId, devCommand, envSignature, ensureLatestConfig]);
 
   useEffect(() => {
-    if (status !== "starting" && status !== "installing") {
-      autoRecoveryAttemptsRef.current = { starting: 0, installing: 0 };
+    if (status !== "starting") {
+      autoRecoveryAttemptsRef.current = { starting: 0 };
       return;
     }
     if (!currentProjectId || !terminalId || url || isRestarting) return;
@@ -391,8 +389,6 @@ export function useDevServer({
     const requestProjectId = currentProjectId;
     const requestPanelId = panelId;
     const requestStatus = status;
-    const recoveryTimeout =
-      status === "installing" ? STUCK_INSTALL_RECOVERY_MS : STUCK_START_RECOVERY_MS;
 
     const timeout = window.setTimeout(() => {
       const latestContext = latestContextRef.current;
@@ -419,7 +415,7 @@ export function useDevServer({
             applyInvokeError(err);
           }
         });
-    }, recoveryTimeout);
+    }, STUCK_START_RECOVERY_MS);
 
     return () => {
       window.clearTimeout(timeout);
