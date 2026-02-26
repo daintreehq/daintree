@@ -206,6 +206,9 @@ export class ActivityMonitor {
   private readonly workingRecoveryDelayMs: number;
   private sustainedWorkingSignalSince = 0;
 
+  // Resize suppression: ignore reflow bytes that follow a terminal resize
+  private resizeSuppressUntil = 0;
+
   private readonly processStateValidator?: ProcessStateValidator;
   private lastActivityTimestamp = Date.now();
   private lastOutputActivityAt = 0;
@@ -604,8 +607,10 @@ export class ActivityMonitor {
       // 3. No recent user input (output is autonomous, not a character echo). Issue #2185.
       // Guard (3) prevents stale patterns during typing (Issue #1476) while allowing
       // recovery when agents resume work autonomously.
+      // During resize suppression, skip idle→busy transitions from redrawn content. Issue #2364.
       if (
         isWorking &&
+        !this.isResizeSuppressed(now) &&
         (this.state === "busy" || this.pendingInputUntil > 0 || !this.isRecentUserInput(now))
       ) {
         // If already busy or pending input, transition immediately
@@ -653,13 +658,19 @@ export class ActivityMonitor {
       const patternResult = this.patternDetector.detect(this.patternBuffer);
       this.lastPatternResult = patternResult;
 
-      if (patternResult.isWorking) {
+      if (patternResult.isWorking && !this.isResizeSuppressed(now)) {
         // Pattern detected - transition to busy with high confidence
         this.becomeBusyFromPattern(patternResult.confidence, now);
       }
     }
 
     const dataLength = Buffer.byteLength(data, "utf8");
+
+    // During resize suppression, skip all output-based tracking so reflow
+    // bytes from SIGWINCH don't trigger false busy transitions. Issue #2364.
+    if (this.isResizeSuppressed(now)) {
+      return;
+    }
 
     // Track high output activity (for preventing premature idle and recovery)
     this.updateHighOutputTracking(dataLength, now);
@@ -858,7 +869,11 @@ export class ActivityMonitor {
       this.lastSpinnerDetectedAt = now;
       // Trigger busy if already busy, pending input, or no recent user input
       // (autonomous output). Issue #1476 guard relaxed for recovery. Issue #2185.
-      if (this.state === "busy" || this.pendingInputUntil > 0 || !this.isRecentUserInput(now)) {
+      // Skip idle→busy during resize suppression — reflow can produce line-erase sequences. Issue #2364.
+      if (
+        !this.isResizeSuppressed(now) &&
+        (this.state === "busy" || this.pendingInputUntil > 0 || !this.isRecentUserInput(now))
+      ) {
         this.becomeBusy({ trigger: "output" }, now);
       }
     }
@@ -1186,6 +1201,7 @@ export class ActivityMonitor {
     this.resetOutputWindow();
     this.resetHighOutputWindow();
     this.sustainedWorkingSignalSince = 0;
+    this.resizeSuppressUntil = 0;
     this.patternBuffer = "";
     this.lastPatternResult = undefined;
     this.pollingStartTime = 0;
@@ -1217,6 +1233,22 @@ export class ActivityMonitor {
    */
   notifySubmission(): void {
     this.becomeBusy({ trigger: "input" });
+  }
+
+  /**
+   * Called when the terminal is resized. Starts a suppression window during which
+   * reflow bytes from SIGWINCH are ignored to prevent false busy transitions.
+   * Each call resets the window so rapid resizes don't stack.
+   */
+  notifyResize(suppressionMs = 1000): void {
+    this.resizeSuppressUntil = Date.now() + suppressionMs;
+    // Reset high-output tracking so partially accumulated reflow bytes
+    // don't contribute to the threshold after the window expires.
+    this.resetHighOutputWindow();
+  }
+
+  private isResizeSuppressed(now: number): boolean {
+    return this.resizeSuppressUntil > 0 && now < this.resizeSuppressUntil;
   }
 
   getState(): "busy" | "idle" {
@@ -1380,14 +1412,18 @@ export class ActivityMonitor {
       }
     }
 
+    // During resize suppression, skip all idle→busy recovery transitions.
+    // Reflow content may match working patterns or trigger high output thresholds. Issue #2364.
+    const resizeSuppressed = this.isResizeSuppressed(now);
+
     // High output recovery: when idle and sustained high output detected,
     // re-enter busy state. This handles incorrect waiting transitions. Issue #1498.
-    if (this.state === "idle" && this.shouldTriggerHighOutputRecovery(now)) {
+    if (!resizeSuppressed && this.state === "idle" && this.shouldTriggerHighOutputRecovery(now)) {
       this.becomeBusy({ trigger: "output" }, now);
       return;
     }
 
-    if (isWorkingSignal) {
+    if (isWorkingSignal && !resizeSuppressed) {
       // Allow working signal to trigger busy if:
       // 1. We're already busy (to stay busy), OR
       // 2. There's pending input (Enter was pressed), OR

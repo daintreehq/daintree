@@ -754,6 +754,11 @@ export class TerminalProcess {
       if (terminal.headlessTerminal) {
         terminal.headlessTerminal.resize(cols, rows);
       }
+
+      // Notify activity monitor so reflow bytes are suppressed. Issue #2364.
+      if (this.activityMonitor) {
+        this.activityMonitor.notifyResize();
+      }
     } catch (error) {
       console.error(`Failed to resize terminal ${this.id}:`, error);
     }

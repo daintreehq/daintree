@@ -1955,4 +1955,156 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
   });
+
+  describe("Resize suppression (Issue #2364)", () => {
+    it("should NOT trigger busy from high output bytes during resize suppression window", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        highOutputThreshold: {
+          enabled: true,
+          windowMs: 500,
+          bytesPerSecond: 2048,
+          recoveryEnabled: true,
+          recoveryDelayMs: 500,
+        },
+      });
+
+      // Notify resize — starts suppression window
+      monitor.notifyResize(1000);
+
+      // Simulate high-output reflow bytes within suppression window
+      for (let i = 0; i < 20; i++) {
+        monitor.onData("x".repeat(500));
+        vi.advanceTimersByTime(30);
+      }
+
+      // Should remain idle — reflow bytes suppressed
+      expect(monitor.getState()).toBe("idle");
+      const busyCalls = onStateChange.mock.calls.filter((call) => call[2] === "busy");
+      expect(busyCalls.length).toBe(0);
+
+      monitor.dispose();
+    });
+
+    it("should trigger busy from high output bytes AFTER suppression window expires", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        highOutputThreshold: {
+          enabled: true,
+          windowMs: 500,
+          bytesPerSecond: 2048,
+          recoveryEnabled: true,
+          recoveryDelayMs: 500,
+        },
+      });
+
+      // Notify resize with short suppression
+      monitor.notifyResize(200);
+
+      // Advance past the suppression window
+      vi.advanceTimersByTime(250);
+
+      // Now send sustained high output — should trigger recovery
+      for (let i = 0; i < 30; i++) {
+        monitor.onData("x".repeat(500));
+        vi.advanceTimersByTime(20);
+      }
+
+      expect(monitor.getState()).toBe("busy");
+
+      monitor.dispose();
+    });
+
+    it("should suppress pattern-based recovery in polling cycle during resize", () => {
+      const onStateChange = vi.fn();
+      const getVisibleLines = vi.fn(() => ["  esc to interrupt  "]);
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines,
+        getCursorLine: () => "  esc to interrupt  ",
+        pollingIntervalMs: 50,
+        idleDebounceMs: 200,
+        bootCompletePatterns: [/ready/i],
+        pollingMaxBootMs: 100,
+        workingRecoveryDelayMs: 200,
+      });
+
+      monitor.startPolling();
+
+      // Exit boot state
+      vi.advanceTimersByTime(150);
+      onStateChange.mockClear();
+
+      // Transition to idle
+      getVisibleLines.mockReturnValue(["> "]);
+      vi.advanceTimersByTime(3000);
+      expect(monitor.getState()).toBe("idle");
+      onStateChange.mockClear();
+
+      // Notify resize — start suppression
+      monitor.notifyResize(1000);
+
+      // Return working pattern lines (simulating redrawn content after resize)
+      getVisibleLines.mockReturnValue(["  esc to interrupt  "]);
+
+      // Advance polling cycles within the suppression window
+      vi.advanceTimersByTime(800);
+
+      // Should remain idle — pattern recovery suppressed during resize
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+
+    it("should reset suppression window on rapid successive resizes", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        highOutputThreshold: {
+          enabled: true,
+          windowMs: 500,
+          bytesPerSecond: 2048,
+          recoveryEnabled: true,
+          recoveryDelayMs: 500,
+        },
+      });
+
+      // First resize
+      monitor.notifyResize(500);
+      vi.advanceTimersByTime(400);
+
+      // Second resize extends the window
+      monitor.notifyResize(500);
+      vi.advanceTimersByTime(400);
+
+      // Still within the second suppression window — bytes should be suppressed
+      for (let i = 0; i < 20; i++) {
+        monitor.onData("x".repeat(500));
+        vi.advanceTimersByTime(5);
+      }
+
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+
+    it("should not affect already-busy terminals during resize", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange);
+
+      // Make terminal busy via input
+      monitor.onInput("hello\r");
+      expect(monitor.getState()).toBe("busy");
+      onStateChange.mockClear();
+
+      // Notify resize while busy
+      monitor.notifyResize(1000);
+
+      // Output during suppression still resets the debounce timer (keeps busy alive)
+      // because the early return in onData is only in the output-tracking section,
+      // after the busy-state debounce reset
+      monitor.onData("some output");
+      expect(monitor.getState()).toBe("busy");
+
+      monitor.dispose();
+    });
+  });
 });

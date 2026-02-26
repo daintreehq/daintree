@@ -272,6 +272,14 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       await fs.mkdir(tempDir, { recursive: true });
 
       const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const projectName =
+        path
+          .basename(worktree.path)
+          .replace(/[^a-zA-Z0-9-_]/g, "-")
+          .replace(/-+/g, "-")
+          .replace(/^-+|-+$/g, "")
+          .toLowerCase()
+          .slice(0, 50) || "project";
       const safeBranch =
         (worktree.branch || "head")
           .replace(/[^a-zA-Z0-9-_]/g, "-")
@@ -279,7 +287,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
           .replace(/^-+|-+$/g, "")
           .slice(0, 100) || "head";
       const extension = getExtensionForFormat(validated.options?.format);
-      const filename = `context-${safeBranch}-${timestamp}.${extension}`;
+      const filename = `${projectName}-${safeBranch}-${timestamp}.${extension}`;
       const filePath = path.join(tempDir, filename);
 
       await fs.writeFile(filePath, result.content, "utf-8");
