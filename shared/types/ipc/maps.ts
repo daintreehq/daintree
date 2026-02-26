@@ -174,6 +174,10 @@ export interface IpcInvokeMap {
     args: [worktreeId: string];
     result: IssueAssociation | null;
   };
+  "worktree:get-all-issue-associations": {
+    args: [];
+    result: Record<string, IssueAssociation>;
+  };
 
   // Terminal channels
   "terminal:spawn": {

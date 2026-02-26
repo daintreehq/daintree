@@ -16,6 +16,7 @@ vi.mock("@/clients", () => ({
   worktreeClient: {
     getAll: vi.fn().mockResolvedValue([]),
     refresh: vi.fn().mockResolvedValue(undefined),
+    getAllIssueAssociations: vi.fn().mockResolvedValue({}),
     onUpdate: vi.fn(() => () => {}),
     onRemove: vi.fn(() => () => {}),
   },

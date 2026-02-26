@@ -394,7 +394,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     setRecipeEditorInitialTerminals(undefined);
   }, []);
 
-  if (isLoading) {
+  if (isLoading && worktrees.length === 0) {
     return (
       <div className="flex flex-col h-full">
         <div className="flex items-center px-4 py-4 border-b border-divider shrink-0">

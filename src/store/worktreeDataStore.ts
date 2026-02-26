@@ -28,6 +28,17 @@ let initPromise: Promise<void> | null = null;
 let storeGeneration = 0;
 let targetProjectId: string | null = null;
 
+const MAX_SNAPSHOT_CACHE_SIZE = 3;
+const projectSnapshotCache = new Map<string, Map<string, WorktreeState>>();
+
+function evictOldestSnapshot(): void {
+  if (projectSnapshotCache.size <= MAX_SNAPSHOT_CACHE_SIZE) return;
+  const firstKey = projectSnapshotCache.keys().next().value;
+  if (firstKey !== undefined) {
+    projectSnapshotCache.delete(firstKey);
+  }
+}
+
 function mergeFetchedWorktrees(
   fetchedStates: WorktreeState[],
   existingWorktrees: Map<string, WorktreeState>,
@@ -232,7 +243,14 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
 
     initPromise = (async () => {
       try {
-        set({ isLoading: true, error: null });
+        // Only show full loading state if no snapshot was pre-populated.
+        // When a snapshot exists, worktrees are already visible and we
+        // just need to refresh in the background.
+        if (get().worktrees.size === 0) {
+          set({ isLoading: true, error: null });
+        } else {
+          set({ error: null });
+        }
 
         // Fetch the initial state - any events emitted during this call
         // will be captured by the listeners we set up above
@@ -245,34 +263,39 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
           return;
         }
 
-        // Load persisted issue associations for each worktree
-        const issueAssociations = await Promise.all(
-          states.map(async (s) => {
-            try {
-              const assoc = await worktreeClient.getIssueAssociation(s.id);
-              return { id: s.id, assoc };
-            } catch {
-              return { id: s.id, assoc: null };
+        // Load all persisted issue associations in a single IPC call
+        let issueMap = new Map<string, IssueAssociation>();
+        try {
+          const allAssociations = await worktreeClient.getAllIssueAssociations();
+          if (storeGeneration !== capturedGeneration) {
+            console.warn(
+              "[WorktreeDataStore] Discarding stale initialize response - project switched"
+            );
+            return;
+          }
+          // Only include associations for worktrees that exist in the current fetch
+          const stateIds = new Set(states.map((s) => s.id));
+          for (const [id, assoc] of Object.entries(allAssociations)) {
+            if (stateIds.has(id)) {
+              issueMap.set(id, assoc);
             }
-          })
-        );
-
-        if (storeGeneration !== capturedGeneration) {
-          console.warn(
-            "[WorktreeDataStore] Discarding stale initialize response - project switched"
-          );
-          return;
+          }
+        } catch (assocErr) {
+          console.warn("[WorktreeDataStore] Failed to load issue associations, skipping", assocErr);
         }
-
-        const issueMap = new Map(
-          issueAssociations.filter((a) => a.assoc !== null).map((a) => [a.id, a.assoc!])
-        );
 
         set((prev) => {
           if (storeGeneration !== capturedGeneration) {
             return prev;
           }
           const map = mergeFetchedWorktrees(states, prev.worktrees, issueMap);
+
+          // Update the snapshot cache with the fresh data
+          if (capturedProjectId) {
+            projectSnapshotCache.delete(capturedProjectId);
+            projectSnapshotCache.set(capturedProjectId, new Map(map));
+            evictOldestSnapshot();
+          }
 
           return {
             worktrees: map,
@@ -307,8 +330,17 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
 
       set((prev) => {
         if (storeGeneration !== capturedGeneration) return prev;
+        const map = mergeFetchedWorktrees(states, prev.worktrees);
+
+        // Update the snapshot cache
+        if (capturedProjectId) {
+          projectSnapshotCache.delete(capturedProjectId);
+          projectSnapshotCache.set(capturedProjectId, new Map(map));
+          evictOldestSnapshot();
+        }
+
         return {
-          worktrees: mergeFetchedWorktrees(states, prev.worktrees),
+          worktrees: map,
           projectId: capturedProjectId,
           isLoading: false,
           isInitialized: true,
@@ -331,6 +363,14 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
     });
   },
 }));
+
+export function snapshotProjectWorktrees(projectId: string): void {
+  const { worktrees } = useWorktreeDataStore.getState();
+  if (worktrees.size === 0) return;
+  projectSnapshotCache.delete(projectId);
+  projectSnapshotCache.set(projectId, new Map(worktrees));
+  evictOldestSnapshot();
+}
 
 export function cleanupWorktreeDataStore() {
   storeGeneration++;
@@ -363,14 +403,19 @@ export function forceReinitializeWorktreeDataStore(projectId?: string) {
   initPromise = null;
   // Clear pulse store to cancel all retry timers
   usePulseStore.getState().invalidateAll();
+
+  // Pre-populate from snapshot if available for near-instant sidebar rendering
+  const snapshot = projectId ? projectSnapshotCache.get(projectId) : undefined;
+  const hasSnapshot = snapshot && snapshot.size > 0;
+
   useWorktreeDataStore.setState({
-    worktrees: new Map(),
+    worktrees: hasSnapshot ? new Map(snapshot) : new Map(),
     projectId: targetProjectId,
     isLoading: true,
     error: null,
     isInitialized: false,
   });
-  // Trigger initialization
+  // Trigger initialization (will refresh in background if snapshot was used)
   useWorktreeDataStore.getState().initialize();
 }
 

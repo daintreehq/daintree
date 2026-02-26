@@ -9,6 +9,7 @@ vi.mock("@/clients", () => ({
     getAll: getAllMock,
     refresh: refreshMock,
     getIssueAssociation: vi.fn().mockResolvedValue(null),
+    getAllIssueAssociations: vi.fn().mockResolvedValue({}),
     onUpdate: vi.fn(() => () => {}),
     onRemove: vi.fn(() => () => {}),
   },

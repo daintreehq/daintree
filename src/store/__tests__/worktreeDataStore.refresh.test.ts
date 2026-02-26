@@ -10,6 +10,7 @@ vi.mock("@/clients", () => ({
   worktreeClient: {
     getAll: getAllMock,
     refresh: refreshMock,
+    getAllIssueAssociations: vi.fn().mockResolvedValue({}),
     onUpdate: vi.fn((callback: (state: WorktreeState) => void) => {
       onUpdateCallback = callback;
       return () => {

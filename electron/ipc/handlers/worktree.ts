@@ -817,5 +817,16 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
   ipcMain.handle(CHANNELS.WORKTREE_GET_ISSUE_ASSOCIATION, handleWorktreeGetIssueAssociation);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_GET_ISSUE_ASSOCIATION));
 
+  const handleWorktreeGetAllIssueAssociations = async (): Promise<
+    Record<string, IssueAssociation>
+  > => {
+    return store.get("worktreeIssueMap") ?? {};
+  };
+  ipcMain.handle(
+    CHANNELS.WORKTREE_GET_ALL_ISSUE_ASSOCIATIONS,
+    handleWorktreeGetAllIssueAssociations
+  );
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_GET_ALL_ISSUE_ASSOCIATIONS));
+
   return () => handlers.forEach((cleanup) => cleanup());
 }

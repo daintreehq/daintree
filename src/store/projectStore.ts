@@ -8,7 +8,7 @@ import {
 import type { Project, ProjectCloseResult, TerminalSnapshot } from "@shared/types";
 import { projectClient } from "@/clients";
 import { resetAllStoresForProjectSwitch } from "./resetStores";
-import { forceReinitializeWorktreeDataStore } from "./worktreeDataStore";
+import { forceReinitializeWorktreeDataStore, snapshotProjectWorktrees } from "./worktreeDataStore";
 import { flushTerminalPersistence } from "./slices";
 import { terminalPersistence, terminalToSnapshot } from "./persistence/terminalPersistence";
 import { useNotificationStore } from "./notificationStore";
@@ -310,6 +310,12 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         evictRendererTerminalInstances(preparedCache.evictTerminalIds);
       }
 
+      // Snapshot worktrees for the outgoing project before clearing the store
+      // so we can pre-populate on switch-back (stale-while-revalidate).
+      if (oldProjectId) {
+        snapshotProjectWorktrees(oldProjectId);
+      }
+
       console.log("[ProjectSwitch] Resetting renderer stores...");
       await resetAllStoresForProjectSwitch({
         preserveTerminalIds,
@@ -349,6 +355,8 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         duration: 6000,
       });
       set({ error: message, isLoading: false, isSwitching: false, switchingToProjectName: null });
+      // Restore worktree data for the outgoing project so the sidebar isn't blank.
+      forceReinitializeWorktreeDataStore(oldProjectId ?? undefined);
     }
   },
 
@@ -495,6 +503,11 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         evictRendererTerminalInstances(preparedCache.evictTerminalIds);
       }
 
+      // Snapshot worktrees for the outgoing project before clearing the store
+      if (oldProjectId) {
+        snapshotProjectWorktrees(oldProjectId);
+      }
+
       console.log("[ProjectStore] Resetting renderer stores...");
       await resetAllStoresForProjectSwitch({
         preserveTerminalIds,
@@ -534,6 +547,8 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         duration: 6000,
       });
       set({ error: message, isLoading: false, isSwitching: false, switchingToProjectName: null });
+      // Restore worktree data for the outgoing project so the sidebar isn't blank.
+      forceReinitializeWorktreeDataStore(oldProjectId ?? undefined);
       throw error;
     }
   },

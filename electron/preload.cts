@@ -145,6 +145,7 @@ const CHANNELS = {
   WORKTREE_ATTACH_ISSUE: "worktree:attach-issue",
   WORKTREE_DETACH_ISSUE: "worktree:detach-issue",
   WORKTREE_GET_ISSUE_ASSOCIATION: "worktree:get-issue-association",
+  WORKTREE_GET_ALL_ISSUE_ASSOCIATIONS: "worktree:get-all-issue-associations",
 
   // Terminal channels
   TERMINAL_SPAWN: "terminal:spawn",
@@ -493,6 +494,9 @@ const api: ElectronAPI = {
 
     getIssueAssociation: (worktreeId: string): Promise<IssueAssociation | null> =>
       _typedInvoke(CHANNELS.WORKTREE_GET_ISSUE_ASSOCIATION, worktreeId),
+
+    getAllIssueAssociations: (): Promise<Record<string, IssueAssociation>> =>
+      _typedInvoke(CHANNELS.WORKTREE_GET_ALL_ISSUE_ASSOCIATIONS),
 
     onUpdate: (callback: (state: WorktreeState) => void) =>
       _typedOn(CHANNELS.WORKTREE_UPDATE, callback),

@@ -73,6 +73,10 @@ export const worktreeClient = {
     return window.electron.worktree.getIssueAssociation(worktreeId);
   },
 
+  getAllIssueAssociations: (): Promise<Record<string, IssueAssociation>> => {
+    return window.electron.worktree.getAllIssueAssociations();
+  },
+
   onRemove: (callback: (data: { worktreeId: string }) => void): (() => void) => {
     return window.electron.worktree.onRemove(callback);
   },
