@@ -176,3 +176,18 @@ jobs:
             --exclude "*" \
             --include "latest*.yml" \
             --cache-control "no-cache, no-store, must-revalidate"
+
+      - name: Notify Website of New Release
+        shell: bash
+        env:
+          WEBSITE_WEBHOOK_SECRET: ${{ secrets.WEBSITE_WEBHOOK_SECRET }}
+        run: |
+          sleep 1
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST https://canopyide.com/api/refresh-releases \
+            -H "Authorization: Bearer ${WEBSITE_WEBHOOK_SECRET}")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          echo "Response (HTTP ${HTTP_CODE}): ${BODY}"
+          if [ "$HTTP_CODE" -ne 200 ]; then
+            echo "::warning::Website refresh failed (HTTP ${HTTP_CODE})"
+          fi
