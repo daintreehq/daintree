@@ -2,8 +2,14 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <!-- V8 JIT compilation in Electron -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
     <!-- Required for loading native modules like node-pty -->
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <!-- Loading Electron framework libraries -->
+    <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
 
     <!-- Disable device permissions (not needed for terminal app) -->

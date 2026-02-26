@@ -43,6 +43,9 @@ yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
 
+# Signing keys (local only — NEVER commit)
+keys/
+
 # Environment
 .env
 .env.local

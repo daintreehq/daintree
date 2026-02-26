@@ -2,7 +2,10 @@
   "name": "canopy-app",
   "version": "0.1.0",
   "description": "Canopy IDE - An Electron-based development environment",
-  "author": "Canopy Team",
+  "author": {
+    "name": "Greg Priday",
+    "email": "greg@siteorigin.com"
+  },
   "main": "dist-electron/electron/main.js",
   "type": "module",
   "engines": {
@@ -102,8 +105,7 @@
     "node-gyp": "^10.3.1"
   },
   "devDependencies": {
-    "@electron/fuses": "^2.0.0",
-    "@electron/rebuild": "^3.7.1",
+    "@electron/rebuild": "^4.0.3",
     "@eslint/js": "^9.39.1",
     "@tailwindcss/typography": "^0.5.19",
     "@tailwindcss/vite": "^4.1.17",
@@ -121,8 +123,8 @@
     "autoprefixer": "^10.4.20",
     "concurrently": "^9.1.0",
     "cross-env": "^7.0.3",
-    "electron": "^33.4.11",
-    "electron-builder": "^25.1.8",
+    "electron": "^40.6.1",
+    "electron-builder": "^26.8.1",
     "esbuild": "^0.27.0",
     "eslint": "^9.39.1",
     "eslint-config-prettier": "^10.1.8",
@@ -156,14 +158,16 @@
     ],
     "electronUpdaterCompatibility": ">=2.16",
     "productName": "Canopy",
-    "npmRebuild": false,
+    "npmRebuild": true,
     "directories": {
       "buildResources": "build",
       "output": "release"
     },
     "files": [
       "dist/**/*",
-      "dist-electron/**/*"
+      "dist-electron/**/*",
+      "!node_modules/node-pty/bin",
+      "!node_modules/node-pty/prebuilds"
     ],
     "extraResources": [
       {
@@ -178,9 +182,20 @@
     "asarUnpack": [
       "node_modules/node-pty/**/*"
     ],
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true,
+      "loadBrowserProcessSpecificV8Snapshot": true,
+      "grantFileProtocolExtraPrivileges": false
+    },
     "afterPack": "./scripts/afterPack.cjs",
     "mac": {
       "forceCodeSigning": true,
+      "notarize": false,
       "category": "public.app-category.developer-tools",
       "icon": "build/icon.icns",
       "extendInfo": {

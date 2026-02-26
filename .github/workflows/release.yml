@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      skip_notarization:
+        description: "Skip macOS notarization (use when Apple's service is down)"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -18,7 +25,7 @@ env:
 jobs:
   build:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -29,6 +36,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Verify Version Matches Tag
+        if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
@@ -59,17 +67,38 @@ jobs:
         with:
           p12-file-base64: ${{ secrets.MAC_CERTS }}
           p12-password: ${{ secrets.MAC_CERTS_PASSWORD }}
+          keychain-password: ${{ secrets.MAC_CERTS_PASSWORD }}
+
+      - name: Prepare Apple API Key
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          mkdir -p "$RUNNER_TEMP/apple"
+          printf '%s' "$APPLE_API_KEY_CONTENT" > "$RUNNER_TEMP/apple/AuthKey.p8"
+        env:
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY }}
 
       - name: Build
+        shell: bash
         env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # macOS signing
           CSC_LINK: ${{ secrets.MAC_CERTS }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTS_PASSWORD }}
-          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
-        run: npm run build && npx electron-builder --publish never
+          # macOS notarization (App Store Connect API key)
+          # APPLE_API_KEY must be the file path — notarytool uses --key <path>
+          APPLE_API_KEY: ${{ runner.temp }}/apple/AuthKey.p8
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Debug logging for signing and notarization
+          DEBUG: electron-builder,electron-notarize*,electron-osx-sign*
+        run: |
+          npm run build
+          EXTRA_ARGS=""
+          if [ "${{ inputs.skip_notarization }}" = "true" ]; then
+            echo "::warning::Skipping macOS notarization (manually disabled)"
+            EXTRA_ARGS="-c.mac.notarize=false"
+          fi
+          npx electron-builder --publish never $EXTRA_ARGS
 
       - name: Validate Update Metadata (Windows)
         if: matrix.os == 'windows-latest'
@@ -114,6 +143,7 @@ jobs:
           if-no-files-found: error
 
   publish:
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-22.04
     timeout-minutes: 15
