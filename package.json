@@ -151,7 +151,7 @@
     "publish": [
       {
         "provider": "generic",
-        "url": "https://updates.canopy.dev/releases/"
+        "url": "https://updates.canopyide.com/releases/"
       }
     ],
     "electronUpdaterCompatibility": ">=2.16",
@@ -220,7 +220,6 @@
       ]
     },
     "win": {
-      "forceCodeSigning": true,
       "icon": "build/icon.ico",
       "target": [
         {
