@@ -289,6 +289,19 @@ Tell the user they should set `develop` as the default branch in GitHub repo set
 
 ---
 
+## Notarization
+
+macOS notarization is currently **disabled** (`mac.notarize: false` in `package.json`). All signing infrastructure and GitHub secrets are already configured — see `docs/release.md` for details.
+
+### Automatic re-enablement at 0.5.0
+
+During **Phase 4** (version bump), if the target version is **>= 0.5.0** and `mac.notarize` is still `false` in `package.json`:
+
+1. Change `"notarize": false` to `"notarize": true` in `package.json` under `build.mac`
+2. Include this change in the version bump commit
+3. Inform the user that notarization is being re-enabled and recommend testing with a manual `workflow_dispatch` (using the `skip_notarization` fallback input) before pushing the tag
+4. If the user declines re-enabling, leave it as-is and proceed
+
 ## Safety Rules
 
 - **NEVER force push.** If a push is rejected, stop and ask the user.
