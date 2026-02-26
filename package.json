@@ -72,7 +72,7 @@
     "anser": "^2.3.5",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "copytree": "github:gregpriday/copytree#develop",
+    "copytree": "^0.14.0",
     "electron-store": "^11.0.2",
     "electron-updater": "^6.3.0",
     "execa": "^9.6.0",
