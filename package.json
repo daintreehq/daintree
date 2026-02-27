@@ -194,6 +194,7 @@
     },
     "afterPack": "./scripts/afterPack.cjs",
     "mac": {
+      "x64ArchFiles": "Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/**",
       "forceCodeSigning": true,
       "notarize": false,
       "binaries": [
