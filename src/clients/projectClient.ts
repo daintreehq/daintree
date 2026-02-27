@@ -83,6 +83,10 @@ export const projectClient = {
     return window.electron.project.getStats(projectId);
   },
 
+  createFolder: (parentPath: string, folderName: string): Promise<string> => {
+    return window.electron.project.createFolder(parentPath, folderName);
+  },
+
   initGit: (directoryPath: string): Promise<void> => {
     return window.electron.project.initGit(directoryPath);
   },

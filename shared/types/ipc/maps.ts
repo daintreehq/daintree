@@ -534,6 +534,10 @@ export interface IpcInvokeMap {
     args: [projectId: string];
     result: ProjectStats;
   };
+  "project:create-folder": {
+    args: [payload: { parentPath: string; folderName: string }];
+    result: string;
+  };
   "project:init-git": {
     args: [directoryPath: string];
     result: void;

@@ -295,6 +295,7 @@ export interface ElectronAPI {
      */
     reopen(projectId: string): Promise<Project>;
     getStats(projectId: string): Promise<ProjectStats>;
+    createFolder(parentPath: string, folderName: string): Promise<string>;
     initGit(directoryPath: string): Promise<void>;
     /** Initialize git repository with progress events */
     initGitGuided(options: GitInitOptions): Promise<GitInitResult>;
