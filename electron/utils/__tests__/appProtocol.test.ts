@@ -41,7 +41,7 @@ describe("appProtocol utilities", () => {
   });
 
   describe("resolveAppUrlToDistPath", () => {
-    const distRoot = "/fake/dist";
+    const distRoot = path.resolve("/fake/dist");
 
     it("should resolve root path to index.html", () => {
       const result = resolveAppUrlToDistPath("app://canopy/", distRoot);

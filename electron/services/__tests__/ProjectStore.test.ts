@@ -140,7 +140,7 @@ describe("ProjectStore", () => {
   });
 
   describe("getProjectStateDir", () => {
-    const projectsConfigDir = "/home/user/.config/canopy/projects";
+    const projectsConfigDir = path.resolve("/home/user/.config/canopy/projects");
     const getProjectStateDir = createGetProjectStateDir(projectsConfigDir);
 
     it("returns valid path for valid hex ID", () => {
@@ -190,7 +190,7 @@ describe("ProjectStore", () => {
   });
 
   describe("path safety integration", () => {
-    const projectsConfigDir = "/home/user/.config/canopy/projects";
+    const projectsConfigDir = path.resolve("/home/user/.config/canopy/projects");
     const getProjectStateDir = createGetProjectStateDir(projectsConfigDir);
 
     it("prevents accessing files outside projectsConfigDir", () => {
