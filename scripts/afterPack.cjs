@@ -36,18 +36,33 @@ exports.default = async function afterPack(context) {
 
   console.log(`[afterPack] node-pty found at: ${nodePtyPath}`);
 
-  const nativeBinaryPath = path.join(nodePtyPath, "build/Release/pty.node");
-  if (!fs.existsSync(nativeBinaryPath)) {
-    throw new Error(
-      `[afterPack] CRITICAL: node-pty native binary not found at ${nativeBinaryPath}. ` +
-        'Run "npm run rebuild" to build the native module.'
-    );
-  }
+  if (electronPlatformName === "win32") {
+    // Windows uses ConPTY + legacy winpty binaries (no pty.node on Windows)
+    const windowsBinaries = ["conpty.node", "conpty_console_list.node", "winpty-agent.exe", "winpty.dll"];
+    for (const bin of windowsBinaries) {
+      const binPath = path.join(nodePtyPath, "build/Release", bin);
+      if (!fs.existsSync(binPath)) {
+        throw new Error(
+          `[afterPack] CRITICAL: Windows node-pty binary not found: ${binPath}. ` +
+            "Ensure node-pty was built on a Windows runner with VS 2022 Build Tools."
+        );
+      }
+    }
+    console.log("[afterPack] Windows node-pty binaries verified (conpty.node, conpty_console_list.node, winpty-agent.exe, winpty.dll)");
+  } else {
+    // macOS and Linux use pty.node
+    const nativeBinaryPath = path.join(nodePtyPath, "build/Release/pty.node");
+    if (!fs.existsSync(nativeBinaryPath)) {
+      throw new Error(
+        `[afterPack] CRITICAL: node-pty native binary not found at ${nativeBinaryPath}. ` +
+          'Run "npm run rebuild" to build the native module.'
+      );
+    }
+    console.log(`[afterPack] Native binary verified: ${nativeBinaryPath}`);
 
-  console.log(`[afterPack] Native binary verified: ${nativeBinaryPath}`);
-
-  if (electronPlatformName === "darwin") {
-    console.log("[afterPack] Native modules will be signed during code signing phase");
+    if (electronPlatformName === "darwin") {
+      console.log("[afterPack] Native modules will be signed during code signing phase");
+    }
   }
 
   console.log("[afterPack] Complete - native modules validated");
