@@ -53,7 +53,6 @@ function ProjectListItem({
   onCloseProject,
 }: ProjectListItemProps) {
   const showStop = project.processCount > 0;
-  const canClose = !project.isActive;
 
   return (
     <div
@@ -69,7 +68,6 @@ function ProjectListItem({
             : "text-canopy-text/70 hover:bg-white/[0.02] hover:text-canopy-text cursor-pointer"
       )}
       onClick={() => !project.isActive && onSelect(project)}
-      aria-disabled={project.isActive}
     >
       <div
         className={cn(
@@ -140,19 +138,16 @@ function ProjectListItem({
                   <button
                     type="button"
                     onClick={(e) => {
-                      if (!canClose) return;
                       e.stopPropagation();
                       onCloseProject(project.id);
                     }}
                     className={cn(
-                      "p-0.5 rounded transition-colors",
-                      canClose
-                        ? "text-canopy-text/50 hover:bg-white/[0.06] hover:text-canopy-text/80 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-                        : "text-canopy-text/20 cursor-not-allowed"
+                      "p-0.5 rounded transition-colors cursor-pointer",
+                      "text-canopy-text/50 hover:bg-white/[0.06] hover:text-canopy-text/80",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
                     )}
-                    title={canClose ? "Close project" : "Can't close active project"}
+                    title="Close project"
                     aria-label="Close project"
-                    disabled={!canClose}
                   >
                     <X className="w-3.5 h-3.5" aria-hidden="true" />
                   </button>
@@ -417,11 +412,8 @@ function ModalContent({
         selectedIndex >= 0 &&
         selectedIndex < results.length
       ) {
-        const selectedProject = results[selectedIndex];
-        if (!selectedProject.isActive) {
-          e.preventDefault();
-          onCloseProject(selectedProject.id);
-        }
+        e.preventDefault();
+        onCloseProject(results[selectedIndex].id);
       }
     },
     [results, selectedIndex, onCloseProject]
@@ -573,12 +565,9 @@ function DropdownContent({
             selectedIndex >= 0 &&
             selectedIndex < results.length
           ) {
-            const selectedProject = results[selectedIndex];
-            if (!selectedProject.isActive) {
-              e.preventDefault();
-              e.stopPropagation();
-              onCloseProject(selectedProject.id);
-            }
+            e.preventDefault();
+            e.stopPropagation();
+            onCloseProject(results[selectedIndex].id);
           }
           break;
       }
@@ -719,9 +708,9 @@ export function ProjectSwitcherPalette({
         <ConfirmDialog
           isOpen={true}
           onClose={isRemovingProject ? undefined : onRemoveConfirmClose}
-          title="Remove Project from List?"
+          title={removeConfirmProject.isActive ? "Close Project?" : "Remove Project from List?"}
           zIndex="nested"
-          confirmLabel="Remove Project"
+          confirmLabel={removeConfirmProject.isActive ? "Close Project" : "Remove Project"}
           cancelLabel="Cancel"
           onConfirm={onConfirmRemove}
           isConfirmLoading={isRemovingProject}
@@ -734,25 +723,45 @@ export function ProjectSwitcherPalette({
                 {removeConfirmProject.path}
               </div>
             </div>
-            {hasRunningProcesses && (
-              <div className="rounded-[var(--radius-md)] bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs text-amber-200">
-                <div className="font-medium">Warning: Active sessions detected</div>
-                <div className="mt-1 text-amber-200/80">
-                  {removeConfirmProject.processCount > 0 && (
-                    <div>• {removeConfirmProject.processCount} running process(es)</div>
-                  )}
-                  {removeConfirmProject.activeAgentCount > 0 && (
-                    <div>• {removeConfirmProject.activeAgentCount} active agent(s)</div>
-                  )}
-                  {removeConfirmProject.waitingAgentCount > 0 && (
-                    <div>• {removeConfirmProject.waitingAgentCount} waiting agent(s)</div>
-                  )}
-                </div>
-              </div>
-            )}
+            {removeConfirmProject.isActive
+              ? hasRunningProcesses && (
+                  <div className="rounded-[var(--radius-md)] bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs text-amber-200">
+                    <div className="font-medium">
+                      Warning: All running processes will be terminated
+                    </div>
+                    <div className="mt-1 text-amber-200/80">
+                      {removeConfirmProject.processCount > 0 && (
+                        <div>• {removeConfirmProject.processCount} running process(es)</div>
+                      )}
+                      {removeConfirmProject.activeAgentCount > 0 && (
+                        <div>• {removeConfirmProject.activeAgentCount} active agent(s)</div>
+                      )}
+                      {removeConfirmProject.waitingAgentCount > 0 && (
+                        <div>• {removeConfirmProject.waitingAgentCount} waiting agent(s)</div>
+                      )}
+                    </div>
+                  </div>
+                )
+              : hasRunningProcesses && (
+                  <div className="rounded-[var(--radius-md)] bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs text-amber-200">
+                    <div className="font-medium">Warning: Active sessions detected</div>
+                    <div className="mt-1 text-amber-200/80">
+                      {removeConfirmProject.processCount > 0 && (
+                        <div>• {removeConfirmProject.processCount} running process(es)</div>
+                      )}
+                      {removeConfirmProject.activeAgentCount > 0 && (
+                        <div>• {removeConfirmProject.activeAgentCount} active agent(s)</div>
+                      )}
+                      {removeConfirmProject.waitingAgentCount > 0 && (
+                        <div>• {removeConfirmProject.waitingAgentCount} waiting agent(s)</div>
+                      )}
+                    </div>
+                  </div>
+                )}
             <div className="text-xs text-canopy-text/60">
-              This project will be removed from your list. You can add it back later, but any
-              running terminals or processes will need to be restarted.
+              {removeConfirmProject.isActive
+                ? "The project will remain in your list and can be reopened at any time."
+                : "This project will be removed from your list. You can add it back later, but any running terminals or processes will need to be restarted."}
             </div>
           </div>
         </ConfirmDialog>

@@ -425,10 +425,11 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
         // Clear persisted state
         await projectStore.clearProjectState(projectId);
 
-        // Set status to 'closed' (no running processes) unless this is the active project
-        if (projectId !== storeActiveProjectId) {
-          projectStore.updateProjectStatus(projectId, "closed");
+        // Set status to 'closed' and clear current project ref if this was the active project
+        if (projectId === storeActiveProjectId) {
+          projectStore.clearCurrentProject();
         }
+        projectStore.updateProjectStatus(projectId, "closed");
 
         console.log(
           `[IPC] project:close: Killed ${terminalsKilled} process(es) ` +
