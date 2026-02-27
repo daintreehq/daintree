@@ -315,6 +315,7 @@ const CHANNELS = {
   PROJECT_CLOSE: "project:close",
   PROJECT_REOPEN: "project:reopen",
   PROJECT_GET_STATS: "project:get-stats",
+  PROJECT_CREATE_FOLDER: "project:create-folder",
   PROJECT_INIT_GIT: "project:init-git",
   PROJECT_INIT_GIT_GUIDED: "project:init-git-guided",
   PROJECT_INIT_GIT_PROGRESS: "project:init-git-progress",
@@ -862,6 +863,9 @@ const api: ElectronAPI = {
     reopen: (projectId: string) => ipcRenderer.invoke(CHANNELS.PROJECT_REOPEN, projectId),
 
     getStats: (projectId: string) => ipcRenderer.invoke(CHANNELS.PROJECT_GET_STATS, projectId),
+
+    createFolder: (parentPath: string, folderName: string): Promise<string> =>
+      _typedInvoke(CHANNELS.PROJECT_CREATE_FOLDER, { parentPath, folderName }),
 
     initGit: (directoryPath: string) =>
       ipcRenderer.invoke(CHANNELS.PROJECT_INIT_GIT, directoryPath),

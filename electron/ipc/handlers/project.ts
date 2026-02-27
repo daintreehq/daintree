@@ -514,6 +514,77 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
   ipcMain.handle(CHANNELS.PROJECT_GET_STATS, handleProjectGetStats);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_GET_STATS));
 
+  const handleProjectCreateFolder = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: { parentPath: string; folderName: string }
+  ): Promise<string> => {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid payload");
+    }
+    const { parentPath, folderName } = payload;
+    if (typeof parentPath !== "string" || !parentPath.trim()) {
+      throw new Error("Invalid parent path");
+    }
+    if (typeof folderName !== "string" || !folderName.trim()) {
+      throw new Error("Folder name is required");
+    }
+    if (!path.isAbsolute(parentPath)) {
+      throw new Error("Parent path must be absolute");
+    }
+
+    const trimmed = folderName.trim();
+
+    // Reject path separators and dot segments to prevent path traversal
+    if (trimmed.includes("/") || trimmed.includes("\\") || trimmed === ".." || trimmed === ".") {
+      throw new Error("Folder name must not contain path separators or dot segments");
+    }
+
+    const fs = await import("fs");
+
+    // Verify parentPath exists and is a directory before attempting mkdir
+    try {
+      const parentStat = await fs.promises.stat(parentPath);
+      if (!parentStat.isDirectory()) {
+        throw new Error("Parent path is not a directory");
+      }
+    } catch (err: unknown) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") {
+        throw new Error("Parent directory does not exist");
+      }
+      throw err;
+    }
+
+    const fullPath = path.join(parentPath, trimmed);
+
+    // Verify the resolved path is still inside parentPath (containment check)
+    const normalizedParent = path.resolve(parentPath);
+    const normalizedFull = path.resolve(fullPath);
+    if (!normalizedFull.startsWith(normalizedParent + path.sep)) {
+      throw new Error("Folder name resolves outside of the parent directory");
+    }
+
+    // Use recursive: false so EEXIST is thrown if folder already exists
+    try {
+      await fs.promises.mkdir(fullPath, { recursive: false });
+    } catch (err: unknown) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "EEXIST") {
+        throw new Error(`Folder "${trimmed}" already exists in this location`);
+      }
+      if (code === "EACCES" || code === "EPERM") {
+        throw new Error("Permission denied: cannot create folder in this location");
+      }
+      if (code === "ENOSPC") {
+        throw new Error("Not enough disk space to create the folder");
+      }
+      throw err;
+    }
+    return fullPath;
+  };
+  ipcMain.handle(CHANNELS.PROJECT_CREATE_FOLDER, handleProjectCreateFolder);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_CREATE_FOLDER));
+
   const handleProjectInitGit = async (
     _event: Electron.IpcMainInvokeEvent,
     directoryPath: string

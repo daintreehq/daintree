@@ -38,11 +38,13 @@ interface ProjectState {
   error: string | null;
   gitInitDialogOpen: boolean;
   gitInitDirectoryPath: string | null;
+  createFolderDialogOpen: boolean;
 
   loadProjects: () => Promise<void>;
   getCurrentProject: () => Promise<void>;
   addProject: () => Promise<void>;
   addProjectByPath: (path: string) => Promise<void>;
+  createProjectFolder: (parentPath: string, folderName: string) => Promise<void>;
   switchProject: (projectId: string) => Promise<void>;
   updateProject: (id: string, updates: Partial<Project>) => Promise<void>;
   removeProject: (id: string) => Promise<void>;
@@ -55,6 +57,8 @@ interface ProjectState {
   openGitInitDialog: (directoryPath: string) => void;
   closeGitInitDialog: () => void;
   handleGitInitSuccess: () => Promise<void>;
+  openCreateFolderDialog: () => void;
+  closeCreateFolderDialog: () => void;
 }
 
 const memoryStorage: StateStorage = (() => {
@@ -156,6 +160,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   switchingToProjectName: null,
   gitInitDialogOpen: false,
   gitInitDirectoryPath: null,
+  createFolderDialogOpen: false,
   error: null,
 
   addProjectByPath: async (path) => {
@@ -681,6 +686,19 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     if (directoryPath) {
       await get().addProjectByPath(directoryPath);
     }
+  },
+
+  openCreateFolderDialog: () => {
+    set({ createFolderDialogOpen: true });
+  },
+
+  closeCreateFolderDialog: () => {
+    set({ createFolderDialogOpen: false });
+  },
+
+  createProjectFolder: async (parentPath, folderName) => {
+    const newFolderPath = await projectClient.createFolder(parentPath, folderName);
+    await get().addProjectByPath(newFolderPath);
   },
 });
 

@@ -1,5 +1,5 @@
 import { useMemo, useEffect, useRef, useCallback } from "react";
-import { Circle, Plus, Settings2, Square, X } from "lucide-react";
+import { Circle, FolderPlus, Plus, Settings2, Square, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
@@ -23,6 +23,7 @@ export interface ProjectSwitcherPaletteProps {
   onClose: () => void;
   mode?: ProjectSwitcherMode;
   onAddProject?: () => void;
+  onCreateFolder?: () => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
   onOpenProjectSettings?: () => void;
@@ -178,10 +179,12 @@ interface ProjectListContentProps {
   onSelect: (project: SearchableProject) => void;
   listRef: React.RefObject<HTMLDivElement | null>;
   onAddProject?: () => void;
+  onCreateFolder?: () => void;
   onOpenProjectSettings?: () => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
   showAddProject?: boolean;
+  showCreateFolder?: boolean;
   showProjectSettings?: boolean;
 }
 
@@ -192,15 +195,18 @@ function ProjectListContent({
   onSelect,
   listRef,
   onAddProject,
+  onCreateFolder,
   onOpenProjectSettings,
   onStopProject,
   onCloseProject,
   showAddProject = false,
+  showCreateFolder = false,
   showProjectSettings = false,
 }: ProjectListContentProps) {
   const showSettings = showProjectSettings && onOpenProjectSettings;
   const showAdd = showAddProject && onAddProject;
-  const showActions = showSettings || showAdd;
+  const showCreate = showCreateFolder && onCreateFolder;
+  const showActions = showSettings || showAdd || showCreate;
 
   const isSearching = query.trim().length > 0;
 
@@ -319,6 +325,20 @@ function ProjectListContent({
                 <span className="font-medium text-sm text-muted-foreground">Add Project...</span>
               </button>
             )}
+            {showCreate && (
+              <button
+                type="button"
+                onClick={() => onCreateFolder?.()}
+                className="w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors hover:bg-white/[0.02]"
+              >
+                <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
+                  <FolderPlus className="h-4 w-4" />
+                </div>
+                <span className="font-medium text-sm text-muted-foreground">
+                  Create New Folder...
+                </span>
+              </button>
+            )}
           </div>
         </>
       )}
@@ -369,6 +389,7 @@ function ModalContent({
   onSelect,
   onClose,
   onAddProject,
+  onCreateFolder,
   onStopProject,
   onCloseProject,
 }: Omit<ProjectSwitcherPaletteProps, "mode" | "children">) {
@@ -442,9 +463,11 @@ function ModalContent({
           onSelect={onSelect}
           listRef={listRef}
           onAddProject={onAddProject}
+          onCreateFolder={onCreateFolder}
           onStopProject={onStopProject}
           onCloseProject={onCloseProject}
           showAddProject={true}
+          showCreateFolder={true}
         />
       )}
     />
@@ -462,6 +485,7 @@ function DropdownContent({
   onSelect,
   onClose,
   onAddProject,
+  onCreateFolder,
   onStopProject,
   onOpenProjectSettings,
   onCloseProject,
@@ -604,10 +628,12 @@ function DropdownContent({
             onSelect={onSelect}
             listRef={listRef}
             onAddProject={onAddProject}
+            onCreateFolder={onCreateFolder}
             onOpenProjectSettings={onOpenProjectSettings}
             onStopProject={onStopProject}
             onCloseProject={onCloseProject}
             showAddProject={true}
+            showCreateFolder={true}
             showProjectSettings={!!onOpenProjectSettings}
           />
         </AppPaletteDialog.Body>
@@ -630,6 +656,7 @@ export function ProjectSwitcherPalette({
   onClose,
   mode = "modal",
   onAddProject,
+  onCreateFolder,
   onStopProject,
   onCloseProject,
   onOpenProjectSettings,
@@ -659,6 +686,7 @@ export function ProjectSwitcherPalette({
         onSelect={onSelect}
         onClose={onClose}
         onAddProject={onAddProject}
+        onCreateFolder={onCreateFolder}
         onStopProject={onStopProject}
         onCloseProject={onCloseProject}
         onOpenProjectSettings={onOpenProjectSettings}
@@ -678,6 +706,7 @@ export function ProjectSwitcherPalette({
         onSelect={onSelect}
         onClose={onClose}
         onAddProject={onAddProject}
+        onCreateFolder={onCreateFolder}
         onStopProject={onStopProject}
         onCloseProject={onCloseProject}
       />

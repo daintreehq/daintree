@@ -39,6 +39,13 @@ export function ProjectSwitcher() {
     projectSwitcher.close();
   }, [projectSwitcher]);
 
+  const openCreateFolderDialog = useProjectStore((state) => state.openCreateFolderDialog);
+
+  const handleCreateFolder = useCallback(() => {
+    projectSwitcher.close();
+    openCreateFolderDialog();
+  }, [projectSwitcher, openCreateFolderDialog]);
+
   const handleOpenSettings = useCallback(() => {
     projectSwitcher.close();
     void actionService.dispatch("project.settings.open", undefined, { source: "user" });
@@ -92,6 +99,7 @@ export function ProjectSwitcher() {
             onSelect={projectSwitcher.selectProject}
             onClose={handleDropdownClose}
             onAddProject={projectSwitcher.addProject}
+            onCreateFolder={handleCreateFolder}
             onStopProject={handleStopProject}
             onCloseProject={handleCloseProject}
             removeConfirmProject={projectSwitcher.removeConfirmProject}
@@ -144,6 +152,7 @@ export function ProjectSwitcher() {
         onSelect={projectSwitcher.selectProject}
         onClose={handleDropdownClose}
         onAddProject={projectSwitcher.addProject}
+        onCreateFolder={handleCreateFolder}
         onStopProject={handleStopProject}
         onCloseProject={handleCloseProject}
         onOpenProjectSettings={handleOpenSettings}
