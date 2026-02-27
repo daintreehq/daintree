@@ -11,6 +11,9 @@
   "engines": {
     "node": ">=22.12.0"
   },
+  "lint-staged": {
+    "*": "prettier --write --ignore-unknown"
+  },
   "scripts": {
     "dev": "concurrently -k \"npm run watch:main\" \"vite\" \"wait-on dist-electron/electron/main.js && npm run dev:electron\"",
     "dev:vite": "vite",
@@ -46,7 +49,8 @@
     "perf:trend": "tsx scripts/perf/report/trend.ts --mode ci",
     "stress-test": "tsx scripts/tui-stress-test.tsx",
     "assistant:dump-tools": "tsx scripts/dump-assistant-tools.ts",
-    "assistant:test-api": "tsx scripts/test-assistant-api.ts"
+    "assistant:test-api": "tsx scripts/test-assistant-api.ts",
+    "prepare": "husky"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.21",
@@ -132,9 +136,11 @@
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.0.1",
     "happy-dom": "^20.0.11",
+    "husky": "^9.1.7",
     "ink": "^6.5.1",
     "ink-spinner": "^5.0.0",
     "jsdom": "^27.4.0",
+    "lint-staged": "^16.2.7",
     "nodemon": "^3.1.11",
     "postcss": "^8.4.49",
     "prettier": "^3.7.2",

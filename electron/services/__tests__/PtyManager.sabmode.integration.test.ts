@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { PtyManager } from "../PtyManager.js";
-import { cleanupPtyManager, spawnShellTerminal, sleep, waitForData } from "./helpers/ptyTestUtils.js";
+import {
+  cleanupPtyManager,
+  spawnShellTerminal,
+  sleep,
+  waitForData,
+} from "./helpers/ptyTestUtils.js";
 
 describe("PtyManager SAB Mode Flow Control", () => {
   let manager: PtyManager;
