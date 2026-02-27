@@ -98,6 +98,24 @@ describe("pulseStore", () => {
     expect(usePulseStore.getState().retryTimers.has("wt-empty")).toBe(false);
   });
 
+  it.each([
+    ["HEAD keyword", "Failed to read git HEAD: something"],
+    ["Repository has no commits", "Repository has no commits"],
+    ["does not have any commits yet", "your current branch 'main' does not have any commits yet"],
+    ["no commits yet", "error: no commits yet on branch 'main'"],
+  ])("treats no-commits error variant as null (no error): %s", async (_label, errorMessage) => {
+    dispatchMock.mockResolvedValueOnce({
+      ok: false,
+      error: { message: errorMessage },
+    });
+
+    await usePulseStore.getState().fetchPulse("wt-new");
+
+    expect(usePulseStore.getState().getError("wt-new")).toBeNull();
+    expect(usePulseStore.getState().getRetryCount("wt-new")).toBe(0);
+    expect(usePulseStore.getState().retryTimers.has("wt-new")).toBe(false);
+  });
+
   it("clears stale request ids when range changes", () => {
     const timer = setTimeout(() => {}, 2000);
     usePulseStore.setState({

@@ -147,11 +147,15 @@ export class ProjectPulseService {
       headSha = (await git.raw(["rev-parse", "--verify", "HEAD"])).trim() || undefined;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      if (
-        errorMessage.includes("fatal: ambiguous argument 'HEAD'") ||
-        errorMessage.includes("unknown revision") ||
-        errorMessage.includes("needed a single revision")
-      ) {
+      const noCommitsPatterns = [
+        "fatal: ambiguous argument 'HEAD'",
+        "unknown revision",
+        "needed a single revision",
+        "does not have any commits yet",
+        "not a valid object name",
+        "bad default revision 'HEAD'",
+      ];
+      if (noCommitsPatterns.some((p) => errorMessage.toLowerCase().includes(p.toLowerCase()))) {
         logDebug("Repository has no commits, returning empty pulse", { worktreeId });
         return {
           pulse: this.createEmptyPulse(options),
