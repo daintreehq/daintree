@@ -223,6 +223,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
               <TerminalIcon
                 type={terminal.type}
                 kind={terminal.kind}
+                detectedProcessId={terminal.detectedProcessId}
                 className="w-3.5 h-3.5"
                 brandColor={brandColor}
               />

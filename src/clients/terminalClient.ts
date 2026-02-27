@@ -1,6 +1,8 @@
 import type {
   TerminalSpawnOptions,
   AgentStateChangePayload,
+  AgentDetectedPayload,
+  AgentExitedPayload,
   TerminalActivityPayload,
   BackendTerminalInfo,
   TerminalReconnectResult,
@@ -148,6 +150,14 @@ export const terminalClient = {
 
   onAgentStateChanged: (callback: (data: AgentStateChangePayload) => void): (() => void) => {
     return window.electron.terminal.onAgentStateChanged(callback);
+  },
+
+  onAgentDetected: (callback: (data: AgentDetectedPayload) => void): (() => void) => {
+    return window.electron.terminal.onAgentDetected(callback);
+  },
+
+  onAgentExited: (callback: (data: AgentExitedPayload) => void): (() => void) => {
+    return window.electron.terminal.onAgentExited(callback);
   },
 
   onActivity: (callback: (data: TerminalActivityPayload) => void): (() => void) => {

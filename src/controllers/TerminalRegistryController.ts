@@ -18,6 +18,8 @@ import type { TerminalType, TerminalLocation, AgentState } from "@/types";
 import type {
   TerminalSpawnOptions,
   AgentStateChangePayload,
+  AgentDetectedPayload,
+  AgentExitedPayload,
   TerminalActivityPayload,
   TerminalStatusPayload,
   SpawnResult,
@@ -284,6 +286,14 @@ class TerminalRegistryController {
 
   onAgentStateChanged(handler: (data: AgentStateChangePayload) => void) {
     return terminalClient.onAgentStateChanged(handler);
+  }
+
+  onAgentDetected(handler: (data: AgentDetectedPayload) => void) {
+    return terminalClient.onAgentDetected(handler);
+  }
+
+  onAgentExited(handler: (data: AgentExitedPayload) => void) {
+    return terminalClient.onAgentExited(handler);
   }
 
   onActivity(handler: (data: TerminalActivityPayload) => void) {

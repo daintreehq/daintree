@@ -49,6 +49,7 @@ export interface ContentPanelProps extends BasePanelProps {
   // Terminal-specific header props (optional, only used for terminal/agent panels)
   type?: TerminalType;
   agentId?: string;
+  detectedProcessId?: string;
   isExited?: boolean;
   exitCode?: number | null;
   isWorking?: boolean;
@@ -99,6 +100,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     "aria-label": ariaLabel,
     type,
     agentId,
+    detectedProcessId,
     isExited = false,
     exitCode = null,
     isWorking: _isWorking = false,
@@ -249,6 +251,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         kind={kind}
         type={type}
         agentId={agentId}
+        detectedProcessId={detectedProcessId}
         isFocused={isFocused}
         isMaximized={isMaximized}
         location={location}

@@ -71,6 +71,7 @@ export interface TerminalPaneProps {
   reconnectError?: TerminalReconnectError;
   spawnError?: SpawnError;
   gridPanelCount?: number;
+  detectedProcessId?: string;
   // Tab support
   tabs?: import("@/components/Panel/TabButton").TabInfo[];
   onTabClick?: (tabId: string) => void;
@@ -105,6 +106,7 @@ function TerminalPaneComponent({
   reconnectError,
   spawnError,
   gridPanelCount,
+  detectedProcessId,
   tabs,
   onTabClick,
   onTabClose,
@@ -578,6 +580,7 @@ function TerminalPaneComponent({
       agentState={agentState}
       activity={activity}
       lastCommand={lastCommand}
+      detectedProcessId={detectedProcessId}
       queueCount={queueCount}
       flowStatus={flowStatus}
       isPinged={isPinged}

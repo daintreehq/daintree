@@ -79,6 +79,7 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
       events.emit("agent:detected", {
         terminalId: event.terminalId,
         agentType: event.agentType,
+        processIconId: event.processIconId,
         processName: event.processName,
         timestamp: event.timestamp,
       });

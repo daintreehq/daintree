@@ -9,6 +9,7 @@ export interface TerminalListItemProps {
   type?: TerminalType;
   kind?: TerminalKind;
   agentId?: string;
+  detectedProcessId?: string;
   worktreeName?: string;
   /** Working directory - always present since palette only shows PTY panels */
   cwd: string;
@@ -31,6 +32,7 @@ export function TerminalListItem({
   type,
   kind,
   agentId,
+  detectedProcessId,
   worktreeName,
   cwd,
   isSelected,
@@ -61,6 +63,7 @@ export function TerminalListItem({
           type={type}
           kind={kind}
           agentId={agentId}
+          detectedProcessId={detectedProcessId}
           brandColor={getBrandColorHex(agentId ?? type)}
         />
       </span>

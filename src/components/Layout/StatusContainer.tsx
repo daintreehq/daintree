@@ -139,6 +139,7 @@ export function StatusContainer({ config, compact = false }: StatusContainerProp
                       type={terminal.type}
                       kind={terminal.kind}
                       agentId={terminal.agentId}
+                      detectedProcessId={terminal.detectedProcessId}
                       className="h-3 w-3"
                     />
                   </div>

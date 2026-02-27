@@ -34,6 +34,7 @@ export function QuickSwitcherItem({ item, isSelected, onClick }: QuickSwitcherIt
             type={item.terminalType}
             kind={item.terminalKind}
             agentId={item.agentId}
+            detectedProcessId={item.detectedProcessId}
             brandColor={getBrandColorHex(item.agentId ?? item.terminalType)}
           />
         ) : (

@@ -359,6 +359,7 @@ events.on("agent:detected", (payload) => {
     type: "agent-detected",
     terminalId: payload.terminalId,
     agentType: payload.agentType,
+    processIconId: payload.processIconId,
     processName: payload.processName,
     timestamp: payload.timestamp,
   });
