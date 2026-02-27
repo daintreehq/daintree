@@ -470,6 +470,8 @@ interface PtyPanelData extends BasePanelData {
   devPreviewConsoleOpen?: boolean;
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely */
   exitBehavior?: PanelExitBehavior;
+  /** Detected process icon ID for dynamic terminal icons (transient, not persisted) */
+  detectedProcessId?: string;
 }
 
 interface BrowserPanelData extends BasePanelData {
@@ -603,6 +605,8 @@ export interface TerminalInstance {
   exitBehavior?: PanelExitBehavior;
   /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */
   hasPty?: boolean;
+  /** Detected process icon ID for dynamic terminal icons (transient, not persisted) */
+  detectedProcessId?: string;
   // Note: Tab membership is now stored in TabGroup objects, not on panels
 }
 

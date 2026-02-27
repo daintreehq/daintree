@@ -1,17 +1,57 @@
 import { Terminal, Globe, StickyNote, Monitor } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { TerminalType, TerminalKind } from "@/types";
+import type { ComponentType } from "react";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
+import {
+  NpmIcon,
+  YarnIcon,
+  PnpmIcon,
+  BunIcon,
+  PythonIcon,
+  ComposerIcon,
+  DockerIcon,
+  RustIcon,
+  GoIcon,
+  RubyIcon,
+  NodeIcon,
+  DenoIcon,
+  GradleIcon,
+} from "@/components/icons";
+
+const PROCESS_ICON_MAP: Record<string, ComponentType<{ className?: string; size?: number }>> = {
+  npm: NpmIcon,
+  yarn: YarnIcon,
+  pnpm: PnpmIcon,
+  bun: BunIcon,
+  python: PythonIcon,
+  composer: ComposerIcon,
+  docker: DockerIcon,
+  rust: RustIcon,
+  go: GoIcon,
+  ruby: RubyIcon,
+  node: NodeIcon,
+  deno: DenoIcon,
+  gradle: GradleIcon,
+};
 
 export interface TerminalIconProps {
   type?: TerminalType;
   kind?: TerminalKind;
   agentId?: string;
+  detectedProcessId?: string;
   className?: string;
   brandColor?: string;
 }
 
-export function TerminalIcon({ type, kind, agentId, className, brandColor }: TerminalIconProps) {
+export function TerminalIcon({
+  type,
+  kind,
+  agentId,
+  detectedProcessId,
+  className,
+  brandColor,
+}: TerminalIconProps) {
   const finalProps = {
     className: cn("w-4 h-4", className),
     "aria-hidden": "true" as const,
@@ -40,6 +80,14 @@ export function TerminalIcon({ type, kind, agentId, className, brandColor }: Ter
     if (config) {
       const Icon = config.icon;
       return <Icon {...finalProps} brandColor={brandColor ?? config.color} />;
+    }
+  }
+
+  // Dynamic process icon for detected running processes (neutral color via currentColor)
+  if (detectedProcessId) {
+    const ProcessIcon = PROCESS_ICON_MAP[detectedProcessId];
+    if (ProcessIcon) {
+      return <ProcessIcon {...finalProps} />;
     }
   }
 

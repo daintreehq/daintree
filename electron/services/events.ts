@@ -529,7 +529,8 @@ export type CanopyEventMap = {
    */
   "agent:detected": {
     terminalId: string;
-    agentType: string;
+    agentType?: string;
+    processIconId?: string;
     processName: string;
     timestamp: number;
   };
@@ -539,7 +540,7 @@ export type CanopyEventMap = {
    */
   "agent:exited": {
     terminalId: string;
-    agentType: string;
+    agentType?: string;
     timestamp: number;
   };
 

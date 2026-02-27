@@ -69,6 +69,7 @@ export function GridTabGroup({
       title: p.title,
       type: p.type,
       agentId: p.agentId,
+      detectedProcessId: p.detectedProcessId,
       kind: p.kind ?? "terminal",
       agentState: p.agentState,
       isActive: p.id === activeTabId,

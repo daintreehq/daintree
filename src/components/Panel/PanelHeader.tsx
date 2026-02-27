@@ -38,6 +38,7 @@ export interface PanelHeaderProps {
   kind: PanelKind;
   type?: TerminalType;
   agentId?: string;
+  detectedProcessId?: string;
   isFocused: boolean;
   isMaximized?: boolean;
   location?: "grid" | "dock";
@@ -86,6 +87,7 @@ function PanelHeaderComponent({
   kind,
   type,
   agentId,
+  detectedProcessId,
   isFocused,
   isMaximized = false,
   location = "grid",
@@ -373,6 +375,7 @@ function PanelHeaderComponent({
                       title={getBaseTitle(tab.title)}
                       type={tab.type}
                       agentId={tab.agentId}
+                      detectedProcessId={tab.detectedProcessId}
                       kind={tab.kind}
                       agentState={tab.agentState}
                       isActive={tab.isActive}
@@ -416,6 +419,7 @@ function PanelHeaderComponent({
                   title={getBaseTitle(tab.title)}
                   type={tab.type}
                   agentId={tab.agentId}
+                  detectedProcessId={tab.detectedProcessId}
                   kind={tab.kind}
                   agentState={tab.agentState}
                   isActive={tab.isActive}
@@ -448,6 +452,7 @@ function PanelHeaderComponent({
                 type={type}
                 kind={kind}
                 agentId={agentId}
+                detectedProcessId={detectedProcessId}
                 className="w-3.5 h-3.5"
                 brandColor={getBrandColorHex(agentId ?? type)}
               />

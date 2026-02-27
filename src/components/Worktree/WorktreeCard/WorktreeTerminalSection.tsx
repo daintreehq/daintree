@@ -151,6 +151,7 @@ export function WorktreeTerminalSection({
                             type={term.type}
                             kind={term.kind}
                             agentId={term.agentId}
+                            detectedProcessId={term.detectedProcessId}
                             className="w-3 h-3"
                           />
                         </div>

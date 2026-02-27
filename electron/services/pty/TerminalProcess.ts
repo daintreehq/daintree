@@ -98,6 +98,7 @@ export class TerminalProcess {
   private submitQueue: string[] = [];
   private submitInFlight = false;
   private headlineGenerator = new ActivityHeadlineGenerator();
+  private lastDetectedProcessIconId: string | undefined;
 
   private lastWriteErrorLogTime = 0;
   private suppressedWriteErrorCount = 0;
@@ -1229,19 +1230,47 @@ export class TerminalProcess {
           terminal.title = agentNames[result.agentType];
         }
 
+        this.lastDetectedProcessIconId = result.processIconId;
         events.emit("agent:detected", {
           terminalId: this.id,
           agentType: result.agentType,
+          processIconId: result.processIconId,
           processName: result.processName || result.agentType,
           timestamp: Date.now(),
         });
       }
-    } else if (!result.detected && terminal.detectedAgentType) {
+    } else if (result.detected && !result.agentType && result.processIconId) {
+      // Non-agent process detected (npm, python, docker, etc.)
+      // If we're transitioning directly from an agent, clear agent state first
+      if (terminal.detectedAgentType) {
+        const previousType = terminal.detectedAgentType;
+        terminal.detectedAgentType = undefined;
+        terminal.type = "terminal";
+        terminal.title = "Terminal";
+        events.emit("agent:exited", {
+          terminalId: this.id,
+          agentType: previousType,
+          timestamp: Date.now(),
+        });
+      }
+      if (this.lastDetectedProcessIconId !== result.processIconId) {
+        this.lastDetectedProcessIconId = result.processIconId;
+        events.emit("agent:detected", {
+          terminalId: this.id,
+          processIconId: result.processIconId,
+          processName: result.processName || result.processIconId,
+          timestamp: Date.now(),
+        });
+      }
+    } else if (!result.detected && (terminal.detectedAgentType || this.lastDetectedProcessIconId)) {
       const previousType = terminal.detectedAgentType;
-      terminal.detectedAgentType = undefined;
-      terminal.type = "terminal";
-      terminal.title = "Terminal";
+      if (previousType) {
+        terminal.detectedAgentType = undefined;
+        terminal.type = "terminal";
+        terminal.title = "Terminal";
+      }
 
+      this.lastDetectedProcessIconId = undefined;
       events.emit("agent:exited", {
         terminalId: this.id,
         agentType: previousType,

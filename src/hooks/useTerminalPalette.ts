@@ -12,6 +12,7 @@ export interface SearchableTerminal {
   type: TerminalInstance["type"];
   kind?: TerminalInstance["kind"];
   agentId?: TerminalInstance["agentId"];
+  detectedProcessId?: TerminalInstance["detectedProcessId"];
   worktreeId?: string;
   worktreeName?: string;
   /** Working directory - always present since palette only shows PTY panels */
@@ -64,6 +65,7 @@ export function useTerminalPalette(): UseTerminalPaletteReturn {
         type: t.type,
         kind: t.kind,
         agentId: t.agentId,
+        detectedProcessId: t.detectedProcessId,
         worktreeId: t.worktreeId,
         worktreeName: t.worktreeId ? worktreeMap.get(t.worktreeId)?.name : undefined,
         cwd: t.cwd ?? "",

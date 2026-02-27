@@ -161,6 +161,9 @@ export type {
   Artifact,
   // Agent state change
   AgentStateChangePayload,
+  // Agent detection
+  AgentDetectedPayload,
+  AgentExitedPayload,
   // Artifact types
   ArtifactDetectedPayload,
   SaveArtifactOptions,

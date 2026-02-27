@@ -385,6 +385,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
               <TerminalIcon
                 type={activePanel.type}
                 kind={activePanel.kind}
+                detectedProcessId={activePanel.detectedProcessId}
                 className="w-3.5 h-3.5"
                 brandColor={brandColor}
               />
@@ -473,6 +474,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                   title={getBaseTitle(panel.title)}
                   type={panel.type}
                   agentId={panel.agentId}
+                  detectedProcessId={panel.detectedProcessId}
                   kind={panel.kind ?? "terminal"}
                   agentState={panel.agentState}
                   isActive={panel.id === activeTabId}

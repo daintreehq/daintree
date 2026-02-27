@@ -147,14 +147,15 @@ export type PtyHostEvent =
   | {
       type: "agent-detected";
       terminalId: string;
-      agentType: string;
+      agentType?: string;
+      processIconId?: string;
       processName: string;
       timestamp: number;
     }
   | {
       type: "agent-exited";
       terminalId: string;
-      agentType: string;
+      agentType?: string;
       timestamp: number;
     }
   | { type: "agent-spawned"; payload: AgentSpawnedPayload }

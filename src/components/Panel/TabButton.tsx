@@ -12,6 +12,7 @@ export interface TabInfo {
   title: string;
   type?: TerminalType;
   agentId?: string;
+  detectedProcessId?: string;
   kind: PanelKind;
   agentState?: AgentState;
   isActive: boolean;
@@ -22,6 +23,7 @@ export interface TabButtonProps {
   title: string;
   type?: TerminalType;
   agentId?: string;
+  detectedProcessId?: string;
   kind: PanelKind;
   agentState?: AgentState;
   isActive: boolean;
@@ -38,6 +40,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
     title,
     type,
     agentId,
+    detectedProcessId,
     kind,
     agentState,
     isActive,
@@ -227,6 +230,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
           type={type}
           kind={kind}
           agentId={agentId}
+          detectedProcessId={detectedProcessId}
           className="w-3.5 h-3.5"
           brandColor={getBrandColorHex(agentId ?? type)}
         />

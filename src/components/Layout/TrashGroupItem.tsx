@@ -171,6 +171,7 @@ export function TrashGroupItem({
                     type={terminal.type}
                     kind={terminal.kind}
                     agentId={terminal.agentId}
+                    detectedProcessId={terminal.detectedProcessId}
                     className="w-2.5 h-2.5 opacity-60"
                   />
                   <span

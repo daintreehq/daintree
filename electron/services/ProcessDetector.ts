@@ -15,9 +15,41 @@ const AGENT_CLI_NAMES: Record<string, TerminalType> = {
   opencode: "opencode",
 };
 
+const PROCESS_ICON_MAP: Record<string, string> = {
+  // AI agents
+  claude: "claude",
+  gemini: "gemini",
+  codex: "codex",
+  opencode: "opencode",
+  // Package managers
+  npm: "npm",
+  npx: "npm",
+  yarn: "yarn",
+  pnpm: "pnpm",
+  bun: "bun",
+  composer: "composer",
+  // Language runtimes
+  python: "python",
+  python3: "python",
+  node: "node",
+  deno: "deno",
+  ruby: "ruby",
+  rails: "ruby",
+  bundle: "ruby",
+  go: "go",
+  cargo: "rust",
+  rustc: "rust",
+  // Build tools
+  gradle: "gradle",
+  gradlew: "gradle",
+  // Containerization
+  docker: "docker",
+};
+
 export interface DetectionResult {
   detected: boolean;
   agentType?: TerminalType;
+  processIconId?: string;
   processName?: string;
   isBusy?: boolean;
   currentCommand?: string;
@@ -31,6 +63,7 @@ export class ProcessDetector {
   private ptyPid: number;
   private callback: DetectionCallback;
   private lastDetected: TerminalType | null = null;
+  private lastProcessIconId: string | null = null;
   private lastBusyState: boolean | null = null;
   private lastCurrentCommand: string | undefined;
   private cache: ProcessTreeCache;
@@ -80,18 +113,23 @@ export class ProcessDetector {
     try {
       const result = this.detectAgent();
 
+      const nextAgent = result.agentType ?? null;
       const agentChanged =
-        (result.detected && result.agentType !== this.lastDetected) ||
+        (result.detected && nextAgent !== this.lastDetected) ||
         (!result.detected && this.lastDetected !== null);
+
+      const processIconChanged = (result.processIconId ?? null) !== this.lastProcessIconId;
 
       const busyChanged = result.isBusy !== undefined && result.isBusy !== this.lastBusyState;
 
       const commandChanged = result.currentCommand !== this.lastCurrentCommand;
 
       if (result.detected) {
-        this.lastDetected = result.agentType!;
-      } else if (this.lastDetected !== null) {
+        this.lastDetected = result.agentType ?? null;
+        this.lastProcessIconId = result.processIconId ?? null;
+      } else {
         this.lastDetected = null;
+        this.lastProcessIconId = null;
       }
 
       if (result.isBusy !== undefined) {
@@ -100,7 +138,7 @@ export class ProcessDetector {
 
       this.lastCurrentCommand = result.currentCommand;
 
-      if (agentChanged || busyChanged || commandChanged) {
+      if (agentChanged || processIconChanged || busyChanged || commandChanged) {
         this.callback(result, this.spawnedAt);
       }
     } catch (_error) {
@@ -132,12 +170,15 @@ export class ProcessDetector {
 
     for (const proc of processes) {
       const normalizedName = this.normalizeProcessName(proc.name);
-      const agentType = AGENT_CLI_NAMES[normalizedName.toLowerCase()];
+      const lowerName = normalizedName.toLowerCase();
+      const agentType = AGENT_CLI_NAMES[lowerName];
+      const processIconId = PROCESS_ICON_MAP[lowerName];
 
-      if (agentType) {
+      if (agentType || processIconId) {
         return {
           detected: true,
           agentType,
+          processIconId,
           processName: normalizedName,
           isBusy,
           currentCommand,
@@ -151,11 +192,14 @@ export class ProcessDetector {
         const grandchildren = this.cache.getChildren(child.pid);
         for (const grandchild of grandchildren) {
           const normalizedName = this.normalizeProcessName(grandchild.comm);
-          const agentType = AGENT_CLI_NAMES[normalizedName.toLowerCase()];
-          if (agentType) {
+          const lowerName = normalizedName.toLowerCase();
+          const agentType = AGENT_CLI_NAMES[lowerName];
+          const processIconId = PROCESS_ICON_MAP[lowerName];
+          if (agentType || processIconId) {
             return {
               detected: true,
               agentType,
+              processIconId,
               processName: normalizedName,
               isBusy,
               currentCommand: grandchild.command || grandchild.comm,
