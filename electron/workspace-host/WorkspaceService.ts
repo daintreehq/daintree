@@ -1,5 +1,5 @@
 import PQueue from "p-queue";
-import { mkdir, writeFile, stat } from "fs/promises";
+import { mkdir, writeFile, stat, readFile } from "fs/promises";
 import {
   join as pathJoin,
   dirname,
@@ -780,13 +780,37 @@ export class WorkspaceService {
         return;
       }
 
+      // Detect branch changes by reading HEAD directly — this is much faster
+      // than waiting for discoverAndSyncWorktrees to re-list worktrees via git.
+      const currentBranch = await this.readCurrentBranch(monitor.path);
+      const branchChanged = currentBranch !== undefined && currentBranch !== monitor.branch;
+      if (branchChanged) {
+        monitor.branch = currentBranch;
+        // Preserve any pending refresh queued while the update was in flight,
+        // since stopMonitorWatcher (called by updateMonitorWatcher) clears it.
+        const hadPendingRefresh = monitor.gitWatchRefreshPending;
+        this.updateMonitorWatcher(monitor);
+        if (hadPendingRefresh) {
+          monitor.gitWatchRefreshPending = true;
+        }
+        // Mirror syncMonitors: re-extract issue number from the new branch name.
+        const syncIssueNumber = extractIssueNumberSync(currentBranch, monitor.name);
+        if (syncIssueNumber) {
+          monitor.issueNumber = syncIssueNumber;
+        } else {
+          monitor.issueNumber = undefined;
+          void this.extractIssueNumberAsync(monitor, currentBranch, monitor.name);
+        }
+        monitor.issueTitle = undefined;
+      }
+
       const noteData = await monitor.noteReader.read();
       const currentHash = this.calculateStateHash(newChanges);
       const stateChanged = currentHash !== monitor.previousStateHash;
       const noteChanged =
         noteData?.content !== monitor.aiNote || noteData?.timestamp !== monitor.aiNoteTimestamp;
 
-      if (!stateChanged && !noteChanged && !forceRefresh) {
+      if (!stateChanged && !noteChanged && !branchChanged && !forceRefresh) {
         return;
       }
 
@@ -898,6 +922,23 @@ export class WorkspaceService {
       return "🌱 Ready to get started";
     } catch {
       return "🌱 Ready to get started";
+    }
+  }
+
+  private async readCurrentBranch(worktreePath: string): Promise<string | undefined> {
+    const gitDir = getGitDir(worktreePath, { cache: true, logErrors: false });
+    if (!gitDir) return undefined;
+
+    try {
+      const headContent = await readFile(pathJoin(gitDir, "HEAD"), "utf-8");
+      const trimmed = headContent.trim();
+      const prefix = "ref: refs/heads/";
+      if (trimmed.startsWith(prefix)) {
+        return trimmed.slice(prefix.length);
+      }
+      return undefined; // detached HEAD
+    } catch {
+      return undefined;
     }
   }
 

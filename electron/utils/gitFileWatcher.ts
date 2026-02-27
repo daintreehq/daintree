@@ -1,5 +1,12 @@
 import { watch as fsWatch, FSWatcher, readFileSync } from "fs";
-import { join as pathJoin, dirname, isAbsolute, basename, sep } from "path";
+import {
+  join as pathJoin,
+  dirname,
+  isAbsolute,
+  basename,
+  sep,
+  normalize as pathNormalize,
+} from "path";
 import { getGitDir } from "./gitUtils.js";
 import { logWarn } from "./logger.js";
 
@@ -53,6 +60,14 @@ export class GitFileWatcher {
       this.watchFile(headPath);
       this.watchFile(pathJoin(commonDir, "packed-refs"));
       this.watchFile(pathJoin(commonDir, "logs", "HEAD"));
+
+      // For linked worktrees, the per-worktree reflog lives under gitDir, not commonDir.
+      // Watch it so branch changes in linked worktrees trigger the onChange callback.
+      // Normalize both paths before comparing to avoid false mismatches from trailing
+      // slashes or non-canonical separators.
+      if (pathNormalize(gitDir) !== pathNormalize(commonDir)) {
+        this.watchFile(pathJoin(gitDir, "logs", "HEAD"));
+      }
 
       if (this.currentBranch) {
         const branchRefPath = pathJoin(commonDir, "refs", "heads", this.currentBranch);

@@ -94,7 +94,57 @@ function enforceIpcSenderValidation() {
     } as typeof ipcMain.handleOnce;
   }
 
-  console.log("[MAIN] IPC sender validation enforced globally");
+  // Extend validation to ipcMain.on (fire-and-forget channels like terminal:input).
+  // Unlike handle channels which can throw, on channels silently drop untrusted messages.
+  // We maintain a listener map so removeListener/off can find wrapped versions.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- IPC listeners have heterogeneous signatures
+  type IpcOnListener = (...args: any[]) => void;
+  const onListenerMap = new Map<string, Map<IpcOnListener, IpcOnListener>>();
+
+  const originalOn = ipcMain.on.bind(ipcMain);
+  ipcMain.on = function (channel: string, listener: IpcOnListener) {
+    const wrapped = (event: Electron.IpcMainEvent, ...args: unknown[]) => {
+      const senderUrl = event.senderFrame?.url;
+      if (!senderUrl || !isTrustedRendererUrl(senderUrl)) {
+        console.warn(
+          `[IPC] Rejected ipcMain.on message from untrusted origin: channel=${channel}, url=${senderUrl || "unknown"}`
+        );
+        return;
+      }
+      return listener(event, ...args);
+    };
+
+    if (!onListenerMap.has(channel)) onListenerMap.set(channel, new Map());
+    onListenerMap.get(channel)!.set(listener, wrapped);
+
+    return originalOn(channel, wrapped);
+  } as typeof ipcMain.on;
+
+  const originalRemoveListener = ipcMain.removeListener.bind(ipcMain);
+  ipcMain.removeListener = function (channel: string, listener: IpcOnListener) {
+    const channelMap = onListenerMap.get(channel);
+    const wrapped = channelMap?.get(listener);
+    if (wrapped) {
+      channelMap!.delete(listener);
+      if (channelMap!.size === 0) onListenerMap.delete(channel);
+      return originalRemoveListener(channel, wrapped as IpcOnListener);
+    }
+    return originalRemoveListener(channel, listener);
+  } as typeof ipcMain.removeListener;
+
+  ipcMain.off = ipcMain.removeListener;
+
+  const originalRemoveAllListeners = ipcMain.removeAllListeners.bind(ipcMain);
+  ipcMain.removeAllListeners = function (channel?: string) {
+    if (channel !== undefined) {
+      onListenerMap.delete(channel);
+    } else {
+      onListenerMap.clear();
+    }
+    return originalRemoveAllListeners(channel);
+  } as typeof ipcMain.removeAllListeners;
+
+  console.log("[MAIN] IPC sender validation enforced globally (handle + on)");
 }
 
 // CRITICAL: Run this before any IPC handlers are registered
