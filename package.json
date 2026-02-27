@@ -194,6 +194,9 @@
     },
     "afterPack": "./scripts/afterPack.cjs",
     "mac": {
+      "files": [
+        "!node_modules/clipboardy/fallbacks/linux"
+      ],
       "x64ArchFiles": "Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/**",
       "forceCodeSigning": true,
       "notarize": false,
