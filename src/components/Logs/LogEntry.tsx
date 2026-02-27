@@ -1,5 +1,11 @@
 import { memo, useCallback } from "react";
 import { cn } from "@/lib/utils";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+  TooltipProvider,
+} from "@/components/ui/tooltip";
 import { safeStringify } from "@/lib/safeStringify";
 import type { LogEntry as LogEntryType, LogLevel } from "@/types";
 
@@ -87,12 +93,16 @@ function LogEntryComponent({ entry, isExpanded, onToggle }: LogEntryProps) {
       }
     >
       <div className="flex items-start gap-2 min-w-0">
-        <span
-          className="text-canopy-text/60 text-xs font-mono shrink-0"
-          title={new Date(entry.timestamp).toISOString()}
-        >
-          {formatTimestamp(entry.timestamp)}
-        </span>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="text-canopy-text/60 text-xs font-mono shrink-0">
+                {formatTimestamp(entry.timestamp)}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{new Date(entry.timestamp).toISOString()}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
 
         <span
           className={cn(

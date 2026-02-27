@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { useArtifacts } from "@/hooks/useArtifacts";
 import type { Artifact } from "@shared/types";
 
@@ -159,18 +160,28 @@ function ArtifactItem({
               Save to File
             </button>
             {artifact.type === "patch" && (
-              <button
-                onClick={handleApplyPatch}
-                disabled={isProcessing || !canApplyPatch}
-                className={cn(
-                  "px-3 py-1 text-xs rounded transition-colors",
-                  "bg-[var(--color-status-success)] hover:brightness-110 text-white",
-                  "disabled:opacity-50 disabled:cursor-not-allowed"
-                )}
-                title={!canApplyPatch ? "No worktree context available" : "Apply patch to worktree"}
-              >
-                Apply Patch
-              </button>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex">
+                      <button
+                        onClick={handleApplyPatch}
+                        disabled={isProcessing || !canApplyPatch}
+                        className={cn(
+                          "px-3 py-1 text-xs rounded transition-colors",
+                          "bg-[var(--color-status-success)] hover:brightness-110 text-white",
+                          "disabled:opacity-50 disabled:cursor-not-allowed"
+                        )}
+                      >
+                        Apply Patch
+                      </button>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {!canApplyPatch ? "No worktree context available" : "Apply patch to worktree"}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             )}
             {feedback && (
               <span
@@ -380,22 +391,32 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                     >
                       Copy All
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => setIncludeAllTypes((v) => !v)}
-                      disabled={isBulkActionRunning}
-                      className={cn(
-                        "px-2 py-1 text-xs rounded transition-colors",
-                        includeAllTypes
-                          ? "bg-canopy-border text-white"
-                          : "bg-canopy-sidebar text-canopy-text/60",
-                        "hover:brightness-110",
-                        "disabled:opacity-50 disabled:cursor-not-allowed"
-                      )}
-                      title={includeAllTypes ? "Copying all types" : "Copying code only"}
-                    >
-                      {includeAllTypes ? "All" : "Code"}
-                    </button>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="inline-flex">
+                            <button
+                              type="button"
+                              onClick={() => setIncludeAllTypes((v) => !v)}
+                              disabled={isBulkActionRunning}
+                              className={cn(
+                                "px-2 py-1 text-xs rounded transition-colors",
+                                includeAllTypes
+                                  ? "bg-canopy-border text-white"
+                                  : "bg-canopy-sidebar text-canopy-text/60",
+                                "hover:brightness-110",
+                                "disabled:opacity-50 disabled:cursor-not-allowed"
+                              )}
+                            >
+                              {includeAllTypes ? "All" : "Code"}
+                            </button>
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">
+                          {includeAllTypes ? "Copying all types" : "Copying code only"}
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                   </div>
                 )}
                 {showSaveAll && (
@@ -413,19 +434,29 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                   </button>
                 )}
                 {showApplyAll && (
-                  <button
-                    type="button"
-                    onClick={handleApplyAllPatches}
-                    disabled={isBulkActionRunning || !canApplyAll}
-                    className={cn(
-                      "px-3 py-1 text-xs rounded transition-colors",
-                      "bg-[var(--color-status-success)] hover:brightness-110 text-white",
-                      "disabled:opacity-50 disabled:cursor-not-allowed"
-                    )}
-                    title={!canApplyAll ? "No worktree context available" : "Apply all patches"}
-                  >
-                    Apply All Patches
-                  </button>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="inline-flex">
+                          <button
+                            type="button"
+                            onClick={handleApplyAllPatches}
+                            disabled={isBulkActionRunning || !canApplyAll}
+                            className={cn(
+                              "px-3 py-1 text-xs rounded transition-colors",
+                              "bg-[var(--color-status-success)] hover:brightness-110 text-white",
+                              "disabled:opacity-50 disabled:cursor-not-allowed"
+                            )}
+                          >
+                            Apply All Patches
+                          </button>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">
+                        {!canApplyAll ? "No worktree context available" : "Apply all patches"}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 )}
                 {bulkProgress && (
                   <span className="text-xs text-canopy-text/60 ml-auto">

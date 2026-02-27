@@ -2,6 +2,7 @@ import React from "react";
 import { Pause, Lock } from "lucide-react";
 import type { TerminalType, AgentState, PanelKind } from "@/types";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { STATE_ICONS, STATE_COLORS } from "@/components/Worktree/terminalStateConfig";
 import type { ActivityState } from "./TerminalPane";
 import { useTerminalStore } from "@/store";
@@ -61,26 +62,32 @@ function TerminalHeaderContentComponent({
     const tooltip = activity?.headline?.trim() || `Agent ${agentState}`;
 
     return (
-      <div
-        className={cn(
-          "inline-flex items-center justify-center w-5 h-5 rounded-full border shrink-0",
-          chipStyle,
-          STATE_COLORS[agentState]
-        )}
-        title={tooltip}
-        role="status"
-        aria-label={`Agent state: ${agentState}`}
-      >
-        <StateIcon
-          className={cn(
-            "w-3 h-3",
-            agentState === "working" && "animate-spin",
-            agentState === "waiting" && "animate-breathe",
-            "motion-reduce:animate-none"
-          )}
-          aria-hidden="true"
-        />
-      </div>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div
+              className={cn(
+                "inline-flex items-center justify-center w-5 h-5 rounded-full border shrink-0",
+                chipStyle,
+                STATE_COLORS[agentState]
+              )}
+              role="status"
+              aria-label={`Agent state: ${agentState}`}
+            >
+              <StateIcon
+                className={cn(
+                  "w-3 h-3",
+                  agentState === "working" && "animate-spin",
+                  agentState === "waiting" && "animate-breathe",
+                  "motion-reduce:animate-none"
+                )}
+                aria-hidden="true"
+              />
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{tooltip}</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     );
   };
 
@@ -88,12 +95,16 @@ function TerminalHeaderContentComponent({
     <>
       {/* Command Pill - shows currently running command (inline with title) */}
       {showCommandPill && (
-        <span
-          className="px-3 py-1 rounded-full text-[11px] font-mono bg-white/[0.03] text-canopy-text/60 border border-divider truncate max-w-[20rem]"
-          title={lastCommand}
-        >
-          {lastCommand}
-        </span>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="px-3 py-1 rounded-full text-[11px] font-mono bg-white/[0.03] text-canopy-text/60 border border-divider truncate max-w-[20rem]">
+                {lastCommand}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{lastCommand}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       )}
 
       {/* Exit code badge */}
@@ -109,52 +120,79 @@ function TerminalHeaderContentComponent({
 
       {/* Queue count badge */}
       {queueCount > 0 && (
-        <div
-          className="inline-flex items-center gap-1 text-xs font-sans bg-canopy-accent/15 text-canopy-text px-1.5 py-0.5 rounded ml-1"
-          role="status"
-          aria-live="polite"
-          title={`${queueCount} command${queueCount > 1 ? "s" : ""} queued`}
-        >
-          <span className="font-mono tabular-nums">{queueCount}</span>
-          <span>queued</span>
-        </div>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div
+                className="inline-flex items-center gap-1 text-xs font-sans bg-canopy-accent/15 text-canopy-text px-1.5 py-0.5 rounded ml-1"
+                role="status"
+                aria-live="polite"
+              >
+                <span className="font-mono tabular-nums">{queueCount}</span>
+                <span>queued</span>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {`${queueCount} command${queueCount > 1 ? "s" : ""} queued`}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       )}
 
       {/* Paused badge */}
       {flowStatus === "paused-backpressure" && (
-        <div
-          className="flex items-center gap-1 text-xs font-sans bg-[var(--color-status-warning)]/15 text-[var(--color-status-warning)] px-1.5 py-0.5 rounded ml-1"
-          role="status"
-          aria-live="polite"
-          title="Terminal paused due to buffer overflow (right-click for Force Resume)"
-        >
-          <Pause className="w-3 h-3" aria-hidden="true" />
-          Paused
-        </div>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div
+                className="flex items-center gap-1 text-xs font-sans bg-[var(--color-status-warning)]/15 text-[var(--color-status-warning)] px-1.5 py-0.5 rounded ml-1"
+                role="status"
+                aria-live="polite"
+              >
+                <Pause className="w-3 h-3" aria-hidden="true" />
+                Paused
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              Terminal paused due to buffer overflow (right-click for Force Resume)
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       )}
 
       {/* Suspended badge */}
       {flowStatus === "suspended" && (
-        <div
-          className="flex items-center gap-1 text-xs font-sans bg-[var(--color-status-warning)]/15 text-[var(--color-status-warning)] px-1.5 py-0.5 rounded ml-1"
-          role="status"
-          aria-live="polite"
-          title="Terminal output streaming suspended due to a stall (auto-recovers on focus)"
-        >
-          <Pause className="w-3 h-3" aria-hidden="true" />
-          Suspended
-        </div>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div
+                className="flex items-center gap-1 text-xs font-sans bg-[var(--color-status-warning)]/15 text-[var(--color-status-warning)] px-1.5 py-0.5 rounded ml-1"
+                role="status"
+                aria-live="polite"
+              >
+                <Pause className="w-3 h-3" aria-hidden="true" />
+                Suspended
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              Terminal output streaming suspended due to a stall (auto-recovers on focus)
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       )}
 
       {/* Input locked indicator */}
       {isInputLocked && (
-        <div
-          className="flex items-center text-canopy-text/50 shrink-0"
-          role="status"
-          title="Input locked (read-only monitor mode)"
-        >
-          <Lock className="w-3.5 h-3.5" aria-hidden="true" />
-        </div>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="flex items-center text-canopy-text/50 shrink-0" role="status">
+                <Lock className="w-3.5 h-3.5" aria-hidden="true" />
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Input locked (read-only monitor mode)</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       )}
 
       {/* Agent state chip */}

@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { cn } from "../../lib/utils";
 import { middleTruncate } from "../../utils/textParsing";
 import { BRANCH_PREFIX_MAP, DEFAULT_BRANCH_TYPE } from "@shared/config/branchPrefixes";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 interface BranchLabelProps {
   label: string;
@@ -39,31 +40,35 @@ export function BranchLabel({ label, isActive, isMainWorktree, className }: Bran
   }, [label]);
 
   return (
-    <span
-      className={cn("flex items-center gap-1.5 min-w-0 cursor-pointer", className)}
-      title={label}
-    >
-      {displayName && colors && (
-        <span
-          className={cn(
-            "text-[11px] tracking-wide font-medium px-1.5 py-0.5 rounded border shrink-0",
-            colors.bg,
-            colors.border,
-            colors.text
-          )}
-        >
-          {displayName}
-        </span>
-      )}
-      <span
-        className={cn(
-          "truncate font-mono font-semibold text-[13px]",
-          isActive ? "text-white" : "text-canopy-text",
-          isMainWorktree && "font-bold tracking-wide"
-        )}
-      >
-        {rest}
-      </span>
-    </span>
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className={cn("flex items-center gap-1.5 min-w-0 cursor-pointer", className)}>
+            {displayName && colors && (
+              <span
+                className={cn(
+                  "text-[11px] tracking-wide font-medium px-1.5 py-0.5 rounded border shrink-0",
+                  colors.bg,
+                  colors.border,
+                  colors.text
+                )}
+              >
+                {displayName}
+              </span>
+            )}
+            <span
+              className={cn(
+                "truncate font-mono font-semibold text-[13px]",
+                isActive ? "text-white" : "text-canopy-text",
+                isMainWorktree && "font-bold tracking-wide"
+              )}
+            >
+              {rest}
+            </span>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{label}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }

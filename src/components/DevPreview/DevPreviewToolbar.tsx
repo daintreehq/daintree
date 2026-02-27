@@ -8,6 +8,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import type { DevPreviewStatus } from "./devPreviewTypes";
 
 const STATUS_CONFIG: Record<
@@ -90,9 +91,14 @@ export function DevPreviewToolbar({
       {/* URL display */}
       <div className="flex-1 min-w-0 mx-2">
         {url ? (
-          <span className="text-xs font-mono text-canopy-text/50 truncate block" title={url}>
-            {url}
-          </span>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="text-xs font-mono text-canopy-text/50 truncate block">{url}</span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{url}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         ) : status === "error" || status === "stopped" ? (
           <span className="text-xs text-canopy-text/30 italic">No URL</span>
         ) : (
@@ -101,27 +107,43 @@ export function DevPreviewToolbar({
       </div>
 
       {/* Action buttons */}
-      <button
-        type="button"
-        onClick={onRestart}
-        disabled={isRestarting || status === "starting" || status === "installing"}
-        className={cn(buttonClass, showSpinner && "animate-spin")}
-        title="Restart dev server"
-        aria-label="Restart dev server"
-        aria-busy={showSpinner}
-      >
-        <RotateCw className="w-4 h-4" />
-      </button>
-      <button
-        type="button"
-        onClick={handleOpenExternal}
-        disabled={!url}
-        className={buttonClass}
-        title="Open in browser"
-        aria-label="Open in external browser"
-      >
-        <ExternalLink className="w-4 h-4" />
-      </button>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex">
+              <button
+                type="button"
+                onClick={onRestart}
+                disabled={isRestarting || status === "starting" || status === "installing"}
+                className={cn(buttonClass, showSpinner && "animate-spin")}
+                aria-label="Restart dev server"
+                aria-busy={showSpinner}
+              >
+                <RotateCw className="w-4 h-4" />
+              </button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Restart dev server</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex">
+              <button
+                type="button"
+                onClick={handleOpenExternal}
+                disabled={!url}
+                className={buttonClass}
+                aria-label="Open in external browser"
+              >
+                <ExternalLink className="w-4 h-4" />
+              </button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Open in browser</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     </div>
   );
 }

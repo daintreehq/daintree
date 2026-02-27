@@ -18,6 +18,7 @@ import { STATE_ICONS, STATE_COLORS } from "@/components/Worktree/terminalStateCo
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useDockPanelPortal } from "./DockPanelOffscreenContainer";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface DockedTerminalItemProps {
   terminal: TerminalInstance;
@@ -211,7 +212,6 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                 openDockTerminal(terminal.id);
               }
             }}
-            title={`${terminal.title} - Click to preview, drag to reorder`}
             aria-label={`${terminal.title} - Click to preview, drag to reorder`}
           >
             <div
@@ -235,31 +235,39 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
             {isActive && commandText && (
               <>
                 <div className="h-3 w-px bg-white/10 shrink-0" aria-hidden="true" />
-                <span
-                  className="truncate flex-1 min-w-0 text-[11px] text-canopy-text/50 font-mono"
-                  title={commandText}
-                >
-                  {commandText}
-                </span>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="truncate flex-1 min-w-0 text-[11px] text-canopy-text/50 font-mono">
+                        {commandText}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">{commandText}</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               </>
             )}
 
             {/* State icon (compact spacing from title) */}
             {showStateIcon && StateIcon && (
-              <div
-                className={cn("flex items-center shrink-0", STATE_COLORS[agentState])}
-                title={`Agent ${agentState}`}
-              >
-                <StateIcon
-                  className={cn(
-                    "w-3.5 h-3.5",
-                    agentState === "working" && "animate-spin",
-                    agentState === "waiting" && "animate-breathe",
-                    "motion-reduce:animate-none"
-                  )}
-                  aria-hidden="true"
-                />
-              </div>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className={cn("flex items-center shrink-0", STATE_COLORS[agentState])}>
+                      <StateIcon
+                        className={cn(
+                          "w-3.5 h-3.5",
+                          agentState === "working" && "animate-spin",
+                          agentState === "waiting" && "animate-breathe",
+                          "motion-reduce:animate-none"
+                        )}
+                        aria-hidden="true"
+                      />
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">{`Agent ${agentState}`}</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             )}
           </button>
         </PopoverTrigger>

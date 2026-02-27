@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { ChevronUp, RotateCw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { XtermAdapter } from "../Terminal/XtermAdapter";
 import { terminalInstanceService } from "../../services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
@@ -114,22 +115,30 @@ export function ConsoleDrawer({
         </div>
 
         {onHardRestart && (
-          <button
-            type="button"
-            onClick={onHardRestart}
-            disabled={hardRestartDisabled}
-            className={cn(
-              "flex min-h-8 shrink-0 items-center gap-2 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-canopy-text/80 transition-colors",
-              "hover:bg-black/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-400 disabled:cursor-not-allowed disabled:opacity-40",
-              isRestarting && "text-blue-400"
-            )}
-            title={restartTooltip}
-            aria-label={restartTooltip}
-            aria-busy={isRestarting}
-          >
-            <RotateCw className={cn("h-3.5 w-3.5", isRestarting && "animate-spin")} />
-            <span>Restart</span>
-          </button>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex">
+                  <button
+                    type="button"
+                    onClick={onHardRestart}
+                    disabled={hardRestartDisabled}
+                    className={cn(
+                      "flex min-h-8 shrink-0 items-center gap-2 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-canopy-text/80 transition-colors",
+                      "hover:bg-black/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-400 disabled:cursor-not-allowed disabled:opacity-40",
+                      isRestarting && "text-blue-400"
+                    )}
+                    aria-label={restartTooltip}
+                    aria-busy={isRestarting}
+                  >
+                    <RotateCw className={cn("h-3.5 w-3.5", isRestarting && "animate-spin")} />
+                    <span>Restart</span>
+                  </button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{restartTooltip}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         )}
       </div>
 

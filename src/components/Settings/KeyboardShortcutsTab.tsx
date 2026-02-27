@@ -8,6 +8,7 @@ import {
 } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 interface ShortcutBinding extends KeybindingConfig {
   effectiveCombo: string;
@@ -256,13 +257,20 @@ function ShortcutRow({ binding, isEditing, onEdit, onSave, onCancel, onReset }: 
           Edit
         </button>
         {binding.isOverridden && (
-          <button
-            onClick={onReset}
-            className="p-0.5 text-canopy-text/60 hover:text-canopy-text opacity-0 group-hover:opacity-100 transition-opacity"
-            title="Reset to default"
-          >
-            <RotateCcw className="w-3 h-3" />
-          </button>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={onReset}
+                  className="p-0.5 text-canopy-text/60 hover:text-canopy-text opacity-0 group-hover:opacity-100 transition-opacity"
+                  aria-label="Reset to default"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Reset to default</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         )}
       </div>
     </div>

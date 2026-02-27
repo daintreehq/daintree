@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { getActivityColor } from "@/utils/colorInterpolation";
 import { formatTimestampExact } from "@/utils/textParsing";
 import { useGlobalSecondTicker } from "@/hooks/useGlobalSecondTicker";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 interface ActivityLightProps {
   lastActivityTimestamp?: number | null;
@@ -36,15 +37,21 @@ export function ActivityLight({ lastActivityTimestamp, className }: ActivityLigh
   const tooltipText = formatTimestampExact(lastActivityTimestamp);
 
   return (
-    <div
-      className={cn(
-        "w-2.5 h-2.5 rounded-full transition-colors duration-1000 ease-linear",
-        className
-      )}
-      style={{ backgroundColor: color }}
-      title={tooltipText}
-      role="status"
-      aria-label={tooltipText}
-    />
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div
+            className={cn(
+              "w-2.5 h-2.5 rounded-full transition-colors duration-1000 ease-linear",
+              className
+            )}
+            style={{ backgroundColor: color }}
+            role="status"
+            aria-label={tooltipText}
+          />
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{tooltipText}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }

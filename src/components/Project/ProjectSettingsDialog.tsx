@@ -57,6 +57,7 @@ import {
   type ProjectSettingsSnapshot,
 } from "./projectSettingsDirty";
 import { isSensitiveEnvKey } from "@shared/utils/envVars";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 interface ProjectSettingsDialogProps {
   projectId: string;
@@ -1706,12 +1707,18 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                                   <div className="flex items-start gap-3">
                                     <div className="flex-1 min-w-0">
                                       <div className="flex items-center gap-2">
-                                        <span
-                                          className="text-sm font-medium text-foreground truncate"
-                                          title={recipe.name}
-                                        >
-                                          {recipe.name}
-                                        </span>
+                                        <TooltipProvider>
+                                          <Tooltip>
+                                            <TooltipTrigger asChild>
+                                              <span className="text-sm font-medium text-foreground truncate">
+                                                {recipe.name}
+                                              </span>
+                                            </TooltipTrigger>
+                                            <TooltipContent side="bottom">
+                                              {recipe.name}
+                                            </TooltipContent>
+                                          </Tooltip>
+                                        </TooltipProvider>
                                         <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
                                           {getRecipeScope(recipe)}
                                         </span>
@@ -1736,44 +1743,66 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                                       </div>
                                     </div>
                                     <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        onClick={() => handleEditRecipe(recipe)}
-                                        className="h-7 px-2"
-                                        title="Edit recipe"
-                                        aria-label={`Edit recipe ${recipe.name}`}
-                                      >
-                                        <Edit3 />
-                                      </Button>
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        onClick={() => handleExportRecipe(recipe.id)}
-                                        className="h-7 px-2"
-                                        title={exported ? "Exported" : "Export recipe to clipboard"}
-                                        aria-label={
-                                          exported
-                                            ? `Recipe ${recipe.name} exported to clipboard`
-                                            : `Export recipe ${recipe.name} to clipboard`
-                                        }
-                                      >
-                                        {exported ? (
-                                          <Check className="text-[var(--color-status-success)]" />
-                                        ) : (
-                                          <Download />
-                                        )}
-                                      </Button>
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        onClick={() => setRecipeToDelete(recipe.id)}
-                                        className="h-7 px-2"
-                                        title="Delete recipe"
-                                        aria-label={`Delete recipe ${recipe.name}`}
-                                      >
-                                        <Trash2 className="text-[var(--color-status-error)]" />
-                                      </Button>
+                                      <TooltipProvider>
+                                        <Tooltip>
+                                          <TooltipTrigger asChild>
+                                            <Button
+                                              variant="ghost"
+                                              size="sm"
+                                              onClick={() => handleEditRecipe(recipe)}
+                                              className="h-7 px-2"
+                                              aria-label={`Edit recipe ${recipe.name}`}
+                                            >
+                                              <Edit3 />
+                                            </Button>
+                                          </TooltipTrigger>
+                                          <TooltipContent side="bottom">Edit recipe</TooltipContent>
+                                        </Tooltip>
+                                      </TooltipProvider>
+                                      <TooltipProvider>
+                                        <Tooltip>
+                                          <TooltipTrigger asChild>
+                                            <Button
+                                              variant="ghost"
+                                              size="sm"
+                                              onClick={() => handleExportRecipe(recipe.id)}
+                                              className="h-7 px-2"
+                                              aria-label={
+                                                exported
+                                                  ? `Recipe ${recipe.name} exported to clipboard`
+                                                  : `Export recipe ${recipe.name} to clipboard`
+                                              }
+                                            >
+                                              {exported ? (
+                                                <Check className="text-[var(--color-status-success)]" />
+                                              ) : (
+                                                <Download />
+                                              )}
+                                            </Button>
+                                          </TooltipTrigger>
+                                          <TooltipContent side="bottom">
+                                            {exported ? "Exported" : "Export recipe to clipboard"}
+                                          </TooltipContent>
+                                        </Tooltip>
+                                      </TooltipProvider>
+                                      <TooltipProvider>
+                                        <Tooltip>
+                                          <TooltipTrigger asChild>
+                                            <Button
+                                              variant="ghost"
+                                              size="sm"
+                                              onClick={() => setRecipeToDelete(recipe.id)}
+                                              className="h-7 px-2"
+                                              aria-label={`Delete recipe ${recipe.name}`}
+                                            >
+                                              <Trash2 className="text-[var(--color-status-error)]" />
+                                            </Button>
+                                          </TooltipTrigger>
+                                          <TooltipContent side="bottom">
+                                            Delete recipe
+                                          </TooltipContent>
+                                        </Tooltip>
+                                      </TooltipProvider>
                                     </div>
                                   </div>
                                 </div>

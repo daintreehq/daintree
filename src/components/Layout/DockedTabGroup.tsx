@@ -33,6 +33,7 @@ import { useDockPanelPortal } from "./DockPanelOffscreenContainer";
 import { SortableTabButton } from "@/components/Panel/SortableTabButton";
 import type { TabGroup } from "@/types";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface DockedTabGroupProps {
   group: TabGroup;
@@ -373,7 +374,6 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                 openDockTerminal(activeTabId);
               }
             }}
-            title={`${activePanel.title} (${panels.length} tabs) - Click to preview, drag to reorder`}
             aria-label={`${activePanel.title} (${panels.length} tabs) - Click to preview, drag to reorder`}
           >
             <div
@@ -400,30 +400,38 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
             {isActive && commandText && (
               <>
                 <div className="h-3 w-px bg-white/10 shrink-0" aria-hidden="true" />
-                <span
-                  className="truncate flex-1 min-w-0 text-[11px] text-canopy-text/50 font-mono"
-                  title={commandText}
-                >
-                  {commandText}
-                </span>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="truncate flex-1 min-w-0 text-[11px] text-canopy-text/50 font-mono">
+                        {commandText}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">{commandText}</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               </>
             )}
 
             {showStateIcon && StateIcon && (
-              <div
-                className={cn("flex items-center shrink-0", STATE_COLORS[agentState])}
-                title={`Agent ${agentState}`}
-              >
-                <StateIcon
-                  className={cn(
-                    "w-3.5 h-3.5",
-                    agentState === "working" && "animate-spin",
-                    agentState === "waiting" && "animate-breathe",
-                    "motion-reduce:animate-none"
-                  )}
-                  aria-hidden="true"
-                />
-              </div>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className={cn("flex items-center shrink-0", STATE_COLORS[agentState])}>
+                      <StateIcon
+                        className={cn(
+                          "w-3.5 h-3.5",
+                          agentState === "working" && "animate-spin",
+                          agentState === "waiting" && "animate-breathe",
+                          "motion-reduce:animate-none"
+                        )}
+                        aria-hidden="true"
+                      />
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">{`Agent ${agentState}`}</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             )}
           </button>
         </PopoverTrigger>
@@ -483,19 +491,25 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                   onRename={(newTitle) => handleTabRename(panel.id, newTitle)}
                 />
               ))}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleAddTab();
-                }}
-                onPointerDown={(e) => e.stopPropagation()}
-                className="shrink-0 p-1.5 hover:bg-canopy-text/10 text-canopy-text/40 hover:text-canopy-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
-                title="Duplicate panel as new tab"
-                aria-label="Duplicate panel as new tab"
-                type="button"
-              >
-                <Plus className="w-3 h-3" aria-hidden="true" />
-              </button>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleAddTab();
+                      }}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      className="shrink-0 p-1.5 hover:bg-canopy-text/10 text-canopy-text/40 hover:text-canopy-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
+                      aria-label="Duplicate panel as new tab"
+                      type="button"
+                    >
+                      <Plus className="w-3 h-3" aria-hidden="true" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Duplicate panel as new tab</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </div>
           </SortableContext>
         </DndContext>

@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useGlobalSecondTicker } from "@/hooks/useGlobalSecondTicker";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 interface LiveTimeAgoProps {
   timestamp?: number | null;
@@ -70,12 +71,15 @@ export function LiveTimeAgo({ timestamp, className }: LiveTimeAgoProps) {
   }
 
   return (
-    <span
-      className={cn("tabular-nums", className)}
-      title={`${timeData.fullLabel} (${timeData.formattedDate})`}
-      aria-label={timeData.fullLabel}
-    >
-      {timeData.label}
-    </span>
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className={cn("tabular-nums", className)} aria-label={timeData.fullLabel}>
+            {timeData.label}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{`${timeData.fullLabel} (${timeData.formattedDate})`}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }

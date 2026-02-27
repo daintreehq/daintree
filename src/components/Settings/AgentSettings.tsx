@@ -10,6 +10,7 @@ import {
 } from "@shared/types";
 import { RotateCcw, ExternalLink, RefreshCw, Copy, Check } from "lucide-react";
 import { actionService } from "@/services/ActionService";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { AgentHelpOutput } from "./AgentHelpOutput";
 import { cliAvailabilityClient } from "@/clients";
 import { getInstallBlocksForCurrentOS } from "@/lib/agentInstall";
@@ -511,17 +512,24 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
                                   <code className="flex-1 text-xs font-mono text-canopy-text">
                                     {command}
                                   </code>
-                                  <button
-                                    onClick={() => void handleCopyCommand(command)}
-                                    className="shrink-0 p-1 hover:bg-white/5 rounded transition-colors"
-                                    title="Copy command"
-                                  >
-                                    {copiedCommand === command ? (
-                                      <Check size={14} className="text-canopy-accent" />
-                                    ) : (
-                                      <Copy size={14} className="text-canopy-text/40" />
-                                    )}
-                                  </button>
+                                  <TooltipProvider>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <button
+                                          onClick={() => void handleCopyCommand(command)}
+                                          className="shrink-0 p-1 hover:bg-white/5 rounded transition-colors"
+                                          aria-label="Copy command"
+                                        >
+                                          {copiedCommand === command ? (
+                                            <Check size={14} className="text-canopy-accent" />
+                                          ) : (
+                                            <Copy size={14} className="text-canopy-text/40" />
+                                          )}
+                                        </button>
+                                      </TooltipTrigger>
+                                      <TooltipContent side="bottom">Copy command</TooltipContent>
+                                    </Tooltip>
+                                  </TooltipProvider>
                                 </div>
                               ))}
                             </div>

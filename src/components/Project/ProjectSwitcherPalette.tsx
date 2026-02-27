@@ -5,6 +5,7 @@ import { getProjectGradient } from "@/lib/colorUtils";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ProjectActionRow } from "./ProjectActionRow";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
@@ -117,40 +118,52 @@ function ProjectListItem({
                 )}
               >
                 {showStop && onStopProject && (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onStopProject(project.id);
-                    }}
-                    className={cn(
-                      "p-0.5 rounded transition-colors cursor-pointer",
-                      "text-[var(--color-status-error)] hover:bg-red-500/10",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-                    )}
-                    title="Stop project"
-                    aria-label="Stop project"
-                  >
-                    <Square className="w-3.5 h-3.5" aria-hidden="true" />
-                  </button>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onStopProject(project.id);
+                          }}
+                          className={cn(
+                            "p-0.5 rounded transition-colors cursor-pointer",
+                            "text-[var(--color-status-error)] hover:bg-red-500/10",
+                            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                          )}
+                          aria-label="Stop project"
+                        >
+                          <Square className="w-3.5 h-3.5" aria-hidden="true" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">Stop project</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 )}
                 {onCloseProject && (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onCloseProject(project.id);
-                    }}
-                    className={cn(
-                      "p-0.5 rounded transition-colors cursor-pointer",
-                      "text-canopy-text/50 hover:bg-white/[0.06] hover:text-canopy-text/80",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-                    )}
-                    title="Close project"
-                    aria-label="Close project"
-                  >
-                    <X className="w-3.5 h-3.5" aria-hidden="true" />
-                  </button>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onCloseProject(project.id);
+                          }}
+                          className={cn(
+                            "p-0.5 rounded transition-colors cursor-pointer",
+                            "text-canopy-text/50 hover:bg-white/[0.06] hover:text-canopy-text/80",
+                            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                          )}
+                          aria-label="Close project"
+                        >
+                          <X className="w-3.5 h-3.5" aria-hidden="true" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">Close project</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 )}
               </div>
             )}

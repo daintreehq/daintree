@@ -5,6 +5,7 @@ import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortabl
 import { useDroppable } from "@dnd-kit/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useTerminalStore, useProjectStore, useWorktreeSelectionStore } from "@/store";
 import { DockedTerminalItem } from "./DockedTerminalItem";
 import { DockedTabGroup } from "./DockedTabGroup";
@@ -153,19 +154,25 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
         {/* Left Scroll Chevron - Overlay */}
         {canScrollLeft && (
           <div className="absolute left-0 top-1/2 -translate-y-1/2 z-10 pointer-events-none bg-gradient-to-r from-[var(--dock-bg)] via-[var(--dock-bg)]/90 to-transparent pr-4">
-            <button
-              type="button"
-              onClick={scrollLeft}
-              className={cn(
-                "pointer-events-auto p-1.5 text-canopy-text/60 hover:text-canopy-text",
-                "rounded-[var(--radius-md)] transition-colors",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-              )}
-              aria-label="Scroll left"
-              title="Scroll left"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={scrollLeft}
+                    className={cn(
+                      "pointer-events-auto p-1.5 text-canopy-text/60 hover:text-canopy-text",
+                      "rounded-[var(--radius-md)] transition-colors",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                    )}
+                    aria-label="Scroll left"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Scroll left</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
         )}
 
@@ -223,19 +230,25 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
         {/* Right Scroll Chevron - Overlay */}
         {canScrollRight && (
           <div className="absolute right-0 top-1/2 -translate-y-1/2 z-10 pointer-events-none bg-gradient-to-l from-[var(--dock-bg)] via-[var(--dock-bg)]/90 to-transparent pl-4">
-            <button
-              type="button"
-              onClick={scrollRight}
-              className={cn(
-                "pointer-events-auto p-1.5 text-canopy-text/60 hover:text-canopy-text",
-                "rounded-[var(--radius-md)] transition-colors",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-              )}
-              aria-label="Scroll right"
-              title="Scroll right"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </button>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={scrollRight}
+                    className={cn(
+                      "pointer-events-auto p-1.5 text-canopy-text/60 hover:text-canopy-text",
+                      "rounded-[var(--radius-md)] transition-colors",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                    )}
+                    aria-label="Scroll right"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Scroll right</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
         )}
       </div>

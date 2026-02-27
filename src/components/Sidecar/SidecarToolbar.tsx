@@ -19,6 +19,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import type { SidecarTab, SidecarLink } from "@shared/types";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { useSidecarStore } from "@/store/sidecarStore";
 import { SidecarIcon } from "./SidecarIcon";
 import { useNativeContextMenu } from "@/hooks";
@@ -260,62 +261,98 @@ export function SidecarToolbar({
       {/* Top Row: Navigation Controls */}
       <div className="flex items-center justify-between px-2 py-1.5">
         <div className="flex items-center gap-0.5">
-          <button
-            onClick={onGoBack}
-            disabled={!activeTabId}
-            aria-label="Go back"
-            className="p-1 rounded hover:bg-white/[0.06] text-muted-foreground hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Go back"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={onGoForward}
-            disabled={!activeTabId}
-            aria-label="Go forward"
-            className="p-1 rounded hover:bg-white/[0.06] text-muted-foreground hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Go forward"
-          >
-            <ArrowRight className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={onReload}
-            disabled={!activeTabId}
-            aria-label="Reload"
-            className="p-1 rounded hover:bg-white/[0.06] text-muted-foreground hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Reload"
-          >
-            <RotateCw className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={onCopyUrl}
-            disabled={!activeTabId || !hasActiveUrl}
-            aria-label="Copy URL"
-            className="p-1 rounded hover:bg-white/[0.06] text-muted-foreground hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Copy URL"
-          >
-            <Link2 className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={onOpenExternal}
-            disabled={!activeTabId || !hasActiveUrl}
-            aria-label="Open in external browser"
-            className="p-1 rounded hover:bg-white/[0.06] text-muted-foreground hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Open in external browser"
-          >
-            <ExternalLink className="w-3.5 h-3.5" />
-          </button>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={onGoBack}
+                  disabled={!activeTabId}
+                  aria-label="Go back"
+                  className="p-1 rounded hover:bg-white/[0.06] text-muted-foreground hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <ArrowLeft className="w-3.5 h-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Go back</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={onGoForward}
+                  disabled={!activeTabId}
+                  aria-label="Go forward"
+                  className="p-1 rounded hover:bg-white/[0.06] text-muted-foreground hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Go forward</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={onReload}
+                  disabled={!activeTabId}
+                  aria-label="Reload"
+                  className="p-1 rounded hover:bg-white/[0.06] text-muted-foreground hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <RotateCw className="w-3.5 h-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Reload</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={onCopyUrl}
+                  disabled={!activeTabId || !hasActiveUrl}
+                  aria-label="Copy URL"
+                  className="p-1 rounded hover:bg-white/[0.06] text-muted-foreground hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Link2 className="w-3.5 h-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Copy URL</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={onOpenExternal}
+                  disabled={!activeTabId || !hasActiveUrl}
+                  aria-label="Open in external browser"
+                  className="p-1 rounded hover:bg-white/[0.06] text-muted-foreground hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Open in external browser</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
 
         <div className="flex items-center gap-1">
-          <button
-            onClick={onClose}
-            aria-label="Close sidecar"
-            className="p-1 rounded hover:bg-white/[0.06] text-muted-foreground hover:text-canopy-text transition-colors ml-1"
-            title="Close sidecar"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={onClose}
+                  aria-label="Close sidecar"
+                  className="p-1 rounded hover:bg-white/[0.06] text-muted-foreground hover:text-canopy-text transition-colors ml-1"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Close sidecar</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
       </div>
 
@@ -361,24 +398,31 @@ export function SidecarToolbar({
                   tabIndex={index}
                 />
               ))}
-              <button
-                onClick={onNewTab}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  void window.electron.sidecar.showNewTabMenu({
-                    x: e.screenX,
-                    y: e.screenY,
-                    links: enabledLinks.map((link) => ({ title: link.title, url: link.url })),
-                    defaultNewTabUrl,
-                  });
-                }}
-                className="flex items-center justify-center w-8 h-[26px] rounded-full bg-white/[0.02] hover:bg-white/[0.03] text-canopy-text/70 hover:text-canopy-text border border-divider transition-all"
-                title="New Tab"
-                aria-haspopup="menu"
-              >
-                <Plus className="w-4 h-4" />
-              </button>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={onNewTab}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        void window.electron.sidecar.showNewTabMenu({
+                          x: e.screenX,
+                          y: e.screenY,
+                          links: enabledLinks.map((link) => ({ title: link.title, url: link.url })),
+                          defaultNewTabUrl,
+                        });
+                      }}
+                      className="flex items-center justify-center w-8 h-[26px] rounded-full bg-white/[0.02] hover:bg-white/[0.03] text-canopy-text/70 hover:text-canopy-text border border-divider transition-all"
+                      aria-label="New Tab"
+                      aria-haspopup="menu"
+                    >
+                      <Plus className="w-4 h-4" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">New Tab</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </div>
           </SortableContext>
         </DndContext>

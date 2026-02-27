@@ -13,6 +13,7 @@ import {
 import { cn } from "@/lib/utils";
 import { normalizeBrowserUrl, getDisplayUrl } from "./browserUtils";
 import { actionService } from "@/services/ActionService";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 const ZOOM_PRESETS = [
   { value: 0.25, label: "25%" },
@@ -172,70 +173,111 @@ export function BrowserToolbar({
   return (
     <div className="flex items-center gap-1.5 px-2 py-1.5 bg-[var(--color-surface)] border-b border-overlay">
       {/* Navigation buttons */}
-      <button
-        type="button"
-        onClick={onBack}
-        disabled={!canGoBack}
-        className={buttonClass}
-        title="Go back"
-      >
-        <ArrowLeft className="w-4 h-4" />
-      </button>
-      <button
-        type="button"
-        onClick={onForward}
-        disabled={!canGoForward}
-        className={buttonClass}
-        title="Go forward"
-      >
-        <ArrowRight className="w-4 h-4" />
-      </button>
-      <button
-        type="button"
-        onClick={onReload}
-        className={cn(buttonClass, isLoading && "animate-spin")}
-        title="Reload"
-      >
-        <RotateCw className="w-4 h-4" />
-      </button>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex">
+              <button type="button" onClick={onBack} disabled={!canGoBack} className={buttonClass}>
+                <ArrowLeft className="w-4 h-4" />
+              </button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Go back</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex">
+              <button
+                type="button"
+                onClick={onForward}
+                disabled={!canGoForward}
+                className={buttonClass}
+              >
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Go forward</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={onReload}
+              className={cn(buttonClass, isLoading && "animate-spin")}
+            >
+              <RotateCw className="w-4 h-4" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Reload</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
 
       {/* Zoom controls */}
       {onZoomChange && (
         <div className="flex items-center gap-0.5">
-          <button
-            type="button"
-            onClick={() => handleZoomStep("out")}
-            disabled={!canZoomOut}
-            className={buttonClass}
-            title="Zoom out"
-            aria-label="Zoom out"
-          >
-            <ZoomOut className="w-3.5 h-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={handleZoomReset}
-            disabled={!isNonDefaultZoom}
-            className={cn(
-              "px-1.5 py-1 rounded text-xs font-medium transition-colors",
-              "hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed",
-              isNonDefaultZoom ? "text-blue-400" : "text-canopy-text/60"
-            )}
-            title="Reset zoom to 100%"
-            aria-label="Reset zoom"
-          >
-            {currentZoomLabel}
-          </button>
-          <button
-            type="button"
-            onClick={() => handleZoomStep("in")}
-            disabled={!canZoomIn}
-            className={buttonClass}
-            title="Zoom in"
-            aria-label="Zoom in"
-          >
-            <ZoomIn className="w-3.5 h-3.5" />
-          </button>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex">
+                  <button
+                    type="button"
+                    onClick={() => handleZoomStep("out")}
+                    disabled={!canZoomOut}
+                    className={buttonClass}
+                    aria-label="Zoom out"
+                  >
+                    <ZoomOut className="w-3.5 h-3.5" />
+                  </button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Zoom out</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex">
+                  <button
+                    type="button"
+                    onClick={handleZoomReset}
+                    disabled={!isNonDefaultZoom}
+                    className={cn(
+                      "px-1.5 py-1 rounded text-xs font-medium transition-colors",
+                      "hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed",
+                      isNonDefaultZoom ? "text-blue-400" : "text-canopy-text/60"
+                    )}
+                    aria-label="Reset zoom"
+                  >
+                    {currentZoomLabel}
+                  </button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Reset zoom to 100%</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex">
+                  <button
+                    type="button"
+                    onClick={() => handleZoomStep("in")}
+                    disabled={!canZoomIn}
+                    className={buttonClass}
+                    aria-label="Zoom in"
+                  >
+                    <ZoomIn className="w-3.5 h-3.5" />
+                  </button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Zoom in</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
       )}
 
@@ -244,10 +286,16 @@ export function BrowserToolbar({
         <div className="relative flex items-center">
           <Globe className="absolute left-2 w-3.5 h-3.5 text-canopy-text/40 pointer-events-none" />
           {urlMightBeStale && !isEditing && (
-            <span
-              className="absolute left-6 w-1.5 h-1.5 rounded-full bg-amber-400/60"
-              title="URL may differ from page shown (in-page navigation)"
-            />
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="absolute left-6 w-1.5 h-1.5 rounded-full bg-amber-400/60" />
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  URL may differ from page shown (in-page navigation)
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           )}
           <input
             ref={inputRef}
@@ -278,17 +326,26 @@ export function BrowserToolbar({
       </form>
 
       {/* Action buttons */}
-      <button type="button" onClick={handleCopy} className={buttonClass} title="Copy URL">
-        {copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
-      </button>
-      <button
-        type="button"
-        onClick={onOpenExternal}
-        className={buttonClass}
-        title="Open in browser"
-      >
-        <ExternalLink className="w-4 h-4" />
-      </button>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button type="button" onClick={handleCopy} className={buttonClass}>
+              {copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Copy URL</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button type="button" onClick={onOpenExternal} className={buttonClass}>
+              <ExternalLink className="w-4 h-4" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Open in browser</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     </div>
   );
 }

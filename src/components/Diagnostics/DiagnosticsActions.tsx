@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { useLogsStore, useErrorStore } from "@/store";
 import { actionService } from "@/services/ActionService";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 export function ProblemsActions() {
   const hasActiveErrors = useErrorStore((state) => state.errors.some((e) => !e.dismissed));
@@ -12,20 +13,35 @@ export function ProblemsActions() {
 
   return (
     <div className="flex items-center gap-2">
-      <Button variant="subtle" size="xs" onClick={handleOpenLogs} title="Open log file">
-        Open Logs
-      </Button>
-      <Button
-        variant="subtle"
-        size="xs"
-        onClick={() =>
-          void actionService.dispatch("errors.clearAll", undefined, { source: "user" })
-        }
-        disabled={!hasActiveErrors}
-        title="Clear all errors"
-      >
-        Clear All
-      </Button>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="subtle" size="xs" onClick={handleOpenLogs}>
+              Open Logs
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Open log file</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex">
+              <Button
+                variant="subtle"
+                size="xs"
+                onClick={() =>
+                  void actionService.dispatch("errors.clearAll", undefined, { source: "user" })
+                }
+                disabled={!hasActiveErrors}
+              >
+                Clear All
+              </Button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Clear all errors</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     </div>
   );
 }
@@ -44,20 +60,42 @@ export function LogsActions() {
 
   return (
     <div className="flex items-center gap-2">
-      <Button
-        variant={autoScroll ? "info" : "subtle"}
-        size="xs"
-        onClick={() => setAutoScroll(!autoScroll)}
-        title={autoScroll ? "Auto-scroll enabled" : "Auto-scroll disabled"}
-      >
-        Auto-scroll
-      </Button>
-      <Button variant="subtle" size="xs" onClick={handleOpenFile} title="Open log file">
-        Open File
-      </Button>
-      <Button variant="subtle" size="xs" onClick={handleClearLogs} title="Clear logs">
-        Clear
-      </Button>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant={autoScroll ? "info" : "subtle"}
+              size="xs"
+              onClick={() => setAutoScroll(!autoScroll)}
+            >
+              Auto-scroll
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {autoScroll ? "Auto-scroll enabled" : "Auto-scroll disabled"}
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="subtle" size="xs" onClick={handleOpenFile}>
+              Open File
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Open log file</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="subtle" size="xs" onClick={handleClearLogs}>
+              Clear
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Clear logs</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     </div>
   );
 }
@@ -71,9 +109,16 @@ export function EventsActions() {
 
   return (
     <div className="flex items-center gap-2">
-      <Button variant="subtle" size="xs" onClick={handleClearEvents} title="Clear all events">
-        Clear
-      </Button>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="subtle" size="xs" onClick={handleClearEvents}>
+              Clear
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Clear all events</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { X, ChevronUp, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { validateRegexTerm, buildSearchOptions, type SearchStatus } from "./terminalSearchUtils";
 
@@ -174,35 +175,47 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
         )}
       />
 
-      <button
-        onClick={handleCaseSensitiveToggle}
-        className={cn(
-          "px-1.5 py-1 text-xs rounded transition-colors",
-          caseSensitive
-            ? "bg-[var(--color-status-info)] text-white"
-            : "text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-bg"
-        )}
-        title="Case sensitive"
-        aria-label="Toggle case sensitivity"
-        aria-pressed={caseSensitive}
-      >
-        Aa
-      </button>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={handleCaseSensitiveToggle}
+              className={cn(
+                "px-1.5 py-1 text-xs rounded transition-colors",
+                caseSensitive
+                  ? "bg-[var(--color-status-info)] text-white"
+                  : "text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-bg"
+              )}
+              aria-label="Toggle case sensitivity"
+              aria-pressed={caseSensitive}
+            >
+              Aa
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Case sensitive</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
 
-      <button
-        onClick={handleRegexToggle}
-        className={cn(
-          "px-1.5 py-1 text-xs font-mono rounded transition-colors",
-          regexEnabled
-            ? "bg-[var(--color-status-info)] text-white"
-            : "text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-bg"
-        )}
-        title="Regex"
-        aria-label="Toggle regex mode"
-        aria-pressed={regexEnabled}
-      >
-        .*
-      </button>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={handleRegexToggle}
+              className={cn(
+                "px-1.5 py-1 text-xs font-mono rounded transition-colors",
+                regexEnabled
+                  ? "bg-[var(--color-status-info)] text-white"
+                  : "text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-bg"
+              )}
+              aria-label="Toggle regex mode"
+              aria-pressed={regexEnabled}
+            >
+              .*
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Regex</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
 
       {searchTerm && searchStatus !== "idle" && (
         <span
@@ -217,45 +230,67 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
         </span>
       )}
 
-      <button
-        onClick={() => performSearch(searchTerm, "prev")}
-        disabled={!searchTerm}
-        className={cn(
-          "p-1 rounded transition-colors",
-          "text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-bg",
-          "disabled:opacity-30 disabled:cursor-not-allowed"
-        )}
-        aria-label="Previous match"
-        title="Previous match (Shift+Enter)"
-      >
-        <ChevronUp className="w-4 h-4" />
-      </button>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex">
+              <button
+                onClick={() => performSearch(searchTerm, "prev")}
+                disabled={!searchTerm}
+                className={cn(
+                  "p-1 rounded transition-colors",
+                  "text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-bg",
+                  "disabled:opacity-30 disabled:cursor-not-allowed"
+                )}
+                aria-label="Previous match"
+              >
+                <ChevronUp className="w-4 h-4" />
+              </button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Previous match (Shift+Enter)</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
 
-      <button
-        onClick={() => performSearch(searchTerm, "next")}
-        disabled={!searchTerm}
-        className={cn(
-          "p-1 rounded transition-colors",
-          "text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-bg",
-          "disabled:opacity-30 disabled:cursor-not-allowed"
-        )}
-        aria-label="Next match"
-        title="Next match (Enter)"
-      >
-        <ChevronDown className="w-4 h-4" />
-      </button>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex">
+              <button
+                onClick={() => performSearch(searchTerm, "next")}
+                disabled={!searchTerm}
+                className={cn(
+                  "p-1 rounded transition-colors",
+                  "text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-bg",
+                  "disabled:opacity-30 disabled:cursor-not-allowed"
+                )}
+                aria-label="Next match"
+              >
+                <ChevronDown className="w-4 h-4" />
+              </button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Next match (Enter)</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
 
-      <button
-        onClick={handleClose}
-        className={cn(
-          "p-1 rounded transition-colors",
-          "text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-bg"
-        )}
-        aria-label="Close search"
-        title="Close (Esc)"
-      >
-        <X className="w-4 h-4" />
-      </button>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={handleClose}
+              className={cn(
+                "p-1 rounded transition-colors",
+                "text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-bg"
+              )}
+              aria-label="Close search"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Close (Esc)</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     </div>
   );
 }

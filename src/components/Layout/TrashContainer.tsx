@@ -132,7 +132,6 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
             compact ? "px-1.5 min-w-0" : "px-3",
             isOpen && "bg-canopy-border border-canopy-accent/40 ring-1 ring-canopy-accent/30"
           )}
-          title="View recently closed terminals"
           aria-haspopup="dialog"
           aria-expanded={isOpen}
           aria-controls={contentId}

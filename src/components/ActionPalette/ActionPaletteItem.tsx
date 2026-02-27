@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
 import type { ActionPaletteItem as ActionPaletteItemType } from "@/hooks/useActionPalette";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 interface ActionPaletteItemProps {
   item: ActionPaletteItemType;
@@ -31,7 +32,7 @@ const DEFAULT_CATEGORY_COLOR = "bg-white/[0.06] text-canopy-text/50";
 export function ActionPaletteItem({ item, isSelected, onSelect }: ActionPaletteItemProps) {
   const categoryColor = CATEGORY_COLORS[item.category] ?? DEFAULT_CATEGORY_COLOR;
 
-  return (
+  const buttonContent = (
     <button
       id={`action-option-${item.id}`}
       role="option"
@@ -45,7 +46,6 @@ export function ActionPaletteItem({ item, isSelected, onSelect }: ActionPaletteI
           : "border-transparent text-canopy-text/70 hover:bg-white/[0.02] hover:text-canopy-text"
       )}
       onClick={() => onSelect(item)}
-      title={!item.enabled ? item.disabledReason : undefined}
     >
       <span
         className={cn(
@@ -70,4 +70,19 @@ export function ActionPaletteItem({ item, isSelected, onSelect }: ActionPaletteI
       )}
     </button>
   );
+
+  if (!item.enabled && item.disabledReason) {
+    return (
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex w-full">{buttonContent}</span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{item.disabledReason}</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
+  }
+
+  return buttonContent;
 }

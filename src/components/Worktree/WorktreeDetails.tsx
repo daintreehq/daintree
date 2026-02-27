@@ -9,6 +9,7 @@ import { cn } from "../../lib/utils";
 import { GitCommit, Copy, Check, ExternalLink } from "lucide-react";
 import { parseNoteWithLinks, formatPath, type TextSegment } from "../../utils/textParsing";
 import { actionService } from "@/services/ActionService";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 export interface WorktreeDetailsProps {
   worktree: WorktreeState;
@@ -200,36 +201,50 @@ export function WorktreeDetails({
       {/* System path footer */}
       <div className="pt-3 border-t border-white/5">
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onPathClick();
-            }}
-            className={cn(
-              "text-xs text-canopy-text/40 hover:text-canopy-text/60 text-left font-mono truncate flex-1 min-w-0 flex items-center gap-1.5 rounded",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
-              isFocused && "text-canopy-text/60"
-            )}
-            title={`Open folder: ${worktree.path}`}
-          >
-            <ExternalLink className="w-3 h-3 shrink-0 opacity-60" />
-            <span className="truncate">{displayPath}</span>
-          </button>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onPathClick();
+                  }}
+                  className={cn(
+                    "text-xs text-canopy-text/40 hover:text-canopy-text/60 text-left font-mono truncate flex-1 min-w-0 flex items-center gap-1.5 rounded",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
+                    isFocused && "text-canopy-text/60"
+                  )}
+                >
+                  <ExternalLink className="w-3 h-3 shrink-0 opacity-60" />
+                  <span className="truncate">{displayPath}</span>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{`Open folder: ${worktree.path}`}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
 
-          <button
-            type="button"
-            onClick={handleCopyPath}
-            className="shrink-0 p-1 text-canopy-text/40 hover:text-canopy-text/60 hover:bg-white/5 rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-            title={pathCopied ? "Copied!" : "Copy full path"}
-            aria-label={pathCopied ? "Path copied to clipboard" : "Copy path to clipboard"}
-          >
-            {pathCopied ? (
-              <Check className="w-3 h-3 text-green-400" />
-            ) : (
-              <Copy className="w-3 h-3" />
-            )}
-          </button>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={handleCopyPath}
+                  className="shrink-0 p-1 text-canopy-text/40 hover:text-canopy-text/60 hover:bg-white/5 rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                  aria-label={pathCopied ? "Path copied to clipboard" : "Copy path to clipboard"}
+                >
+                  {pathCopied ? (
+                    <Check className="w-3 h-3 text-green-400" />
+                  ) : (
+                    <Copy className="w-3 h-3" />
+                  )}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {pathCopied ? "Copied!" : "Copy full path"}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
           <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
             {pathCopied ? "Path copied to clipboard" : ""}
           </div>
