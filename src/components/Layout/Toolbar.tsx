@@ -22,7 +22,7 @@ import {
   Monitor,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { createTooltipWithShortcut, formatShortcutForTooltip } from "@/lib/platform";
+import { isMac, createTooltipWithShortcut, formatShortcutForTooltip } from "@/lib/platform";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { GitHubResourceList, CommitList } from "@/components/GitHub";
 import { AgentButton } from "./AgentButton";
@@ -693,12 +693,14 @@ export function Toolbar({
 
         {/* LEFT GROUP */}
         <div className="flex items-center gap-1.5 app-no-drag z-20">
-          <div
-            className={cn(
-              "shrink-0 transition-[width] duration-200",
-              isFullscreen ? "w-0" : "w-16"
-            )}
-          />
+          {isMac() && (
+            <div
+              className={cn(
+                "shrink-0 transition-[width] duration-200",
+                isFullscreen ? "w-0" : "w-16"
+              )}
+            />
+          )}
           {buttonRegistry["sidebar-toggle"].render()}
 
           <div className="w-px h-5 bg-white/[0.08] mx-1" />

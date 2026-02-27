@@ -631,8 +631,21 @@ async function createWindow(): Promise<void> {
       webviewTag: true,
       navigateOnDragDrop: false,
     },
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 12, y: 18 },
+    ...(process.platform === "darwin"
+      ? {
+          titleBarStyle: "hiddenInset" as const,
+          trafficLightPosition: { x: 12, y: 18 },
+        }
+      : {
+          titleBarStyle: "hidden" as const,
+          ...(process.platform === "win32" && {
+            titleBarOverlay: {
+              color: "#18181b",
+              symbolColor: "#a1a1aa",
+              height: 36,
+            },
+          }),
+        }),
     backgroundColor: "#18181b",
   });
   markPerformance(PERF_MARKS.MAIN_WINDOW_CREATED);
