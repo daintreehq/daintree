@@ -57,14 +57,17 @@ function mergeFetchedWorktrees(
     const fetched = map.get(id);
     if (!fetched) continue;
 
+    const branchChanged = fetched.branch !== existing.branch;
     map.set(id, {
       ...fetched,
-      prNumber: fetched.prNumber ?? existing.prNumber,
-      prUrl: fetched.prUrl ?? existing.prUrl,
-      prState: fetched.prState ?? existing.prState,
-      prTitle: fetched.prTitle ?? existing.prTitle,
-      issueNumber: fetched.issueNumber ?? existing.issueNumber,
-      issueTitle: fetched.issueTitle ?? existing.issueTitle,
+      prNumber: branchChanged ? fetched.prNumber : (fetched.prNumber ?? existing.prNumber),
+      prUrl: branchChanged ? fetched.prUrl : (fetched.prUrl ?? existing.prUrl),
+      prState: branchChanged ? fetched.prState : (fetched.prState ?? existing.prState),
+      prTitle: branchChanged ? fetched.prTitle : (fetched.prTitle ?? existing.prTitle),
+      issueNumber: branchChanged
+        ? fetched.issueNumber
+        : (fetched.issueNumber ?? existing.issueNumber),
+      issueTitle: branchChanged ? fetched.issueTitle : (fetched.issueTitle ?? existing.issueTitle),
     });
   }
 
@@ -103,14 +106,19 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
           const next = new Map(prev.worktrees);
           const existing = prev.worktrees.get(state.id);
           if (existing) {
+            const branchChanged = existing.branch !== state.branch;
             next.set(state.id, {
               ...state,
-              prNumber: state.prNumber ?? existing.prNumber,
-              prUrl: state.prUrl ?? existing.prUrl,
-              prState: state.prState ?? existing.prState,
-              prTitle: state.prTitle ?? existing.prTitle,
-              issueNumber: state.issueNumber ?? existing.issueNumber,
-              issueTitle: state.issueTitle ?? existing.issueTitle,
+              prNumber: branchChanged ? state.prNumber : (state.prNumber ?? existing.prNumber),
+              prUrl: branchChanged ? state.prUrl : (state.prUrl ?? existing.prUrl),
+              prState: branchChanged ? state.prState : (state.prState ?? existing.prState),
+              prTitle: branchChanged ? state.prTitle : (state.prTitle ?? existing.prTitle),
+              issueNumber: branchChanged
+                ? state.issueNumber
+                : (state.issueNumber ?? existing.issueNumber),
+              issueTitle: branchChanged
+                ? state.issueTitle
+                : (state.issueTitle ?? existing.issueTitle),
             });
           } else {
             next.set(state.id, state);
