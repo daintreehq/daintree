@@ -30,6 +30,7 @@ const {
     loadProjects: vi.fn().mockResolvedValue(undefined),
     addProject: vi.fn().mockResolvedValue(undefined),
     closeProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
+    closeActiveProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
     removeProject: vi.fn().mockResolvedValue(undefined),
   };
 
@@ -258,6 +259,144 @@ describe("useProjectSwitcherPalette", () => {
 
       expect(result.current.selectedIndex).toBe(1);
       expect(result.current.results[1].id).toBe("project-2");
+    });
+  });
+
+  describe("active project close", () => {
+    const activeProject = {
+      id: "project-1",
+      name: "Active Project",
+      path: "/repo/active",
+      emoji: "🌲",
+      color: "#00aa00",
+      lastOpened: 300,
+      status: "active" as const,
+    };
+    const inactiveProject = {
+      id: "project-2",
+      name: "Inactive Project",
+      path: "/repo/inactive",
+      emoji: "🌿",
+      color: "#00bb00",
+      lastOpened: 200,
+      status: "active" as const,
+    };
+
+    beforeEach(() => {
+      projectState.projects = [activeProject, inactiveProject];
+      projectState.currentProject = { id: "project-1" };
+      getStatsMock.mockResolvedValue({
+        processCount: 2,
+        terminalCount: 2,
+        estimatedMemoryMB: 0,
+        terminalTypes: {},
+        processIds: [],
+      });
+      getForProjectMock.mockResolvedValue([]);
+    });
+
+    it("allows active project to enter confirm flow", async () => {
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(2);
+      });
+
+      const activeResult = result.current.results.find((p) => p.id === "project-1");
+      expect(activeResult?.isActive).toBe(true);
+
+      await act(async () => {
+        result.current.removeProject("project-1");
+      });
+
+      expect(result.current.removeConfirmProject?.id).toBe("project-1");
+    });
+
+    it("confirm calls closeActiveProject for active project, not removeProject", async () => {
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(2);
+      });
+
+      await act(async () => {
+        result.current.removeProject("project-1");
+      });
+
+      expect(result.current.removeConfirmProject?.id).toBe("project-1");
+
+      await act(async () => {
+        await result.current.confirmRemoveProject();
+      });
+
+      expect(projectState.closeActiveProject).toHaveBeenCalledWith("project-1");
+      expect(projectState.removeProject).not.toHaveBeenCalled();
+      expect(result.current.removeConfirmProject).toBeNull();
+    });
+
+    it("confirm calls removeProject for non-active project, not closeActiveProject", async () => {
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(2);
+      });
+
+      await act(async () => {
+        result.current.removeProject("project-2");
+      });
+
+      expect(result.current.removeConfirmProject?.id).toBe("project-2");
+
+      await act(async () => {
+        await result.current.confirmRemoveProject();
+      });
+
+      expect(projectState.removeProject).toHaveBeenCalledWith("project-2");
+      expect(projectState.closeActiveProject).not.toHaveBeenCalled();
+      expect(result.current.removeConfirmProject).toBeNull();
+    });
+
+    it("shows error notification when closeActiveProject fails", async () => {
+      const addNotification = vi.fn();
+      (useNotificationStoreMock as ReturnType<typeof vi.fn>).mockReturnValue({ addNotification });
+      projectState.closeActiveProject.mockRejectedValueOnce(new Error("close failed"));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(2);
+      });
+
+      await act(async () => {
+        result.current.removeProject("project-1");
+      });
+
+      await act(async () => {
+        await result.current.confirmRemoveProject();
+      });
+
+      expect(addNotification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "error",
+          title: "Failed to close project",
+        })
+      );
     });
   });
 

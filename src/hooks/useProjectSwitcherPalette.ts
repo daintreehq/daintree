@@ -88,6 +88,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const loadProjects = useProjectStore((state) => state.loadProjects);
   const addProjectFn = useProjectStore((state) => state.addProject);
   const closeProject = useProjectStore((state) => state.closeProject);
+  const closeActiveProject = useProjectStore((state) => state.closeActiveProject);
   const removeProject = useProjectStore((state) => state.removeProject);
   const { addNotification } = useNotificationStore();
 
@@ -459,8 +460,6 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       const project = searchableProjects.find((p) => p.id === projectId);
       if (!project) return;
 
-      if (project.isActive) return;
-
       if (removeConfirmProject) return;
 
       setRemoveConfirmProject(project);
@@ -469,35 +468,30 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   );
 
   const confirmRemoveProject = useCallback(async () => {
-    if (!removeConfirmProject) return;
-
-    if (removeConfirmProject.id === currentProject?.id) {
-      setRemoveConfirmProject(null);
-      addNotification({
-        type: "error",
-        title: "Cannot remove active project",
-        message: "Switch to a different project first",
-        duration: 3000,
-      });
-      return;
-    }
+    if (!removeConfirmProject || isRemovingProject) return;
 
     setIsRemovingProject(true);
 
     try {
-      await removeProject(removeConfirmProject.id);
+      if (removeConfirmProject.isActive) {
+        await closeActiveProject(removeConfirmProject.id);
+      } else {
+        await removeProject(removeConfirmProject.id);
+      }
       setRemoveConfirmProject(null);
     } catch (error) {
       addNotification({
         type: "error",
-        title: "Failed to remove project",
+        title: removeConfirmProject.isActive
+          ? "Failed to close project"
+          : "Failed to remove project",
         message: error instanceof Error ? error.message : "Unknown error",
         duration: 5000,
       });
     } finally {
       setIsRemovingProject(false);
     }
-  }, [removeConfirmProject, removeProject, addNotification, currentProject?.id]);
+  }, [removeConfirmProject, isRemovingProject, closeActiveProject, removeProject, addNotification]);
 
   return {
     isOpen,

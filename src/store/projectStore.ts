@@ -54,6 +54,7 @@ interface ProjectState {
     projectId: string,
     options?: { killTerminals?: boolean }
   ) => Promise<ProjectCloseResult>;
+  closeActiveProject: (projectId: string) => Promise<ProjectCloseResult>;
   reopenProject: (projectId: string) => Promise<void>;
   finishProjectSwitch: () => void;
   openGitInitDialog: (directoryPath: string) => void;
@@ -513,6 +514,60 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         component: "projectStore",
         details: { projectId, killTerminals: options?.killTerminals },
       });
+      throw error;
+    }
+  },
+
+  closeActiveProject: async (projectId) => {
+    const currentProjectId = get().currentProject?.id;
+    if (projectId !== currentProjectId) {
+      throw new Error("Project is not currently active");
+    }
+
+    let ipcSucceeded = false;
+
+    try {
+      const result = await projectClient.close(projectId, { killTerminals: true });
+
+      if (!result.success) {
+        throw new Error(result.error || "Failed to close project");
+      }
+
+      ipcSucceeded = true;
+
+      // Re-validate: if the active project changed during the async IPC call, bail out
+      // to avoid resetting state for the wrong project.
+      if (get().currentProject?.id !== projectId) {
+        console.warn(
+          `[ProjectStore] Active project changed during close of ${projectId}, skipping state reset`
+        );
+        await get().loadProjects();
+        return result;
+      }
+
+      console.log(
+        `[ProjectStore] Closed active project ${projectId}, transitioning to no-project state`
+      );
+
+      await resetAllStoresForProjectSwitch({ preserveTerminalIds: new Set() });
+      set({ currentProject: null });
+      await get().loadProjects();
+
+      return result;
+    } catch (error) {
+      logErrorWithContext(error, {
+        operation: "close_active_project",
+        component: "projectStore",
+        details: { projectId },
+      });
+
+      // If IPC succeeded but the renderer reset threw, ensure we still clear the stale active
+      // project so the app doesn't stay in a half-closed state.
+      if (ipcSucceeded && get().currentProject?.id === projectId) {
+        set({ currentProject: null });
+        void get().loadProjects();
+      }
+
       throw error;
     }
   },

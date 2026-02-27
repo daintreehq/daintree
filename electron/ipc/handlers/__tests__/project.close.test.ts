@@ -24,6 +24,7 @@ const projectStoreMock = vi.hoisted(() => ({
   getProjectById:
     vi.fn<(projectId: string) => { id: string; name: string; status?: string } | null>(),
   clearProjectState: vi.fn<(projectId: string) => Promise<void>>(),
+  clearCurrentProject: vi.fn<() => void>(),
   updateProjectStatus:
     vi.fn<(projectId: string, status: "active" | "background" | "closed") => unknown>(),
 }));
@@ -42,7 +43,7 @@ describe("project:close handler", () => {
     vi.clearAllMocks();
   });
 
-  it("allows killing terminals for the active project without closing it", async () => {
+  it("allows killing terminals for the active project and clears it", async () => {
     projectStoreMock.getCurrentProjectId.mockReturnValue("project-active");
     projectStoreMock.getProjectById.mockReturnValue({
       id: "project-active",
@@ -91,10 +92,8 @@ describe("project:close handler", () => {
     expect(result.processesKilled).toBe(2);
     expect(ptyClient.killByProject).toHaveBeenCalledWith("project-active");
     expect(projectStoreMock.clearProjectState).toHaveBeenCalledWith("project-active");
-    expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalledWith(
-      "project-active",
-      "closed"
-    );
+    expect(projectStoreMock.clearCurrentProject).toHaveBeenCalled();
+    expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("project-active", "closed");
   });
 
   it("rejects closing the active project when not killing terminals", async () => {
