@@ -1,6 +1,7 @@
 import { ipcMain, clipboard } from "electron";
 import crypto from "crypto";
 import path from "path";
+import { pathToFileURL } from "url";
 import { CHANNELS } from "../channels.js";
 import { sendToRenderer, checkRateLimit } from "../utils.js";
 import type { HandlerDependencies } from "../types.js";
@@ -304,7 +305,10 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       } else if (process.platform === "win32") {
         clipboard.writeText(filePath);
       } else {
-        clipboard.writeBuffer("text/uri-list", Buffer.from(`file://${filePath}`, "utf8"));
+        clipboard.writeBuffer(
+          "text/uri-list",
+          Buffer.from(pathToFileURL(filePath).href + "\r\n", "utf8")
+        );
       }
 
       console.log(`[${traceId}] Copied context file to clipboard: ${filePath}`);
