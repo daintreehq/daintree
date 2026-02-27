@@ -196,6 +196,9 @@
     "mac": {
       "forceCodeSigning": true,
       "notarize": false,
+      "binaries": [
+        "Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/spawn-helper"
+      ],
       "category": "public.app-category.developer-tools",
       "icon": "build/icon.icns",
       "extendInfo": {
