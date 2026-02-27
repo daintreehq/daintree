@@ -11,6 +11,7 @@ import { projectStore } from "../../../services/ProjectStore.js";
 import type { HandlerDependencies } from "../../types.js";
 import type { TerminalSpawnOptions } from "../../../types/index.js";
 import { TerminalSpawnOptionsSchema } from "../../../schemas/ipc.js";
+import { getDefaultShell } from "../../../services/pty/terminalShell.js";
 
 export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
@@ -130,12 +131,9 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           const isAgent = kind === "agent" || Boolean(agentId);
           if (isAgent) {
             if (process.platform === "win32") {
-              const shell = (
-                validatedOptions.shell ||
-                process.env.COMSPEC ||
-                "powershell.exe"
-              ).toLowerCase();
-              if (shell.includes("cmd")) {
+              const shell = (validatedOptions.shell || getDefaultShell()).toLowerCase();
+              const shellBasename = shell.split(/[\\/]/).pop() ?? shell;
+              if (shellBasename === "cmd.exe" || shellBasename === "cmd") {
                 finalCommand = `${trimmedCommand} & exit`;
               } else {
                 finalCommand = `${trimmedCommand}; exit`;
