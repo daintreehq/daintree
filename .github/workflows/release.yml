@@ -59,7 +59,13 @@ jobs:
         if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libarchive-tools
+          sudo apt-get install -y \
+            libarchive-tools \
+            libxss-dev \
+            libsecret-1-dev \
+            libnss3-dev \
+            libnotify-dev \
+            libxkbfile-dev
 
       - name: Import macOS Certificates
         if: startsWith(matrix.os, 'macos')
