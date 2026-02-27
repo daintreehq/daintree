@@ -655,8 +655,10 @@ export function setupTerminalStoreListeners() {
       return;
     }
 
-    if (terminal.exitBehavior === "keep") {
-      // Explicit keep - preserve terminal regardless of type
+    if (terminal.exitBehavior === "keep" || terminal.exitBehavior === "restart") {
+      // "keep": preserve terminal for review
+      // "restart": preserve terminal; TerminalPane triggers the restart via its exit effect
+      // Note: non-zero exits are already preserved above, so this only matters for exit code 0
       return;
     }
 

@@ -119,6 +119,10 @@ function TerminalPaneComponent({
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isUpdateCwdOpen, setIsUpdateCwdOpen] = useState(false);
   const [showGeminiBanner, setShowGeminiBanner] = useState(false);
+  const [isAutoRestarting, setIsAutoRestarting] = useState(false);
+  const autoRestartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoRestartAttemptRef = useRef(0);
+  const processStartTimeRef = useRef<number>(0);
 
   if (isFocused && !prevFocusedRef.current) {
     justFocusedUntilRef.current = performance.now() + 250;
@@ -128,9 +132,21 @@ function TerminalPaneComponent({
     prevFocusedRef.current = isFocused;
   }, [isFocused]);
 
+  // Cancel pending auto-restart timer on unmount
+  useEffect(() => {
+    return () => {
+      if (autoRestartTimerRef.current !== null) {
+        clearTimeout(autoRestartTimerRef.current);
+        autoRestartTimerRef.current = null;
+      }
+    };
+  }, []);
+
   useEffect(() => {
     setDismissedRestartPrompt(false);
     inputTrackerRef.current?.reset();
+    // Track process start time on each restart for backoff stability window
+    processStartTimeRef.current = Date.now();
   }, [restartKey]);
 
   useEffect(() => {
@@ -185,11 +201,14 @@ function TerminalPaneComponent({
         isInputLocked: terminal?.isInputLocked ?? false,
         stateChangeTrigger: terminal?.stateChangeTrigger,
         isRestarting: terminal?.isRestarting ?? false,
+        exitBehavior: terminal?.exitBehavior,
+        isTrashedOrRemoved: terminal?.location === "trash" || terminal === undefined,
       };
     })
   );
 
-  const { isInputLocked, stateChangeTrigger, isRestarting } = terminalState;
+  const { isInputLocked, stateChangeTrigger, isRestarting, exitBehavior, isTrashedOrRemoved } =
+    terminalState;
 
   const isBackendDisconnected = backendStatus === "disconnected";
   const isBackendRecovering = backendStatus === "recovering";
@@ -226,6 +245,63 @@ function TerminalPaneComponent({
     removeError,
     restartKey,
   });
+
+  // Cancel auto-restart if terminal is intentionally trashed/removed
+  useEffect(() => {
+    if (isTrashedOrRemoved && autoRestartTimerRef.current !== null) {
+      clearTimeout(autoRestartTimerRef.current);
+      autoRestartTimerRef.current = null;
+      setIsAutoRestarting(false);
+    }
+  }, [isTrashedOrRemoved]);
+
+  // Auto-restart logic: when exitBehavior === "restart" and terminal exits (any code except 130)
+  useEffect(() => {
+    if (!isExited) return;
+    if (exitBehavior !== "restart") return;
+    if (exitCode === 130) return;
+    if (isTrashedOrRemoved) return;
+    if (isRestarting) return;
+
+    if (autoRestartTimerRef.current !== null) {
+      clearTimeout(autoRestartTimerRef.current);
+      autoRestartTimerRef.current = null;
+    }
+
+    // Reset backoff if process ran stably for > 10s
+    const runDuration =
+      processStartTimeRef.current > 0 ? Date.now() - processStartTimeRef.current : 0;
+    if (runDuration > 10_000) {
+      autoRestartAttemptRef.current = 0;
+    }
+
+    const attempt = autoRestartAttemptRef.current;
+    // Exponential backoff: 250ms, 500ms, 1s, 2s, 4s, capped at 5s
+    const delay = Math.min(250 * Math.pow(2, attempt), 5_000);
+    autoRestartAttemptRef.current = attempt + 1;
+
+    setIsAutoRestarting(true);
+
+    autoRestartTimerRef.current = setTimeout(() => {
+      autoRestartTimerRef.current = null;
+      const currentTerminal = useTerminalStore.getState().terminals.find((t) => t.id === id);
+      if (!currentTerminal || currentTerminal.location === "trash") {
+        setIsAutoRestarting(false);
+        return;
+      }
+      restartTerminal(id);
+      setIsAutoRestarting(false);
+    }, delay);
+
+    return () => {
+      if (autoRestartTimerRef.current !== null) {
+        clearTimeout(autoRestartTimerRef.current);
+        autoRestartTimerRef.current = null;
+        setIsAutoRestarting(false);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isExited, exitBehavior, exitCode, isTrashedOrRemoved]);
 
   // Track drag state in a ref to avoid useEffect cleanup timing issues.
   // If isDragging is in the dependency array, cleanup runs on drag START
@@ -589,13 +665,21 @@ function TerminalPaneComponent({
         exitCode !== 130 &&
         !dismissedRestartPrompt &&
         !restartError &&
-        !isRestarting && (
+        !isRestarting &&
+        exitBehavior !== "restart" && (
           <TerminalRestartBanner
             exitCode={exitCode}
             onRestart={handleRestart}
             onDismiss={() => setDismissedRestartPrompt(true)}
           />
         )}
+
+      {isAutoRestarting && (
+        <div className="flex items-center gap-2 px-3 py-1.5 text-xs text-canopy-text/60 bg-canopy-accent/5 border-b border-canopy-border shrink-0">
+          <Loader2 className="h-3 w-3 animate-spin text-canopy-accent" />
+          <span>Auto-restarting…</span>
+        </div>
+      )}
 
       {showGeminiBanner && (
         <GeminiAlternateBufferBanner terminalId={id} onDismiss={() => setShowGeminiBanner(false)} />

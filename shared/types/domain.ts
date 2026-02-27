@@ -705,6 +705,8 @@ export interface TerminalSnapshot {
   scope?: "worktree" | "project";
   /** Note creation timestamp (kind === 'notes') */
   createdAt?: number;
+  /** Behavior when terminal exits */
+  exitBehavior?: PanelExitBehavior;
   // Note: Tab membership is now stored in ProjectState.tabGroups, not on terminals
 }
 
@@ -760,7 +762,7 @@ export interface ProjectState {
 export type RecipeTerminalType = AgentId | "terminal" | "dev-preview";
 
 /** Exit behavior for panels/terminals after process exits */
-export type PanelExitBehavior = "keep" | "trash" | "remove";
+export type PanelExitBehavior = "keep" | "trash" | "remove" | "restart";
 
 /** A single terminal definition within a recipe */
 export interface RecipeTerminal {

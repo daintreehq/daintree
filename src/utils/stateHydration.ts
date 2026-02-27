@@ -199,6 +199,7 @@ export interface HydrationOptions {
     devServerError?: { type: string; message: string } | null;
     devServerTerminalId?: string | null;
     devPreviewConsoleOpen?: boolean;
+    exitBehavior?: import("@shared/types/domain").PanelExitBehavior;
   }) => Promise<string>;
   setActiveWorktree: (id: string | null) => void;
   loadRecipes: (projectId: string) => Promise<void>;
@@ -428,6 +429,7 @@ export async function hydrateAppState(
                   browserHistory: isDevPreview ? saved.browserHistory : undefined,
                   browserZoom: isDevPreview ? saved.browserZoom : undefined,
                   devPreviewConsoleOpen: isDevPreview ? saved.devPreviewConsoleOpen : undefined,
+                  exitBehavior: saved.exitBehavior,
                 });
 
                 // Initialize frontend tier state from backend to ensure proper wake behavior
@@ -613,6 +615,7 @@ export async function hydrateAppState(
                       browserHistory: isDevPreview ? saved.browserHistory : undefined,
                       browserZoom: isDevPreview ? saved.browserZoom : undefined,
                       devPreviewConsoleOpen: isDevPreview ? saved.devPreviewConsoleOpen : undefined,
+                      exitBehavior: saved.exitBehavior,
                     });
 
                     // Initialize frontend tier state from backend
@@ -729,7 +732,7 @@ export async function hydrateAppState(
                       location,
                       // Don't reuse ID on timeout - could kill a slow-to-respond live session
                       requestedId: reconnectTimedOut ? undefined : saved.id,
-                      command: isAgentPanel ? command : undefined,
+                      command: isAgentPanel ? command : saved.command?.trim() || undefined,
                       // Execute command at spawn for all agents (grid and dock)
                       // Docked agents just run in background - same behavior, different location
                       isInputLocked: saved.isInputLocked,
@@ -738,6 +741,7 @@ export async function hydrateAppState(
                       browserHistory: isDevPreview ? saved.browserHistory : undefined,
                       browserZoom: isDevPreview ? saved.browserZoom : undefined,
                       devPreviewConsoleOpen: isDevPreview ? saved.devPreviewConsoleOpen : undefined,
+                      exitBehavior: isAgentPanel ? undefined : saved.exitBehavior,
                     });
 
                     // Restore terminal dimensions if available
@@ -786,6 +790,7 @@ export async function hydrateAppState(
                     devCommand,
                     devPreviewConsoleOpen:
                       kind === "dev-preview" ? saved.devPreviewConsoleOpen : undefined,
+                    exitBehavior: saved.exitBehavior,
                   });
                 }
               }

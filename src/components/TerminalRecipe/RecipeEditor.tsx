@@ -12,7 +12,8 @@ function cloneTerminal(t: RecipeTerminal): RecipeTerminal {
 
 function normalizeExitBehavior(t: RecipeTerminal): "" | "keep" | "trash" | "remove" {
   const value = t.exitBehavior ?? "";
-  if (!value) return "";
+  // "restart" is QuickRun-only and not exposed in recipe UI — treat as default
+  if (!value || value === "restart") return "";
   const defaultBehavior = t.type === "terminal" || t.type === "dev-preview" ? "trash" : "keep";
   return value === defaultBehavior ? "" : value;
 }

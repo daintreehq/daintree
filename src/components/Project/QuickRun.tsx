@@ -9,6 +9,7 @@ import {
   ChevronDown,
   Pin,
   PinOff,
+  RefreshCw,
 } from "lucide-react";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useTerminalStore } from "@/store/terminalStore";
@@ -49,6 +50,7 @@ type SuggestionItem =
     };
 
 const HISTORY_KEY_PREFIX = "canopy_cmd_history_";
+const AUTO_RESTART_KEY_PREFIX = "canopy_quickrun_autorestart_";
 const MAX_HISTORY = 10;
 
 /**
@@ -75,6 +77,21 @@ export function QuickRun({ projectId }: QuickRunProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [input, setInput] = useState("");
   const [runAsDocked, setRunAsDocked] = useState(false);
+  const [autoRestart, setAutoRestart] = useState(() => {
+    try {
+      return localStorage.getItem(`${AUTO_RESTART_KEY_PREFIX}${projectId}`) === "true";
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      setAutoRestart(localStorage.getItem(`${AUTO_RESTART_KEY_PREFIX}${projectId}`) === "true");
+    } catch {
+      setAutoRestart(false);
+    }
+  }, [projectId]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [focusedSuggestionIndex, setFocusedSuggestionIndex] = useState(-1);
@@ -233,6 +250,18 @@ export function QuickRun({ projectId }: QuickRunProps) {
     );
   }, [input, allDetectedRunners, history, settings]);
 
+  const handleToggleAutoRestart = () => {
+    setAutoRestart((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(`${AUTO_RESTART_KEY_PREFIX}${projectId}`, String(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+
   const handleRun = async (cmd: string) => {
     if (!cmd.trim()) return;
 
@@ -255,6 +284,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
         command: cmd,
         location: runAsDocked ? "dock" : "grid",
         worktreeId: activeWorktreeId || undefined,
+        exitBehavior: autoRestart ? "restart" : undefined,
       });
     } catch (error) {
       console.error("Failed to spawn terminal:", error);
@@ -354,6 +384,22 @@ export function QuickRun({ projectId }: QuickRunProps) {
 
               {/* Right Side Controls */}
               <div className="flex items-center pr-1.5 gap-1">
+                {/* Auto-Restart Toggle */}
+                <button
+                  onClick={handleToggleAutoRestart}
+                  className={cn(
+                    "p-1.5 rounded-[var(--radius-sm)] transition-all",
+                    autoRestart
+                      ? "bg-canopy-accent/20 text-canopy-accent"
+                      : "text-white/30 hover:text-white/60 hover:bg-white/10"
+                  )}
+                  title={autoRestart ? "Auto-restart: On" : "Auto-restart: Off"}
+                  aria-label={autoRestart ? "Disable auto-restart" : "Enable auto-restart"}
+                  aria-pressed={autoRestart}
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                </button>
+
                 {/* Location Toggle */}
                 <button
                   onClick={() => setRunAsDocked(!runAsDocked)}
