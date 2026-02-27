@@ -63,7 +63,7 @@ import { NewWorktreeDialog } from "./components/Worktree/NewWorktreeDialog";
 import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
 import { TerminalPalette, NewTerminalPalette } from "./components/TerminalPalette";
 import { PanelPalette } from "./components/PanelPalette/PanelPalette";
-import { GitInitDialog, ProjectOnboardingWizard } from "./components/Project";
+import { GitInitDialog, ProjectOnboardingWizard, WelcomeScreen } from "./components/Project";
 import { CreateProjectFolderDialog } from "./components/Project/CreateProjectFolderDialog";
 import { ProjectSwitcherPalette } from "./components/Project/ProjectSwitcherPalette";
 import { ActionPalette } from "./components/ActionPalette";
@@ -927,12 +927,16 @@ function App() {
             projectSwitcherPalette={projectSwitcherPalette}
           >
             <Profiler id="content-grid" onRender={onContentGridRender}>
-              <ContentGrid
-                key={currentProject?.id ?? "no-project"}
-                className="h-full w-full"
-                agentAvailability={availability}
-                defaultCwd={defaultTerminalCwd}
-              />
+              {currentProject === null ? (
+                <WelcomeScreen />
+              ) : (
+                <ContentGrid
+                  key={currentProject.id}
+                  className="h-full w-full"
+                  agentAvailability={availability}
+                  defaultCwd={defaultTerminalCwd}
+                />
+              )}
             </Profiler>
           </AppLayout>
         </Profiler>

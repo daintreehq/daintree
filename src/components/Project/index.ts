@@ -5,3 +5,4 @@ export { ProjectSwitchOverlay } from "./ProjectSwitchOverlay";
 export { QuickRun } from "./QuickRun";
 export { GitInitDialog } from "./GitInitDialog";
 export { ProjectOnboardingWizard } from "./ProjectOnboardingWizard";
+export { WelcomeScreen } from "./WelcomeScreen";
