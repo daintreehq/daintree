@@ -27,6 +27,16 @@ import {
 
 fixPath();
 
+// Enable native Wayland support on Linux (Electron < 38)
+// Electron 38+ auto-detects via XDG_SESSION_TYPE; this flag is ignored.
+if (process.platform === "linux") {
+  app.commandLine.appendSwitch("ozone-platform-hint", "auto");
+  if (process.env.XDG_SESSION_TYPE === "wayland") {
+    app.commandLine.appendSwitch("enable-features", "WaylandWindowDecorations");
+    app.commandLine.appendSwitch("enable-wayland-ime");
+  }
+}
+
 if (process.platform === "win32") {
   const extraPaths = [
     path.join(os.homedir(), "AppData", "Local", "Programs", "Git", "cmd"),

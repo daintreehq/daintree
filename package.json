@@ -271,7 +271,16 @@
         "AppImage",
         "deb"
       ],
-      "category": "Development"
+      "category": "Development",
+      "extraResources": [
+        {
+          "from": "build/linux/canopy.apparmor",
+          "to": "canopy.apparmor"
+        }
+      ]
+    },
+    "deb": {
+      "afterInstall": "build/linux/postinst.sh"
     }
   }
 }
