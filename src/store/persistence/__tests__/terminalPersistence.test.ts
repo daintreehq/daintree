@@ -42,6 +42,8 @@ const createMockProjectClient = () => ({
   setTabGroups: vi.fn().mockResolvedValue(undefined),
   getTerminalSizes: vi.fn().mockResolvedValue({}),
   setTerminalSizes: vi.fn().mockResolvedValue(undefined),
+  readClaudeMd: vi.fn().mockResolvedValue(null),
+  writeClaudeMd: vi.fn().mockResolvedValue(undefined),
   createFolder: vi.fn().mockResolvedValue(""),
 });
 

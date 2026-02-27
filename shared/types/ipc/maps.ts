@@ -615,6 +615,14 @@ export interface IpcInvokeMap {
     ];
     result: void;
   };
+  "project:read-claude-md": {
+    args: [projectId: string];
+    result: string | null;
+  };
+  "project:write-claude-md": {
+    args: [payload: { projectId: string; content: string }];
+    result: void;
+  };
 
   // GitHub channels
   "github:get-repo-stats": {

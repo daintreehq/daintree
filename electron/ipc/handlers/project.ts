@@ -1,6 +1,7 @@
 import { ipcMain, dialog, shell } from "electron";
 import path from "path";
 import os from "os";
+import fs from "fs/promises";
 import { CHANNELS } from "../channels.js";
 import { openExternalUrl } from "../../utils/openExternal.js";
 import { projectStore } from "../../services/ProjectStore.js";
@@ -1186,6 +1187,91 @@ Thumbs.db
   };
   ipcMain.handle(CHANNELS.PROJECT_SET_FOCUS_MODE, handleProjectSetFocusMode);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_SET_FOCUS_MODE));
+
+  const resolveClaudeMdPath = async (projectId: string): Promise<string> => {
+    if (typeof projectId !== "string" || !projectId) {
+      throw new Error("Invalid project ID");
+    }
+    const project = projectStore.getAllProjects().find((p) => p.id === projectId);
+    if (!project) {
+      throw new Error("Project not found");
+    }
+    const claudeMdPath = path.join(project.path, "CLAUDE.md");
+    // Check for symlink — reject to prevent writing outside project root
+    try {
+      const stat = await fs.lstat(claudeMdPath);
+      if (stat.isSymbolicLink()) {
+        throw new Error("CLAUDE.md is a symlink; operation not allowed");
+      }
+    } catch (error: unknown) {
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+      ) {
+        // File doesn't exist yet — that's fine, containment check is on the parent dir
+        const parentReal = await fs.realpath(project.path);
+        const expectedParent = path.normalize(parentReal);
+        if (
+          !path.normalize(claudeMdPath).startsWith(expectedParent + path.sep) &&
+          path.normalize(claudeMdPath) !== expectedParent
+        ) {
+          throw new Error("Resolved path is outside project root");
+        }
+        return claudeMdPath;
+      }
+      throw error;
+    }
+    // For existing non-symlink file: verify it's within the project root
+    const resolvedPath = path.normalize(await fs.realpath(project.path));
+    if (!path.normalize(claudeMdPath).startsWith(resolvedPath + path.sep)) {
+      throw new Error("Resolved path is outside project root");
+    }
+    return claudeMdPath;
+  };
+
+  const handleProjectReadClaudeMd = async (
+    _event: Electron.IpcMainInvokeEvent,
+    projectId: string
+  ): Promise<string | null> => {
+    const claudeMdPath = await resolveClaudeMdPath(projectId);
+    try {
+      return await fs.readFile(claudeMdPath, "utf-8");
+    } catch (error: unknown) {
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+      ) {
+        return null;
+      }
+      throw error;
+    }
+  };
+  ipcMain.handle(CHANNELS.PROJECT_READ_CLAUDE_MD, handleProjectReadClaudeMd);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_READ_CLAUDE_MD));
+
+  const handleProjectWriteClaudeMd = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: { projectId: string; content: string }
+  ): Promise<void> => {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid payload");
+    }
+    const { projectId, content } = payload;
+    if (typeof content !== "string") {
+      throw new Error("Invalid content");
+    }
+    if (content.length > 1_000_000) {
+      throw new Error("Content exceeds 1 MB limit");
+    }
+    const claudeMdPath = await resolveClaudeMdPath(projectId);
+    await fs.writeFile(claudeMdPath, content, "utf-8");
+  };
+  ipcMain.handle(CHANNELS.PROJECT_WRITE_CLAUDE_MD, handleProjectWriteClaudeMd);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_WRITE_CLAUDE_MD));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

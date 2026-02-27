@@ -38,6 +38,8 @@ interface ProjectState {
   error: string | null;
   gitInitDialogOpen: boolean;
   gitInitDirectoryPath: string | null;
+  onboardingWizardOpen: boolean;
+  onboardingProjectId: string | null;
   createFolderDialogOpen: boolean;
 
   loadProjects: () => Promise<void>;
@@ -57,6 +59,7 @@ interface ProjectState {
   openGitInitDialog: (directoryPath: string) => void;
   closeGitInitDialog: () => void;
   handleGitInitSuccess: () => Promise<void>;
+  closeOnboardingWizard: () => void;
   openCreateFolderDialog: () => void;
   closeCreateFolderDialog: () => void;
 }
@@ -160,6 +163,8 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   switchingToProjectName: null,
   gitInitDialogOpen: false,
   gitInitDirectoryPath: null,
+  onboardingWizardOpen: false,
+  onboardingProjectId: null,
   createFolderDialogOpen: false,
   error: null,
 
@@ -173,10 +178,16 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         return;
       }
 
+      const existingProjectIds = new Set(get().projects.map((p) => p.id));
       const newProject = await projectClient.add(resolvedPath);
+      const isNewProject = !existingProjectIds.has(newProject.id);
 
       await get().loadProjects();
       await get().switchProject(newProject.id);
+
+      if (isNewProject) {
+        set({ onboardingWizardOpen: true, onboardingProjectId: newProject.id });
+      }
     } catch (error) {
       logErrorWithContext(error, {
         operation: "add_project",
@@ -460,6 +471,9 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       if (get().currentProject?.id === id) {
         set({ currentProject: null });
       }
+      if (get().onboardingProjectId === id) {
+        set({ onboardingWizardOpen: false, onboardingProjectId: null });
+      }
       set({ isLoading: false });
     } catch (error) {
       logErrorWithContext(error, {
@@ -686,6 +700,10 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     if (directoryPath) {
       await get().addProjectByPath(directoryPath);
     }
+  },
+
+  closeOnboardingWizard: () => {
+    set({ onboardingWizardOpen: false, onboardingProjectId: null });
   },
 
   openCreateFolderDialog: () => {

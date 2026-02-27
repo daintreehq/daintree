@@ -151,4 +151,12 @@ export const projectClient = {
   setTabGroups: (projectId: string, tabGroups: TabGroup[]): Promise<void> => {
     return window.electron.project.setTabGroups(projectId, tabGroups);
   },
+
+  readClaudeMd: (projectId: string): Promise<string | null> => {
+    return window.electron.project.readClaudeMd(projectId);
+  },
+
+  writeClaudeMd: (projectId: string, content: string): Promise<void> => {
+    return window.electron.project.writeClaudeMd(projectId, content);
+  },
 } as const;
