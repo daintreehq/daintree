@@ -838,7 +838,7 @@ export interface ProjectSettings {
   runCommands: RunCommand[];
   /** Environment variables to set */
   environmentVariables?: Record<string, string>;
-  /** List of env var keys stored securely (values in safeStorage, not settings.json) */
+  /** List of env var keys stored separately from settings.json */
   secureEnvironmentVariables?: string[];
   /** List of env var keys found in plaintext that should be migrated (transient, not persisted) */
   insecureEnvironmentVariables?: string[];

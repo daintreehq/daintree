@@ -1,14 +1,10 @@
-import * as electron from "electron";
 import { store } from "../store.js";
 
 /**
  * Per-project environment variable storage backed by electron-store.
  * Values are stored as plain text — the same security model as .env files.
- * On first access, any previously safeStorage-encrypted values are migrated to plain text.
  */
 class ProjectEnvSecureStorage {
-  private migratedKeys = new Set<string>();
-
   private makeKey(projectId: string, envKey: string): string {
     return `${projectId}:${envKey}`;
   }
@@ -28,40 +24,6 @@ class ProjectEnvSecureStorage {
     return normalized;
   }
 
-  private isHexEncoded(value: string): boolean {
-    return /^[0-9a-f]+$/i.test(value) && value.length % 2 === 0;
-  }
-
-  private migrateIfNeeded(compositeKey: string, storedValue: string): string | undefined {
-    if (this.migratedKeys.has(compositeKey)) return storedValue;
-    this.migratedKeys.add(compositeKey);
-
-    if (!this.isHexEncoded(storedValue)) return storedValue;
-
-    // Try to decrypt legacy safeStorage-encrypted values
-    try {
-      if (electron.safeStorage?.isEncryptionAvailable()) {
-        const buffer = Buffer.from(storedValue, "hex");
-        const decrypted = electron.safeStorage.decryptString(buffer);
-        // Persist the migrated plain-text value
-        const projectEnv = this.getProjectEnvMap();
-        projectEnv[compositeKey] = decrypted;
-        store.set("projectEnv", projectEnv);
-        console.info(`[ProjectEnvSecureStorage] Migrated ${compositeKey} from encrypted to plain text.`);
-        return decrypted;
-      }
-    } catch {
-      // Can't decrypt — corrupted or not actually encrypted
-    }
-
-    // Hex-encoded but can't decrypt — likely corrupted
-    console.warn(`[ProjectEnvSecureStorage] Could not migrate ${compositeKey}, clearing entry.`);
-    const projectEnv = this.getProjectEnvMap();
-    delete projectEnv[compositeKey];
-    store.set("projectEnv", projectEnv);
-    return undefined;
-  }
-
   public set(projectId: string, envKey: string, value: string | undefined): void {
     const key = this.makeKey(projectId, envKey);
     const projectEnv = this.getProjectEnvMap();
@@ -79,11 +41,7 @@ class ProjectEnvSecureStorage {
   public get(projectId: string, envKey: string): string | undefined {
     const key = this.makeKey(projectId, envKey);
     const projectEnv = this.getProjectEnvMap();
-    const storedValue = projectEnv[key];
-
-    if (!storedValue) return undefined;
-
-    return this.migrateIfNeeded(key, storedValue);
+    return projectEnv[key] || undefined;
   }
 
   public delete(projectId: string, envKey: string): void {
