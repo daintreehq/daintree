@@ -8,11 +8,9 @@ const failedConfig: StatusContainerConfig = {
   badgeColor: "bg-red-400",
   badgeTextColor: "text-red-950",
   headerLabel: "Failed Sessions",
-  buttonTitle: "View failed agent sessions",
   buttonLabel: "Failed",
   statusAriaLabel: "Failed",
   contentAriaLabel: "Failed terminals",
-  keybindingAction: "agent.focusNextFailed",
   contentId: "failed-container-popover",
   useTerminals: useFailedTerminals,
 };

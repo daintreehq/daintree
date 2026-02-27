@@ -18,6 +18,7 @@ import {
   type GroupedSection,
 } from "@/lib/worktreeFilters";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 export interface WorktreeOverviewModalProps {
   isOpen: boolean;
@@ -339,38 +340,50 @@ export function WorktreeOverviewModal({
           <div className="flex items-center gap-2">
             {/* Hide main worktree toggle - show if there are non-main worktrees OR if filter is active (to allow recovery) */}
             {(hasNonMainWorktrees || hideMainWorktree) && !hasOnlyMainWorktree && (
-              <label
-                className="flex items-center gap-1.5 text-xs text-canopy-text/60 cursor-pointer hover:text-canopy-text/80 transition-colors"
-                title={hideMainWorktree ? "Show main worktree" : "Hide main worktree"}
-              >
-                <input
-                  type="checkbox"
-                  checked={hideMainWorktree}
-                  onChange={(e) => setHideMainWorktree(e.target.checked)}
-                  className="w-3 h-3 rounded border-canopy-border text-canopy-accent focus:ring-canopy-accent focus:ring-offset-0 bg-canopy-bg cursor-pointer"
-                />
-                <span>Hide main</span>
-              </label>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <label className="flex items-center gap-1.5 text-xs text-canopy-text/60 cursor-pointer hover:text-canopy-text/80 transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={hideMainWorktree}
+                        onChange={(e) => setHideMainWorktree(e.target.checked)}
+                        className="w-3 h-3 rounded border-canopy-border text-canopy-accent focus:ring-canopy-accent focus:ring-offset-0 bg-canopy-bg cursor-pointer"
+                      />
+                      <span>Hide main</span>
+                    </label>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {hideMainWorktree ? "Show main worktree" : "Hide main worktree"}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             )}
             {/* Filter Popover */}
             <WorktreeFilterPopover />
             {/* Clear Filters Button - only shown when filters are active */}
             {hasActiveFilters() && (
-              <button
-                onClick={clearAllFilters}
-                className={cn(
-                  "flex items-center gap-1.5 px-2 py-1.5 rounded text-xs",
-                  "text-canopy-text/60 hover:text-canopy-text",
-                  "hover:bg-white/[0.06]",
-                  "transition-colors",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
-                )}
-                aria-label="Clear all filters"
-                title="Clear all filters"
-              >
-                <FilterX className="w-3.5 h-3.5" />
-                <span>Clear</span>
-              </button>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={clearAllFilters}
+                      className={cn(
+                        "flex items-center gap-1.5 px-2 py-1.5 rounded text-xs",
+                        "text-canopy-text/60 hover:text-canopy-text",
+                        "hover:bg-white/[0.06]",
+                        "transition-colors",
+                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
+                      )}
+                      aria-label="Clear all filters"
+                    >
+                      <FilterX className="w-3.5 h-3.5" />
+                      <span>Clear</span>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Clear all filters</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             )}
             {/* Close Button */}
             <button

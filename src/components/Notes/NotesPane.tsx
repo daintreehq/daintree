@@ -5,6 +5,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { EditorView } from "@codemirror/view";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { notesClient, type NoteMetadata } from "@/clients/notesClient";
 import { canopyTheme } from "./editorTheme";
 import { useTerminalStore } from "@/store/terminalStore";
@@ -373,22 +374,40 @@ export function NotesPane({
   const headerActions = useMemo(
     () => (
       <div className="flex items-center gap-1">
-        <button
-          onClick={handleSendMenuClick}
-          className="flex items-center gap-1.5 px-2 py-1 text-xs rounded-[var(--radius-sm)] hover:bg-canopy-text/10 text-canopy-text/60 hover:text-canopy-text transition-colors"
-          title="Send to agent"
-        >
-          {sent ? <Check className="w-3 h-3 text-green-500" /> : <Send className="w-3 h-3" />}
-          <span>Send to...</span>
-        </button>
-        <button
-          onClick={handleCopyPath}
-          className="flex items-center gap-1.5 px-2 py-1 text-xs rounded-[var(--radius-sm)] hover:bg-canopy-text/10 text-canopy-text/60 hover:text-canopy-text transition-colors"
-          title="Copy addressable path"
-        >
-          {copied ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
-          <span>Copy @path</span>
-        </button>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={handleSendMenuClick}
+                className="flex items-center gap-1.5 px-2 py-1 text-xs rounded-[var(--radius-sm)] hover:bg-canopy-text/10 text-canopy-text/60 hover:text-canopy-text transition-colors"
+                aria-label="Send to agent"
+              >
+                {sent ? <Check className="w-3 h-3 text-green-500" /> : <Send className="w-3 h-3" />}
+                <span>Send to...</span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Send to agent</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={handleCopyPath}
+                className="flex items-center gap-1.5 px-2 py-1 text-xs rounded-[var(--radius-sm)] hover:bg-canopy-text/10 text-canopy-text/60 hover:text-canopy-text transition-colors"
+                aria-label="Copy addressable path"
+              >
+                {copied ? (
+                  <Check className="w-3 h-3 text-green-500" />
+                ) : (
+                  <Copy className="w-3 h-3" />
+                )}
+                <span>Copy @path</span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Copy addressable path</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </div>
     ),
     [handleCopyPath, copied, handleSendMenuClick, sent]

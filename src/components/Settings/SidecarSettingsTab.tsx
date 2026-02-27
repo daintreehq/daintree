@@ -13,6 +13,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { useSidecarStore } from "@/store/sidecarStore";
 import { useLinkDiscovery } from "@/hooks/useLinkDiscovery";
 import {
@@ -390,12 +391,18 @@ export function SidecarSettingsTab() {
                         <span className="text-sm text-canopy-text">
                           {link?.title || template.title}
                         </span>
-                        <span
-                          className="text-[11px] font-mono text-zinc-500 truncate min-w-0"
-                          title={link?.url || template.url}
-                        >
-                          {link?.url || template.url}
-                        </span>
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span className="text-[11px] font-mono text-zinc-500 truncate min-w-0">
+                                {link?.url || template.url}
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom">
+                              {link?.url || template.url}
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
                       </div>
                       <span
                         className={cn(

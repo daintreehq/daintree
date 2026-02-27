@@ -5,6 +5,7 @@ import { useTerminalStore, type TerminalInstance } from "@/store";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { TrashedTerminal } from "@/store/slices";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface TrashBinItemProps {
   terminal: TerminalInstance;
@@ -81,37 +82,51 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
       </div>
 
       <div className="flex gap-1">
-        <Button
-          variant="ghost-success"
-          size="icon-sm"
-          onClick={handleRestore}
-          disabled={!canRestore}
-          aria-label={
-            isOrphan
-              ? canRestore
-                ? `Adopt ${terminalName} to current worktree`
-                : "No active worktree to restore to"
-              : `Restore ${terminalName}`
-          }
-          title={
-            isOrphan
-              ? canRestore
-                ? "Adopt to current worktree"
-                : "No active worktree - select a worktree first"
-              : `Restore ${terminalName}`
-          }
-        >
-          <RotateCcw aria-hidden="true" />
-        </Button>
-        <Button
-          variant="ghost-danger"
-          size="icon-sm"
-          onClick={handleKill}
-          aria-label={`Remove ${terminalName} permanently`}
-          title={`Remove ${terminalName} permanently`}
-        >
-          <X aria-hidden="true" />
-        </Button>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex">
+                <Button
+                  variant="ghost-success"
+                  size="icon-sm"
+                  onClick={handleRestore}
+                  disabled={!canRestore}
+                  aria-label={
+                    isOrphan
+                      ? canRestore
+                        ? `Adopt ${terminalName} to current worktree`
+                        : "No active worktree to restore to"
+                      : `Restore ${terminalName}`
+                  }
+                >
+                  <RotateCcw aria-hidden="true" />
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {isOrphan
+                ? canRestore
+                  ? "Adopt to current worktree"
+                  : "No active worktree - select a worktree first"
+                : `Restore ${terminalName}`}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost-danger"
+                size="icon-sm"
+                onClick={handleKill}
+                aria-label={`Remove ${terminalName} permanently`}
+              >
+                <X aria-hidden="true" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{`Remove ${terminalName} permanently`}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </div>
     </div>
   );

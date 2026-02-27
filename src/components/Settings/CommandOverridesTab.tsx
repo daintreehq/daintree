@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { commandsClient } from "@/clients/commandsClient";
 import type { CommandManifestEntry, CommandOverride } from "@shared/types/commands";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { extractTemplateVariables, validatePromptTemplate } from "@shared/utils/promptTemplate";
 
 interface CommandOverridesTabProps {
@@ -375,28 +376,50 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
 
                 <div className="flex items-center gap-1 shrink-0">
                   {hasOverride(command.id) && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => resetToDefaults(command.id)}
-                      className="h-7 px-2"
-                      title="Reset to defaults"
-                    >
-                      <RotateCcw />
-                    </Button>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => resetToDefaults(command.id)}
+                            className="h-7 px-2"
+                            aria-label="Reset to defaults"
+                          >
+                            <RotateCcw />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">Reset to defaults</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                   )}
-                  <button
-                    onClick={() => toggleDisabled(command.id)}
-                    className={cn(
-                      "p-1.5 rounded transition-colors",
-                      isDisabled
-                        ? "text-red-500 hover:bg-red-900/30"
-                        : "text-green-500 hover:bg-green-900/30"
-                    )}
-                    title={isDisabled ? "Command disabled for this project" : "Command enabled"}
-                  >
-                    {isDisabled ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
-                  </button>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          onClick={() => toggleDisabled(command.id)}
+                          className={cn(
+                            "p-1.5 rounded transition-colors",
+                            isDisabled
+                              ? "text-red-500 hover:bg-red-900/30"
+                              : "text-green-500 hover:bg-green-900/30"
+                          )}
+                          aria-label={
+                            isDisabled ? "Command disabled for this project" : "Command enabled"
+                          }
+                        >
+                          {isDisabled ? (
+                            <PowerOff className="h-4 w-4" />
+                          ) : (
+                            <Power className="h-4 w-4" />
+                          )}
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">
+                        {isDisabled ? "Command disabled for this project" : "Command enabled"}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 </div>
               </div>
 
@@ -537,21 +560,28 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
             <p className="text-xs font-medium text-canopy-text/70 mb-1.5">Available variables:</p>
             <div className="flex flex-wrap gap-1.5">
               {args.map((arg) => (
-                <button
-                  key={arg.name}
-                  onClick={() => onChange(value + `{${arg.name}}`)}
-                  className={cn(
-                    "text-[11px] px-2 py-0.5 rounded font-mono transition-colors",
-                    usedVariables.includes(arg.name)
-                      ? "bg-canopy-accent/20 text-canopy-accent border border-canopy-accent/30"
-                      : "bg-canopy-sidebar text-canopy-text/70 hover:bg-canopy-border border border-canopy-border"
-                  )}
-                  title={arg.description || `Insert {${arg.name}}`}
-                >
-                  {"{"}
-                  {arg.name}
-                  {"}"}
-                </button>
+                <TooltipProvider key={arg.name}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        onClick={() => onChange(value + `{${arg.name}}`)}
+                        className={cn(
+                          "text-[11px] px-2 py-0.5 rounded font-mono transition-colors",
+                          usedVariables.includes(arg.name)
+                            ? "bg-canopy-accent/20 text-canopy-accent border border-canopy-accent/30"
+                            : "bg-canopy-sidebar text-canopy-text/70 hover:bg-canopy-border border border-canopy-border"
+                        )}
+                      >
+                        {"{"}
+                        {arg.name}
+                        {"}"}
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {arg.description || `Insert {${arg.name}}`}
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               ))}
             </div>
           </div>

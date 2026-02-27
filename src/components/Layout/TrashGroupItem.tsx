@@ -5,6 +5,7 @@ import { useTerminalStore, type TerminalInstance } from "@/store";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { TrashedTerminal, TrashedTerminalGroupMetadata } from "@/store/slices";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface TrashGroupItemProps {
   groupRestoreId: string;
@@ -108,37 +109,51 @@ export function TrashGroupItem({
         </div>
 
         <div className="flex gap-1">
-          <Button
-            variant="ghost-success"
-            size="icon-sm"
-            onClick={handleRestoreGroup}
-            disabled={!canRestore}
-            aria-label={
-              isOrphan
-                ? canRestore
-                  ? `Restore group to current worktree`
-                  : "No active worktree to restore to"
-                : `Restore tab group (${tabCount} tabs)`
-            }
-            title={
-              isOrphan
-                ? canRestore
-                  ? "Restore group to current worktree"
-                  : "No active worktree - select a worktree first"
-                : `Restore tab group (${tabCount} tabs)`
-            }
-          >
-            <RotateCcw aria-hidden="true" />
-          </Button>
-          <Button
-            variant="ghost-danger"
-            size="icon-sm"
-            onClick={handleRemoveAll}
-            aria-label={`Remove all ${tabCount} tabs permanently`}
-            title={`Remove all ${tabCount} tabs permanently`}
-          >
-            <X aria-hidden="true" />
-          </Button>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex">
+                  <Button
+                    variant="ghost-success"
+                    size="icon-sm"
+                    onClick={handleRestoreGroup}
+                    disabled={!canRestore}
+                    aria-label={
+                      isOrphan
+                        ? canRestore
+                          ? `Restore group to current worktree`
+                          : "No active worktree to restore to"
+                        : `Restore tab group (${tabCount} tabs)`
+                    }
+                  >
+                    <RotateCcw aria-hidden="true" />
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {isOrphan
+                  ? canRestore
+                    ? "Restore group to current worktree"
+                    : "No active worktree - select a worktree first"
+                  : `Restore tab group (${tabCount} tabs)`}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost-danger"
+                  size="icon-sm"
+                  onClick={handleRemoveAll}
+                  aria-label={`Remove all ${tabCount} tabs permanently`}
+                >
+                  <X aria-hidden="true" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{`Remove all ${tabCount} tabs permanently`}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
       </div>
 
@@ -181,33 +196,47 @@ export function TrashGroupItem({
                     {isActiveTab && <span className="ml-1 text-canopy-text/40">(active)</span>}
                   </span>
                   <div className="flex gap-0.5 opacity-0 group-hover/panel:opacity-100 transition-opacity">
-                    <Button
-                      variant="ghost-success"
-                      size="icon-sm"
-                      className="h-4 w-4"
-                      onClick={() => {
-                        if (isOrphan && activeWorktreeId) {
-                          restoreTerminal(terminal.id, activeWorktreeId);
-                        } else {
-                          restoreTerminal(terminal.id);
-                        }
-                      }}
-                      disabled={!canRestore}
-                      aria-label={`Restore ${terminalName} only`}
-                      title={`Restore ${terminalName} only`}
-                    >
-                      <RotateCcw className="w-2.5 h-2.5" aria-hidden="true" />
-                    </Button>
-                    <Button
-                      variant="ghost-danger"
-                      size="icon-sm"
-                      className="h-4 w-4"
-                      onClick={() => removeTerminal(terminal.id)}
-                      aria-label={`Remove ${terminalName} permanently`}
-                      title={`Remove ${terminalName} permanently`}
-                    >
-                      <X className="w-2.5 h-2.5" aria-hidden="true" />
-                    </Button>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="inline-flex">
+                            <Button
+                              variant="ghost-success"
+                              size="icon-sm"
+                              className="h-4 w-4"
+                              onClick={() => {
+                                if (isOrphan && activeWorktreeId) {
+                                  restoreTerminal(terminal.id, activeWorktreeId);
+                                } else {
+                                  restoreTerminal(terminal.id);
+                                }
+                              }}
+                              disabled={!canRestore}
+                              aria-label={`Restore ${terminalName} only`}
+                            >
+                              <RotateCcw className="w-2.5 h-2.5" aria-hidden="true" />
+                            </Button>
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">{`Restore ${terminalName} only`}</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost-danger"
+                            size="icon-sm"
+                            className="h-4 w-4"
+                            onClick={() => removeTerminal(terminal.id)}
+                            aria-label={`Remove ${terminalName} permanently`}
+                          >
+                            <X className="w-2.5 h-2.5" aria-hidden="true" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">{`Remove ${terminalName} permanently`}</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                   </div>
                 </div>
               );

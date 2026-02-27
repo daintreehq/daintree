@@ -13,6 +13,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { DEFAULT_APP_AGENT_CONFIG } from "@shared/types";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 type ValidationResult = "success" | "error" | "test-success" | "test-error" | null;
 
@@ -304,35 +305,53 @@ export function AssistantSettingsTab() {
                 className="flex-1 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-canopy-accent/50 placeholder:text-canopy-text/30"
                 disabled={isSavingModel || isTestingModel}
               />
-              <Button
-                onClick={handleResetModel}
-                disabled={
-                  isSavingModel || isTestingModel || modelInput === DEFAULT_APP_AGENT_CONFIG.model
-                }
-                variant="outline"
-                size="sm"
-                className="text-canopy-text border-canopy-border hover:bg-canopy-border"
-                title="Reset to default"
-              >
-                <RotateCcw size={14} />
-              </Button>
-              <Button
-                onClick={() => void handleTestModel()}
-                disabled={isTestingModel || isSavingModel || !modelInput.trim() || !hasApiKey}
-                variant="outline"
-                size="sm"
-                className="min-w-[70px] text-canopy-text border-canopy-border hover:bg-canopy-border"
-                title={!hasApiKey ? "Configure API key first" : "Test model"}
-              >
-                {isTestingModel ? (
-                  <Loader2 className="animate-spin" />
-                ) : (
-                  <>
-                    <FlaskConical />
-                    Test
-                  </>
-                )}
-              </Button>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      onClick={handleResetModel}
+                      disabled={
+                        isSavingModel ||
+                        isTestingModel ||
+                        modelInput === DEFAULT_APP_AGENT_CONFIG.model
+                      }
+                      variant="outline"
+                      size="sm"
+                      className="text-canopy-text border-canopy-border hover:bg-canopy-border"
+                      aria-label="Reset to default"
+                    >
+                      <RotateCcw size={14} />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Reset to default</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      onClick={() => void handleTestModel()}
+                      disabled={isTestingModel || isSavingModel || !modelInput.trim() || !hasApiKey}
+                      variant="outline"
+                      size="sm"
+                      className="min-w-[70px] text-canopy-text border-canopy-border hover:bg-canopy-border"
+                      aria-label={!hasApiKey ? "Configure API key first" : "Test model"}
+                    >
+                      {isTestingModel ? (
+                        <Loader2 className="animate-spin" />
+                      ) : (
+                        <>
+                          <FlaskConical />
+                          Test
+                        </>
+                      )}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {!hasApiKey ? "Configure API key first" : "Test model"}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
               <Button
                 onClick={() => void handleSaveModel()}
                 disabled={isSavingModel || isTestingModel || !modelInput.trim() || !isModelModified}

@@ -3,6 +3,7 @@ import type { MouseEvent } from "react";
 import { GitCommitHorizontal, Copy, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { GitCommit } from "@shared/types/github";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 interface CommitListItemProps {
   commit: GitCommit;
@@ -61,31 +62,62 @@ export function CommitListItem({ commit }: CommitListItemProps) {
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-foreground truncate" title={commit.message}>
-              {commit.message}
-            </span>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="text-sm font-medium text-foreground truncate">
+                    {commit.message}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{commit.message}</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
           <div className="text-xs text-muted-foreground mt-1 flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={handleCopyHash}
-              className={cn(
-                "font-mono hover:text-foreground transition-colors flex items-center gap-1",
-                copied && "text-[var(--color-status-success)]"
-              )}
-              title={copied ? "Copied!" : "Click to copy hash"}
-            >
-              {copied ? (
-                <Check className="h-3 w-3" />
-              ) : (
-                <Copy className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity" />
-              )}
-              <span>{commit.shortHash}</span>
-            </button>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={handleCopyHash}
+                    className={cn(
+                      "font-mono hover:text-foreground transition-colors flex items-center gap-1",
+                      copied && "text-[var(--color-status-success)]"
+                    )}
+                  >
+                    {copied ? (
+                      <Check className="h-3 w-3" />
+                    ) : (
+                      <Copy className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity" />
+                    )}
+                    <span>{commit.shortHash}</span>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {copied ? "Copied!" : "Click to copy hash"}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
             <span>&middot;</span>
-            <span title={commit.author.email}>{commit.author.name}</span>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span>{commit.author.name}</span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{commit.author.email}</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
             <span>&middot;</span>
-            <span title={new Date(commit.date).toLocaleString()}>{formatTimeAgo(commit.date)}</span>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span>{formatTimeAgo(commit.date)}</span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {new Date(commit.date).toLocaleString()}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
         </div>
       </div>

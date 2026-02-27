@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, type CSSProperties } from "react";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 type ButtonVariant = "primary" | "accent" | "dismiss" | "danger" | "dangerFilled";
 
@@ -159,7 +160,7 @@ function InlineStatusBannerComponent({
           const variant = action.variant ?? "primary";
           const variantClasses = getButtonClasses(variant);
           const variantStyle = getButtonStyle(variant, colorVar);
-          return (
+          const buttonEl = (
             <button
               key={action.id}
               type="button"
@@ -174,7 +175,6 @@ function InlineStatusBannerComponent({
                   "hover:[color:var(--hover-color)] hover:[background:var(--hover-bg)]"
               )}
               style={variantStyle}
-              title={action.title}
               aria-label={action.ariaLabel}
             >
               {action.icon && (
@@ -185,6 +185,17 @@ function InlineStatusBannerComponent({
               )}
               {!action.iconOnly && action.label}
             </button>
+          );
+
+          return action.title ? (
+            <TooltipProvider key={action.id}>
+              <Tooltip>
+                <TooltipTrigger asChild>{buttonEl}</TooltipTrigger>
+                <TooltipContent side="bottom">{action.title}</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          ) : (
+            <React.Fragment key={action.id}>{buttonEl}</React.Fragment>
           );
         })}
       </div>

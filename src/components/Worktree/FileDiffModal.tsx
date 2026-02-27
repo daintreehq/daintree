@@ -8,6 +8,7 @@ import type { GitStatus } from "@shared/types";
 import { actionService } from "@/services/ActionService";
 import { Copy, Check } from "lucide-react";
 import { useNotificationStore } from "@/store/notificationStore";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 export interface FileDiffModalProps {
   isOpen: boolean;
@@ -206,24 +207,32 @@ export function FileDiffModal({
             </button>
           </div>
 
-          <button
-            type="button"
-            onClick={handleCopyDiff}
-            disabled={loadingState !== "loaded" || !isValidDiffContent}
-            aria-label={diffCopied ? "Copied!" : "Copy diff to clipboard"}
-            title={diffCopied ? "Copied!" : "Copy diff to clipboard"}
-            className={cn(
-              "p-1.5 rounded transition-colors",
-              loadingState !== "loaded" || !isValidDiffContent
-                ? "text-muted-foreground/50 cursor-not-allowed"
-                : "text-muted-foreground hover:text-canopy-text hover:bg-canopy-border"
-            )}
-          >
-            {diffCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-            <span className="sr-only" role="status" aria-live="polite">
-              {diffCopied ? "Copied to clipboard" : ""}
-            </span>
-          </button>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={handleCopyDiff}
+                  disabled={loadingState !== "loaded" || !isValidDiffContent}
+                  aria-label={diffCopied ? "Copied!" : "Copy diff to clipboard"}
+                  className={cn(
+                    "p-1.5 rounded transition-colors",
+                    loadingState !== "loaded" || !isValidDiffContent
+                      ? "text-muted-foreground/50 cursor-not-allowed"
+                      : "text-muted-foreground hover:text-canopy-text hover:bg-canopy-border"
+                  )}
+                >
+                  {diffCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  <span className="sr-only" role="status" aria-live="polite">
+                    {diffCopied ? "Copied to clipboard" : ""}
+                  </span>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {diffCopied ? "Copied!" : "Copy diff to clipboard"}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
 
           <AppDialog.CloseButton />
         </div>

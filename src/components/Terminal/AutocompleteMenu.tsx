@@ -1,5 +1,6 @@
 import { forwardRef } from "react";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 function getDescriptionSnippet(description: string, maxLength = 60): string {
   const cleaned = description.replace(/\s+/g, " ").trim();
@@ -57,33 +58,40 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
               : undefined;
 
             return (
-              <button
-                key={item.key}
-                type="button"
-                role="option"
-                aria-selected={idx === selectedIndex}
-                className={cn(
-                  "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left transition-colors",
-                  idx === selectedIndex
-                    ? "bg-canopy-accent/20 text-canopy-text"
-                    : "text-canopy-text/70 hover:bg-white/[0.05] hover:text-canopy-text"
-                )}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => onSelect(item)}
-                title={item.description ? `${item.label} — ${item.description}` : item.label}
-              >
-                <span className="shrink-0 font-mono text-xs leading-4">{item.label}</span>
-                {descriptionSnippet && (
-                  <span
-                    className={cn(
-                      "min-w-0 truncate text-[10px] leading-4",
-                      idx === selectedIndex ? "text-canopy-text/80" : "text-canopy-text/30"
-                    )}
-                  >
-                    {descriptionSnippet}
-                  </span>
-                )}
-              </button>
+              <TooltipProvider key={item.key}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={idx === selectedIndex}
+                      className={cn(
+                        "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left transition-colors",
+                        idx === selectedIndex
+                          ? "bg-canopy-accent/20 text-canopy-text"
+                          : "text-canopy-text/70 hover:bg-white/[0.05] hover:text-canopy-text"
+                      )}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => onSelect(item)}
+                    >
+                      <span className="shrink-0 font-mono text-xs leading-4">{item.label}</span>
+                      {descriptionSnippet && (
+                        <span
+                          className={cn(
+                            "min-w-0 truncate text-[10px] leading-4",
+                            idx === selectedIndex ? "text-canopy-text/80" : "text-canopy-text/30"
+                          )}
+                        >
+                          {descriptionSnippet}
+                        </span>
+                      )}
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {item.description ? `${item.label} — ${item.description}` : item.label}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             );
           })}
         </div>

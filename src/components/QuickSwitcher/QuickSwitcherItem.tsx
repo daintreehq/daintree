@@ -3,6 +3,7 @@ import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { GitBranch } from "lucide-react";
 import type { QuickSwitcherItem as QuickSwitcherItemData } from "@/hooks/useQuickSwitcher";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 export interface QuickSwitcherItemProps {
   item: QuickSwitcherItemData;
@@ -57,9 +58,14 @@ export function QuickSwitcherItem({ item, isSelected, onClick }: QuickSwitcherIt
           </span>
         </div>
         {item.subtitle && (
-          <div className="text-xs text-canopy-text/50 truncate" title={item.subtitle}>
-            {item.subtitle}
-          </div>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="text-xs text-canopy-text/50 truncate">{item.subtitle}</div>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{item.subtitle}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         )}
       </div>
     </button>

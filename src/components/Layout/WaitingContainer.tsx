@@ -8,11 +8,9 @@ const waitingConfig: StatusContainerConfig = {
   badgeColor: "bg-amber-400",
   badgeTextColor: "text-amber-950",
   headerLabel: "Waiting For Input",
-  buttonTitle: "View agents waiting for input",
   buttonLabel: "Waiting",
   statusAriaLabel: "Waiting for input",
   contentAriaLabel: "Waiting terminals",
-  keybindingAction: "agent.focusNextWaiting",
   contentId: "waiting-container-popover",
   useTerminals: useWaitingTerminals,
 };

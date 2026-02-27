@@ -2,6 +2,7 @@ import { cn } from "@/lib/utils";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import type { TerminalType, TerminalKind } from "@/types";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 export interface TerminalListItemProps {
   id: string;
@@ -79,9 +80,14 @@ export function TerminalListItem({
           )}
         </div>
 
-        <div className="text-xs text-canopy-text/50 truncate" title={cwd}>
-          {truncatePath(cwd)}
-        </div>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="text-xs text-canopy-text/50 truncate">{truncatePath(cwd)}</div>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{cwd}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </div>
 
       <span className="shrink-0 text-xs text-canopy-text/40 capitalize">{type}</span>

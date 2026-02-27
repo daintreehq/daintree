@@ -1,6 +1,7 @@
 import { cn } from "@/lib/utils";
 import type { AgentState } from "@/types";
 import { STATE_COLORS, STATE_ICONS } from "@/components/Worktree/terminalStateConfig";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 export interface ProjectActionRowProps {
   activeAgentCount: number | null;
@@ -32,7 +33,7 @@ export function ProjectActionRow({
 
   const Icon = state ? STATE_ICONS[state] : null;
 
-  return (
+  const content = (
     <div
       className={cn(
         "flex items-center justify-end gap-1.5 shrink-0",
@@ -41,7 +42,6 @@ export function ProjectActionRow({
         className
       )}
       aria-label={label ?? undefined}
-      title={label ?? undefined}
     >
       {Icon && count != null && state && (
         <>
@@ -57,5 +57,16 @@ export function ProjectActionRow({
         </>
       )}
     </div>
+  );
+
+  if (!label) return content;
+
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>{content}</TooltipTrigger>
+        <TooltipContent side="bottom">{label}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }

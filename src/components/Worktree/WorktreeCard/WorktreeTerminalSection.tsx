@@ -162,12 +162,16 @@ export function WorktreeTerminalSection({
                           {term.type === "terminal" &&
                             term.agentState === "running" &&
                             term.lastCommand && (
-                              <span
-                                className="text-[11px] font-mono text-canopy-text/50 truncate"
-                                title={term.lastCommand}
-                              >
-                                {term.lastCommand}
-                              </span>
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <span className="text-[11px] font-mono text-canopy-text/50 truncate">
+                                      {term.lastCommand}
+                                    </span>
+                                  </TooltipTrigger>
+                                  <TooltipContent side="bottom">{term.lastCommand}</TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
                             )}
                         </div>
                       </button>
@@ -208,16 +212,22 @@ export function WorktreeTerminalSection({
                           />
                         )}
 
-                        <div
-                          className="text-muted-foreground/40 group-hover:text-muted-foreground/60 transition-colors"
-                          title={term.location === "dock" ? "Docked" : "On Grid"}
-                        >
-                          {term.location === "dock" ? (
-                            <PanelBottom className="w-3 h-3" />
-                          ) : (
-                            <LayoutGrid className="w-3 h-3" />
-                          )}
-                        </div>
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <div className="text-muted-foreground/40 group-hover:text-muted-foreground/60 transition-colors">
+                                {term.location === "dock" ? (
+                                  <PanelBottom className="w-3 h-3" />
+                                ) : (
+                                  <LayoutGrid className="w-3 h-3" />
+                                )}
+                              </div>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom">
+                              {term.location === "dock" ? "Docked" : "On Grid"}
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
 
                         <button
                           type="button"

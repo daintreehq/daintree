@@ -5,6 +5,7 @@ import { MarkdownRenderer } from "./MarkdownRenderer";
 import { ToolCallBlock } from "./ToolCallBlock";
 import { StreamingCursor } from "./StreamingCursor";
 import type { AssistantMessage } from "./types";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 interface InteractionBlockProps {
   message: Pick<AssistantMessage, "role" | "content" | "toolCalls" | "timestamp" | "eventMetadata">;
@@ -99,12 +100,16 @@ function EventBlock({
         {fullTerminalId && (
           <>
             <span className="text-canopy-text/40 shrink-0">•</span>
-            <span
-              className="text-canopy-text/50 font-mono text-[11px] shrink-0"
-              title={fullTerminalId}
-            >
-              {fullTerminalId.slice(0, 8)}
-            </span>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="text-canopy-text/50 font-mono text-[11px] shrink-0">
+                    {fullTerminalId.slice(0, 8)}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{fullTerminalId}</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </>
         )}
       </div>
@@ -187,23 +192,29 @@ function AssistantResponseBlock({
 
       {/* Copy button - bottom right */}
       {hasContent && !isStreaming && (
-        <button
-          type="button"
-          onClick={handleCopy}
-          className={cn(
-            "absolute bottom-6 right-6 p-1.5 rounded transition-all",
-            "opacity-0 group-hover:opacity-100 focus:opacity-100",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
-            "[@media(hover:none)]:opacity-100",
-            copied
-              ? "text-canopy-accent bg-canopy-accent/10"
-              : "text-canopy-text/30 hover:text-canopy-text/60 hover:bg-white/[0.05]"
-          )}
-          aria-label={copied ? "Copied response" : "Copy response"}
-          title="Copy response to clipboard"
-        >
-          {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-        </button>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={handleCopy}
+                className={cn(
+                  "absolute bottom-6 right-6 p-1.5 rounded transition-all",
+                  "opacity-0 group-hover:opacity-100 focus:opacity-100",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
+                  "[@media(hover:none)]:opacity-100",
+                  copied
+                    ? "text-canopy-accent bg-canopy-accent/10"
+                    : "text-canopy-text/30 hover:text-canopy-text/60 hover:bg-white/[0.05]"
+                )}
+                aria-label={copied ? "Copied response" : "Copy response"}
+              >
+                {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Copy response to clipboard</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       )}
     </div>
   );

@@ -9,6 +9,7 @@ import { EmptyState } from "./EmptyState";
 import { useAssistantChat } from "./useAssistantChat";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AutoResumePrompt } from "./AutoResumePrompt";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 export function AssistantPane() {
   const { hasApiKey, isInitialized, initialize } = useAppAgentStore();
@@ -154,25 +155,37 @@ export function AssistantPane() {
             </div>
             <div className="flex items-center gap-1.5 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity motion-reduce:transition-none">
               {hasMessages && (
-                <button
-                  type="button"
-                  onClick={handleClearConversation}
-                  className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
-                  title="Clear conversation"
-                  aria-label="Clear conversation"
-                >
-                  <RefreshCw className="w-3 h-3" aria-hidden="true" />
-                </button>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={handleClearConversation}
+                        className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
+                        aria-label="Clear conversation"
+                      >
+                        <RefreshCw className="w-3 h-3" aria-hidden="true" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Clear conversation</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               )}
-              <button
-                type="button"
-                onClick={close}
-                className="p-1.5 hover:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-status-error)] focus-visible:outline-offset-2 text-canopy-text/60 hover:text-[var(--color-status-error)] transition-colors"
-                title="Close assistant"
-                aria-label="Close assistant"
-              >
-                <X className="w-3 h-3" aria-hidden="true" />
-              </button>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={close}
+                      className="p-1.5 hover:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-status-error)] focus-visible:outline-offset-2 text-canopy-text/60 hover:text-[var(--color-status-error)] transition-colors"
+                      aria-label="Close assistant"
+                    >
+                      <X className="w-3 h-3" aria-hidden="true" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Close assistant</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </div>
           </div>
 
@@ -201,29 +214,43 @@ export function AssistantPane() {
               </span>
               <div className="flex items-center gap-2 shrink-0">
                 {messages.some((msg) => msg.role === "user") && (
-                  <button
-                    type="button"
-                    onClick={retryLastMessage}
-                    disabled={isLoading}
-                    className="flex items-center gap-1.5 px-2 py-1 rounded text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-xs font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-red-400 focus-visible:outline-offset-2"
-                    aria-label={isLoading ? "Retrying last message..." : "Retry last message"}
-                    title={isLoading ? "Retrying..." : "Retry last message"}
-                  >
-                    <RotateCw
-                      className={`w-3 h-3 ${isLoading ? "animate-spin motion-reduce:animate-none" : ""}`}
-                    />
-                    <span>{isLoading ? "Retrying..." : "Retry"}</span>
-                  </button>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          onClick={retryLastMessage}
+                          disabled={isLoading}
+                          className="flex items-center gap-1.5 px-2 py-1 rounded text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-xs font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-red-400 focus-visible:outline-offset-2"
+                          aria-label={isLoading ? "Retrying last message..." : "Retry last message"}
+                        >
+                          <RotateCw
+                            className={`w-3 h-3 ${isLoading ? "animate-spin motion-reduce:animate-none" : ""}`}
+                          />
+                          <span>{isLoading ? "Retrying..." : "Retry"}</span>
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">
+                        {isLoading ? "Retrying..." : "Retry last message"}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 )}
-                <button
-                  type="button"
-                  onClick={clearError}
-                  className="p-1.5 rounded text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-red-400 focus-visible:outline-offset-2"
-                  aria-label="Dismiss error"
-                  title="Dismiss error"
-                >
-                  <X className="w-3 h-3" />
-                </button>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={clearError}
+                        className="p-1.5 rounded text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-red-400 focus-visible:outline-offset-2"
+                        aria-label="Dismiss error"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Dismiss error</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               </div>
             </div>
           )}

@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { GitBranch, AlertCircle, Check, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import {
   validatePathPattern,
   previewPathPattern,
@@ -162,13 +163,20 @@ export function WorktreeSettingsTab() {
               )}
               placeholder="{parent-dir}/{base-folder}-worktrees/{branch-slug}"
             />
-            <button
-              onClick={handleReset}
-              className="px-3 py-2 border border-canopy-border rounded-[var(--radius-md)] text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-border/50 transition-colors"
-              title="Reset to default"
-            >
-              <RotateCcw className="w-4 h-4" />
-            </button>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={handleReset}
+                    className="px-3 py-2 border border-canopy-border rounded-[var(--radius-md)] text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-border/50 transition-colors"
+                    aria-label="Reset to default"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Reset to default</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
 
           {!validation.valid && validation.error && (
@@ -214,19 +222,24 @@ export function WorktreeSettingsTab() {
           <span className="block text-xs font-medium text-canopy-text/70">Presets:</span>
           <div className="flex flex-wrap gap-2">
             {PATTERN_PRESETS.map((preset) => (
-              <button
-                key={preset.label}
-                onClick={() => handlePresetClick(preset.pattern)}
-                className={cn(
-                  "px-3 py-1.5 text-xs rounded-[var(--radius-md)] border transition-colors",
-                  pattern === preset.pattern
-                    ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
-                    : "border-canopy-border text-canopy-text/70 hover:bg-canopy-border/50"
-                )}
-                title={preset.description}
-              >
-                {preset.label}
-              </button>
+              <TooltipProvider key={preset.label}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={() => handlePresetClick(preset.pattern)}
+                      className={cn(
+                        "px-3 py-1.5 text-xs rounded-[var(--radius-md)] border transition-colors",
+                        pattern === preset.pattern
+                          ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
+                          : "border-canopy-border text-canopy-text/70 hover:bg-canopy-border/50"
+                      )}
+                    >
+                      {preset.label}
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">{preset.description}</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             ))}
           </div>
         </div>

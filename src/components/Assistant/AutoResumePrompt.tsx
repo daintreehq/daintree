@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import { Play, X, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 const AUTO_RESUME_GRACE_PERIOD_MS = 15000;
 
@@ -103,25 +104,37 @@ function AutoResumePromptComponent({
       </div>
 
       <div className="flex items-center gap-1 shrink-0">
-        <button
-          type="button"
-          onClick={handleResume}
-          className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium bg-[var(--color-canopy-accent)]/10 text-[var(--color-canopy-accent)] hover:bg-[var(--color-canopy-accent)]/20 rounded transition-colors"
-          title="Resume now"
-          aria-label="Resume conversation now"
-        >
-          <Play className="w-3 h-3" aria-hidden="true" />
-          Resume now
-        </button>
-        <button
-          type="button"
-          onClick={handleCancel}
-          className="p-1 text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-text/10 rounded transition-colors"
-          title="Cancel"
-          aria-label="Cancel auto-resume"
-        >
-          <X className="w-3.5 h-3.5" aria-hidden="true" />
-        </button>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={handleResume}
+                className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium bg-[var(--color-canopy-accent)]/10 text-[var(--color-canopy-accent)] hover:bg-[var(--color-canopy-accent)]/20 rounded transition-colors"
+                aria-label="Resume conversation now"
+              >
+                <Play className="w-3 h-3" aria-hidden="true" />
+                Resume now
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Resume now</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={handleCancel}
+                className="p-1 text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-text/10 rounded transition-colors"
+                aria-label="Cancel auto-resume"
+              >
+                <X className="w-3.5 h-3.5" aria-hidden="true" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Cancel</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </div>
     </div>
   );

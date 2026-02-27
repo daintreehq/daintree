@@ -4,13 +4,12 @@ import { useShallow } from "zustand/react/shallow";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useTerminalStore } from "@/store/terminalStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import type { TerminalInstance } from "@/store/terminalStore";
 import type { TerminalLocation } from "@shared/types";
-import type { KeyAction } from "@shared/types/keymap";
 import type { LucideIcon } from "lucide-react";
 
 function getLocationIcon(location: TerminalLocation | undefined) {
@@ -24,11 +23,9 @@ export interface StatusContainerConfig {
   badgeColor: string;
   badgeTextColor: string;
   headerLabel: string;
-  buttonTitle: string;
   buttonLabel: string;
   statusAriaLabel: string;
   contentAriaLabel: string;
-  keybindingAction: KeyAction;
   contentId: string;
   useTerminals: () => TerminalInstance[];
 }
@@ -54,8 +51,6 @@ export function StatusContainer({ config, compact = false }: StatusContainerProp
       trackTerminalFocus: state.trackTerminalFocus,
     }))
   );
-  const shortcut = useKeybindingDisplay(config.keybindingAction);
-
   if (terminals.length === 0) return null;
 
   const count = terminals.length;
@@ -72,7 +67,6 @@ export function StatusContainer({ config, compact = false }: StatusContainerProp
             compact ? "px-1.5 min-w-0" : "px-3",
             isOpen && "bg-canopy-border border-canopy-accent/40 ring-1 ring-canopy-accent/30"
           )}
-          title={`${config.buttonTitle}${shortcut ? ` (${shortcut})` : ""}`}
           aria-haspopup="dialog"
           aria-expanded={isOpen}
           aria-controls={config.contentId}
@@ -154,12 +148,18 @@ export function StatusContainer({ config, compact = false }: StatusContainerProp
                     aria-label={config.statusAriaLabel}
                   />
 
-                  <div
-                    className="text-muted-foreground/40 group-hover:text-muted-foreground/60 transition-colors"
-                    title={terminal.location === "dock" ? "Docked" : "On Grid"}
-                  >
-                    {getLocationIcon(terminal.location)}
-                  </div>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div className="text-muted-foreground/40 group-hover:text-muted-foreground/60 transition-colors">
+                          {getLocationIcon(terminal.location)}
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">
+                        {terminal.location === "dock" ? "Docked" : "On Grid"}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 </div>
               </button>
             ))}

@@ -17,6 +17,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { cn } from "@/lib/utils";
 import { detectTerminalTypeFromCommand } from "@/utils/terminalType";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import type { RunCommand } from "@/types";
 
 interface QuickRunProps {
@@ -385,63 +386,85 @@ export function QuickRun({ projectId }: QuickRunProps) {
               {/* Right Side Controls */}
               <div className="flex items-center pr-1.5 gap-1">
                 {/* Auto-Restart Toggle */}
-                <button
-                  onClick={handleToggleAutoRestart}
-                  className={cn(
-                    "p-1.5 rounded-[var(--radius-sm)] transition-all",
-                    autoRestart
-                      ? "bg-canopy-accent/20 text-canopy-accent"
-                      : "text-white/30 hover:text-white/60 hover:bg-white/10"
-                  )}
-                  title={autoRestart ? "Auto-restart: On" : "Auto-restart: Off"}
-                  aria-label={autoRestart ? "Disable auto-restart" : "Enable auto-restart"}
-                  aria-pressed={autoRestart}
-                >
-                  <RefreshCw className="h-3.5 w-3.5" />
-                </button>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        onClick={handleToggleAutoRestart}
+                        className={cn(
+                          "p-1.5 rounded-[var(--radius-sm)] transition-all",
+                          autoRestart
+                            ? "bg-canopy-accent/20 text-canopy-accent"
+                            : "text-white/30 hover:text-white/60 hover:bg-white/10"
+                        )}
+                        aria-label={autoRestart ? "Disable auto-restart" : "Enable auto-restart"}
+                        aria-pressed={autoRestart}
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {autoRestart ? "Auto-restart: On" : "Auto-restart: Off"}
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
 
                 {/* Location Toggle */}
-                <button
-                  onClick={() => setRunAsDocked(!runAsDocked)}
-                  className={cn(
-                    "p-1.5 rounded-[var(--radius-sm)] transition-all",
-                    runAsDocked
-                      ? "bg-canopy-accent/20 text-canopy-accent"
-                      : "text-white/30 hover:text-white/60 hover:bg-white/10"
-                  )}
-                  title={
-                    runAsDocked
-                      ? "Output: Dock (Background Task)"
-                      : "Output: Grid (Interactive Terminal)"
-                  }
-                  aria-label={
-                    runAsDocked
-                      ? "Send output to Dock (background task)"
-                      : "Send output to Grid (interactive terminal)"
-                  }
-                >
-                  {runAsDocked ? (
-                    <PanelBottom className="h-3.5 w-3.5" />
-                  ) : (
-                    <LayoutGrid className="h-3.5 w-3.5" />
-                  )}
-                </button>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        onClick={() => setRunAsDocked(!runAsDocked)}
+                        className={cn(
+                          "p-1.5 rounded-[var(--radius-sm)] transition-all",
+                          runAsDocked
+                            ? "bg-canopy-accent/20 text-canopy-accent"
+                            : "text-white/30 hover:text-white/60 hover:bg-white/10"
+                        )}
+                        aria-label={
+                          runAsDocked
+                            ? "Send output to Dock (background task)"
+                            : "Send output to Grid (interactive terminal)"
+                        }
+                      >
+                        {runAsDocked ? (
+                          <PanelBottom className="h-3.5 w-3.5" />
+                        ) : (
+                          <LayoutGrid className="h-3.5 w-3.5" />
+                        )}
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {runAsDocked
+                        ? "Output: Dock (Background Task)"
+                        : "Output: Grid (Interactive Terminal)"}
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
 
                 {/* Enter Button */}
-                <button
-                  onClick={() => handleRun(input)}
-                  disabled={!input.trim()}
-                  className={cn(
-                    "p-1.5 rounded-[var(--radius-sm)] transition-all",
-                    input.trim()
-                      ? "text-white hover:bg-white/10"
-                      : "text-white/10 cursor-not-allowed"
-                  )}
-                  title="Run Command (Enter)"
-                  aria-label="Run command"
-                >
-                  <CornerDownLeft className="h-3.5 w-3.5" />
-                </button>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex">
+                        <button
+                          onClick={() => handleRun(input)}
+                          disabled={!input.trim()}
+                          className={cn(
+                            "p-1.5 rounded-[var(--radius-sm)] transition-all",
+                            input.trim()
+                              ? "text-white hover:bg-white/10"
+                              : "text-white/10 cursor-not-allowed"
+                          )}
+                          aria-label="Run command"
+                        >
+                          <CornerDownLeft className="h-3.5 w-3.5" />
+                        </button>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Run Command (Enter)</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               </div>
 
               {/* Autocomplete Menu */}

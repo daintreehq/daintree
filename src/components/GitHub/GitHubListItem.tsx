@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import type { GitHubIssue, GitHubPR, LinkedPRInfo } from "@shared/types/github";
 import { Avatar } from "@/components/ui/Avatar";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 interface GitHubListItemProps {
   item: GitHubIssue | GitHubPR;
@@ -159,30 +160,42 @@ export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemP
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleOpenExternal}
-              className="text-sm font-medium text-foreground truncate hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 cursor-pointer text-left"
-              title="Open in GitHub"
-              aria-label={`Open ${type} "${item.title}" in GitHub`}
-            >
-              {item.title}
-            </button>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={handleOpenExternal}
+                    className="text-sm font-medium text-foreground truncate hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 cursor-pointer text-left"
+                    aria-label={`Open ${type} "${item.title}" in GitHub`}
+                  >
+                    {item.title}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Open in GitHub</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
             {prBadgeInfo && linkedPR && (
-              <button
-                type="button"
-                onClick={handleOpenLinkedPR}
-                className={cn(
-                  "shrink-0 text-[11px] px-1.5 py-0.5 rounded font-medium flex items-center gap-1 hover:opacity-80 transition-opacity cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-                  prBadgeInfo.color,
-                  prBadgeInfo.bgColor
-                )}
-                title={`Open PR #${linkedPR.number} (${linkedPR.state.toLowerCase()})`}
-                aria-label={`Open linked pull request #${linkedPR.number} (${linkedPR.state.toLowerCase()})`}
-              >
-                <prBadgeInfo.icon className="w-3 h-3" />
-                <span>#{linkedPR.number}</span>
-              </button>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={handleOpenLinkedPR}
+                      className={cn(
+                        "shrink-0 text-[11px] px-1.5 py-0.5 rounded font-medium flex items-center gap-1 hover:opacity-80 transition-opacity cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                        prBadgeInfo.color,
+                        prBadgeInfo.bgColor
+                      )}
+                      aria-label={`Open linked pull request #${linkedPR.number} (${linkedPR.state.toLowerCase()})`}
+                    >
+                      <prBadgeInfo.icon className="w-3 h-3" />
+                      <span>#{linkedPR.number}</span>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">{`Open PR #${linkedPR.number} (${linkedPR.state.toLowerCase()})`}</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             )}
             {isItemPR && item.isDraft && (
               <span className="shrink-0 text-[11px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-medium">
@@ -196,24 +209,32 @@ export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemP
             aria-live="polite"
             aria-atomic="true"
           >
-            <button
-              type="button"
-              onClick={handleCopyNumber}
-              className={cn(
-                "hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-                status.color
-              )}
-              title={copied ? "Copied!" : copyError ? "Failed to copy" : "Click to copy number"}
-              aria-label={
-                copied
-                  ? `Number ${item.number} copied to clipboard`
-                  : copyError
-                    ? `Failed to copy number ${item.number}`
-                    : `Copy ${type} number ${item.number}`
-              }
-            >
-              {status.text}
-            </button>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={handleCopyNumber}
+                    className={cn(
+                      "hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                      status.color
+                    )}
+                    aria-label={
+                      copied
+                        ? `Number ${item.number} copied to clipboard`
+                        : copyError
+                          ? `Failed to copy number ${item.number}`
+                          : `Copy ${type} number ${item.number}`
+                    }
+                  >
+                    {status.text}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {copied ? "Copied!" : copyError ? "Failed to copy" : "Click to copy number"}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
             <span>&middot;</span>
             <span>{item.author.login}</span>
             <span>&middot;</span>
@@ -221,15 +242,21 @@ export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemP
             {type === "issue" && onCreateWorktree && item.state === "OPEN" && (
               <>
                 <span>&middot;</span>
-                <button
-                  type="button"
-                  onClick={handleCreateWorktree}
-                  className="hover:text-canopy-accent transition-colors flex items-center gap-1"
-                  title="Create Worktree from Issue"
-                >
-                  <GitBranch className="w-3 h-3" />
-                  <span>Create Worktree</span>
-                </button>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={handleCreateWorktree}
+                        className="hover:text-canopy-accent transition-colors flex items-center gap-1"
+                      >
+                        <GitBranch className="w-3 h-3" />
+                        <span>Create Worktree</span>
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Create Worktree from Issue</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               </>
             )}
           </div>

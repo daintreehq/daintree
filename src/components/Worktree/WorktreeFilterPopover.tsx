@@ -199,7 +199,7 @@ export function WorktreeFilterPopover() {
             "transition-colors",
             hasActiveFilters() && "text-canopy-accent"
           )}
-          title="Filter and sort worktrees"
+          aria-label="Filter and sort worktrees"
         >
           <Filter className="w-3.5 h-3.5" />
           {showBadge && (

@@ -254,21 +254,25 @@ export function Toolbar({
     () => ({
       "sidebar-toggle": {
         render: () => (
-          <Button
-            key="sidebar-toggle"
-            variant="ghost"
-            size="icon"
-            onClick={onToggleFocusMode}
-            className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
-            title={createTooltipWithShortcut(
-              isFocusMode ? "Show Sidebar" : "Hide Sidebar",
-              "Cmd+B"
-            )}
-            aria-label="Toggle Sidebar"
-            aria-pressed={!isFocusMode}
-          >
-            {isFocusMode ? <PanelLeftOpen /> : <PanelLeftClose />}
-          </Button>
+          <TooltipProvider key="sidebar-toggle">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={onToggleFocusMode}
+                  className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
+                  aria-label="Toggle Sidebar"
+                  aria-pressed={!isFocusMode}
+                >
+                  {isFocusMode ? <PanelLeftOpen /> : <PanelLeftClose />}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {createTooltipWithShortcut(isFocusMode ? "Show Sidebar" : "Hide Sidebar", "Cmd+B")}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         ),
         isAvailable: true,
       },
@@ -368,32 +372,39 @@ export function Toolbar({
       },
       "dev-server": {
         render: () => (
-          <Button
-            key="dev-server"
-            variant="ghost"
-            size="icon"
-            onClick={() => {
-              void actionService.dispatch("devServer.start", undefined, { source: "user" });
-            }}
-            disabled={!currentProject}
-            className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
-            title={
-              !currentProject
-                ? "Open a project to use Dev Preview"
-                : devServerCommand
-                  ? "Start Dev Server"
-                  : "Open Dev Preview"
-            }
-            aria-label={
-              !currentProject
-                ? "Open a project to use Dev Preview"
-                : devServerCommand
-                  ? "Start Dev Server"
-                  : "Open Dev Preview"
-            }
-          >
-            <Monitor />
-          </Button>
+          <TooltipProvider key="dev-server">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => {
+                      void actionService.dispatch("devServer.start", undefined, { source: "user" });
+                    }}
+                    disabled={!currentProject}
+                    className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
+                    aria-label={
+                      !currentProject
+                        ? "Open a project to use Dev Preview"
+                        : devServerCommand
+                          ? "Start Dev Server"
+                          : "Open Dev Preview"
+                    }
+                  >
+                    <Monitor />
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {!currentProject
+                  ? "Open a project to use Dev Preview"
+                  : devServerCommand
+                    ? "Start Dev Server"
+                    : "Open Dev Preview"}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         ),
         isAvailable: true,
       },
@@ -404,36 +415,43 @@ export function Toolbar({
               key="github-stats"
               className="relative flex items-center h-8 rounded-[var(--radius-md)] overflow-hidden bg-white/[0.03] border border-divider divide-x divide-[var(--border-divider)] mr-2"
             >
-              <Button
-                ref={issuesButtonRef}
-                variant="ghost"
-                onClick={() => {
-                  setPrsOpen(false);
-                  setCommitsOpen(false);
-                  const willOpen = !issuesOpen;
-                  setIssuesOpen(willOpen);
-                  if (willOpen) {
-                    refreshStats({ force: true });
-                  }
-                }}
-                className={cn(
-                  "text-canopy-text hover:bg-white/[0.04] hover:text-canopy-accent h-full px-3 gap-2 rounded-none rounded-l-[var(--radius-md)]",
-                  stats?.issueCount === 0 && "opacity-50",
-                  isStale && "opacity-60",
-                  issuesOpen && "bg-white/[0.04] ring-1 ring-canopy-accent/20 text-canopy-accent"
-                )}
-                title={
-                  isStale
-                    ? `${stats?.issueCount ?? "\u2014"} open issues (last updated ${getTimeSinceUpdate(lastUpdated)} - offline)`
-                    : "Browse GitHub Issues"
-                }
-                aria-label={`${stats?.issueCount ?? "\u2014"} open issues${isStale ? " (cached)" : ""}`}
-              >
-                <CircleDot className="h-4 w-4" />
-                <span className="text-xs font-medium tabular-nums">
-                  {stats?.issueCount ?? "\u2014"}
-                </span>
-              </Button>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      ref={issuesButtonRef}
+                      variant="ghost"
+                      onClick={() => {
+                        setPrsOpen(false);
+                        setCommitsOpen(false);
+                        const willOpen = !issuesOpen;
+                        setIssuesOpen(willOpen);
+                        if (willOpen) {
+                          refreshStats({ force: true });
+                        }
+                      }}
+                      className={cn(
+                        "text-canopy-text hover:bg-white/[0.04] hover:text-canopy-accent h-full px-3 gap-2 rounded-none rounded-l-[var(--radius-md)]",
+                        stats?.issueCount === 0 && "opacity-50",
+                        isStale && "opacity-60",
+                        issuesOpen &&
+                          "bg-white/[0.04] ring-1 ring-canopy-accent/20 text-canopy-accent"
+                      )}
+                      aria-label={`${stats?.issueCount ?? "\u2014"} open issues${isStale ? " (cached)" : ""}`}
+                    >
+                      <CircleDot className="h-4 w-4" />
+                      <span className="text-xs font-medium tabular-nums">
+                        {stats?.issueCount ?? "\u2014"}
+                      </span>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {isStale
+                      ? `${stats?.issueCount ?? "\u2014"} open issues (last updated ${getTimeSinceUpdate(lastUpdated)} - offline)`
+                      : "Browse GitHub Issues"}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
               <FixedDropdown
                 open={issuesOpen}
                 onOpenChange={setIssuesOpen}
@@ -447,36 +465,42 @@ export function Toolbar({
                   initialCount={stats?.issueCount}
                 />
               </FixedDropdown>
-              <Button
-                ref={prsButtonRef}
-                variant="ghost"
-                onClick={() => {
-                  setIssuesOpen(false);
-                  setCommitsOpen(false);
-                  const willOpen = !prsOpen;
-                  setPrsOpen(willOpen);
-                  if (willOpen) {
-                    refreshStats({ force: true });
-                  }
-                }}
-                className={cn(
-                  "text-canopy-text hover:bg-white/[0.04] hover:text-canopy-accent h-full px-3 gap-2 rounded-none",
-                  stats?.prCount === 0 && "opacity-50",
-                  isStale && "opacity-60",
-                  prsOpen && "bg-white/[0.04] ring-1 ring-canopy-accent/20 text-canopy-accent"
-                )}
-                title={
-                  isStale
-                    ? `${stats?.prCount ?? "\u2014"} open PRs (last updated ${getTimeSinceUpdate(lastUpdated)} - offline)`
-                    : "Browse GitHub Pull Requests"
-                }
-                aria-label={`${stats?.prCount ?? "\u2014"} open pull requests${isStale ? " (cached)" : ""}`}
-              >
-                <GitPullRequest className="h-4 w-4" />
-                <span className="text-xs font-medium tabular-nums">
-                  {stats?.prCount ?? "\u2014"}
-                </span>
-              </Button>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      ref={prsButtonRef}
+                      variant="ghost"
+                      onClick={() => {
+                        setIssuesOpen(false);
+                        setCommitsOpen(false);
+                        const willOpen = !prsOpen;
+                        setPrsOpen(willOpen);
+                        if (willOpen) {
+                          refreshStats({ force: true });
+                        }
+                      }}
+                      className={cn(
+                        "text-canopy-text hover:bg-white/[0.04] hover:text-canopy-accent h-full px-3 gap-2 rounded-none",
+                        stats?.prCount === 0 && "opacity-50",
+                        isStale && "opacity-60",
+                        prsOpen && "bg-white/[0.04] ring-1 ring-canopy-accent/20 text-canopy-accent"
+                      )}
+                      aria-label={`${stats?.prCount ?? "\u2014"} open pull requests${isStale ? " (cached)" : ""}`}
+                    >
+                      <GitPullRequest className="h-4 w-4" />
+                      <span className="text-xs font-medium tabular-nums">
+                        {stats?.prCount ?? "\u2014"}
+                      </span>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {isStale
+                      ? `${stats?.prCount ?? "\u2014"} open PRs (last updated ${getTimeSinceUpdate(lastUpdated)} - offline)`
+                      : "Browse GitHub Pull Requests"}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
               <FixedDropdown
                 open={prsOpen}
                 onOpenChange={setPrsOpen}
@@ -490,27 +514,34 @@ export function Toolbar({
                   initialCount={stats?.prCount}
                 />
               </FixedDropdown>
-              <Button
-                ref={commitsButtonRef}
-                variant="ghost"
-                onClick={() => {
-                  setIssuesOpen(false);
-                  setPrsOpen(false);
-                  setCommitsOpen(!commitsOpen);
-                }}
-                className={cn(
-                  "text-canopy-text hover:bg-white/[0.04] hover:text-canopy-accent h-full px-3 gap-2 rounded-none rounded-r-[var(--radius-md)]",
-                  stats?.commitCount === 0 && "opacity-50",
-                  commitsOpen && "bg-white/[0.04] ring-1 ring-canopy-accent/20 text-canopy-accent"
-                )}
-                title="Browse Git Commits"
-                aria-label={`${stats?.commitCount ?? "\u2014"} commits`}
-              >
-                <GitCommit className="h-4 w-4" />
-                <span className="text-xs font-medium tabular-nums">
-                  {stats?.commitCount ?? "\u2014"}
-                </span>
-              </Button>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      ref={commitsButtonRef}
+                      variant="ghost"
+                      onClick={() => {
+                        setIssuesOpen(false);
+                        setPrsOpen(false);
+                        setCommitsOpen(!commitsOpen);
+                      }}
+                      className={cn(
+                        "text-canopy-text hover:bg-white/[0.04] hover:text-canopy-accent h-full px-3 gap-2 rounded-none rounded-r-[var(--radius-md)]",
+                        stats?.commitCount === 0 && "opacity-50",
+                        commitsOpen &&
+                          "bg-white/[0.04] ring-1 ring-canopy-accent/20 text-canopy-accent"
+                      )}
+                      aria-label={`${stats?.commitCount ?? "\u2014"} commits`}
+                    >
+                      <GitCommit className="h-4 w-4" />
+                      <span className="text-xs font-medium tabular-nums">
+                        {stats?.commitCount ?? "\u2014"}
+                      </span>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Browse Git Commits</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
               <FixedDropdown
                 open={commitsOpen}
                 onOpenChange={setCommitsOpen}
@@ -534,17 +565,22 @@ export function Toolbar({
       },
       notes: {
         render: () => (
-          <Button
-            key="notes"
-            variant="ghost"
-            size="icon"
-            onClick={() => actionService.dispatch("notes.create", {}, { source: "user" })}
-            className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
-            title="Notes"
-            aria-label="Open notes palette"
-          >
-            <StickyNote />
-          </Button>
+          <TooltipProvider key="notes">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => actionService.dispatch("notes.create", {}, { source: "user" })}
+                  className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
+                  aria-label="Open notes palette"
+                >
+                  <StickyNote />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Notes</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         ),
         isAvailable: true,
       },
@@ -566,7 +602,6 @@ export function Toolbar({
                     isCopyingTree && "cursor-wait opacity-70",
                     !activeWorktree && "opacity-50"
                   )}
-                  title={activeWorktree ? "Copy Context" : "No active worktree"}
                   aria-label={treeCopied ? "Context Copied" : "Copy Context"}
                 >
                   {isCopyingTree ? (
@@ -590,40 +625,52 @@ export function Toolbar({
       },
       settings: {
         render: () => (
-          <Button
-            key="settings"
-            variant="ghost"
-            size="icon"
-            onClick={onSettings}
-            onContextMenu={handleSettingsContextMenu}
-            className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
-            title="Open Settings"
-            aria-label="Open settings"
-          >
-            <Settings />
-          </Button>
+          <TooltipProvider key="settings">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={onSettings}
+                  onContextMenu={handleSettingsContextMenu}
+                  className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
+                  aria-label="Open settings"
+                >
+                  <Settings />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Open Settings</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         ),
         isAvailable: true,
       },
       problems: {
         render: () => (
-          <Button
-            key="problems"
-            variant="ghost"
-            size="icon"
-            onClick={onToggleProblems}
-            className={cn(
-              "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent relative transition-colors",
-              errorCount > 0 && "text-[var(--color-status-error)]"
-            )}
-            title={createTooltipWithShortcut("Show Problems Panel", "Ctrl+Shift+M")}
-            aria-label={`Problems: ${errorCount} error${errorCount !== 1 ? "s" : ""}`}
-          >
-            <AlertCircle />
-            {errorCount > 0 && (
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-[var(--color-status-error)] rounded-full" />
-            )}
-          </Button>
+          <TooltipProvider key="problems">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={onToggleProblems}
+                  className={cn(
+                    "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent relative transition-colors",
+                    errorCount > 0 && "text-[var(--color-status-error)]"
+                  )}
+                  aria-label={`Problems: ${errorCount} error${errorCount !== 1 ? "s" : ""}`}
+                >
+                  <AlertCircle />
+                  {errorCount > 0 && (
+                    <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-[var(--color-status-error)] rounded-full" />
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {createTooltipWithShortcut("Show Problems Panel", "Ctrl+Shift+M")}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         ),
         isAvailable: showDeveloperTools,
       },
@@ -633,24 +680,31 @@ export function Toolbar({
       },
       "sidecar-toggle": {
         render: () => (
-          <Button
-            key="sidecar-toggle"
-            variant="ghost"
-            size="icon"
-            onClick={toggleSidecar}
-            className={cn(
-              "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
-            )}
-            title={sidecarOpen ? "Close Context Sidecar" : "Open Context Sidecar"}
-            aria-label={sidecarOpen ? "Close context sidecar" : "Open context sidecar"}
-            aria-pressed={sidecarOpen}
-          >
-            {sidecarOpen ? (
-              <PanelRightClose aria-hidden="true" />
-            ) : (
-              <PanelRightOpen aria-hidden="true" />
-            )}
-          </Button>
+          <TooltipProvider key="sidecar-toggle">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={toggleSidecar}
+                  className={cn(
+                    "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
+                  )}
+                  aria-label={sidecarOpen ? "Close context sidecar" : "Open context sidecar"}
+                  aria-pressed={sidecarOpen}
+                >
+                  {sidecarOpen ? (
+                    <PanelRightClose aria-hidden="true" />
+                  ) : (
+                    <PanelRightOpen aria-hidden="true" />
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {sidecarOpen ? "Close Context Sidecar" : "Open Context Sidecar"}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         ),
         isAvailable: true,
       },
