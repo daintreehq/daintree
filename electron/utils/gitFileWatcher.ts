@@ -1,5 +1,12 @@
 import { watch as fsWatch, FSWatcher, readFileSync } from "fs";
-import { join as pathJoin, dirname, isAbsolute, basename, sep } from "path";
+import {
+  join as pathJoin,
+  dirname,
+  isAbsolute,
+  basename,
+  sep,
+  normalize as pathNormalize,
+} from "path";
 import { getGitDir } from "./gitUtils.js";
 import { logWarn } from "./logger.js";
 
@@ -53,6 +60,14 @@ export class GitFileWatcher {
       this.watchFile(headPath);
       this.watchFile(pathJoin(commonDir, "packed-refs"));
       this.watchFile(pathJoin(commonDir, "logs", "HEAD"));
+
+      // For linked worktrees, the per-worktree reflog lives under gitDir, not commonDir.
+      // Watch it so branch changes in linked worktrees trigger the onChange callback.
+      // Normalize both paths before comparing to avoid false mismatches from trailing
+      // slashes or non-canonical separators.
+      if (pathNormalize(gitDir) !== pathNormalize(commonDir)) {
+        this.watchFile(pathJoin(gitDir, "logs", "HEAD"));
+      }
 
       if (this.currentBranch) {
         const branchRefPath = pathJoin(commonDir, "refs", "heads", this.currentBranch);
@@ -147,18 +162,47 @@ export class GitFileWatcher {
       );
 
       watcher.on("error", (error) => {
-        logWarn("Worktree recursive watcher error", {
-          path: this.worktreePath,
-          error: error.message,
-        });
+        const errno = error as NodeJS.ErrnoException;
+        if (process.platform === "linux" && errno.code === "ENOSPC") {
+          logWarn(
+            "inotify watch limit reached — file watching may be incomplete. " +
+              "Temporary fix: sudo sysctl -w fs.inotify.max_user_watches=524288 fs.inotify.max_user_instances=512. " +
+              "Permanent fix: echo 'fs.inotify.max_user_watches=524288' | sudo tee /etc/sysctl.d/99-inotify.conf && sudo sysctl --system",
+            { path: this.worktreePath }
+          );
+          const idx = this.watchers.indexOf(watcher);
+          if (idx !== -1) {
+            this.watchers.splice(idx, 1);
+          }
+          try {
+            watcher.close();
+          } catch {
+            // Ignore close errors on already-broken watcher
+          }
+        } else {
+          logWarn("Worktree recursive watcher error", {
+            path: this.worktreePath,
+            error: error.message,
+          });
+        }
       });
 
       this.watchers.push(watcher);
     } catch (error) {
-      logWarn("Failed to start recursive worktree watcher", {
-        path: this.worktreePath,
-        error: (error as Error).message,
-      });
+      const errno = error as NodeJS.ErrnoException;
+      if (process.platform === "linux" && errno.code === "ENOSPC") {
+        logWarn(
+          "inotify watch limit reached — file watching may be incomplete. " +
+            "Temporary fix: sudo sysctl -w fs.inotify.max_user_watches=524288 fs.inotify.max_user_instances=512. " +
+            "Permanent fix: echo 'fs.inotify.max_user_watches=524288' | sudo tee /etc/sysctl.d/99-inotify.conf && sudo sysctl --system",
+          { path: this.worktreePath }
+        );
+      } else {
+        logWarn("Failed to start recursive worktree watcher", {
+          path: this.worktreePath,
+          error: errno.message,
+        });
+      }
     }
   }
 

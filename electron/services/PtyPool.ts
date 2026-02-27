@@ -1,7 +1,7 @@
 import * as pty from "node-pty";
 import type { IDisposable } from "node-pty";
-import { existsSync } from "fs";
 import os from "os";
+import { getDefaultShell, getDefaultShellArgs } from "./pty/terminalShell.js";
 
 export interface PtyPoolConfig {
   poolSize?: number;
@@ -28,7 +28,7 @@ export class PtyPool {
   constructor(config: PtyPoolConfig = {}) {
     this.poolSize = this.resolvePoolSize(config.poolSize);
     this.defaultCwd = this.resolveCwd(config.defaultCwd, this.getDefaultCwd());
-    this.defaultShell = this.getDefaultShell();
+    this.defaultShell = getDefaultShell();
   }
 
   async warmPool(cwd?: string): Promise<void> {
@@ -68,7 +68,7 @@ export class PtyPool {
     try {
       const id = `pool-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
-      const ptyProcess = pty.spawn(this.defaultShell, this.getDefaultShellArgs(), {
+      const ptyProcess = pty.spawn(this.defaultShell, getDefaultShellArgs(this.defaultShell), {
         name: "xterm-256color",
         cols: 80,
         rows: 24,
@@ -224,43 +224,8 @@ export class PtyPool {
     console.log("[PtyPool] Disposed");
   }
 
-  private getDefaultShell(): string {
-    if (process.platform === "win32") {
-      return process.env.COMSPEC || "powershell.exe";
-    }
-
-    if (process.env.SHELL) {
-      return process.env.SHELL;
-    }
-
-    const commonShells = ["/bin/zsh", "/bin/bash", "/bin/sh"];
-    for (const shell of commonShells) {
-      try {
-        if (existsSync(shell)) {
-          return shell;
-        }
-      } catch {
-        // ignore
-      }
-    }
-
-    return "/bin/sh";
-  }
-
-  private getDefaultShellArgs(): string[] {
-    const shellName = this.defaultShell.toLowerCase();
-
-    if (process.platform !== "win32") {
-      if (shellName.includes("zsh") || shellName.includes("bash")) {
-        return ["-l"];
-      }
-    }
-
-    return [];
-  }
-
   private getDefaultCwd(): string {
-    return process.env.HOME || os.homedir();
+    return os.homedir();
   }
 
   private getFilteredEnv(): Record<string, string> {

@@ -22,7 +22,7 @@ const common = {
   minify: isProd,
   sourcemap: !isProd,
   platform: "node",
-  target: "node20", // Electron 33 uses Node 20
+  target: "node22",
   external,
   logLevel: "info",
   absWorkingDir: root,
@@ -30,6 +30,13 @@ const common = {
 
 async function run() {
   console.log(`[Build] Starting build in ${isWatch ? "watch" : "single"} mode...`);
+
+  if (isProd && !isWatch) {
+    const electronOutDir = path.join(root, "dist-electron/electron");
+    if (fs.existsSync(electronOutDir)) {
+      fs.rmSync(electronOutDir, { recursive: true, force: true });
+    }
+  }
 
   // Config for ESM files (Main, Hosts)
   const esmConfig = {

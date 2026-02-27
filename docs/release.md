@@ -12,14 +12,14 @@ macOS builds are signed with a Developer ID Application certificate. The signing
 
 ### Secrets
 
-| Secret | Description |
-|--------|-------------|
-| `MAC_CERTS` | Base64-encoded .p12 signing certificate |
-| `MAC_CERTS_PASSWORD` | Password for the .p12 certificate |
-| `APPLE_API_KEY` | App Store Connect API key (.p8 file content) |
-| `APPLE_API_KEY_ID` | 10-character Key ID from App Store Connect (`3NFG76895G`) |
-| `APPLE_API_ISSUER` | Issuer UUID from App Store Connect |
-| `APPLE_TEAM_ID` | Apple Team ID (`D9674SJ8J4`) |
+| Secret               | Description                                               |
+| -------------------- | --------------------------------------------------------- |
+| `MAC_CERTS`          | Base64-encoded .p12 signing certificate                   |
+| `MAC_CERTS_PASSWORD` | Password for the .p12 certificate                         |
+| `APPLE_API_KEY`      | App Store Connect API key (.p8 file content)              |
+| `APPLE_API_KEY_ID`   | 10-character Key ID from App Store Connect (`3NFG76895G`) |
+| `APPLE_API_ISSUER`   | Issuer UUID from App Store Connect                        |
+| `APPLE_TEAM_ID`      | Apple Team ID (`D9674SJ8J4`)                              |
 
 ### How signing works in CI
 
@@ -31,11 +31,13 @@ macOS builds are signed with a Developer ID Application certificate. The signing
 ### Local signing keys
 
 Local copies of signing keys are stored in the `keys/` directory (gitignored):
+
 - `keys/AuthKey_3NFG76895G.p8` — App Store Connect API key
 
 The `.env` file (also gitignored) stores credentials for local builds. See `.env` for the current values.
 
 To check notarization status locally:
+
 ```bash
 xcrun notarytool history \
   --key keys/AuthKey_3NFG76895G.p8 \
@@ -76,21 +78,23 @@ The workflow sets `DEBUG=electron-builder,electron-notarize*,electron-osx-sign*`
 ## R2 Publishing
 
 Artifacts are uploaded to Cloudflare R2 via AWS CLI:
+
 - Binaries (dmg, zip, exe, AppImage, deb, blockmap) → `s3://<bucket>/releases/` with immutable caching
-- Metadata (latest*.yml) → `s3://<bucket>/releases/` with no-cache headers
+- Metadata (latest\*.yml) → `s3://<bucket>/releases/` with no-cache headers
 
 ### R2 Secrets
 
-| Secret | Description |
-|--------|-------------|
-| `R2_ACCESS_KEY_ID` | R2 access key |
-| `R2_SECRET_ACCESS_KEY` | R2 secret key |
-| `R2_ENDPOINT` | R2 endpoint URL |
-| `R2_BUCKET` | Bucket name (`canopy-updates`) |
+| Secret                 | Description                    |
+| ---------------------- | ------------------------------ |
+| `R2_ACCESS_KEY_ID`     | R2 access key                  |
+| `R2_SECRET_ACCESS_KEY` | R2 secret key                  |
+| `R2_ENDPOINT`          | R2 endpoint URL                |
+| `R2_BUCKET`            | Bucket name (`canopy-updates`) |
 
 ## Entitlements
 
 The hardened runtime entitlements are in `build/entitlements.mac.plist`:
+
 - `com.apple.security.cs.allow-jit` — required for Electron with hardened runtime
 - `com.apple.security.cs.allow-unsigned-executable-memory` — may not be needed for Electron 40+, review when re-enabling notarization
 - `com.apple.security.cs.disable-library-validation` — allows loading node-pty native module

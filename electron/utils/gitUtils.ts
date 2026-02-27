@@ -1,5 +1,5 @@
 import { execSync } from "child_process";
-import { join as pathJoin } from "path";
+import { isAbsolute, join as pathJoin } from "path";
 import { logWarn } from "./logger.js";
 
 const gitDirCache = new Map<string, string | null>();
@@ -26,7 +26,7 @@ export function getGitDir(worktreePath: string, options: GitDirOptions = {}): st
       stdio: ["pipe", "pipe", "pipe"],
     }).trim();
 
-    const resolved = result.startsWith("/") ? result : pathJoin(worktreePath, result);
+    const resolved = isAbsolute(result) ? result : pathJoin(worktreePath, result);
 
     if (cache) {
       gitDirCache.set(worktreePath, resolved);

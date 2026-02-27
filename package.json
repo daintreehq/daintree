@@ -9,13 +9,13 @@
   "main": "dist-electron/electron/main.js",
   "type": "module",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.12.0"
   },
   "scripts": {
     "dev": "concurrently -k \"npm run watch:main\" \"vite\" \"wait-on dist-electron/electron/main.js && npm run dev:electron\"",
     "dev:vite": "vite",
     "dev:electron": "nodemon --delay 500ms --watch dist-electron --ext js --exec \"cross-env NODE_ENV=development electron .\"",
-    "build:main": "node scripts/build-main.mjs",
+    "build:main": "cross-env NODE_ENV=production node scripts/build-main.mjs",
     "watch:main": "node scripts/build-main.mjs --watch",
     "build": "tsc && vite build && npm run build:main",
     "package": "npm run build && electron-builder",
@@ -187,15 +187,22 @@
       "enableCookieEncryption": true,
       "enableNodeOptionsEnvironmentVariable": false,
       "enableNodeCliInspectArguments": false,
-      "enableEmbeddedAsarIntegrityValidation": true,
-      "onlyLoadAppFromAsar": true,
-      "loadBrowserProcessSpecificV8Snapshot": true,
+      "enableEmbeddedAsarIntegrityValidation": false,
+      "onlyLoadAppFromAsar": false,
+      "loadBrowserProcessSpecificV8Snapshot": false,
       "grantFileProtocolExtraPrivileges": false
     },
     "afterPack": "./scripts/afterPack.cjs",
     "mac": {
-      "forceCodeSigning": true,
+      "files": [
+        "!node_modules/clipboardy/fallbacks/linux"
+      ],
+      "x64ArchFiles": "Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/**",
+      "forceCodeSigning": false,
       "notarize": false,
+      "binaries": [
+        "Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/spawn-helper"
+      ],
       "category": "public.app-category.developer-tools",
       "icon": "build/icon.icns",
       "extendInfo": {
@@ -270,7 +277,13 @@
         "entry": {
           "StartupWMClass": "canopy-app"
         }
-      }
+      },
+      "extraResources": [
+        {
+          "from": "build/linux/canopy.apparmor",
+          "to": "canopy.apparmor"
+        }
+      ]
     },
     "deb": {
       "depends": [

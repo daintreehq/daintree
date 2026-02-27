@@ -57,6 +57,8 @@ vi.mock("../resetStores", () => ({
 
 vi.mock("../worktreeDataStore", () => ({
   forceReinitializeWorktreeDataStore: vi.fn(),
+  prePopulateWorktreeSnapshot: vi.fn(),
+  snapshotProjectWorktrees: vi.fn(),
 }));
 
 vi.mock("../worktreeStore", () => ({
@@ -80,6 +82,8 @@ vi.mock("../projectSettingsStore", () => ({
       loadSettings: vi.fn().mockResolvedValue(undefined),
     }),
   },
+  snapshotProjectSettings: vi.fn(),
+  prePopulateProjectSettings: vi.fn(),
 }));
 
 vi.mock("../notificationStore", () => ({
@@ -101,6 +105,11 @@ vi.mock("../persistence/terminalPersistence", () => ({
 
 vi.mock("@/utils/errorContext", () => ({
   logErrorWithContext: vi.fn(),
+}));
+
+vi.mock("@/services/projectSwitchRendererCache", () => ({
+  prepareProjectSwitchRendererCache: vi.fn().mockReturnValue(null),
+  cancelPreparedProjectSwitchRendererCache: vi.fn(),
 }));
 
 vi.mock("@/services/TerminalInstanceService", () => ({

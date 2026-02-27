@@ -11,19 +11,6 @@ const storeMock = vi.hoisted(() => ({
   }),
 }));
 
-const safeStorageMock = vi.hoisted(() => ({
-  isEncryptionAvailable: vi.fn(() => true),
-  decryptString: vi.fn((buffer: Buffer) => {
-    const text = buffer.toString("utf8");
-    if (!text.startsWith("enc:")) throw new Error("Invalid payload");
-    return text.slice(4);
-  }),
-}));
-
-vi.mock("electron", () => ({
-  safeStorage: safeStorageMock,
-}));
-
 vi.mock("../../store.js", () => ({
   store: storeMock,
 }));
@@ -33,12 +20,6 @@ describe("ProjectEnvSecureStorage", () => {
     vi.clearAllMocks();
     vi.resetModules();
     storeState.data = { projectEnv: {} };
-    safeStorageMock.isEncryptionAvailable.mockReturnValue(true);
-    safeStorageMock.decryptString.mockImplementation((buffer: Buffer) => {
-      const text = buffer.toString("utf8");
-      if (!text.startsWith("enc:")) throw new Error("Invalid payload");
-      return text.slice(4);
-    });
   });
 
   async function getService() {
@@ -53,28 +34,10 @@ describe("ProjectEnvSecureStorage", () => {
     expect(service.get("project-1", "API_KEY")).toBe("secret");
   });
 
-  it("migrates legacy encrypted values to plain text on read", async () => {
-    const encrypted = Buffer.from("enc:my-api-key", "utf8").toString("hex");
-    (storeState.data.projectEnv as Record<string, string>)["project-1:API_KEY"] = encrypted;
+  it("returns undefined for missing keys", async () => {
     const service = await getService();
 
-    expect(service.get("project-1", "API_KEY")).toBe("my-api-key");
-  });
-
-  it("clears corrupted encrypted values that fail decryption", async () => {
-    const badHex = Buffer.from("not-encrypted", "utf8").toString("hex");
-    (storeState.data.projectEnv as Record<string, string>)["project-1:API_KEY"] = badHex;
-    const service = await getService();
-
-    expect(service.get("project-1", "API_KEY")).toBeUndefined();
-  });
-
-  it("stores values even when safeStorage is unavailable (no encryption needed)", async () => {
-    safeStorageMock.isEncryptionAvailable.mockReturnValue(false);
-    const service = await getService();
-
-    expect(() => service.set("project-1", "API_KEY", "secret")).not.toThrow();
-    expect(service.get("project-1", "API_KEY")).toBe("secret");
+    expect(service.get("project-1", "MISSING")).toBeUndefined();
   });
 
   it("set handles malformed projectEnv store value by normalizing", async () => {

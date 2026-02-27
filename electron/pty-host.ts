@@ -1271,7 +1271,7 @@ async function initialize(): Promise<void> {
     console.log("[PtyHost] Initialized and ready (accepting IPC)");
 
     ptyPool = getPtyPool({ poolSize: 2 });
-    const homedir = process.env.HOME || os.homedir();
+    const homedir = os.homedir();
 
     // Warm pool in background
     ptyPool
