@@ -11,7 +11,7 @@ Instead of juggling multiple terminal windows and manually copying context, Cano
 ### Worktree Dashboard
 
 - **Visual Monitoring**: View all git worktrees at a glance with real-time status updates
-- **Smart Summaries**: AI-powered summaries of file changes in every branch
+- **Smart Summaries**: Commit-based summaries of changes in every branch
 - **GitHub Integration**: Auto-detects associated Pull Requests and Issues based on branch names
 - **Dev Server Control**: Auto-detects `package.json` scripts and manages dev server lifecycles per worktree
 - **Mood Indicators**: Visual prioritization with stable, active, stale, and error states
@@ -27,25 +27,25 @@ Instead of juggling multiple terminal windows and manually copying context, Cano
 
 - **One-Click Context**: Integrated with [CopyTree](https://github.com/gregpriday/copytree) for intelligent context generation
 - **Smart Selection**: Pick specific files or folders to inject into the active agent's terminal
-- **Format Optimization**: Automatically selects the best format (XML, Markdown) based on the running agent
+- **Format Optimization**: Generates context in XML format optimized for AI agent consumption
 
 ### Multi-Panel Terminal Environment
 
 - **Drag-and-Drop Layout**: Reorderable panel grid with dnd-kit integration
 - **Resizable Panels**: Dock and trash system for terminal organization
-- **Performance Modes**: Optimized rendering for handling dozens of terminals
+- **Performance Modes**: Memoized rendering and configurable optimizations for multi-terminal workflows
 - **Hybrid Input Bar**: Command submission without typing directly in terminal
-- **State Persistence**: Hibernation service saves/restores terminal state on quit
+- **State Persistence**: Auto-hibernation of inactive projects and terminal state persistence across sessions
 
 ### GitHub Integration
 
 - **PR/Issue Detection**: Automatic linking from branch names
 - **Repository Stats**: Commit lists and statistics
-- **Secure Authentication**: Token-based auth with encrypted storage
+- **Secure Authentication**: Token-based auth with persistent local storage
 
 ## Prerequisites
 
-- **Node.js**: v20+ recommended
+- **Node.js**: v22+ required
 - **Git**: v2.30+
 - **AI Agents (Optional)**: For the best experience, install the CLIs for the agents you intend to use:
 
@@ -127,7 +127,7 @@ Main Process (electron/)          Renderer (src/)
 The central orchestration layer for all UI operations:
 
 - **ActionService** (`src/services/ActionService.ts`): Registry and dispatcher singleton
-- **17 Domain Files**: Terminal, agent, panel, worktree, project, GitHub, git, navigation, app, preferences, browser, system, logs, recipes
+- **20 Domain Files**: Terminal, agent, panel, worktree, worktree-session, project, GitHub, git, navigation, app, preferences, browser, system, logs, recipes, assistant, notes, workflow, dev-server, introspection
 - **Typed API**: `dispatch(actionId, args?, options?)` with Zod validation
 - **Safety Levels**: `ActionDanger` ("safe" | "confirm" | "restricted")
 - **Source Tracking**: `ActionSource` ("user" | "keybinding" | "menu" | "agent" | "context-menu")
@@ -137,8 +137,8 @@ The central orchestration layer for all UI operations:
 Extensible discriminated union architecture:
 
 ```typescript
-PanelInstance = PtyPanelData | BrowserPanelData;
-BuiltInPanelKind = "terminal" | "agent" | "browser";
+PanelInstance = PtyPanelData | BrowserPanelData | NotesPanelData | DevPreviewPanelData;
+BuiltInPanelKind = "terminal" | "agent" | "browser" | "notes" | "dev-preview";
 ```
 
 - **Panel Registry**: Extensible configuration in `shared/config/panelKindRegistry.ts`
@@ -146,29 +146,38 @@ BuiltInPanelKind = "terminal" | "agent" | "browser";
 
 ### IPC Bridge (`window.electron`)
 
-Namespaced API for renderer → main communication:
+Namespaced API for renderer → main communication (34 namespaces, selected highlights below):
 
-| Namespace  | Methods                                                      |
-| ---------- | ------------------------------------------------------------ |
-| `worktree` | getAll, refresh, setActive, create, delete, onUpdate         |
-| `terminal` | spawn, write, resize, kill, trash, restore, onData, onExit   |
-| `app`      | getState, setState, hydrate, onMenuAction, quit              |
-| `copyTree` | generate, injectToTerminal, isAvailable, cancel, onProgress  |
-| `github`   | openIssues, openPRs, listIssues, listPullRequests, getConfig |
-| `project`  | getAll, getCurrent, add, remove, update, switch, onSwitch    |
-| `system`   | openExternal, openPath, checkCommand, checkDirectory         |
-| `logs`     | getAll, getSources, clear, openFile, onEntry                 |
-| `events`   | emit (action tracking)                                       |
+| Namespace  | Key Methods                                                                         |
+| ---------- | ----------------------------------------------------------------------------------- |
+| `worktree` | getAll, refresh, setActive, create, delete, onUpdate, attachIssue                   |
+| `terminal` | spawn, write, resize, kill, trash, restore, onData, onExit, submit, onAgentDetected |
+| `app`      | getState, setState, hydrate, onMenuAction, quit, getVersion                         |
+| `copyTree` | generate, injectToTerminal, isAvailable, cancel, onProgress                         |
+| `github`   | openIssues, openPRs, listIssues, listPullRequests, getConfig, setToken              |
+| `project`  | getAll, getCurrent, add, remove, update, switch, getSettings, saveSettings          |
+| `system`   | openExternal, openPath, checkCommand, checkDirectory, getCliAvailability            |
+| `logs`     | getAll, getSources, clear, openFile, onEntry                                        |
+| `events`   | emit (action tracking)                                                              |
+| `appAgent` | dispatch, confirm, getTools, onResponse                                             |
+| `artifact` | detect, save, patch, getAll                                                         |
+| `git`      | diff, pulse, commits                                                                |
+| `notes`    | get, save, delete                                                                   |
+| `commands` | list, get, execute                                                                  |
+| `window`   | fullscreen, zoom, devtools                                                          |
+| `update`   | onAvailable, install                                                                |
+
+> See `src/types/electron.d.ts` for the complete typed API surface.
 
 ### Key Technologies
 
 | Component          | Technology                                   |
 | ------------------ | -------------------------------------------- |
-| Runtime            | Electron 33                                  |
+| Runtime            | Electron 40                                  |
 | UI Framework       | React 19 + TypeScript                        |
 | Build              | Vite 6                                       |
-| State Management   | Zustand (atomic selectors)                   |
-| Terminal Emulation | xterm.js v5.5 + addons                       |
+| State Management   | Zustand v5 (atomic selectors)                |
+| Terminal Emulation | @xterm/xterm v6.0 + addons                   |
 | PTY                | node-pty v1.0 (native module)                |
 | Git                | simple-git v3.30                             |
 | Styling            | Tailwind CSS v4                              |
@@ -212,7 +221,7 @@ canopy-electron/
 │   ├── clients/                 # IPC wrappers
 │   └── services/
 │       ├── ActionService.ts     # Action dispatcher
-│       └── actions/definitions/ # 17 action definition files
+│       └── actions/definitions/ # 20 action definition files
 │
 ├── shared/                      # Shared types & config
 │   ├── types/
@@ -224,7 +233,7 @@ canopy-electron/
 │       └── agentRegistry.ts     # Agent configuration
 │
 ├── docs/                        # Documentation
-│   ├── architecture.md
+│   ├── architecture/            # Architecture docs (action-system, terminal-lifecycle)
 │   ├── development.md
 │   └── feature-curation.md
 │
@@ -270,15 +279,15 @@ npm run package:linux
 
 ## Notable Implementation Details
 
-- **SharedArrayBuffer Flow Control**: PTY host uses SharedRingBuffer for low-latency backpressure
-- **Terminal State Persistence**: Hibernation service saves/restores terminal state on quit
+- **SharedArrayBuffer Flow Control**: PTY host uses lock-free SharedRingBuffer with Atomics for low-latency backpressure
+- **Terminal State Persistence**: Auto-hibernation of inactive projects with configurable thresholds; terminal state persisted across sessions
 - **Multi-Project Support**: Services filter by projectId; stores reset on project switch
 - **Artifact Detection**: Automatic detection and inline viewing of AI-generated code changes
-- **Dev Server Auto-Detection**: Scans package.json for scripts and manages lifecycles
+- **Dev Server Auto-Detection**: Scans package.json, Makefiles, Django, and Composer configs to detect and manage dev server lifecycles
 
 ## Documentation
 
-- [Architecture](docs/architecture.md) - System design, IPC patterns, project structure
+- [Architecture](docs/architecture/) - System design, IPC patterns, project structure
 - [Development Guide](docs/development.md) - Setup, commands, debugging
 - [Feature Curation](docs/feature-curation.md) - Feature evaluation criteria
 
