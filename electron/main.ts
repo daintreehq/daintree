@@ -10,6 +10,7 @@ import {
   session,
 } from "electron";
 import path from "path";
+import { existsSync } from "fs";
 import { fileURLToPath, pathToFileURL } from "url";
 import os from "os";
 import { randomBytes } from "crypto";
@@ -25,6 +26,22 @@ import {
 } from "./utils/performance.js";
 
 fixPath();
+
+if (process.platform === "win32") {
+  const extraPaths = [
+    path.join(os.homedir(), "AppData", "Local", "Programs", "Git", "cmd"),
+    "C:\\Program Files\\Git\\cmd",
+    path.join(os.homedir(), ".local", "bin"),
+  ];
+  const current = process.env.PATH || "";
+  const existingEntries = current.split(path.delimiter).map((e) => e.toLowerCase());
+  const missing = extraPaths.filter(
+    (p) => !existingEntries.includes(p.toLowerCase()) && existsSync(p)
+  );
+  if (missing.length) {
+    process.env.PATH = [...missing, current].join(path.delimiter);
+  }
+}
 
 app.enableSandbox();
 
@@ -958,7 +975,7 @@ async function createWindow(): Promise<void> {
     console.log("[MAIN] Spawning default terminal...");
     try {
       ptyClient.spawn(DEFAULT_TERMINAL_ID, {
-        cwd: process.env.HOME || os.homedir(),
+        cwd: os.homedir(),
         cols: 80,
         rows: 30,
         projectId: currentProjectId ?? undefined,
