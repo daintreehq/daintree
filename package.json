@@ -267,11 +267,17 @@
     },
     "linux": {
       "icon": "build/icon.png",
+      "executableName": "canopy-app",
       "target": [
         "AppImage",
         "deb"
       ],
       "category": "Development",
+      "desktop": {
+        "entry": {
+          "StartupWMClass": "canopy-app"
+        }
+      },
       "extraResources": [
         {
           "from": "build/linux/canopy.apparmor",
@@ -280,6 +286,26 @@
       ]
     },
     "deb": {
+      "depends": [
+        "libc6 (>= 2.31)",
+        "libgtk-3-0",
+        "libnss3",
+        "libasound2",
+        "libgbm1",
+        "libxss1",
+        "libxtst6",
+        "libx11-6",
+        "libx11-xcb1",
+        "libxcb1",
+        "libatk1.0-0",
+        "libatk-bridge2.0-0",
+        "libcups2",
+        "libdrm2",
+        "libexpat1",
+        "libnotify4",
+        "libsecret-1-0",
+        "xdg-utils"
+      ],
       "afterInstall": "build/linux/postinst.sh"
     }
   }
