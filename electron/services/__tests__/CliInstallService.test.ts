@@ -74,10 +74,7 @@ describe("CliInstallService", () => {
 
     expect(appMock.app.getAppPath).toHaveBeenCalled();
     expect(fsMock.existsSync).toHaveBeenCalledWith(SOURCE_SCRIPT);
-    expect(fsMock.symlinkSync).toHaveBeenCalledWith(
-      SOURCE_SCRIPT,
-      "/usr/local/bin/canopy"
-    );
+    expect(fsMock.symlinkSync).toHaveBeenCalledWith(SOURCE_SCRIPT, "/usr/local/bin/canopy");
     expect(result).toEqual({
       installed: true,
       upToDate: true,
@@ -99,10 +96,7 @@ describe("CliInstallService", () => {
     const result = await install();
 
     expect(fsMock.mkdirSync).toHaveBeenCalledWith("/home/test/.local/bin", { recursive: true });
-    expect(fsMock.symlinkSync).toHaveBeenCalledWith(
-      SOURCE_SCRIPT,
-      "/home/test/.local/bin/canopy"
-    );
+    expect(fsMock.symlinkSync).toHaveBeenCalledWith(SOURCE_SCRIPT, "/home/test/.local/bin/canopy");
     expect(result.path).toBe("/home/test/.local/bin/canopy");
   });
 
