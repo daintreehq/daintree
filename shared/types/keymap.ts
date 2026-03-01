@@ -76,6 +76,7 @@ export type KeyAction =
   | "terminal.focusDown"
   | "terminal.focusLeft"
   | "terminal.focusRight"
+  | "terminal.focusDock"
   | "terminal.focusIndex1"
   | "terminal.focusIndex2"
   | "terminal.focusIndex3"

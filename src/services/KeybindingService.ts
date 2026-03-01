@@ -89,6 +89,14 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Terminal",
   },
   {
+    actionId: "terminal.focusDock",
+    combo: "Cmd+Alt+D",
+    scope: "global",
+    priority: 0,
+    description: "Focus active dock terminal",
+    category: "Terminal",
+  },
+  {
     actionId: "terminal.toggleDockAll",
     combo: "Cmd+Alt+Shift+M",
     scope: "global",

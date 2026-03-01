@@ -824,6 +824,36 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
     },
   }));
 
+  actions.set("terminal.focusDock", () => ({
+    id: "terminal.focusDock",
+    title: "Focus Dock",
+    description: "Focus the active dock terminal (or first dock terminal in the active worktree)",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const state = useTerminalStore.getState();
+      const activeWorktreeId = callbacks.getActiveWorktreeId();
+      const dockTerminals = state.terminals.filter(
+        (t) =>
+          t.location === "dock" && (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+      );
+      if (dockTerminals.length === 0) return;
+
+      const targetId =
+        (state.activeDockTerminalId &&
+          dockTerminals.some((t) => t.id === state.activeDockTerminalId) &&
+          state.activeDockTerminalId) ||
+        dockTerminals[0]!.id;
+      const group = state.getPanelGroup(targetId);
+      if (group) {
+        state.setActiveTab(group.id, targetId);
+      }
+      state.openDockTerminal(targetId);
+    },
+  }));
+
   actions.set("terminal.toggleDock", () => ({
     id: "terminal.toggleDock",
     title: "Toggle Dock",
@@ -846,6 +876,7 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
           state.setMaximizedId(null);
         }
         state.moveTerminalToDock(focusedId);
+        state.openDockTerminal(focusedId);
       }
     },
   }));
