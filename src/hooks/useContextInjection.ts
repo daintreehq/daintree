@@ -341,6 +341,13 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
           `Context injected (${result.fileCount} files as ${DEFAULT_COPYTREE_FORMAT.toUpperCase()}${pathInfo})`
         );
 
+        try {
+          localStorage.setItem("canopy:context-injected-once", "true");
+        } catch {
+          // silently fail
+        }
+        window.dispatchEvent(new CustomEvent("canopy:context-injected"));
+
         if (currentErrorIdRef.current) {
           removeError(currentErrorIdRef.current);
           currentErrorIdRef.current = null;
