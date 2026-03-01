@@ -8,7 +8,7 @@ import {
   getAgentSettingsEntry,
   DEFAULT_DANGEROUS_ARGS,
 } from "@shared/types";
-import { RotateCcw, ExternalLink, RefreshCw, Copy, Check, Sparkles } from "lucide-react";
+import { RotateCcw, ExternalLink, RefreshCw, Copy, Check, PackagePlus } from "lucide-react";
 import { actionService } from "@/services/ActionService";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { AgentHelpOutput } from "./AgentHelpOutput";
@@ -201,7 +201,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
             }}
             className="text-canopy-text/60 hover:text-canopy-text shrink-0"
           >
-            <Sparkles className="w-3.5 h-3.5" />
+            <PackagePlus className="w-3.5 h-3.5" />
             Run Setup Wizard
           </Button>
         </div>

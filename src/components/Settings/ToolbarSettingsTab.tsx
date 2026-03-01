@@ -26,7 +26,7 @@ import {
   Settings,
   AlertCircle,
   Bot,
-  Sparkles,
+  PackagePlus,
 } from "lucide-react";
 import { useToolbarPreferencesStore } from "@/store";
 import type { ToolbarButtonId } from "@/../../shared/types/domain";
@@ -37,7 +37,7 @@ type ButtonMetadata = { label: string; icon: React.ReactNode; description: strin
 const BUTTON_METADATA: Partial<Record<ToolbarButtonId, ButtonMetadata>> = {
   "agent-setup": {
     label: "Agent Setup",
-    icon: <Sparkles className="h-4 w-4" />,
+    icon: <PackagePlus className="h-4 w-4" />,
     description: "Shown only when no agents are selected in Agent Settings",
   },
   claude: {
