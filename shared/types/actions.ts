@@ -201,7 +201,6 @@ export type ActionId =
   | "sidecar.links.update"
   | "sidecar.links.toggle"
   | "sidecar.links.reorder"
-  | "sidecar.links.rescan"
   | "sidecar.tabs.reorder"
   | "ui.sidebar.resetWidth"
   | "terminal.info.open"

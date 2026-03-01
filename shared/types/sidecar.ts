@@ -2,7 +2,7 @@ export type SidecarLayoutMode = "push" | "overlay";
 
 export type SidecarLayoutModePreference = "auto" | "push" | "overlay";
 
-export type SidecarLinkType = "system" | "discovered" | "user";
+export type SidecarLinkType = "system" | "user";
 
 export interface SidecarLink {
   id: string;
@@ -12,7 +12,6 @@ export interface SidecarLink {
   type: SidecarLinkType;
   enabled: boolean;
   order: number;
-  cliDetector?: string;
   alwaysEnabled?: boolean;
 }
 
@@ -20,8 +19,6 @@ export interface LinkTemplate {
   title: string;
   url: string;
   icon: string;
-  cliDetector?: string;
-  alwaysEnabled?: boolean;
 }
 
 export const LINK_TEMPLATES: Record<string, LinkTemplate> = {
@@ -29,21 +26,30 @@ export const LINK_TEMPLATES: Record<string, LinkTemplate> = {
     title: "Claude",
     url: "https://claude.ai/new",
     icon: "claude",
-    cliDetector: "claude",
   },
   codex: {
     title: "ChatGPT",
     url: "https://chatgpt.com/",
     icon: "codex",
-    cliDetector: "codex",
   },
   gemini: {
     title: "Gemini",
     url: "https://gemini.google.com/app",
     icon: "gemini",
-    cliDetector: "gemini",
   },
 };
+
+export const DEFAULT_SYSTEM_LINKS: SidecarLink[] = Object.entries(LINK_TEMPLATES).map(
+  ([key, template], index) => ({
+    id: `system-${key}`,
+    title: template.title,
+    url: template.url,
+    icon: template.icon,
+    type: "system" as const,
+    enabled: true,
+    order: index,
+  })
+);
 
 export interface SidecarTab {
   id: string;

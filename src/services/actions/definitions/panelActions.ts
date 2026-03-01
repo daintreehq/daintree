@@ -1,6 +1,6 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
-import { cliAvailabilityClient, systemClient } from "@/clients";
+import { systemClient } from "@/clients";
 import { getAIAgentInfo } from "@/lib/aiAgentDetection";
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { useSidecarStore } from "@/store/sidecarStore";
@@ -221,28 +221,21 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
       title: z.string().min(1),
       url: z.string().min(1),
       icon: z.string().optional().default("globe"),
-      type: z.enum(["system", "discovered", "user"]).optional().default("user"),
-      enabled: z.boolean().optional().default(true),
-      cliDetector: z.string().optional(),
       alwaysEnabled: z.boolean().optional(),
     }),
     run: async (args: unknown) => {
-      const { title, url, icon, type, enabled, cliDetector, alwaysEnabled } = args as {
+      const { title, url, icon, alwaysEnabled } = args as {
         title: string;
         url: string;
         icon: string;
-        type: "system" | "discovered" | "user";
-        enabled: boolean;
-        cliDetector?: string;
         alwaysEnabled?: boolean;
       };
       useSidecarStore.getState().addLink({
         title,
         url,
         icon,
-        type,
-        enabled,
-        cliDetector,
+        type: "user",
+        enabled: true,
         alwaysEnabled,
       });
     },
@@ -273,16 +266,13 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
     scope: "renderer",
     argsSchema: z.object({
       id: z.string(),
-      updates: z
-        .object({
-          title: z.string().optional(),
-          url: z.string().optional(),
-          icon: z.string().optional(),
-          enabled: z.boolean().optional(),
-          order: z.number().int().optional(),
-          type: z.enum(["system", "discovered", "user"]).optional(),
-        })
-        .catchall(z.unknown()),
+      updates: z.object({
+        title: z.string().optional(),
+        url: z.string().optional(),
+        icon: z.string().optional(),
+        enabled: z.boolean().optional(),
+        order: z.number().int().optional(),
+      }),
     }),
     run: async (args: unknown) => {
       const { id, updates } = args as { id: string; updates: Record<string, unknown> };
@@ -332,23 +322,6 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
     run: async (args: unknown) => {
       const { fromIndex, toIndex } = args as { fromIndex: number; toIndex: number };
       useSidecarStore.getState().reorderTabs(fromIndex, toIndex);
-    },
-  }));
-
-  actions.set("sidecar.links.rescan", () => ({
-    id: "sidecar.links.rescan",
-    title: "Rescan Sidecar Links",
-    description: "Rescan local CLI availability and update discovered links",
-    category: "sidecar",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      const availability = await cliAvailabilityClient.refresh();
-      const state = useSidecarStore.getState();
-      state.setDiscoveredLinks(availability);
-      state.markDiscoveryComplete();
-      return availability;
     },
   }));
 

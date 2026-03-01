@@ -6,7 +6,7 @@ interface SidecarIconProps {
   icon: string;
   size?: "tab" | "launchpad";
   url?: string;
-  type?: "system" | "discovered" | "user";
+  type?: "system" | "user";
 }
 
 export function SidecarIcon({ icon, size = "launchpad", url, type }: SidecarIconProps) {

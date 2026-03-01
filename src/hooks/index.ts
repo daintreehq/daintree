@@ -39,8 +39,6 @@ export { useProjectBranding } from "./useProjectBranding";
 
 export { useWaitingTerminalIds, useBackgroundPanelStats } from "./useTerminalSelectors";
 
-export { useLinkDiscovery } from "./useLinkDiscovery";
-
 export { useOverlayState } from "./useOverlayState";
 
 export { useGridNavigation } from "./useGridNavigation";
