@@ -3,8 +3,10 @@ import { getPanelKindIds, getPanelKindConfig } from "@shared/config/panelKindReg
 import { hasPanelComponent } from "@/registry/panelComponentRegistry";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
 import { keybindingService } from "@/services/KeybindingService";
+import { actionService } from "@/services/ActionService";
 import type { KeyAction } from "@shared/types/keymap";
 
 export interface PanelKindOption {
@@ -37,8 +39,11 @@ function filterPanelKinds(items: PanelKindOption[], query: string): PanelKindOpt
   );
 }
 
+export const MORE_AGENTS_PANEL_ID = "more-agents";
+
 export function usePanelPalette(): UsePanelPaletteReturn {
   const userRegistry = useUserAgentRegistryStore((state) => state.registry);
+  const agentSettings = useAgentSettingsStore((state) => state.settings);
   const [keybindingVersion, setKeybindingVersion] = useState(0);
 
   useEffect(() => {
@@ -68,7 +73,16 @@ export function usePanelPalette(): UsePanelPaletteReturn {
         };
       });
 
+    // When settings haven't loaded, show all agents (no filter).
+    // When loaded, hide agents explicitly deselected (selected === false).
+    // Agents with selected === undefined (pre-migration) are treated as visible.
+    const isAgentHidden = (agentId: string): boolean => {
+      if (!agentSettings?.agents) return false;
+      return agentSettings.agents[agentId]?.selected === false;
+    };
+
     const agentKinds = getEffectiveAgentIds()
+      .filter((agentId) => !isAgentHidden(agentId))
       .map((agentId): PanelKindOption | null => {
         const agentConfig = getEffectiveAgentConfig(agentId);
         if (!agentConfig) return null;
@@ -91,8 +105,18 @@ export function usePanelPalette(): UsePanelPaletteReturn {
       }
     }
 
-    return Array.from(dedupedById.values());
-  }, [userRegistry, keybindingVersion]);
+    const result = Array.from(dedupedById.values());
+
+    result.push({
+      id: MORE_AGENTS_PANEL_ID,
+      name: "More agents...",
+      iconId: "settings",
+      color: "var(--color-canopy-text)",
+      description: "Configure which agents appear in this menu",
+    });
+
+    return result;
+  }, [userRegistry, keybindingVersion, agentSettings]);
 
   const { results, selectedIndex, close, ...paletteRest } = useSearchablePalette<PanelKindOption>({
     items: availableKinds,
@@ -103,6 +127,9 @@ export function usePanelPalette(): UsePanelPaletteReturn {
   const handleSelect = useCallback(
     (option: PanelKindOption): PanelKindOption => {
       close();
+      if (option.id === MORE_AGENTS_PANEL_ID) {
+        void actionService.dispatch("app.settings.openTab", { tab: "agents" }, { source: "user" });
+      }
       return option;
     },
     [close]
@@ -113,6 +140,9 @@ export function usePanelPalette(): UsePanelPaletteReturn {
     const selected = results[selectedIndex];
     if (!selected) return null;
     close();
+    if (selected.id === MORE_AGENTS_PANEL_ID) {
+      void actionService.dispatch("app.settings.openTab", { tab: "agents" }, { source: "user" });
+    }
     return selected;
   }, [results, selectedIndex, close]);
 

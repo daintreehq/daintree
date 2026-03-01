@@ -1,4 +1,4 @@
-import { Terminal, Globe } from "lucide-react";
+import { Terminal, Globe, Settings } from "lucide-react";
 import { ClaudeIcon, GeminiIcon, CodexIcon, OpenCodeIcon } from "@/components/icons";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import type { TerminalType, TerminalKind } from "@/types";
@@ -58,4 +58,14 @@ export function getLaunchOptions(): LaunchOption[] {
       icon: <Globe className="w-4 h-4 text-blue-400" />,
     },
   ];
+}
+
+export function getMoreAgentsOption(): LaunchOption {
+  return {
+    id: "more-agents",
+    type: "terminal",
+    label: "More agents...",
+    description: "Configure which agents appear in this menu",
+    icon: <Settings className="w-4 h-4 text-canopy-text/50" />,
+  };
 }
