@@ -569,14 +569,16 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 }
 
 function App() {
-  const { focusedId, addTerminal, setReconnectError, hydrateTabGroups } = useTerminalStore(
-    useShallow((state) => ({
-      focusedId: state.focusedId,
-      addTerminal: state.addTerminal,
-      setReconnectError: state.setReconnectError,
-      hydrateTabGroups: state.hydrateTabGroups,
-    }))
-  );
+  const { focusedId, addTerminal, setReconnectError, hydrateTabGroups, hydrateMru } =
+    useTerminalStore(
+      useShallow((state) => ({
+        focusedId: state.focusedId,
+        addTerminal: state.addTerminal,
+        setReconnectError: state.setReconnectError,
+        hydrateTabGroups: state.hydrateTabGroups,
+        hydrateMru: state.hydrateMru,
+      }))
+    );
 
   useEffect(() => {
     const handleBeforeUnload = () => {
@@ -785,6 +787,7 @@ function App() {
       setFocusMode,
       setReconnectError,
       hydrateTabGroups,
+      hydrateMru,
     }),
     [
       addTerminal,
@@ -794,6 +797,7 @@ function App() {
       setFocusMode,
       setReconnectError,
       hydrateTabGroups,
+      hydrateMru,
     ]
   );
 

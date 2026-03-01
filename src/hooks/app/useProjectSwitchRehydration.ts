@@ -129,5 +129,6 @@ export function useProjectSwitchRehydration(callbacks: HydrationCallbacks) {
     callbacks.setFocusMode,
     callbacks.setReconnectError,
     callbacks.hydrateTabGroups,
+    callbacks.hydrateMru,
   ]);
 }

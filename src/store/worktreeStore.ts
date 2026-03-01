@@ -45,6 +45,53 @@ let lastPersistedActiveWorktreeId: string | null | undefined;
 let pendingPersistActiveWorktreeId: string | null | undefined;
 let persistRequestVersion = 0;
 
+let lastPersistedMruList: string[] | undefined;
+let pendingPersistMruList: string[] | undefined;
+let mruPersistVersion = 0;
+let mruRecordingSuppressed = false;
+
+/** Call before app/project hydration to prevent hydration focus events from corrupting MRU. */
+export function suppressMruRecording(suppress: boolean): void {
+  mruRecordingSuppressed = suppress;
+}
+
+function mruListsEqual(a: string[] | undefined, b: string[]): boolean {
+  if (!a || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function persistMruList(list: string[]): void {
+  if (mruListsEqual(pendingPersistMruList ?? lastPersistedMruList, list)) {
+    return;
+  }
+
+  pendingPersistMruList = list;
+  const requestVersion = ++mruPersistVersion;
+
+  void loadClientsModule()
+    .then(({ appClient }) => appClient.setState({ mruList: list }))
+    .then(() => {
+      if (requestVersion === mruPersistVersion) {
+        lastPersistedMruList = list;
+        pendingPersistMruList = undefined;
+      }
+    })
+    .catch((error) => {
+      if (requestVersion === mruPersistVersion) {
+        pendingPersistMruList = undefined;
+      }
+      logErrorWithContext(error, {
+        operation: "persist_mru_list",
+        component: "worktreeStore",
+        errorType: "filesystem",
+        details: { listLength: list.length },
+      });
+    });
+}
+
 function loadClientsModule(): Promise<ClientsModule> {
   if (!clientsModulePromise) {
     const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
@@ -202,6 +249,16 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
 
     persistActiveWorktree(id);
 
+    // Record worktree MRU on explicit selection (suppressed during hydration)
+    if (!mruRecordingSuppressed) {
+      void loadTerminalStoreModule()
+        .then(({ useTerminalStore }) => {
+          useTerminalStore.getState().recordMru(`worktree:${id}`);
+          persistMruList(useTerminalStore.getState().mruList);
+        })
+        .catch(() => {});
+    }
+
     applyWorktreeTerminalPolicy(get, set, id, generation, () => {
       markRendererPerformance(PERF_MARKS.WORKTREE_SWITCH_END, {
         fromWorktreeId: previousId ?? null,
@@ -348,6 +405,12 @@ export function setupWorktreeFocusTracking() {
         const terminal = state.terminals.find((t) => t.id === focusedId);
         if (terminal?.worktreeId) {
           useWorktreeSelectionStore.getState().trackTerminalFocus(terminal.worktreeId, focusedId);
+        }
+
+        // Record terminal MRU on focus change (suppressed during hydration)
+        if (!mruRecordingSuppressed) {
+          state.recordMru(`terminal:${focusedId}`);
+          persistMruList(useTerminalStore.getState().mruList);
         }
       });
     })

@@ -76,6 +76,8 @@ export interface AppState {
   };
   /** Panel grid layout configuration */
   panelGridConfig?: import("../config.js").PanelGridConfig;
+  /** Most-recently-used ordered list of quick-switcher item IDs ("terminal:<id>" | "worktree:<id>") */
+  mruList?: string[];
 }
 
 /** Result from app hydration */

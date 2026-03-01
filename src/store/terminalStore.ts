@@ -9,11 +9,13 @@ import {
   createTerminalFocusSlice,
   createTerminalCommandQueueSlice,
   createTerminalBulkActionsSlice,
+  createTerminalMruSlice,
   flushTerminalPersistence,
   type TerminalRegistrySlice,
   type TerminalFocusSlice,
   type TerminalCommandQueueSlice,
   type TerminalBulkActionsSlice,
+  type TerminalMruSlice,
   type AddTerminalOptions,
   type QueuedCommand,
   isAgentReady,
@@ -35,6 +37,7 @@ import { logInfo, logWarn, logError } from "@/utils/logger";
 
 export type { TerminalInstance, AddTerminalOptions, QueuedCommand, CrashType };
 export { isAgentReady };
+export type { TerminalMruSlice };
 
 const PROJECT_SWITCH_RESIZE_SUPPRESSION_MS = 10_000;
 
@@ -77,7 +80,8 @@ export interface PanelGridState
     TerminalRegistrySlice,
     TerminalFocusSlice,
     TerminalCommandQueueSlice,
-    TerminalBulkActionsSlice {
+    TerminalBulkActionsSlice,
+    TerminalMruSlice {
   backendStatus: BackendStatus;
   lastCrashType: CrashType | null;
   setBackendStatus: (status: BackendStatus) => void;
@@ -122,6 +126,7 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
 
   const focusSlice = createTerminalFocusSlice(getTerminals)(set, get, api);
   const commandQueueSlice = createTerminalCommandQueueSlice(getTerminal)(set, get, api);
+  const mruSlice = createTerminalMruSlice(set, get, api);
   const bulkActionsSlice = createTerminalBulkActionsSlice(
     getTerminals,
     (id) => get().removeTerminal(id),
@@ -138,6 +143,7 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
     ...focusSlice,
     ...commandQueueSlice,
     ...bulkActionsSlice,
+    ...mruSlice,
 
     backendStatus: "connected" as BackendStatus,
     lastCrashType: null as CrashType | null,
@@ -416,6 +422,7 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
         commandQueue: [],
         backendStatus: "connected",
         lastCrashType: null,
+        mruList: [],
       });
     },
 
@@ -457,6 +464,7 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
         commandQueue: [],
         backendStatus: "connected",
         lastCrashType: null,
+        mruList: [],
       });
     },
   };

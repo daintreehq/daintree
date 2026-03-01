@@ -83,6 +83,7 @@ export interface StoreSchema {
       lastUsedAt?: number;
     }>;
     panelGridConfig?: PanelGridConfig;
+    mruList?: string[];
   };
   projects: {
     list: Project[];

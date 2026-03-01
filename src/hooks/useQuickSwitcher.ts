@@ -1,5 +1,5 @@
-import { useCallback, useMemo } from "react";
-import type { IFuseOptions } from "fuse.js";
+import { useCallback, useMemo, useEffect } from "react";
+import Fuse, { type IFuseOptions } from "fuse.js";
 import { useShallow } from "zustand/react/shallow";
 import { useTerminalStore, type TerminalInstance } from "@/store";
 import { useWorktrees } from "./useWorktrees";
@@ -48,10 +48,13 @@ const FUSE_OPTIONS: IFuseOptions<QuickSwitcherItem> = {
 
 const MAX_RESULTS = 20;
 const DEBOUNCE_MS = 150;
+const MRU_BOOST_FACTOR = 0.05;
 
 export function useQuickSwitcher(): UseQuickSwitcherReturn {
   const terminals = useTerminalStore(useShallow((state) => state.terminals));
   const setFocused = useTerminalStore((state) => state.setFocused);
+  const mruList = useTerminalStore(useShallow((state) => state.mruList));
+  const pruneMru = useTerminalStore((state) => state.pruneMru);
 
   const { worktrees, worktreeMap } = useWorktrees();
   const { selectWorktree } = useWorktreeSelectionStore(
@@ -95,6 +98,45 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     return result;
   }, [terminals, worktrees, worktreeMap]);
 
+  // Prune stale MRU entries when item set or MRU list changes (e.g. after hydration)
+  useEffect(() => {
+    if (mruList.length === 0) return;
+    const validIds = new Set(items.map((item) => item.id));
+    pruneMru(validIds);
+  }, [items, mruList, pruneMru]);
+
+  const fuse = useMemo(() => new Fuse(items, FUSE_OPTIONS), [items]);
+
+  const filterFn = useCallback(
+    (allItems: QuickSwitcherItem[], query: string): QuickSwitcherItem[] => {
+      const mruIndexMap = new Map<string, number>();
+      mruList.forEach((id, index) => mruIndexMap.set(id, index));
+      const mruSize = mruList.length;
+
+      if (!query.trim()) {
+        // Empty query: return items in MRU order (MRU items first, then others)
+        return [...allItems].sort((a, b) => {
+          const aIndex = mruIndexMap.get(a.id) ?? Infinity;
+          const bIndex = mruIndexMap.get(b.id) ?? Infinity;
+          return aIndex - bIndex;
+        });
+      }
+
+      // Non-empty query: Fuse search with MRU boost (lower score = better match)
+      const fuseResults = fuse.search(query);
+      return fuseResults
+        .map((r) => {
+          const rank = mruIndexMap.get(r.item.id);
+          const boost =
+            rank !== undefined ? (1 - rank / Math.max(mruSize, 1)) * MRU_BOOST_FACTOR : 0;
+          return { item: r.item, boostedScore: (r.score ?? 1) - boost };
+        })
+        .sort((a, b) => a.boostedScore - b.boostedScore)
+        .map((r) => r.item);
+    },
+    [fuse, mruList]
+  );
+
   const {
     isOpen,
     query,
@@ -108,7 +150,7 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     selectNext,
   } = useSearchablePalette<QuickSwitcherItem>({
     items,
-    fuseOptions: FUSE_OPTIONS,
+    filterFn,
     maxResults: MAX_RESULTS,
     debounceMs: DEBOUNCE_MS,
   });

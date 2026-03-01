@@ -1,4 +1,5 @@
 import { appClient, terminalClient, worktreeClient, projectClient } from "@/clients";
+import { suppressMruRecording } from "@/store/worktreeStore";
 import { terminalConfigClient } from "@/clients/terminalConfigClient";
 import {
   useLayoutConfigStore,
@@ -210,6 +211,7 @@ export interface HydrationOptions {
   ) => void;
   setReconnectError?: (id: string, error: TerminalReconnectError) => void;
   hydrateTabGroups?: (tabGroups: TabGroup[], options?: { skipPersist?: boolean }) => void;
+  hydrateMru?: (list: string[]) => void;
 }
 
 export async function hydrateAppState(
@@ -234,6 +236,7 @@ export async function hydrateAppState(
     return isCurrent();
   };
 
+  suppressMruRecording(true);
   try {
     await ensureHydrationBootstrap();
     if (!checkCurrent()) return;
@@ -1046,10 +1049,16 @@ export async function hydrateAppState(
     if (options.setFocusMode && appState.focusMode !== undefined) {
       options.setFocusMode(appState.focusMode, appState.focusPanelState);
     }
+
+    // Restore MRU list
+    if (options.hydrateMru && Array.isArray(appState.mruList)) {
+      options.hydrateMru(appState.mruList);
+    }
   } catch (error) {
     logError("Failed to hydrate app state", error);
     throw error;
   } finally {
+    suppressMruRecording(false);
     markRendererPerformance(PERF_MARKS.HYDRATE_COMPLETE, {
       switchId: _switchId ?? null,
       durationMs: Date.now() - hydrationStartedAt,
