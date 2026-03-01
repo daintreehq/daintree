@@ -126,7 +126,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const tooltipCompartmentRef = useRef(new Compartment());
     const fileChipTooltipCompartmentRef = useRef(new Compartment());
     const isApplyingExternalValueRef = useRef(false);
-    const lastEnterKeydownShiftRef = useRef(false);
+    const lastEnterKeydownNewlineRef = useRef(false);
     const handledEnterRef = useRef(false);
     const inputShellRef = useRef<HTMLDivElement | null>(null);
     const menuRef = useRef<HTMLDivElement | null>(null);
@@ -185,7 +185,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       setSlashContext(null);
       setSelectedIndex(0);
       lastQueryRef.current = "";
-      lastEnterKeydownShiftRef.current = false;
+      lastEnterKeydownNewlineRef.current = false;
       handledEnterRef.current = false;
       submitAfterCompositionRef.current = false;
 
@@ -689,7 +689,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               return true;
             }
 
-            if (lastEnterKeydownShiftRef.current) {
+            if (lastEnterKeydownNewlineRef.current) {
               return false;
             }
 
@@ -719,7 +719,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           compositionstart: () => {
             isComposingRef.current = true;
             submitAfterCompositionRef.current = false;
-            lastEnterKeydownShiftRef.current = false;
+            lastEnterKeydownNewlineRef.current = false;
             return false;
           },
           compositionend: () => {
@@ -737,11 +737,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               event.code === "NumpadEnter";
 
             if (isEnter) {
-              lastEnterKeydownShiftRef.current = event.shiftKey;
+              lastEnterKeydownNewlineRef.current = event.shiftKey || event.altKey;
             }
 
             if (event.isComposing) {
-              if (isEnter && !event.shiftKey) {
+              if (isEnter && !event.shiftKey && !event.altKey) {
                 submitAfterCompositionRef.current = true;
               }
               return false;
@@ -756,7 +756,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
             setAtContext(null);
             setSlashContext(null);
-            lastEnterKeydownShiftRef.current = false;
+            lastEnterKeydownNewlineRef.current = false;
             handledEnterRef.current = false;
             submitAfterCompositionRef.current = false;
 

@@ -328,6 +328,10 @@ export function createCustomKeymap(config: CustomKeymapConfig): Extension {
         run: insertNewline,
       },
       {
+        key: "Alt-Enter",
+        run: insertNewline,
+      },
+      {
         key: "Escape",
         run() {
           return config.onEscape();

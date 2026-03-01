@@ -3,8 +3,8 @@
  */
 import { describe, it, expect, vi } from "vitest";
 import { EditorState } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
-import { computeAutoSize, createAutoSize } from "../inputEditorExtensions";
+import { EditorView, runScopeHandlers } from "@codemirror/view";
+import { computeAutoSize, createAutoSize, createCustomKeymap } from "../inputEditorExtensions";
 
 describe("computeAutoSize", () => {
   it("snaps height to line height increments with epsilon tolerance", () => {
@@ -344,6 +344,68 @@ describe("createAutoSize integration", () => {
     // Single character with 21px height and epsilon: (21-2)/20 = 0.95 → 1 line = 20px
     expect(view.dom.style.height).toBe("20px");
 
+    view.destroy();
+  });
+});
+
+describe("createCustomKeymap", () => {
+  function makeView(onEnter: () => boolean) {
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    return new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "hello",
+        extensions: [
+          createCustomKeymap({
+            onEnter,
+            onEscape: () => false,
+            onArrowUp: () => false,
+            onArrowDown: () => false,
+            onArrowLeft: () => false,
+            onArrowRight: () => false,
+            onTab: () => false,
+            onCtrlC: () => false,
+          }),
+        ],
+      }),
+    });
+  }
+
+  it("Enter calls onEnter and does not insert newline", () => {
+    const onEnter = vi.fn(() => true);
+    const view = makeView(onEnter);
+
+    runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+
+    expect(onEnter).toHaveBeenCalledOnce();
+    expect(view.state.doc.toString()).toBe("hello");
+    view.destroy();
+  });
+
+  it("Shift+Enter inserts newline without calling onEnter", () => {
+    const onEnter = vi.fn(() => true);
+    const view = makeView(onEnter);
+
+    runScopeHandlers(
+      view,
+      new KeyboardEvent("keydown", { key: "Enter", shiftKey: true }),
+      "editor"
+    );
+
+    expect(onEnter).not.toHaveBeenCalled();
+    expect(view.state.doc.toString()).toContain("\n");
+    view.destroy();
+  });
+
+  it("Alt+Enter inserts newline without calling onEnter", () => {
+    const onEnter = vi.fn(() => true);
+    const view = makeView(onEnter);
+
+    runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter", altKey: true }), "editor");
+
+    expect(onEnter).not.toHaveBeenCalled();
+    expect(view.state.doc.toString()).toContain("\n");
     view.destroy();
   });
 });
