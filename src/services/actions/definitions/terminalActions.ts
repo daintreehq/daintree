@@ -650,7 +650,7 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
   actions.set("terminal.focusNext", () => ({
     id: "terminal.focusNext",
     title: "Focus Next Terminal",
-    description: "Focus the next terminal in the grid",
+    description: "Focus the next terminal (cycles through grid then dock)",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -663,7 +663,7 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
   actions.set("terminal.focusPrevious", () => ({
     id: "terminal.focusPrevious",
     title: "Focus Previous Terminal",
-    description: "Focus the previous terminal in the grid",
+    description: "Focus the previous terminal (cycles through grid then dock)",
     category: "terminal",
     kind: "command",
     danger: "safe",

@@ -367,6 +367,31 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       });
     },
 
+    // Override focusNext/focusPrevious to sync activeTabByGroup when landing on a docked tab group panel
+    focusNext: () => {
+      focusSlice.focusNext();
+      const focusedId = get().focusedId;
+      if (focusedId) {
+        const terminal = get().terminals.find((t) => t.id === focusedId);
+        if (terminal?.location === "dock") {
+          const group = get().getPanelGroup(focusedId);
+          if (group) get().setActiveTab(group.id, focusedId);
+        }
+      }
+    },
+
+    focusPrevious: () => {
+      focusSlice.focusPrevious();
+      const focusedId = get().focusedId;
+      if (focusedId) {
+        const terminal = get().terminals.find((t) => t.id === focusedId);
+        if (terminal?.location === "dock") {
+          const group = get().getPanelGroup(focusedId);
+          if (group) get().setActiveTab(group.id, focusedId);
+        }
+      }
+    },
+
     // Override hydrateTabGroups to also seed activeTabByGroup from persisted TabGroup.activeTabId
     // This ensures the active tab state is restored after restart
     hydrateTabGroups: (tabGroups, options) => {
