@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { AlertTriangle, ExternalLink, Home } from "lucide-react";
+import { AlertTriangle, ExternalLink } from "lucide-react";
 import { useTerminalStore } from "@/store";
 import type { BrowserHistory } from "@shared/types/domain";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
@@ -425,11 +425,8 @@ export function BrowserPane({
         {!hasValidUrl ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
             <div className="flex flex-col items-center text-center max-w-md">
-              <div className="w-16 h-16 rounded-2xl bg-blue-500/10 flex items-center justify-center mb-6">
-                <Home className="w-8 h-8 text-blue-400" />
-              </div>
-              <h3 className="text-lg font-medium mb-2">Localhost Browser</h3>
-              <p className="text-sm text-canopy-text/60 mb-6 leading-relaxed">
+              <h3 className="text-sm font-medium text-canopy-text/70 mb-1">Localhost Browser</h3>
+              <p className="text-xs text-canopy-text/50 mb-4 leading-relaxed">
                 Preview your local development server. Enter a localhost URL in the address bar
                 above to get started.
               </p>
@@ -439,7 +436,7 @@ export function BrowserPane({
                     key={example}
                     type="button"
                     onClick={() => handleNavigate(`http://${example}`)}
-                    className="px-3 py-1.5 text-xs font-mono bg-white/5 hover:bg-white/10 border border-white/10 rounded-md transition-colors"
+                    className="px-3 py-1.5 text-xs font-mono text-canopy-text/50 bg-white/5 hover:bg-white/10 border border-white/10 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
                   >
                     {example}
                   </button>
@@ -449,16 +446,18 @@ export function BrowserPane({
           </div>
         ) : loadError ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
-            <AlertTriangle className="w-12 h-12 text-amber-400 mb-4" />
-            <h3 className="text-lg font-medium mb-2">Unable to Display Page</h3>
-            <p className="text-sm text-canopy-text/60 text-center mb-4 max-w-md">{loadError}</p>
+            <AlertTriangle className="w-6 h-6 text-amber-400 mb-3" />
+            <h3 className="text-sm font-medium text-canopy-text/70 mb-1">Unable to Display Page</h3>
+            <p className="text-xs text-canopy-text/50 text-center mb-3 max-w-md">{loadError}</p>
             <button
               type="button"
               onClick={handleOpenExternal}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 rounded-lg border border-blue-500/30 transition-colors"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
             >
-              <ExternalLink className="w-4 h-4" />
-              Open in External Browser
+              <ExternalLink className="h-3.5 w-3.5 text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors" />
+              <span className="text-xs text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors">
+                Open in External Browser
+              </span>
             </button>
           </div>
         ) : (

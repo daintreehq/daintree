@@ -485,28 +485,32 @@ export function DevPreviewPane({
             </div>
           ) : status === "error" && error ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
-              <AlertTriangle className="w-12 h-12 text-amber-400 mb-4" />
-              <h3 className="text-lg font-medium mb-2">Dev Server Error</h3>
-              <p className="text-sm text-canopy-text/60 text-center mb-4 max-w-md">
+              <AlertTriangle className="w-6 h-6 text-amber-400 mb-3" />
+              <h3 className="text-sm font-medium text-canopy-text/70 mb-1">Dev Server Error</h3>
+              <p className="text-xs text-canopy-text/50 text-center mb-3 max-w-md">
                 {error.message}
               </p>
-              <div className="flex gap-3">
+              <div className="flex items-center gap-1">
                 <button
                   type="button"
                   onClick={handleRetry}
-                  className="flex items-center gap-2 px-4 py-2 bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 rounded-lg border border-blue-500/30 transition-colors"
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
                 >
-                  <RotateCw className="w-4 h-4" />
-                  Retry
+                  <RotateCw className="h-3.5 w-3.5 text-canopy-accent/70 group-hover:text-canopy-accent transition-colors" />
+                  <span className="text-xs text-canopy-accent/70 group-hover:text-canopy-accent transition-colors">
+                    Retry
+                  </span>
                 </button>
                 {currentUrl && (
                   <button
                     type="button"
                     onClick={handleOpenExternal}
-                    className="flex items-center gap-2 px-4 py-2 bg-gray-500/20 hover:bg-gray-500/30 text-gray-400 rounded-lg border border-gray-500/30 transition-colors"
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
                   >
-                    <ExternalLink className="w-4 h-4" />
-                    Open External
+                    <ExternalLink className="h-3.5 w-3.5 text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors" />
+                    <span className="text-xs text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors">
+                      Open External
+                    </span>
                   </button>
                 )}
               </div>
@@ -515,41 +519,49 @@ export function DevPreviewPane({
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
               {isUnconfigured ? (
                 <div className="flex flex-col items-center text-center max-w-md">
-                  <h3 className="text-lg font-medium mb-2">Configure Dev Server</h3>
-                  <p className="text-sm text-canopy-text/60 mb-6 leading-relaxed">
+                  <h3 className="text-sm font-medium text-canopy-text/70 mb-1">
+                    Configure Dev Server
+                  </h3>
+                  <p className="text-xs text-canopy-text/50 mb-4 leading-relaxed">
                     No dev server command is configured for this project.
                     {allDetectedRunners && findDevServerCandidate(allDetectedRunners)
                       ? " We found a script in your package.json that looks like a dev server."
                       : " Configure one to preview your application."}
                   </p>
-                  <div className="flex flex-col gap-3 w-full">
+                  <div className="flex flex-col items-center gap-2">
                     {allDetectedRunners && findDevServerCandidate(allDetectedRunners) && (
                       <button
                         type="button"
                         onClick={handleAutoDetect}
                         disabled={isAutoDetecting || isSettingsLoading}
-                        className="flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 rounded-lg border border-blue-500/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
                       >
-                        <Wand2 className="w-4 h-4" />
-                        {isAutoDetecting
-                          ? "Detecting..."
-                          : `Use \`${findDevServerCandidate(allDetectedRunners)?.command}\``}
+                        <Wand2 className="h-3.5 w-3.5 text-canopy-accent/70 group-hover:text-canopy-accent transition-colors" />
+                        <span className="text-xs text-canopy-accent/70 group-hover:text-canopy-accent transition-colors">
+                          {isAutoDetecting
+                            ? "Detecting..."
+                            : `Use \`${findDevServerCandidate(allDetectedRunners)?.command}\``}
+                        </span>
                       </button>
                     )}
                     <button
                       type="button"
                       onClick={handleOpenSettings}
-                      className="flex items-center justify-center gap-2 px-4 py-2.5 bg-gray-500/20 hover:bg-gray-500/30 text-gray-400 rounded-lg border border-gray-500/30 transition-colors"
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
                     >
-                      <Settings className="w-4 h-4" />
-                      Open Project Settings
+                      <Settings className="h-3.5 w-3.5 text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors" />
+                      <span className="text-xs text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors">
+                        Open Project Settings
+                      </span>
                     </button>
                   </div>
                 </div>
               ) : (
                 <div className="flex flex-col items-center text-center max-w-md">
-                  <h3 className="text-lg font-medium mb-2">Waiting for Dev Server</h3>
-                  <p className="text-sm text-canopy-text/60 mb-6 leading-relaxed">
+                  <h3 className="text-sm font-medium text-canopy-text/70 mb-1">
+                    Waiting for Dev Server
+                  </h3>
+                  <p className="text-xs text-canopy-text/50 mb-4 leading-relaxed">
                     The development server will appear here once it starts and a URL is detected.
                   </p>
                 </div>
