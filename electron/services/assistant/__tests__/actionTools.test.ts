@@ -78,6 +78,7 @@ function createAction(overrides: Partial<ActionManifestEntry> = {}): ActionManif
     kind: "query",
     danger: "safe",
     enabled: true,
+    requiresArgs: false,
     inputSchema: { type: "object", properties: {} },
     ...overrides,
   };

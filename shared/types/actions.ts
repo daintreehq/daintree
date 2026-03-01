@@ -265,6 +265,7 @@ export interface ActionManifestEntry {
   outputSchema?: Record<string, unknown>;
   enabled: boolean;
   disabledReason?: string;
+  requiresArgs: boolean;
 }
 
 export interface ActionDispatchSuccess<Result = unknown> {
