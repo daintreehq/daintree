@@ -377,7 +377,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                 placeholder="Execute command..."
                 aria-label="Command input"
                 className={cn(
-                  "flex-1 bg-transparent py-2.5 text-xs text-canopy-text font-mono placeholder:text-white/20",
+                  "flex-1 bg-transparent py-2.5 text-xs text-canopy-text font-mono placeholder:text-white/35",
                   "focus:outline-none min-w-0"
                 )}
                 autoComplete="off"
@@ -395,7 +395,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                           "p-1.5 rounded-[var(--radius-sm)] transition-all",
                           autoRestart
                             ? "bg-canopy-accent/20 text-canopy-accent"
-                            : "text-white/30 hover:text-white/60 hover:bg-white/10"
+                            : "text-white/40 hover:text-white/60 hover:bg-white/10"
                         )}
                         aria-label={autoRestart ? "Disable auto-restart" : "Enable auto-restart"}
                         aria-pressed={autoRestart}
@@ -419,7 +419,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                           "p-1.5 rounded-[var(--radius-sm)] transition-all",
                           runAsDocked
                             ? "bg-canopy-accent/20 text-canopy-accent"
-                            : "text-white/30 hover:text-white/60 hover:bg-white/10"
+                            : "text-white/40 hover:text-white/60 hover:bg-white/10"
                         )}
                         aria-label={
                           runAsDocked
@@ -454,7 +454,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                             "p-1.5 rounded-[var(--radius-sm)] transition-all",
                             input.trim()
                               ? "text-white hover:bg-white/10"
-                              : "text-white/10 cursor-not-allowed"
+                              : "text-white/20 cursor-not-allowed"
                           )}
                           aria-label="Run command"
                         >
