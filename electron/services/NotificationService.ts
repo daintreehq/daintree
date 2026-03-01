@@ -34,16 +34,18 @@ class NotificationService {
 
     this.focusHandler = () => {
       this.windowFocused = true;
+      this.currentState = { waitingCount: 0, failedCount: 0 };
+
+      if (this.debounceTimer) {
+        clearTimeout(this.debounceTimer);
+        this.debounceTimer = null;
+      }
+
       this.clearNotifications();
     };
 
     this.blurHandler = () => {
       this.windowFocused = false;
-      // Immediately apply notifications when window loses focus if there are any
-      const { waitingCount, failedCount } = this.currentState;
-      if (waitingCount > 0 || failedCount > 0) {
-        this.applyNotifications();
-      }
     };
 
     window.on("focus", this.focusHandler);

@@ -80,7 +80,7 @@ describe("useTerminalSelectors", () => {
       expect(result.current.failedCount).toBe(0);
     });
 
-    it("counts terminals that changed state after blurTime and within 5 minutes", () => {
+    it("counts terminals that changed state after blurTime", () => {
       setupEmptyWorktrees();
       const blurTime = Date.now() - 60_000;
       setupTerminals([
@@ -113,7 +113,7 @@ describe("useTerminalSelectors", () => {
       expect(result.current.waitingCount).toBe(0);
     });
 
-    it("excludes terminals older than 5 minutes even if after blurTime", () => {
+    it("counts terminals that changed after blurTime regardless of age", () => {
       setupEmptyWorktrees();
       const blurTime = Date.now() - 10 * 60_000;
       setupTerminals([
@@ -126,10 +126,10 @@ describe("useTerminalSelectors", () => {
       ]);
 
       const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
-      expect(result.current.failedCount).toBe(0);
+      expect(result.current.failedCount).toBe(1);
     });
 
-    it("counts terminal at exactly the 5-minute boundary as expired", () => {
+    it("counts terminal that changed long after blurTime", () => {
       setupEmptyWorktrees();
       const blurTime = Date.now() - 10 * 60_000;
       setupTerminals([
@@ -142,7 +142,7 @@ describe("useTerminalSelectors", () => {
       ]);
 
       const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
-      expect(result.current.waitingCount).toBe(0);
+      expect(result.current.waitingCount).toBe(1);
     });
 
     it("excludes terminals without lastStateChange when blurTime is set", () => {
@@ -226,23 +226,20 @@ describe("useTerminalSelectors", () => {
       expect(result.current.waitingCount).toBe(0);
     });
 
-    it("includes terminal just under the 5-minute expiry window", () => {
-      vi.useFakeTimers();
-      const now = Date.now();
+    it("counts terminal that changed just after blurTime", () => {
       setupEmptyWorktrees();
-      const blurTime = now - 10 * 60_000;
+      const blurTime = Date.now() - 60_000;
       setupTerminals([
         {
           id: "t1",
           agentState: "waiting",
           location: "grid",
-          lastStateChange: now - (5 * 60_000 - 1),
+          lastStateChange: blurTime + 1,
         },
       ]);
 
       const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
       expect(result.current.waitingCount).toBe(1);
-      vi.useRealTimers();
     });
 
     it("does not recount a terminal from a previous blur session on re-blur", () => {
@@ -271,6 +268,48 @@ describe("useTerminalSelectors", () => {
       const secondBlurTime = Date.now() - 30_000;
       const { result: result3 } = renderHook(() => useTerminalNotificationCounts(secondBlurTime));
       expect(result3.current.waitingCount).toBe(0);
+    });
+
+    it("counts terminal that re-enters waiting after leaving it during blur session", () => {
+      setupEmptyWorktrees();
+      const blurTime = Date.now() - 120_000;
+
+      // Terminal went waiting → working → waiting during blur; lastStateChange is the re-entry time
+      const reEntryTime = Date.now() - 30_000;
+      setupTerminals([
+        {
+          id: "t1",
+          agentState: "waiting",
+          location: "grid",
+          lastStateChange: reEntryTime,
+        },
+      ]);
+
+      const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
+      expect(result.current.waitingCount).toBe(1);
+    });
+
+    it("does not count working or idle terminals even if lastStateChange is after blurTime", () => {
+      setupEmptyWorktrees();
+      const blurTime = Date.now() - 60_000;
+      setupTerminals([
+        {
+          id: "t1",
+          agentState: "working",
+          location: "grid",
+          lastStateChange: Date.now() - 30_000,
+        },
+        {
+          id: "t2",
+          agentState: "idle",
+          location: "grid",
+          lastStateChange: Date.now() - 10_000,
+        },
+      ]);
+
+      const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
+      expect(result.current.waitingCount).toBe(0);
+      expect(result.current.failedCount).toBe(0);
     });
   });
 });

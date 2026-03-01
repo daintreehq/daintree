@@ -3,14 +3,12 @@ import { updateFaviconBadge, clearFaviconBadge } from "@/services/FaviconBadgeSe
 import { useTerminalNotificationCounts } from "@/hooks/useTerminalSelectors";
 
 const DEBOUNCE_MS = 300;
-const EXPIRY_TICK_MS = 30_000;
 
 export function useWindowNotifications(): void {
   const prevStateRef = useRef({ waitingCount: 0, failedCount: 0 });
   const windowFocusedRef = useRef(true);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const blurTimeRef = useRef<number | null>(null);
-  const tickerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [, setTick] = useState(0);
 
   const { waitingCount, failedCount } = useTerminalNotificationCounts(blurTimeRef.current);
@@ -20,15 +18,12 @@ export function useWindowNotifications(): void {
       windowFocusedRef.current = true;
       blurTimeRef.current = null;
 
-      if (tickerRef.current) {
-        clearInterval(tickerRef.current);
-        tickerRef.current = null;
-      }
-
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
         debounceTimerRef.current = null;
       }
+
+      prevStateRef.current = { waitingCount: 0, failedCount: 0 };
 
       clearFaviconBadge();
 
@@ -42,14 +37,6 @@ export function useWindowNotifications(): void {
     const handleBlur = () => {
       windowFocusedRef.current = false;
       blurTimeRef.current = Date.now();
-
-      if (tickerRef.current) {
-        clearInterval(tickerRef.current);
-      }
-      tickerRef.current = setInterval(() => {
-        setTick((t) => t + 1);
-      }, EXPIRY_TICK_MS);
-
       setTick((t) => t + 1);
     };
 
@@ -59,10 +46,6 @@ export function useWindowNotifications(): void {
     return () => {
       window.removeEventListener("focus", handleFocus);
       window.removeEventListener("blur", handleBlur);
-      if (tickerRef.current) {
-        clearInterval(tickerRef.current);
-        tickerRef.current = null;
-      }
     };
   }, []);
 
@@ -100,11 +83,6 @@ export function useWindowNotifications(): void {
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
         debounceTimerRef.current = null;
-      }
-
-      if (tickerRef.current) {
-        clearInterval(tickerRef.current);
-        tickerRef.current = null;
       }
 
       if (window.electron?.notification?.updateBadge) {

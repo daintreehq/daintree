@@ -20,8 +20,6 @@ function isTerminalVisible(
   return true;
 }
 
-const NOTIFICATION_EXPIRY_MS = 5 * 60 * 1000;
-
 export function useTerminalNotificationCounts(blurTime?: number | null): {
   waitingCount: number;
   failedCount: number;
@@ -45,7 +43,6 @@ export function useTerminalNotificationCounts(blurTime?: number | null): {
 
       let waitingCount = 0;
       let failedCount = 0;
-      const now = Date.now();
 
       for (const terminal of state.terminals) {
         if (!isTerminalVisible(terminal, state.isInTrash, worktreeIds)) continue;
@@ -56,7 +53,6 @@ export function useTerminalNotificationCounts(blurTime?: number | null): {
         if (blurTime !== undefined) {
           if (terminal.lastStateChange == null) continue;
           if (terminal.lastStateChange <= blurTime) continue;
-          if (now - terminal.lastStateChange >= NOTIFICATION_EXPIRY_MS) continue;
         }
 
         if (terminal.agentState === "waiting") waitingCount += 1;
