@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from "react";
 import {
   Terminal,
   Rocket,
-  FileCode,
   Plus,
   Trash2,
   ChevronUp,
@@ -18,8 +17,6 @@ import { useProjectSettings } from "@/hooks";
 import { useProjectStore } from "@/store/projectStore";
 import type { RunCommand } from "@/types";
 import { getProjectGradient } from "@/lib/colorUtils";
-import { projectClient } from "@/clients";
-import { detectProjectType, generateClaudeMdTemplate } from "@/lib/claudeMdTemplates";
 
 interface ProjectOnboardingWizardProps {
   isOpen: boolean;
@@ -43,9 +40,6 @@ export function ProjectOnboardingWizard({
   const [isEmojiPickerOpen, setIsEmojiPickerOpen] = useState(false);
   const [devServerCommand, setDevServerCommand] = useState("");
   const [runCommands, setRunCommands] = useState<RunCommand[]>([]);
-  const [claudeMdContent, setClaudeMdContent] = useState("");
-  const [useTemplate, setUseTemplate] = useState(false);
-  const [templateContent, setTemplateContent] = useState("");
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -53,8 +47,6 @@ export function ProjectOnboardingWizard({
   const initStartedRef = useRef(false);
 
   useEffect(() => {
-    let cancelled = false;
-
     if (isOpen && !isLoading && settings && currentProject && !initStartedRef.current) {
       initStartedRef.current = true;
 
@@ -62,25 +54,7 @@ export function ProjectOnboardingWizard({
       setEmoji(currentProject.emoji || "🌲");
       setDevServerCommand(settings.devServerCommand || "");
       setRunCommands(settings.runCommands || []);
-
-      Promise.all([
-        projectClient.readClaudeMd(projectId).catch(() => null),
-        detectProjectType(currentProject.path).catch(() => "generic" as const),
-      ]).then(([existingContent, detectedType]) => {
-        if (cancelled) return;
-
-        const template = generateClaudeMdTemplate(detectedType);
-        setTemplateContent(template);
-
-        if (existingContent?.trim()) {
-          setClaudeMdContent(existingContent);
-          setUseTemplate(false);
-        } else {
-          setClaudeMdContent(template);
-          setUseTemplate(true);
-        }
-        setIsInitialized(true);
-      });
+      setIsInitialized(true);
     }
 
     if (!isOpen) {
@@ -90,20 +64,7 @@ export function ProjectOnboardingWizard({
       setIsEmojiPickerOpen(false);
       setIsAdvancedOpen(false);
     }
-
-    return () => {
-      cancelled = true;
-    };
   }, [isOpen, isLoading, settings, currentProject, projectId]);
-
-  const handleUseTemplateToggle = (checked: boolean) => {
-    setUseTemplate(checked);
-    if (checked) {
-      setClaudeMdContent(templateContent);
-    } else {
-      setClaudeMdContent("");
-    }
-  };
 
   const handleFinish = async () => {
     if (!settings || isSaving) return;
@@ -127,10 +88,6 @@ export function ProjectOnboardingWizard({
         runCommands: sanitizedRunCommands,
         devServerCommand: devServerCommand.trim() || undefined,
       });
-
-      if (claudeMdContent.trim()) {
-        await projectClient.writeClaudeMd(projectId, claudeMdContent);
-      }
 
       onClose();
       onFinish?.();
@@ -203,39 +160,6 @@ export function ProjectOnboardingWizard({
                 />
               </div>
             </div>
-          </div>
-
-          {/* AI Rules */}
-          <div className="pb-6 border-b border-canopy-border">
-            <div className="flex items-start justify-between mb-1">
-              <h3 className="text-sm font-semibold text-canopy-text/80 flex items-center gap-2">
-                <FileCode className="h-4 w-4" />
-                AI Rules (CLAUDE.md)
-              </h3>
-              <label className="flex items-center gap-1.5 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={useTemplate}
-                  onChange={(e) => handleUseTemplateToggle(e.target.checked)}
-                  className="w-3.5 h-3.5 rounded border-canopy-border accent-canopy-accent"
-                  aria-label="Use generated template"
-                />
-                <span className="text-xs text-canopy-text/60">Use template</span>
-              </label>
-            </div>
-            <p className="text-xs text-canopy-text/60 mb-3">
-              Instructions for AI agents working on this project. Written to{" "}
-              <code className="font-mono">CLAUDE.md</code> in the project root.
-            </p>
-            <textarea
-              value={claudeMdContent}
-              onChange={(e) => setClaudeMdContent(e.target.value)}
-              rows={8}
-              className="w-full bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition-all placeholder:text-canopy-text/40 resize-y"
-              placeholder="# Project Guidelines&#10;&#10;Describe coding conventions, architecture decisions, and anything agents should know..."
-              aria-label="CLAUDE.md content"
-              spellCheck={false}
-            />
           </div>
 
           {/* Advanced Configuration */}

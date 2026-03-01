@@ -646,7 +646,6 @@ function App() {
   const onboardingProjectId = useProjectStore((state) => state.onboardingProjectId);
   const closeOnboardingWizard = useProjectStore((state) => state.closeOnboardingWizard);
 
-  const openOnboardingWizard = useProjectStore((state) => state.openOnboardingWizard);
   const agentSettingsInitialized = useAgentSettingsStore((state) => state.isInitialized);
 
   // Intercept onboarding to show agent selection on first run.
@@ -831,13 +830,6 @@ function App() {
       }).catch(() => {});
     }
   }, [launchAgent, activeWorktreeId, availability, agentSettings]);
-
-  const handleOpenSetupWizard = useCallback(() => {
-    const currentProject = useProjectStore.getState().currentProject;
-    if (!currentProject) return;
-    setIsSettingsOpen(false);
-    openOnboardingWizard(currentProject.id);
-  }, [openOnboardingWizard]);
 
   const handleOpenAgentSettings = useCallback(() => {
     setSettingsTab("agents");
@@ -1203,7 +1195,6 @@ function App() {
         onClose={() => setIsSettingsOpen(false)}
         defaultTab={settingsTab}
         onSettingsChange={refreshSettings}
-        onOpenSetupWizard={currentProject ? handleOpenSetupWizard : undefined}
       />
 
       <ShortcutReferenceDialog isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />

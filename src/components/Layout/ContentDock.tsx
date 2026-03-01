@@ -1,4 +1,4 @@
-import { useMemo, useRef, useCallback } from "react";
+import { useMemo, useRef, useCallback, useEffect } from "react";
 import type React from "react";
 import { useShallow } from "zustand/react/shallow";
 import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
@@ -7,6 +7,8 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useTerminalStore, useProjectStore, useWorktreeSelectionStore } from "@/store";
+import { useAppAgentStore } from "@/store/appAgentStore";
+import { useAssistantChatStore } from "@/store/assistantChatStore";
 import { DockedTerminalItem } from "./DockedTerminalItem";
 import { DockedTabGroup } from "./DockedTabGroup";
 import { TrashContainer } from "./TrashContainer";
@@ -41,6 +43,24 @@ interface ContentDockProps {
 export function ContentDock({ density = "normal" }: ContentDockProps) {
   const { showMenu } = useNativeContextMenu();
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
+
+  const { hasApiKey, isInitialized: agentStoreReady } = useAppAgentStore(
+    useShallow((s) => ({ hasApiKey: s.hasApiKey, isInitialized: s.isInitialized }))
+  );
+  const initializeAgentStore = useAppAgentStore((s) => s.initialize);
+  const closeAssistant = useAssistantChatStore((s) => s.close);
+
+  useEffect(() => {
+    void initializeAgentStore();
+  }, [initializeAgentStore]);
+
+  useEffect(() => {
+    if (agentStoreReady && !hasApiKey) {
+      closeAssistant();
+    }
+  }, [agentStoreReady, hasApiKey, closeAssistant]);
+
+  const showAssistant = agentStoreReady && hasApiKey;
 
   const trashedTerminals = useTerminalStore(useShallow((state) => state.trashedTerminals));
   const terminals = useTerminalStore((state) => state.terminals);
@@ -261,7 +281,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
         <WaitingContainer compact={isCompact} />
         <FailedContainer compact={isCompact} />
         <TrashContainer trashedTerminals={trashedItems} compact={isCompact} />
-        <AssistantDockButton />
+        {showAssistant && <AssistantDockButton />}
       </div>
     </div>
   );

@@ -45,10 +45,6 @@ import { buildWhatsNextPrompt } from "@/lib/whatsNextPrompt";
 import { cliAvailabilityClient } from "@/clients";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
-import {
-  GettingStartedChecklist,
-  shouldShowGettingStartedChecklist,
-} from "@/components/Setup/GettingStartedChecklist";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 
@@ -320,8 +316,6 @@ function EmptyState({
             <ProjectPulseCard worktreeId={activeWorktreeId} />
           </div>
         )}
-
-        {hasActiveWorktree && shouldShowGettingStartedChecklist() && <GettingStartedChecklist />}
 
         <div className="flex flex-col items-center gap-4 mt-4">
           {hasActiveWorktree && (

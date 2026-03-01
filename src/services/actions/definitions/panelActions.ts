@@ -1,5 +1,4 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
-import { SidecarLayoutModeSchema } from "./schemas";
 import { z } from "zod";
 import { systemClient } from "@/clients";
 import { getAIAgentInfo } from "@/lib/aiAgentDetection";
@@ -752,21 +751,6 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
         return;
       }
       await activateSidecarTab(next.activeTabId);
-    },
-  }));
-
-  actions.set("sidecar.setLayoutMode", () => ({
-    id: "sidecar.setLayoutMode",
-    title: "Set Sidecar Layout Mode",
-    description: "Set sidecar layout mode preference",
-    category: "sidecar",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    argsSchema: z.object({ mode: SidecarLayoutModeSchema }),
-    run: async (args: unknown) => {
-      const { mode } = args as { mode: "auto" | "push" | "overlay" };
-      useSidecarStore.getState().setLayoutModePreference(mode);
     },
   }));
 
