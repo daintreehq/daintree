@@ -5,7 +5,6 @@ import type {
   SidecarLayoutModePreference,
   SidecarTab,
   SidecarLink,
-  CliAvailability,
 } from "@shared/types";
 import {
   DEFAULT_SIDECAR_TABS,
@@ -13,7 +12,7 @@ import {
   SIDECAR_MAX_WIDTH,
   SIDECAR_DEFAULT_WIDTH,
   MIN_GRID_WIDTH,
-  LINK_TEMPLATES,
+  DEFAULT_SYSTEM_LINKS,
 } from "@shared/types";
 
 interface SidecarState {
@@ -25,7 +24,6 @@ interface SidecarState {
   tabs: SidecarTab[];
   createdTabs: Set<string>;
   links: SidecarLink[];
-  discoveryComplete: boolean;
   defaultNewTabUrl: string | null;
 }
 
@@ -58,14 +56,7 @@ interface SidecarActions {
   toggleLink: (id: string) => void;
   reorderLinks: (fromIndex: number, toIndex: number) => void;
   reorderTabs: (fromIndex: number, toIndex: number) => void;
-  setDiscoveredLinks: (cliAvailability: CliAvailability) => void;
-  markDiscoveryComplete: () => void;
-  initializeDefaultLinks: () => void;
   setDefaultNewTabUrl: (url: string | null) => void;
-}
-
-function createDefaultLinks(): SidecarLink[] {
-  return [];
 }
 
 const initialState: SidecarState = {
@@ -76,8 +67,7 @@ const initialState: SidecarState = {
   activeTabId: null,
   tabs: DEFAULT_SIDECAR_TABS,
   createdTabs: new Set<string>(),
-  links: createDefaultLinks(),
-  discoveryComplete: false,
+  links: [...DEFAULT_SYSTEM_LINKS],
   defaultNewTabUrl: null,
 };
 
@@ -375,49 +365,6 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
       return { tabs: newTabs };
     }),
 
-  setDiscoveredLinks: (availability) =>
-    set((s) => {
-      const existingUserLinks = s.links
-        .filter((l) => l.type === "user")
-        .sort((a, b) => a.order - b.order);
-      const existingDiscoveredLinks = s.links.filter((l) => l.type === "discovered");
-      const findExisting = (id: string) => existingDiscoveredLinks.find((l) => l.id === id);
-
-      const newLinks: SidecarLink[] = [];
-      let order = 0;
-
-      Object.entries(availability).forEach(([agentId, isAvailable]) => {
-        if (!isAvailable) return;
-        const template = LINK_TEMPLATES[agentId];
-        if (!template) return;
-        const id = `discovered-${agentId}`;
-        const existing = findExisting(id);
-        newLinks.push({
-          id,
-          ...template,
-          title: existing?.title ?? template.title,
-          url: existing?.url ?? template.url,
-          type: "discovered",
-          enabled: existing?.enabled ?? true,
-          order: order++,
-        });
-      });
-
-      const userLinks = existingUserLinks.map((l) => ({ ...l, order: order++ }));
-
-      return { links: [...newLinks, ...userLinks] };
-    }),
-
-  markDiscoveryComplete: () => set({ discoveryComplete: true }),
-
-  initializeDefaultLinks: () =>
-    set((s) => {
-      if (s.links.length === 0) {
-        return { links: createDefaultLinks() };
-      }
-      return s;
-    }),
-
   setDefaultNewTabUrl: (url) => {
     if (url === null) {
       set({ defaultNewTabUrl: null });
@@ -455,9 +402,56 @@ const sidecarStoreCreator: StateCreator<
   }),
   merge: (persistedState: unknown, currentState) => {
     const persisted = persistedState as Partial<SidecarState>;
+
+    let links = currentState.links;
+    if (Array.isArray(persisted.links)) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const rawLinks = persisted.links as Array<Record<string, any>>;
+
+      // Migrate discovered links to system: rename IDs and reclassify type.
+      // Deduplicate so discovered-X and system-X don't both survive as system-X.
+      const seen = new Set<string>();
+      const migratedLinks: Array<Record<string, unknown>> = [];
+      for (const l of rawLinks) {
+        const newId = l.id?.startsWith("discovered-")
+          ? String(l.id).replace("discovered-", "system-")
+          : l.id;
+        const newType = l.type === "discovered" ? "system" : l.type;
+        if (seen.has(newId)) continue;
+        seen.add(newId);
+        migratedLinks.push({ ...l, id: newId, type: newType });
+      }
+
+      const userLinks = migratedLinks.filter((l) => l.type === "user");
+      const persistedSystemById = new Map(
+        migratedLinks.filter((l) => l.type === "system").map((l) => [l.id, l])
+      );
+
+      // Build final system links ordered per DEFAULT_SYSTEM_LINKS, merging persisted overrides.
+      // Any persisted system links not in defaults are appended (custom system links).
+      const defaultIds = new Set(DEFAULT_SYSTEM_LINKS.map((d) => d.id));
+      const normalizedSystemLinks = DEFAULT_SYSTEM_LINKS.map((d) => ({
+        ...d,
+        ...(persistedSystemById.get(d.id) ?? {}),
+        id: d.id,
+        type: "system" as const,
+      }));
+      const extraSystemLinks = migratedLinks.filter(
+        (l) => l.type === "system" && !defaultIds.has(l.id as string)
+      );
+
+      let order = 0;
+      links = [
+        ...normalizedSystemLinks.map((l) => ({ ...l, order: order++ })),
+        ...extraSystemLinks.map((l) => ({ ...l, order: order++ })),
+        ...userLinks.map((l) => ({ ...l, order: order++ })),
+      ] as SidecarLink[];
+    }
+
     return {
       ...currentState,
       ...persisted,
+      links,
       width:
         typeof persisted.width === "number"
           ? Math.min(Math.max(persisted.width, SIDECAR_MIN_WIDTH), SIDECAR_MAX_WIDTH)

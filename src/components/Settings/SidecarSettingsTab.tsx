@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  RefreshCw,
   Plus,
   Trash2,
   Globe,
@@ -15,9 +14,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { useSidecarStore } from "@/store/sidecarStore";
-import { useLinkDiscovery } from "@/hooks/useLinkDiscovery";
 import {
-  LINK_TEMPLATES,
   SIDECAR_MIN_WIDTH,
   SIDECAR_MAX_WIDTH,
   SIDECAR_DEFAULT_WIDTH,
@@ -98,8 +95,6 @@ export function SidecarSettingsTab() {
   const layoutModePreference = useSidecarStore((s) => s.layoutModePreference);
   const width = useSidecarStore((s) => s.width);
   const defaultNewTabUrl = useSidecarStore((s) => s.defaultNewTabUrl);
-  const { rescan, isScanning } = useLinkDiscovery();
-
   const [newLinkName, setNewLinkName] = useState("");
   const [newLinkUrl, setNewLinkUrl] = useState("");
   const [editingLinkId, setEditingLinkId] = useState<string | null>(null);
@@ -118,7 +113,7 @@ export function SidecarSettingsTab() {
     if (!isAdjustingWidthRef.current) setLocalWidth(width);
   }, [width]);
 
-  const discoveredLinks = links.filter((l) => l.type === "discovered");
+  const systemLinks = links.filter((l) => l.type === "system");
   const userLinks = links.filter((l) => l.type === "user");
 
   const handleAddLink = () => {
@@ -195,10 +190,6 @@ export function SidecarSettingsTab() {
     setEditUrl("");
     setUrlError("");
   };
-
-  const knownServices = Object.entries(LINK_TEMPLATES).filter(
-    ([_, template]) => template.cliDetector
-  );
 
   const enabledLinks = links.filter((l) => l.enabled).sort((a, b) => a.order - b.order);
 
@@ -343,132 +334,94 @@ export function SidecarSettingsTab() {
       </section>
 
       <section className="pt-4 border-t border-canopy-border">
-        <h4 className="text-sm font-medium text-canopy-text mb-3">AI Services</h4>
+        <h4 className="text-sm font-medium text-canopy-text mb-3">Default Links</h4>
         <div className="space-y-2">
-          {knownServices.map(([key, template]) => {
-            const link = discoveredLinks.find((l) => l.id === `discovered-${key}`);
-            const isDetected = !!link;
+          {systemLinks.map((link) => (
+            <div
+              key={link.id}
+              className="flex items-center justify-between p-3 rounded-[var(--radius-lg)] bg-canopy-bg border border-canopy-border"
+            >
+              {editingLinkId === link.id ? (
+                <div className="flex items-center gap-2 flex-1">
+                  <input
+                    type="text"
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    className="bg-canopy-bg border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text w-32 focus:border-canopy-accent focus:outline-none"
+                    placeholder="Name"
+                  />
+                  <input
+                    type="text"
+                    value={editUrl}
+                    onChange={(e) => setEditUrl(e.target.value)}
+                    className="bg-canopy-bg border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text flex-1 focus:border-canopy-accent focus:outline-none"
+                    placeholder="URL"
+                  />
+                  <button
+                    onClick={handleSaveEdit}
+                    className="p-1.5 rounded hover:bg-canopy-border text-green-500"
+                  >
+                    <Check className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={handleCancelEdit}
+                    className="p-1.5 rounded hover:bg-canopy-border text-zinc-500"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center gap-3">
+                    <ServiceIcon name={link.icon} />
+                    <div className="flex flex-col">
+                      <span className="text-sm text-canopy-text">{link.title}</span>
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className="text-[11px] font-mono text-zinc-500 truncate min-w-0">
+                              {link.url}
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom">{link.url}</TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </div>
+                  </div>
 
-            return (
-              <div
-                key={key}
-                className="flex items-center justify-between p-3 rounded-[var(--radius-lg)] bg-canopy-bg border border-canopy-border"
-              >
-                {editingLinkId === link?.id ? (
-                  <div className="flex items-center gap-2 flex-1">
-                    <input
-                      type="text"
-                      value={editName}
-                      onChange={(e) => setEditName(e.target.value)}
-                      className="bg-canopy-bg border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text w-32 focus:border-canopy-accent focus:outline-none"
-                      placeholder="Name"
-                    />
-                    <input
-                      type="text"
-                      value={editUrl}
-                      onChange={(e) => setEditUrl(e.target.value)}
-                      className="bg-canopy-bg border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text flex-1 focus:border-canopy-accent focus:outline-none"
-                      placeholder="URL"
-                    />
+                  <div className="flex items-center gap-2">
                     <button
-                      onClick={handleSaveEdit}
-                      className="p-1.5 rounded hover:bg-canopy-border text-green-500"
+                      onClick={() => handleStartEdit(link.id, link.title, link.url)}
+                      className="text-xs text-zinc-500 hover:text-canopy-text px-2 py-1 rounded hover:bg-canopy-border"
                     >
-                      <Check className="w-4 h-4" />
+                      Edit
                     </button>
                     <button
-                      onClick={handleCancelEdit}
-                      className="p-1.5 rounded hover:bg-canopy-border text-zinc-500"
+                      onClick={() =>
+                        void actionService.dispatch(
+                          "sidecar.links.toggle",
+                          { id: link.id },
+                          { source: "user" }
+                        )
+                      }
+                      className={cn(
+                        "w-10 h-5 rounded-full relative transition-colors",
+                        link.enabled ? "bg-canopy-accent" : "bg-canopy-border"
+                      )}
                     >
-                      <X className="w-4 h-4" />
+                      <div
+                        className={cn(
+                          "absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform",
+                          link.enabled ? "translate-x-5" : "translate-x-0.5"
+                        )}
+                      />
                     </button>
                   </div>
-                ) : (
-                  <>
-                    <div className="flex items-center gap-3">
-                      <ServiceIcon name={template.icon} />
-                      <div className="flex flex-col">
-                        <span className="text-sm text-canopy-text">
-                          {link?.title || template.title}
-                        </span>
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <span className="text-[11px] font-mono text-zinc-500 truncate min-w-0">
-                                {link?.url || template.url}
-                              </span>
-                            </TooltipTrigger>
-                            <TooltipContent side="bottom">
-                              {link?.url || template.url}
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      </div>
-                      <span
-                        className={cn(
-                          "text-xs flex items-center gap-1",
-                          isDetected ? "text-green-500" : "text-zinc-500"
-                        )}
-                      >
-                        {isDetected ? (
-                          <>
-                            <Check className="w-3 h-3" /> CLI detected
-                          </>
-                        ) : (
-                          <>
-                            <X className="w-3 h-3" /> Not detected
-                          </>
-                        )}
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      {isDetected && (
-                        <button
-                          onClick={() => link && handleStartEdit(link.id, link.title, link.url)}
-                          className="text-xs text-zinc-500 hover:text-canopy-text px-2 py-1 rounded hover:bg-canopy-border"
-                        >
-                          Edit
-                        </button>
-                      )}
-                      <button
-                        onClick={() =>
-                          link &&
-                          void actionService.dispatch(
-                            "sidecar.links.toggle",
-                            { id: link.id },
-                            { source: "user" }
-                          )
-                        }
-                        disabled={!isDetected}
-                        className={cn(
-                          "w-10 h-5 rounded-full relative transition-colors",
-                          !isDetected && "opacity-50 cursor-not-allowed",
-                          link?.enabled ? "bg-canopy-accent" : "bg-canopy-border"
-                        )}
-                      >
-                        <div
-                          className={cn(
-                            "absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform",
-                            link?.enabled ? "translate-x-5" : "translate-x-0.5"
-                          )}
-                        />
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            );
-          })}
+                </>
+              )}
+            </div>
+          ))}
         </div>
-        <button
-          onClick={rescan}
-          disabled={isScanning}
-          className="mt-3 flex items-center gap-2 px-3 py-1.5 text-xs rounded-[var(--radius-md)] border border-canopy-border hover:bg-canopy-border/50 transition-colors text-canopy-text/70"
-        >
-          <RefreshCw className={cn("w-3 h-3", isScanning && "animate-spin")} />
-          {isScanning ? "Scanning..." : "Re-scan for tools"}
-        </button>
       </section>
 
       <section className="pt-4 border-t border-canopy-border">
@@ -733,8 +686,8 @@ export function SidecarSettingsTab() {
 
       <section className="pt-4 border-t border-canopy-border">
         <p className="text-xs text-canopy-text/50">
-          Enabled links appear as tabs in the Sidecar browser panel. AI service links are
-          auto-detected based on installed CLI tools.
+          Enabled links appear as tabs in the Sidecar browser panel. Toggle default links on or off,
+          or add custom links to your preferred AI services.
         </p>
       </section>
     </div>

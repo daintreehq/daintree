@@ -22,7 +22,6 @@ import {
   useGlobalKeybindings,
   useContextInjection,
   useProjectSettings,
-  useLinkDiscovery,
   useGridNavigation,
   useWindowNotifications,
   useWorktreeActions,
@@ -961,9 +960,6 @@ function App() {
     getFocusedId: () => focusedId,
     getGridNavigation: () => ({ findNearest, findByIndex, findDockByIndex, getCurrentLocation }),
   });
-
-  // Must be after useActionRegistry so actions are registered before discovery runs
-  useLinkDiscovery();
 
   useMenuActions({
     onOpenSettings: handleSettings,

@@ -196,7 +196,6 @@ export const AGENT_ACCESSIBLE_ACTIONS = [
   "sidecar.links.update",
   "sidecar.links.reorder",
   "sidecar.links.toggle",
-  "sidecar.links.rescan",
 
   // Browser (panel variant)
   "browser.back",
