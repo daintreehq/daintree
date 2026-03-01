@@ -61,6 +61,7 @@ interface ProjectState {
   closeGitInitDialog: () => void;
   handleGitInitSuccess: () => Promise<void>;
   closeOnboardingWizard: () => void;
+  openOnboardingWizard: (projectId: string) => void;
   openCreateFolderDialog: () => void;
   closeCreateFolderDialog: () => void;
 }
@@ -759,6 +760,10 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
 
   closeOnboardingWizard: () => {
     set({ onboardingWizardOpen: false, onboardingProjectId: null });
+  },
+
+  openOnboardingWizard: (projectId) => {
+    set({ onboardingWizardOpen: true, onboardingProjectId: projectId });
   },
 
   openCreateFolderDialog: () => {

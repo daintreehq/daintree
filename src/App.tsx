@@ -87,6 +87,7 @@ import {
   useDiagnosticsStore,
   useFocusStore,
   cleanupWorktreeDataStore,
+  useToolbarPreferencesStore,
   type RetryAction,
 } from "./store";
 import { useShallow } from "zustand/react/shallow";
@@ -633,6 +634,7 @@ function App() {
   const onboardingWizardOpen = useProjectStore((state) => state.onboardingWizardOpen);
   const onboardingProjectId = useProjectStore((state) => state.onboardingProjectId);
   const closeOnboardingWizard = useProjectStore((state) => state.closeOnboardingWizard);
+  const openOnboardingWizard = useProjectStore((state) => state.openOnboardingWizard);
   const createFolderDialogOpen = useProjectStore((state) => state.createFolderDialogOpen);
   const closeCreateFolderDialog = useProjectStore((state) => state.closeCreateFolderDialog);
   const openCreateFolderDialog = useProjectStore((state) => state.openCreateFolderDialog);
@@ -759,6 +761,30 @@ function App() {
     setSettingsTab("general");
     setIsSettingsOpen(true);
   }, []);
+
+  const handleWizardFinish = useCallback(() => {
+    const defaultAgent = useToolbarPreferencesStore.getState().launcher.defaultAgent;
+    const selected = agentSettings?.agents
+      ? Object.entries(agentSettings.agents)
+          .filter(([, entry]) => entry.selected === true)
+          .map(([id]) => id)
+      : [];
+    const primaryAgent = defaultAgent ?? selected[0];
+
+    if (primaryAgent && availability[primaryAgent]) {
+      launchAgent(primaryAgent, {
+        worktreeId: activeWorktreeId ?? undefined,
+        prompt: "Hi! I'm ready to help with this project. What would you like to know?",
+      }).catch(() => {});
+    }
+  }, [launchAgent, activeWorktreeId, availability, agentSettings]);
+
+  const handleOpenSetupWizard = useCallback(() => {
+    const currentProject = useProjectStore.getState().currentProject;
+    if (!currentProject) return;
+    setIsSettingsOpen(false);
+    openOnboardingWizard(currentProject.id);
+  }, [openOnboardingWizard]);
 
   const handleOpenAgentSettings = useCallback(() => {
     setSettingsTab("agents");
@@ -1126,6 +1152,7 @@ function App() {
         onClose={() => setIsSettingsOpen(false)}
         defaultTab={settingsTab}
         onSettingsChange={refreshSettings}
+        onOpenSetupWizard={currentProject ? handleOpenSetupWizard : undefined}
       />
 
       <ShortcutReferenceDialog isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
@@ -1146,6 +1173,7 @@ function App() {
           isOpen={onboardingWizardOpen}
           projectId={onboardingProjectId}
           onClose={closeOnboardingWizard}
+          onFinish={handleWizardFinish}
         />
       )}
 
