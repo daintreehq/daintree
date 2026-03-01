@@ -216,6 +216,7 @@ export interface WorktreeHeaderProps {
     recipes: TerminalRecipe[];
     runningRecipeId: string | null;
     isRestartValidating: boolean;
+    hasFocusedTerminal: boolean;
     counts: {
       grid: number;
       dock: number;
@@ -224,11 +225,15 @@ export interface WorktreeHeaderProps {
       failed: number;
       all: number;
     };
-    onCopyContext: () => void;
+    onCopyContextFull: () => void;
+    onCopyContextModified: () => void;
+    onInjectContext: () => void;
     onOpenEditor: () => void;
     onRevealInFinder: () => void;
-    onOpenIssue?: () => void;
-    onOpenPR?: () => void;
+    onOpenIssueSidecar?: () => void;
+    onOpenIssueExternal?: () => void;
+    onOpenPRSidecar?: () => void;
+    onOpenPRExternal?: () => void;
     onRunRecipe: (recipeId: string) => void;
     onSaveLayout?: () => void;
     onTogglePin?: () => void;
@@ -236,6 +241,7 @@ export interface WorktreeHeaderProps {
     onMinimizeAll: () => void;
     onMaximizeAll: () => void;
     onRestartAll: () => void;
+    onResetRenderers: () => void;
     onCloseCompleted: () => void;
     onCloseFailed: () => void;
     onCloseAll: () => void;
@@ -370,13 +376,18 @@ export function WorktreeHeader({
                 runningRecipeId={menu.runningRecipeId}
                 isRestartValidating={menu.isRestartValidating}
                 isPinned={isPinned}
+                hasFocusedTerminal={menu.hasFocusedTerminal}
                 counts={menu.counts}
                 onLaunchAgent={menu.onLaunchAgent ? handleLaunchAgent : undefined}
-                onCopyContext={menu.onCopyContext}
+                onCopyContextFull={menu.onCopyContextFull}
+                onCopyContextModified={menu.onCopyContextModified}
+                onInjectContext={menu.onInjectContext}
                 onOpenEditor={menu.onOpenEditor}
                 onRevealInFinder={menu.onRevealInFinder}
-                onOpenIssue={menu.onOpenIssue}
-                onOpenPR={menu.onOpenPR}
+                onOpenIssueSidecar={menu.onOpenIssueSidecar}
+                onOpenIssueExternal={menu.onOpenIssueExternal}
+                onOpenPRSidecar={menu.onOpenPRSidecar}
+                onOpenPRExternal={menu.onOpenPRExternal}
                 onAttachIssue={menu.onAttachIssue}
                 onRunRecipe={menu.onRunRecipe}
                 onSaveLayout={menu.onSaveLayout}
@@ -384,6 +395,7 @@ export function WorktreeHeader({
                 onMinimizeAll={menu.onMinimizeAll}
                 onMaximizeAll={menu.onMaximizeAll}
                 onRestartAll={menu.onRestartAll}
+                onResetRenderers={menu.onResetRenderers}
                 onCloseCompleted={menu.onCloseCompleted}
                 onCloseFailed={menu.onCloseFailed}
                 onCloseAll={menu.onCloseAll}

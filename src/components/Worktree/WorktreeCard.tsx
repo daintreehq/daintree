@@ -167,7 +167,15 @@ export function WorktreeCard({
     allTerminalCount,
   });
 
-  const handleOpenIssue = useCallback(() => {
+  const handleOpenIssueSidecar = useCallback(() => {
+    void actionService.dispatch(
+      "worktree.openIssueInSidecar",
+      { worktreeId: worktree.id },
+      { source: "user" }
+    );
+  }, [worktree.id]);
+
+  const handleOpenIssueExternal = useCallback(() => {
     void actionService.dispatch(
       "worktree.openIssue",
       { worktreeId: worktree.id },
@@ -175,9 +183,43 @@ export function WorktreeCard({
     );
   }, [worktree.id]);
 
-  const handleOpenPR = useCallback(() => {
+  const handleOpenPRSidecar = useCallback(() => {
+    void actionService.dispatch(
+      "worktree.openPRInSidecar",
+      { worktreeId: worktree.id },
+      { source: "user" }
+    );
+  }, [worktree.id]);
+
+  const handleOpenPRExternal = useCallback(() => {
     void actionService.dispatch("worktree.openPR", { worktreeId: worktree.id }, { source: "user" });
   }, [worktree.id]);
+
+  const handleInjectContext = useCallback(() => {
+    void actionService.dispatch("worktree.inject", { worktreeId: worktree.id }, { source: "user" });
+  }, [worktree.id]);
+
+  const handleResetRenderers = useCallback(() => {
+    void actionService.dispatch(
+      "worktree.sessions.resetRenderers",
+      { worktreeId: worktree.id },
+      { source: "user" }
+    );
+  }, [worktree.id]);
+
+  const handleCopyContextFull = useCallback(() => {
+    void handleCopyTree();
+  }, [handleCopyTree]);
+
+  const handleCopyContextModified = useCallback(() => {
+    void actionService.dispatch(
+      "worktree.copyTree",
+      { worktreeId: worktree.id, modified: true },
+      { source: "user" }
+    );
+  }, [worktree.id]);
+
+  const hasFocusedTerminal = useTerminalStore((state) => state.focusedId !== null);
 
   const [showIssuePicker, setShowIssuePicker] = useState(false);
 
@@ -416,14 +458,15 @@ export function WorktreeCard({
             onCopyTreeClick: handleCopyTreeClick,
           }}
           badges={{
-            onOpenIssue: worktree.issueNumber ? handleOpenIssue : undefined,
-            onOpenPR: worktree.prNumber ? handleOpenPR : undefined,
+            onOpenIssue: worktree.issueNumber ? handleOpenIssueExternal : undefined,
+            onOpenPR: worktree.prNumber ? handleOpenPRExternal : undefined,
           }}
           menu={{
             launchAgents,
             recipes,
             runningRecipeId,
             isRestartValidating,
+            hasFocusedTerminal,
             counts: {
               grid: gridCount,
               dock: dockCount,
@@ -432,11 +475,15 @@ export function WorktreeCard({
               failed: failedCount,
               all: allTerminalCount,
             },
-            onCopyContext: () => void handleCopyTree(),
+            onCopyContextFull: handleCopyContextFull,
+            onCopyContextModified: handleCopyContextModified,
+            onInjectContext: handleInjectContext,
             onOpenEditor,
             onRevealInFinder: handlePathClick,
-            onOpenIssue: worktree.issueNumber ? handleOpenIssue : undefined,
-            onOpenPR: worktree.prNumber ? handleOpenPR : undefined,
+            onOpenIssueSidecar: worktree.issueNumber ? handleOpenIssueSidecar : undefined,
+            onOpenIssueExternal: worktree.issueNumber ? handleOpenIssueExternal : undefined,
+            onOpenPRSidecar: worktree.prUrl ? handleOpenPRSidecar : undefined,
+            onOpenPRExternal: worktree.prUrl ? handleOpenPRExternal : undefined,
             onAttachIssue: () => setShowIssuePicker(true),
             onRunRecipe: (recipeId) => void handleRunRecipe(recipeId),
             onSaveLayout,
@@ -445,6 +492,7 @@ export function WorktreeCard({
             onMinimizeAll: handleMinimizeAll,
             onMaximizeAll: handleMaximizeAll,
             onRestartAll: () => void handleRestartAll(),
+            onResetRenderers: handleResetRenderers,
             onCloseCompleted: handleCloseCompleted,
             onCloseFailed: handleCloseFailed,
             onCloseAll: handleCloseAll,
