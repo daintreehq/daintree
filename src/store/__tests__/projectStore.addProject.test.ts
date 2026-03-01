@@ -66,6 +66,7 @@ vi.mock("../slices", () => ({
   createTerminalRegistrySlice: vi.fn(() => () => ({})),
   createTerminalFocusSlice: vi.fn(() => () => ({})),
   createTerminalCommandQueueSlice: vi.fn(() => () => ({})),
+  createTerminalMruSlice: vi.fn(() => () => ({})),
   createTerminalBulkActionsSlice: vi.fn(() => () => ({})),
 }));
 
