@@ -147,6 +147,7 @@ export function SettingsDialog({
             icon={<CanopyIcon className="w-4 h-4" />}
           >
             Assistant
+            <span className="w-1.5 h-1.5 shrink-0 rounded-full bg-amber-400" aria-hidden="true" />
           </NavButton>
           <NavButton
             active={activeTab === "agents"}
