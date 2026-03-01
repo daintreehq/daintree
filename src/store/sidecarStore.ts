@@ -48,7 +48,6 @@ interface SidecarActions {
   updateTabUrl: (id: string, url: string) => void;
   updateTabIcon: (id: string, icon: string | undefined) => void;
   updateLayoutMode: (windowWidth: number, sidebarWidth: number) => void;
-  setLayoutModePreference: (preference: SidecarLayoutModePreference) => void;
   markTabCreated: (id: string) => void;
   isTabCreated: (id: string) => boolean;
   reset: () => void;
@@ -282,13 +281,6 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
     set({ layoutMode: remainingSpace < MIN_GRID_WIDTH ? "overlay" : "push" });
   },
 
-  setLayoutModePreference: (preference) => {
-    set({
-      layoutModePreference: preference,
-      ...(preference !== "auto" ? { layoutMode: preference } : {}),
-    });
-  },
-
   markTabCreated: (id) =>
     set((s) => {
       const newSet = new Set(s.createdTabs);
@@ -450,7 +442,6 @@ const sidecarStoreCreator: StateCreator<
     links: state.links,
     width: state.width,
     tabs: state.tabs,
-    layoutModePreference: state.layoutModePreference,
     defaultNewTabUrl: state.defaultNewTabUrl,
   }),
   merge: (persistedState: unknown, currentState) => {
@@ -462,12 +453,7 @@ const sidecarStoreCreator: StateCreator<
         typeof persisted.width === "number"
           ? Math.min(Math.max(persisted.width, SIDECAR_MIN_WIDTH), SIDECAR_MAX_WIDTH)
           : currentState.width,
-      layoutModePreference:
-        persisted.layoutModePreference === "auto" ||
-        persisted.layoutModePreference === "push" ||
-        persisted.layoutModePreference === "overlay"
-          ? persisted.layoutModePreference
-          : currentState.layoutModePreference,
+      layoutModePreference: "auto",
       defaultNewTabUrl:
         typeof persisted.defaultNewTabUrl === "string" && persisted.defaultNewTabUrl.trim()
           ? persisted.defaultNewTabUrl.trim()

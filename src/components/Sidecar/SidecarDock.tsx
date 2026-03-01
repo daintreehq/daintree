@@ -13,16 +13,8 @@ import { actionService } from "@/services/ActionService";
 
 export function SidecarDock() {
   const { showMenu } = useNativeContextMenu();
-  const {
-    width,
-    activeTabId,
-    tabs,
-    links,
-    setWidth,
-    setOpen,
-    defaultNewTabUrl,
-    layoutModePreference,
-  } = useSidecarStore();
+  const { width, activeTabId, tabs, links, setWidth, setOpen, defaultNewTabUrl } =
+    useSidecarStore();
   const contentRef = useRef<HTMLDivElement>(null);
   const dockRef = useRef<HTMLDivElement>(null);
   const [isResizing, setIsResizing] = useState(false);
@@ -76,30 +68,6 @@ export function SidecarDock() {
         { id: "sidecar:close-tab", label: "Close Tab", enabled: activeTabId !== null },
         { id: "sidecar:close-all", label: "Close All Tabs", enabled: tabs.length > 0 },
         { type: "separator" },
-        {
-          id: "sidecar:layout-mode",
-          label: "Layout Mode",
-          submenu: [
-            {
-              id: "sidecar:layout-mode:auto",
-              label: "Auto",
-              type: "checkbox",
-              checked: layoutModePreference === "auto",
-            },
-            {
-              id: "sidecar:layout-mode:push",
-              label: "Push",
-              type: "checkbox",
-              checked: layoutModePreference === "push",
-            },
-            {
-              id: "sidecar:layout-mode:overlay",
-              label: "Overlay",
-              type: "checkbox",
-              checked: layoutModePreference === "overlay",
-            },
-          ],
-        },
         { id: "sidecar:reset-width", label: "Reset Width" },
         { type: "separator" },
         { id: "sidecar:default-new-tab", label: "Default New Tab", submenu: defaultNewTabItems },
@@ -132,27 +100,6 @@ export function SidecarDock() {
             source: "context-menu",
           });
           break;
-        case "sidecar:layout-mode:auto":
-          void actionService.dispatch(
-            "sidecar.setLayoutMode",
-            { mode: "auto" },
-            { source: "context-menu" }
-          );
-          break;
-        case "sidecar:layout-mode:push":
-          void actionService.dispatch(
-            "sidecar.setLayoutMode",
-            { mode: "push" },
-            { source: "context-menu" }
-          );
-          break;
-        case "sidecar:layout-mode:overlay":
-          void actionService.dispatch(
-            "sidecar.setLayoutMode",
-            { mode: "overlay" },
-            { source: "context-menu" }
-          );
-          break;
         case "sidecar:reset-width":
           void actionService.dispatch("sidecar.resetWidth", undefined, { source: "context-menu" });
           break;
@@ -172,7 +119,7 @@ export function SidecarDock() {
           break;
       }
     },
-    [activeTabId, defaultNewTabUrl, enabledLinks, layoutModePreference, showMenu, tabs.length]
+    [activeTabId, defaultNewTabUrl, enabledLinks, showMenu, tabs.length]
   );
 
   const syncBounds = useCallback(() => {

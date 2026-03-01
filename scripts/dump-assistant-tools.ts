@@ -182,7 +182,6 @@ const AGENT_ACCESSIBLE_ACTIONS = [
   // Sidecar layout
   "sidecar.width.set",
   "sidecar.resetWidth",
-  "sidecar.setLayoutMode",
   "sidecar.setDefaultNewTab",
   "sidecar.tabs.reorder",
 

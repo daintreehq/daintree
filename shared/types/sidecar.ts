@@ -115,5 +115,5 @@ export const DEFAULT_SIDECAR_TABS: SidecarTab[] = [];
 
 export const SIDECAR_MIN_WIDTH = 480;
 export const SIDECAR_MAX_WIDTH = 1200;
-export const SIDECAR_DEFAULT_WIDTH = 640;
+export const SIDECAR_DEFAULT_WIDTH = 480;
 export const MIN_GRID_WIDTH = 400;

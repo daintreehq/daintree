@@ -193,7 +193,6 @@ export type ActionId =
   | "sidecar.openTabExternal"
   | "sidecar.closeOthers"
   | "sidecar.closeToRight"
-  | "sidecar.setLayoutMode"
   | "sidecar.resetWidth"
   | "sidecar.width.set"
   | "sidecar.setDefaultNewTab"

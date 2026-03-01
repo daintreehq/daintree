@@ -1,17 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  RefreshCw,
-  Plus,
-  Trash2,
-  Globe,
-  Check,
-  X,
-  Search,
-  Layers,
-  ArrowRightToLine,
-  SquareStack,
-  AlertTriangle,
-} from "lucide-react";
+import { RefreshCw, Plus, Trash2, Globe, Check, X, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { useSidecarStore } from "@/store/sidecarStore";
@@ -21,9 +9,7 @@ import {
   SIDECAR_MIN_WIDTH,
   SIDECAR_MAX_WIDTH,
   SIDECAR_DEFAULT_WIDTH,
-  MIN_GRID_WIDTH,
 } from "@shared/types";
-import type { SidecarLayoutModePreference } from "@shared/types";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { actionService } from "@/services/ActionService";
 
@@ -67,35 +53,8 @@ function FaviconIcon({ url }: { url: string }) {
   }
 }
 
-const LAYOUT_MODE_OPTIONS: Array<{
-  id: SidecarLayoutModePreference;
-  label: string;
-  description: string;
-  icon: typeof Layers;
-}> = [
-  {
-    id: "auto",
-    label: "Auto",
-    description: "Adapts to window size",
-    icon: Layers,
-  },
-  {
-    id: "push",
-    label: "Push",
-    description: "Always pushes content",
-    icon: ArrowRightToLine,
-  },
-  {
-    id: "overlay",
-    label: "Overlay",
-    description: "Always overlays content",
-    icon: SquareStack,
-  },
-];
-
 export function SidecarSettingsTab() {
   const links = useSidecarStore((s) => s.links);
-  const layoutModePreference = useSidecarStore((s) => s.layoutModePreference);
   const width = useSidecarStore((s) => s.width);
   const defaultNewTabUrl = useSidecarStore((s) => s.defaultNewTabUrl);
   const { rescan, isScanning } = useLinkDiscovery();
@@ -602,67 +561,6 @@ export function SidecarSettingsTab() {
           </div>
           {urlError && <p className="text-xs text-red-500 mt-1">{urlError}</p>}
         </div>
-      </section>
-
-      <section className="pt-4 border-t border-canopy-border">
-        <h4 className="text-sm font-medium text-canopy-text mb-2">Layout Mode</h4>
-        <p className="text-xs text-canopy-text/50 mb-4">
-          Control how the sidecar panel interacts with the main content area.
-        </p>
-
-        <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Layout mode">
-          {LAYOUT_MODE_OPTIONS.map(({ id, label, description, icon: Icon }) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() =>
-                void actionService.dispatch(
-                  "sidecar.setLayoutMode",
-                  { mode: id },
-                  { source: "user" }
-                )
-              }
-              role="radio"
-              aria-checked={layoutModePreference === id}
-              aria-label={`${label} - ${description}`}
-              className={cn(
-                "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-all",
-                layoutModePreference === id
-                  ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
-                  : "border-canopy-border hover:bg-white/5 text-canopy-text/70"
-              )}
-            >
-              <Icon className="w-5 h-5 mb-1.5" />
-              <span className="text-xs font-medium">{label}</span>
-              <span className="text-[11px] mt-0.5 opacity-60">{description}</span>
-            </button>
-          ))}
-        </div>
-
-        <div className="text-xs text-canopy-text/50 space-y-1.5 bg-canopy-bg/50 rounded-[var(--radius-md)] p-3 mt-3">
-          <div className="font-medium text-canopy-text/70 mb-2">Mode behavior:</div>
-          <div className="flex justify-between">
-            <span>Auto</span>
-            <span className="text-canopy-text/70">
-              Switches to overlay when grid width &lt; {MIN_GRID_WIDTH}px
-            </span>
-          </div>
-          <div className="flex justify-between">
-            <span>Push</span>
-            <span className="text-canopy-text/70">Always pushes content aside</span>
-          </div>
-          <div className="flex justify-between">
-            <span>Overlay</span>
-            <span className="text-canopy-text/70">Always overlays on top of content</span>
-          </div>
-        </div>
-
-        {layoutModePreference === "push" && (
-          <p className="text-xs text-amber-500/80 flex items-center gap-1.5 mt-3">
-            <AlertTriangle className="w-3 h-3" />
-            Forcing push mode on small windows may make the panel grid unusable.
-          </p>
-        )}
       </section>
 
       <section className="pt-4 border-t border-canopy-border">

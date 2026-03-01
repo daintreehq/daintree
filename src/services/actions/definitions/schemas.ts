@@ -27,8 +27,6 @@ export const SettingsTabSchema = z.enum([
 
 export const TerminalTypeSchema = z.enum(["terminal", "claude", "gemini", "codex", "opencode"]);
 
-export const SidecarLayoutModeSchema = z.enum(["auto", "push", "overlay"]);
-
 export const LegacyAgentTypeSchema = z.enum(["claude", "gemini", "codex", "opencode"]);
 
 export const GitStatusSchema = z.enum([
