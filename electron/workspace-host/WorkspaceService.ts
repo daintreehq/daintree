@@ -1235,10 +1235,6 @@ export class WorkspaceService {
         throw new Error("Cannot delete the main worktree");
       }
 
-      if (monitor.isCurrent) {
-        throw new Error("Cannot delete the currently active worktree");
-      }
-
       if (!force && (monitor.worktreeChanges?.changedFileCount ?? 0) > 0) {
         throw new Error("Worktree has uncommitted changes. Use force delete to proceed.");
       }
@@ -1247,6 +1243,20 @@ export class WorkspaceService {
 
       if (deleteBranch && !monitor.branch) {
         throw new Error("Cannot delete branch: worktree has no associated branch (detached HEAD)");
+      }
+
+      if (monitor.isCurrent) {
+        let mainWorktreeId: string | undefined;
+        for (const [id, m] of this.monitors) {
+          if (m.isMainWorktree) {
+            mainWorktreeId = id;
+            break;
+          }
+        }
+        if (!mainWorktreeId) {
+          throw new Error("Cannot delete active worktree: no main worktree found to switch to");
+        }
+        this.setActiveWorktree(`${requestId}-auto-switch`, mainWorktreeId);
       }
 
       if (this.git) {
