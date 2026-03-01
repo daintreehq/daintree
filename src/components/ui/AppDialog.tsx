@@ -261,7 +261,7 @@ interface AppDialogBodyProps {
 }
 
 AppDialog.Body = function AppDialogBody({ children, className }: AppDialogBodyProps) {
-  return <div className={cn("flex-1 overflow-y-auto p-6", className)}>{children}</div>;
+  return <div className={cn("flex-1 overflow-y-auto min-h-0 p-6", className)}>{children}</div>;
 };
 
 interface AppDialogBodyScrollProps {
