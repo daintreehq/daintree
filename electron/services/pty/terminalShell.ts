@@ -63,6 +63,7 @@ export function getDefaultShellArgs(shell: string, _options?: ShellArgsOptions):
  * See: https://github.com/google-gemini/gemini-cli/issues/1563
  */
 export const AGENT_ENV_EXCLUSIONS: Record<string, string[]> = {
+  claude: ["CLAUDECODE"],
   gemini: ["CI", "NONINTERACTIVE"],
 };
 
