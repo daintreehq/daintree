@@ -22,7 +22,6 @@ import { actionService } from "@/services/ActionService";
 interface GeneralTabProps {
   appVersion: string;
   onNavigateToAgents?: () => void;
-  onOpenSetupWizard?: () => void;
 }
 
 const CURATED_SHORTCUTS = [
@@ -66,7 +65,7 @@ interface ShortcutCategory {
   shortcuts: ShortcutDisplay[];
 }
 
-export function GeneralTab({ appVersion, onNavigateToAgents, onOpenSetupWizard }: GeneralTabProps) {
+export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) {
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [hibernationConfig, setHibernationConfig] = useState<HibernationConfig | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -257,25 +256,6 @@ export function GeneralTab({ appVersion, onNavigateToAgents, onOpenSetupWizard }
           progress, and inject context to help them understand your codebase.
         </p>
       </div>
-
-      {onOpenSetupWizard && (
-        <div className="space-y-2">
-          <h4 className="text-sm font-medium text-canopy-text">Project Setup</h4>
-          <div className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] p-4">
-            <p className="text-sm text-canopy-text/60 mb-3">
-              Re-open the project setup wizard to update your project name, AI rules (CLAUDE.md),
-              and advanced configuration.
-            </p>
-            <button
-              type="button"
-              onClick={onOpenSetupWizard}
-              className="text-sm px-3 py-1.5 rounded-[var(--radius-md)] border border-canopy-border hover:bg-canopy-border/30 text-canopy-text transition-colors"
-            >
-              Re-open Setup Wizard
-            </button>
-          </div>
-        </div>
-      )}
 
       <div className="space-y-2">
         <h4 className="text-sm font-medium text-canopy-text">System Status</h4>

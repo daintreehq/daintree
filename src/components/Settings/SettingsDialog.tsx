@@ -32,7 +32,6 @@ interface SettingsDialogProps {
   onClose: () => void;
   defaultTab?: SettingsTab;
   onSettingsChange?: () => void;
-  onOpenSetupWizard?: () => void;
 }
 
 export type SettingsTab =
@@ -53,7 +52,6 @@ export function SettingsDialog({
   onClose,
   defaultTab,
   onSettingsChange,
-  onOpenSetupWizard,
 }: SettingsDialogProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(defaultTab ?? "general");
   const setSidecarOpen = useSidecarStore((state) => state.setOpen);
@@ -202,7 +200,6 @@ export function SettingsDialog({
               <GeneralTab
                 appVersion={appVersion}
                 onNavigateToAgents={() => setActiveTab("agents")}
-                onOpenSetupWizard={onOpenSetupWizard}
               />
             </div>
 
