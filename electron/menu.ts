@@ -181,14 +181,14 @@ export function createApplicationMenu(
             ]
           : [{ type: "separator" as const }]),
         {
-          label: "Terminal Palette...",
+          label: "Quick Switcher...",
           accelerator: "CommandOrControl+P",
-          click: () => sendAction("open-agent-palette"),
+          click: () => sendAction("open-quick-switcher"),
         },
         {
-          label: "Panel Palette...",
+          label: "Command Palette...",
           accelerator: "CommandOrControl+Shift+P",
-          click: () => sendAction("open-panel-palette"),
+          click: () => sendAction("open-action-palette"),
         },
         { type: "separator" },
         {
