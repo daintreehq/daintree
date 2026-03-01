@@ -63,6 +63,7 @@ import { NewWorktreeDialog } from "./components/Worktree/NewWorktreeDialog";
 import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
 import { TerminalPalette, NewTerminalPalette } from "./components/TerminalPalette";
 import { PanelPalette } from "./components/PanelPalette/PanelPalette";
+import { MORE_AGENTS_PANEL_ID } from "./hooks/usePanelPalette";
 import { GitInitDialog, ProjectOnboardingWizard, WelcomeScreen } from "./components/Project";
 import { AgentSetupWizard, shouldShowAgentSetupWizard } from "./components/Setup";
 import { CreateProjectFolderDialog } from "./components/Project/CreateProjectFolderDialog";
@@ -1019,6 +1020,7 @@ function App() {
         onSelectNext={panelPalette.selectNext}
         onSelect={(kind) => {
           panelPalette.handleSelect(kind);
+          if (kind.id === MORE_AGENTS_PANEL_ID) return;
           if (kind.id.startsWith("agent:")) {
             const agentId = kind.id.slice("agent:".length);
             if (agentId) {
@@ -1035,7 +1037,7 @@ function App() {
         }}
         onConfirm={() => {
           const selected = panelPalette.confirmSelection();
-          if (selected) {
+          if (selected && selected.id !== MORE_AGENTS_PANEL_ID) {
             if (selected.id.startsWith("agent:")) {
               const agentId = selected.id.slice("agent:".length);
               if (agentId) {

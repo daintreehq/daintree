@@ -278,20 +278,26 @@ export function WorktreeCard({
   }, [agentSettings]);
 
   const launchAgents = useMemo(() => {
-    return agentIds.map((agentId) => {
-      const config = getAgentConfig(agentId);
-      const entry = getAgentSettingsEntry(agentSettings, agentId);
-      const settingsEnabled = entry.enabled ?? true;
-      const available = agentAvailability?.[agentId] ?? false;
+    return agentIds
+      .filter((agentId) => {
+        const entry = getAgentSettingsEntry(agentSettings, agentId);
+        // selected === false = explicitly deselected; undefined = pre-migration, treat as visible
+        return entry.selected !== false;
+      })
+      .map((agentId) => {
+        const config = getAgentConfig(agentId);
+        const entry = getAgentSettingsEntry(agentSettings, agentId);
+        const settingsEnabled = entry.enabled ?? true;
+        const available = agentAvailability?.[agentId] ?? false;
 
-      return {
-        id: agentId,
-        name: config?.name ?? agentId,
-        icon: config?.icon,
-        shortcut: config?.shortcut ?? null,
-        isEnabled: settingsEnabled && available,
-      };
-    });
+        return {
+          id: agentId,
+          name: config?.name ?? agentId,
+          icon: config?.icon,
+          shortcut: config?.shortcut ?? null,
+          isEnabled: settingsEnabled && available,
+        };
+      });
   }, [agentAvailability, agentIds, agentSettings]);
 
   const launchAgentsForContextMenu = useMemo(

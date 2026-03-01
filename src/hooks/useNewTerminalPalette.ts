@@ -1,10 +1,17 @@
-import { useCallback, useMemo, useRef } from "react";
-import { getLaunchOptions, type LaunchOption } from "@/components/TerminalPalette/launchOptions";
+import { useCallback, useMemo } from "react";
+import {
+  getLaunchOptions,
+  getMoreAgentsOption,
+  type LaunchOption,
+} from "@/components/TerminalPalette/launchOptions";
 import type { LaunchAgentOptions } from "./useAgentLauncher";
 import { useWorktreeSelectionStore, useTerminalStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import type { WorktreeState } from "@/types";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
+import { actionService } from "@/services/ActionService";
+import { getEffectiveAgentIds } from "@shared/config/agentRegistry";
 
 interface UseNewTerminalPaletteProps {
   launchAgent: (
@@ -29,6 +36,8 @@ function filterLaunchOptions(items: LaunchOption[], query: string): LaunchOption
   );
 }
 
+export const MORE_AGENTS_TERMINAL_ID = "more-agents";
+
 export function useNewTerminalPalette({
   launchAgent,
   worktreeMap,
@@ -36,13 +45,43 @@ export function useNewTerminalPalette({
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const currentProject = useProjectStore((state) => state.currentProject);
   const addTerminal = useTerminalStore((state) => state.addTerminal);
+  const agentSettings = useAgentSettingsStore((state) => state.settings);
 
-  const options = useMemo(() => getLaunchOptions(), []);
+  const options = useMemo(() => {
+    const allOptions = getLaunchOptions();
+    const registryAgentIds = new Set(getEffectiveAgentIds());
 
-  const closeFnRef = useRef<() => void>(() => {});
+    // When settings haven't loaded yet, show all agents (no filter).
+    // When loaded, hide agents explicitly deselected (selected === false).
+    // Agents with selected === undefined (pre-migration) are treated as visible.
+    const isAgentHidden = (id: string): boolean => {
+      if (!agentSettings?.agents) return false;
+      return agentSettings.agents[id]?.selected === false;
+    };
+
+    const filtered = allOptions.filter(
+      (opt) => !registryAgentIds.has(opt.id) || !isAgentHidden(opt.id)
+    );
+
+    filtered.push(getMoreAgentsOption());
+
+    return filtered;
+  }, [agentSettings]);
+
+  const { results, selectedIndex, close, ...paletteRest } = useSearchablePalette<LaunchOption>({
+    items: options,
+    filterFn: filterLaunchOptions,
+    maxResults: 20,
+  });
 
   const handleSelect = useCallback(
     async (option: LaunchOption) => {
+      if (option.id === MORE_AGENTS_TERMINAL_ID) {
+        close();
+        void actionService.dispatch("app.settings.openTab", { tab: "agents" }, { source: "user" });
+        return;
+      }
+
       const targetWorktreeId = activeWorktreeId;
       const targetWorktree = targetWorktreeId ? worktreeMap.get(targetWorktreeId) : null;
       const cwd = targetWorktree?.path ?? currentProject?.path ?? "";
@@ -55,7 +94,7 @@ export function useNewTerminalPalette({
             worktreeId: targetWorktreeId || undefined,
             location: "grid",
           });
-          closeFnRef.current();
+          close();
           return;
         }
 
@@ -64,19 +103,13 @@ export function useNewTerminalPalette({
           cwd,
           location: "grid",
         });
-        closeFnRef.current();
+        close();
       } catch (error) {
         console.error(`Failed to launch ${option.type} terminal:`, error);
       }
     },
-    [activeWorktreeId, worktreeMap, currentProject, launchAgent, addTerminal]
+    [activeWorktreeId, worktreeMap, currentProject, launchAgent, addTerminal, close]
   );
-
-  const { results, selectedIndex, close, ...paletteRest } = useSearchablePalette<LaunchOption>({
-    items: options,
-    filterFn: filterLaunchOptions,
-    maxResults: 20,
-  });
 
   const confirmSelection = useCallback(() => {
     if (results.length > 0 && selectedIndex >= 0) {

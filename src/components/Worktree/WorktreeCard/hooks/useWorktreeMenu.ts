@@ -56,6 +56,9 @@ export function useWorktreeMenu({
         enabled: Boolean(onLaunchAgent && agent.isEnabled),
       })),
       ...(launchAgents.length > 0 ? [{ type: "separator" as const }] : []),
+      ...(launchAgents.length === 0
+        ? [{ id: "launch:configure-agents", label: "Configure agents..." }]
+        : []),
       { id: "launch:terminal", label: "Open Terminal", enabled: Boolean(onLaunchAgent) },
       { id: "launch:browser", label: "Open Browser", enabled: Boolean(onLaunchAgent) },
     ];
@@ -216,6 +219,15 @@ export function useWorktreeMenu({
     async (event: React.MouseEvent) => {
       const actionId = await showMenu(event, contextMenuTemplate);
       if (!actionId) return;
+
+      if (actionId === "launch:configure-agents") {
+        void actionService.dispatch(
+          "app.settings.openTab",
+          { tab: "agents" },
+          { source: "context-menu" }
+        );
+        return;
+      }
 
       if (actionId.startsWith("launch:")) {
         const agentId = actionId.slice("launch:".length);

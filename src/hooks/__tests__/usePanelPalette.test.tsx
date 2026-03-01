@@ -36,6 +36,19 @@ vi.mock("@/store/userAgentRegistryStore", () => ({
   ) => selector({ registry: {} }),
 }));
 
+vi.mock("@/store/agentSettingsStore", () => ({
+  useAgentSettingsStore: (
+    selector: (state: {
+      settings: { agents: Record<string, { selected?: boolean }> } | null;
+    }) => unknown
+  ) =>
+    selector({ settings: { agents: { claude: { selected: true }, gemini: { selected: true } } } }),
+}));
+
+vi.mock("@/services/ActionService", () => ({
+  actionService: { dispatch: vi.fn() },
+}));
+
 import { usePanelPalette } from "../usePanelPalette";
 
 describe("usePanelPalette", () => {
