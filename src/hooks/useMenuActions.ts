@@ -80,7 +80,7 @@ export function useMenuActions(options: UseMenuActionsOptions): void {
           "new-worktree": "worktree.createDialog.open",
           "open-settings": "app.settings",
           "toggle-sidebar": "nav.toggleSidebar",
-          "open-agent-palette": "terminal.palette",
+          "open-agent-palette": "nav.quickSwitcher",
           "open-panel-palette": "panel.palette",
           "open-assistant": "assistant.open",
         };

@@ -36,7 +36,6 @@ export function useActionRegistry(options: ActionCallbacks): void {
       onToggleWorktreeOverview: () => callbacksRef.current.onToggleWorktreeOverview(),
       onOpenWorktreeOverview: () => callbacksRef.current.onOpenWorktreeOverview(),
       onCloseWorktreeOverview: () => callbacksRef.current.onCloseWorktreeOverview(),
-      onOpenNewTerminalPalette: () => callbacksRef.current.onOpenNewTerminalPalette(),
       onOpenPanelPalette: () => callbacksRef.current.onOpenPanelPalette(),
       onOpenProjectSwitcherPalette: () => callbacksRef.current.onOpenProjectSwitcherPalette(),
       onOpenShortcuts: () => callbacksRef.current.onOpenShortcuts(),

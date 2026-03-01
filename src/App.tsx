@@ -938,7 +938,6 @@ function App() {
     onToggleWorktreeOverview: toggleWorktreeOverview,
     onOpenWorktreeOverview: openWorktreeOverview,
     onCloseWorktreeOverview: closeWorktreeOverview,
-    onOpenNewTerminalPalette: newTerminalPalette.open,
     onOpenPanelPalette: panelPalette.open,
     onOpenProjectSwitcherPalette: projectSwitcherPalette.open,
     onOpenShortcuts: () => setIsShortcutsOpen(true),

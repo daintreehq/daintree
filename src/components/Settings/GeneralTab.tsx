@@ -28,7 +28,7 @@ const CURATED_SHORTCUTS = [
   {
     category: "Agents",
     actionIds: [
-      "terminal.spawnPalette",
+      "panel.palette",
       "agent.claude",
       "agent.gemini",
       "agent.codex",
@@ -39,7 +39,12 @@ const CURATED_SHORTCUTS = [
   },
   {
     category: "Terminal",
-    actionIds: ["terminal.palette", "terminal.new", "terminal.focusNext", "terminal.focusPrevious"],
+    actionIds: [
+      "nav.quickSwitcher",
+      "terminal.new",
+      "terminal.focusNext",
+      "terminal.focusPrevious",
+    ],
   },
   {
     category: "Panels",

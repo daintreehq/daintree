@@ -82,12 +82,12 @@ const AGENT_ACCESSIBLE_ACTIONS = [
   "agent.focusNextFailed",
   "agent.focusNextWaiting",
   "agent.palette",
+  "nav.quickSwitcher",
 
   // ===== TERMINAL OPERATIONS =====
   "terminal.new",
   "terminal.close",
   "terminal.trash",
-  "terminal.palette",
   "terminal.rename",
   "terminal.duplicate",
   "terminal.restart",
@@ -115,12 +115,10 @@ const AGENT_ACCESSIBLE_ACTIONS = [
   "tab.previous",
 
   // Terminal state
-  "terminal.minimize",
-  "terminal.restore",
   "terminal.maximize",
   "terminal.toggleMaximize",
-  "terminal.minimizeAll",
-  "terminal.restoreAll",
+  "terminal.toggleDock",
+  "terminal.toggleDockAll",
 
   // Terminal-to-worktree actions
   "terminal.openWorktreeEditor",

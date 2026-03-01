@@ -79,6 +79,7 @@ export const AGENT_ACCESSIBLE_ACTIONS = [
   "agent.focusNextFailed",
   "agent.focusNextWaiting",
   "agent.palette",
+  "nav.quickSwitcher",
 
   // ===== TERMINAL OPERATIONS =====
   // Terminal management and interaction
@@ -86,7 +87,6 @@ export const AGENT_ACCESSIBLE_ACTIONS = [
   "terminal.new",
   "terminal.close",
   "terminal.trash",
-  "terminal.palette",
   "terminal.rename",
   "terminal.duplicate",
   "terminal.restart",
@@ -114,12 +114,10 @@ export const AGENT_ACCESSIBLE_ACTIONS = [
   "tab.previous",
 
   // Terminal state
-  "terminal.minimize",
-  "terminal.restore",
   "terminal.maximize",
   "terminal.toggleMaximize",
-  "terminal.minimizeAll",
-  "terminal.restoreAll",
+  "terminal.toggleDock",
+  "terminal.toggleDockAll",
   "terminal.restartAll",
 
   // Terminal-to-worktree actions

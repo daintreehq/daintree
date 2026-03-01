@@ -473,39 +473,6 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
     },
   }));
 
-  actions.set("terminal.minimize", () => ({
-    id: "terminal.minimize",
-    title: "Minimize Terminal",
-    description: "Minimize terminal to dock",
-    category: "terminal",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      const state = useTerminalStore.getState();
-      if (state.focusedId) {
-        state.moveTerminalToDock(state.focusedId);
-      }
-    },
-  }));
-
-  actions.set("terminal.restore", () => ({
-    id: "terminal.restore",
-    title: "Restore Terminal",
-    description: "Restore terminal from dock to grid",
-    category: "terminal",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      const state = useTerminalStore.getState();
-      const dockTerminals = state.terminals.filter((t) => t.location === "dock");
-      if (dockTerminals.length > 0) {
-        state.moveTerminalToGrid(dockTerminals[0].id);
-      }
-    },
-  }));
-
   actions.set("terminal.toggleMaximize", () => ({
     id: "terminal.toggleMaximize",
     title: "Toggle Maximize",
@@ -857,32 +824,6 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
     },
   }));
 
-  actions.set("terminal.minimizeAll", () => ({
-    id: "terminal.minimizeAll",
-    title: "Minimize All Terminals",
-    description: "Move all terminals to dock",
-    category: "terminal",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      useTerminalStore.getState().bulkMoveToDock();
-    },
-  }));
-
-  actions.set("terminal.restoreAll", () => ({
-    id: "terminal.restoreAll",
-    title: "Restore All Terminals",
-    description: "Move all terminals from dock to grid",
-    category: "terminal",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      useTerminalStore.getState().bulkMoveToGrid();
-    },
-  }));
-
   actions.set("terminal.toggleDock", () => ({
     id: "terminal.toggleDock",
     title: "Toggle Dock",
@@ -930,32 +871,6 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
       } else {
         state.bulkMoveToDock();
       }
-    },
-  }));
-
-  actions.set("terminal.palette", () => ({
-    id: "terminal.palette",
-    title: "Open Terminal Palette",
-    description: "Open the terminal/agent palette",
-    category: "terminal",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      callbacks.onOpenAgentPalette();
-    },
-  }));
-
-  actions.set("terminal.spawnPalette", () => ({
-    id: "terminal.spawnPalette",
-    title: "Open New Terminal Palette",
-    description: "Open palette to spawn a new terminal",
-    category: "terminal",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      callbacks.onOpenNewTerminalPalette();
     },
   }));
 
