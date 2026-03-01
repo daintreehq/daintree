@@ -124,7 +124,7 @@ export function ProjectOnboardingWizard({
 
   return (
     <AppDialog isOpen={isOpen} onClose={onClose} size="md" dismissible={!isSaving}>
-      <div className="p-6">
+      <AppDialog.Body>
         <div className="mb-6">
           <h2 className="text-lg font-semibold text-canopy-text">Set up your project</h2>
           <p className="text-sm text-canopy-text/60 mt-1">
@@ -137,9 +137,7 @@ export function ProjectOnboardingWizard({
             Loading project settings...
           </div>
         )}
-        <div
-          className={`space-y-6 overflow-y-auto max-h-[60vh] pr-1 ${!isInitialized ? "hidden" : ""}`}
-        >
+        <div className={`space-y-6 ${!isInitialized ? "hidden" : ""}`}>
           {/* Identity */}
           <div className="pb-6 border-b border-canopy-border">
             <h3 className="text-sm font-semibold text-canopy-text/80 mb-3">Project Identity</h3>
@@ -381,25 +379,25 @@ export function ProjectOnboardingWizard({
             )}
           </div>
         </div>
+      </AppDialog.Body>
 
-        {saveError && (
-          <div
-            className="mt-4 text-sm text-[var(--color-status-error)] bg-red-900/20 border border-red-900/30 rounded p-3"
-            role="alert"
-          >
-            {saveError}
-          </div>
-        )}
-
-        <div className="flex items-center justify-end gap-3 mt-6 pt-4 border-t border-canopy-border">
-          <Button variant="ghost" onClick={onClose} disabled={isSaving}>
-            Skip
-          </Button>
-          <Button onClick={handleFinish} disabled={isSaving || isLoading}>
-            {isSaving ? "Saving..." : "Finish"}
-          </Button>
+      {saveError && (
+        <div
+          className="shrink-0 px-6 py-3 border-t border-canopy-border text-sm text-[var(--color-status-error)] bg-red-900/20"
+          role="alert"
+        >
+          {saveError}
         </div>
-      </div>
+      )}
+
+      <AppDialog.Footer>
+        <Button variant="ghost" onClick={onClose} disabled={isSaving}>
+          Skip
+        </Button>
+        <Button onClick={handleFinish} disabled={isSaving || isLoading}>
+          {isSaving ? "Saving..." : "Finish"}
+        </Button>
+      </AppDialog.Footer>
     </AppDialog>
   );
 }
