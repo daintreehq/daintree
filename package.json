@@ -155,7 +155,7 @@
   },
   "build": {
     "asar": true,
-    "appId": "com.canopy.commandcenter",
+    "appId": "com.canopyide.app",
     "publish": [
       {
         "provider": "generic",
