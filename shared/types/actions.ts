@@ -45,6 +45,8 @@ export type ActionId =
   | "worktreeConfig.get"
   | "worktreeConfig.setPattern"
   | "files.search"
+  | "file.view"
+  | "file.openInEditor"
   | "slashCommands.list"
   | "artifact.saveToFile"
   | "artifact.applyPatch"

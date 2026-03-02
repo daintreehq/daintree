@@ -53,6 +53,7 @@ export const CHANNELS = {
   TERMINAL_SEND_KEY: "terminal:send-key",
 
   FILES_SEARCH: "files:search",
+  FILES_READ: "files:read",
 
   AGENT_STATE_CHANGED: "agent:state-changed",
   AGENT_DETECTED: "agent:detected",
@@ -75,6 +76,7 @@ export const CHANNELS = {
 
   SYSTEM_OPEN_EXTERNAL: "system:open-external",
   SYSTEM_OPEN_PATH: "system:open-path",
+  SYSTEM_OPEN_IN_EDITOR: "system:open-in-editor",
   SYSTEM_CHECK_COMMAND: "system:check-command",
   SYSTEM_CHECK_DIRECTORY: "system:check-directory",
   SYSTEM_GET_HOME_DIR: "system:get-home-dir",

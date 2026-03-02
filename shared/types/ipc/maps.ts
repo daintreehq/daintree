@@ -59,6 +59,7 @@ import type {
 import type {
   SystemOpenExternalPayload,
   SystemOpenPathPayload,
+  SystemOpenInEditorPayload,
   SystemWakePayload,
   CliAvailability,
   AgentVersionInfo,
@@ -86,7 +87,12 @@ import type { GitGetFileDiffPayload } from "./git.js";
 import type { TerminalConfig } from "./config.js";
 import type { SystemSleepMetrics } from "./systemSleep.js";
 import type { ShowContextMenuPayload } from "../menu.js";
-import type { FileSearchPayload, FileSearchResult } from "./files.js";
+import type {
+  FileSearchPayload,
+  FileSearchResult,
+  FileReadPayload,
+  FileReadResult,
+} from "./files.js";
 import type { SlashCommand, SlashCommandListRequest } from "../slashCommands.js";
 import type {
   DevPreviewEnsureRequest,
@@ -250,6 +256,10 @@ export interface IpcInvokeMap {
     args: [payload: FileSearchPayload];
     result: FileSearchResult;
   };
+  "files:read": {
+    args: [payload: FileReadPayload];
+    result: FileReadResult;
+  };
 
   // Slash command discovery
   "slash-commands:list": {
@@ -310,6 +320,10 @@ export interface IpcInvokeMap {
   };
   "system:open-path": {
     args: [payload: SystemOpenPathPayload];
+    result: void;
+  };
+  "system:open-in-editor": {
+    args: [payload: SystemOpenInEditorPayload];
     result: void;
   };
   "system:check-command": {

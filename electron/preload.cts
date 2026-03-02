@@ -183,6 +183,7 @@ const CHANNELS = {
 
   // Files channels
   FILES_SEARCH: "files:search",
+  FILES_READ: "files:read",
 
   // Agent state channels
   AGENT_STATE_CHANGED: "agent:state-changed",
@@ -210,6 +211,7 @@ const CHANNELS = {
   // System channels
   SYSTEM_OPEN_EXTERNAL: "system:open-external",
   SYSTEM_OPEN_PATH: "system:open-path",
+  SYSTEM_OPEN_IN_EDITOR: "system:open-in-editor",
   SYSTEM_CHECK_COMMAND: "system:check-command",
   SYSTEM_CHECK_DIRECTORY: "system:check-directory",
   SYSTEM_GET_HOME_DIR: "system:get-home-dir",
@@ -654,6 +656,7 @@ const api: ElectronAPI = {
   // Files API
   files: {
     search: (payload) => _typedInvoke(CHANNELS.FILES_SEARCH, payload),
+    read: (payload) => _typedInvoke(CHANNELS.FILES_READ, payload),
   },
 
   // Slash Commands API
@@ -707,6 +710,9 @@ const api: ElectronAPI = {
     openExternal: (url: string) => _typedInvoke(CHANNELS.SYSTEM_OPEN_EXTERNAL, { url }),
 
     openPath: (path: string) => _typedInvoke(CHANNELS.SYSTEM_OPEN_PATH, { path }),
+
+    openInEditor: (payload: { path: string; line?: number; col?: number }) =>
+      _typedInvoke(CHANNELS.SYSTEM_OPEN_IN_EDITOR, payload),
 
     checkCommand: (command: string) => _typedInvoke(CHANNELS.SYSTEM_CHECK_COMMAND, command),
 

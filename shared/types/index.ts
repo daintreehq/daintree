@@ -175,6 +175,9 @@ export type {
   // File search types
   FileSearchPayload,
   FileSearchResult,
+  FileReadPayload,
+  FileReadResult,
+  FileReadErrorCode,
   // Electron API
   ElectronAPI,
   BranchInfo,

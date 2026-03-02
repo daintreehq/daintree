@@ -47,6 +47,7 @@ import type {
 } from "./copyTree.js";
 import type {
   SystemWakePayload,
+  SystemOpenInEditorPayload,
   CliAvailability,
   AgentVersionInfo,
   AgentUpdateSettings,
@@ -75,7 +76,12 @@ import type { SystemSleepMetrics } from "./systemSleep.js";
 import type { KeyAction } from "../keymap.js";
 import type { TerminalStatusPayload, PtyHostActivityTier, SpawnResult } from "../pty-host.js";
 import type { ShowContextMenuPayload } from "../menu.js";
-import type { FileSearchPayload, FileSearchResult } from "./files.js";
+import type {
+  FileSearchPayload,
+  FileSearchResult,
+  FileReadPayload,
+  FileReadResult,
+} from "./files.js";
 import type { SlashCommand, SlashCommandListRequest } from "../slashCommands.js";
 import type {
   DevPreviewEnsureRequest,
@@ -186,6 +192,7 @@ export interface ElectronAPI {
   };
   files: {
     search(payload: FileSearchPayload): Promise<FileSearchResult>;
+    read(payload: FileReadPayload): Promise<FileReadResult>;
   };
   slashCommands: {
     list(payload: SlashCommandListRequest): Promise<SlashCommand[]>;
@@ -216,6 +223,7 @@ export interface ElectronAPI {
   system: {
     openExternal(url: string): Promise<void>;
     openPath(path: string): Promise<void>;
+    openInEditor(payload: SystemOpenInEditorPayload): Promise<void>;
     checkCommand(command: string): Promise<boolean>;
     checkDirectory(path: string): Promise<boolean>;
     getHomeDir(): Promise<string>;

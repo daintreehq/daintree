@@ -16,6 +16,10 @@ export const systemClient = {
     return window.electron.system.openPath(path);
   },
 
+  openInEditor: (payload: { path: string; line?: number; col?: number }): Promise<void> => {
+    return window.electron.system.openInEditor(payload);
+  },
+
   checkCommand: (command: string): Promise<boolean> => {
     return window.electron.system.checkCommand(command);
   },

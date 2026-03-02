@@ -3,61 +3,12 @@ import { parseDiff, Diff, Hunk, tokenize, markEdits, DiffType, ViewType } from "
 import type { HunkData, HunkTokens, TokenizeOptions } from "react-diff-view";
 import { refractor } from "refractor";
 import "react-diff-view/style/index.css";
+import { getLanguageForFile } from "@/components/FileViewer/languageUtils";
 
 export interface DiffViewerProps {
   diff: string;
   filePath: string;
   viewType?: ViewType;
-}
-
-function getLanguage(filePath: string): string {
-  const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
-
-  const languageMap: Record<string, string> = {
-    js: "javascript",
-    jsx: "jsx",
-    ts: "typescript",
-    tsx: "tsx",
-    mjs: "javascript",
-    cjs: "javascript",
-    html: "markup",
-    htm: "markup",
-    css: "css",
-    scss: "scss",
-    sass: "sass",
-    less: "less",
-    json: "json",
-    yaml: "yaml",
-    yml: "yaml",
-    toml: "toml",
-    xml: "markup",
-    md: "markdown",
-    mdx: "markdown",
-    py: "python",
-    rb: "ruby",
-    go: "go",
-    rs: "rust",
-    java: "java",
-    kt: "kotlin",
-    swift: "swift",
-    c: "c",
-    cpp: "cpp",
-    h: "c",
-    hpp: "cpp",
-    cs: "csharp",
-    php: "php",
-    sql: "sql",
-    sh: "bash",
-    bash: "bash",
-    zsh: "bash",
-    fish: "bash",
-    dockerfile: "docker",
-    makefile: "makefile",
-    graphql: "graphql",
-    gql: "graphql",
-  };
-
-  return languageMap[ext] || "text";
 }
 
 function useTokens(hunks: HunkData[], language: string): HunkTokens | null {
@@ -120,7 +71,7 @@ export function DiffViewer({ diff, filePath, viewType = "split" }: DiffViewerPro
     );
   }
 
-  const language = getLanguage(filePath);
+  const language = getLanguageForFile(filePath);
 
   return (
     <div className="diff-viewer overflow-auto">
