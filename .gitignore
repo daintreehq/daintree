@@ -48,10 +48,7 @@ keys/
 
 # Environment
 .env
-.env.local
-.env.*.local
-.env.development
-.env.production
+.env.*
 
 # Cache
 .cache/
