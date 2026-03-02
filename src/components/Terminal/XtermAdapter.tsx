@@ -8,13 +8,9 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useScrollbackStore, usePerformanceModeStore, useTerminalFontStore } from "@/store";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { getXtermOptions } from "@/config/xtermConfig";
-import {
-  getSoftNewlineSequence,
-  formatWithBracketedPaste,
-} from "../../../shared/utils/terminalInputProtocol.js";
+import { getSoftNewlineSequence } from "../../../shared/utils/terminalInputProtocol.js";
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
-import { isMac } from "@/lib/platform";
 
 export interface XtermAdapterProps {
   terminalId: string;
@@ -247,38 +243,10 @@ function XtermAdapterComponent({
           }
         }
 
-        // Clipboard paste: Cmd+V (macOS) or Ctrl+Shift+V (Linux/Windows)
-        // Must intercept before the generic metaKey fallthrough so we can
-        // apply bracketed paste wrapping and write via the app-level PTY path.
-        {
-          const isPaste = isMac()
-            ? event.metaKey && event.key.toLowerCase() === "v"
-            : event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "v";
-
-          if (isPaste && !managed.isInputLocked) {
-            event.preventDefault();
-            event.stopPropagation();
-            void (async () => {
-              try {
-                const text = await navigator.clipboard.readText();
-                if (!text) return;
-                // Re-check lock after async clipboard read
-                if (managed.isInputLocked) return;
-                if (managed.terminal.modes.bracketedPasteMode) {
-                  terminalClient.write(terminalId, formatWithBracketedPaste(text));
-                } else {
-                  terminalClient.write(terminalId, text.replace(/\r?\n/g, "\r"));
-                }
-                terminalInstanceService.notifyUserInput(terminalId);
-              } catch {
-                // Clipboard API may be denied in some Electron contexts
-              }
-            })();
-            return false;
-          }
-        }
-
         // Let the OS handle meta combinations (e.g., Cmd+C/V).
+        // Paste (Cmd+V) is handled by Electron's native Edit > Paste menu role,
+        // which dispatches a paste event that xterm.js processes natively
+        // (including bracketed paste mode wrapping).
         // Keep Alt/Option available for word navigation/editing inside the TUI.
         if (event.metaKey) {
           return false;

@@ -565,23 +565,19 @@ async function createWindow(): Promise<void> {
 
   // Lock down permissions on untrusted sessions to prevent OS permission prompts
   // Deny all for untrusted content (browser, dev-preview, sidecar)
-  // Allow minimal permissions for trusted app renderer (clipboard only)
+  // Allow minimal permissions for trusted app renderer (clipboard read/write only)
   function lockdownUntrustedPermissions(ses: Electron.Session): void {
     ses.setPermissionRequestHandler((_wc, _perm, callback) => callback(false));
     ses.setPermissionCheckHandler(() => false);
   }
 
   function lockdownTrustedPermissions(ses: Electron.Session): void {
+    const trustedPermissions = new Set(["clipboard-sanitized-write", "clipboard-read"]);
     ses.setPermissionRequestHandler((_wc, permission, callback) => {
-      // Allow only clipboard-write for trusted app renderer
-      if (permission === "clipboard-sanitized-write") {
-        callback(true);
-      } else {
-        callback(false);
-      }
+      callback(trustedPermissions.has(permission));
     });
     ses.setPermissionCheckHandler((_wc, permission) => {
-      return permission === "clipboard-sanitized-write";
+      return trustedPermissions.has(permission);
     });
   }
 
