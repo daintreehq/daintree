@@ -64,6 +64,7 @@ export const CopyTreeOptionsSchema = z.object({
 
 export const AgentSettingsEntrySchema = z
   .object({
+    selected: z.boolean().optional(),
     enabled: z.boolean().optional(),
     customFlags: z.string().optional(),
     dangerousArgs: z.string().optional(),

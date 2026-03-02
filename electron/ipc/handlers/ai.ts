@@ -110,7 +110,7 @@ export function registerAiHandlers(_deps: HandlerDependencies): () => void {
         ...currentSettings.root,
         agents: {
           ...currentSettings.agents,
-          [safeAgentType]: DEFAULT_AGENT_SETTINGS.agents[safeAgentType] ?? { enabled: true },
+          [safeAgentType]: DEFAULT_AGENT_SETTINGS.agents[safeAgentType] ?? {},
         },
       };
       store.set("agentSettings", updatedSettings);

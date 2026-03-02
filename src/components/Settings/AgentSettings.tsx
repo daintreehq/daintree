@@ -132,8 +132,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
             color: config.color,
             Icon: config.icon,
             usageUrl: config.usageUrl,
-            selected: entry.selected ?? false,
-            enabled: entry.enabled ?? true,
+            selected: entry.selected !== false,
             dangerousEnabled: entry.dangerousEnabled ?? false,
             hasCustomFlags: Boolean(entry.customFlags?.trim()),
           };
@@ -312,58 +311,33 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
               </div>
             </div>
 
-            {/* Selected (Include in Workflow) Toggle */}
+            {/* Enable Agent Toggle */}
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-sm font-medium text-canopy-text">Include in Workflow</div>
+                <div className="text-sm font-medium text-canopy-text">Enable agent</div>
                 <div className="text-xs text-canopy-text/50">
-                  Show in toolbars, palettes, and menus
+                  When disabled, this agent is hidden everywhere and treated as if it is not
+                  installed
                 </div>
               </div>
               <button
                 role="switch"
-                aria-checked={activeEntry.selected ?? false}
-                aria-label={`Include ${activeAgent.name} in workflow`}
+                aria-checked={activeEntry.selected !== false}
+                aria-label={`Enable ${activeAgent.name}`}
                 onClick={async () => {
-                  const current = activeEntry.selected ?? false;
+                  const current = activeEntry.selected !== false;
                   await setAgentSelected(activeAgent.id, !current);
                   onSettingsChange?.();
                 }}
                 className={cn(
-                  "relative w-11 h-6 rounded-full transition-colors",
-                  (activeEntry.selected ?? false) ? "bg-canopy-accent" : "bg-canopy-border"
+                  "relative w-11 h-6 rounded-full transition-colors shrink-0",
+                  activeEntry.selected !== false ? "bg-canopy-accent" : "bg-canopy-border"
                 )}
               >
                 <span
                   className={cn(
                     "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform",
-                    (activeEntry.selected ?? false) && "translate-x-5"
-                  )}
-                />
-              </button>
-            </div>
-
-            {/* Enabled Toggle */}
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-sm font-medium text-canopy-text">Enabled</div>
-                <div className="text-xs text-canopy-text/50">Show in agent launcher</div>
-              </div>
-              <button
-                onClick={async () => {
-                  const current = activeEntry.enabled ?? true;
-                  await updateAgent(activeAgent.id, { enabled: !current });
-                  onSettingsChange?.();
-                }}
-                className={cn(
-                  "relative w-11 h-6 rounded-full transition-colors",
-                  (activeEntry.enabled ?? true) ? "bg-canopy-accent" : "bg-canopy-border"
-                )}
-              >
-                <span
-                  className={cn(
-                    "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform",
-                    (activeEntry.enabled ?? true) && "translate-x-5"
+                    activeEntry.selected !== false && "translate-x-5"
                   )}
                 />
               </button>

@@ -14,16 +14,13 @@ type AgentType = "claude" | "gemini" | "codex" | "opencode";
 interface AgentButtonProps {
   type: AgentType;
   availability?: boolean;
-  isEnabled: boolean;
   onOpenSettings: () => void;
 }
 
-export function AgentButton({ type, availability, isEnabled, onOpenSettings }: AgentButtonProps) {
+export function AgentButton({ type, availability, onOpenSettings }: AgentButtonProps) {
   const { showMenu } = useNativeContextMenu();
   const { worktrees } = useWorktrees();
   const displayCombo = useKeybindingDisplay(`agent.${type}`);
-
-  if (!isEnabled) return null;
 
   const config = getAgentConfig(type);
   if (!config) return null;

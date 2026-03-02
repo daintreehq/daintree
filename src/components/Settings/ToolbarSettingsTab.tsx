@@ -38,7 +38,7 @@ const BUTTON_METADATA: Partial<Record<ToolbarButtonId, ButtonMetadata>> = {
   "agent-setup": {
     label: "Agent Setup",
     icon: <PackagePlus className="h-4 w-4" />,
-    description: "Shown only when no agents are selected in Agent Settings",
+    description: "Shown only when no agents are enabled in Agent Settings",
   },
   claude: {
     label: "Claude Agent",

@@ -299,7 +299,6 @@ export function Toolbar({
             key="claude"
             type="claude"
             availability={agentAvailability?.claude}
-            isEnabled={agentSettings?.agents?.claude?.enabled ?? true}
             onOpenSettings={openAgentSettings}
           />
         ),
@@ -311,7 +310,6 @@ export function Toolbar({
             key="gemini"
             type="gemini"
             availability={agentAvailability?.gemini}
-            isEnabled={agentSettings?.agents?.gemini?.enabled ?? true}
             onOpenSettings={openAgentSettings}
           />
         ),
@@ -323,7 +321,6 @@ export function Toolbar({
             key="codex"
             type="codex"
             availability={agentAvailability?.codex}
-            isEnabled={agentSettings?.agents?.codex?.enabled ?? true}
             onOpenSettings={openAgentSettings}
           />
         ),
@@ -335,7 +332,6 @@ export function Toolbar({
             key="opencode"
             type="opencode"
             availability={agentAvailability?.opencode}
-            isEnabled={agentSettings?.agents?.opencode?.enabled ?? true}
             onOpenSettings={openAgentSettings}
           />
         ),

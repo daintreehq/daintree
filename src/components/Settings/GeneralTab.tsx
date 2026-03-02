@@ -275,7 +275,7 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
             getAgentIds().map((id) => {
               const config = getAgentConfig(id);
               const agentEntry = getAgentSettingsEntry(agentSettings, id);
-              const isEnabled = agentEntry.enabled ?? true;
+              const isSelected = agentEntry.selected !== false;
               const isAvailable = cliAvailability[id] ?? false;
               const name = config?.name ?? id;
 
@@ -283,7 +283,7 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
                 <div key={id} className="flex items-center justify-between text-sm">
                   <span className="text-canopy-text/70">{name}</span>
                   <div className="flex items-center gap-2">
-                    {!isEnabled ? (
+                    {!isSelected ? (
                       <span className="text-canopy-text/40 text-xs">Disabled</span>
                     ) : isAvailable ? (
                       <>

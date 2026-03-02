@@ -328,8 +328,6 @@ export function WorktreeCard({
       })
       .map((agentId) => {
         const config = getAgentConfig(agentId);
-        const entry = getAgentSettingsEntry(agentSettings, agentId);
-        const settingsEnabled = entry.enabled ?? true;
         const available = agentAvailability?.[agentId] ?? false;
 
         return {
@@ -337,7 +335,7 @@ export function WorktreeCard({
           name: config?.name ?? agentId,
           icon: config?.icon,
           shortcut: config?.shortcut ?? null,
-          isEnabled: settingsEnabled && available,
+          isEnabled: available,
         };
       });
   }, [agentAvailability, agentIds, agentSettings]);

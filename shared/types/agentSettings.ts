@@ -69,8 +69,12 @@ export const DEFAULT_ROUTING_CONFIG: AgentRoutingConfig = {
 };
 
 export interface AgentSettingsEntry {
+  /**
+   * @deprecated Use `selected` instead. Kept for migration compatibility only.
+   * Will be removed in a future release.
+   */
   enabled?: boolean;
-  /** Include this agent in the user's active workflow (toolbars, palettes, menus) */
+  /** Enable this agent — when false the agent is hidden everywhere and treated as not installed */
   selected?: boolean;
   customFlags?: string;
   /** Additional args appended when dangerous mode is enabled */
@@ -97,7 +101,6 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
     Object.keys(AGENT_REGISTRY).map((id) => [
       id,
       {
-        enabled: true,
         customFlags: "",
         dangerousArgs: DEFAULT_DANGEROUS_ARGS[id] ?? "",
         dangerousEnabled: false,
