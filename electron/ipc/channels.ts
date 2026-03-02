@@ -304,6 +304,8 @@ export const CHANNELS = {
   // Canopy CLI install channels
   CLI_INSTALL: "cli:install",
   CLI_GET_STATUS: "cli:get-status",
+
+  CLIPBOARD_SAVE_IMAGE: "clipboard:save-image",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

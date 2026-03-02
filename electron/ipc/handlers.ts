@@ -32,6 +32,7 @@ import { registerAppAgentHandlers } from "./handlers/appAgent.js";
 import { registerAssistantHandlers } from "./handlers/assistant.js";
 import { registerAgentCapabilitiesHandlers } from "./handlers/agentCapabilities.js";
 import { registerCliHandlers } from "./handlers/cli.js";
+import { registerClipboardHandlers } from "./handlers/clipboard.js";
 import { events } from "../services/events.js";
 import { typedHandle, typedSend, sendToRenderer } from "./utils.js";
 
@@ -103,6 +104,7 @@ export function registerIpcHandlers(
     register(() => registerAssistantHandlers(mainWindow));
     register(() => registerAgentCapabilitiesHandlers());
     register(() => registerCliHandlers());
+    register(() => registerClipboardHandlers());
   } catch (error) {
     runCleanups(cleanupFunctions);
     throw error;

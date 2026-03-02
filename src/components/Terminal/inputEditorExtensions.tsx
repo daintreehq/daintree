@@ -1,5 +1,6 @@
 import { EditorView, Decoration, hoverTooltip, keymap, placeholder } from "@codemirror/view";
-import { StateField, Prec, Extension, Compartment } from "@codemirror/state";
+import type { Extension } from "@codemirror/state";
+import { StateField, StateEffect, Prec, Compartment } from "@codemirror/state";
 import { insertNewline } from "@codemirror/commands";
 import type { SlashCommand } from "@shared/types";
 import { getLeadingSlashCommand, getAllAtFileTokens, type AtFileToken } from "./hybridInputParsing";
@@ -66,6 +67,12 @@ export const inputTheme = EditorView.theme({
     background: "transparent",
     border: "none",
     boxShadow: "none",
+  },
+  ".cm-image-path-chip": {
+    fontWeight: 600,
+    color: "rgb(251, 191, 36)",
+    textDecoration: "underline dotted 1px",
+    textUnderlineOffset: "2px",
   },
 });
 
@@ -397,4 +404,102 @@ export function createSlashChipCompartment() {
 
 export function createSlashTooltipCompartment() {
   return new Compartment();
+}
+
+// --- Image path chip (mark decoration + hover preview for pasted image paths) ---
+
+interface ImageChipEntry {
+  from: number;
+  to: number;
+  filePath: string;
+  thumbnailUrl: string;
+}
+
+const imagePathMark = Decoration.mark({ class: "cm-image-path-chip" });
+
+export const addImageChip = StateEffect.define<ImageChipEntry>();
+
+export const imageChipField = StateField.define<ImageChipEntry[]>({
+  create() {
+    return [];
+  },
+  update(entries, tr) {
+    if (tr.docChanged) {
+      const surviving: ImageChipEntry[] = [];
+      for (const e of entries) {
+        let edited = false;
+        tr.changes.iterChangedRanges((fromA, toA) => {
+          if (fromA < e.to && toA > e.from) edited = true;
+        });
+        if (edited) continue;
+        const from = tr.changes.mapPos(e.from, 1);
+        const to = tr.changes.mapPos(e.to, -1);
+        if (from < to) surviving.push({ ...e, from, to });
+      }
+      entries = surviving;
+    }
+    for (const effect of tr.effects) {
+      if (effect.is(addImageChip)) {
+        entries = [...entries, effect.value];
+      }
+    }
+    return entries;
+  },
+  provide: (f) =>
+    EditorView.decorations.from(f, (entries) => {
+      if (entries.length === 0) return Decoration.none;
+      const ranges = entries.map((e) => imagePathMark.range(e.from, e.to));
+      return Decoration.set(ranges, true);
+    }),
+});
+
+export function createImageChipTooltip() {
+  return hoverTooltip((view, pos) => {
+    const entries = view.state.field(imageChipField, false);
+    if (!entries || entries.length === 0) return null;
+
+    const entry = entries.find((e) => pos >= e.from && pos < e.to);
+    if (!entry) return null;
+
+    return {
+      pos: entry.from,
+      end: entry.to,
+      above: true,
+      create() {
+        const dom = document.createElement("div");
+        dom.className = "px-2 py-2";
+        dom.style.cssText = `
+          background: rgba(24, 24, 27, 0.95);
+          border-radius: 6px;
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+        `;
+
+        const img = document.createElement("img");
+        img.src = entry.thumbnailUrl;
+        img.alt = "Screenshot preview";
+        img.style.cssText =
+          "max-width: 200px; max-height: 200px; border-radius: 4px; display: block;";
+        dom.appendChild(img);
+
+        return { dom };
+      },
+    };
+  });
+}
+
+export function createImagePasteHandler(onImagePaste: (view: EditorView) => void): Extension {
+  return EditorView.domEventHandlers({
+    paste(event, view) {
+      const items = event.clipboardData?.items;
+      if (!items) return false;
+      for (const item of items) {
+        if (item.type.startsWith("image/")) {
+          event.preventDefault();
+          onImagePaste(view);
+          return true;
+        }
+      }
+      return false;
+    },
+  });
 }

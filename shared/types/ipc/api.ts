@@ -710,4 +710,11 @@ export interface ElectronAPI {
     /** Check if agent is enabled/available */
     isAgentEnabled(agentId: string): Promise<boolean>;
   };
+  clipboard: {
+    saveImage(
+      projectPath: string
+    ): Promise<
+      { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string }
+    >;
+  };
 }

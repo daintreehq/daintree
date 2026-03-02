@@ -1042,6 +1042,12 @@ export interface IpcInvokeMap {
     args: [];
     result: CliInstallStatus;
   };
+
+  // Clipboard channels
+  "clipboard:save-image": {
+    args: [payload: { projectPath: string }];
+    result: { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string };
+  };
 }
 
 /**

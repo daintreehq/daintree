@@ -41,6 +41,10 @@ import {
   createFileChipTooltip,
   createCustomKeymap,
   createAutoSize,
+  createImagePasteHandler,
+  imageChipField,
+  addImageChip,
+  createImageChipTooltip,
 } from "./inputEditorExtensions";
 
 export interface HybridInputBarHandle {
@@ -119,12 +123,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const sendRafRef = useRef<number | null>(null);
     const editorHostRef = useRef<HTMLDivElement | null>(null);
     const editorViewRef = useRef<EditorView | null>(null);
+    const cwdRef = useRef(cwd);
     const placeholderCompartmentRef = useRef(new Compartment());
     const keymapCompartmentRef = useRef(new Compartment());
     const editableCompartmentRef = useRef(new Compartment());
     const chipCompartmentRef = useRef(new Compartment());
     const tooltipCompartmentRef = useRef(new Compartment());
     const fileChipTooltipCompartmentRef = useRef(new Compartment());
+    const imageChipTooltipCompartmentRef = useRef(new Compartment());
     const isApplyingExternalValueRef = useRef(false);
     const lastEnterKeydownNewlineRef = useRef(false);
     const handledEnterRef = useRef(false);
@@ -154,6 +160,33 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     );
 
     const isAgentTerminal = agentId !== undefined;
+
+    cwdRef.current = cwd;
+
+    const imagePasteExtension = useMemo(
+      () =>
+        createImagePasteHandler(async (view) => {
+          try {
+            const result = await window.electron.clipboard.saveImage(cwdRef.current);
+            if (!result.ok) return;
+            const cursor = view.state.selection.main.head;
+            const { filePath, thumbnailDataUrl } = result;
+            view.dispatch({
+              changes: { from: cursor, insert: filePath },
+              effects: addImageChip.of({
+                from: cursor,
+                to: cursor + filePath.length,
+                filePath,
+                thumbnailUrl: thumbnailDataUrl,
+              }),
+              selection: { anchor: cursor + filePath.length },
+            });
+          } catch {
+            // Editor may have been destroyed before IPC returned
+          }
+        }),
+      []
+    );
 
     useEffect(() => {
       setInitializationState("initializing");
@@ -948,9 +981,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           tooltipCompartmentRef.current.of(!disabled ? createSlashTooltip(commandMap) : []),
           createFileChipField(),
           fileChipTooltipCompartmentRef.current.of(!disabled ? createFileChipTooltip() : []),
+          imageChipField,
+          imageChipTooltipCompartmentRef.current.of(!disabled ? createImageChipTooltip() : []),
           keymapCompartmentRef.current.of(keymapExtension),
           editorUpdateListener,
           domEventHandlers,
+          imagePasteExtension,
         ],
       });
 
@@ -1013,6 +1049,17 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       view.dispatch({
         effects: fileChipTooltipCompartmentRef.current.reconfigure(
           !disabled ? createFileChipTooltip() : []
+        ),
+      });
+    }, [disabled]);
+
+    useEffect(() => {
+      const view = editorViewRef.current;
+      if (!view) return;
+
+      view.dispatch({
+        effects: imageChipTooltipCompartmentRef.current.reconfigure(
+          !disabled ? createImageChipTooltip() : []
         ),
       });
     }, [disabled]);

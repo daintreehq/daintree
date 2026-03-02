@@ -454,6 +454,9 @@ const CHANNELS = {
   AGENT_CAPABILITIES_GET_AGENT_IDS: "agent-capabilities:get-agent-ids",
   AGENT_CAPABILITIES_GET_AGENT_METADATA: "agent-capabilities:get-agent-metadata",
   AGENT_CAPABILITIES_IS_AGENT_ENABLED: "agent-capabilities:is-agent-enabled",
+
+  // Clipboard channels
+  CLIPBOARD_SAVE_IMAGE: "clipboard:save-image",
 } as const;
 
 const api: ElectronAPI = {
@@ -1558,6 +1561,12 @@ const api: ElectronAPI = {
 
     isAgentEnabled: (agentId: string) =>
       _typedInvoke(CHANNELS.AGENT_CAPABILITIES_IS_AGENT_ENABLED, agentId),
+  },
+
+  // Clipboard API
+  clipboard: {
+    saveImage: (projectPath: string) =>
+      _typedInvoke(CHANNELS.CLIPBOARD_SAVE_IMAGE, { projectPath }),
   },
 };
 
