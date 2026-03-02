@@ -254,10 +254,12 @@ export function Toolbar({
     void actionService.dispatch("app.settings.openTab", { tab }, { source: "context-menu" });
   };
 
+  const cliInitialized = useCliAvailabilityStore((state) => state.isInitialized);
   const hasAnyInstalledAgent = useMemo(() => {
+    if (!cliInitialized) return true;
     if (!agentAvailability) return false;
     return Object.values(agentAvailability).some((v) => v === true);
-  }, [agentAvailability]);
+  }, [agentAvailability, cliInitialized]);
 
   const buttonRegistry = useMemo<
     Record<ToolbarButtonId, { render: () => React.ReactNode; isAvailable: boolean }>
