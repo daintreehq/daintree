@@ -345,7 +345,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const isWaiting = activePanel.agentState === "waiting";
   const isActive = isWorking || isRunning || isWaiting;
   const commandText = activePanel.activityHeadline || activePanel.lastCommand;
-  const brandColor = getBrandColorHex(activePanel.type);
+  const brandColor = getBrandColorHex(activePanel.agentId ?? activePanel.type);
   const agentState = activePanel.agentState;
   const displayTitle = getBaseTitle(activePanel.title);
   const showStateIcon = agentState && agentState !== "idle" && agentState !== "completed";
@@ -385,6 +385,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
               <TerminalIcon
                 type={activePanel.type}
                 kind={activePanel.kind}
+                agentId={activePanel.agentId}
                 detectedProcessId={activePanel.detectedProcessId}
                 className="w-3.5 h-3.5"
                 brandColor={brandColor}

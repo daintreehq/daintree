@@ -178,7 +178,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   const isWaiting = terminal.agentState === "waiting";
   const isActive = isWorking || isRunning || isWaiting;
   const commandText = terminal.activityHeadline || terminal.lastCommand;
-  const brandColor = getBrandColorHex(terminal.type);
+  const brandColor = getBrandColorHex(terminal.agentId ?? terminal.type);
   const agentState = terminal.agentState;
   // Use shortened title without command summary for dock items
   const displayTitle = getBaseTitle(terminal.title);
@@ -223,6 +223,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
               <TerminalIcon
                 type={terminal.type}
                 kind={terminal.kind}
+                agentId={terminal.agentId}
                 detectedProcessId={terminal.detectedProcessId}
                 className="w-3.5 h-3.5"
                 brandColor={brandColor}
