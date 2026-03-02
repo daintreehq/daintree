@@ -10,6 +10,13 @@ export interface SystemOpenPathPayload {
   path: string;
 }
 
+/** Payload for opening a file in the configured external editor */
+export interface SystemOpenInEditorPayload {
+  path: string;
+  line?: number;
+  col?: number;
+}
+
 /** System wake event payload */
 export interface SystemWakePayload {
   /** Duration of sleep in milliseconds */

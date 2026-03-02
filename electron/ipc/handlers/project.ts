@@ -17,6 +17,7 @@ import type {
 import {
   SystemOpenExternalPayloadSchema,
   SystemOpenPathPayloadSchema,
+  SystemOpenInEditorPayloadSchema,
   TerminalSnapshotSchema,
   filterValidTerminalEntries,
   sanitizeTabGroups,
@@ -90,6 +91,63 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
   };
   ipcMain.handle(CHANNELS.SYSTEM_OPEN_PATH, handleSystemOpenPath);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_OPEN_PATH));
+
+  const handleSystemOpenInEditor = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: unknown
+  ) => {
+    const parseResult = SystemOpenInEditorPayloadSchema.safeParse(payload);
+    if (!parseResult.success) {
+      throw new Error(`Invalid payload: ${parseResult.error.message}`);
+    }
+
+    const { path: targetPath, line, col } = parseResult.data;
+
+    if (!path.isAbsolute(targetPath)) {
+      throw new Error("Only absolute paths are allowed");
+    }
+
+    // Try VS Code with --goto flag first
+    try {
+      const { execFile } = await import("child_process");
+      const { promisify } = await import("util");
+      const execFileAsync = promisify(execFile);
+
+      const gotoArg =
+        line !== undefined
+          ? col !== undefined
+            ? `${targetPath}:${line}:${col}`
+            : `${targetPath}:${line}`
+          : targetPath;
+
+      // On Windows, VS Code's CLI entry point is code.cmd
+      const candidates = process.platform === "win32" ? ["code.cmd", "code"] : ["code"];
+
+      let launched = false;
+      for (const cmd of candidates) {
+        try {
+          await execFileAsync(cmd, ["--goto", gotoArg], {
+            timeout: 5000,
+            ...(process.platform === "win32" ? { shell: true } : {}),
+          });
+          launched = true;
+          break;
+        } catch {
+          // Try next candidate
+        }
+      }
+      if (launched) return;
+    } catch {
+      // Fall through to shell.openPath
+    }
+
+    const errorString = await shell.openPath(targetPath);
+    if (errorString) {
+      throw new Error(`Failed to open path: ${errorString}`);
+    }
+  };
+  ipcMain.handle(CHANNELS.SYSTEM_OPEN_IN_EDITOR, handleSystemOpenInEditor);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_OPEN_IN_EDITOR));
 
   const handleSystemCheckCommand = async (
     _event: Electron.IpcMainInvokeEvent,

@@ -60,6 +60,7 @@ import {
 } from "./components/Worktree";
 import { NewWorktreeDialog } from "./components/Worktree/NewWorktreeDialog";
 import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
+import { FileViewerModalHost } from "./components/FileViewer/FileViewerModalHost";
 import { TerminalPalette, NewTerminalPalette } from "./components/TerminalPalette";
 import { PanelPalette } from "./components/PanelPalette/PanelPalette";
 import { MORE_AGENTS_PANEL_ID } from "./hooks/usePanelPalette";
@@ -1203,6 +1204,7 @@ function App() {
       <ShortcutReferenceDialog isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
 
       <TerminalInfoDialogHost />
+      <FileViewerModalHost />
 
       {gitInitDirectoryPath && (
         <GitInitDialog
