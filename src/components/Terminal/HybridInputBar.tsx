@@ -131,14 +131,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const inputShellRef = useRef<HTMLDivElement | null>(null);
     const menuRef = useRef<HTMLDivElement | null>(null);
     const rootRef = useRef<HTMLDivElement | null>(null);
-    const barContentRef = useRef<HTMLDivElement | null>(null);
     const lastEmittedValueRef = useRef<string>(value);
     const [atContext, setAtContext] = useState<AtFileContext | null>(null);
     const [slashContext, setSlashContext] = useState<SlashCommandContext | null>(null);
     const [selectedIndex, setSelectedIndex] = useState(0);
     const lastQueryRef = useRef<string>("");
     const [menuLeftPx, setMenuLeftPx] = useState<number>(0);
-    const [collapsedHeightPx, setCollapsedHeightPx] = useState<number | null>(null);
     const [initializationState, setInitializationState] = useState<"initializing" | "initialized">(
       "initializing"
     );
@@ -266,21 +264,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       clearDraftInput,
       navigateHistory,
     };
-
-    useLayoutEffect(() => {
-      if (collapsedHeightPx !== null) return;
-      const el = barContentRef.current;
-      if (!el) return;
-      if (value.length > 0) return;
-
-      const rafId = requestAnimationFrame(() => {
-        const rawHeight = el.getBoundingClientRect().height;
-        // Round instead of ceil to avoid zoom-induced fractional inflation
-        const next = Math.round(rawHeight);
-        if (next > 0) setCollapsedHeightPx(next);
-      });
-      return () => cancelAnimationFrame(rafId);
-    }, [collapsedHeightPx, value]);
 
     useLayoutEffect(() => {
       if (!isAutocompleteOpen) return;
@@ -1048,7 +1031,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     }, [value]);
 
     const barContent = (
-      <div ref={barContentRef} className="group cursor-text bg-canopy-bg px-4 pb-3 pt-3">
+      <div className="group cursor-text bg-canopy-bg px-4 pb-3 pt-3">
         <div className="flex items-end gap-2">
           <div
             ref={inputShellRef}
@@ -1092,8 +1075,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       </div>
     );
 
-    const isOverlayMode = collapsedHeightPx !== null;
-
     return (
       <>
         <div
@@ -1117,10 +1098,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             focusEditor();
           }}
         >
-          {isOverlayMode && <div aria-hidden="true" style={{ height: `${collapsedHeightPx}px` }} />}
-          <div className={cn(isOverlayMode && "absolute inset-x-0 bottom-0 z-10")}>
-            {barContent}
-          </div>
+          {barContent}
         </div>
         <CommandPickerHost context={commandContext} onCommandExecuted={handleCommandExecuted} />
       </>
