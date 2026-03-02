@@ -1,4 +1,11 @@
-import { EditorView, Decoration, hoverTooltip, keymap, placeholder } from "@codemirror/view";
+import {
+  EditorView,
+  Decoration,
+  WidgetType,
+  hoverTooltip,
+  keymap,
+  placeholder,
+} from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
 import { StateField, StateEffect, Prec, Compartment } from "@codemirror/state";
 import { insertNewline } from "@codemirror/commands";
@@ -68,11 +75,21 @@ export const inputTheme = EditorView.theme({
     border: "none",
     boxShadow: "none",
   },
-  ".cm-image-path-chip": {
-    fontWeight: 600,
+  ".cm-image-chip": {
     color: "rgb(251, 191, 36)",
+    fontWeight: 600,
     textDecoration: "underline dotted 1px",
     textUnderlineOffset: "2px",
+    whiteSpace: "nowrap",
+  },
+  ".cm-image-chip img": {
+    height: "14px",
+    width: "14px",
+    objectFit: "cover",
+    borderRadius: "2px",
+    verticalAlign: "text-bottom",
+    display: "inline",
+    marginRight: "3px",
   },
 });
 
@@ -406,7 +423,7 @@ export function createSlashTooltipCompartment() {
   return new Compartment();
 }
 
-// --- Image path chip (mark decoration + hover preview for pasted image paths) ---
+// --- Image chip (replace widget showing thumbnail + filename for pasted image paths) ---
 
 interface ImageChipEntry {
   from: number;
@@ -415,7 +432,41 @@ interface ImageChipEntry {
   thumbnailUrl: string;
 }
 
-const imagePathMark = Decoration.mark({ class: "cm-image-path-chip" });
+function extractFilename(filePath: string): string {
+  const lastSep = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
+  return lastSep >= 0 ? filePath.slice(lastSep + 1) : filePath;
+}
+
+class ImageChipWidget extends WidgetType {
+  constructor(
+    readonly filePath: string,
+    readonly thumbnailUrl: string
+  ) {
+    super();
+  }
+
+  eq(other: ImageChipWidget) {
+    return this.filePath === other.filePath;
+  }
+
+  toDOM() {
+    const span = document.createElement("span");
+    span.className = "cm-image-chip";
+
+    const img = document.createElement("img");
+    img.src = this.thumbnailUrl;
+    img.alt = "";
+    span.appendChild(img);
+
+    span.appendChild(document.createTextNode(extractFilename(this.filePath)));
+
+    return span;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
 
 export const addImageChip = StateEffect.define<ImageChipEntry>();
 
@@ -445,12 +496,24 @@ export const imageChipField = StateField.define<ImageChipEntry[]>({
     }
     return entries;
   },
-  provide: (f) =>
+  provide: (f) => [
     EditorView.decorations.from(f, (entries) => {
       if (entries.length === 0) return Decoration.none;
-      const ranges = entries.map((e) => imagePathMark.range(e.from, e.to));
+      const ranges = entries.map((e) =>
+        Decoration.replace({ widget: new ImageChipWidget(e.filePath, e.thumbnailUrl) }).range(
+          e.from,
+          e.to
+        )
+      );
       return Decoration.set(ranges, true);
     }),
+    EditorView.atomicRanges.of((view) => {
+      const entries = view.state.field(f, false);
+      if (!entries || entries.length === 0) return Decoration.none;
+      const ranges = entries.map((e) => Decoration.mark({}).range(e.from, e.to));
+      return Decoration.set(ranges, true);
+    }),
+  ],
 });
 
 export function createImageChipTooltip() {
@@ -458,7 +521,7 @@ export function createImageChipTooltip() {
     const entries = view.state.field(imageChipField, false);
     if (!entries || entries.length === 0) return null;
 
-    const entry = entries.find((e) => pos >= e.from && pos < e.to);
+    const entry = entries.find((e) => pos >= e.from && pos <= e.to);
     if (!entry) return null;
 
     return {
