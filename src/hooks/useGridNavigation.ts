@@ -18,10 +18,13 @@ interface UseGridNavigationOptions {
 export function useGridNavigation(options: UseGridNavigationOptions = {}) {
   const { containerSelector = "#terminal-grid" } = options;
 
-  const { terminals, focusedId } = useTerminalStore(
+  const { terminals, focusedId, tabGroups, activeTabByGroup, getTabGroups } = useTerminalStore(
     useShallow((state) => ({
       terminals: state.terminals,
       focusedId: state.focusedId,
+      tabGroups: state.tabGroups,
+      activeTabByGroup: state.activeTabByGroup,
+      getTabGroups: state.getTabGroups,
     }))
   );
 
@@ -192,12 +195,23 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
     [rowMajor, indexById, columnBuckets, positionById]
   );
 
+  // Build a group-aware ordered list matching ContentGrid's visual order.
+  // Uses getTabGroups for ordering (explicit groups first by terminal order, then virtual groups)
+  // so Cmd+N indices are consistent with what the user sees on screen.
+  const groupRowMajor = useMemo(() => {
+    const orderedGroups = getTabGroups("grid", activeWorktreeId ?? undefined);
+    return orderedGroups.flatMap((group) => {
+      const activeId = activeTabByGroup.get(group.id) ?? group.activeTabId;
+      const resolvedId = group.panelIds.includes(activeId) ? activeId : group.panelIds[0];
+      return resolvedId ? [resolvedId] : [];
+    });
+  }, [getTabGroups, activeWorktreeId, terminals, tabGroups, activeTabByGroup]);
+
   const findByIndex = useCallback(
     (index: number): string | null => {
-      const position = rowMajor[index - 1];
-      return position?.terminalId ?? null;
+      return groupRowMajor[index - 1] ?? null;
     },
-    [rowMajor]
+    [groupRowMajor]
   );
 
   const findDockByIndex = useCallback(
