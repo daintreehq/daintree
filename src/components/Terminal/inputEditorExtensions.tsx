@@ -82,7 +82,7 @@ export const inputTheme = EditorView.theme({
     verticalAlign: "bottom",
     whiteSpace: "nowrap",
     gap: "4px",
-    padding: "0 4px",
+    padding: "0 5px",
     color: "var(--color-canopy-accent)",
     fontWeight: 600,
     background: "rgba(96, 211, 224, 0.1)",
