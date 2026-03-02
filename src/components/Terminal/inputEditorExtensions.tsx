@@ -76,20 +76,24 @@ export const inputTheme = EditorView.theme({
     boxShadow: "none",
   },
   ".cm-image-chip": {
-    color: "rgb(251, 191, 36)",
-    fontWeight: 600,
-    textDecoration: "underline dotted 1px",
-    textUnderlineOffset: "2px",
+    display: "inline-flex",
+    alignItems: "center",
+    height: "20px",
+    verticalAlign: "bottom",
     whiteSpace: "nowrap",
+    gap: "4px",
+    padding: "0 4px",
+    color: "var(--color-canopy-accent)",
+    fontWeight: 600,
+    background: "rgba(96, 211, 224, 0.1)",
+    borderRadius: "3px",
   },
   ".cm-image-chip img": {
-    height: "14px",
-    width: "14px",
+    height: "16px",
+    width: "16px",
     objectFit: "cover",
     borderRadius: "2px",
-    verticalAlign: "text-bottom",
-    display: "inline",
-    marginRight: "3px",
+    flexShrink: "0",
   },
 });
 
@@ -432,9 +436,17 @@ interface ImageChipEntry {
   thumbnailUrl: string;
 }
 
-function extractFilename(filePath: string): string {
-  const lastSep = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
-  return lastSep >= 0 ? filePath.slice(lastSep + 1) : filePath;
+function formatChipLabel(filePath: string): string {
+  const match = filePath.match(/clipboard-(\d+)-/);
+  if (match) {
+    const date = new Date(Number(match[1]));
+    if (!isNaN(date.getTime())) {
+      const hh = String(date.getHours()).padStart(2, "0");
+      const mm = String(date.getMinutes()).padStart(2, "0");
+      return `Screenshot ${hh}:${mm}`;
+    }
+  }
+  return "Screenshot";
 }
 
 class ImageChipWidget extends WidgetType {
@@ -452,13 +464,19 @@ class ImageChipWidget extends WidgetType {
   toDOM() {
     const span = document.createElement("span");
     span.className = "cm-image-chip";
+    span.setAttribute("role", "img");
+    span.setAttribute("aria-label", `Image: ${this.filePath}`);
 
     const img = document.createElement("img");
     img.src = this.thumbnailUrl;
     img.alt = "";
+    img.setAttribute("aria-hidden", "true");
     span.appendChild(img);
 
-    span.appendChild(document.createTextNode(extractFilename(this.filePath)));
+    const label = document.createElement("span");
+    label.setAttribute("aria-hidden", "true");
+    label.textContent = formatChipLabel(this.filePath);
+    span.appendChild(label);
 
     return span;
   }
@@ -543,6 +561,12 @@ export function createImageChipTooltip() {
         img.style.cssText =
           "max-width: 200px; max-height: 200px; border-radius: 4px; display: block;";
         dom.appendChild(img);
+
+        const pathEl = document.createElement("p");
+        pathEl.style.cssText =
+          "font-size: 10px; color: rgba(255,255,255,0.45); margin-top: 4px; word-break: break-all; max-width: 200px;";
+        pathEl.textContent = entry.filePath;
+        dom.appendChild(pathEl);
 
         return { dom };
       },

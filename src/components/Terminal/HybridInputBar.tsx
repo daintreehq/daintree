@@ -123,7 +123,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const sendRafRef = useRef<number | null>(null);
     const editorHostRef = useRef<HTMLDivElement | null>(null);
     const editorViewRef = useRef<EditorView | null>(null);
-    const cwdRef = useRef(cwd);
     const placeholderCompartmentRef = useRef(new Compartment());
     const keymapCompartmentRef = useRef(new Compartment());
     const editableCompartmentRef = useRef(new Compartment());
@@ -161,13 +160,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     const isAgentTerminal = agentId !== undefined;
 
-    cwdRef.current = cwd;
-
     const imagePasteExtension = useMemo(
       () =>
         createImagePasteHandler(async (view) => {
           try {
-            const result = await window.electron.clipboard.saveImage(cwdRef.current);
+            const result = await window.electron.clipboard.saveImage();
             if (!result.ok) return;
             const cursor = view.state.selection.main.head;
             const { filePath, thumbnailDataUrl } = result;

@@ -1565,8 +1565,7 @@ const api: ElectronAPI = {
 
   // Clipboard API
   clipboard: {
-    saveImage: (projectPath: string) =>
-      _typedInvoke(CHANNELS.CLIPBOARD_SAVE_IMAGE, { projectPath }),
+    saveImage: () => _typedInvoke(CHANNELS.CLIPBOARD_SAVE_IMAGE),
   },
 };
 
