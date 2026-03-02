@@ -318,7 +318,7 @@ export function WorktreeHeader({
           )}
         >
           <TooltipProvider>
-            <Tooltip open={copy.treeCopied} delayDuration={0}>
+            <Tooltip open={copy.treeCopied || undefined} delayDuration={copy.treeCopied ? 0 : 300}>
               <TooltipTrigger asChild>
                 <button
                   onClick={copy.onCopyTreeClick}
@@ -331,7 +331,13 @@ export function WorktreeHeader({
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
                     copy.isCopyingTree && "cursor-wait opacity-70"
                   )}
-                  aria-label={copy.treeCopied ? "Context Copied" : "Copy Context"}
+                  aria-label={
+                    copy.isCopyingTree
+                      ? "Copying…"
+                      : copy.treeCopied
+                        ? "Context Copied"
+                        : "Copy Context"
+                  }
                 >
                   {copy.isCopyingTree ? (
                     <Loader2 className="w-3.5 h-3.5 animate-spin motion-reduce:animate-none text-canopy-text" />
@@ -343,23 +349,36 @@ export function WorktreeHeader({
                 </button>
               </TooltipTrigger>
               <TooltipContent side="top" className="font-medium">
-                <span role="status" aria-live="polite">
-                  {copy.copyFeedback}
-                </span>
+                {copy.isCopyingTree ? (
+                  "Copying…"
+                ) : copy.treeCopied ? (
+                  <span role="status" aria-live="polite">
+                    {copy.copyFeedback}
+                  </span>
+                ) : (
+                  "Copy Context"
+                )}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
 
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                onClick={(e) => e.stopPropagation()}
-                className="p-1 text-canopy-text/60 hover:text-white hover:bg-white/5 rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-                aria-label="More actions"
-              >
-                <MoreHorizontal className="w-3.5 h-3.5" />
-              </button>
-            </DropdownMenuTrigger>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      onClick={(e) => e.stopPropagation()}
+                      className="p-1 text-canopy-text/60 hover:text-white hover:bg-white/5 rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                      aria-label="More actions"
+                    >
+                      <MoreHorizontal className="w-3.5 h-3.5" />
+                    </button>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="top">More actions</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
             <DropdownMenuContent
               align="end"
               side="bottom"

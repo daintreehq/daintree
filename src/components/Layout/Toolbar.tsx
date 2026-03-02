@@ -600,7 +600,7 @@ export function Toolbar({
       "copy-tree": {
         render: () => (
           <TooltipProvider key="copy-tree">
-            <Tooltip open={treeCopied} delayDuration={0}>
+            <Tooltip open={treeCopied || undefined} delayDuration={treeCopied ? 0 : 300}>
               <TooltipTrigger asChild>
                 <Button
                   variant="ghost"
@@ -615,7 +615,7 @@ export function Toolbar({
                     isCopyingTree && "cursor-wait opacity-70",
                     !activeWorktree && "opacity-50"
                   )}
-                  aria-label={treeCopied ? "Context Copied" : "Copy Context"}
+                  aria-label={isCopyingTree ? "Copying…" : treeCopied ? "Context Copied" : "Copy Context"}
                 >
                   {isCopyingTree ? (
                     <Loader2 className="animate-spin motion-reduce:animate-none" />
@@ -627,9 +627,15 @@ export function Toolbar({
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom" className="font-medium">
-                <span role="status" aria-live="polite">
-                  {copyFeedback}
-                </span>
+                {isCopyingTree ? (
+                  "Copying…"
+                ) : treeCopied ? (
+                  <span role="status" aria-live="polite">
+                    {copyFeedback}
+                  </span>
+                ) : (
+                  "Copy Context"
+                )}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
