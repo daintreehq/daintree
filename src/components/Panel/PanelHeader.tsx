@@ -1,14 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import {
-  X,
-  Maximize2,
-  Minimize2,
-  ArrowDownToLine,
-  RotateCcw,
-  Grid2X2,
-  Activity,
-  Plus,
-} from "lucide-react";
+import { X, Maximize2, Minimize2, RotateCcw, Grid2X2, Activity, Plus } from "lucide-react";
 import {
   DndContext,
   closestCenter,
@@ -27,6 +18,7 @@ import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/comp
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
+import { DockToBottomIcon } from "@/components/icons";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { useBackgroundPanelStats } from "@/hooks";
 import { TabButton, type TabInfo } from "./TabButton";
@@ -623,7 +615,7 @@ function PanelHeaderComponent({
                       className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
                       aria-label={location === "dock" ? "Minimize" : "Minimize to dock"}
                     >
-                      <ArrowDownToLine className="w-3 h-3" aria-hidden="true" />
+                      <DockToBottomIcon className="w-3 h-3" />
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
