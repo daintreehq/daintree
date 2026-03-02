@@ -235,10 +235,14 @@ function PanelHeaderComponent({
 
   const handleHeaderDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
-    if (target.tagName === "INPUT" || target.tagName === "BUTTON") {
+    if (target.closest("button, input, [role='button']")) {
       return;
     }
-    onToggleMaximize?.();
+    if (location === "dock") {
+      onRestore?.();
+    } else {
+      onToggleMaximize?.();
+    }
   };
 
   const getAriaLabel = () => {

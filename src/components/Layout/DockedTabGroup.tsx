@@ -44,6 +44,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const activeDockTerminalId = useTerminalStore((s) => s.activeDockTerminalId);
   const openDockTerminal = useTerminalStore((s) => s.openDockTerminal);
   const closeDockTerminal = useTerminalStore((s) => s.closeDockTerminal);
+  const moveTerminalToGrid = useTerminalStore((s) => s.moveTerminalToGrid);
   const backendStatus = useTerminalStore((s) => s.backendStatus);
   const setActiveTab = useTerminalStore((s) => s.setActiveTab);
   const setFocused = useTerminalStore((s) => s.setFocused);
@@ -374,7 +375,13 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                 openDockTerminal(activeTabId);
               }
             }}
-            aria-label={`${activePanel.title} (${panels.length} tabs) - Click to preview, drag to reorder`}
+            onDoubleClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              moveTerminalToGrid(activePanel.id);
+              closeDockTerminal();
+            }}
+            aria-label={`${activePanel.title} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
           >
             <div
               className={cn(

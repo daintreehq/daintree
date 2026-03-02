@@ -28,6 +28,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   const activeDockTerminalId = useTerminalStore((s) => s.activeDockTerminalId);
   const openDockTerminal = useTerminalStore((s) => s.openDockTerminal);
   const closeDockTerminal = useTerminalStore((s) => s.closeDockTerminal);
+  const moveTerminalToGrid = useTerminalStore((s) => s.moveTerminalToGrid);
   const backendStatus = useTerminalStore((s) => s.backendStatus);
   const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
   const hybridInputAutoFocus = useTerminalInputStore((s) => s.hybridInputAutoFocus);
@@ -212,7 +213,13 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                 openDockTerminal(terminal.id);
               }
             }}
-            aria-label={`${terminal.title} - Click to preview, drag to reorder`}
+            onDoubleClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              moveTerminalToGrid(terminal.id);
+              closeDockTerminal();
+            }}
+            aria-label={`${terminal.title} - Click to preview, double-click to move to grid, drag to reorder`}
           >
             <div
               className={cn(
