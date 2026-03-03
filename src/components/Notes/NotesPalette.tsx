@@ -678,6 +678,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
           role="dialog"
           aria-modal="true"
           aria-label="Notes"
+          data-testid="notes-palette"
         >
           <div
             ref={dialogRef}

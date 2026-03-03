@@ -371,6 +371,7 @@ export function WorktreeHeader({
                       onClick={(e) => e.stopPropagation()}
                       className="p-1 text-canopy-text/60 hover:text-white hover:bg-white/5 rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
                       aria-label="More actions"
+                      data-testid="worktree-actions-menu"
                     >
                       <MoreHorizontal className="w-3.5 h-3.5" />
                     </button>

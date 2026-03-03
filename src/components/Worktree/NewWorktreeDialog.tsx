@@ -633,7 +633,13 @@ export function NewWorktreeDialog({
   };
 
   return (
-    <AppDialog isOpen={isOpen} onClose={onClose} size="md" dismissible={!creating}>
+    <AppDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      size="md"
+      dismissible={!creating}
+      data-testid="new-worktree-dialog"
+    >
       <AppDialog.Header>
         <AppDialog.Title icon={<GitBranch className="w-5 h-5 text-canopy-accent" />}>
           Create New Worktree
@@ -842,6 +848,7 @@ export function NewWorktreeDialog({
                         ref={newBranchInputRef}
                         id="new-branch"
                         type="text"
+                        data-testid="branch-name-input"
                         value={branchInput}
                         onChange={(e) => {
                           setBranchInput(e.target.value);
@@ -951,6 +958,7 @@ export function NewWorktreeDialog({
                 <div className="flex gap-2 items-center">
                   <input
                     id="worktree-path"
+                    data-testid="worktree-path-input"
                     type="text"
                     value={worktreePath}
                     onChange={(e) => setWorktreePath(e.target.value)}
@@ -1169,7 +1177,12 @@ export function NewWorktreeDialog({
         <Button variant="ghost" onClick={onClose} disabled={creating}>
           Cancel
         </Button>
-        <Button onClick={handleCreate} disabled={creating || loading} className="min-w-[100px]">
+        <Button
+          onClick={handleCreate}
+          disabled={creating || loading}
+          className="min-w-[100px]"
+          data-testid="create-worktree-button"
+        >
           {creating ? (
             <>
               <Loader2 className="animate-spin" />

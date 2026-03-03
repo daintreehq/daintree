@@ -151,9 +151,18 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  e2e-core-gate:
+    needs: build
+    uses: ./.github/workflows/e2e-core.yml
+
+  e2e-online-gate:
+    needs: build
+    uses: ./.github/workflows/e2e-online.yml
+    secrets: inherit
+
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, e2e-core-gate, e2e-online-gate]
     runs-on: ubuntu-22.04
     timeout-minutes: 15
 

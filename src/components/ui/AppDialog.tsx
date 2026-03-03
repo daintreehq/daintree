@@ -32,6 +32,7 @@ export interface AppDialogProps {
   className?: string;
   maxHeight?: string;
   zIndex?: DialogZIndex;
+  "data-testid"?: string;
 }
 
 export type { DialogSize, DialogVariant, DialogZIndex };
@@ -57,6 +58,7 @@ export function AppDialog({
   className,
   maxHeight = "max-h-[80vh]",
   zIndex = "modal",
+  "data-testid": dataTestId,
 }: AppDialogProps) {
   const previousActiveElement = useRef<HTMLElement | null>(null);
   const backdropPointerRef = useRef<number | null>(null);
@@ -172,6 +174,7 @@ export function AppDialog({
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
+        data-testid={dataTestId}
       >
         <div
           className={cn(

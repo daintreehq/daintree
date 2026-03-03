@@ -224,6 +224,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     <div
       ref={ref}
       data-panel-id={id}
+      data-panel-location={location}
       className={cn(
         "flex flex-col h-full overflow-hidden group",
         location === "grid" && !isMaximized && "bg-[var(--color-surface)]",

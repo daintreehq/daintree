@@ -6,23 +6,24 @@ import path from "path";
 
 const require = createRequire(import.meta.url);
 const electronPath = require("electron") as unknown as string;
-const ROOT = path.resolve(import.meta.dirname, "..");
+const ROOT = path.resolve(import.meta.dirname, "../..");
 
 export interface AppContext {
   app: ElectronApplication;
   window: Page;
+  userDataDir: string;
 }
 
-/**
- * Launch the Electron app with an isolated user-data directory
- * and wait for the main layout to be ready.
- */
-export async function launchApp(): Promise<AppContext> {
-  const userDataDir = mkdtempSync(path.join(tmpdir(), "canopy-e2e-"));
+export interface LaunchOptions {
+  env?: Record<string, string>;
+  userDataDir?: string;
+}
+
+export async function launchApp(options: LaunchOptions = {}): Promise<AppContext> {
+  const userDataDir = options.userDataDir ?? mkdtempSync(path.join(tmpdir(), "canopy-e2e-"));
 
   const args = [`--user-data-dir=${userDataDir}`, ROOT];
 
-  // Linux CI requires --no-sandbox (no suid sandbox inside containers)
   if (process.env.CI && process.platform === "linux") {
     args.unshift("--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu");
   }
@@ -30,11 +31,10 @@ export async function launchApp(): Promise<AppContext> {
   const app = await electron.launch({
     executablePath: electronPath,
     args,
-    env: { ...process.env, NODE_ENV: "production" },
+    env: { ...process.env, ...options.env, NODE_ENV: "production" },
     timeout: 60_000,
   });
 
-  // Log console errors for debugging
   app.on("close", () => console.log("[e2e] Electron app closed"));
 
   const window = await app.firstWindow();
@@ -45,18 +45,13 @@ export async function launchApp(): Promise<AppContext> {
 
   await window.waitForLoadState("domcontentloaded");
 
-  // Wait for the toolbar to be ready — app startup can be slow
   await window
     .locator('[aria-label="Open settings"]')
     .waitFor({ state: "visible", timeout: 60_000 });
 
-  return { app, window };
+  return { app, window, userDataDir };
 }
 
-/**
- * Mock Electron's native dialog.showOpenDialog to return a predetermined path
- * instead of opening the OS file picker.
- */
 export async function mockOpenDialog(
   app: ElectronApplication,
   directoryPath: string
