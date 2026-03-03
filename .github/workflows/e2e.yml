@@ -66,6 +66,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Build app
+        run: npm run build
+
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code
 
