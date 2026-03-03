@@ -28,11 +28,14 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
     args.unshift("--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu");
   }
 
+  // Windows CI runners are significantly slower to start Electron
+  const launchTimeout = process.env.CI ? 120_000 : 60_000;
+
   const app = await electron.launch({
     executablePath: electronPath,
     args,
     env: { ...process.env, ...options.env, NODE_ENV: "production" },
-    timeout: 60_000,
+    timeout: launchTimeout,
   });
 
   app.on("close", () => console.log("[e2e] Electron app closed"));
@@ -47,7 +50,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
 
   await window
     .locator('[aria-label="Open settings"]')
-    .waitFor({ state: "visible", timeout: 60_000 });
+    .waitFor({ state: "visible", timeout: launchTimeout });
 
   return { app, window, userDataDir };
 }
