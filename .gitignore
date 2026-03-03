@@ -60,6 +60,8 @@ github-stats-cache.json
 # Testing
 coverage/
 .nyc_output/
+test-results/
+playwright-report/
 
 # Temp files
 tmp/

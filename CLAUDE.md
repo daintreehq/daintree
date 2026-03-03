@@ -182,4 +182,5 @@ src/
 ## Documentation
 
 - `docs/development.md` — Architecture, IPC patterns, debugging
+- `docs/e2e-testing.md` — Playwright E2E testing setup and patterns
 - `docs/feature-curation.md` — Feature evaluation criteria
