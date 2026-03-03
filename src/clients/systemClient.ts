@@ -32,6 +32,10 @@ export const systemClient = {
     return window.electron.system.getHomeDir();
   },
 
+  getTmpDir: (): Promise<string> => {
+    return window.electron.system.getTmpDir();
+  },
+
   onWake: (
     callback: (data: { sleepDuration: number; timestamp: number }) => void
   ): (() => void) => {

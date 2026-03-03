@@ -1,7 +1,7 @@
 import { create, type StateCreator } from "zustand";
 import type { TerminalRecipe, RecipeTerminal, RecipeTerminalType } from "@/types";
 import { useTerminalStore, type TerminalInstance } from "./terminalStore";
-import { projectClient, agentSettingsClient } from "@/clients";
+import { projectClient, agentSettingsClient, systemClient } from "@/clients";
 import { getAgentConfig } from "@/config/agents";
 import { generateAgentCommand } from "@shared/types";
 
@@ -227,12 +227,18 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     // Pre-fetch agent settings once for all agent terminals
     let agentSettings: Awaited<ReturnType<typeof agentSettingsClient.get>> | null = null;
+    let clipboardDirectory: string | undefined;
     const hasAgent = recipe.terminals.some(
       (t) => t.type !== "terminal" && t.type !== "dev-preview"
     );
     if (hasAgent) {
       try {
-        agentSettings = await agentSettingsClient.get();
+        const [settings, tmpDir] = await Promise.all([
+          agentSettingsClient.get(),
+          systemClient.getTmpDir().catch(() => ""),
+        ]);
+        agentSettings = settings;
+        clipboardDirectory = tmpDir ? `${tmpDir}/canopy-clipboard` : undefined;
       } catch (error) {
         console.warn("Failed to fetch agent settings for recipe:", error);
       }
@@ -265,6 +271,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           const entry = agentSettings?.agents?.[terminal.type] ?? {};
           command = generateAgentCommand(baseCommand, entry, terminal.type, {
             initialPrompt,
+            clipboardDirectory,
           });
         }
 
