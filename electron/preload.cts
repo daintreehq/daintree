@@ -442,14 +442,6 @@ const CHANNELS = {
   APP_AGENT_TEST_API_KEY: "app-agent:test-api-key",
   APP_AGENT_TEST_MODEL: "app-agent:test-model",
 
-  // Assistant channels
-  ASSISTANT_SEND_MESSAGE: "assistant:send-message",
-  ASSISTANT_CANCEL: "assistant:cancel",
-  ASSISTANT_CHUNK: "assistant:chunk",
-  ASSISTANT_HAS_API_KEY: "assistant:has-api-key",
-  ASSISTANT_CLEAR_SESSION: "assistant:clear-session",
-  ASSISTANT_ACKNOWLEDGE_EVENT: "assistant:acknowledge-event",
-
   // Agent Capabilities channels
   AGENT_CAPABILITIES_GET_REGISTRY: "agent-capabilities:get-registry",
   AGENT_CAPABILITIES_GET_AGENT_IDS: "agent-capabilities:get-agent-ids",
@@ -1347,7 +1339,7 @@ const api: ElectronAPI = {
 
     testModel: (model: string) => ipcRenderer.invoke(CHANNELS.APP_AGENT_TEST_MODEL, model),
 
-    // Listen for action dispatch requests from main process (for Assistant tool calling)
+    // Listen for action dispatch requests from main process
     onDispatchActionRequest: (
       callback: (payload: {
         requestId: string;
@@ -1414,143 +1406,6 @@ const api: ElectronAPI = {
     // Send confirmation response back to main process
     sendConfirmationResponse: (payload: { requestId: string; approved: boolean }) =>
       ipcRenderer.send("app-agent:confirmation-response", payload),
-  },
-
-  // Assistant API
-  assistant: {
-    sendMessage: (payload: {
-      sessionId: string;
-      messages: Array<{
-        id: string;
-        role: "user" | "assistant";
-        content: string;
-        toolCalls?: Array<{ id: string; name: string; args: Record<string, unknown> }>;
-        toolResults?: Array<{ toolCallId: string; result: unknown; error?: string }>;
-        createdAt: string;
-      }>;
-      actions?: Array<{
-        id: string;
-        name: string;
-        title: string;
-        description: string;
-        category: string;
-        kind: "query" | "command";
-        danger: "safe" | "confirm" | "restricted";
-        inputSchema?: Record<string, unknown>;
-        outputSchema?: Record<string, unknown>;
-        enabled: boolean;
-        disabledReason?: string;
-      }>;
-      context?: {
-        projectId?: string;
-        activeWorktreeId?: string;
-        focusedWorktreeId?: string;
-        focusedTerminalId?: string;
-        isTerminalPaletteOpen?: boolean;
-        isSettingsOpen?: boolean;
-      };
-    }) => ipcRenderer.invoke(CHANNELS.ASSISTANT_SEND_MESSAGE, payload),
-
-    cancel: (sessionId: string) => ipcRenderer.invoke(CHANNELS.ASSISTANT_CANCEL, sessionId),
-
-    clearSession: (sessionId: string) =>
-      ipcRenderer.invoke(CHANNELS.ASSISTANT_CLEAR_SESSION, sessionId),
-
-    hasApiKey: () => ipcRenderer.invoke(CHANNELS.ASSISTANT_HAS_API_KEY),
-
-    acknowledgeEvent: (sessionId: string, eventId: string): Promise<boolean> =>
-      ipcRenderer.invoke(CHANNELS.ASSISTANT_ACKNOWLEDGE_EVENT, { sessionId, eventId }),
-
-    onChunk: (
-      callback: (data: {
-        sessionId: string;
-        chunk: {
-          type:
-            | "text"
-            | "tool_call"
-            | "tool_result"
-            | "error"
-            | "done"
-            | "listener_triggered"
-            | "auto_resume"
-            | "retrying";
-          content?: string;
-          toolCall?: { id: string; name: string; args: Record<string, unknown> };
-          toolResult?: { toolCallId: string; toolName: string; result: unknown; error?: string };
-          error?: string;
-          finishReason?: string;
-          listenerData?: {
-            listenerId: string;
-            eventType: string;
-            data: Record<string, unknown>;
-          };
-          autoResumeData?: {
-            eventId: string;
-            listenerId: string;
-            eventType: string;
-            eventData: Record<string, unknown>;
-            resumePrompt: string;
-            context: {
-              plan?: string;
-              lastToolCalls?: unknown[];
-              metadata?: Record<string, unknown>;
-            };
-          };
-          retryInfo?: {
-            attempt: number;
-            maxAttempts: number;
-            reason: string;
-          };
-        };
-      }) => void
-    ) => {
-      const handler = (
-        _event: Electron.IpcRendererEvent,
-        data: {
-          sessionId: string;
-          chunk: {
-            type:
-              | "text"
-              | "tool_call"
-              | "tool_result"
-              | "error"
-              | "done"
-              | "listener_triggered"
-              | "auto_resume"
-              | "retrying";
-            content?: string;
-            toolCall?: { id: string; name: string; args: Record<string, unknown> };
-            toolResult?: { toolCallId: string; toolName: string; result: unknown; error?: string };
-            error?: string;
-            finishReason?: string;
-            listenerData?: {
-              listenerId: string;
-              eventType: string;
-              data: Record<string, unknown>;
-            };
-            autoResumeData?: {
-              eventId: string;
-              listenerId: string;
-              eventType: string;
-              eventData: Record<string, unknown>;
-              resumePrompt: string;
-              context: {
-                plan?: string;
-                lastToolCalls?: unknown[];
-                metadata?: Record<string, unknown>;
-              };
-            };
-            retryInfo?: {
-              attempt: number;
-              maxAttempts: number;
-              reason: string;
-            };
-          };
-        }
-      ) => callback(data);
-      ipcRenderer.on(CHANNELS.ASSISTANT_CHUNK, handler);
-      return () => ipcRenderer.removeListener(CHANNELS.ASSISTANT_CHUNK, handler);
-    },
   },
 
   // Agent Capabilities API

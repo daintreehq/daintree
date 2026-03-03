@@ -29,7 +29,6 @@ import { registerNotesHandlers } from "./handlers/notes.js";
 import { registerDevPreviewHandlers } from "./handlers/devPreview.js";
 import { registerCommandHandlers } from "./handlers/commands.js";
 import { registerAppAgentHandlers } from "./handlers/appAgent.js";
-import { registerAssistantHandlers } from "./handlers/assistant.js";
 import { registerAgentCapabilitiesHandlers } from "./handlers/agentCapabilities.js";
 import { registerCliHandlers } from "./handlers/cli.js";
 import { registerClipboardHandlers } from "./handlers/clipboard.js";
@@ -101,7 +100,6 @@ export function registerIpcHandlers(
     register(() => registerDevPreviewHandlers(deps));
     register(() => registerCommandHandlers());
     register(() => registerAppAgentHandlers(deps));
-    register(() => registerAssistantHandlers(mainWindow));
     register(() => registerAgentCapabilitiesHandlers());
     register(() => registerCliHandlers());
     register(() => registerClipboardHandlers());

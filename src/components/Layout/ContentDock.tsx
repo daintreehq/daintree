@@ -1,4 +1,4 @@
-import { useMemo, useRef, useCallback, useEffect } from "react";
+import { useMemo, useRef, useCallback } from "react";
 import type React from "react";
 import { useShallow } from "zustand/react/shallow";
 import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
@@ -7,14 +7,11 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useTerminalStore, useProjectStore, useWorktreeSelectionStore } from "@/store";
-import { useAppAgentStore } from "@/store/appAgentStore";
-import { useAssistantChatStore } from "@/store/assistantChatStore";
 import { DockedTerminalItem } from "./DockedTerminalItem";
 import { DockedTabGroup } from "./DockedTabGroup";
 import { TrashContainer } from "./TrashContainer";
 import { WaitingContainer } from "./WaitingContainer";
 import { FailedContainer } from "./FailedContainer";
-import { AssistantDockButton } from "@/components/Dock/AssistantDockButton";
 import {
   SortableDockItem,
   SortableDockPlaceholder,
@@ -43,32 +40,6 @@ interface ContentDockProps {
 export function ContentDock({ density = "normal" }: ContentDockProps) {
   const { showMenu } = useNativeContextMenu();
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
-
-  const {
-    hasApiKey,
-    enabled,
-    isInitialized: agentStoreReady,
-  } = useAppAgentStore(
-    useShallow((s) => ({
-      hasApiKey: s.hasApiKey,
-      enabled: s.enabled,
-      isInitialized: s.isInitialized,
-    }))
-  );
-  const initializeAgentStore = useAppAgentStore((s) => s.initialize);
-  const closeAssistant = useAssistantChatStore((s) => s.close);
-
-  useEffect(() => {
-    void initializeAgentStore();
-  }, [initializeAgentStore]);
-
-  useEffect(() => {
-    if (agentStoreReady && (!hasApiKey || !enabled)) {
-      closeAssistant();
-    }
-  }, [agentStoreReady, hasApiKey, enabled, closeAssistant]);
-
-  const showAssistant = agentStoreReady && hasApiKey && enabled;
 
   const trashedTerminals = useTerminalStore(useShallow((state) => state.trashedTerminals));
   const terminals = useTerminalStore((state) => state.terminals);
@@ -284,12 +255,11 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
       {/* Separator between terminals and action containers */}
       {tabGroups.length > 0 && <div className="w-px h-5 bg-[var(--dock-border)] mx-1 shrink-0" />}
 
-      {/* Action containers: Waiting + Failed + Trash + Assistant */}
+      {/* Action containers: Waiting + Failed + Trash */}
       <div className="shrink-0 pl-1 flex items-center gap-2">
         <WaitingContainer compact={isCompact} />
         <FailedContainer compact={isCompact} />
         <TrashContainer trashedTerminals={trashedItems} compact={isCompact} />
-        {showAssistant && <AssistantDockButton />}
       </div>
     </div>
   );

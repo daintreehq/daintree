@@ -6,7 +6,6 @@ import type { Project } from "../types/index.js";
 import { projectStore } from "./ProjectStore.js";
 import { logBuffer } from "./LogBuffer.js";
 import { taskQueueService } from "./TaskQueueService.js";
-import { assistantService } from "./AssistantService.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { sendToRenderer } from "../ipc/utils.js";
 import { randomUUID } from "crypto";
@@ -169,18 +168,11 @@ export class ProjectSwitchService {
         ? safeCall(() => this.deps.eventBuffer!.onProjectSwitch())
         : Promise.resolve(),
       safeCall(() => taskQueueService.onProjectSwitch(projectId)),
-      safeCall(() => assistantService.clearAllSessions()),
     ]);
 
     cleanupResults.forEach((result, index) => {
       if (result.status === "rejected") {
-        const serviceNames = [
-          "PtyClient",
-          "LogBuffer",
-          "EventBuffer",
-          "TaskQueueService",
-          "AssistantService",
-        ];
+        const serviceNames = ["PtyClient", "LogBuffer", "EventBuffer", "TaskQueueService"];
         console.error(`[ProjectSwitch] ${serviceNames[index]} cleanup failed:`, result.reason);
       }
     });

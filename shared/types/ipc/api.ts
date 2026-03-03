@@ -99,8 +99,7 @@ import type {
   BuilderStep,
 } from "../commands.js";
 import type { AppAgentConfig } from "../appAgent.js";
-import type { ActionManifestEntry, ActionContext } from "../actions.js";
-import type { AssistantMessage, AssistantChunkPayload } from "../assistant.js";
+import type { ActionContext } from "../actions.js";
 import type { AgentRegistry, AgentMetadata } from "./agentCapabilities.js";
 
 // ElectronAPI Type (exposed via preload)
@@ -681,25 +680,6 @@ export interface ElectronAPI {
     ): () => void;
     /** Send confirmation response back to main process */
     sendConfirmationResponse(payload: { requestId: string; approved: boolean }): void;
-  };
-  assistant: {
-    /** Send a message to the assistant and receive streaming response with optional tool calling */
-    sendMessage(payload: {
-      sessionId: string;
-      messages: AssistantMessage[];
-      actions?: ActionManifestEntry[];
-      context?: ActionContext;
-    }): Promise<void>;
-    /** Cancel an active streaming session */
-    cancel(sessionId: string): Promise<void>;
-    /** Clear session and remove all listeners associated with it */
-    clearSession(sessionId: string): Promise<void>;
-    /** Check if API key is configured (uses appAgentConfig) */
-    hasApiKey(): Promise<boolean>;
-    /** Acknowledge a pending event by ID */
-    acknowledgeEvent(sessionId: string, eventId: string): Promise<boolean>;
-    /** Subscribe to streaming chunks from the assistant */
-    onChunk(callback: (data: AssistantChunkPayload) => void): () => void;
   };
   agentCapabilities: {
     /** Get effective registry (built-in + user overrides) */

@@ -30,7 +30,6 @@ import {
 } from "lucide-react";
 import { useToolbarPreferencesStore } from "@/store";
 import type { ToolbarButtonId } from "@/../../shared/types/domain";
-import { CanopyIcon } from "@/components/icons";
 
 type ButtonMetadata = { label: string; icon: React.ReactNode; description: string };
 
@@ -99,11 +98,6 @@ const BUTTON_METADATA: Partial<Record<ToolbarButtonId, ButtonMetadata>> = {
     label: "Problems",
     icon: <AlertCircle className="h-4 w-4" />,
     description: "Show problems panel",
-  },
-  assistant: {
-    label: "Assistant",
-    icon: <CanopyIcon size={16} />,
-    description: "Open Canopy Assistant",
   },
 };
 

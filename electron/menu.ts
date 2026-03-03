@@ -192,12 +192,6 @@ export function createApplicationMenu(
         },
         { type: "separator" },
         {
-          label: "Canopy Assistant...",
-          accelerator: "CommandOrControl+Shift+K",
-          click: () => sendAction("open-assistant"),
-        },
-        { type: "separator" },
-        {
           label: "Install Canopy Command Line Tool",
           enabled: process.platform === "darwin" || process.platform === "linux",
           click: async () => {

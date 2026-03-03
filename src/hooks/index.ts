@@ -62,10 +62,6 @@ export type { UseHorizontalScrollControlsReturn } from "./useHorizontalScrollCon
 
 export { useDockRenderState } from "./useDockRenderState";
 
-export { useAppAgentDispatcher } from "./useAppAgentDispatcher";
-
-export { useAssistantStreamProcessor } from "./useAssistantStreamProcessor";
-
 export { useActionPalette } from "./useActionPalette";
 export type { ActionPaletteItem, UseActionPaletteReturn } from "./useActionPalette";
 

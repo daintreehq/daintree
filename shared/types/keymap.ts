@@ -102,9 +102,6 @@ export type KeyAction =
   | "agent.focusNextAgent"
   | "agent.focusPreviousAgent"
 
-  // Assistant panel
-  | "assistant.open"
-
   // Find/Search
   | "find.inFocusedPanel"
 

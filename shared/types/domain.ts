@@ -897,8 +897,7 @@ export type ToolbarButtonId =
   | "copy-tree"
   | "settings"
   | "problems"
-  | "sidecar-toggle"
-  | "assistant";
+  | "sidecar-toggle";
 
 /** Configuration for which toolbar buttons are visible and their order */
 export interface ToolbarLayout {

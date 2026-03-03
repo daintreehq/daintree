@@ -14,9 +14,7 @@ import {
 import { cn } from "@/lib/utils";
 import { appClient } from "@/clients";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { CanopyIcon } from "@/components/icons";
 import { AgentSettings } from "./AgentSettings";
-import { AssistantSettingsTab } from "./AssistantSettingsTab";
 import { GeneralTab } from "./GeneralTab";
 import { TerminalSettingsTab } from "./TerminalSettingsTab";
 import { TerminalAppearanceTab } from "./TerminalAppearanceTab";
@@ -40,7 +38,6 @@ export type SettingsTab =
   | "terminal"
   | "terminalAppearance"
   | "worktree"
-  | "assistant"
   | "agents"
   | "github"
   | "sidecar"
@@ -89,7 +86,6 @@ export function SettingsDialog({
     terminal: "Panel Grid",
     terminalAppearance: "Appearance",
     worktree: "Worktree Paths",
-    assistant: "Canopy Assistant",
     agents: "CLI Agents",
     github: "GitHub Integration",
     sidecar: "Sidecar Links",
@@ -138,14 +134,6 @@ export function SettingsDialog({
             icon={<GitBranch className="w-4 h-4" />}
           >
             Worktree
-          </NavButton>
-          <NavButton
-            active={activeTab === "assistant"}
-            onClick={() => setActiveTab("assistant")}
-            icon={<CanopyIcon className="w-4 h-4" />}
-          >
-            Assistant
-            <span className="w-1.5 h-1.5 shrink-0 rounded-full bg-amber-400" aria-hidden="true" />
           </NavButton>
           <NavButton
             active={activeTab === "agents"}
@@ -217,10 +205,6 @@ export function SettingsDialog({
 
             <div className={activeTab === "worktree" ? "" : "hidden"}>
               <WorktreeSettingsTab />
-            </div>
-
-            <div className={activeTab === "assistant" ? "" : "hidden"}>
-              <AssistantSettingsTab />
             </div>
 
             <div className={activeTab === "agents" ? "" : "hidden"}>

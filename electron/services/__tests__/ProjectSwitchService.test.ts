@@ -17,10 +17,6 @@ const taskQueueServiceMock = vi.hoisted(() => ({
   onProjectSwitch: vi.fn(async () => undefined),
 }));
 
-const assistantServiceMock = vi.hoisted(() => ({
-  clearAllSessions: vi.fn(() => undefined),
-}));
-
 const sendToRendererMock = vi.hoisted(() => vi.fn());
 const randomUUIDMock = vi.hoisted(() => vi.fn(() => "switch-id-1"));
 
@@ -41,10 +37,6 @@ vi.mock("../LogBuffer.js", () => ({
 
 vi.mock("../TaskQueueService.js", () => ({
   taskQueueService: taskQueueServiceMock,
-}));
-
-vi.mock("../AssistantService.js", () => ({
-  assistantService: assistantServiceMock,
 }));
 
 vi.mock("../../ipc/utils.js", () => ({
@@ -86,7 +78,6 @@ describe("ProjectSwitchService", () => {
 
     logBufferMock.onProjectSwitch.mockImplementation(() => undefined);
     taskQueueServiceMock.onProjectSwitch.mockResolvedValue(undefined);
-    assistantServiceMock.clearAllSessions.mockImplementation(() => undefined);
   });
 
   function createService(overrides?: {

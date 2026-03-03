@@ -17,7 +17,6 @@ export const SettingsTabSchema = z.enum([
   "terminal",
   "terminalAppearance",
   "worktree",
-  "assistant",
   "agents",
   "github",
   "sidecar",

@@ -82,7 +82,6 @@ export function useMenuActions(options: UseMenuActionsOptions): void {
           "toggle-sidebar": "nav.toggleSidebar",
           "open-quick-switcher": "nav.quickSwitcher",
           "open-action-palette": "action.palette.open",
-          "open-assistant": "assistant.open",
         };
 
         const actionId = menuToActionMap[action];

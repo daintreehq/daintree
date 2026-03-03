@@ -26,8 +26,6 @@ import {
   useWindowNotifications,
   useWorktreeActions,
   useMenuActions,
-  useAppAgentDispatcher,
-  useAssistantStreamProcessor,
 } from "./hooks";
 import { useActionRegistry } from "./hooks/useActionRegistry";
 import { useUpdateListener } from "./hooks/useUpdateListener";
@@ -35,10 +33,7 @@ import { useActionPalette } from "./hooks/useActionPalette";
 import { useQuickSwitcher } from "./hooks/useQuickSwitcher";
 import { useWorktreePalette } from "./hooks/useWorktreePalette";
 import { useDoubleShift } from "./hooks/useDoubleShift";
-import { useAssistantContextSync } from "./hooks/useAssistantContextSync";
-import { actionService } from "./services/ActionService";
 import { createTooltipWithShortcut } from "./lib/platform";
-import { getAssistantContext } from "./components/Assistant/assistantContext";
 import {
   useAppHydration,
   useProjectSwitchRehydration,
@@ -84,7 +79,6 @@ import { Toaster } from "./components/ui/toaster";
 import { UpdateNotification } from "./components/UpdateNotification";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { DndProvider } from "./components/DragDrop";
-import { AssistantActionConfirmationHost } from "./components/Assistant/AssistantActionConfirmationHost";
 import {
   useTerminalStore,
   useWorktreeSelectionStore,
@@ -621,9 +615,6 @@ function App() {
   useTerminalConfig();
   useWindowNotifications();
   useUpdateListener();
-  useAppAgentDispatcher(); // Enable Assistant tool calling via action dispatch
-  useAssistantStreamProcessor(); // Process Assistant chunks even when pane is closed
-
   const [homeDir, setHomeDir] = useState<string | undefined>(undefined);
   useEffect(() => {
     systemClient.getHomeDir().then(setHomeDir).catch(console.error);
@@ -848,7 +839,6 @@ function App() {
       "terminal",
       "terminalAppearance",
       "worktree",
-      "assistant",
       "agents",
       "github",
       "sidecar",
@@ -921,12 +911,6 @@ function App() {
   const electronAvailable = isElectronAvailable();
   const { inject } = useContextInjection();
 
-  useEffect(() => {
-    actionService.setContextProvider(() => getAssistantContext());
-
-    return () => actionService.setContextProvider(null);
-  }, []);
-
   const handleToggleSidebar = useCallback(() => {
     window.dispatchEvent(new CustomEvent("canopy:toggle-focus-mode"));
   }, []);
@@ -975,7 +959,6 @@ function App() {
   useTerminalStoreBootstrap();
   useSemanticWorkerLifecycle();
   useSystemWakeHandler();
-  useAssistantContextSync();
   useDevServerDiscovery();
 
   if (!isElectronAvailable()) {
@@ -989,12 +972,7 @@ function App() {
   }
 
   if (!isStateLoaded) {
-    return (
-      <>
-        <div className="h-screen w-screen bg-canopy-bg" />
-        <AssistantActionConfirmationHost />
-      </>
-    );
+    return <div className="h-screen w-screen bg-canopy-bg" />;
   }
 
   return (
@@ -1253,8 +1231,6 @@ function App() {
       />
 
       <PanelTransitionOverlay />
-
-      <AssistantActionConfirmationHost />
 
       <Toaster />
       <UpdateNotification />

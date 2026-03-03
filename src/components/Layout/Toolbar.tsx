@@ -695,10 +695,6 @@ export function Toolbar({
         ),
         isAvailable: showDeveloperTools,
       },
-      assistant: {
-        render: () => null,
-        isAvailable: false,
-      },
       "sidecar-toggle": {
         render: () => (
           <TooltipProvider key="sidecar-toggle">

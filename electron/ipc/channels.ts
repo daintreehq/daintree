@@ -288,14 +288,6 @@ export const CHANNELS = {
   APP_AGENT_CONFIRMATION_REQUEST: "app-agent:confirmation-request",
   APP_AGENT_CONFIRMATION_RESPONSE: "app-agent:confirmation-response",
 
-  // Assistant channels
-  ASSISTANT_SEND_MESSAGE: "assistant:send-message",
-  ASSISTANT_CANCEL: "assistant:cancel",
-  ASSISTANT_CHUNK: "assistant:chunk",
-  ASSISTANT_HAS_API_KEY: "assistant:has-api-key",
-  ASSISTANT_CLEAR_SESSION: "assistant:clear-session",
-  ASSISTANT_ACKNOWLEDGE_EVENT: "assistant:acknowledge-event",
-
   // Agent Capabilities channels
   AGENT_CAPABILITIES_GET_REGISTRY: "agent-capabilities:get-registry",
   AGENT_CAPABILITIES_GET_AGENT_IDS: "agent-capabilities:get-agent-ids",

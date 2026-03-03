@@ -233,14 +233,6 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Agents",
   },
   {
-    actionId: "assistant.open",
-    combo: "Cmd+Shift+K",
-    scope: "global",
-    priority: 0,
-    description: "Open Assistant panel",
-    category: "Assistant",
-  },
-  {
     actionId: "terminal.inject",
     combo: "Cmd+Shift+I",
     scope: "global",

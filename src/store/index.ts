@@ -81,6 +81,3 @@ export { useTwoPaneSplitStore } from "./twoPaneSplitStore";
 export type { TwoPaneSplitConfig } from "./twoPaneSplitStore";
 
 export { useAppAgentStore, cleanupAppAgentStore } from "./appAgentStore";
-
-export { useAssistantChatStore } from "./assistantChatStore";
-export type { ConversationState } from "./assistantChatStore";
