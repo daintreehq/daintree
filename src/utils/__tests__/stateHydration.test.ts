@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { escapeShellArg } from "@shared/utils/shellEscape";
 
 const appClientMock = {
   hydrate: vi.fn(),
@@ -443,8 +444,8 @@ describe("hydrateAppState", () => {
     expect(callArgs).not.toHaveProperty("existingId");
 
     // Verify command is regenerated from settings (doesn't include old prompt)
-    // Non-flag values are shell-escaped by generateAgentCommand, hence the quotes
-    expect(callArgs.command).toBe("claude --model 'sonnet-4'");
+    // Non-flag values are shell-escaped by generateAgentCommand (platform-dependent quoting)
+    expect(callArgs.command).toBe(`claude --model ${escapeShellArg("sonnet-4")}`);
     expect(callArgs.command).not.toContain("-p");
     expect(callArgs.command).not.toContain("Old prompt");
 
