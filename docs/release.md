@@ -47,16 +47,7 @@ xcrun notarytool history \
 
 ## macOS Notarization
 
-**Status: Disabled (re-enable for ~0.5.0 release)**
-
-Notarization is currently disabled (`mac.notarize: false` in `package.json`) due to prolonged Apple Notarization Service outages in February 2026. All infrastructure is in place — just flip the flag.
-
-### To re-enable notarization
-
-1. In `package.json`, change `"notarize": false` to `"notarize": true` under `build.mac`
-2. Verify secrets are still valid: run `xcrun notarytool history --key <path> --key-id 3NFG76895G --issuer <issuer>` locally
-3. Test with a manual workflow dispatch (without `skip_notarization`) before tagging a release
-4. Normal notarization takes 5-15 minutes; if it hangs beyond 30 minutes, Apple's service may be degraded
+Notarization is enabled. All CI builds are signed and submitted to Apple's notarization service automatically.
 
 ### Key technical details
 
@@ -98,3 +89,11 @@ The hardened runtime entitlements are in `build/entitlements.mac.plist`:
 - `com.apple.security.cs.allow-jit` — required for Electron with hardened runtime
 - `com.apple.security.cs.allow-unsigned-executable-memory` — may not be needed for Electron 40+, review when re-enabling notarization
 - `com.apple.security.cs.disable-library-validation` — allows loading node-pty native module
+
+## Local Development Builds
+
+To build locally without code signing or notarization (e.g. for testing):
+
+```bash
+CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --publish never -c.mac.notarize=false -c.mac.forceCodeSigning=false
+```
