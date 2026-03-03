@@ -49,6 +49,7 @@ keys/
 # Environment
 .env
 .env.*
+!.env.example
 
 # Cache
 .cache/
