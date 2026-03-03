@@ -128,6 +128,7 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
         <Button
           variant="pill"
           size="sm"
+          data-testid="trash-container"
           className={cn(
             compact ? "px-1.5 min-w-0" : "px-3",
             isOpen && "bg-canopy-border border-canopy-accent/40 ring-1 ring-canopy-accent/30"

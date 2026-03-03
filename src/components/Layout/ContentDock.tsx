@@ -139,6 +139,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
 
   return (
     <div
+      id="dock-container"
       onContextMenu={handleContextMenu}
       className={cn(
         "bg-[var(--dock-bg)]/95 backdrop-blur-sm",

@@ -43,6 +43,8 @@
     "check": "npm run typecheck && npm run lint:ratchet && npm run format:check",
     "fix": "npm run format && npm run lint:fix",
     "test:e2e": "npx playwright test",
+    "test:e2e:core": "npx playwright test --project=core",
+    "test:e2e:online": "npx playwright test --project=online",
     "perf:smoke": "tsx scripts/perf/run.ts --mode smoke",
     "perf:ci": "tsx scripts/perf/run.ts --mode ci",
     "perf:nightly": "tsx scripts/perf/run.ts --mode nightly",

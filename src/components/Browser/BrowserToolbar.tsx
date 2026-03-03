@@ -300,6 +300,7 @@ export function BrowserToolbar({
           <input
             ref={inputRef}
             type="text"
+            data-testid="browser-address-bar"
             value={inputValue}
             onChange={(e) => {
               setInputValue(e.target.value);

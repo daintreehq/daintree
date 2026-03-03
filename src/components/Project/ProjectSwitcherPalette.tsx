@@ -326,6 +326,7 @@ function ProjectListContent({
                 type="button"
                 onClick={() => onAddProject?.()}
                 className="w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors hover:bg-white/[0.02]"
+                data-testid="project-add-button"
               >
                 <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
                   <Plus className="h-4 w-4" />
@@ -595,6 +596,7 @@ function DropdownContent({
       <PopoverTrigger asChild>{children}</PopoverTrigger>
       <PopoverContent
         className="w-[484px] max-w-[calc(100vw-2rem)] p-0"
+        data-testid="project-switcher-palette"
         align={dropdownAlign}
         sideOffset={8}
         onOpenAutoFocus={(e) => {

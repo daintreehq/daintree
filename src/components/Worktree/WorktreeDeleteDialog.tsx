@@ -122,6 +122,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       size="md"
       variant="destructive"
       dismissible={!isDeleting}
+      data-testid="delete-worktree-dialog"
     >
       <AppDialog.Body>
         <div className="flex items-center gap-3 mb-4 text-[var(--color-status-error)]">
@@ -231,6 +232,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
           onClick={handleDelete}
           disabled={isDeleting}
           className={isArmed ? "animate-pulse ring-2 ring-[var(--color-status-error)]" : ""}
+          data-testid="delete-worktree-confirm"
         >
           {getDeleteButtonText()}
         </Button>

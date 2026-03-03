@@ -828,6 +828,7 @@ export function Toolbar({
                 "flex items-center justify-center gap-2 px-3 h-9 rounded-[var(--radius-md)] select-none border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] app-no-drag pointer-events-auto outline-none",
                 "opacity-80 hover:opacity-100 transition-opacity cursor-pointer"
               )}
+              data-testid="project-switcher-trigger"
               style={{
                 background: currentProject
                   ? getProjectGradient(currentProject.color)
