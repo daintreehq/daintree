@@ -219,6 +219,12 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
       const targetId = state.focusedId ?? state.terminals.find((t) => t.location !== "trash")?.id;
       if (targetId) {
         state.trashTerminal(targetId);
+        const remaining = useTerminalStore
+          .getState()
+          .terminals.filter((t) => t.location !== "trash");
+        if (remaining.length === 0) {
+          await appClient.quit();
+        }
       }
     },
   }));
