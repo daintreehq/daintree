@@ -66,14 +66,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Install Claude Code via native installer (--yes skips interactive prompts)
-      - name: Install Claude Code (macOS/Linux)
-        if: runner.os != 'Windows'
-        run: curl -fsSL https://claude.ai/install.sh | bash -s -- --yes
-
-      - name: Install Claude Code (Windows)
-        if: runner.os == 'Windows'
-        run: irm https://claude.ai/install.ps1 | iex
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
 
       # Pre-configure Claude Code: skip onboarding, set model to Sonnet, use API key auth
       - name: Configure Claude Code (macOS/Linux)
