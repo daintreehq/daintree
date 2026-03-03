@@ -1,0 +1,128 @@
+name: E2E Tests
+
+on:
+  push:
+  workflow_dispatch:
+  # TODO: Switch back to nightly schedule once the workflow is stable:
+  #   schedule:
+  #     - cron: "0 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            name: macOS
+          - os: ubuntu-22.04
+            name: Linux
+          - os: windows-latest
+            name: Windows
+
+    runs-on: ${{ matrix.os }}
+    name: E2E (${{ matrix.name }})
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      # Linux: install system dependencies for Electron
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgbm1 \
+            libgtk-3-0 \
+            libnss3 \
+            libasound2 \
+            libxss1 \
+            libxtst6 \
+            libatk1.0-0 \
+            libatk-bridge2.0-0 \
+            libcups2 \
+            libdrm2 \
+            libnotify4 \
+            xvfb
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Install Claude Code via native installer (--yes skips interactive prompts)
+      - name: Install Claude Code (macOS/Linux)
+        if: runner.os != 'Windows'
+        run: curl -fsSL https://claude.ai/install.sh | bash -s -- --yes
+
+      - name: Install Claude Code (Windows)
+        if: runner.os == 'Windows'
+        run: irm https://claude.ai/install.ps1 | iex
+
+      # Pre-configure Claude Code: skip onboarding, set model to Sonnet, use API key auth
+      - name: Configure Claude Code (macOS/Linux)
+        if: runner.os != 'Windows'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          mkdir -p ~/.claude
+          echo '{"hasCompletedOnboarding": true}' > ~/.claude.json
+          claude config set model sonnet
+
+      - name: Configure Claude Code (Windows)
+        if: runner.os == 'Windows'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.claude" | Out-Null
+          '{"hasCompletedOnboarding": true}' | Set-Content "$env:USERPROFILE\.claude.json"
+          claude config set model sonnet
+
+      # macOS
+      - name: Run e2e tests (macOS)
+        if: runner.os == 'macOS'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: npm run test:e2e
+
+      # Linux: wrap with xvfb for virtual display
+      - name: Run e2e tests (Linux)
+        if: runner.os == 'Linux'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: xvfb-run --auto-servernum npm run test:e2e
+
+      # Windows
+      - name: Run e2e tests (Windows)
+        if: runner.os == 'Windows'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: npm run test:e2e
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results-${{ matrix.name }}-${{ github.sha }}
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore

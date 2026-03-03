@@ -20,9 +20,16 @@ export interface AppContext {
 export async function launchApp(): Promise<AppContext> {
   const userDataDir = mkdtempSync(path.join(tmpdir(), "canopy-e2e-"));
 
+  const args = [`--user-data-dir=${userDataDir}`, ROOT];
+
+  // Linux CI requires --no-sandbox (no suid sandbox inside containers)
+  if (process.env.CI && process.platform === "linux") {
+    args.unshift("--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu");
+  }
+
   const app = await electron.launch({
     executablePath: electronPath,
-    args: [`--user-data-dir=${userDataDir}`, ROOT],
+    args,
     env: { ...process.env, NODE_ENV: "production" },
     timeout: 30_000,
   });

@@ -150,6 +150,41 @@ await expect
 
 ## CI
 
+Tests run nightly (3am UTC) and on manual `workflow_dispatch` via `.github/workflows/e2e.yml`.
+
+### Cross-Platform Matrix
+
+| Platform | Runner                     | Notes                                                                                 |
+| -------- | -------------------------- | ------------------------------------------------------------------------------------- |
+| macOS    | `macos-14` (Apple Silicon) | No extra setup needed                                                                 |
+| Linux    | `ubuntu-22.04`             | Requires `xvfb-run` for virtual display; `libgbm1`, `libnss3`, etc. installed via apt |
+| Windows  | `windows-latest`           | node-pty rebuilt automatically via `postinstall`; no xvfb needed                      |
+
+### Platform-Specific Electron Flags
+
+`e2e/launch.ts` automatically adds flags when `CI=true` on Linux:
+
+- `--no-sandbox` — required in containerized CI (no suid sandbox)
+- `--disable-dev-shm-usage` — avoids `/dev/shm` size limits in containers
+- `--disable-gpu` — prevents GPU-related crashes in headless environments
+
+### Claude Code Installation & Configuration
+
+Claude Code is installed via the native installer with `--yes` for non-interactive mode:
+
+- **macOS/Linux:** `curl -fsSL https://claude.ai/install.sh | bash -s -- --yes`
+- **Windows:** `irm https://claude.ai/install.ps1 | iex`
+
+After installation, the workflow pre-configures Claude Code for CI:
+
+1. **Skip onboarding:** `echo '{"hasCompletedOnboarding": true}' > ~/.claude.json`
+2. **Set model:** `claude config set model sonnet`
+3. **Authentication:** `ANTHROPIC_API_KEY` env var (from GitHub Secrets) — no interactive login needed
+
+### Other CI Details
+
 - Retries are set to 2 on CI (`process.env.CI`).
+- `fail-fast: false` ensures all platforms run even if one fails.
 - Traces and failure screenshots are written to `test-results/` for upload as CI artifacts.
+- Artifact names include the platform: `e2e-results-macOS-<sha>`, `e2e-results-Linux-<sha>`, etc.
 - `playwright-report/` and `test-results/` are both gitignored.
