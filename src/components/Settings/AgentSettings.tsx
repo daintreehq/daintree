@@ -417,6 +417,43 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
               );
             })()}
 
+            {/* Share Clipboard Directory Toggle - Gemini only */}
+            {activeAgent.id === "gemini" && (
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-sm font-medium text-canopy-text">
+                    Share Clipboard Directory
+                  </div>
+                  <div className="text-xs text-canopy-text/50">
+                    Allow Gemini to read pasted clipboard images via --include-directories
+                  </div>
+                </div>
+                <button
+                  role="switch"
+                  aria-checked={activeEntry.shareClipboardDirectory !== false}
+                  aria-label="Share clipboard directory with Gemini"
+                  onClick={async () => {
+                    const current = activeEntry.shareClipboardDirectory !== false;
+                    await updateAgent(activeAgent.id, { shareClipboardDirectory: !current });
+                    onSettingsChange?.();
+                  }}
+                  className={cn(
+                    "relative w-11 h-6 rounded-full transition-colors shrink-0",
+                    activeEntry.shareClipboardDirectory !== false
+                      ? "bg-canopy-accent"
+                      : "bg-canopy-border"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform",
+                      activeEntry.shareClipboardDirectory !== false && "translate-x-5"
+                    )}
+                  />
+                </button>
+              </div>
+            )}
+
             {/* Custom Arguments */}
             <div className="space-y-2 pt-2 border-t border-canopy-border">
               <label className="text-sm font-medium text-canopy-text">Custom Arguments</label>

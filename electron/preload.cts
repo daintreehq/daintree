@@ -215,6 +215,7 @@ const CHANNELS = {
   SYSTEM_CHECK_COMMAND: "system:check-command",
   SYSTEM_CHECK_DIRECTORY: "system:check-directory",
   SYSTEM_GET_HOME_DIR: "system:get-home-dir",
+  SYSTEM_GET_TMP_DIR: "system:get-tmp-dir",
   SYSTEM_GET_CLI_AVAILABILITY: "system:get-cli-availability",
   SYSTEM_REFRESH_CLI_AVAILABILITY: "system:refresh-cli-availability",
   SYSTEM_GET_AGENT_VERSIONS: "system:get-agent-versions",
@@ -722,6 +723,8 @@ const api: ElectronAPI = {
     checkDirectory: (path: string) => _typedInvoke(CHANNELS.SYSTEM_CHECK_DIRECTORY, path),
 
     getHomeDir: () => _typedInvoke(CHANNELS.SYSTEM_GET_HOME_DIR),
+
+    getTmpDir: () => _typedInvoke(CHANNELS.SYSTEM_GET_TMP_DIR),
 
     getCliAvailability: () => _typedInvoke(CHANNELS.SYSTEM_GET_CLI_AVAILABILITY),
 

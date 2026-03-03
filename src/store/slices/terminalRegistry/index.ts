@@ -1,6 +1,6 @@
 import type { StateCreator } from "zustand";
 import type { TerminalRuntimeStatus, TerminalLocation, TabGroup, TabGroupLocation } from "@/types";
-import { terminalClient, agentSettingsClient, projectClient } from "@/clients";
+import { terminalClient, agentSettingsClient, projectClient, systemClient } from "@/clients";
 import { generateAgentCommand } from "@shared/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
@@ -1364,14 +1364,19 @@ export const createTerminalRegistrySlice =
 
         if (isAgent && effectiveAgentId) {
           try {
-            const agentSettings = await agentSettingsClient.get();
+            const [agentSettings, tmpDir] = await Promise.all([
+              agentSettingsClient.get(),
+              systemClient.getTmpDir().catch(() => ""),
+            ]);
             if (agentSettings) {
               const agentConfig = getAgentConfig(effectiveAgentId);
               const baseCommand = agentConfig?.command || effectiveAgentId;
+              const clipboardDirectory = tmpDir ? `${tmpDir}/canopy-clipboard` : undefined;
               commandToRun = generateAgentCommand(
                 baseCommand,
                 agentSettings.agents?.[effectiveAgentId] ?? {},
-                effectiveAgentId
+                effectiveAgentId,
+                { clipboardDirectory }
               );
             }
           } catch (error) {
@@ -1741,14 +1746,19 @@ export const createTerminalRegistrySlice =
         let commandToRun: string | undefined;
         if (effectiveAgentId) {
           try {
-            const agentSettings = await agentSettingsClient.get();
+            const [agentSettings, tmpDir] = await Promise.all([
+              agentSettingsClient.get(),
+              systemClient.getTmpDir().catch(() => ""),
+            ]);
             if (agentSettings) {
               const agentConfig = getAgentConfig(effectiveAgentId);
               const baseCommand = agentConfig?.command || effectiveAgentId;
+              const clipboardDirectory = tmpDir ? `${tmpDir}/canopy-clipboard` : undefined;
               commandToRun = generateAgentCommand(
                 baseCommand,
                 agentSettings.agents?.[effectiveAgentId] ?? {},
-                effectiveAgentId
+                effectiveAgentId,
+                { clipboardDirectory }
               );
             }
           } catch (error) {

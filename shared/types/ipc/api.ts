@@ -227,6 +227,7 @@ export interface ElectronAPI {
     checkCommand(command: string): Promise<boolean>;
     checkDirectory(path: string): Promise<boolean>;
     getHomeDir(): Promise<string>;
+    getTmpDir(): Promise<string>;
     getCliAvailability(): Promise<CliAvailability>;
     refreshCliAvailability(): Promise<CliAvailability>;
     getAgentVersions(): Promise<AgentVersionInfo[]>;

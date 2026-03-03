@@ -1,4 +1,4 @@
-import { appClient, terminalClient, worktreeClient, projectClient } from "@/clients";
+import { appClient, terminalClient, worktreeClient, projectClient, systemClient } from "@/clients";
 import { suppressMruRecording } from "@/store/worktreeStore";
 import { terminalConfigClient } from "@/clients/terminalConfigClient";
 import {
@@ -17,7 +17,7 @@ import type {
 } from "@/types";
 import { keybindingService } from "@/services/KeybindingService";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
-import { generateAgentFlags } from "@shared/types";
+import { generateAgentCommand } from "@shared/types";
 import { normalizeScrollbackLines } from "@shared/config/scrollback";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { isTerminalWarmInProjectSwitchCache } from "@/services/projectSwitchRendererCache";
@@ -30,6 +30,7 @@ const RECONNECT_TIMEOUT_MS = 10000;
 const RESTORE_CONCURRENCY = 8;
 const DEFERRED_RESTORE_IDLE_TIMEOUT_MS = 1200;
 const DEFERRED_RESTORE_FALLBACK_DELAY_MS = 32;
+const CLIPBOARD_DIR_NAME = "canopy-clipboard";
 
 let hydrationBootstrapPromise: Promise<void> | null = null;
 
@@ -242,12 +243,12 @@ export async function hydrateAppState(
     if (!checkCurrent()) return;
 
     // Batch fetch initial state
-    const {
-      appState,
-      terminalConfig,
-      project: currentProject,
-      agentSettings,
-    } = await appClient.hydrate();
+    const [hydrateResult, tmpDir] = await Promise.all([
+      appClient.hydrate(),
+      systemClient.getTmpDir().catch(() => ""),
+    ]);
+    const { appState, terminalConfig, project: currentProject, agentSettings } = hydrateResult;
+    const clipboardDirectory = tmpDir ? `${tmpDir}/${CLIPBOARD_DIR_NAME}` : undefined;
     if (!checkCurrent()) return;
 
     // Hydrate terminal config (scrollback, performance mode) BEFORE restoring terminals
@@ -697,12 +698,12 @@ export async function hydrateAppState(
                     if (agentId && agentSettings) {
                       const agentConfig = getAgentConfig(agentId);
                       const baseCommand = agentConfig?.command || agentId;
-                      const flags = generateAgentFlags(
+                      command = generateAgentCommand(
+                        baseCommand,
                         agentSettings.agents?.[agentId] ?? {},
-                        agentId
+                        agentId,
+                        { clipboardDirectory }
                       );
-                      command =
-                        flags.length > 0 ? `${baseCommand} ${flags.join(" ")}` : baseCommand;
                     }
 
                     // Preserve the original kind (dev-preview, terminal, etc.) unless it's an agent

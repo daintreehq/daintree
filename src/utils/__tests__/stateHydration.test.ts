@@ -58,6 +58,7 @@ vi.mock("@/clients", () => ({
   terminalClient: terminalClientMock,
   worktreeClient: worktreeClientMock,
   projectClient: projectClientMock,
+  systemClient: { getTmpDir: vi.fn().mockResolvedValue("/tmp") },
 }));
 
 vi.mock("@/clients/terminalConfigClient", () => ({
@@ -442,7 +443,8 @@ describe("hydrateAppState", () => {
     expect(callArgs).not.toHaveProperty("existingId");
 
     // Verify command is regenerated from settings (doesn't include old prompt)
-    expect(callArgs.command).toBe("claude --model sonnet-4");
+    // Non-flag values are shell-escaped by generateAgentCommand, hence the quotes
+    expect(callArgs.command).toBe("claude --model 'sonnet-4'");
     expect(callArgs.command).not.toContain("-p");
     expect(callArgs.command).not.toContain("Old prompt");
 

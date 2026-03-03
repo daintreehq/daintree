@@ -338,6 +338,10 @@ export interface IpcInvokeMap {
     args: [];
     result: string;
   };
+  "system:get-tmp-dir": {
+    args: [];
+    result: string;
+  };
   "system:get-cli-availability": {
     args: [];
     result: CliAvailability;

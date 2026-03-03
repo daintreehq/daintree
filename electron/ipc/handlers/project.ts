@@ -205,6 +205,12 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
   ipcMain.handle(CHANNELS.SYSTEM_GET_HOME_DIR, handleSystemGetHomeDir);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_GET_HOME_DIR));
 
+  const handleSystemGetTmpDir = async () => {
+    return os.tmpdir();
+  };
+  ipcMain.handle(CHANNELS.SYSTEM_GET_TMP_DIR, handleSystemGetTmpDir);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_GET_TMP_DIR));
+
   const handleSystemGetCliAvailability = async () => {
     if (!cliAvailabilityService) {
       console.warn("[IPC] CliAvailabilityService not available");

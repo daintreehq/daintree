@@ -229,6 +229,7 @@ export type {
   AgentSettingsEntry,
   AgentSettings,
   GenerateAgentCommandOptions,
+  GenerateAgentFlagsOptions,
 } from "./agentSettings.js";
 
 // Agent settings helpers

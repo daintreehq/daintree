@@ -5,10 +5,12 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useWorktrees } from "./useWorktrees";
 import { isElectronAvailable } from "./useElectron";
-import { agentSettingsClient } from "@/clients";
+import { agentSettingsClient, systemClient } from "@/clients";
 import type { AgentSettings, CliAvailability } from "@shared/types";
 import { generateAgentCommand } from "@shared/types";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
+
+const CLIPBOARD_DIR_NAME = "canopy-clipboard";
 
 export interface LaunchAgentOptions {
   location?: AddTerminalOptions["location"];
@@ -114,9 +116,22 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
       let command: string | undefined;
       if (agentConfig) {
         const entry = agentSettings?.agents?.[agentId] ?? {};
+
+        // Resolve clipboard directory for agents that need it (e.g. Gemini)
+        let clipboardDirectory: string | undefined;
+        if (agentId === "gemini" && entry.shareClipboardDirectory !== false) {
+          try {
+            const tmpDir = await systemClient.getTmpDir();
+            clipboardDirectory = `${tmpDir}/${CLIPBOARD_DIR_NAME}`;
+          } catch {
+            // Non-critical: Gemini will work without clipboard access
+          }
+        }
+
         command = generateAgentCommand(agentConfig.command, entry, agentId, {
           initialPrompt: launchOptions?.prompt,
           interactive: launchOptions?.interactive ?? true,
+          clipboardDirectory,
         });
       }
 
