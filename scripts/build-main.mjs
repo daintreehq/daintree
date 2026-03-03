@@ -72,19 +72,6 @@ async function run() {
       console.log("[Build] Complete.");
     }
 
-    // Copy static assets to dist-electron
-    const assetsDir = path.join(root, "dist-electron/electron/services/assistant");
-    fs.mkdirSync(assetsDir, { recursive: true });
-
-    const assistantFiles = ["systemPrompt.txt", "examples.txt"];
-    for (const file of assistantFiles) {
-      fs.copyFileSync(
-        path.join(root, "electron/services/assistant", file),
-        path.join(assetsDir, file)
-      );
-    }
-    console.log("[Build] Copied assistant prompt files");
-
     const workflowsSrcDir = path.join(root, "electron/workflows");
     const workflowsDestDir = path.join(root, "dist-electron/workflows");
     if (fs.existsSync(workflowsSrcDir)) {
