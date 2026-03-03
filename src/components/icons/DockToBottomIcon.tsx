@@ -17,9 +17,8 @@ export function DockToBottomIcon({ className }: DockToBottomIconProps) {
       className={className}
       aria-hidden="true"
     >
-      <line x1="4" y1="20" x2="20" y2="20" />
-      <path d="M11 16H7v-4" />
-      <path d="M7 16L14 9" />
+      <path d="m7 4 5 5 5-5" />
+      <path d="M3 16l3-2h12l3 2v5H3z" />
     </svg>
   );
 }
