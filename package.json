@@ -42,6 +42,7 @@
     "typecheck": "tsc --noEmit && tsc -b electron/tsconfig.preload.json electron/tsconfig.json",
     "check": "npm run typecheck && npm run lint:ratchet && npm run format:check",
     "fix": "npm run format && npm run lint:fix",
+    "test:e2e": "npx playwright test",
     "perf:smoke": "tsx scripts/perf/run.ts --mode smoke",
     "perf:ci": "tsx scripts/perf/run.ts --mode ci",
     "perf:nightly": "tsx scripts/perf/run.ts --mode nightly",
@@ -107,6 +108,7 @@
   "devDependencies": {
     "@electron/rebuild": "^4.0.3",
     "@eslint/js": "^9.39.1",
+    "@playwright/test": "^1.58.2",
     "@tailwindcss/typography": "^0.5.19",
     "@tailwindcss/vite": "^4.1.17",
     "@testing-library/dom": "^10.4.1",
