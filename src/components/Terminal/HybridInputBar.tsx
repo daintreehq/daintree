@@ -45,6 +45,10 @@ import {
   imageChipField,
   addImageChip,
   createImageChipTooltip,
+  fileDropChipField,
+  addFileDropChip,
+  createFileDropChipTooltip,
+  createFilePasteHandler,
 } from "./inputEditorExtensions";
 
 export interface HybridInputBarHandle {
@@ -130,6 +134,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const tooltipCompartmentRef = useRef(new Compartment());
     const fileChipTooltipCompartmentRef = useRef(new Compartment());
     const imageChipTooltipCompartmentRef = useRef(new Compartment());
+    const fileDropChipTooltipCompartmentRef = useRef(new Compartment());
     const isApplyingExternalValueRef = useRef(false);
     const lastEnterKeydownNewlineRef = useRef(false);
     const handledEnterRef = useRef(false);
@@ -181,6 +186,36 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           } catch {
             // Editor may have been destroyed before IPC returned
           }
+        }),
+      []
+    );
+
+    const filePasteExtension = useMemo(
+      () =>
+        createFilePasteHandler((view, files) => {
+          const cursor = view.state.selection.main.head;
+          const effects: ReturnType<typeof addFileDropChip.of>[] = [];
+
+          let insertText = "";
+          for (const file of files) {
+            const token = formatAtFileToken(file.path);
+            const from = cursor + insertText.length;
+            insertText += token + " ";
+            effects.push(
+              addFileDropChip.of({
+                from,
+                to: from + token.length,
+                filePath: file.path,
+                fileName: file.name,
+              })
+            );
+          }
+
+          view.dispatch({
+            changes: { from: cursor, insert: insertText },
+            effects,
+            selection: { anchor: cursor + insertText.length },
+          });
         }),
       []
     );
@@ -980,10 +1015,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           fileChipTooltipCompartmentRef.current.of(!disabled ? createFileChipTooltip() : []),
           imageChipField,
           imageChipTooltipCompartmentRef.current.of(!disabled ? createImageChipTooltip() : []),
+          fileDropChipField,
+          fileDropChipTooltipCompartmentRef.current.of(
+            !disabled ? createFileDropChipTooltip() : []
+          ),
           keymapCompartmentRef.current.of(keymapExtension),
           editorUpdateListener,
           domEventHandlers,
           imagePasteExtension,
+          filePasteExtension,
         ],
       });
 
@@ -1057,6 +1097,17 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       view.dispatch({
         effects: imageChipTooltipCompartmentRef.current.reconfigure(
           !disabled ? createImageChipTooltip() : []
+        ),
+      });
+    }, [disabled]);
+
+    useEffect(() => {
+      const view = editorViewRef.current;
+      if (!view) return;
+
+      view.dispatch({
+        effects: fileDropChipTooltipCompartmentRef.current.reconfigure(
+          !disabled ? createFileDropChipTooltip() : []
         ),
       });
     }, [disabled]);

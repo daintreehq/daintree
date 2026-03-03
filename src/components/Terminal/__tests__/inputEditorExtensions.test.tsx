@@ -4,7 +4,14 @@
 import { describe, it, expect, vi } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { EditorView, runScopeHandlers } from "@codemirror/view";
-import { computeAutoSize, createAutoSize, createCustomKeymap } from "../inputEditorExtensions";
+import {
+  computeAutoSize,
+  createAutoSize,
+  createCustomKeymap,
+  fileDropChipField,
+  addFileDropChip,
+  createFilePasteHandler,
+} from "../inputEditorExtensions";
 
 describe("computeAutoSize", () => {
   it("snaps height to line height increments with epsilon tolerance", () => {
@@ -406,6 +413,262 @@ describe("createCustomKeymap", () => {
 
     expect(onEnter).not.toHaveBeenCalled();
     expect(view.state.doc.toString()).toContain("\n");
+    view.destroy();
+  });
+});
+
+describe("fileDropChipField", () => {
+  function makeEditorWithFileChip() {
+    const parent = document.createElement("div");
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "",
+        extensions: [fileDropChipField],
+      }),
+    });
+    return view;
+  }
+
+  it("adds a file chip entry via addFileDropChip effect", () => {
+    const view = makeEditorWithFileChip();
+
+    view.dispatch({
+      changes: { from: 0, insert: "@/Users/test/file.ts " },
+      effects: addFileDropChip.of({
+        from: 0,
+        to: 20,
+        filePath: "/Users/test/file.ts",
+        fileName: "file.ts",
+      }),
+    });
+
+    const entries = view.state.field(fileDropChipField);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].filePath).toBe("/Users/test/file.ts");
+    expect(entries[0].fileName).toBe("file.ts");
+    expect(entries[0].from).toBe(0);
+    expect(entries[0].to).toBe(20);
+
+    view.destroy();
+  });
+
+  it("maps chip positions through document changes before the chip", () => {
+    const view = makeEditorWithFileChip();
+
+    view.dispatch({
+      changes: { from: 0, insert: "@/Users/test/file.ts " },
+      effects: addFileDropChip.of({
+        from: 0,
+        to: 20,
+        filePath: "/Users/test/file.ts",
+        fileName: "file.ts",
+      }),
+    });
+
+    // Insert text before the chip
+    view.dispatch({
+      changes: { from: 0, insert: "prefix " },
+    });
+
+    const entries = view.state.field(fileDropChipField);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].from).toBe(7); // shifted by "prefix " (7 chars)
+    expect(entries[0].to).toBe(27);
+
+    view.destroy();
+  });
+
+  it("discards chip when its range is edited", () => {
+    const view = makeEditorWithFileChip();
+
+    view.dispatch({
+      changes: { from: 0, insert: "@/Users/test/file.ts " },
+      effects: addFileDropChip.of({
+        from: 0,
+        to: 20,
+        filePath: "/Users/test/file.ts",
+        fileName: "file.ts",
+      }),
+    });
+
+    // Edit within the chip range
+    view.dispatch({
+      changes: { from: 5, to: 10, insert: "X" },
+    });
+
+    const entries = view.state.field(fileDropChipField);
+    expect(entries).toHaveLength(0);
+
+    view.destroy();
+  });
+
+  it("supports multiple file chip entries", () => {
+    const view = makeEditorWithFileChip();
+
+    const text = "@/Users/test/a.ts @/Users/test/b.ts ";
+    view.dispatch({
+      changes: { from: 0, insert: text },
+      effects: [
+        addFileDropChip.of({
+          from: 0,
+          to: 17,
+          filePath: "/Users/test/a.ts",
+          fileName: "a.ts",
+        }),
+        addFileDropChip.of({
+          from: 18,
+          to: 35,
+          filePath: "/Users/test/b.ts",
+          fileName: "b.ts",
+        }),
+      ],
+    });
+
+    const entries = view.state.field(fileDropChipField);
+    expect(entries).toHaveLength(2);
+    expect(entries[0].fileName).toBe("a.ts");
+    expect(entries[1].fileName).toBe("b.ts");
+
+    view.destroy();
+  });
+
+  it("removes file chips when the entire document is cleared", () => {
+    const view = makeEditorWithFileChip();
+
+    view.dispatch({
+      changes: { from: 0, insert: "@/Users/test/file.ts " },
+      effects: addFileDropChip.of({
+        from: 0,
+        to: 20,
+        filePath: "/Users/test/file.ts",
+        fileName: "file.ts",
+      }),
+    });
+
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: "" },
+    });
+
+    expect(view.state.doc.length).toBe(0);
+    expect(view.state.field(fileDropChipField)).toHaveLength(0);
+
+    view.destroy();
+  });
+
+  it("preserves raw @path text in document for agent consumption", () => {
+    const view = makeEditorWithFileChip();
+
+    view.dispatch({
+      changes: { from: 0, insert: "@/Users/test/file.ts " },
+      effects: addFileDropChip.of({
+        from: 0,
+        to: 20,
+        filePath: "/Users/test/file.ts",
+        fileName: "file.ts",
+      }),
+    });
+
+    expect(view.state.doc.toString()).toBe("@/Users/test/file.ts ");
+
+    view.destroy();
+  });
+});
+
+describe("createFilePasteHandler", () => {
+  function makeMockClipboardData(items: { kind: string; type: string; file: File | null }[]) {
+    const mockItems = items.map((item) => ({
+      kind: item.kind,
+      type: item.type,
+      getAsFile: () => item.file,
+    }));
+    return {
+      clipboardData: {
+        items: mockItems,
+        getData: () => "",
+        types: [] as string[],
+      },
+    };
+  }
+
+  function makePasteEvent(clipboardData: unknown): ClipboardEvent {
+    const event = new Event("paste", { bubbles: true, cancelable: true }) as ClipboardEvent;
+    Object.defineProperty(event, "clipboardData", { value: clipboardData });
+    return event;
+  }
+
+  it("calls onFilePaste for non-image file items with a path", () => {
+    const onFilePaste = vi.fn();
+    const parent = document.createElement("div");
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "",
+        extensions: [createFilePasteHandler(onFilePaste)],
+      }),
+    });
+
+    const file = new File(["content"], "test.pdf", { type: "application/pdf" });
+    Object.defineProperty(file, "path", { value: "/Users/test/test.pdf" });
+
+    const mockData = makeMockClipboardData([{ kind: "file", type: "application/pdf", file }]);
+    const pasteEvent = makePasteEvent(mockData.clipboardData);
+
+    view.contentDOM.dispatchEvent(pasteEvent);
+
+    expect(onFilePaste).toHaveBeenCalledOnce();
+    expect(onFilePaste).toHaveBeenCalledWith(view, [
+      { path: "/Users/test/test.pdf", name: "test.pdf" },
+    ]);
+
+    view.destroy();
+  });
+
+  it("does not call onFilePaste for image file items", () => {
+    const onFilePaste = vi.fn();
+    const parent = document.createElement("div");
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "",
+        extensions: [createFilePasteHandler(onFilePaste)],
+      }),
+    });
+
+    const file = new File(["imagedata"], "screenshot.png", { type: "image/png" });
+    Object.defineProperty(file, "path", { value: "/Users/test/screenshot.png" });
+
+    const mockData = makeMockClipboardData([{ kind: "file", type: "image/png", file }]);
+    const pasteEvent = makePasteEvent(mockData.clipboardData);
+
+    view.contentDOM.dispatchEvent(pasteEvent);
+
+    expect(onFilePaste).not.toHaveBeenCalled();
+
+    view.destroy();
+  });
+
+  it("does not call onFilePaste for files without a path", () => {
+    const onFilePaste = vi.fn();
+    const parent = document.createElement("div");
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "",
+        extensions: [createFilePasteHandler(onFilePaste)],
+      }),
+    });
+
+    const file = new File(["content"], "test.txt", { type: "text/plain" });
+    // No .path property set (non-Electron file)
+
+    const mockData = makeMockClipboardData([{ kind: "file", type: "text/plain", file }]);
+    const pasteEvent = makePasteEvent(mockData.clipboardData);
+
+    view.contentDOM.dispatchEvent(pasteEvent);
+
+    expect(onFilePaste).not.toHaveBeenCalled();
+
     view.destroy();
   });
 });
