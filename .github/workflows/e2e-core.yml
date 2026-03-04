@@ -6,7 +6,22 @@ on:
   schedule:
     - cron: "0 3 * * *"
   workflow_dispatch:
+    inputs:
+      platform:
+        description: "Platform to test on"
+        type: choice
+        default: "all"
+        options:
+          - all
+          - macos
+          - linux
+          - windows
   workflow_call:
+    inputs:
+      platform:
+        description: "Platform to test on"
+        type: string
+        default: "all"
 
 permissions:
   contents: read
@@ -27,8 +42,17 @@ jobs:
     steps:
       - id: set
         run: |
+          PLATFORM="${{ inputs.platform || 'all' }}"
+
+          # PRs always run Linux-only regardless of input
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             echo 'matrix={"include":[{"os":"ubuntu-22.04","name":"Linux"}]}' >> "$GITHUB_OUTPUT"
+          elif [ "$PLATFORM" = "macos" ]; then
+            echo 'matrix={"include":[{"os":"macos-14","name":"macOS"}]}' >> "$GITHUB_OUTPUT"
+          elif [ "$PLATFORM" = "linux" ]; then
+            echo 'matrix={"include":[{"os":"ubuntu-22.04","name":"Linux"}]}' >> "$GITHUB_OUTPUT"
+          elif [ "$PLATFORM" = "windows" ]; then
+            echo 'matrix={"include":[{"os":"windows-latest","name":"Windows"}]}' >> "$GITHUB_OUTPUT"
           else
             echo 'matrix={"include":[{"os":"macos-14","name":"macOS"},{"os":"ubuntu-22.04","name":"Linux"},{"os":"windows-latest","name":"Windows"}]}' >> "$GITHUB_OUTPUT"
           fi
