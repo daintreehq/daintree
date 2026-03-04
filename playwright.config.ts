@@ -1,14 +1,13 @@
 import { defineConfig } from "@playwright/test";
 
-const isWindows = process.platform === "win32";
 const isCI = !!process.env.CI;
-const isWindowsCI = isWindows && isCI;
+const isWindowsCI = process.platform === "win32" && isCI;
 
 // Windows CI runners are slow to launch Electron — give hooks and tests more time
 const coreTimeout = isWindowsCI ? 240_000 : 120_000;
 
 export default defineConfig({
-  workers: 4,
+  workers: "50%",
   fullyParallel: false,
   timeout: 180_000,
   outputDir: "./test-results",
