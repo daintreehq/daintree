@@ -4,7 +4,8 @@ const isCI = !!process.env.CI;
 const isWindowsCI = process.platform === "win32" && isCI;
 
 // Windows CI runners are slow to launch Electron — give hooks and tests more time
-const coreTimeout = isWindowsCI ? 240_000 : 120_000;
+const coreTimeout = isWindowsCI ? 600_000 : 120_000;
+const onlineTimeout = isWindowsCI ? 600_000 : 300_000;
 
 export default defineConfig({
   workers: "50%",
@@ -26,7 +27,7 @@ export default defineConfig({
     {
       name: "online",
       testDir: "./e2e/online",
-      timeout: 300_000,
+      timeout: onlineTimeout,
       retries: isCI ? 1 : 0,
     },
   ],
