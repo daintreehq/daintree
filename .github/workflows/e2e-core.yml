@@ -95,14 +95,6 @@ jobs:
             libnotify4 \
             xvfb
 
-      - name: Exclude workspace from Windows Defender
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          Add-MpPreference -ExclusionPath "${{ github.workspace }}"
-          Add-MpPreference -ExclusionProcess "electron.exe"
-          Add-MpPreference -ExclusionProcess "node.exe"
-
       - name: Install dependencies
         run: npm ci
 

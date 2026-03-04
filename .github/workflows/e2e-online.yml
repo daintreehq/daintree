@@ -2,7 +2,7 @@ name: E2E Online Tests
 
 on:
   schedule:
-    - cron: "0 3 * * *"
+    - cron: "30 3 * * *"
   workflow_dispatch:
     inputs:
       platform:
@@ -88,14 +88,6 @@ jobs:
             libdrm2 \
             libnotify4 \
             xvfb
-
-      - name: Exclude workspace from Windows Defender
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          Add-MpPreference -ExclusionPath "${{ github.workspace }}"
-          Add-MpPreference -ExclusionProcess "electron.exe"
-          Add-MpPreference -ExclusionProcess "node.exe"
 
       - name: Install dependencies
         run: npm ci
