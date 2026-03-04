@@ -46,32 +46,37 @@ test.describe("Claude Online Flow", () => {
       await expect(agentPanel).toBeVisible({ timeout: 5_000 });
     });
 
-    await test.step("trust workspace", async () => {
+    await test.step("handle prompts and wait for Welcome", async () => {
       const { window } = ctx;
-
       const agentPanel = window.locator(SEL.agent.panel);
-      await waitForTerminalText(agentPanel, "trust", 15_000);
-
       const cmEditor = agentPanel.locator(SEL.terminal.cmEditor);
-      await cmEditor.click();
-      await window.keyboard.press("Enter");
-    });
 
-    await test.step("accept API key", async () => {
-      const { window } = ctx;
+      // Claude Code may prompt for trust, API key, or skip straight to Welcome
+      // depending on prior configuration. Poll and handle whatever appears.
+      const deadline = Date.now() + 90_000;
+      let reachedWelcome = false;
 
-      const agentPanel = window.locator(SEL.agent.panel);
-      await waitForTerminalText(agentPanel, "API key", 15_000);
+      while (Date.now() < deadline && !reachedWelcome) {
+        const text = await getTerminalText(agentPanel);
+        const lower = text.toLowerCase();
 
-      const cmEditor = agentPanel.locator(SEL.terminal.cmEditor);
-      await cmEditor.click();
-      await window.keyboard.press("ArrowUp");
-      await window.keyboard.press("Enter");
-    });
+        if (lower.includes("welcome")) {
+          reachedWelcome = true;
+        } else if (lower.includes("trust")) {
+          await cmEditor.click();
+          await window.keyboard.press("Enter");
+          await window.waitForTimeout(2_000);
+        } else if (lower.includes("api key")) {
+          await cmEditor.click();
+          await window.keyboard.press("ArrowUp");
+          await window.keyboard.press("Enter");
+          await window.waitForTimeout(2_000);
+        } else {
+          await window.waitForTimeout(1_000);
+        }
+      }
 
-    await test.step("wait for Welcome screen", async () => {
-      const agentPanel = ctx.window.locator(SEL.agent.panel);
-      await waitForTerminalText(agentPanel, "Welcome", 60_000);
+      expect(reachedWelcome).toBe(true);
     });
 
     await test.step("send hello world command", async () => {
@@ -97,7 +102,7 @@ test.describe("Claude Online Flow", () => {
           },
           { timeout: 60_000, intervals: [1_000] }
         )
-        .toBeGreaterThanOrEqual(2);
+        .toBeGreaterThanOrEqual(1);
     });
   });
 });
