@@ -37,7 +37,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
 
   // Windows CI runners are significantly slower to start Electron
   const isWindowsCI = process.env.CI && process.platform === "win32";
-  const launchTimeout = isWindowsCI ? 600_000 : process.env.CI ? 120_000 : 60_000;
+  const launchTimeout = isWindowsCI ? 600_000 : 120_000;
 
   const app = await electron.launch({
     executablePath: electronPath,
