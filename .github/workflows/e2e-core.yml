@@ -125,13 +125,6 @@ jobs:
         if: runner.os == 'Windows'
         run: npm run test:e2e:core
 
-      - name: Kill zombie Electron processes
-        if: always() && runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          taskkill /F /IM "electron.exe" /T 2>$null; $true
-          taskkill /F /IM "node.exe" /T 2>$null; $true
-
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
