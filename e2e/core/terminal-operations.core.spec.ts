@@ -4,6 +4,7 @@ import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { getFirstGridPanel, getGridPanelCount } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
+import { T_SHORT, T_MEDIUM, T_LONG } from "../helpers/timeouts";
 
 let ctx: AppContext;
 
@@ -23,7 +24,7 @@ test.describe.serial("Terminal Operations", () => {
 
     await window.locator(SEL.toolbar.openTerminal).click();
     const panel = getFirstGridPanel(window);
-    await expect(panel).toBeVisible({ timeout: 10_000 });
+    await expect(panel).toBeVisible({ timeout: T_LONG });
   });
 
   test("rename terminal by editing title", async () => {
@@ -31,24 +32,20 @@ test.describe.serial("Terminal Operations", () => {
 
     const panel = getFirstGridPanel(window);
 
-    // The title is a <span role="button"> with aria-label like "Terminal title: Terminal. Press Enter or F2 to edit"
     const titleBtn = panel.locator('[role="button"][aria-label*="Terminal title"]').first();
-    await expect(titleBtn).toBeVisible({ timeout: 5_000 });
+    await expect(titleBtn).toBeVisible({ timeout: T_MEDIUM });
 
-    // Click to focus, then Enter to enter edit mode
     await titleBtn.click();
     await window.keyboard.press("Enter");
 
-    // An input should appear for editing
     const titleInput = panel.locator("input").first();
-    await expect(titleInput).toBeVisible({ timeout: 3_000 });
+    await expect(titleInput).toBeVisible({ timeout: T_SHORT });
 
     await titleInput.fill("My Custom Terminal");
     await window.keyboard.press("Enter");
 
-    // Verify the title updated
     await expect(panel.locator('[role="button"][aria-label*="My Custom Terminal"]')).toBeVisible({
-      timeout: 3_000,
+      timeout: T_SHORT,
     });
   });
 
@@ -57,18 +54,15 @@ test.describe.serial("Terminal Operations", () => {
 
     const panel = getFirstGridPanel(window);
 
-    // Action buttons are hidden via CSS opacity; use force:true to click
     const duplicateBtn = panel.locator(SEL.panel.duplicate).first();
-    await duplicateBtn.click({ force: true, timeout: 5_000 });
+    await duplicateBtn.click({ force: true, timeout: T_MEDIUM });
 
-    // Should now have a tab list with 2 tabs
     const tabList = panel.locator(SEL.panel.tabList);
-    await expect(tabList).toBeVisible({ timeout: 5_000 });
+    await expect(tabList).toBeVisible({ timeout: T_MEDIUM });
 
     const tabs = tabList.locator(SEL.panel.tab);
-    await expect(tabs).toHaveCount(2, { timeout: 5_000 });
+    await expect(tabs).toHaveCount(2, { timeout: T_MEDIUM });
 
-    // Still only 1 grid panel (tabs are within the same panel)
     const count = await getGridPanelCount(window);
     expect(count).toBe(1);
   });
@@ -78,16 +72,13 @@ test.describe.serial("Terminal Operations", () => {
 
     const panel = getFirstGridPanel(window);
 
-    // Action buttons are hidden via CSS opacity; use force:true to click
     const restartBtn = panel.locator(SEL.panel.restart).first();
     await restartBtn.click({ force: true });
 
-    // Restart uses a 2-click confirmation — click again to confirm
     await window.waitForTimeout(300);
     await restartBtn.click({ force: true });
 
-    // Terminal should still be visible after restart
-    await expect(panel).toBeVisible({ timeout: 10_000 });
+    await expect(panel).toBeVisible({ timeout: T_LONG });
   });
 
   test("close all tabs leaves empty grid", async () => {
@@ -95,11 +86,9 @@ test.describe.serial("Terminal Operations", () => {
 
     const panel = getFirstGridPanel(window);
 
-    // Close the first tab via close button in panel header
     const closeBtn = panel.locator(SEL.panel.close).first();
     await closeBtn.click();
 
-    // There may still be the second tab, close it too
     await window.waitForTimeout(500);
     const remaining = await getGridPanelCount(window);
     if (remaining > 0) {
@@ -108,6 +97,6 @@ test.describe.serial("Terminal Operations", () => {
       await closeBtn2.click();
     }
 
-    await expect.poll(() => getGridPanelCount(window), { timeout: 5_000 }).toBe(0);
+    await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(0);
   });
 });

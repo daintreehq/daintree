@@ -65,7 +65,7 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     name: Core (${{ matrix.name }})
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     steps:
       - name: Check out repository

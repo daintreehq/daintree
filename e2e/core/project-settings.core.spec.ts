@@ -3,6 +3,7 @@ import { launchApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { SEL } from "../helpers/selectors";
+import { T_SHORT, T_MEDIUM } from "../helpers/timeouts";
 
 let ctx: AppContext;
 
@@ -23,34 +24,29 @@ test.describe.serial("Project Settings", () => {
   test("open project settings via project switcher", async () => {
     const { window } = ctx;
 
-    // Open the project switcher dropdown
     await window.locator(SEL.toolbar.projectSwitcherTrigger).click();
 
     const palette = window.locator(SEL.projectSwitcher.palette);
-    await expect(palette).toBeVisible({ timeout: 5_000 });
+    await expect(palette).toBeVisible({ timeout: T_MEDIUM });
 
-    // Click "Project Settings..." — look for the button within the palette
     const settingsBtn = palette.locator("button", { hasText: /Project Settings/ });
-    await expect(settingsBtn).toBeVisible({ timeout: 3_000 });
+    await expect(settingsBtn).toBeVisible({ timeout: T_SHORT });
     await settingsBtn.click();
 
-    // Project settings dialog should appear
     const heading = window.locator('h2:has-text("Project Settings")');
-    await expect(heading).toBeVisible({ timeout: 5_000 });
+    await expect(heading).toBeVisible({ timeout: T_MEDIUM });
   });
 
   test("project name is displayed", async () => {
     const { window } = ctx;
 
-    // The project name input or display should show the onboarded name
     const nameInput = window.locator('input[aria-label="Project name"]');
     if (await nameInput.isVisible().catch(() => false)) {
       const value = await nameInput.inputValue();
       expect(value).toContain("Project Settings Test");
     } else {
-      // Name might be displayed as text
       const nameText = window.locator('text="Project Settings Test"');
-      await expect(nameText).toBeVisible({ timeout: 3_000 });
+      await expect(nameText).toBeVisible({ timeout: T_SHORT });
     }
   });
 
@@ -58,7 +54,7 @@ test.describe.serial("Project Settings", () => {
     const { window } = ctx;
 
     const devInput = window.locator('[aria-label="Dev server command"]');
-    await expect(devInput).toBeVisible({ timeout: 3_000 });
+    await expect(devInput).toBeVisible({ timeout: T_SHORT });
   });
 
   test("close project settings via close button", async () => {
@@ -68,6 +64,6 @@ test.describe.serial("Project Settings", () => {
     await closeBtn.click();
 
     const heading = window.locator('h2:has-text("Project Settings")');
-    await expect(heading).not.toBeVisible({ timeout: 3_000 });
+    await expect(heading).not.toBeVisible({ timeout: T_SHORT });
   });
 });

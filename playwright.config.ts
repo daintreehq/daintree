@@ -14,7 +14,7 @@ export default defineConfig({
       name: "core",
       testDir: "./e2e/core",
       timeout: 120_000,
-      retries: process.env.CI ? 2 : 0,
+      retries: process.env.CI ? 1 : 0,
     },
     {
       name: "online",

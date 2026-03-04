@@ -3,6 +3,7 @@ import { launchApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { SEL } from "../helpers/selectors";
+import { T_SHORT, T_MEDIUM, T_LONG } from "../helpers/timeouts";
 
 let ctx: AppContext;
 let mainBranch: string;
@@ -25,15 +26,12 @@ test.describe.serial("Worktree Lifecycle", () => {
   test("main worktree card is visible and selected", async () => {
     const { window } = ctx;
 
-    // Find any worktree card — there should be at least one
     const cards = window.locator("[data-worktree-branch]");
-    await expect(cards.first()).toBeVisible({ timeout: 10_000 });
+    await expect(cards.first()).toBeVisible({ timeout: T_LONG });
 
-    // Get the branch name of the first (main) card
     mainBranch = (await cards.first().getAttribute("data-worktree-branch")) ?? "";
     expect(mainBranch.length).toBeGreaterThan(0);
 
-    // It should be marked as selected
     const mainCard = window.locator(SEL.worktree.card(mainBranch));
     await expect(mainCard).toHaveAttribute("aria-label", /selected/);
   });
@@ -41,13 +39,11 @@ test.describe.serial("Worktree Lifecycle", () => {
   test("create new worktree via UI", async () => {
     const { window } = ctx;
 
-    // Click "+ New" button in the worktree sidebar header
     const newBtn = window.locator('button[title="Create new worktree"]');
     await newBtn.click();
 
-    // Fill in branch name in the New Worktree dialog
     const branchInput = window.locator(SEL.worktree.branchNameInput);
-    await expect(branchInput).toBeVisible({ timeout: 5_000 });
+    await expect(branchInput).toBeVisible({ timeout: T_MEDIUM });
     await branchInput.fill("e2e/test-worktree");
 
     // Wait for the worktree path to be auto-populated (300ms debounce + async IPC)
@@ -58,15 +54,13 @@ test.describe.serial("Worktree Lifecycle", () => {
           const val = await pathInput.inputValue();
           return val.trim().length;
         },
-        { timeout: 10_000, message: "Worktree path should auto-populate" }
+        { timeout: T_LONG, message: "Worktree path should auto-populate" }
       )
       .toBeGreaterThan(0);
 
-    // Click Create
     const createBtn = window.locator(SEL.worktree.createButton);
     await createBtn.click();
 
-    // Wait for the new worktree card to appear
     const newCard = window.locator(SEL.worktree.card("e2e/test-worktree"));
     await expect(newCard).toBeVisible({ timeout: 30_000 });
   });
@@ -77,8 +71,7 @@ test.describe.serial("Worktree Lifecycle", () => {
     const newCard = window.locator(SEL.worktree.card("e2e/test-worktree"));
     await newCard.click();
 
-    // New card should be selected
-    await expect(newCard).toHaveAttribute("aria-label", /selected/, { timeout: 5_000 });
+    await expect(newCard).toHaveAttribute("aria-label", /selected/, { timeout: T_MEDIUM });
   });
 
   test("delete worktree via dropdown menu", async () => {
@@ -89,22 +82,20 @@ test.describe.serial("Worktree Lifecycle", () => {
     await actionsBtn.click();
 
     const deleteItem = window.getByRole("menuitem", { name: /delete/i });
-    await expect(deleteItem).toBeVisible({ timeout: 3_000 });
+    await expect(deleteItem).toBeVisible({ timeout: T_SHORT });
     await deleteItem.click();
 
-    // Confirm deletion
     const confirmBtn = window.locator(SEL.worktree.deleteConfirm);
-    await expect(confirmBtn).toBeVisible({ timeout: 5_000 });
+    await expect(confirmBtn).toBeVisible({ timeout: T_MEDIUM });
     await confirmBtn.click();
 
-    // Wait for card to disappear
-    await expect(newCard).not.toBeVisible({ timeout: 15_000 });
+    await expect(newCard).not.toBeVisible({ timeout: T_LONG });
   });
 
   test("main worktree remains after deletion", async () => {
     const { window } = ctx;
 
     const mainCard = window.locator(SEL.worktree.card(mainBranch));
-    await expect(mainCard).toBeVisible({ timeout: 5_000 });
+    await expect(mainCard).toBeVisible({ timeout: T_MEDIUM });
   });
 });

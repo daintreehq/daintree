@@ -4,6 +4,7 @@ import { launchApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { SEL } from "../helpers/selectors";
+import { T_SHORT, T_MEDIUM, T_LONG } from "../helpers/timeouts";
 
 let ctx: AppContext;
 let server: Server;
@@ -38,7 +39,7 @@ test.describe.serial("Browser, Sidecar & Notes", () => {
     await window.locator(SEL.toolbar.openBrowser).click();
 
     const addressBar = window.locator(SEL.browser.addressBar);
-    await expect(addressBar).toBeVisible({ timeout: 10_000 });
+    await expect(addressBar).toBeVisible({ timeout: T_LONG });
   });
 
   test("navigate to local server", async () => {
@@ -53,14 +54,15 @@ test.describe.serial("Browser, Sidecar & Notes", () => {
     await window.waitForTimeout(2_000);
 
     // Address bar may strip the http:// protocol
-    await expect(addressBar).toHaveValue(new RegExp(`127\\.0\\.0\\.1:${port}`), { timeout: 5_000 });
+    await expect(addressBar).toHaveValue(new RegExp(`127\\.0\\.0\\.1:${port}`), {
+      timeout: T_MEDIUM,
+    });
   });
 
   test("sidecar toggle opens and closes", async () => {
     const { window } = ctx;
 
     const sidecarBtn = window.locator(SEL.toolbar.sidecarToggle);
-    // Sidecar toggle may not exist if no sidecar feature — skip if not found
     if (!(await sidecarBtn.isVisible().catch(() => false))) {
       test.skip();
       return;
@@ -85,10 +87,10 @@ test.describe.serial("Browser, Sidecar & Notes", () => {
     await notesBtn.click();
 
     const palette = window.locator(SEL.notes.palette);
-    await expect(palette).toBeVisible({ timeout: 5_000 });
+    await expect(palette).toBeVisible({ timeout: T_MEDIUM });
 
     // Close notes
     await window.keyboard.press("Escape");
-    await expect(palette).not.toBeVisible({ timeout: 3_000 });
+    await expect(palette).not.toBeVisible({ timeout: T_SHORT });
   });
 });

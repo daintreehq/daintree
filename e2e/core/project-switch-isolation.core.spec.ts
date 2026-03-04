@@ -4,6 +4,7 @@ import { createFixtureRepos } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { getGridPanelCount } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
+import { T_MEDIUM, T_LONG } from "../helpers/timeouts";
 
 let ctx: AppContext;
 let repos: string[];
@@ -26,7 +27,7 @@ test.describe.serial("Project Switch Isolation", () => {
     // Open a terminal
     await window.locator(SEL.toolbar.openTerminal).click();
     const panel = window.locator(SEL.panel.gridPanel).first();
-    await expect(panel).toBeVisible({ timeout: 10_000 });
+    await expect(panel).toBeVisible({ timeout: T_LONG });
 
     const count = await getGridPanelCount(window);
     expect(count).toBe(1);
@@ -42,7 +43,7 @@ test.describe.serial("Project Switch Isolation", () => {
     await window.locator(SEL.toolbar.projectSwitcherTrigger).click();
 
     const palette = window.locator(SEL.projectSwitcher.palette);
-    await expect(palette).toBeVisible({ timeout: 5_000 });
+    await expect(palette).toBeVisible({ timeout: T_MEDIUM });
 
     // Click "Add Project..." — opens mocked dialog, then shows onboarding
     const addBtn = window.locator(SEL.projectSwitcher.addButton);
@@ -50,11 +51,11 @@ test.describe.serial("Project Switch Isolation", () => {
 
     // Complete onboarding for Project B
     const heading = window.locator("h2", { hasText: "Set up your project" });
-    await expect(heading).toBeVisible({ timeout: 10_000 });
+    await expect(heading).toBeVisible({ timeout: T_LONG });
     const nameInput = window.getByRole("textbox", { name: "Project Name" });
     await nameInput.fill("Project B");
     await window.getByRole("button", { name: "Finish" }).click();
-    await expect(heading).not.toBeVisible({ timeout: 5_000 });
+    await expect(heading).not.toBeVisible({ timeout: T_MEDIUM });
   });
 
   test("Project B has 0 panels (isolation verified)", async () => {
@@ -74,7 +75,7 @@ test.describe.serial("Project Switch Isolation", () => {
     await window.locator(SEL.toolbar.projectSwitcherTrigger).click();
 
     const palette = window.locator(SEL.projectSwitcher.palette);
-    await expect(palette).toBeVisible({ timeout: 5_000 });
+    await expect(palette).toBeVisible({ timeout: T_MEDIUM });
 
     // Click Project A in the list
     const projectA = palette.locator('text="Project A"');
