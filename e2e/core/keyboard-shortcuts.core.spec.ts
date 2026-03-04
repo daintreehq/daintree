@@ -4,6 +4,7 @@ import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { getGridPanelCount } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
+import { T_SHORT, T_MEDIUM, T_LONG } from "../helpers/timeouts";
 
 let ctx: AppContext;
 
@@ -27,7 +28,7 @@ test.describe.serial("Keyboard Shortcuts", () => {
     const before = await getGridPanelCount(window);
     await window.keyboard.press(`${mod}+t`);
 
-    await expect.poll(() => getGridPanelCount(window), { timeout: 10_000 }).toBe(before + 1);
+    await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
   });
 
   test("Cmd+T opens a second terminal", async () => {
@@ -36,7 +37,7 @@ test.describe.serial("Keyboard Shortcuts", () => {
     const before = await getGridPanelCount(window);
     await window.keyboard.press(`${mod}+t`);
 
-    await expect.poll(() => getGridPanelCount(window), { timeout: 10_000 }).toBe(before + 1);
+    await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
   });
 
   test("Cmd+W closes the focused terminal", async () => {
@@ -47,22 +48,22 @@ test.describe.serial("Keyboard Shortcuts", () => {
 
     await window.keyboard.press(`${mod}+w`);
 
-    await expect.poll(() => getGridPanelCount(window), { timeout: 5_000 }).toBe(before - 1);
+    await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(before - 1);
   });
 
   test("Cmd+B toggles sidebar off and on", async () => {
     const { window } = ctx;
 
     const sidebar = window.locator("aside").first();
-    await expect(sidebar).toBeVisible({ timeout: 3_000 });
+    await expect(sidebar).toBeVisible({ timeout: T_SHORT });
 
     // Toggle off
     await window.keyboard.press(`${mod}+b`);
-    await expect(sidebar).not.toBeVisible({ timeout: 3_000 });
+    await expect(sidebar).not.toBeVisible({ timeout: T_SHORT });
 
     // Toggle back on
     await window.keyboard.press(`${mod}+b`);
-    await expect(sidebar).toBeVisible({ timeout: 3_000 });
+    await expect(sidebar).toBeVisible({ timeout: T_SHORT });
   });
 
   test("Cmd+, opens settings", async () => {
@@ -71,20 +72,18 @@ test.describe.serial("Keyboard Shortcuts", () => {
     await window.keyboard.press(`${mod}+,`);
 
     const heading = window.locator(SEL.settings.heading);
-    await expect(heading).toBeVisible({ timeout: 5_000 });
+    await expect(heading).toBeVisible({ timeout: T_MEDIUM });
   });
 
   test("Escape closes settings dialog", async () => {
     const { window } = ctx;
 
     const heading = window.locator(SEL.settings.heading);
-    await expect(heading).toBeVisible({ timeout: 3_000 });
+    await expect(heading).toBeVisible({ timeout: T_SHORT });
 
-    // Click the close button instead — Escape may not reach the dialog
-    // when terminal has focus
     const closeBtn = window.locator(SEL.settings.closeButton);
     await closeBtn.click();
-    await expect(heading).not.toBeVisible({ timeout: 3_000 });
+    await expect(heading).not.toBeVisible({ timeout: T_SHORT });
   });
 
   test("Cmd+W closes remaining terminal", async () => {
@@ -103,6 +102,6 @@ test.describe.serial("Keyboard Shortcuts", () => {
 
     await window.keyboard.press(`${mod}+w`);
 
-    await expect.poll(() => getGridPanelCount(window), { timeout: 5_000 }).toBe(before - 1);
+    await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(before - 1);
   });
 });

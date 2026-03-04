@@ -3,6 +3,7 @@ import { launchApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { SEL } from "../helpers/selectors";
+import { T_MEDIUM, T_LONG } from "../helpers/timeouts";
 
 let ctx: AppContext;
 
@@ -21,7 +22,7 @@ test.describe.serial("Context Flow", () => {
     const { window } = ctx;
     // Scope to toolbar header to avoid matching worktree card's Copy Context button
     const btn = window.getByRole("banner").locator(SEL.toolbar.copyContext);
-    await expect(btn).toBeVisible({ timeout: 5_000 });
+    await expect(btn).toBeVisible({ timeout: T_MEDIUM });
   });
 
   test("Copy Context button transitions through states", async () => {
@@ -32,7 +33,7 @@ test.describe.serial("Context Flow", () => {
 
     // Button should transition to a "copying" or "copied" state
     // Wait for it to return to normal state
-    await expect(btn).toBeVisible({ timeout: 15_000 });
+    await expect(btn).toBeVisible({ timeout: T_LONG });
   });
 
   test("clipboard contains context after copy", async () => {
@@ -46,7 +47,7 @@ test.describe.serial("Context Flow", () => {
           const formats = await app.evaluate(({ clipboard }) => clipboard.availableFormats());
           return formats.length;
         },
-        { timeout: 15_000, message: "Clipboard should have content after copy" }
+        { timeout: T_LONG, message: "Clipboard should have content after copy" }
       )
       .toBeGreaterThan(0);
   });

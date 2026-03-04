@@ -5,6 +5,7 @@ import { openAndOnboardProject } from "../helpers/project";
 import { waitForTerminalText, runTerminalCommand } from "../helpers/terminal";
 import { getFirstGridPanel, getGridPanelCount } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
+import { T_SHORT, T_MEDIUM, T_LONG } from "../helpers/timeouts";
 
 let ctx: AppContext;
 
@@ -25,7 +26,7 @@ test.describe.serial("Terminal Panel Lifecycle", () => {
     await window.locator(SEL.toolbar.openTerminal).click();
 
     const panel = getFirstGridPanel(window);
-    await expect(panel).toBeVisible({ timeout: 10_000 });
+    await expect(panel).toBeVisible({ timeout: T_LONG });
   });
 
   test("run command and verify output", async () => {
@@ -33,7 +34,7 @@ test.describe.serial("Terminal Panel Lifecycle", () => {
 
     const panel = getFirstGridPanel(window);
     await runTerminalCommand(window, panel, "node -e \"console.log('CANOPY_E2E_OK')\"");
-    await waitForTerminalText(panel, "CANOPY_E2E_OK", 15_000);
+    await waitForTerminalText(panel, "CANOPY_E2E_OK", T_LONG);
   });
 
   test("maximize and unmaximize panel", async () => {
@@ -41,16 +42,14 @@ test.describe.serial("Terminal Panel Lifecycle", () => {
 
     const panel = getFirstGridPanel(window);
 
-    // Find maximize button within the panel header
     const maximizeBtn = panel.locator('[aria-label*="Maximize"]').first();
     await maximizeBtn.click();
 
-    // Should show Exit Focus button
     const exitFocus = window.locator('[aria-label*="Exit Focus"]').first();
-    await expect(exitFocus).toBeVisible({ timeout: 3_000 });
+    await expect(exitFocus).toBeVisible({ timeout: T_SHORT });
 
     await exitFocus.click();
-    await expect(exitFocus).not.toBeVisible({ timeout: 3_000 });
+    await expect(exitFocus).not.toBeVisible({ timeout: T_SHORT });
   });
 
   test("minimize to dock and restore", async () => {
@@ -60,22 +59,17 @@ test.describe.serial("Terminal Panel Lifecycle", () => {
     const minimizeBtn = panel.locator(SEL.panel.minimize).first();
     await minimizeBtn.click();
 
-    // Wait for panel to move to dock
-    await expect(panel).not.toBeVisible({ timeout: 3_000 });
+    await expect(panel).not.toBeVisible({ timeout: T_SHORT });
 
-    // Grid should be empty
-    await expect.poll(() => getGridPanelCount(window), { timeout: 5_000 }).toBe(0);
+    await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(0);
 
-    // Dock should be visible
     const dock = window.locator(SEL.dock.container);
-    await expect(dock).toBeVisible({ timeout: 3_000 });
+    await expect(dock).toBeVisible({ timeout: T_SHORT });
 
-    // Double-click dock item to restore to grid
     const dockItem = dock.locator("button").first();
     await dockItem.dblclick();
 
-    // Panel should be back in grid
-    await expect(getFirstGridPanel(window)).toBeVisible({ timeout: 5_000 });
+    await expect(getFirstGridPanel(window)).toBeVisible({ timeout: T_MEDIUM });
   });
 
   test("close terminal session", async () => {
@@ -85,7 +79,6 @@ test.describe.serial("Terminal Panel Lifecycle", () => {
     const closeBtn = panel.locator(SEL.panel.close);
     await closeBtn.click();
 
-    // Panel removal is async — poll until grid is empty
-    await expect.poll(() => getGridPanelCount(window), { timeout: 5_000 }).toBe(0);
+    await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(0);
   });
 });
