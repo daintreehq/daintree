@@ -24,8 +24,13 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
 
   const args = [`--user-data-dir=${userDataDir}`, ROOT];
 
-  if (process.env.CI && process.platform === "linux") {
-    args.unshift("--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu");
+  if (process.env.CI) {
+    // CI runners lack real GPUs — disable GPU to prevent hangs
+    args.unshift("--disable-gpu", "--disable-software-rasterizer");
+
+    if (process.platform === "linux") {
+      args.unshift("--no-sandbox", "--disable-dev-shm-usage");
+    }
   }
 
   // Windows CI runners are significantly slower to start Electron
