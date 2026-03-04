@@ -148,10 +148,17 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: xvfb-run --auto-servernum npm run test:e2e:online
 
+      - name: Verify native modules (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          node -e "try { require('node-pty'); console.log('node-pty: OK') } catch(e) { console.error('node-pty FAILED:', e.message); process.exit(1) }"
+
       - name: Run online e2e tests (Windows)
         if: runner.os == 'Windows'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ELECTRON_ENABLE_LOGGING: "1"
         run: npm run test:e2e:online
 
       - name: Upload test results

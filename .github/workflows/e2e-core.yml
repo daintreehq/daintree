@@ -123,6 +123,19 @@ jobs:
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code
 
+      - name: Configure Claude Code (macOS/Linux)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p ~/.claude
+          echo '{"hasCompletedOnboarding": true}' > ~/.claude.json
+
+      - name: Configure Claude Code (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.claude" | Out-Null
+          '{"hasCompletedOnboarding": true}' | Set-Content "$env:USERPROFILE\.claude.json"
+
       - name: Run core e2e tests (macOS)
         if: runner.os == 'macOS'
         run: npm run test:e2e:core
@@ -131,8 +144,16 @@ jobs:
         if: runner.os == 'Linux'
         run: xvfb-run --auto-servernum npm run test:e2e:core
 
+      - name: Verify native modules (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          node -e "try { require('node-pty'); console.log('node-pty: OK') } catch(e) { console.error('node-pty FAILED:', e.message); process.exit(1) }"
+
       - name: Run core e2e tests (Windows)
         if: runner.os == 'Windows'
+        env:
+          ELECTRON_ENABLE_LOGGING: "1"
         run: npm run test:e2e:core
 
       - name: Upload test results
