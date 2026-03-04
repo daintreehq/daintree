@@ -26,15 +26,21 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
 
   if (process.env.CI) {
     // CI runners lack real GPUs — disable GPU to prevent hangs
-    args.unshift("--disable-gpu", "--disable-software-rasterizer");
+    args.unshift(
+      "--disable-gpu",
+      "--disable-software-rasterizer",
+      "--no-sandbox",
+      "--noerrdialogs"
+    );
 
     if (process.platform === "linux") {
-      args.unshift("--no-sandbox", "--disable-dev-shm-usage");
+      args.unshift("--disable-dev-shm-usage");
     }
   }
 
   // Windows CI runners are significantly slower to start Electron
-  const launchTimeout = process.env.CI ? 120_000 : 60_000;
+  const isWindowsCI = process.env.CI && process.platform === "win32";
+  const launchTimeout = isWindowsCI ? 240_000 : process.env.CI ? 120_000 : 60_000;
 
   const app = await electron.launch({
     executablePath: electronPath,
