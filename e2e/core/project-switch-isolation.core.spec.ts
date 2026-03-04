@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { launchApp, mockOpenDialog, type AppContext } from "../helpers/launch";
+import { launchApp, closeApp, mockOpenDialog, type AppContext } from "../helpers/launch";
 import { createFixtureRepos } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { getGridPanelCount } from "../helpers/panels";
@@ -16,7 +16,7 @@ test.describe.serial("Project Switch Isolation", () => {
   });
 
   test.afterAll(async () => {
-    await ctx?.app.close();
+    if (ctx?.app) await closeApp(ctx.app);
   });
 
   test("open and onboard Project A with terminal", async () => {

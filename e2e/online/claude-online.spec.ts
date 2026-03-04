@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { launchApp, mockOpenDialog, type AppContext } from "../helpers/launch";
+import { launchApp, closeApp, mockOpenDialog, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { waitForTerminalText, getTerminalText } from "../helpers/terminal";
 import { SEL } from "../helpers/selectors";
@@ -13,7 +13,7 @@ test.describe("Claude Online Flow", () => {
   });
 
   test.afterAll(async () => {
-    await ctx?.app.close();
+    if (ctx?.app) await closeApp(ctx.app);
   });
 
   test("full Claude agent interaction", async () => {

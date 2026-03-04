@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { launchApp, type AppContext } from "../helpers/launch";
+import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { waitForTerminalText, runTerminalCommand } from "../helpers/terminal";
@@ -17,7 +17,7 @@ test.describe.serial("Terminal Panel Lifecycle", () => {
   });
 
   test.afterAll(async () => {
-    await ctx?.app.close();
+    if (ctx?.app) await closeApp(ctx.app);
   });
 
   test("open terminal via toolbar button", async () => {

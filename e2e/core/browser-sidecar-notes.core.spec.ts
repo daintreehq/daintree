@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { createServer, type Server } from "http";
-import { launchApp, type AppContext } from "../helpers/launch";
+import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { SEL } from "../helpers/selectors";
@@ -29,7 +29,7 @@ test.describe.serial("Browser, Sidecar & Notes", () => {
   });
 
   test.afterAll(async () => {
-    await ctx?.app.close();
+    if (ctx?.app) await closeApp(ctx.app);
     server?.close();
   });
 

@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { launchApp, type AppContext } from "../helpers/launch";
+import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "../helpers/timeouts";
 
@@ -11,7 +11,7 @@ test.describe.serial("App Shell", () => {
   });
 
   test.afterAll(async () => {
-    await ctx?.app.close();
+    if (ctx?.app) await closeApp(ctx.app);
   });
 
   test("app launches with correct title and version", async () => {

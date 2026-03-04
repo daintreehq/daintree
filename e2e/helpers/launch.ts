@@ -2,6 +2,7 @@ import { _electron as electron, type ElectronApplication, type Page } from "@pla
 import { createRequire } from "module";
 import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
+import { execSync } from "child_process";
 import path from "path";
 
 const require = createRequire(import.meta.url);
@@ -60,6 +61,27 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
     .waitFor({ state: "visible", timeout: launchTimeout });
 
   return { app, window, userDataDir };
+}
+
+export async function closeApp(app: ElectronApplication): Promise<void> {
+  try {
+    await Promise.race([
+      app.close(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("close timeout")), 10_000)),
+    ]);
+  } catch {
+    // Force-kill if close() hangs (zombie process prevention)
+    try {
+      if (process.platform === "win32") {
+        const pid = app.process().pid;
+        if (pid) execSync(`taskkill /F /PID ${pid} /T 2>nul`, { stdio: "ignore" });
+      } else {
+        app.process().kill("SIGKILL");
+      }
+    } catch {
+      // Already dead
+    }
+  }
 }
 
 export async function mockOpenDialog(
