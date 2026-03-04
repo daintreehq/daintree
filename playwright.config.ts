@@ -8,7 +8,7 @@ const coreTimeout = isWindowsCI ? 600_000 : 120_000;
 const onlineTimeout = isWindowsCI ? 600_000 : 300_000;
 
 export default defineConfig({
-  workers: "50%",
+  workers: 1,
   fullyParallel: false,
   timeout: 180_000,
   expect: { timeout: isWindowsCI ? 15_000 : isCI ? 10_000 : 5_000 },
