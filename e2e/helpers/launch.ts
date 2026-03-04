@@ -53,23 +53,9 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
 
   await window.waitForLoadState("domcontentloaded");
 
-  // Skip the Agent Setup Wizard — CI has no agents installed, so the wizard
-  // would appear as a full-screen modal blocking all interactions.
-  await window.evaluate(() => {
-    localStorage.setItem("canopy:agent-setup-complete", "true");
-  });
-
   await window
     .locator('[aria-label="Open settings"]')
     .waitFor({ state: "visible", timeout: launchTimeout });
-
-  // Dismiss the wizard if it appeared before the localStorage flag took effect
-  const wizardDialog = window.locator('[role="dialog"]');
-  if (await wizardDialog.isVisible({ timeout: 1_000 }).catch(() => false)) {
-    // Press Escape to dismiss (dialog is dismissible)
-    await window.keyboard.press("Escape");
-    await wizardDialog.waitFor({ state: "hidden", timeout: 5_000 }).catch(() => {});
-  }
 
   return { app, window, userDataDir };
 }
