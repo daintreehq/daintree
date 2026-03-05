@@ -119,22 +119,18 @@ jobs:
 
       - name: Configure Claude Code (macOS/Linux)
         if: runner.os != 'Windows'
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           mkdir -p ~/.claude
           echo '{"hasCompletedOnboarding": true}' > ~/.claude.json
-          echo '{"model": "sonnet"}' > ~/.claude/settings.json
+          echo '{"model": "claude-sonnet-4-6"}' > ~/.claude/settings.json
 
       - name: Configure Claude Code (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.claude" | Out-Null
           '{"hasCompletedOnboarding": true}' | Set-Content "$env:USERPROFILE\.claude.json"
-          '{"model": "sonnet"}' | Set-Content "$env:USERPROFILE\.claude\settings.json"
+          '{"model": "claude-sonnet-4-6"}' | Set-Content "$env:USERPROFILE\.claude\settings.json"
 
       - name: Run online e2e tests (macOS)
         if: runner.os == 'macOS'
