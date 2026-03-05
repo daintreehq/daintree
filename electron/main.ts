@@ -918,7 +918,9 @@ async function createWindow(): Promise<void> {
   notificationService.initialize(mainWindow);
   console.log("[MAIN] NotificationService initialized");
 
-  // Initialize Service Instances (Start processes in background)
+  // Initialize Service Instances
+  // On Windows, stagger utility process forks to reduce resource contention
+  // that can cause ACCESS_VIOLATION (0xC0000005) crashes on CI runners.
   console.log("[MAIN] Starting critical services...");
 
   ptyClient = new PtyClient({
@@ -969,6 +971,17 @@ async function createWindow(): Promise<void> {
       }
     }
   });
+
+  // Wait for pty-host to be ready before forking workspace-host.
+  // Staggering prevents two utility processes from simultaneously loading
+  // native modules (node-pty, simple-git) which can crash on Windows CI.
+  console.log("[MAIN] Waiting for Pty Host to be ready before starting Workspace Host...");
+  try {
+    await ptyClient.waitForReady();
+    console.log("[MAIN] Pty Host ready, starting Workspace Host...");
+  } catch (error) {
+    console.error("[MAIN] Pty Host failed to start:", error);
+  }
 
   workspaceClient = getWorkspaceClient({
     maxRestartAttempts: 3,
@@ -1042,12 +1055,13 @@ async function createWindow(): Promise<void> {
     console.error(`[MAIN] Workspace Host crashed with code ${code}`);
   });
 
-  // WAIT for services to be ready (Parallel)
-  console.log("[MAIN] Waiting for services to initialize...");
+  // WAIT for remaining services (pty-host already awaited above during staggered startup)
+  console.log("[MAIN] Waiting for remaining services to initialize...");
   let ptyReady = false;
   let workspaceReady = false;
 
   try {
+    // pty-host was already awaited before workspace-host fork; re-check resolves instantly
     const results = await Promise.allSettled([
       ptyClient.waitForReady(),
       workspaceClient.waitForReady(),
