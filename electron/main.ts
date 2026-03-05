@@ -1202,14 +1202,88 @@ async function createWindow(): Promise<void> {
     console.log("[SMOKE] CHECK: Auto-updater module — OK");
     console.log("[SMOKE] GPU feature status:", JSON.stringify(app.getGPUFeatureStatus()));
     console.log("[SMOKE] Boot completed in %dms", bootMs);
-    const allPassed = ptyReady && workspaceReady;
-    if (allPassed) {
-      console.log("[SMOKE] All boot checks passed");
-    } else {
+
+    if (!ptyReady || !workspaceReady) {
       console.error("[SMOKE] FAILED — one or more services did not start");
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
+      workspaceClient.dispose();
+      ptyClient.dispose();
+      app.exit(1);
+      return;
     }
-    // Dispose clients before exit so their host-exit handlers don't fire
-    // against an already-destroyed window (TypeError: Object has been destroyed)
+
+    // --- Functional test: spawn a terminal and verify output ---
+    // ptyClient is guaranteed non-null here since ptyReady is true,
+    // but TypeScript can't narrow through the boolean check.
+    const smokeClient = ptyClient!;
+    const SMOKE_TERM_ID = "smoke-test-terminal";
+    const SMOKE_TOKEN = "CANOPY_SMOKE_OK_" + Date.now();
+    const smokeCmd =
+      process.platform === "win32" ? `echo ${SMOKE_TOKEN}\r\n` : `echo ${SMOKE_TOKEN}\n`;
+
+    let terminalOutputOk = false;
+
+    const smokeTerminalResult = await new Promise<boolean>((resolve) => {
+      const timeout = setTimeout(() => {
+        console.error("[SMOKE] FAILED — terminal spawn timed out after 15s");
+        resolve(false);
+      }, 15_000);
+
+      let output = "";
+
+      const onData = (id: string, data: string) => {
+        if (id !== SMOKE_TERM_ID) return;
+        output += data;
+        if (!terminalOutputOk && output.includes(SMOKE_TOKEN)) {
+          terminalOutputOk = true;
+          console.log("[SMOKE] CHECK: Terminal output received — OK");
+          smokeClient.kill(SMOKE_TERM_ID, "smoke-test-complete");
+        }
+      };
+
+      const onExit = (id: string, exitCode: number) => {
+        if (id !== SMOKE_TERM_ID) return;
+        console.log("[SMOKE] CHECK: Terminal exited (code %d) — OK", exitCode);
+        smokeClient.removeListener("data", onData);
+        smokeClient.removeListener("exit", onExit);
+        clearTimeout(timeout);
+        resolve(terminalOutputOk);
+      };
+
+      smokeClient.on("data", onData);
+      smokeClient.on("exit", onExit);
+
+      console.log("[SMOKE] Spawning test terminal...");
+      smokeClient.spawn(SMOKE_TERM_ID, {
+        cwd: os.homedir(),
+        cols: 80,
+        rows: 24,
+      });
+
+      // Give the shell a moment to start, then write the echo command
+      setTimeout(() => {
+        smokeClient.write(SMOKE_TERM_ID, smokeCmd);
+      }, 1000);
+    });
+
+    console.log(
+      "[SMOKE] CHECK: Terminal spawn + output — %s",
+      smokeTerminalResult ? "OK" : "FAILED"
+    );
+
+    const allPassed = smokeTerminalResult;
+
+    if (allPassed) {
+      console.log("[SMOKE] All checks passed — holding for 10s stability soak...");
+      await new Promise((r) => setTimeout(r, 10_000));
+      console.log("[SMOKE] Stability soak complete — no crashes detected");
+    } else {
+      console.error("[SMOKE] FAILED — functional checks did not pass");
+    }
+
+    // Destroy window first to stop renderer IPC calls, then dispose clients
+    // to suppress host-exit handlers, then exit.
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
     workspaceClient.dispose();
     ptyClient.dispose();
     app.exit(allPassed ? 0 : 1);
