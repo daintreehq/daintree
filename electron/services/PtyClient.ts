@@ -211,23 +211,30 @@ export class PtyClient extends EventEmitter {
       this.readyReject = reject;
     });
 
-    try {
-      const perShardSize = Math.floor(DEFAULT_RING_BUFFER_SIZE / this.VISUAL_SHARD_COUNT);
-      for (let i = 0; i < this.VISUAL_SHARD_COUNT; i++) {
-        this.visualBuffers.push(SharedRingBuffer.create(perShardSize));
+    // SharedArrayBuffer transfer to Electron utility processes fails on Windows
+    // ("An object could not be cloned"), and the failed transfer can intermittently
+    // cause ACCESS_VIOLATION (0xC0000005) crashes. Skip entirely on Windows.
+    if (process.platform !== "win32") {
+      try {
+        const perShardSize = Math.floor(DEFAULT_RING_BUFFER_SIZE / this.VISUAL_SHARD_COUNT);
+        for (let i = 0; i < this.VISUAL_SHARD_COUNT; i++) {
+          this.visualBuffers.push(SharedRingBuffer.create(perShardSize));
+        }
+        this.analysisBuffer = SharedRingBuffer.create(DEFAULT_RING_BUFFER_SIZE);
+        this.visualSignalBuffer = new SharedArrayBuffer(4);
+        this.sharedBufferEnabled = true;
+        console.log(
+          `[PtyClient] SharedArrayBuffer enabled (${this.VISUAL_SHARD_COUNT} visual shards × ${Math.floor(perShardSize / 1024 / 1024)}MB + 10MB analysis)`
+        );
+      } catch (error) {
+        console.warn("[PtyClient] SharedArrayBuffer unavailable, using IPC fallback:", error);
+        this.visualBuffers = [];
+        this.analysisBuffer = null;
+        this.visualSignalBuffer = null;
+        this.sharedBufferEnabled = false;
       }
-      this.analysisBuffer = SharedRingBuffer.create(DEFAULT_RING_BUFFER_SIZE);
-      this.visualSignalBuffer = new SharedArrayBuffer(4);
-      this.sharedBufferEnabled = true;
-      console.log(
-        `[PtyClient] SharedArrayBuffer enabled (${this.VISUAL_SHARD_COUNT} visual shards × ${Math.floor(perShardSize / 1024 / 1024)}MB + 10MB analysis)`
-      );
-    } catch (error) {
-      console.warn("[PtyClient] SharedArrayBuffer unavailable, using IPC fallback:", error);
-      this.visualBuffers = [];
-      this.analysisBuffer = null;
-      this.visualSignalBuffer = null;
-      this.sharedBufferEnabled = false;
+    } else {
+      console.log("[PtyClient] Windows detected, using IPC fallback (SharedArrayBuffer disabled)");
     }
 
     this.startHost();
