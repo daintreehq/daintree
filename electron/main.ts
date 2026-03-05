@@ -1017,21 +1017,6 @@ async function createWindow(): Promise<void> {
     console.error("[MAIN] Unexpected error during service initialization:", error);
   }
 
-  if (isSmokeTest) {
-    if (smokeTestTimer) clearTimeout(smokeTestTimer);
-    console.log("[SMOKE] CHECK: Window created — OK");
-    console.log("[SMOKE] CHECK: PTY service — %s", ptyReady ? "OK" : "FAILED");
-    console.log("[SMOKE] CHECK: Workspace service — %s", workspaceReady ? "OK" : "FAILED");
-    if (ptyReady && workspaceReady) {
-      console.log("[SMOKE] All boot checks passed");
-      app.exit(0);
-    } else {
-      console.error("[SMOKE] FAILED — one or more services did not start");
-      app.exit(1);
-    }
-    return;
-  }
-
   // Only set up PTY-related features if PTY is ready
   if (ptyReady) {
     createAndDistributePorts();
@@ -1172,6 +1157,23 @@ async function createWindow(): Promise<void> {
 
   // Initialize auto-updater (checks for updates on startup and periodically)
   autoUpdaterService.initialize(mainWindow);
+
+  if (isSmokeTest) {
+    if (smokeTestTimer) clearTimeout(smokeTestTimer);
+    console.log("[SMOKE] CHECK: Window created — OK");
+    console.log("[SMOKE] CHECK: PTY service — %s", ptyReady ? "OK" : "FAILED");
+    console.log("[SMOKE] CHECK: Workspace service — %s", workspaceReady ? "OK" : "FAILED");
+    console.log("[SMOKE] CHECK: Auto-updater module — OK");
+    const allPassed = ptyReady && workspaceReady;
+    if (allPassed) {
+      console.log("[SMOKE] All boot checks passed");
+      app.exit(0);
+    } else {
+      console.error("[SMOKE] FAILED — one or more services did not start");
+      app.exit(1);
+    }
+    return;
+  }
 
   // Initialize Deferred Services
   initializeDeferredServices(mainWindow, cliAvailabilityService!, eventBuffer!).catch((error) => {
