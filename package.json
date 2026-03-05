@@ -42,6 +42,7 @@
     "typecheck": "tsc --noEmit && tsc -b electron/tsconfig.preload.json electron/tsconfig.json",
     "check": "npm run typecheck && npm run lint:ratchet && npm run format:check",
     "fix": "npm run format && npm run lint:fix",
+    "test:smoke": "electron . --smoke-test --disable-gpu",
     "test:e2e": "npx playwright test",
     "test:e2e:core": "npx playwright test --project=core",
     "test:e2e:online": "npx playwright test --project=online",

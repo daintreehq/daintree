@@ -96,3 +96,25 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Smoke test (Linux)
+        if: matrix.os == 'ubuntu-22.04'
+        run: xvfb-run --auto-servernum npx electron . --smoke-test --disable-gpu --no-sandbox
+        env:
+          NODE_ENV: production
+        timeout-minutes: 2
+
+      - name: Smoke test (macOS)
+        if: matrix.os == 'macos-14'
+        run: npx electron . --smoke-test --disable-gpu
+        env:
+          NODE_ENV: production
+        timeout-minutes: 2
+
+      - name: Smoke test (Windows)
+        if: matrix.os == 'windows-latest'
+        run: npx electron . --smoke-test --disable-gpu
+        env:
+          NODE_ENV: production
+          ELECTRON_ENABLE_LOGGING: "1"
+        timeout-minutes: 2

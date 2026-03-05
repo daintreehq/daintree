@@ -53,6 +53,15 @@ if (process.platform === "win32") {
   }
 }
 
+const isSmokeTest = process.argv.includes("--smoke-test");
+if (isSmokeTest) {
+  console.log("[SMOKE] Smoke test mode enabled");
+  console.log("[SMOKE] Platform:", process.platform, process.arch);
+  console.log("[SMOKE] Electron:", process.versions.electron);
+  console.log("[SMOKE] Node:", process.versions.node);
+  console.log("[SMOKE] Chrome:", process.versions.chrome);
+}
+
 app.enableSandbox();
 
 // Prevent macOS keychain prompt ("canopy-app Safe Storage").
@@ -302,7 +311,7 @@ function extractCliPath(argv: string[]): string | null {
   return null;
 }
 
-const gotTheLock = app.requestSingleInstanceLock();
+const gotTheLock = isSmokeTest || app.requestSingleInstanceLock();
 
 if (!gotTheLock) {
   console.log("[MAIN] Another instance is already running. Quitting...");
@@ -559,6 +568,15 @@ async function createWindow(): Promise<void> {
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.focus();
     return;
+  }
+
+  let smokeTestTimer: ReturnType<typeof setTimeout> | undefined;
+  if (isSmokeTest) {
+    console.log("[SMOKE] Starting 60s safety timeout");
+    smokeTestTimer = setTimeout(() => {
+      console.error("[SMOKE] FAILED — app did not finish loading within 60s");
+      app.exit(1);
+    }, 60_000);
   }
 
   // Lock down permissions on untrusted sessions to prevent OS permission prompts
@@ -940,6 +958,7 @@ async function createWindow(): Promise<void> {
   // Handle reloads
   mainWindow.webContents.on("did-finish-load", () => {
     console.log("[MAIN] Renderer loaded, ensuring MessagePort connection...");
+    if (isSmokeTest) console.log("[SMOKE] CHECK: Renderer did-finish-load — OK");
     markPerformance(PERF_MARKS.RENDERER_READY);
     createAndDistributePorts();
   });
@@ -996,6 +1015,21 @@ async function createWindow(): Promise<void> {
   } catch (error) {
     // This shouldn't happen with allSettled, but handle it just in case
     console.error("[MAIN] Unexpected error during service initialization:", error);
+  }
+
+  if (isSmokeTest) {
+    if (smokeTestTimer) clearTimeout(smokeTestTimer);
+    console.log("[SMOKE] CHECK: Window created — OK");
+    console.log("[SMOKE] CHECK: PTY service — %s", ptyReady ? "OK" : "FAILED");
+    console.log("[SMOKE] CHECK: Workspace service — %s", workspaceReady ? "OK" : "FAILED");
+    if (ptyReady && workspaceReady) {
+      console.log("[SMOKE] All boot checks passed");
+      app.exit(0);
+    } else {
+      console.error("[SMOKE] FAILED — one or more services did not start");
+      app.exit(1);
+    }
+    return;
   }
 
   // Only set up PTY-related features if PTY is ready
