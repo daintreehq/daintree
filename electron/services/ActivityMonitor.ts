@@ -172,6 +172,7 @@ export class ActivityMonitor {
   private readonly WORKING_HOLD_MS = 200;
   private readonly SPINNER_ACTIVE_MS = 1500;
   private readonly INPUT_ECHO_WINDOW_MS = 1000;
+  private readonly ECHO_MAX_BYTES = 24;
   private lastUserInputAt = 0;
   private inBracketedPaste = false;
   private partialEscape = "";
@@ -211,6 +212,7 @@ export class ActivityMonitor {
 
   private readonly processStateValidator?: ProcessStateValidator;
   private lastActivityTimestamp = Date.now();
+  private lastDataTimestamp = Date.now();
   private lastOutputActivityAt = 0;
   private lastSpinnerDetectedAt = 0;
   private promptStableSince = 0;
@@ -560,25 +562,31 @@ export class ActivityMonitor {
    */
   onData(data?: string): void {
     const now = Date.now();
-    const timeSinceLastActivity = now - this.lastActivityTimestamp;
+    const timeSinceLastData = now - this.lastDataTimestamp;
 
-    if (timeSinceLastActivity > this.SLEEP_DETECTION_THRESHOLD_MS) {
+    if (timeSinceLastData > this.SLEEP_DETECTION_THRESHOLD_MS) {
       this.pendingStateRevalidation = true;
     }
 
-    this.lastActivityTimestamp = now;
+    this.lastDataTimestamp = now;
+
+    const isLikelyUserEcho = data ? this.isLikelyUserEcho(data, now) : false;
+    if (data && !isLikelyUserEcho) {
+      this.lastActivityTimestamp = now;
+    }
+
     if (this.pendingStateRevalidation && this.state === "busy") {
       this.pendingStateRevalidation = false;
       this.revalidateStateAfterWake();
     }
 
-    if (data) {
+    if (data && !isLikelyUserEcho) {
       this.updateLineRewriteDetection(data, now);
     }
 
     // For polling-enabled terminals: check raw stream for patterns FIRST
     // This runs BEFORE the busy-state early return to ensure instant detection
-    if (data && this.getVisibleLines) {
+    if (data && this.getVisibleLines && !isLikelyUserEcho) {
       // Use rolling buffer to catch patterns split across PTY chunks
       this.updatePatternBuffer(data);
       const bufferText = stripAnsi(this.patternBuffer);
@@ -637,11 +645,11 @@ export class ActivityMonitor {
     }
 
     // Now handle busy state - reset debounce timer
-    if (this.state === "busy") {
+    if (this.state === "busy" && !isLikelyUserEcho) {
       this.resetDebounceTimer();
     }
 
-    if (!data) {
+    if (!data || isLikelyUserEcho) {
       return;
     }
 
@@ -1053,6 +1061,37 @@ export class ActivityMonitor {
     return this.lastUserInputAt > 0 && now - this.lastUserInputAt < this.INPUT_ECHO_WINDOW_MS;
   }
 
+  private isLikelyUserEcho(data: string, now: number): boolean {
+    if (!this.isRecentUserInput(now)) {
+      return false;
+    }
+
+    if (this.pendingInputUntil > 0) {
+      return false;
+    }
+
+    if (data.includes("\x1b") || data.includes("\r") || data.includes("\n")) {
+      return false;
+    }
+
+    if (Buffer.byteLength(data, "utf8") > this.ECHO_MAX_BYTES) {
+      return false;
+    }
+
+    for (let i = 0; i < data.length; i++) {
+      const code = data.charCodeAt(i);
+      if (
+        (code >= 0x00 && code <= 0x07) ||
+        (code >= 0x0b && code <= 0x1a) ||
+        (code >= 0x1c && code <= 0x1f)
+      ) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
   /**
    * Transition to busy state based on pattern detection.
    */
@@ -1211,6 +1250,7 @@ export class ActivityMonitor {
     this.pendingInputChars = 0;
     this.workingHoldUntil = 0;
     this.lastUserInputAt = 0;
+    this.lastDataTimestamp = 0;
     this.lastOutputActivityAt = 0;
     this.lastSpinnerDetectedAt = 0;
     this.promptStableSince = 0;
@@ -1343,6 +1383,12 @@ export class ActivityMonitor {
       this.promptStableSince = 0;
     }
 
+    const suppressWorkingPatternForPromptTyping =
+      isPrompt && this.pendingInputUntil === 0 && this.isRecentUserInput(now);
+    const effectiveWorkingPattern = suppressWorkingPatternForPromptTyping
+      ? false
+      : isWorkingPattern;
+
     // Check for boot completion (agent-specific ready patterns)
     if (!this.hasExitedBootState) {
       const timeSinceBoot = now - this.pollingStartTime;
@@ -1375,7 +1421,7 @@ export class ActivityMonitor {
     const shouldPreferPrompt =
       shouldAllowPromptStability && promptStableForMs >= this.PROMPT_DEBOUNCE_MS;
 
-    if (isWorkingPattern && !shouldAllowPromptStability && !isQuietForIdle) {
+    if (effectiveWorkingPattern && !shouldAllowPromptStability && !isQuietForIdle) {
       this.recordWorkingSignal(now);
     }
 
@@ -1383,7 +1429,10 @@ export class ActivityMonitor {
       isSpinnerActive ||
       hasRecentOutputActivity ||
       hasHighOutputActivity || // High output activity is a working signal - Issue #1498
-      (isWorkingPattern && !shouldPreferPrompt && !shouldAllowPromptStability && !isQuietForIdle);
+      (effectiveWorkingPattern &&
+        !shouldPreferPrompt &&
+        !shouldAllowPromptStability &&
+        !isQuietForIdle);
     if (isWorkingSignal) {
       this.promptStableSince = 0;
     }
@@ -1394,7 +1443,7 @@ export class ActivityMonitor {
         // Immediately transition to busy state (Issue #1506)
         this.pendingInputUntil = 0;
         this.pendingInputWasNonEmpty = false;
-        const metadata = isWorkingPattern
+        const metadata = effectiveWorkingPattern
           ? { trigger: "pattern" as const, patternConfidence: patternResult?.confidence ?? 0.9 }
           : { trigger: "output" as const };
         this.becomeBusy(metadata, now);
@@ -1438,13 +1487,13 @@ export class ActivityMonitor {
       if (this.state !== "busy") {
         // Recovery from idle - require sustained signal (debounced) only after boot
         if (this.hasExitedBootState && this.shouldTriggerWorkingRecovery(now, true)) {
-          const metadata = isWorkingPattern
+          const metadata = effectiveWorkingPattern
             ? { trigger: "pattern" as const, patternConfidence: patternResult?.confidence ?? 0.9 }
             : { trigger: "output" as const };
           this.becomeBusy(metadata, now);
         } else if (!this.hasExitedBootState) {
           // During boot, allow immediate transition (no debouncing)
-          const metadata = isWorkingPattern
+          const metadata = effectiveWorkingPattern
             ? { trigger: "pattern" as const, patternConfidence: patternResult?.confidence ?? 0.9 }
             : { trigger: "output" as const };
           this.becomeBusy(metadata, now);
