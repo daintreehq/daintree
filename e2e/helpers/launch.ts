@@ -56,8 +56,9 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
     }
     if (isWindowsCI) {
       // Prevent Windows occlusion/background throttling from stalling startup.
+      // Keep Chromium sandbox defaults on Windows; forcing --no-sandbox regressed
+      // startup stability and correlated with 0xC0000005 main-process crashes.
       args.unshift(
-        "--no-sandbox",
         "--disable-backgrounding-occluded-windows",
         "--disable-features=CalculateNativeWinOcclusion"
       );
