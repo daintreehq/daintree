@@ -54,12 +54,47 @@ if (process.platform === "win32") {
 }
 
 const isSmokeTest = process.argv.includes("--smoke-test");
+const smokeTestStart = isSmokeTest ? Date.now() : 0;
 if (isSmokeTest) {
   console.log("[SMOKE] Smoke test mode enabled");
   console.log("[SMOKE] Platform:", process.platform, process.arch);
   console.log("[SMOKE] Electron:", process.versions.electron);
   console.log("[SMOKE] Node:", process.versions.node);
   console.log("[SMOKE] Chrome:", process.versions.chrome);
+
+  // Fail fast on renderer or child process crashes
+  app.on("render-process-gone", (_event, _wc, details) => {
+    if (details.reason !== "clean-exit") {
+      console.error(
+        `[SMOKE] FAILED — renderer process gone: reason=${details.reason}, exitCode=${details.exitCode}`
+      );
+      app.exit(1);
+    }
+  });
+  app.on("child-process-gone", (_event, details) => {
+    if (details.reason !== "clean-exit") {
+      console.error(
+        `[SMOKE] FAILED — child process gone: type=${details.type}, reason=${details.reason}, exitCode=${details.exitCode}`
+      );
+      if (details.type === "GPU" || details.type === "Utility") {
+        app.exit(1);
+      }
+    }
+  });
+
+  // Verify native module (node-pty) loads and bindings work
+  try {
+    const pty = await import("node-pty");
+    const testProc = pty.spawn(process.platform === "win32" ? "cmd.exe" : "echo", ["smoke"], {
+      cols: 80,
+      rows: 24,
+    });
+    testProc.kill();
+    console.log("[SMOKE] CHECK: node-pty native module — OK");
+  } catch (err) {
+    console.error("[SMOKE] FAILED — node-pty native module:", (err as Error).message);
+    app.exit(1);
+  }
 }
 
 app.enableSandbox();
@@ -1160,10 +1195,13 @@ async function createWindow(): Promise<void> {
 
   if (isSmokeTest) {
     if (smokeTestTimer) clearTimeout(smokeTestTimer);
+    const bootMs = Date.now() - smokeTestStart;
     console.log("[SMOKE] CHECK: Window created — OK");
     console.log("[SMOKE] CHECK: PTY service — %s", ptyReady ? "OK" : "FAILED");
     console.log("[SMOKE] CHECK: Workspace service — %s", workspaceReady ? "OK" : "FAILED");
     console.log("[SMOKE] CHECK: Auto-updater module — OK");
+    console.log("[SMOKE] GPU feature status:", JSON.stringify(app.getGPUFeatureStatus()));
+    console.log("[SMOKE] Boot completed in %dms", bootMs);
     const allPassed = ptyReady && workspaceReady;
     if (allPassed) {
       console.log("[SMOKE] All boot checks passed");
