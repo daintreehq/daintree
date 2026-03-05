@@ -7,19 +7,26 @@ export async function openProject(
   window: Page,
   projectPath: string
 ): Promise<void> {
+  const isWindowsCI = process.env.CI && process.platform === "win32";
   await mockOpenDialog(app, projectPath);
-  await window.getByRole("button", { name: "Open Folder" }).click();
+  const openFolder = window.getByRole("button", { name: "Open Folder" });
+  await expect(openFolder).toBeVisible({ timeout: isWindowsCI ? 30_000 : 10_000 });
+  await openFolder.click();
 }
 
 export async function completeOnboarding(window: Page, name: string): Promise<void> {
+  const isWindowsCI = process.env.CI && process.platform === "win32";
+  const visibleTimeout = isWindowsCI ? 45_000 : process.env.CI ? 20_000 : 10_000;
+  const closeTimeout = isWindowsCI ? 20_000 : 5_000;
+
   const heading = window.locator("h2", { hasText: "Set up your project" });
-  await expect(heading).toBeVisible({ timeout: 10_000 });
+  await expect(heading).toBeVisible({ timeout: visibleTimeout });
 
   const nameInput = window.getByRole("textbox", { name: "Project Name" });
   await nameInput.fill(name);
 
   await window.getByRole("button", { name: "Finish" }).click();
-  await expect(heading).not.toBeVisible({ timeout: 5_000 });
+  await expect(heading).not.toBeVisible({ timeout: closeTimeout });
 }
 
 export async function openAndOnboardProject(

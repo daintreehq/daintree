@@ -294,6 +294,7 @@ import { initializeAgentRouter, disposeAgentRouter } from "./services/AgentRoute
 import { initializeWorkflowEngine, disposeWorkflowEngine } from "./services/WorkflowEngine.js";
 import { workflowLoader } from "./services/WorkflowLoader.js";
 import { autoUpdaterService } from "./services/AutoUpdaterService.js";
+import { SMOKE_BOOT_TIMEOUT_MS, runSmokeFunctionalChecks } from "./services/smokeTest.js";
 
 // Initialize logger early with userData path
 initializeLogger(app.getPath("userData"));
@@ -397,7 +398,7 @@ if (!gotTheLock) {
   });
 
   app.on("before-quit", (event) => {
-    if (isQuitting || !mainWindow) {
+    if (isQuitting || !mainWindow || isSmokeTest) {
       return;
     }
 
@@ -606,12 +607,14 @@ async function createWindow(): Promise<void> {
   }
 
   let smokeTestTimer: ReturnType<typeof setTimeout> | undefined;
+  let smokeRendererUnresponsive = false;
   if (isSmokeTest) {
-    console.log("[SMOKE] Starting 60s safety timeout");
+    console.log("[SMOKE] Starting %ds startup safety timeout", SMOKE_BOOT_TIMEOUT_MS / 1000);
     smokeTestTimer = setTimeout(() => {
-      console.error("[SMOKE] FAILED — app did not finish loading within 60s");
+      console.error("[SMOKE] FAILED — app did not finish loading within startup timeout");
       app.exit(1);
-    }, 60_000);
+    }, SMOKE_BOOT_TIMEOUT_MS);
+    smokeTestTimer.unref();
   }
 
   // Lock down permissions on untrusted sessions to prevent OS permission prompts
@@ -734,6 +737,13 @@ async function createWindow(): Promise<void> {
     backgroundColor: "#18181b",
   });
   markPerformance(PERF_MARKS.MAIN_WINDOW_CREATED);
+
+  if (isSmokeTest) {
+    mainWindow.on("unresponsive", () => {
+      smokeRendererUnresponsive = true;
+      console.error("[SMOKE] FAILED — main window became unresponsive");
+    });
+  }
 
   console.log("[MAIN] Window created, loading content immediately (Paint First)...");
 
@@ -1212,80 +1222,28 @@ async function createWindow(): Promise<void> {
       return;
     }
 
-    // --- Functional test: spawn a terminal and verify output ---
     // ptyClient is guaranteed non-null here since ptyReady is true,
     // but TypeScript can't narrow through the boolean check.
     const smokeClient = ptyClient!;
-    const SMOKE_TERM_ID = "smoke-test-terminal";
-    const SMOKE_TOKEN = "CANOPY_SMOKE_OK_" + Date.now();
-    const smokeCmd =
-      process.platform === "win32" ? `echo ${SMOKE_TOKEN}\r\n` : `echo ${SMOKE_TOKEN}\n`;
-
-    let terminalOutputOk = false;
-
-    const smokeTerminalResult = await new Promise<boolean>((resolve) => {
-      const timeout = setTimeout(() => {
-        console.error("[SMOKE] FAILED — terminal spawn timed out after 15s");
-        resolve(false);
-      }, 15_000);
-
-      let output = "";
-
-      const onData = (id: string, data: string) => {
-        if (id !== SMOKE_TERM_ID) return;
-        output += data;
-        if (!terminalOutputOk && output.includes(SMOKE_TOKEN)) {
-          terminalOutputOk = true;
-          console.log("[SMOKE] CHECK: Terminal output received — OK");
-          smokeClient.kill(SMOKE_TERM_ID, "smoke-test-complete");
-        }
-      };
-
-      const onExit = (id: string, exitCode: number) => {
-        if (id !== SMOKE_TERM_ID) return;
-        console.log("[SMOKE] CHECK: Terminal exited (code %d) — OK", exitCode);
-        smokeClient.removeListener("data", onData);
-        smokeClient.removeListener("exit", onExit);
-        clearTimeout(timeout);
-        resolve(terminalOutputOk);
-      };
-
-      smokeClient.on("data", onData);
-      smokeClient.on("exit", onExit);
-
-      console.log("[SMOKE] Spawning test terminal...");
-      smokeClient.spawn(SMOKE_TERM_ID, {
-        cwd: os.homedir(),
-        cols: 80,
-        rows: 24,
-      });
-
-      // Give the shell a moment to start, then write the echo command
-      setTimeout(() => {
-        smokeClient.write(SMOKE_TERM_ID, smokeCmd);
-      }, 1000);
-    });
-
-    console.log(
-      "[SMOKE] CHECK: Terminal spawn + output — %s",
-      smokeTerminalResult ? "OK" : "FAILED"
+    const allPassed = await runSmokeFunctionalChecks(
+      mainWindow,
+      smokeClient,
+      () => smokeRendererUnresponsive
     );
-
-    const allPassed = smokeTerminalResult;
-
-    if (allPassed) {
-      console.log("[SMOKE] All checks passed — holding for 10s stability soak...");
-      await new Promise((r) => setTimeout(r, 10_000));
-      console.log("[SMOKE] Stability soak complete — no crashes detected");
-    } else {
-      console.error("[SMOKE] FAILED — functional checks did not pass");
-    }
 
     // Destroy window first to stop renderer IPC calls, then dispose clients
     // to suppress host-exit handlers, then exit.
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
-    workspaceClient.dispose();
-    ptyClient.dispose();
+    try {
+      workspaceClient.dispose();
+    } catch {
+      // Ignore cleanup errors in smoke mode.
+    }
+    try {
+      ptyClient.dispose();
+    } catch {
+      // Ignore cleanup errors in smoke mode.
+    }
     app.exit(allPassed ? 0 : 1);
     return;
   }
