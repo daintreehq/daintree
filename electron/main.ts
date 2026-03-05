@@ -751,7 +751,7 @@ async function createWindow(): Promise<void> {
     });
   }
 
-  const deferRendererLoadForE2E = process.env.CANOPY_E2E_DEFER_RENDERER_LOAD === "1";
+  const deferRendererLoad = process.env.CANOPY_E2E_DEFER_RENDERER_LOAD === "1" || isSmokeTest;
   let rendererLoadRequested = false;
   const loadRenderer = (reason: string): void => {
     if (!mainWindow || mainWindow.isDestroyed() || rendererLoadRequested) return;
@@ -766,10 +766,8 @@ async function createWindow(): Promise<void> {
     }
   };
 
-  if (deferRendererLoadForE2E) {
-    console.log(
-      "[MAIN] Deferring renderer load until IPC handlers are registered (CANOPY_E2E_DEFER_RENDERER_LOAD=1)"
-    );
+  if (deferRendererLoad) {
+    console.log("[MAIN] Deferring renderer load until IPC handlers are registered");
   } else {
     console.log("[MAIN] Window created, loading content immediately (Paint First)...");
     loadRenderer("paint-first");
@@ -1016,7 +1014,7 @@ async function createWindow(): Promise<void> {
   );
   cleanupErrorHandlers = registerErrorHandlers(mainWindow, workspaceClient, ptyClient);
 
-  if (deferRendererLoadForE2E) {
+  if (deferRendererLoad) {
     loadRenderer("after-ipc-registration");
   }
 
