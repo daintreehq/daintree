@@ -1,6 +1,6 @@
 import { _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
 import { createRequire } from "module";
-import { mkdtempSync, rmSync } from "fs";
+import { mkdtempSync, rmSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 import { execSync } from "child_process";
 import path from "path";
@@ -8,6 +8,7 @@ import path from "path";
 const require = createRequire(import.meta.url);
 const electronPath = require("electron") as unknown as string;
 const ROOT = path.resolve(import.meta.dirname, "../..");
+const SCREENSHOT_DIR = path.join(ROOT, "test-results");
 
 export interface AppContext {
   app: ElectronApplication;
@@ -79,16 +80,68 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
         if (msg.type() === "error") console.error("[e2e:console]", msg.text());
       });
 
+      console.log("[e2e] Waiting for domcontentloaded...");
       await window.waitForLoadState("domcontentloaded");
+      console.log("[e2e] domcontentloaded reached");
 
+      // Dismiss agent setup/selection wizards so they don't block the UI
+      await window.evaluate(() => {
+        localStorage.setItem("canopy:agent-setup-complete", "true");
+        localStorage.setItem("canopy:agent-selection-dismissed", "true");
+      });
+      console.log("[e2e] Agent wizard dismissal keys set in localStorage");
+
+      // Take an early screenshot for CI diagnostics
+      try {
+        mkdirSync(SCREENSHOT_DIR, { recursive: true });
+        const screenshotPath = path.join(
+          SCREENSHOT_DIR,
+          `launch-early-${process.platform}-${Date.now()}.png`
+        );
+        await window.screenshot({ path: screenshotPath });
+        console.log("[e2e] Early screenshot saved:", screenshotPath);
+      } catch (err) {
+        console.warn("[e2e] Early screenshot failed:", err);
+      }
+
+      console.log("[e2e] Waiting for settings button to appear...");
       await window
         .locator('[aria-label="Open settings"]')
         .waitFor({ state: "visible", timeout: launchTimeout });
+      console.log("[e2e] Settings button visible — app ready");
+
+      // Take a post-ready screenshot for CI diagnostics
+      try {
+        const screenshotPath = path.join(
+          SCREENSHOT_DIR,
+          `launch-ready-${process.platform}-${Date.now()}.png`
+        );
+        await window.screenshot({ path: screenshotPath });
+        console.log("[e2e] Ready screenshot saved:", screenshotPath);
+      } catch (err) {
+        console.warn("[e2e] Ready screenshot failed:", err);
+      }
 
       return { app, window, userDataDir };
     } catch (error) {
+      console.error(`[e2e] Launch attempt ${attempt}/${maxAttempts} failed:`, error);
       lastError = error;
+      // Try to capture a failure screenshot before closing
       if (app) {
+        try {
+          const failWindow = await app.firstWindow().catch(() => null);
+          if (failWindow) {
+            mkdirSync(SCREENSHOT_DIR, { recursive: true });
+            const screenshotPath = path.join(
+              SCREENSHOT_DIR,
+              `launch-failure-${process.platform}-attempt${attempt}-${Date.now()}.png`
+            );
+            await failWindow.screenshot({ path: screenshotPath });
+            console.log("[e2e] Failure screenshot saved:", screenshotPath);
+          }
+        } catch {
+          // Best-effort screenshot capture
+        }
         await closeApp(app);
       }
       if (!options.userDataDir) {
