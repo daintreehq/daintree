@@ -36,8 +36,8 @@ function wait(ms: number): Promise<void> {
 export async function launchApp(options: LaunchOptions = {}): Promise<AppContext> {
   // Windows CI runners are significantly slower to start Electron
   const isWindowsCI = process.env.CI && process.platform === "win32";
-  const launchTimeout = isWindowsCI ? 600_000 : 120_000;
-  const maxAttempts = isWindowsCI ? 2 : 1;
+  const launchTimeout = isWindowsCI ? 120_000 : 60_000;
+  const maxAttempts = isWindowsCI ? 5 : 1;
   let lastError: unknown = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
