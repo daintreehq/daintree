@@ -28,6 +28,7 @@
 import { utilityProcess, UtilityProcess, dialog, app, MessagePortMain } from "electron";
 import { EventEmitter } from "events";
 import path from "path";
+import os from "os";
 import { fileURLToPath } from "url";
 import { logInfo, logWarn } from "../utils/logger.js";
 import { SharedRingBuffer } from "../../shared/utils/SharedRingBuffer.js";
@@ -328,6 +329,7 @@ export class PtyClient extends EventEmitter {
       this.child = utilityProcess.fork(hostPath, [], {
         serviceName: "canopy-pty-host",
         stdio: "pipe",
+        cwd: os.homedir(),
         execArgv: [`--max-old-space-size=${this.config.memoryLimitMb}`],
         env: {
           ...(process.env as Record<string, string>),
