@@ -11,6 +11,7 @@
 import { utilityProcess, UtilityProcess, dialog, app, BrowserWindow } from "electron";
 import { EventEmitter } from "events";
 import path from "path";
+import os from "os";
 import crypto from "crypto";
 import { fileURLToPath } from "url";
 import { events } from "./events.js";
@@ -140,6 +141,7 @@ export class WorkspaceClient extends EventEmitter {
       this.child = utilityProcess.fork(hostPath, [], {
         serviceName: "canopy-workspace-host",
         stdio: "inherit",
+        cwd: os.homedir(),
         env: {
           ...(process.env as Record<string, string>),
           CANOPY_USER_DATA: app.getPath("userData"),

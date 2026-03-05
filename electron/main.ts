@@ -5,6 +5,7 @@ import {
   dialog,
   powerMonitor,
   MessageChannelMain,
+  MessagePortMain,
   protocol,
   net,
   session,
@@ -324,6 +325,11 @@ let cleanupIpcHandlers: (() => void) | null = null;
 let cleanupErrorHandlers: (() => void) | null = null;
 let eventBuffer: EventBuffer | null = null;
 let eventBufferUnsubscribe: (() => void) | null = null;
+// Retain strong references to MessagePorts to prevent V8 GC from collecting them,
+// which can cause ACCESS_VIOLATION crashes on Windows (the C++ backing objects get freed
+// while the utility process still references them).
+let activeRendererPort: MessagePortMain | null = null;
+let activePtyHostPort: MessagePortMain | null = null;
 let stopEventLoopLagMonitor: (() => void) | null = null;
 let stopProcessMemoryMonitor: (() => void) | null = null;
 
@@ -989,18 +995,38 @@ async function createWindow(): Promise<void> {
   cleanupErrorHandlers = registerErrorHandlers(mainWindow, workspaceClient, ptyClient);
 
   function createAndDistributePorts(): void {
+    // Close previous ports before creating new ones
+    if (activeRendererPort) {
+      try {
+        activeRendererPort.close();
+      } catch {
+        // ignore
+      }
+    }
+    if (activePtyHostPort) {
+      try {
+        activePtyHostPort.close();
+      } catch {
+        // ignore
+      }
+    }
+
     const { port1, port2 } = new MessageChannelMain();
     const handshakeToken = randomBytes(32).toString("hex");
 
+    // Retain strong references to prevent V8 GC from freeing the C++ backing
+    // objects while utility processes still hold references — this can cause
+    // ACCESS_VIOLATION (0xC0000005) crashes on Windows.
+    activeRendererPort = port1;
+    activePtyHostPort = port2;
+
     if (ptyClient) {
       ptyClient.connectMessagePort(port2);
-      // console.log("[MAIN] MessagePort sent to Pty Host");
     }
 
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.postMessage("terminal-port-token", { token: handshakeToken });
       mainWindow.webContents.postMessage("terminal-port", { token: handshakeToken }, [port1]);
-      // console.log("[MAIN] MessagePort sent to renderer");
     }
   }
 
