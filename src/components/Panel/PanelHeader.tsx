@@ -22,7 +22,6 @@ import { DockToBottomIcon } from "@/components/icons";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { useBackgroundPanelStats } from "@/hooks";
 import { useTerminalStore } from "@/store/terminalStore";
-import { fireWatchNotification } from "@/lib/watchNotification";
 import { TabButton, type TabInfo } from "./TabButton";
 import { SortableTabButton } from "./SortableTabButton";
 import { panelKindCanRestart } from "@shared/config/panelKindRegistry";
@@ -226,29 +225,15 @@ function PanelHeaderComponent({
 
   // Watch state — only relevant for agent panels
   const isWatched = useTerminalStore((state) => state.watchedPanels.has(id));
-  const watchPanel = useTerminalStore((state) => state.watchPanel);
   const unwatchPanel = useTerminalStore((state) => state.unwatchPanel);
-  const panelAgentState = useTerminalStore(
-    (state) => state.terminals.find((t) => t.id === id)?.agentState
-  );
-  const panelWorktreeId = useTerminalStore(
-    (state) => state.terminals.find((t) => t.id === id)?.worktreeId ?? undefined
-  );
   const showWatchButton = !!agentId;
 
-  const handleToggleWatch = useCallback(
+  const handleCancelWatch = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
-      if (isWatched) {
-        unwatchPanel(id);
-      } else if (panelAgentState === "completed" || panelAgentState === "waiting") {
-        // Agent already in terminal state — fire immediately, no need to arm watch
-        fireWatchNotification(id, title, panelAgentState, panelWorktreeId);
-      } else {
-        watchPanel(id);
-      }
+      unwatchPanel(id);
     },
-    [id, title, isWatched, panelAgentState, panelWorktreeId, watchPanel, unwatchPanel]
+    [id, unwatchPanel]
   );
 
   // In dock, show shortened title without command summary for space efficiency
@@ -588,14 +573,14 @@ function PanelHeaderComponent({
 
         <div className="flex items-center gap-1.5">
           {/* Window controls - hover only */}
-          {/* Watch toggle — rendered outside hover container so the active bell is always visible */}
+          {/* Watch status indicator — only visible when actively watching; clicking cancels watch */}
           {showWatchButton && isWatched && (
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
                     type="button"
-                    onClick={handleToggleWatch}
+                    onClick={handleCancelWatch}
                     onPointerDown={(e) => e.stopPropagation()}
                     className="p-1.5 transition-all text-canopy-accent hover:text-canopy-accent/80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-canopy-accent"
                     aria-label="Cancel watch — stop waiting for completion"
