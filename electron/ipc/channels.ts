@@ -269,6 +269,8 @@ export const CHANNELS = {
   NOTIFICATION_SETTINGS_GET: "notification:settings-get",
   NOTIFICATION_SETTINGS_SET: "notification:settings-set",
   NOTIFICATION_PLAY_SOUND: "notification:play-sound",
+  NOTIFICATION_SHOW_WATCH: "notification:show-watch",
+  NOTIFICATION_WATCH_NAVIGATE: "notification:watch-navigate",
 
   // Auto-update channels
   UPDATE_AVAILABLE: "update:available",

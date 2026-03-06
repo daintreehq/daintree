@@ -25,6 +25,7 @@ import {
   useProjectSettings,
   useGridNavigation,
   useWindowNotifications,
+  useWatchedPanelNotifications,
   useWorktreeActions,
   useMenuActions,
 } from "./hooks";
@@ -625,6 +626,7 @@ function App() {
   useTerminalConfig();
   useAppThemeConfig();
   useWindowNotifications();
+  useWatchedPanelNotifications();
   useUpdateListener();
   const [homeDir, setHomeDir] = useState<string | undefined>(undefined);
   useEffect(() => {

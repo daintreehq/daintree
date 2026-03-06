@@ -81,6 +81,14 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Terminal",
   },
   {
+    actionId: "terminal.watch",
+    combo: "Cmd+Shift+W",
+    scope: "global",
+    priority: 0,
+    description: "Toggle watch on focused terminal",
+    category: "Terminal",
+  },
+  {
     actionId: "terminal.toggleDock",
     combo: "Cmd+Alt+M",
     scope: "global",

@@ -49,6 +49,7 @@ export { useLayoutState } from "./useLayoutState";
 export type { LayoutState } from "./useLayoutState";
 
 export { useWindowNotifications } from "./useWindowNotifications";
+export { useWatchedPanelNotifications } from "./useWatchedPanelNotifications";
 
 export { useWorktreeActions } from "./useWorktreeActions";
 export type { UseWorktreeActionsOptions, WorktreeActions } from "./useWorktreeActions";

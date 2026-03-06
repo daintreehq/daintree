@@ -5,6 +5,12 @@ export interface NotificationState {
   failedCount: number;
 }
 
+export interface WatchNotificationContext {
+  worktreeId?: string;
+  panelId: string;
+  panelTitle: string;
+}
+
 const DEBOUNCE_MS = 300;
 const DEFAULT_TITLE = "Canopy";
 
@@ -120,6 +126,38 @@ class NotificationService {
     };
     notification.on("close", cleanup);
     notification.on("failed" as "close", cleanup);
+
+    notification.show();
+  }
+
+  showWatchNotification(
+    title: string,
+    body: string,
+    context: WatchNotificationContext,
+    navigateChannel: string
+  ): void {
+    if (!Notification.isSupported()) return;
+
+    const notification = new Notification({ title, body, silent: false });
+    this.activeNotifications.add(notification);
+
+    const cleanup = () => {
+      this.activeNotifications.delete(notification);
+    };
+    notification.on("close", cleanup);
+    notification.on("failed" as "close", cleanup);
+
+    notification.on("click", () => {
+      cleanup();
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        if (this.mainWindow.isMinimized()) {
+          this.mainWindow.restore();
+        }
+        this.mainWindow.show();
+        this.mainWindow.focus();
+        this.mainWindow.webContents.send(navigateChannel, context);
+      }
+    });
 
     notification.show();
   }

@@ -29,3 +29,5 @@ export {
 } from "./terminalBulkActionsSlice";
 
 export { createTerminalMruSlice, type TerminalMruSlice } from "./terminalMruSlice";
+
+export { createWatchedPanelsSlice, type WatchedPanelsSlice } from "./watchedPanelsSlice";

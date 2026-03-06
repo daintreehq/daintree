@@ -171,6 +171,7 @@ export type ActionId =
   | "terminal.kill"
   | "terminal.moveToWorktree"
   | "terminal.convertType"
+  | "terminal.watch"
   | "terminal.viewInfo"
   | "browser.reload"
   | "browser.navigate"

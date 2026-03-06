@@ -691,6 +691,18 @@ export interface ElectronAPI {
     setSettings(settings: Partial<NotificationSettings>): Promise<void>;
     /** Play a sound file by name for preview */
     playSound(soundFile: string): Promise<void>;
+    /** Show a high-priority watch notification unconditionally (no focus suppression) */
+    showWatchNotification(payload: {
+      title: string;
+      body: string;
+      panelId: string;
+      panelTitle: string;
+      worktreeId?: string;
+    }): void;
+    /** Subscribe to watch notification click → navigate events from main process */
+    onWatchNavigate(
+      callback: (context: { panelId: string; panelTitle: string; worktreeId?: string }) => void
+    ): () => void;
   };
   update: {
     onUpdateAvailable(callback: (info: { version: string }) => void): () => void;

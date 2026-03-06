@@ -10,12 +10,14 @@ import {
   createTerminalCommandQueueSlice,
   createTerminalBulkActionsSlice,
   createTerminalMruSlice,
+  createWatchedPanelsSlice,
   flushTerminalPersistence,
   type TerminalRegistrySlice,
   type TerminalFocusSlice,
   type TerminalCommandQueueSlice,
   type TerminalBulkActionsSlice,
   type TerminalMruSlice,
+  type WatchedPanelsSlice,
   type AddTerminalOptions,
   type QueuedCommand,
   isAgentReady,
@@ -37,7 +39,7 @@ import { logInfo, logWarn, logError } from "@/utils/logger";
 
 export type { TerminalInstance, AddTerminalOptions, QueuedCommand, CrashType };
 export { isAgentReady };
-export type { TerminalMruSlice };
+export type { TerminalMruSlice, WatchedPanelsSlice };
 
 const PROJECT_SWITCH_RESIZE_SUPPRESSION_MS = 10_000;
 
@@ -81,7 +83,8 @@ export interface PanelGridState
     TerminalFocusSlice,
     TerminalCommandQueueSlice,
     TerminalBulkActionsSlice,
-    TerminalMruSlice {
+    TerminalMruSlice,
+    WatchedPanelsSlice {
   backendStatus: BackendStatus;
   lastCrashType: CrashType | null;
   setBackendStatus: (status: BackendStatus) => void;
@@ -107,6 +110,9 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
         useTerminalInputStore.getState().clearDraftInput(id, projectId);
       });
 
+      // Auto-clear watch if panel is removed while watched
+      get().unwatchPanel(id);
+
       // Clean up stale tab group mappings
       const validPanelIds = new Set(remainingTerminals.map((t) => t.id));
       get().cleanupStaleTabs(validPanelIds);
@@ -127,6 +133,7 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
   const focusSlice = createTerminalFocusSlice(getTerminals)(set, get, api);
   const commandQueueSlice = createTerminalCommandQueueSlice(getTerminal)(set, get, api);
   const mruSlice = createTerminalMruSlice(set, get, api);
+  const watchedPanelsSlice = createWatchedPanelsSlice()(set, get, api);
   const bulkActionsSlice = createTerminalBulkActionsSlice(
     getTerminals,
     (id) => get().removeTerminal(id),
@@ -144,6 +151,7 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
     ...commandQueueSlice,
     ...bulkActionsSlice,
     ...mruSlice,
+    ...watchedPanelsSlice,
 
     backendStatus: "connected" as BackendStatus,
     lastCrashType: null as CrashType | null,
@@ -189,6 +197,9 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
     trashTerminal: (id: string) => {
       const state = get();
       registrySlice.trashTerminal(id);
+
+      // Clear watch when panel is trashed (onTerminalRemoved only fires on full removal)
+      get().unwatchPanel(id);
 
       const updates: Partial<PanelGridState> = {};
 

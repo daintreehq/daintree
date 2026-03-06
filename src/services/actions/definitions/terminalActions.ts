@@ -1176,4 +1176,39 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
       navigateTab("previous");
     },
   }));
+
+  actions.set("terminal.watch", () => ({
+    id: "terminal.watch",
+    title: "Watch This Terminal",
+    description:
+      "Toggle a one-shot watch on the focused terminal — fires a high-priority notification when the agent completes or waits for input",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    isEnabled: (ctx) => !!ctx.focusedTerminalId,
+    run: async (_args, ctx) => {
+      const state = useTerminalStore.getState();
+      const targetId = ctx.focusedTerminalId ?? state.focusedId;
+      if (!targetId) return;
+
+      if (state.watchedPanels.has(targetId)) {
+        state.unwatchPanel(targetId);
+      } else {
+        const terminal = state.terminals.find((t) => t.id === targetId);
+        // Fire immediately if agent is already in a terminal attention state
+        if (terminal?.agentState === "completed" || terminal?.agentState === "waiting") {
+          const { fireWatchNotification } = await import("@/lib/watchNotification");
+          fireWatchNotification(
+            targetId,
+            terminal.title ?? targetId,
+            terminal.agentState,
+            terminal.worktreeId ?? undefined
+          );
+        } else {
+          state.watchPanel(targetId);
+        }
+      }
+    },
+  }));
 }
