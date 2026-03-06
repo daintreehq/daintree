@@ -6,7 +6,6 @@ const storeMock = vi.hoisted(() => ({
 }));
 
 const notificationServiceMock = vi.hoisted(() => ({
-  showNativeNotification: vi.fn(),
   showWatchNotification: vi.fn(),
   isWindowFocused: vi.fn(() => false),
 }));
@@ -107,6 +106,33 @@ describe("AgentNotificationService", () => {
     expect(playSoundMock).not.toHaveBeenCalled();
   });
 
+  it("does not fire notifications when terminalId is absent in payload", () => {
+    storeMock.get.mockReturnValue({
+      completedEnabled: true,
+      waitingEnabled: true,
+      failedEnabled: true,
+      soundEnabled: false,
+      soundFile: "chime.wav",
+    });
+
+    // Payload without terminalId — cannot check watched membership
+    const payloadNoId = {
+      state: "completed" as const,
+      previousState: "working" as const,
+      worktreeId: "wt-1",
+      agentId: "agent-1",
+      timestamp: Date.now(),
+      trigger: "heuristic" as const,
+      confidence: 1,
+    };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    events.emit("agent:state-changed", payloadNoId as any);
+    vi.advanceTimersByTime(5000);
+
+    expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+  });
+
   it("fires a notification when completed is enabled", () => {
     storeMock.get.mockReturnValue({
       completedEnabled: true,
@@ -124,7 +150,7 @@ describe("AgentNotificationService", () => {
       expect.stringContaining("finished"),
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
-      false
+      true
     );
   });
 
@@ -144,7 +170,7 @@ describe("AgentNotificationService", () => {
       expect.stringContaining("waiting for input"),
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
-      false
+      true
     );
   });
 
@@ -165,7 +191,7 @@ describe("AgentNotificationService", () => {
       expect.stringContaining("error"),
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
-      false
+      true
     );
   });
 
@@ -236,7 +262,7 @@ describe("AgentNotificationService", () => {
       expect.stringContaining("waiting for input"),
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
-      false
+      true
     );
   });
 
@@ -291,7 +317,7 @@ describe("AgentNotificationService", () => {
       expect.stringContaining("finished"),
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
-      false
+      true
     );
   });
 });

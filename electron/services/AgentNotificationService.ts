@@ -5,6 +5,7 @@ import { events } from "./events.js";
 import { notificationService, type WatchNotificationContext } from "./NotificationService.js";
 import { store } from "../store.js";
 import { playSound, type SoundHandle } from "../utils/soundPlayer.js";
+import { CHANNELS } from "../ipc/channels.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -95,8 +96,8 @@ class AgentNotificationService {
         "Agent waiting",
         `${label} is waiting for input`,
         context,
-        "notification:watch-navigate",
-        settings.soundEnabled
+        CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
+        true
       );
     } else if (state === "failed" && settings.failedEnabled) {
       const label = this.getLabel(agentId, worktreeId);
@@ -109,7 +110,7 @@ class AgentNotificationService {
           agentId,
           triggerSound: settings.soundEnabled,
         },
-        false,
+        true,
         "error.wav"
       );
     }
@@ -130,14 +131,17 @@ class AgentNotificationService {
       const settings = store.get("notificationSettings");
       if (!settings.completedEnabled) return;
       const label = this.getLabel(agentId, worktreeId);
-      this.enqueue({
-        title: "Agent completed",
-        body: `${label} finished its task`,
-        worktreeId,
-        terminalId,
-        agentId,
-        triggerSound: settings.soundEnabled,
-      });
+      this.enqueue(
+        {
+          title: "Agent completed",
+          body: `${label} finished its task`,
+          worktreeId,
+          terminalId,
+          agentId,
+          triggerSound: settings.soundEnabled,
+        },
+        true
+      );
     }, COMPLETION_DEBOUNCE_MS);
 
     this.completionTimers.set(key, timer);
@@ -169,8 +173,8 @@ class AgentNotificationService {
       item.title,
       item.body,
       context,
-      "notification:watch-navigate",
-      item.triggerSound
+      CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
+      true
     );
 
     if (this.notificationQueue.length > 0) {
