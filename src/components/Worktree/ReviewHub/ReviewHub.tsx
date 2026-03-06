@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { StagingStatus, GitStatus } from "@shared/types";
 import { cn } from "@/lib/utils";
 import { X, RefreshCw, CheckSquare, Square, Loader2, AlertTriangle } from "lucide-react";
@@ -175,7 +176,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
     (status?.conflicted.length ?? 0);
   const hasConflicts = (status?.conflicted.length ?? 0) > 0;
 
-  return (
+  return createPortal(
     <>
       <div
         className={cn(
@@ -393,6 +394,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
         worktreePath={worktreePath}
         onClose={() => setSelectedFile(null)}
       />
-    </>
+    </>,
+    document.body
   );
 }
