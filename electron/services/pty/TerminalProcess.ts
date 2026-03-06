@@ -71,6 +71,7 @@ import {
   buildNonInteractiveEnv,
   AGENT_ENV_EXCLUSIONS,
 } from "./terminalShell.js";
+import { filterEnvironment, injectCanopyMetadata } from "./EnvironmentFilter.js";
 
 type CursorBuffer = {
   cursorY?: number;
@@ -244,7 +245,18 @@ export class TerminalProcess {
       : undefined;
 
     const baseEnv = process.env as Record<string, string | undefined>;
-    const mergedEnv = { ...baseEnv, ...options.env };
+    const rawMergedEnv = { ...baseEnv, ...options.env };
+
+    // Filter out sensitive credentials, then inject CANOPY_* metadata.
+    // This prevents API keys, passwords, and tokens from leaking into spawned
+    // processes while preserving essential infrastructure vars (PATH, HOME, etc.).
+    const filteredEnv = filterEnvironment(rawMergedEnv);
+    const mergedEnv = injectCanopyMetadata(filteredEnv, {
+      paneId: id,
+      cwd: options.cwd,
+      projectId: options.projectId,
+      worktreeId: options.worktreeId,
+    });
 
     // For agent terminals, use non-interactive environment to suppress prompts
     // (oh-my-zsh updates, Homebrew notifications, etc.)
@@ -259,12 +271,10 @@ export class TerminalProcess {
     );
     const filteredAgentEnv = Object.fromEntries(
       Object.entries(agentEnv).filter(([key]) => !exclusions.has(key))
-    );
-    const env = this.isAgentTerminal
+    ) as Record<string, string>;
+    const env: Record<string, string> = this.isAgentTerminal
       ? { ...buildNonInteractiveEnv(mergedEnv, shell, agentId), ...filteredAgentEnv }
-      : (Object.fromEntries(
-          Object.entries(mergedEnv).filter(([_, value]) => value !== undefined)
-        ) as Record<string, string>);
+      : mergedEnv;
 
     const canUsePool =
       deps.ptyPool &&
