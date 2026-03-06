@@ -27,6 +27,7 @@ const RECIPES_FILENAME = "recipes.json";
 const WORKFLOWS_FILENAME = "workflows.json";
 const PROJECT_STATE_CACHE_TTL_MS = 60_000;
 const CANOPY_PROJECT_JSON = ".canopy/project.json";
+const CANOPY_SETTINGS_JSON = ".canopy/settings.json";
 const MAX_PROJECT_NAME_LENGTH = 100;
 export const DEFAULT_PROJECT_EMOJI = "🌲";
 // UTF-8 BOM that editors may prepend to JSON files
@@ -236,6 +237,7 @@ export class ProjectStore {
     if (updates.status !== undefined) safeUpdates.status = updates.status;
     if (updates.canopyConfigPresent !== undefined)
       safeUpdates.canopyConfigPresent = updates.canopyConfigPresent;
+    if (updates.inRepoSettings !== undefined) safeUpdates.inRepoSettings = updates.inRepoSettings;
 
     const updated = { ...projects[index], ...safeUpdates };
     projects[index] = updated;
@@ -1162,6 +1164,136 @@ export class ProjectStore {
     } catch (error) {
       console.error(`[ProjectStore] Failed to clear state for ${projectId}:`, error);
       throw error;
+    }
+  }
+  /**
+   * Reject writes if .canopy/ is a symlink (could redirect writes outside the repository).
+   */
+  private async assertCanopyDirNotSymlink(projectPath: string): Promise<void> {
+    const canopyDir = path.join(projectPath, ".canopy");
+    try {
+      const stat = await fs.lstat(canopyDir);
+      if (stat.isSymbolicLink()) {
+        throw new Error(
+          `.canopy/ in ${projectPath} is a symbolic link — refusing to write to prevent path traversal`
+        );
+      }
+    } catch (error) {
+      // ENOENT means .canopy/ doesn't exist yet — that's fine, we'll create it
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
+      throw error;
+    }
+  }
+
+  /**
+   * Atomically write project identity to `.canopy/project.json` in the repository root.
+   * Creates the `.canopy/` directory if absent.
+   */
+  async writeInRepoProjectIdentity(
+    projectPath: string,
+    data: { name?: string; emoji?: string; color?: string }
+  ): Promise<void> {
+    await this.assertCanopyDirNotSymlink(projectPath);
+    const canopyDir = path.join(projectPath, ".canopy");
+    const filePath = path.join(projectPath, CANOPY_PROJECT_JSON);
+
+    const payload: { version: 1; name?: string; emoji?: string; color?: string } = { version: 1 };
+    if (data.name !== undefined) payload.name = data.name;
+    if (data.emoji !== undefined) payload.emoji = data.emoji;
+    if (data.color !== undefined) payload.color = data.color;
+
+    const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const tempFilePath = `${filePath}.${uniqueSuffix}.tmp`;
+
+    const attemptWrite = async (ensureDir: boolean): Promise<void> => {
+      if (ensureDir) {
+        await fs.mkdir(canopyDir, { recursive: true });
+      }
+      await resilientWriteFile(tempFilePath, JSON.stringify(payload, null, 2), "utf-8");
+      await resilientRename(tempFilePath, filePath);
+    };
+
+    try {
+      await attemptWrite(false);
+    } catch (error) {
+      const isEnoent = error instanceof Error && "code" in error && error.code === "ENOENT";
+      if (!isEnoent) {
+        console.error(
+          `[ProjectStore] Failed to write .canopy/project.json for ${projectPath}:`,
+          error
+        );
+        this.cleanupTempFile(tempFilePath);
+        throw error;
+      }
+      try {
+        await attemptWrite(true);
+      } catch (retryError) {
+        console.error(
+          `[ProjectStore] Failed to write .canopy/project.json for ${projectPath}:`,
+          retryError
+        );
+        this.cleanupTempFile(tempFilePath);
+        throw retryError;
+      }
+    }
+  }
+
+  /**
+   * Atomically write shareable project settings to `.canopy/settings.json`.
+   * Machine-local fields (secrets, dismissed flags, auto-detected values) are omitted.
+   * Creates the `.canopy/` directory if absent.
+   */
+  async writeInRepoSettings(projectPath: string, settings: ProjectSettings): Promise<void> {
+    await this.assertCanopyDirNotSymlink(projectPath);
+    const canopyDir = path.join(projectPath, ".canopy");
+    const filePath = path.join(projectPath, CANOPY_SETTINGS_JSON);
+
+    const payload: {
+      version: 1;
+      runCommands?: import("../types/index.js").RunCommand[];
+      devServerCommand?: string;
+      copyTreeSettings?: import("../types/index.js").CopyTreeSettings;
+      excludedPaths?: string[];
+    } = { version: 1 };
+
+    if (settings.runCommands?.length) payload.runCommands = settings.runCommands;
+    if (settings.devServerCommand) payload.devServerCommand = settings.devServerCommand;
+    if (settings.copyTreeSettings) payload.copyTreeSettings = settings.copyTreeSettings;
+    if (settings.excludedPaths?.length) payload.excludedPaths = settings.excludedPaths;
+
+    const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const tempFilePath = `${filePath}.${uniqueSuffix}.tmp`;
+
+    const attemptWrite = async (ensureDir: boolean): Promise<void> => {
+      if (ensureDir) {
+        await fs.mkdir(canopyDir, { recursive: true });
+      }
+      await resilientWriteFile(tempFilePath, JSON.stringify(payload, null, 2), "utf-8");
+      await resilientRename(tempFilePath, filePath);
+    };
+
+    try {
+      await attemptWrite(false);
+    } catch (error) {
+      const isEnoent = error instanceof Error && "code" in error && error.code === "ENOENT";
+      if (!isEnoent) {
+        console.error(
+          `[ProjectStore] Failed to write .canopy/settings.json for ${projectPath}:`,
+          error
+        );
+        this.cleanupTempFile(tempFilePath);
+        throw error;
+      }
+      try {
+        await attemptWrite(true);
+      } catch (retryError) {
+        console.error(
+          `[ProjectStore] Failed to write .canopy/settings.json for ${projectPath}:`,
+          retryError
+        );
+        this.cleanupTempFile(tempFilePath);
+        throw retryError;
+      }
     }
   }
 }

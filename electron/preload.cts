@@ -337,6 +337,8 @@ const CHANNELS = {
   PROJECT_SET_FOCUS_MODE: "project:set-focus-mode",
   PROJECT_READ_CLAUDE_MD: "project:read-claude-md",
   PROJECT_WRITE_CLAUDE_MD: "project:write-claude-md",
+  PROJECT_ENABLE_IN_REPO_SETTINGS: "project:enable-in-repo-settings",
+  PROJECT_DISABLE_IN_REPO_SETTINGS: "project:disable-in-repo-settings",
 
   // Agent settings channels
   AGENT_SETTINGS_GET: "agent-settings:get",
@@ -967,6 +969,12 @@ const api: ElectronAPI = {
 
     writeClaudeMd: (projectId: string, content: string): Promise<void> =>
       _typedInvoke(CHANNELS.PROJECT_WRITE_CLAUDE_MD, { projectId, content }),
+
+    enableInRepoSettings: (projectId: string): Promise<Project> =>
+      _typedInvoke(CHANNELS.PROJECT_ENABLE_IN_REPO_SETTINGS, projectId),
+
+    disableInRepoSettings: (projectId: string): Promise<Project> =>
+      _typedInvoke(CHANNELS.PROJECT_DISABLE_IN_REPO_SETTINGS, projectId),
   },
 
   // Agent Settings API

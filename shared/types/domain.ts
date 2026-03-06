@@ -679,6 +679,8 @@ export interface Project {
   status?: ProjectStatus;
   /** Whether a .canopy/project.json was found in the repository root */
   canopyConfigPresent?: boolean;
+  /** Whether in-repo settings mode is enabled (writes to .canopy/ on update) */
+  inRepoSettings?: boolean;
 }
 
 /**

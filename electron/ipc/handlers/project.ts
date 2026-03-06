@@ -363,7 +363,27 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
     if (typeof updates !== "object" || updates === null) {
       throw new Error("Invalid updates object");
     }
-    return projectStore.updateProject(projectId, updates);
+    // Strip control-plane fields — use project:enable/disable-in-repo-settings instead
+    const { inRepoSettings: _inRepo, ...safeUpdates } = updates;
+    const updated = projectStore.updateProject(projectId, safeUpdates);
+    if (
+      updated.inRepoSettings &&
+      (updates.name !== undefined || updates.emoji !== undefined || updates.color !== undefined)
+    ) {
+      projectStore
+        .writeInRepoProjectIdentity(updated.path, {
+          name: updated.name,
+          emoji: updated.emoji,
+          color: updated.color,
+        })
+        .catch((err) => {
+          console.warn(
+            `[IPC] project:update: failed to sync .canopy/project.json for ${projectId}:`,
+            err
+          );
+        });
+    }
+    return updated;
   };
   ipcMain.handle(CHANNELS.PROJECT_UPDATE, handleProjectUpdate);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_UPDATE));
@@ -419,7 +439,11 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
     if (!settings || typeof settings !== "object") {
       throw new Error("Invalid settings object");
     }
-    return projectStore.saveProjectSettings(projectId, settings);
+    await projectStore.saveProjectSettings(projectId, settings);
+    const project = projectStore.getProjectById(projectId);
+    if (project?.inRepoSettings) {
+      await projectStore.writeInRepoSettings(project.path, settings);
+    }
   };
   ipcMain.handle(CHANNELS.PROJECT_SAVE_SETTINGS, handleProjectSaveSettings);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_SAVE_SETTINGS));
@@ -1343,6 +1367,48 @@ Thumbs.db
   };
   ipcMain.handle(CHANNELS.PROJECT_WRITE_CLAUDE_MD, handleProjectWriteClaudeMd);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_WRITE_CLAUDE_MD));
+
+  const handleProjectEnableInRepoSettings = async (
+    _event: Electron.IpcMainInvokeEvent,
+    projectId: string
+  ): Promise<Project> => {
+    if (typeof projectId !== "string" || !projectId) {
+      throw new Error("Invalid project ID");
+    }
+    const project = projectStore.getProjectById(projectId);
+    if (!project) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+    const settings = await projectStore.getProjectSettings(projectId);
+    await projectStore.writeInRepoProjectIdentity(project.path, {
+      name: project.name,
+      emoji: project.emoji,
+      color: project.color,
+    });
+    await projectStore.writeInRepoSettings(project.path, settings);
+    return projectStore.updateProject(projectId, {
+      inRepoSettings: true,
+      canopyConfigPresent: true,
+    });
+  };
+  ipcMain.handle(CHANNELS.PROJECT_ENABLE_IN_REPO_SETTINGS, handleProjectEnableInRepoSettings);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_ENABLE_IN_REPO_SETTINGS));
+
+  const handleProjectDisableInRepoSettings = async (
+    _event: Electron.IpcMainInvokeEvent,
+    projectId: string
+  ): Promise<Project> => {
+    if (typeof projectId !== "string" || !projectId) {
+      throw new Error("Invalid project ID");
+    }
+    const project = projectStore.getProjectById(projectId);
+    if (!project) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+    return projectStore.updateProject(projectId, { inRepoSettings: false });
+  };
+  ipcMain.handle(CHANNELS.PROJECT_DISABLE_IN_REPO_SETTINGS, handleProjectDisableInRepoSettings);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_DISABLE_IN_REPO_SETTINGS));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }
