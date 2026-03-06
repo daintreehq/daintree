@@ -9,33 +9,33 @@ import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/comp
 const STATUS_CONFIG: Record<GitStatus, { label: string; bg: string; text: string }> = {
   modified: {
     label: "M",
-    bg: "bg-[var(--color-status-warning)]/15",
-    text: "text-[var(--color-status-warning)]",
+    bg: "bg-status-warning/15",
+    text: "text-status-warning",
   },
   added: {
     label: "A",
-    bg: "bg-[var(--color-status-success)]/15",
-    text: "text-[var(--color-status-success)]",
+    bg: "bg-status-success/15",
+    text: "text-status-success",
   },
   deleted: {
     label: "D",
-    bg: "bg-[var(--color-status-error)]/15",
-    text: "text-[var(--color-status-error)]",
+    bg: "bg-status-error/15",
+    text: "text-status-error",
   },
   untracked: {
     label: "?",
-    bg: "bg-[var(--color-status-success)]/15",
-    text: "text-[var(--color-status-success)]",
+    bg: "bg-status-success/15",
+    text: "text-status-success",
   },
   renamed: {
     label: "R",
-    bg: "bg-[var(--color-status-info)]/15",
-    text: "text-[var(--color-status-info)]",
+    bg: "bg-status-info/15",
+    text: "text-status-info",
   },
   copied: {
     label: "C",
-    bg: "bg-[var(--color-status-info)]/15",
-    text: "text-[var(--color-status-info)]",
+    bg: "bg-status-info/15",
+    text: "text-status-info",
   },
   ignored: {
     label: "I",
@@ -44,8 +44,8 @@ const STATUS_CONFIG: Record<GitStatus, { label: string; bg: string; text: string
   },
   conflicted: {
     label: "!",
-    bg: "bg-[var(--color-status-error)]/15",
-    text: "text-[var(--color-status-error)]",
+    bg: "bg-status-error/15",
+    text: "text-status-error",
   },
 };
 
@@ -97,7 +97,7 @@ export function FileStageRow({ file, isStaged, onToggle, onFileClick }: FileStag
         "group flex items-center text-xs rounded px-1.5 py-1.5 cursor-pointer transition-colors",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent",
         isStaged
-          ? "bg-[var(--color-status-success)]/[0.06] hover:bg-[var(--color-status-success)]/[0.10]"
+          ? "bg-status-success/[0.06] hover:bg-status-success/[0.10]"
           : "hover:bg-white/5"
       )}
       onClick={handleClick}
@@ -115,9 +115,9 @@ export function FileStageRow({ file, isStaged, onToggle, onFileClick }: FileStag
               aria-label={isStaged ? `Unstage ${file.path}` : `Stage ${file.path}`}
             >
               {isStaged ? (
-                <Minus className="w-3 h-3 text-[var(--color-status-error)]" />
+                <Minus className="w-3 h-3 text-status-error" />
               ) : (
-                <Plus className="w-3 h-3 text-[var(--color-status-success)]" />
+                <Plus className="w-3 h-3 text-status-success" />
               )}
             </button>
           </TooltipTrigger>

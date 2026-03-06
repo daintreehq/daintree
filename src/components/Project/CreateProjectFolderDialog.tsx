@@ -163,12 +163,12 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
             onKeyDown={handleKeyDown}
             aria-invalid={error != null}
             aria-describedby={error ? errorId : undefined}
-            className="w-full rounded-[var(--radius-md)] border border-canopy-border bg-muted/50 px-3 py-2 text-sm text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent/50 focus:border-canopy-accent aria-invalid:border-[var(--color-status-error)]"
+            className="w-full rounded-[var(--radius-md)] border border-canopy-border bg-muted/50 px-3 py-2 text-sm text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent/50 focus:border-canopy-accent aria-invalid:border-status-error"
             placeholder="my-project"
             disabled={isCreating}
           />
           {error && (
-            <p id={errorId} role="alert" className="text-xs text-[var(--color-status-error)]">
+            <p id={errorId} role="alert" className="text-xs text-status-error">
               {error}
             </p>
           )}

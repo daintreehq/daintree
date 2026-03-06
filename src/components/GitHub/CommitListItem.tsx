@@ -82,7 +82,7 @@ export function CommitListItem({ commit }: CommitListItemProps) {
                     onClick={handleCopyHash}
                     className={cn(
                       "font-mono hover:text-foreground transition-colors flex items-center gap-1",
-                      copied && "text-[var(--color-status-success)]"
+                      copied && "text-status-success"
                     )}
                   >
                     {copied ? (

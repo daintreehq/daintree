@@ -304,16 +304,16 @@ export function GitHubResourceList({
 
   const renderError = () => (
     <div className="p-4 m-3 rounded-[var(--radius-md)] bg-[color-mix(in_oklab,var(--color-status-error)_10%,transparent)] border border-[color-mix(in_oklab,var(--color-status-error)_20%,transparent)]">
-      <div className="flex items-center gap-2 text-[var(--color-status-error)]">
+      <div className="flex items-center gap-2 text-status-error">
         <AlertCircle className="h-4 w-4" />
         <span className="text-sm font-medium">Error</span>
       </div>
-      <p className="text-sm text-[var(--color-status-error)] mt-1">{error}</p>
+      <p className="text-sm text-status-error mt-1">{error}</p>
       <Button
         variant="ghost"
         size="sm"
         onClick={handleRetry}
-        className="mt-2 text-[var(--color-status-error)] hover:brightness-110"
+        className="mt-2 text-status-error hover:brightness-110"
       >
         <RefreshCw />
         Retry

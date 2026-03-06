@@ -91,7 +91,7 @@ export function TerminalIcon({
 
   // Dev preview panes get a monitor icon
   if (kind === "dev-preview") {
-    return <Monitor {...finalProps} className={cn(finalProps.className, "text-github-merged")} />;
+    return <Monitor {...finalProps} className={cn(finalProps.className, "text-status-info")} />;
   }
 
   // Get effective agent ID - either from explicit agentId prop or from type (backward compat)

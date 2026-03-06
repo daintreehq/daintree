@@ -30,8 +30,8 @@ function getStateIcon(state: string, type: "issue" | "pr") {
 }
 
 function getStateColor(state: string): string {
-  if (state === "OPEN") return "text-[var(--color-status-info)]";
-  if (state === "MERGED") return "text-[var(--color-status-success)]";
+  if (state === "OPEN") return "text-status-info";
+  if (state === "MERGED") return "text-status-success";
   return "text-muted-foreground";
 }
 
@@ -59,15 +59,15 @@ function getPRBadgeInfo(linkedPR: LinkedPRInfo): {
   if (linkedPR.state === "MERGED") {
     return {
       icon: GitMerge,
-      color: "text-[var(--color-status-success)]",
-      bgColor: "bg-[var(--color-status-success)]/10",
+      color: "text-status-success",
+      bgColor: "bg-status-success/10",
     };
   }
   if (linkedPR.state === "OPEN") {
     return {
       icon: GitPullRequest,
-      color: "text-[var(--color-status-info)]",
-      bgColor: "bg-[var(--color-status-info)]/10",
+      color: "text-status-info",
+      bgColor: "bg-status-info/10",
     };
   }
   return {
@@ -124,8 +124,8 @@ export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemP
   };
 
   const getButtonStatus = () => {
-    if (copied) return { text: "✓", color: "text-[var(--color-status-success)]" };
-    if (copyError) return { text: `#${item.number}`, color: "text-[var(--color-status-error)]" };
+    if (copied) return { text: "✓", color: "text-status-success" };
+    if (copyError) return { text: `#${item.number}`, color: "text-status-error" };
     return { text: `#${item.number}`, color: "" };
   };
 

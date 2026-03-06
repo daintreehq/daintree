@@ -287,7 +287,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
                       "opacity-0 group-hover/tab:opacity-100 focus-visible:opacity-100",
                       "hover:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)]",
                       "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1",
-                      "text-canopy-text/40 hover:text-[var(--color-status-error)]"
+                      "text-canopy-text/40 hover:text-status-error"
                     )}
                     aria-label={`Close ${title}`}
                     type="button"

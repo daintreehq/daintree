@@ -89,7 +89,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     return (
       <div
         className={cn(
-          "p-4 bg-[var(--color-surface)] rounded-[var(--radius-lg)] border border-canopy-border",
+          "p-4 bg-surface rounded-[var(--radius-lg)] border border-canopy-border",
           className
         )}
       >
@@ -109,7 +109,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     return (
       <div
         className={cn(
-          "p-4 bg-[var(--color-surface)] rounded-[var(--radius-lg)] border border-canopy-border",
+          "p-4 bg-surface rounded-[var(--radius-lg)] border border-canopy-border",
           className
         )}
       >
@@ -129,7 +129,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     return (
       <div
         className={cn(
-          "p-4 bg-[var(--color-surface)] rounded-[var(--radius-lg)] border border-canopy-border",
+          "p-4 bg-surface rounded-[var(--radius-lg)] border border-canopy-border",
           className
         )}
       >
@@ -139,7 +139,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
             <span className="text-xs">{error}</span>
             <button
               onClick={handleRefresh}
-              className="ml-auto p-1 hover:bg-[var(--color-surface-highlight)] rounded transition-colors"
+              className="ml-auto p-1 hover:bg-surface-highlight rounded transition-colors"
               aria-label="Retry now"
             >
               <RefreshCw className="w-3 h-3" aria-hidden="true" />
@@ -169,7 +169,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
   return (
     <div
       className={cn(
-        "w-fit bg-[var(--color-surface)] rounded-[var(--radius-lg)] border border-canopy-border",
+        "w-fit bg-surface rounded-[var(--radius-lg)] border border-canopy-border",
         className
       )}
     >
@@ -184,7 +184,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
-                className="text-xs text-canopy-text/50 hover:text-canopy-text/70 transition-colors px-2 py-1 rounded hover:bg-[var(--color-surface-highlight)]"
+                className="text-xs text-canopy-text/50 hover:text-canopy-text/70 transition-colors px-2 py-1 rounded hover:bg-surface-highlight"
                 aria-label="Change time range"
               >
                 {currentRangeLabel}
@@ -196,7 +196,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
                   key={option.value}
                   onClick={() => handleRangeChange(option.value)}
                   className={cn(
-                    option.value === rangeDays && "bg-[var(--color-surface-highlight)]"
+                    option.value === rangeDays && "bg-surface-highlight"
                   )}
                 >
                   {option.label}
@@ -208,7 +208,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
           <button
             onClick={handleRefresh}
             disabled={isLoading}
-            className="p-1 text-canopy-text/40 hover:text-canopy-text/70 hover:bg-[var(--color-surface-highlight)] rounded transition-colors disabled:opacity-50"
+            className="p-1 text-canopy-text/40 hover:text-canopy-text/70 hover:bg-surface-highlight rounded transition-colors disabled:opacity-50"
             aria-label="Refresh"
           >
             <RefreshCw className={cn("w-3 h-3", isLoading && "animate-spin")} />

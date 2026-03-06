@@ -620,7 +620,7 @@ function TerminalPaneComponent({
         isPinged &&
           allowPing &&
           (wasJustSelected ? "animate-terminal-ping-select" : "animate-terminal-ping"),
-        agentState === "failed" && "ring-1 ring-inset ring-[var(--color-status-error)]/25"
+        agentState === "failed" && "ring-1 ring-inset ring-status-error/25"
       )}
       onClick={handleClick}
       onKeyDown={handleKeyDown}

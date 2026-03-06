@@ -115,7 +115,7 @@ function LogEntryComponent({ entry, isExpanded, onToggle }: LogEntryProps) {
         </span>
 
         {entry.source && (
-          <span className="text-purple-400 text-xs font-mono shrink-0">[{entry.source}]</span>
+          <span className="text-github-merged text-xs font-mono shrink-0">[{entry.source}]</span>
         )}
 
         <span className="text-canopy-text text-xs font-mono break-words min-w-0 flex-1">

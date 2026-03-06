@@ -1314,20 +1314,20 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
 
                       {settings?.insecureEnvironmentVariables &&
                         settings.insecureEnvironmentVariables.length > 0 && (
-                          <div className="mb-4 p-3 bg-yellow-900/20 border border-yellow-600/30 rounded-[var(--radius-md)] flex items-start gap-2">
-                            <ShieldAlert className="h-4 w-4 text-yellow-500 mt-0.5 flex-shrink-0" />
+                          <div className="mb-4 p-3 bg-status-warning/10 border border-status-warning/20 rounded-[var(--radius-md)] flex items-start gap-2">
+                            <ShieldAlert className="h-4 w-4 text-status-warning mt-0.5 flex-shrink-0" />
                             <div className="flex-1 text-xs">
-                              <p className="text-yellow-200 font-semibold mb-1">
+                              <p className="text-status-warning font-semibold mb-1">
                                 Insecure sensitive variables detected
                               </p>
-                              <p className="text-yellow-300/80 mb-2">
+                              <p className="text-status-warning/80 mb-2">
                                 The following variables contain sensitive keywords but are stored in
                                 plaintext:{" "}
                                 <span className="font-mono">
                                   {settings.insecureEnvironmentVariables.join(", ")}
                                 </span>
                               </p>
-                              <p className="text-yellow-300/80">
+                              <p className="text-status-warning/80">
                                 Click Save to automatically move them to secure storage.
                               </p>
                             </div>
@@ -1361,7 +1361,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                                 )}
                                 {isInsecure && (
                                   <ShieldAlert
-                                    className="h-3.5 w-3.5 text-yellow-500/60 flex-shrink-0"
+                                    className="h-3.5 w-3.5 text-status-warning/60 flex-shrink-0"
                                     aria-label="Stored in plaintext"
                                   />
                                 )}
@@ -1677,10 +1677,10 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                                 )}
 
                                 {recipeNotFound && (
-                                  <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-yellow-500/10 border border-yellow-500/20">
-                                    <AlertTriangle className="h-4 w-4 text-yellow-500 mt-0.5 shrink-0" />
+                                  <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
+                                    <AlertTriangle className="h-4 w-4 text-status-warning mt-0.5 shrink-0" />
                                     <div>
-                                      <p className="text-sm text-yellow-500">
+                                      <p className="text-sm text-status-warning">
                                         Selected recipe no longer exists
                                       </p>
                                       <p className="text-xs text-canopy-text/60 mt-1">

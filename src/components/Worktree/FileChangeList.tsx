@@ -29,14 +29,14 @@ function getBasename(filePath: string): string {
 }
 
 const STATUS_CONFIG: Record<GitStatus, { label: string; color: string }> = {
-  modified: { label: "M", color: "text-[var(--color-status-warning)]" },
-  added: { label: "A", color: "text-[var(--color-status-success)]" },
-  deleted: { label: "D", color: "text-[var(--color-status-error)]" },
-  untracked: { label: "?", color: "text-[var(--color-status-success)]" },
-  renamed: { label: "R", color: "text-[var(--color-status-info)]" },
-  copied: { label: "C", color: "text-[var(--color-status-info)]" },
+  modified: { label: "M", color: "text-status-warning" },
+  added: { label: "A", color: "text-status-success" },
+  deleted: { label: "D", color: "text-status-error" },
+  untracked: { label: "?", color: "text-status-success" },
+  renamed: { label: "R", color: "text-status-info" },
+  copied: { label: "C", color: "text-status-info" },
   ignored: { label: "I", color: "text-canopy-text/40" },
-  conflicted: { label: "!", color: "text-[var(--color-status-error)]" },
+  conflicted: { label: "!", color: "text-status-error" },
 };
 
 const STATUS_PRIORITY: Record<GitStatus, number> = {
@@ -204,12 +204,12 @@ export function FileChangeList({
 
               <div className="flex items-center gap-2 shrink-0 text-[11px]">
                 {(change.insertions ?? 0) > 0 && (
-                  <span className="text-[var(--color-status-success)]/80">
+                  <span className="text-status-success/80">
                     +{change.insertions}
                   </span>
                 )}
                 {(change.deletions ?? 0) > 0 && (
-                  <span className="text-[var(--color-status-error)]/80">-{change.deletions}</span>
+                  <span className="text-status-error/80">-{change.deletions}</span>
                 )}
               </div>
             </div>

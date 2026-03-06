@@ -66,19 +66,19 @@ export function ErrorBanner({
     return (
       <div
         className={cn(
-          "flex items-center gap-2 px-2 py-1 text-xs bg-[color-mix(in_oklab,var(--color-status-error)_12%,transparent)] border border-[var(--color-status-error)]/30 rounded",
+          "flex items-center gap-2 px-2 py-1 text-xs bg-[color-mix(in_oklab,var(--color-status-error)_12%,transparent)] border border-status-error/30 rounded",
           className
         )}
       >
         <span className="shrink-0">{typeIcon}</span>
-        <span className="text-[var(--color-status-error)] truncate flex-1">{error.message}</span>
+        <span className="text-status-error truncate flex-1">{error.message}</span>
         {canRetry && (
           <Button
             variant="outline"
             size="xs"
             onClick={handleRetry}
             disabled={isRetrying}
-            className="border-[var(--color-status-success)]/50 text-[var(--color-status-success)] hover:text-[var(--color-status-success)]/80"
+            className="border-status-success/50 text-status-success hover:text-status-success/80"
           >
             {isRetrying ? "..." : "Retry"}
           </Button>
@@ -98,7 +98,7 @@ export function ErrorBanner({
   return (
     <div
       className={cn(
-        "border border-[var(--color-status-error)]/30 bg-[color-mix(in_oklab,var(--color-status-error)_12%,transparent)] rounded-[var(--radius-lg)] overflow-hidden",
+        "border border-status-error/30 bg-[color-mix(in_oklab,var(--color-status-error)_12%,transparent)] rounded-[var(--radius-lg)] overflow-hidden",
         className
       )}
       role="alert"
@@ -107,14 +107,14 @@ export function ErrorBanner({
         <span className="shrink-0 text-lg">{typeIcon}</span>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-xs text-[var(--color-status-error)] font-medium">
+            <span className="text-xs text-status-error font-medium">
               {typeLabel}
             </span>
             {error.source && (
-              <span className="text-xs text-[var(--color-status-error)]/80">• {error.source}</span>
+              <span className="text-xs text-status-error/80">• {error.source}</span>
             )}
           </div>
-          <p className="text-sm text-[var(--color-status-error)] truncate">{error.message}</p>
+          <p className="text-sm text-status-error truncate">{error.message}</p>
         </div>
         <div className="flex items-center gap-1 shrink-0">
           {error.details && (
@@ -134,7 +134,7 @@ export function ErrorBanner({
               size="xs"
               onClick={handleRetry}
               disabled={isRetrying}
-              className="border-[var(--color-status-success)]/50 text-[var(--color-status-success)] hover:text-[var(--color-status-success)]/80 hover:bg-[var(--color-status-success)]/10"
+              className="border-status-success/50 text-status-success hover:text-status-success/80 hover:bg-status-success/10"
             >
               {isRetrying ? "Retrying..." : "Retry"}
             </Button>
@@ -153,9 +153,9 @@ export function ErrorBanner({
       {isExpanded && error.details && (
         <div
           id={`error-details-${error.id}`}
-          className="px-3 py-2 border-t border-[var(--color-status-error)]/30 bg-[color-mix(in_oklab,var(--color-status-error)_12%,transparent)]"
+          className="px-3 py-2 border-t border-status-error/30 bg-[color-mix(in_oklab,var(--color-status-error)_12%,transparent)]"
         >
-          <pre className="text-xs text-[var(--color-status-error)]/80 whitespace-pre-wrap break-all font-mono overflow-x-auto">
+          <pre className="text-xs text-status-error/80 whitespace-pre-wrap break-all font-mono overflow-x-auto">
             {error.details}
           </pre>
         </div>

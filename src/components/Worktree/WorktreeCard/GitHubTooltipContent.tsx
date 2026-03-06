@@ -52,7 +52,7 @@ interface IssueTooltipContentProps {
 export const IssueTooltipContent = memo(function IssueTooltipContent({
   data,
 }: IssueTooltipContentProps) {
-  const stateColor = data.state === "OPEN" ? "text-status-success" : "text-status-error";
+  const stateColor = data.state === "OPEN" ? "text-status-success" : "text-github-merged";
 
   return (
     <div className="space-y-2 max-w-[280px]">

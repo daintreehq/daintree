@@ -10,7 +10,7 @@ interface PulseHeatmapProps {
 }
 
 const HEAT_COLORS = [
-  "bg-[var(--color-surface-highlight)]",
+  "bg-surface-highlight",
   "bg-canopy-accent/20",
   "bg-canopy-accent/40",
   "bg-canopy-accent/60",

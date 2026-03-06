@@ -170,7 +170,7 @@ export function IssuePickerDialog({
             <span className="text-sm">Loading issues...</span>
           </div>
         ) : error ? (
-          <div className="text-center py-8 text-sm text-[var(--color-status-error)]">{error}</div>
+          <div className="text-center py-8 text-sm text-status-error">{error}</div>
         ) : issues.length === 0 ? (
           <div className="text-center py-8 text-sm text-canopy-text/50">
             {search ? "No issues match your search" : "No issues found"}

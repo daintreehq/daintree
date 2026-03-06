@@ -35,7 +35,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
       <div
         ref={ref}
         className={cn(
-          "absolute bottom-full mb-0 w-[420px] max-w-[calc(100vw-16px)] overflow-hidden rounded-md border border-white/10 bg-[var(--color-surface)] shadow-2xl",
+          "absolute bottom-full mb-0 w-[420px] max-w-[calc(100vw-16px)] overflow-hidden rounded-md border border-white/10 bg-surface shadow-2xl",
           "z-50"
         )}
         style={style}
