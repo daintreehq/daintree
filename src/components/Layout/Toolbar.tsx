@@ -450,7 +450,7 @@ export function Toolbar({
                         }
                       }}
                       className={cn(
-                        "text-canopy-text hover:bg-white/[0.04] hover:text-canopy-accent h-full px-3 gap-2 rounded-none rounded-l-[var(--radius-md)]",
+                        "text-github-open hover:bg-white/[0.04] hover:text-canopy-accent h-full px-3 gap-2 rounded-none rounded-l-[var(--radius-md)]",
                         stats?.issueCount === 0 && "opacity-50",
                         isStale && "opacity-60",
                         issuesOpen &&
@@ -500,7 +500,7 @@ export function Toolbar({
                         }
                       }}
                       className={cn(
-                        "text-canopy-text hover:bg-white/[0.04] hover:text-canopy-accent h-full px-3 gap-2 rounded-none",
+                        "text-github-open hover:bg-white/[0.04] hover:text-canopy-accent h-full px-3 gap-2 rounded-none",
                         stats?.prCount === 0 && "opacity-50",
                         isStale && "opacity-60",
                         prsOpen && "bg-white/[0.04] ring-1 ring-canopy-accent/20 text-canopy-accent"
