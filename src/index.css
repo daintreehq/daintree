@@ -54,16 +54,15 @@
   --color-canopy-text: #e4e4e7; /* Zinc-200: Soft white, not harsh */
   --color-canopy-accent: #6b8de6; /* Canopy Blue: Brand accent */
   --color-canopy-accent-rgb: 107, 141, 230; /* RGB values for accent color */
-  --color-canopy-success: #5dae8b; /* Muted sage green: success/completed states */
-  --color-canopy-warning: #fbbf24; /* Amber-400 */
-  --color-canopy-error: #f87171; /* Red-400: Soft Coral */
+  --color-canopy-warning: #d4a043; /* Warm amber: softened from fbbf24 */
+  --color-canopy-error: #d97979; /* Soft coral: softened from f87171 */
   --color-terminal-selection: #1a2744; /* Deep blue: Terminal selection background */
 
   /* Semantic status colors - for user-facing states (success, error, warning, info) */
   --color-status-success: #5dae8b; /* Muted sage green */
-  --color-status-warning: #fbbf24; /* Amber-400 */
-  --color-status-error: #f87171; /* Red-400: Soft Coral */
-  --color-status-info: #a1a1aa; /* Zinc-400: Muted for developer tool aesthetic, WCAG AA compliant */
+  --color-status-warning: #d4a043; /* Warm amber: softened, 7.62:1 on bg */
+  --color-status-error: #d97979; /* Soft coral: softened, 5.95:1 on bg */
+  --color-status-info: #7f8ea3; /* Blue-gray: distinct from muted text, 5.37:1 on bg */
 
   /* Semantic state colors - for agent/terminal lifecycle states */
   --color-state-active: #6b8de6; /* Canopy Blue: Active Worktree */
@@ -72,10 +71,10 @@
   --color-state-waiting: #fbbf24; /* Amber-400: Needs Attention */
 
   /* Server status colors - for dev server states */
-  --color-server-running: #5dae8b; /* Muted sage green: Server running successfully */
-  --color-server-stopped: #52525b; /* Zinc-600: Server stopped/inactive */
-  --color-server-starting: #fbbf24; /* Amber-400: Server starting up */
-  --color-server-error: #f87171; /* Red-400: Server error state */
+  --color-server-running: #5dae8b; /* Same as status-success: Server running */
+  --color-server-stopped: #52525b; /* Same as state-idle: Server inactive */
+  --color-server-starting: #d4a043; /* Same as status-warning: Server starting */
+  --color-server-error: #d97979; /* Same as status-error: Server error */
 
   /* Grid background - off-black base for noise texture */
   --color-grid-bg: #0d0d0e;
@@ -584,15 +583,15 @@ body,
 @keyframes status-pulse {
   0%,
   100% {
-    color: #6b8de6;
-  } /* Canopy Blue */
+    color: var(--color-state-working);
+  }
   50% {
-    color: #8aa5ec;
-  } /* Canopy Blue: Lighter variant */
+    color: color-mix(in oklab, var(--color-state-working) 70%, white);
+  }
 }
 
 .status-working {
-  color: #6b8de6; /* Fallback color for reduced motion */
+  color: var(--color-state-working);
   animation: status-pulse 2s ease-in-out infinite;
 }
 

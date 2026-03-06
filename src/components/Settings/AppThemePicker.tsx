@@ -13,7 +13,7 @@ function ThemePreview({ scheme }: { scheme: AppColorScheme }) {
         <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: t["canopy-sidebar"] }} />
         <div className="flex-1 flex gap-0.5 flex-wrap">
           <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: t["canopy-accent"] }} />
-          <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: t["canopy-success"] }} />
+          <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: t["status-success"] }} />
           <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: t["status-warning"] }} />
           <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: t["status-error"] }} />
           <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: t["canopy-text"] }} />

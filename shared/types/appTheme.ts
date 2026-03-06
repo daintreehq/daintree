@@ -5,7 +5,6 @@ export interface AppColorSchemeTokens {
   "canopy-border": string;
   "canopy-text": string;
   "canopy-accent": string;
-  "canopy-success": string;
   surface: string;
   "surface-highlight": string;
   "grid-bg": string;

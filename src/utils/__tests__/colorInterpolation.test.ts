@@ -8,6 +8,7 @@ describe("getActivityColor", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 
   it("returns idle color for null timestamp", () => {
@@ -43,5 +44,22 @@ describe("getActivityColor", () => {
 
     vi.setSystemTime(start + 120_000);
     expect(getActivityColor(start)).toBe("#52525b");
+  });
+
+  it("reads colors from CSS custom properties when document is available", () => {
+    const mockGetPropertyValue = vi.fn((prop: string) => {
+      if (prop === "--color-state-working") return "#aabbcc";
+      if (prop === "--color-state-idle") return "#112233";
+      return "";
+    });
+    vi.stubGlobal("document", { documentElement: {} });
+    vi.stubGlobal("getComputedStyle", () => ({ getPropertyValue: mockGetPropertyValue }));
+
+    const now = Date.now();
+    vi.setSystemTime(now);
+    expect(getActivityColor(now)).toBe("color-mix(in oklab, #aabbcc 100%, #112233)");
+
+    vi.setSystemTime(now + 120_000);
+    expect(getActivityColor(now)).toBe("#112233");
   });
 });

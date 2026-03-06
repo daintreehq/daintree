@@ -72,7 +72,7 @@ export function getTerminalThemeFromCSS(): typeof CANOPY_TERMINAL_THEME_FALLBACK
     white: getVar("--color-canopy-text", CANOPY_TERMINAL_THEME_FALLBACK.white),
     brightBlack: getVar("--color-state-idle", CANOPY_TERMINAL_THEME_FALLBACK.brightBlack),
     brightRed: "#fca5a5",
-    brightGreen: getVar("--color-canopy-success", CANOPY_TERMINAL_THEME_FALLBACK.brightGreen),
+    brightGreen: getVar("--color-status-success", CANOPY_TERMINAL_THEME_FALLBACK.brightGreen),
     brightYellow: "#fcd34d",
     brightBlue: "#7dd3fc",
     brightMagenta: "#c084fc",
