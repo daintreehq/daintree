@@ -353,6 +353,149 @@ describe("createAutoSize integration", () => {
 
     view.destroy();
   });
+
+  it("uses view.defaultLineHeight when no lineHeightPx is configured", () => {
+    // Simulates the chip-decorated line bug: when createAutoSize() is called without an
+    // explicit lineHeightPx (as in production), it should use view.defaultLineHeight (20px)
+    // rather than any DOM-measured value. If a chip made a .cm-line appear 28px tall, the
+    // old DOM-measurement approach would have snapped to the wrong height.
+    const parent = document.createElement("div");
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "",
+        // No lineHeightPx — production call site. defaultLineHeight (mocked to 20) should govern.
+        extensions: [createAutoSize({ maxHeightPx: 160 })],
+      }),
+    });
+
+    // Simulate 4 visual lines at 20px each
+    Object.defineProperty(view, "contentHeight", { get: () => 80, configurable: true });
+    Object.defineProperty(view, "defaultLineHeight", { get: () => 20, configurable: true });
+
+    const originalRequestMeasure = view.requestMeasure.bind(view);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.spyOn(view, "requestMeasure").mockImplementation((measure: any) => {
+      if (measure?.read && measure?.write) {
+        const measured = measure.read();
+        measure.write(measured);
+      } else {
+        originalRequestMeasure(measure);
+      }
+    });
+
+    view.dispatch({ changes: { from: 0, insert: "wrapped content" } });
+
+    // With defaultLineHeight=20: (80-2)/20 = 3.9 → ceil=4 → 80px (correct)
+    expect(view.dom.style.height).toBe("80px");
+
+    view.destroy();
+  });
+
+  it("overflowY write is idempotent — same value does not re-write style", () => {
+    // Verifies that writing the same overflowY value repeatedly does not trigger
+    // unnecessary DOM mutations (which would cause a geometry-changed re-entry loop).
+    const parent = document.createElement("div");
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "",
+        extensions: [createAutoSize({ lineHeightPx: 20, maxHeightPx: 160 })],
+      }),
+    });
+
+    Object.defineProperty(view, "contentHeight", { get: () => 40, configurable: true });
+
+    const originalRequestMeasure = view.requestMeasure.bind(view);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.spyOn(view, "requestMeasure").mockImplementation((measure: any) => {
+      if (measure?.read && measure?.write) {
+        const measured = measure.read();
+        measure.write(measured);
+      } else {
+        originalRequestMeasure(measure);
+      }
+    });
+
+    const scrollDOM = view.scrollDOM;
+    // Track how many times overflowY is actually written to the DOM
+    let overflowWriteCount = 0;
+    const originalStyleSetter = Object.getOwnPropertyDescriptor(
+      CSSStyleDeclaration.prototype,
+      "overflowY"
+    );
+    if (originalStyleSetter?.set) {
+      vi.spyOn(scrollDOM.style, "overflowY", "set").mockImplementation(function (
+        this: CSSStyleDeclaration,
+        val: string
+      ) {
+        overflowWriteCount++;
+        originalStyleSetter.set!.call(this, val);
+      });
+    }
+
+    // First dispatch — should write overflowY once ("hidden")
+    view.dispatch({ changes: { from: 0, insert: "a" } });
+    // Confirm the spy captured the first write (validates spy is active)
+    expect(overflowWriteCount).toBe(1);
+
+    // Second dispatch with same contentHeight — overflowY value unchanged, should NOT re-write
+    view.dispatch({ changes: { from: 1, insert: "b" } });
+    expect(overflowWriteCount).toBe(1);
+
+    view.destroy();
+  });
+
+  it("near-wrap-boundary: adding exactly one newline snaps height up by one line only", () => {
+    // Regression test for the core bug: tests the production code path (no explicit lineHeightPx)
+    // where view.defaultLineHeight governs the snap increment. With the old DOM-measurement
+    // approach a chip-decorated line could inflate the increment, causing a multi-line jump.
+    const parent = document.createElement("div");
+    let currentContentHeight = 60; // 3 visual lines at 20px each
+
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "",
+        // No lineHeightPx — matches the production call site in HybridInputBar.tsx
+        extensions: [createAutoSize({ maxHeightPx: 160 })],
+      }),
+    });
+
+    Object.defineProperty(view, "contentHeight", {
+      get: () => currentContentHeight,
+      configurable: true,
+    });
+    // Stub defaultLineHeight to 20px — this is what the production code path uses when no
+    // lineHeightPx is explicitly configured. With the old DOM-measurement approach, a chip
+    // decoration could make this 28px, causing the snap to wrongly jump to 100px instead of 80px.
+    Object.defineProperty(view, "defaultLineHeight", { get: () => 20, configurable: true });
+
+    const originalRequestMeasure = view.requestMeasure.bind(view);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.spyOn(view, "requestMeasure").mockImplementation((measure: any) => {
+      if (measure?.read && measure?.write) {
+        const measured = measure.read();
+        measure.write(measured);
+      } else {
+        originalRequestMeasure(measure);
+      }
+    });
+
+    // Establish baseline: 3 visual lines = 60px (simulates wrapped text before newline)
+    view.dispatch({ changes: { from: 0, insert: "line1\nline2" } });
+    expect(view.dom.style.height).toBe("60px");
+
+    // User presses Shift+Enter: content grows to 4 visual lines (80px)
+    currentContentHeight = 80;
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "\n" } });
+
+    // Should snap to exactly 80px (4 lines × 20px), not 100px or 120px
+    // Old behavior with chip-inflated lineHeight=28: (80-2)/28=2.79 → ceil=3 → 84px (wrong)
+    expect(view.dom.style.height).toBe("80px");
+
+    view.destroy();
+  });
 });
 
 describe("createCustomKeymap", () => {

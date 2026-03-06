@@ -299,24 +299,11 @@ export function computeAutoSize(
   return { next, shouldScroll: snapped > maxHeightPx };
 }
 
-function measureLineHeight(view: EditorView, fallback: number): number {
-  try {
-    const lineElement = view.dom.querySelector(".cm-line");
-    if (lineElement) {
-      const height = lineElement.getBoundingClientRect().height;
-      if (height > 0) return height;
-    }
-  } catch {
-    // Fall through to fallback
-  }
-  return fallback;
-}
-
 export function createAutoSize(config: AutoSizeConfig = {}) {
-  const configLineHeightPx = config.lineHeightPx ?? LINE_HEIGHT_PX;
+  const configLineHeightPx = config.lineHeightPx; // undefined = not explicitly set
   const maxHeightPx = config.maxHeightPx ?? MAX_TEXTAREA_HEIGHT_PX;
   let lastHeight = 0;
-  let cachedLineHeight: number | null = null;
+  let lastOverflowY = "";
 
   return EditorView.updateListener.of((update) => {
     if (!update.docChanged && !update.viewportChanged && !update.geometryChanged) return;
@@ -326,24 +313,33 @@ export function createAutoSize(config: AutoSizeConfig = {}) {
     // Use requestMeasure to ensure we read contentHeight after CodeMirror's layout pass
     view.requestMeasure({
       read() {
-        // Measure actual line height from DOM (cache for performance)
-        if (cachedLineHeight === null || update.geometryChanged) {
-          cachedLineHeight = measureLineHeight(view, configLineHeightPx);
-        }
-
+        // Use view.defaultLineHeight as the authoritative line height from CodeMirror's font
+        // metrics. It is unaffected by inline chip decorations (which would skew a DOM-measured
+        // .cm-line height and cause the snap increment to be wrong on lines without chips).
+        // An explicit configLineHeightPx takes priority (used in tests and custom configurations).
+        const lineHeight =
+          configLineHeightPx != null && configLineHeightPx > 0
+            ? configLineHeightPx
+            : view.defaultLineHeight > 0
+              ? view.defaultLineHeight
+              : LINE_HEIGHT_PX;
         const isEmpty = view.state.doc.length === 0;
-
-        // Read phase: measure contentHeight after layout is complete
-        return computeAutoSize(view.contentHeight, cachedLineHeight, maxHeightPx, isEmpty);
+        return computeAutoSize(view.contentHeight, lineHeight, maxHeightPx, isEmpty);
       },
       write(measured) {
-        // Write phase: apply DOM updates
         if (measured.next !== lastHeight) {
           lastHeight = measured.next;
           view.dom.style.height = `${measured.next}px`;
         }
 
-        view.scrollDOM.style.overflowY = measured.shouldScroll ? "auto" : "hidden";
+        // Guard overflowY writes to avoid triggering unnecessary geometry updates that
+        // can cause a secondary measure cycle (and visible height oscillation) when
+        // the overflow value hasn't actually changed.
+        const newOverflowY = measured.shouldScroll ? "auto" : "hidden";
+        if (newOverflowY !== lastOverflowY) {
+          lastOverflowY = newOverflowY;
+          view.scrollDOM.style.overflowY = newOverflowY;
+        }
       },
     });
   });
