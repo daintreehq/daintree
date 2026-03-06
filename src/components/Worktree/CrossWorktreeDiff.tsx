@@ -41,20 +41,32 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
   const [selectedFile, setSelectedFile] = useState<CrossWorktreeFile | null>(null);
   const [fileDiff, setFileDiff] = useState<string | null>(null);
   const [fileDiffLoading, setFileDiffLoading] = useState(false);
+  const [fileDiffError, setFileDiffError] = useState(false);
 
-  // Initialize left side from initial worktree
+  // Request tokens to guard stale async responses
+  const compareTokenRef = useRef(0);
+  const fileDiffTokenRef = useRef(0);
+
+  // Initialize / reset state when modal opens or closes
   useEffect(() => {
     if (!isOpen) {
+      setLeftId(null);
+      setRightId(null);
       setResult(null);
       setSelectedFile(null);
       setFileDiff(null);
+      setFileDiffError(false);
       setError(null);
+      setLoading(false);
+      setFileDiffLoading(false);
       return;
     }
     if (initialWorktreeId) {
-      setLeftId(initialWorktreeId);
+      // Only accept if the worktree still exists
+      const exists = worktrees.some((wt) => wt.id === initialWorktreeId);
+      if (exists) setLeftId(initialWorktreeId);
     }
-  }, [isOpen, initialWorktreeId]);
+  }, [isOpen, initialWorktreeId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const leftWorktree = worktrees.find((wt) => wt.id === leftId) ?? null;
   const rightWorktree = worktrees.find((wt) => wt.id === rightId) ?? null;
@@ -63,11 +75,14 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
     if (!leftWorktree?.branch || !rightWorktree?.branch) return;
     if (leftWorktree.branch === rightWorktree.branch) return;
 
+    const token = ++compareTokenRef.current;
+
     setLoading(true);
     setError(null);
     setResult(null);
     setSelectedFile(null);
     setFileDiff(null);
+    setFileDiffError(false);
 
     try {
       const res = await window.electron.git.compareWorktrees(
@@ -75,15 +90,17 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
         leftWorktree.branch,
         rightWorktree.branch
       );
+      if (token !== compareTokenRef.current) return; // stale response
       if (typeof res === "string") {
         setError("Unexpected result from comparison");
         return;
       }
       setResult(res);
     } catch (err) {
+      if (token !== compareTokenRef.current) return;
       setError(err instanceof Error ? err.message : "Failed to compare worktrees");
     } finally {
-      setLoading(false);
+      if (token === compareTokenRef.current) setLoading(false);
     }
   }, [leftWorktree, rightWorktree]);
 
@@ -98,8 +115,11 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
     async (file: CrossWorktreeFile) => {
       if (!leftWorktree?.branch || !rightWorktree?.branch) return;
 
+      const token = ++fileDiffTokenRef.current;
+
       setSelectedFile(file);
       setFileDiff(null);
+      setFileDiffError(false);
       setFileDiffLoading(true);
 
       try {
@@ -109,11 +129,15 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
           rightWorktree.branch,
           file.path
         );
+        if (token !== fileDiffTokenRef.current) return; // stale response
         setFileDiff(typeof diff === "string" ? diff : null);
+        setFileDiffError(false);
       } catch {
+        if (token !== fileDiffTokenRef.current) return;
         setFileDiff(null);
+        setFileDiffError(true);
       } finally {
-        setFileDiffLoading(false);
+        if (token === fileDiffTokenRef.current) setFileDiffLoading(false);
       }
     },
     [leftWorktree, rightWorktree]
@@ -206,6 +230,11 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
               {!loading && !error && !result && (
                 <div className="p-4 text-neutral-500 text-xs">Select two worktrees to compare</div>
               )}
+              {result?.files.length === 0 && (
+                <div className="p-4 text-neutral-500 text-xs">
+                  No differences between these branches
+                </div>
+              )}
               {result?.files.map((file) => {
                 const { label, className: statusClass } = statusLabel(file.status);
                 const isSelected = selectedFile?.path === file.path;
@@ -246,7 +275,13 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
                 Loading diff…
               </div>
             )}
-            {selectedFile && !fileDiffLoading && fileDiff !== null && (
+            {selectedFile && !fileDiffLoading && fileDiffError && (
+              <div className="flex items-center justify-center gap-2 h-full text-red-400 text-sm">
+                <AlertCircle className="w-4 h-4" />
+                Failed to load diff
+              </div>
+            )}
+            {selectedFile && !fileDiffLoading && !fileDiffError && fileDiff !== null && (
               <DiffViewer diff={fileDiff} filePath={selectedFile.path} viewType="split" />
             )}
           </div>

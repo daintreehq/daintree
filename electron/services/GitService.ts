@@ -279,7 +279,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     branch2: string,
     filePath?: string
   ): Promise<CrossWorktreeDiffResult | string> {
-    const range = `${branch1}...${branch2}`;
+    const range = `${branch1}..${branch2}`;
 
     if (filePath) {
       // Return the unified diff for a specific file
