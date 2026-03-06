@@ -1,25 +1,13 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState } from "react";
 import { FileViewerModal } from "./FileViewerModal";
 import { useProjectStore } from "@/store";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { useBranchForPath } from "@/hooks/useBranchForPath";
 
 interface FileViewState {
   path: string;
   rootPath?: string;
   line?: number;
   col?: number;
-}
-
-function useBranchForPath(rootPath: string): string | undefined {
-  const worktrees = useWorktreeDataStore((s) => s.worktrees);
-  return useMemo(() => {
-    const normalized = rootPath.endsWith("/") ? rootPath.slice(0, -1) : rootPath;
-    for (const wt of worktrees.values()) {
-      const wtPath = wt.path.endsWith("/") ? wt.path.slice(0, -1) : wt.path;
-      if (wtPath === normalized) return wt.branch;
-    }
-    return undefined;
-  }, [worktrees, rootPath]);
 }
 
 export function FileViewerModalHost() {

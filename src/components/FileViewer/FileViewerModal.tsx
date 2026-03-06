@@ -136,11 +136,12 @@ export function FileViewerModal({
 
   const fileName = filePath.split("/").pop() || filePath;
 
-  // Compute relative path by stripping rootPath prefix
-  const normalizedRoot = rootPath.endsWith("/") ? rootPath : rootPath + "/";
-  const relativePath = filePath.startsWith(normalizedRoot)
-    ? filePath.slice(normalizedRoot.length)
-    : fileName;
+  // Compute relative path by stripping rootPath prefix; guard against empty root
+  const normalizedRoot = rootPath ? (rootPath.endsWith("/") ? rootPath : rootPath + "/") : null;
+  const relativePath =
+    normalizedRoot && filePath.startsWith(normalizedRoot)
+      ? filePath.slice(normalizedRoot.length)
+      : fileName;
   const relativeDir = relativePath.includes("/")
     ? relativePath.slice(0, relativePath.lastIndexOf("/") + 1)
     : "";
@@ -153,13 +154,15 @@ export function FileViewerModal({
         <div className="flex items-center gap-3 min-w-0">
           <TooltipProvider>
             <Tooltip>
-              <TooltipTrigger asChild>
-                <AppDialog.Title className="text-sm font-medium truncate">
-                  {branch && <span className="text-muted-foreground/70 mr-1.5">{branch}</span>}
-                  {relativeDir && <span className="text-muted-foreground">{relativeDir}</span>}
-                  <span className="text-canopy-text">{fileName}</span>
-                </AppDialog.Title>
-              </TooltipTrigger>
+              <AppDialog.Title className="text-sm font-medium min-w-0">
+                <TooltipTrigger asChild>
+                  <span className="truncate cursor-default">
+                    {branch && <span className="text-muted-foreground/70 mr-1.5">{branch}</span>}
+                    {relativeDir && <span className="text-muted-foreground">{relativeDir}</span>}
+                    <span className="text-canopy-text">{fileName}</span>
+                  </span>
+                </TooltipTrigger>
+              </AppDialog.Title>
               <TooltipContent side="bottom" className="max-w-lg break-all">
                 {filePath}
               </TooltipContent>

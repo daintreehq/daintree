@@ -1,8 +1,8 @@
-import { useEffect, useCallback, useState, useRef, useMemo } from "react";
+import { useEffect, useCallback, useState, useRef } from "react";
 import type { GitStatus } from "@shared/types";
 import { actionService } from "@/services/ActionService";
 import { FileViewerModal } from "@/components/FileViewer/FileViewerModal";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { useBranchForPath } from "@/hooks/useBranchForPath";
 
 export interface FileDiffModalProps {
   isOpen: boolean;
@@ -21,15 +21,7 @@ export function FileDiffModal({
 }: FileDiffModalProps) {
   const [diff, setDiff] = useState<string | undefined>(undefined);
   const requestRef = useRef(0);
-  const worktrees = useWorktreeDataStore((s) => s.worktrees);
-  const branch = useMemo(() => {
-    const normalized = worktreePath.endsWith("/") ? worktreePath.slice(0, -1) : worktreePath;
-    for (const wt of worktrees.values()) {
-      const wtPath = wt.path.endsWith("/") ? wt.path.slice(0, -1) : wt.path;
-      if (wtPath === normalized) return wt.branch;
-    }
-    return undefined;
-  }, [worktrees, worktreePath]);
+  const branch = useBranchForPath(worktreePath);
 
   const absoluteFilePath = worktreePath.endsWith("/")
     ? worktreePath + filePath
