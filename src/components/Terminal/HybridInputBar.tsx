@@ -29,6 +29,7 @@ import {
 import { CommandPickerButton, CommandPickerHost } from "@/components/Commands";
 import { useCommandStore } from "@/store/commandStore";
 import { useProjectStore } from "@/store/projectStore";
+import { VoiceInputButton } from "./VoiceInputButton";
 import type { CommandContext, CommandResult } from "@shared/types/commands";
 import { isEnterLikeLineBreakInputEvent } from "./hybridInputEvents";
 import {
@@ -153,6 +154,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const latestRef = useRef<LatestState | null>(null);
 
     const openPicker = useCommandStore((s) => s.openPicker);
+    const [voiceEnabled, setVoiceEnabled] = useState(false);
+    const pendingTranscriptRef = useRef<string>("");
 
     const commandContext = useMemo(
       (): CommandContext => ({
@@ -236,6 +239,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           cancelAnimationFrame(sendRafRef.current);
         }
       };
+    }, []);
+
+    useEffect(() => {
+      window.electron?.voiceInput
+        ?.getSettings()
+        .then((s) => {
+          setVoiceEnabled(s.enabled);
+        })
+        .catch(() => {});
     }, []);
 
     const isInitializing = isAgentTerminal && initializationState === "initializing";
@@ -475,6 +487,29 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       },
       [applyEditorValue]
     );
+
+    const handleVoiceTranscriptionDelta = useCallback((delta: string) => {
+      pendingTranscriptRef.current += delta;
+    }, []);
+
+    const handleVoiceTranscriptionComplete = useCallback((text: string) => {
+      pendingTranscriptRef.current = "";
+      const view = editorViewRef.current;
+      if (!view) return;
+
+      const current = view.state.doc.toString();
+      const separator = current && !current.endsWith(" ") ? " " : "";
+      const insert = separator + text;
+      const from = view.state.doc.length;
+
+      isApplyingExternalValueRef.current = true;
+      view.dispatch({
+        changes: { from, insert },
+        selection: { anchor: from + insert.length },
+        scrollIntoView: true,
+      });
+      view.focus();
+    }, []);
 
     const sendFromEditor = useCallback(() => {
       const view = editorViewRef.current;
@@ -1162,7 +1197,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               />
             </div>
 
-            <div className="pr-1.5">
+            <div className="flex items-center gap-0.5 pr-1.5">
+              {voiceEnabled && (
+                <VoiceInputButton
+                  onTranscriptionDelta={handleVoiceTranscriptionDelta}
+                  onTranscriptionComplete={handleVoiceTranscriptionComplete}
+                  disabled={disabled}
+                />
+              )}
               <CommandPickerButton onClick={openPicker} disabled={disabled} />
             </div>
           </div>

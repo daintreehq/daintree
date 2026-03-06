@@ -1220,6 +1220,31 @@ export interface IpcInvokeMap {
     args: [];
     result: void;
   };
+
+  // Voice input
+  "voice-input:get-settings": {
+    args: [];
+    result: { enabled: boolean; apiKey: string; language: string; customDictionary: string[] };
+  };
+  "voice-input:set-settings": {
+    args: [
+      patch: Partial<{
+        enabled: boolean;
+        apiKey: string;
+        language: string;
+        customDictionary: string[];
+      }>,
+    ];
+    result: void;
+  };
+  "voice-input:start": {
+    args: [];
+    result: { ok: true } | { ok: false; error: string };
+  };
+  "voice-input:stop": {
+    args: [];
+    result: void;
+  };
 }
 
 /**
@@ -1321,6 +1346,12 @@ export interface IpcEventMap {
     title: string;
     action: "created" | "updated" | "deleted";
   };
+
+  // Voice input events
+  "voice-input:transcription-delta": string;
+  "voice-input:transcription-complete": string;
+  "voice-input:error": string;
+  "voice-input:status": "idle" | "connecting" | "recording" | "error";
 }
 
 export type IpcInvokeArgs<K extends keyof IpcInvokeMap> = IpcInvokeMap[K]["args"];

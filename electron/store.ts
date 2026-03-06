@@ -117,6 +117,12 @@ export interface StoreSchema {
     enabled: boolean;
     hasSeenPrompt: boolean;
   };
+  voiceInput: {
+    enabled: boolean;
+    apiKey: string;
+    language: string;
+    customDictionary: string[];
+  };
 }
 
 const storeOptions = {
@@ -181,6 +187,12 @@ const storeOptions = {
     telemetry: {
       enabled: false,
       hasSeenPrompt: false,
+    },
+    voiceInput: {
+      enabled: false,
+      apiKey: "",
+      language: "en",
+      customDictionary: [],
     },
   },
   cwd: process.env.CANOPY_USER_DATA,

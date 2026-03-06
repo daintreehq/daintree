@@ -12,6 +12,7 @@ import {
   Terminal,
   Settings as SettingsIcon,
   Bell,
+  Mic,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { appClient } from "@/clients";
@@ -28,6 +29,7 @@ import { KeyboardShortcutsTab } from "./KeyboardShortcutsTab";
 import { WorktreeSettingsTab } from "./WorktreeSettingsTab";
 import { ToolbarSettingsTab } from "./ToolbarSettingsTab";
 import { EditorIntegrationTab } from "./EditorIntegrationTab";
+import { VoiceInputSettingsTab } from "./VoiceInputSettingsTab";
 
 interface SettingsDialogProps {
   isOpen: boolean;
@@ -48,6 +50,7 @@ export type SettingsTab =
   | "toolbar"
   | "notifications"
   | "editor"
+  | "voice"
   | "troubleshooting";
 
 export function SettingsDialog({
@@ -98,6 +101,7 @@ export function SettingsDialog({
     toolbar: "Toolbar Customization",
     notifications: "Notifications",
     editor: "Editor Integration",
+    voice: "Voice Input",
     troubleshooting: "Troubleshooting",
   };
 
@@ -186,6 +190,13 @@ export function SettingsDialog({
             Editor
           </NavButton>
           <NavButton
+            active={activeTab === "voice"}
+            onClick={() => setActiveTab("voice")}
+            icon={<Mic className="w-4 h-4" />}
+          >
+            Voice Input
+          </NavButton>
+          <NavButton
             active={activeTab === "troubleshooting"}
             onClick={() => setActiveTab("troubleshooting")}
           >
@@ -251,6 +262,10 @@ export function SettingsDialog({
 
             <div className={activeTab === "editor" ? "" : "hidden"}>
               <EditorIntegrationTab />
+            </div>
+
+            <div className={activeTab === "voice" ? "" : "hidden"}>
+              <VoiceInputSettingsTab />
             </div>
 
             <div className={activeTab === "troubleshooting" ? "" : "hidden"}>

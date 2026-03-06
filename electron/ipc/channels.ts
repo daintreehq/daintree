@@ -332,6 +332,17 @@ export const CHANNELS = {
   TELEMETRY_GET: "telemetry:get",
   TELEMETRY_SET_ENABLED: "telemetry:set-enabled",
   TELEMETRY_MARK_PROMPT_SHOWN: "telemetry:mark-prompt-shown",
+
+  // Voice Input channels
+  VOICE_INPUT_GET_SETTINGS: "voice-input:get-settings",
+  VOICE_INPUT_SET_SETTINGS: "voice-input:set-settings",
+  VOICE_INPUT_START: "voice-input:start",
+  VOICE_INPUT_STOP: "voice-input:stop",
+  VOICE_INPUT_AUDIO_CHUNK: "voice-input:audio-chunk",
+  VOICE_INPUT_TRANSCRIPTION_DELTA: "voice-input:transcription-delta",
+  VOICE_INPUT_TRANSCRIPTION_COMPLETE: "voice-input:transcription-complete",
+  VOICE_INPUT_ERROR: "voice-input:error",
+  VOICE_INPUT_STATUS: "voice-input:status",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];
