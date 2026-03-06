@@ -374,6 +374,7 @@ describe("createAutoSize integration", () => {
     Object.defineProperty(view, "defaultLineHeight", { get: () => 20, configurable: true });
 
     const originalRequestMeasure = view.requestMeasure.bind(view);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     vi.spyOn(view, "requestMeasure").mockImplementation((measure: any) => {
       if (measure?.read && measure?.write) {
         const measured = measure.read();
@@ -406,6 +407,7 @@ describe("createAutoSize integration", () => {
     Object.defineProperty(view, "contentHeight", { get: () => 40, configurable: true });
 
     const originalRequestMeasure = view.requestMeasure.bind(view);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     vi.spyOn(view, "requestMeasure").mockImplementation((measure: any) => {
       if (measure?.read && measure?.write) {
         const measured = measure.read();
@@ -423,7 +425,10 @@ describe("createAutoSize integration", () => {
       "overflowY"
     );
     if (originalStyleSetter?.set) {
-      vi.spyOn(scrollDOM.style, "overflowY", "set").mockImplementation(function (val) {
+      vi.spyOn(scrollDOM.style, "overflowY", "set").mockImplementation(function (
+        this: CSSStyleDeclaration,
+        val: string
+      ) {
         overflowWriteCount++;
         originalStyleSetter.set!.call(this, val);
       });
@@ -467,6 +472,7 @@ describe("createAutoSize integration", () => {
     Object.defineProperty(view, "defaultLineHeight", { get: () => 20, configurable: true });
 
     const originalRequestMeasure = view.requestMeasure.bind(view);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     vi.spyOn(view, "requestMeasure").mockImplementation((measure: any) => {
       if (measure?.read && measure?.write) {
         const measured = measure.read();
