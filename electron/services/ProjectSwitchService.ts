@@ -1,3 +1,4 @@
+import path from "path";
 import type { Project } from "../types/index.js";
 import type { HandlerDependencies } from "../ipc/types.js";
 import { projectStore } from "./ProjectStore.js";
@@ -65,6 +66,10 @@ export class ProjectSwitchService {
       console.log("[ProjectSwitch] Previous project cleanup in progress");
 
       await projectStore.setCurrentProject(projectId);
+
+      // Apply portable project identity from .canopy/project.json if the user
+      // hasn't customised the project name/emoji (still has defaults).
+      await this.applyInRepoIdentity(project);
 
       const updatedProject = projectStore.getProjectById(projectId);
       if (!updatedProject) {
@@ -179,6 +184,42 @@ export class ProjectSwitchService {
       console.log("[ProjectSwitch] Worktrees loaded successfully");
     } catch (err) {
       console.error("Failed to load worktrees for project:", err);
+    }
+  }
+
+  /**
+   * Apply portable project identity from .canopy/project.json during switch.
+   * Only applies values when the project still has default name/emoji (user hasn't customised).
+   */
+  private async applyInRepoIdentity(project: Project): Promise<void> {
+    try {
+      const inRepo = await projectStore.readInRepoProjectIdentity(project.path);
+      const updates: Partial<Project> = {};
+
+      if (inRepo.found && !project.canopyConfigPresent) {
+        updates.canopyConfigPresent = true;
+      } else if (!inRepo.found && project.canopyConfigPresent) {
+        updates.canopyConfigPresent = false;
+      }
+
+      const defaultName = path.basename(project.path);
+      const defaultEmoji = "🌲";
+
+      if (inRepo.name && project.name === defaultName) {
+        updates.name = inRepo.name;
+      }
+      if (inRepo.emoji && project.emoji === defaultEmoji) {
+        updates.emoji = inRepo.emoji;
+      }
+      if (inRepo.color && !project.color) {
+        updates.color = inRepo.color;
+      }
+
+      if (Object.keys(updates).length > 0) {
+        projectStore.updateProject(project.id, updates);
+      }
+    } catch (error) {
+      console.error("[ProjectSwitch] Failed to apply in-repo identity:", error);
     }
   }
 

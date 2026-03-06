@@ -26,6 +26,8 @@ const SETTINGS_FILENAME = "settings.json";
 const RECIPES_FILENAME = "recipes.json";
 const WORKFLOWS_FILENAME = "workflows.json";
 const PROJECT_STATE_CACHE_TTL_MS = 60_000;
+const CANOPY_PROJECT_JSON = ".canopy/project.json";
+const MAX_PROJECT_NAME_LENGTH = 100;
 
 interface ProjectStateCacheEntry {
   expiresAt: number;
@@ -43,6 +45,57 @@ export class ProjectStore {
   async initialize(): Promise<void> {
     if (!existsSync(this.projectsConfigDir)) {
       await fs.mkdir(this.projectsConfigDir, { recursive: true });
+    }
+  }
+
+  /**
+   * Read portable project identity from .canopy/project.json in the repository root.
+   *
+   * Expected schema:
+   * {
+   *   "version": 1,
+   *   "name": "My Project",    // optional, string, max 100 chars
+   *   "emoji": "🚀",           // optional, string
+   *   "color": "#ff6600"       // optional, string
+   * }
+   *
+   * Returns an empty object if the file is absent, unreadable, or malformed.
+   */
+  async readInRepoProjectIdentity(
+    projectPath: string
+  ): Promise<{ name?: string; emoji?: string; color?: string; found: boolean }> {
+    const filePath = path.join(projectPath, CANOPY_PROJECT_JSON);
+    try {
+      const content = await fs.readFile(filePath, "utf-8");
+      const parsed = JSON.parse(content);
+
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        return { found: false };
+      }
+
+      if (typeof parsed.version !== "number") {
+        return { found: false };
+      }
+
+      const result: { name?: string; emoji?: string; color?: string; found: boolean } = {
+        found: true,
+      };
+
+      if (typeof parsed.name === "string" && parsed.name.trim().length > 0) {
+        result.name = parsed.name.trim().slice(0, MAX_PROJECT_NAME_LENGTH);
+      }
+
+      if (typeof parsed.emoji === "string" && parsed.emoji.trim().length > 0) {
+        result.emoji = parsed.emoji.trim();
+      }
+
+      if (typeof parsed.color === "string" && parsed.color.trim().length > 0) {
+        result.color = parsed.color.trim();
+      }
+
+      return result;
+    } catch {
+      return { found: false };
     }
   }
 
@@ -110,13 +163,17 @@ export class ProjectStore {
       return this.updateProject(existing.id, { lastOpened: Date.now() });
     }
 
+    const inRepo = await this.readInRepoProjectIdentity(normalizedPath);
+
     const project: Project = {
       id: this.generateProjectId(normalizedPath),
       path: normalizedPath,
-      name: path.basename(normalizedPath),
-      emoji: "🌲",
+      name: inRepo.name ?? path.basename(normalizedPath),
+      emoji: inRepo.emoji ?? "🌲",
       lastOpened: Date.now(),
       status: "closed",
+      ...(inRepo.color ? { color: inRepo.color } : {}),
+      ...(inRepo.found ? { canopyConfigPresent: true } : {}),
     };
 
     const projects = this.getAllProjects();
@@ -171,6 +228,8 @@ export class ProjectStore {
     if (updates.color !== undefined) safeUpdates.color = updates.color;
     if (updates.lastOpened !== undefined) safeUpdates.lastOpened = updates.lastOpened;
     if (updates.status !== undefined) safeUpdates.status = updates.status;
+    if (updates.canopyConfigPresent !== undefined)
+      safeUpdates.canopyConfigPresent = updates.canopyConfigPresent;
 
     const updated = { ...projects[index], ...safeUpdates };
     projects[index] = updated;
