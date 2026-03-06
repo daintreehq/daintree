@@ -900,6 +900,10 @@ export interface ProjectSettings {
   };
   /** Preferred external editor for this project */
   preferredEditor?: import("./editor.js").EditorConfig;
+  /** Branch prefix mode for new worktrees */
+  branchPrefixMode?: "none" | "username" | "custom";
+  /** Custom branch prefix string when branchPrefixMode is "custom" (e.g., "feature/") */
+  branchPrefixCustom?: string;
 }
 
 // Toolbar Customization Types

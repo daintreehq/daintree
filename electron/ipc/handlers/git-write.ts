@@ -173,6 +173,24 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
   ipcMain.handle(CHANNELS.GIT_PUSH, handlePush);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_PUSH));
 
+  const handleGetUsername = async (
+    _event: Electron.IpcMainInvokeEvent,
+    cwd: string
+  ): Promise<string | null> => {
+    checkRateLimit(CHANNELS.GIT_GET_USERNAME, 20, 10_000);
+    validateCwd(cwd);
+    const { simpleGit } = await import("simple-git");
+    const git = simpleGit(cwd);
+    try {
+      const { value } = await git.getConfig("user.name");
+      return value || null;
+    } catch {
+      return null;
+    }
+  };
+  ipcMain.handle(CHANNELS.GIT_GET_USERNAME, handleGetUsername);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_GET_USERNAME));
+
   const handleGetStagingStatus = async (
     _event: Electron.IpcMainInvokeEvent,
     cwd: string
