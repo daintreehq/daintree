@@ -614,9 +614,12 @@ export class WorkspaceService {
     // Suppress self-triggered watcher events.  git status touches .git/index
     // (and index.lock), which fires the watcher and creates an infinite loop
     // if we don't ignore events shortly after our own operations complete.
+    // Still set the pending flag so a real change arriving during the cooldown
+    // window is picked up on the next poll or flush, rather than being lost.
     if (!monitor.isUpdating) {
       const msSinceLastStatus = Date.now() - monitor.lastGitStatusCompletedAt;
       if (msSinceLastStatus < GIT_WATCH_SELF_TRIGGER_COOLDOWN_MS) {
+        monitor.gitWatchRefreshPending = true;
         return;
       }
     }

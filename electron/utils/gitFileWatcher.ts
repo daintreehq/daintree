@@ -126,9 +126,12 @@ export class GitFileWatcher {
     }
   }
 
-  private startWorktreeWatcher(gitDir: string): void {
+  private startWorktreeWatcher(_gitDir: string): void {
     try {
-      const gitDirBase = basename(gitDir);
+      // Always filter ".git" — for linked worktrees the gitDir resolves to the
+      // main repo's .git/worktrees/<name>, but the worktree root still has a
+      // ".git" entry (a pointer file) that should be ignored.
+      const gitDirBase = ".git";
       const watcher = fsWatch(
         this.worktreePath,
         { persistent: false, recursive: true },

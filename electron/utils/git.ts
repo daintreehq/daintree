@@ -231,6 +231,7 @@ export async function getWorktreeChangesWithStats(
       ...status.created,
       ...status.deleted,
       ...status.renamed.map((r) => r.to),
+      ...status.staged,
     ];
 
     let diffOutput = "";
@@ -342,6 +343,10 @@ export async function getWorktreeChangesWithStats(
 
     for (const file of status.deleted) {
       await addChange(file, "deleted");
+    }
+
+    for (const file of status.staged) {
+      await addChange(file, "modified");
     }
 
     if (status.conflicted) {
