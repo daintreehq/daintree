@@ -292,7 +292,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
               className={cn(
                 "px-3 py-1.5 text-xs font-medium rounded transition-colors capitalize",
                 filterMode === mode
-                  ? "bg-canopy-accent text-white"
+                  ? "bg-canopy-accent text-canopy-bg"
                   : "bg-canopy-sidebar text-canopy-text/70 hover:bg-canopy-border"
               )}
             >
@@ -434,7 +434,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                           className={cn(
                             "px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
                             currentMode === "defaults"
-                              ? "bg-canopy-accent text-white"
+                              ? "bg-canopy-accent text-canopy-bg"
                               : "bg-canopy-sidebar text-canopy-text/70 hover:bg-canopy-border"
                           )}
                         >
@@ -446,7 +446,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                         className={cn(
                           "px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
                           currentMode === "prompt"
-                            ? "bg-canopy-accent text-white"
+                            ? "bg-canopy-accent text-canopy-bg"
                             : "bg-canopy-sidebar text-canopy-text/70 hover:bg-canopy-border"
                         )}
                       >

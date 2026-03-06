@@ -191,7 +191,7 @@ function KeyRecorder({ onCapture, onCancel, excludeActionId }: KeyRecorderProps)
         {capturedCombo && (
           <button
             onClick={handleSave}
-            className="px-3 py-1.5 text-sm bg-canopy-accent text-white rounded hover:bg-canopy-accent/90 transition-colors"
+            className="px-3 py-1.5 text-sm bg-canopy-accent text-canopy-bg rounded hover:bg-canopy-accent/90 transition-colors"
           >
             Save
           </button>

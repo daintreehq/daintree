@@ -28,7 +28,7 @@ const buttonVariants = cva(
           "text-[var(--color-status-success)] hover:bg-[var(--color-status-success)]/10 active:scale-[0.98]",
         "ghost-info":
           "text-[var(--color-status-info)] hover:bg-[var(--color-status-info)]/10 active:scale-[0.98]",
-        info: "bg-[var(--color-status-info)] text-white hover:brightness-110 active:scale-[0.98]",
+        info: "bg-[var(--color-status-info)] text-canopy-bg hover:brightness-110 active:scale-[0.98]",
       },
       size: {
         default: "h-9 px-4 py-2 gap-2 text-sm [&_svg]:size-4",

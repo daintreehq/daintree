@@ -203,7 +203,7 @@ export function WorktreeFilterPopover() {
         >
           <Filter className="w-3.5 h-3.5" />
           {showBadge && (
-            <span className="absolute -top-0.5 -right-0.5 flex items-center justify-center min-w-[14px] h-[14px] px-1 text-[9px] font-medium bg-canopy-accent text-white rounded-full">
+            <span className="absolute -top-0.5 -right-0.5 flex items-center justify-center min-w-[14px] h-[14px] px-1 text-[9px] font-medium bg-canopy-accent text-canopy-bg rounded-full">
               {filterCount}
             </span>
           )}

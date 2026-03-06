@@ -142,7 +142,7 @@ function ArtifactItem({
               disabled={isProcessing}
               className={cn(
                 "px-3 py-1 text-xs rounded transition-colors",
-                "bg-[var(--color-status-info)] hover:brightness-110 text-white",
+                "bg-[var(--color-status-info)] hover:brightness-110 text-canopy-bg",
                 "disabled:opacity-50 disabled:cursor-not-allowed"
               )}
             >
@@ -169,7 +169,7 @@ function ArtifactItem({
                         disabled={isProcessing || !canApplyPatch}
                         className={cn(
                           "px-3 py-1 text-xs rounded transition-colors",
-                          "bg-[var(--color-status-success)] hover:brightness-110 text-white",
+                          "bg-[var(--color-status-success)] hover:brightness-110 text-canopy-bg",
                           "disabled:opacity-50 disabled:cursor-not-allowed"
                         )}
                       >
@@ -328,7 +328,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
           onClick={() => setIsExpanded(true)}
           className={cn(
             "px-3 py-2 rounded-[var(--radius-md)] shadow-lg",
-            "bg-[var(--color-status-info)] hover:brightness-110 text-white",
+            "bg-[var(--color-status-info)] hover:brightness-110 text-canopy-bg",
             "text-sm font-medium transition-all",
             "flex items-center gap-2"
           )}
@@ -385,7 +385,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                       disabled={isBulkActionRunning || !canCopyAll}
                       className={cn(
                         "px-3 py-1 text-xs rounded transition-colors",
-                        "bg-[var(--color-status-info)] hover:brightness-110 text-white",
+                        "bg-[var(--color-status-info)] hover:brightness-110 text-canopy-bg",
                         "disabled:opacity-50 disabled:cursor-not-allowed"
                       )}
                     >
@@ -444,7 +444,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                             disabled={isBulkActionRunning || !canApplyAll}
                             className={cn(
                               "px-3 py-1 text-xs rounded transition-colors",
-                              "bg-[var(--color-status-success)] hover:brightness-110 text-white",
+                              "bg-[var(--color-status-success)] hover:brightness-110 text-canopy-bg",
                               "disabled:opacity-50 disabled:cursor-not-allowed"
                             )}
                           >
