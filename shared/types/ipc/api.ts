@@ -546,6 +546,20 @@ export interface ElectronAPI {
     setFontFamily(fontFamily: string): Promise<void>;
     setHybridInputEnabled(enabled: boolean): Promise<void>;
     setHybridInputAutoFocus(enabled: boolean): Promise<void>;
+    setColorScheme(schemeId: string): Promise<void>;
+    setCustomSchemes(schemesJson: string): Promise<void>;
+    importColorScheme(): Promise<
+      | {
+          ok: true;
+          scheme: {
+            id: string;
+            name: string;
+            type: "dark" | "light";
+            colors: Record<string, string>;
+          };
+        }
+      | { ok: false; errors: string[] }
+    >;
   };
   sidecar: {
     create(payload: import("../sidecar.js").SidecarCreatePayload): Promise<void>;

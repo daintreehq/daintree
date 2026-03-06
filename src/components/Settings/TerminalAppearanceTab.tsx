@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { useTerminalFontStore } from "@/store";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
 import { actionService } from "@/services/ActionService";
+import { ColorSchemePicker } from "./ColorSchemePicker";
 
 const MIN_FONT_SIZE = 8;
 const MAX_FONT_SIZE = 24;
@@ -100,6 +101,13 @@ export function TerminalAppearanceTab() {
 
   return (
     <div className="space-y-6">
+      <div className="space-y-2">
+        <h4 className="text-sm font-medium text-canopy-text">Color scheme</h4>
+        <div className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] p-4">
+          <ColorSchemePicker />
+        </div>
+      </div>
+
       <div className="space-y-2">
         <h4 className="text-sm font-medium text-canopy-text">Font size</h4>
         <div className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] p-4 space-y-2">
