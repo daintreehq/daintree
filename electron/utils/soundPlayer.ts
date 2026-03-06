@@ -33,7 +33,8 @@ export function playSound(filePath: string): SoundHandle {
       proc = spawnSilent("paplay", [filePath]);
       proc.on("error", () => {
         if (existsSync(filePath)) {
-          proc = spawnSilent("aplay", [filePath]);
+          const fallback = spawnSilent("aplay", [filePath]);
+          fallback.on("error", () => {});
         }
       });
     }

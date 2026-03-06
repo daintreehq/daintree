@@ -115,9 +115,11 @@ class NotificationService {
     const notification = new Notification({ title, body, silent: true });
     this.activeNotifications.add(notification);
 
-    notification.on("close", () => {
+    const cleanup = () => {
       this.activeNotifications.delete(notification);
-    });
+    };
+    notification.on("close", cleanup);
+    notification.on("failed" as "close", cleanup);
 
     notification.show();
   }
@@ -129,9 +131,8 @@ class NotificationService {
     }
 
     this.detachWindowListeners();
-
-    // Clear notifications before disposing
     this.clearNotifications();
+    this.activeNotifications.clear();
 
     this.focusHandler = null;
     this.blurHandler = null;
