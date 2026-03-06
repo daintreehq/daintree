@@ -66,14 +66,16 @@ describe("appColorSchemes rebrand — semantic color separation", () => {
       expect(getScheme("canopy").tokens["status-info"]).toBe("#7f8ea3");
     });
 
-    it("state-working matches canopy-accent (blue, not green)", () => {
+    it("state-working is green, not canopy-accent blue", () => {
       const tokens = getScheme("canopy").tokens;
-      expect(tokens["state-working"]).toBe(tokens["canopy-accent"]);
+      expect(tokens["state-working"]).not.toBe(tokens["canopy-accent"]);
+      expect(tokens["state-working"]).toBe("#22c55e");
     });
 
-    it("state-active matches canopy-accent", () => {
+    it("state-active is green, not canopy-accent blue", () => {
       const tokens = getScheme("canopy").tokens;
-      expect(tokens["state-active"]).toBe(tokens["canopy-accent"]);
+      expect(tokens["state-active"]).not.toBe(tokens["canopy-accent"]);
+      expect(tokens["state-active"]).toBe("#22c55e");
     });
 
     it("server-running matches status-success", () => {
@@ -98,14 +100,16 @@ describe("appColorSchemes rebrand — semantic color separation", () => {
   });
 
   describe("semantic alias invariants — canopy-slate scheme", () => {
-    it("state-working matches canopy-accent", () => {
+    it("state-working is green, not canopy-accent blue", () => {
       const tokens = getScheme("canopy-slate").tokens;
-      expect(tokens["state-working"]).toBe(tokens["canopy-accent"]);
+      expect(tokens["state-working"]).not.toBe(tokens["canopy-accent"]);
+      expect(tokens["state-working"]).toBe("#22c55e");
     });
 
-    it("state-active matches canopy-accent", () => {
+    it("state-active is green, not canopy-accent blue", () => {
       const tokens = getScheme("canopy-slate").tokens;
-      expect(tokens["state-active"]).toBe(tokens["canopy-accent"]);
+      expect(tokens["state-active"]).not.toBe(tokens["canopy-accent"]);
+      expect(tokens["state-active"]).toBe("#22c55e");
     });
 
     it("server-running matches status-success", () => {

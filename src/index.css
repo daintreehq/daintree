@@ -62,10 +62,15 @@
   --color-status-error: #d97979; /* Soft coral: softened, 5.95:1 on bg */
   --color-status-info: #7f8ea3; /* Blue-gray: distinct from muted text, 5.37:1 on bg */
 
-  /* Semantic state colors - for agent/terminal lifecycle states */
-  --color-state-active: #6b8de6; /* Canopy Blue: Active Worktree */
+  /* Semantic state colors - for agent/terminal lifecycle states
+   * Green communicates "alive / in-progress" independent of brand identity.
+   * Brand blue (canopy-accent) belongs on interactive elements only
+   * (buttons, focus rings, text selections, active tab underlines).
+   * state-working/state-active are intentionally distinct from status-success
+   * (#5dae8b muted sage = completed) — vivid green means "in progress". */
+  --color-state-active: #22c55e; /* Green-500: Active Worktree — 7.84:1 on bg (WCAG AAA) */
   --color-state-idle: #52525b; /* Zinc-600: Dormant */
-  --color-state-working: #6b8de6; /* Canopy Blue: AI is Working */
+  --color-state-working: #22c55e; /* Green-500: AI is Working — 7.84:1 on bg (WCAG AAA) */
   --color-state-waiting: #fbbf24; /* Amber-400: Needs Attention */
 
   /* Server status colors - for dev server states */

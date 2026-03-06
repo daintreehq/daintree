@@ -170,7 +170,7 @@ export function WorktreeDetailsSection({
                     onClick={onOpenReviewHub}
                     className={cn(
                       "px-2 py-1 border-l border-white/5 transition-colors shrink-0",
-                      "text-canopy-accent/70 hover:text-canopy-accent hover:bg-canopy-accent/10",
+                      "text-[var(--color-state-active)]/70 hover:text-[var(--color-state-active)] hover:bg-[var(--color-state-active)]/10",
                       "rounded-r-[var(--radius-lg)]",
                       "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
                     )}
