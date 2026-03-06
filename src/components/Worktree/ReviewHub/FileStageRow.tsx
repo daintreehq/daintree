@@ -6,15 +6,47 @@ import { cn } from "@/lib/utils";
 import { Plus, Minus } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
-const STATUS_CONFIG: Record<GitStatus, { label: string; color: string }> = {
-  modified: { label: "M", color: "text-[var(--color-status-warning)]" },
-  added: { label: "A", color: "text-[var(--color-status-success)]" },
-  deleted: { label: "D", color: "text-[var(--color-status-error)]" },
-  untracked: { label: "?", color: "text-[var(--color-status-success)]" },
-  renamed: { label: "R", color: "text-[var(--color-status-info)]" },
-  copied: { label: "C", color: "text-[var(--color-status-info)]" },
-  ignored: { label: "I", color: "text-canopy-text/40" },
-  conflicted: { label: "!", color: "text-[var(--color-status-error)]" },
+const STATUS_CONFIG: Record<GitStatus, { label: string; bg: string; text: string }> = {
+  modified: {
+    label: "M",
+    bg: "bg-[var(--color-status-warning)]/15",
+    text: "text-[var(--color-status-warning)]",
+  },
+  added: {
+    label: "A",
+    bg: "bg-[var(--color-status-success)]/15",
+    text: "text-[var(--color-status-success)]",
+  },
+  deleted: {
+    label: "D",
+    bg: "bg-[var(--color-status-error)]/15",
+    text: "text-[var(--color-status-error)]",
+  },
+  untracked: {
+    label: "?",
+    bg: "bg-[var(--color-status-success)]/15",
+    text: "text-[var(--color-status-success)]",
+  },
+  renamed: {
+    label: "R",
+    bg: "bg-[var(--color-status-info)]/15",
+    text: "text-[var(--color-status-info)]",
+  },
+  copied: {
+    label: "C",
+    bg: "bg-[var(--color-status-info)]/15",
+    text: "text-[var(--color-status-info)]",
+  },
+  ignored: {
+    label: "I",
+    bg: "bg-white/[0.06]",
+    text: "text-canopy-text/40",
+  },
+  conflicted: {
+    label: "!",
+    bg: "bg-[var(--color-status-error)]/15",
+    text: "text-[var(--color-status-error)]",
+  },
 };
 
 interface FileStageRowProps {
@@ -61,7 +93,13 @@ export function FileStageRow({ file, isStaged, onToggle, onFileClick }: FileStag
     <div
       role="button"
       tabIndex={0}
-      className="group flex items-center text-xs font-mono hover:bg-white/5 rounded px-1.5 py-0.5 cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
+      className={cn(
+        "group flex items-center text-xs rounded px-1.5 py-1.5 cursor-pointer transition-colors",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent",
+        isStaged
+          ? "bg-[var(--color-status-success)]/[0.06] hover:bg-[var(--color-status-success)]/[0.10]"
+          : "hover:bg-white/5"
+      )}
       onClick={handleClick}
       onKeyDown={handleKeyDown}
     >
@@ -71,7 +109,7 @@ export function FileStageRow({ file, isStaged, onToggle, onFileClick }: FileStag
             <button
               onClick={handleToggle}
               className={cn(
-                "w-5 h-5 flex items-center justify-center rounded shrink-0 mr-1 transition-colors",
+                "w-5 h-5 flex items-center justify-center rounded shrink-0 mr-2 transition-colors",
                 "hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
               )}
               aria-label={isStaged ? `Unstage ${file.path}` : `Stage ${file.path}`}
@@ -87,15 +125,25 @@ export function FileStageRow({ file, isStaged, onToggle, onFileClick }: FileStag
         </Tooltip>
       </TooltipProvider>
 
-      <span className={cn("w-4 font-bold shrink-0", config.color)}>{config.label}</span>
+      <span
+        aria-hidden="true"
+        className={cn(
+          "inline-flex items-center justify-center rounded-sm px-1 mr-2 shrink-0",
+          "text-[10px] font-medium leading-4 h-4 min-w-[16px]",
+          config.bg,
+          config.text
+        )}
+      >
+        {config.label}
+      </span>
 
-      <div className="flex-1 min-w-0 flex items-center mr-2">
+      <div className="flex-1 min-w-0 flex items-baseline">
         {dir && (
-          <span className="truncate min-w-0 text-canopy-text/60 opacity-60 group-hover:opacity-80">
+          <span className="shrink truncate text-canopy-text/50 group-hover:text-canopy-text/70 font-mono text-[11px] transition-colors">
             {dir}/
           </span>
         )}
-        <span className="text-canopy-text group-hover:text-white font-medium truncate min-w-0">
+        <span className="shrink truncate text-canopy-text group-hover:text-white font-medium font-mono text-[11px] transition-colors">
           {base}
         </span>
       </div>
