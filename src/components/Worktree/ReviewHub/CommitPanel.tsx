@@ -8,6 +8,7 @@ const MAX_SUBJECT_LENGTH = 72;
 interface CommitPanelProps {
   stagedCount: number;
   isDetachedHead: boolean;
+  hasConflicts: boolean;
   hasRemote: boolean;
   currentBranch: string | null;
   onCommit: (message: string) => Promise<void>;
@@ -17,6 +18,7 @@ interface CommitPanelProps {
 export function CommitPanel({
   stagedCount,
   isDetachedHead,
+  hasConflicts,
   hasRemote,
   currentBranch,
   onCommit,
@@ -28,10 +30,12 @@ export function CommitPanel({
 
   const subjectLine = message.split("\n")[0] || "";
   const isOverLimit = subjectLine.length > MAX_SUBJECT_LENGTH;
-  const canCommit = stagedCount > 0 && message.trim().length > 0 && !isDetachedHead;
+  const isBusy = isCommitting || isPushing;
+  const canCommit =
+    stagedCount > 0 && message.trim().length > 0 && !isDetachedHead && !hasConflicts;
 
   const handleCommit = useCallback(async () => {
-    if (!canCommit || isCommitting) return;
+    if (!canCommit || isBusy) return;
     setIsCommitting(true);
     try {
       await onCommit(message);
@@ -39,10 +43,10 @@ export function CommitPanel({
     } finally {
       setIsCommitting(false);
     }
-  }, [canCommit, isCommitting, message, onCommit]);
+  }, [canCommit, isBusy, message, onCommit]);
 
   const handleCommitAndPush = useCallback(async () => {
-    if (!canCommit || isPushing) return;
+    if (!canCommit || isBusy) return;
     setIsPushing(true);
     try {
       await onCommitAndPush(message);
@@ -50,7 +54,7 @@ export function CommitPanel({
     } finally {
       setIsPushing(false);
     }
-  }, [canCommit, isPushing, message, onCommitAndPush]);
+  }, [canCommit, isBusy, message, onCommitAndPush]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -65,8 +69,6 @@ export function CommitPanel({
     },
     [handleCommit, handleCommitAndPush]
   );
-
-  const isBusy = isCommitting || isPushing;
 
   return (
     <div className="border-t border-divider p-3 space-y-2">

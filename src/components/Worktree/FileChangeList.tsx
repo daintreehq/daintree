@@ -36,6 +36,7 @@ const STATUS_CONFIG: Record<GitStatus, { label: string; color: string }> = {
   renamed: { label: "R", color: "text-[var(--color-status-info)]" },
   copied: { label: "C", color: "text-[var(--color-status-info)]" },
   ignored: { label: "I", color: "text-canopy-text/40" },
+  conflicted: { label: "!", color: "text-[var(--color-status-error)]" },
 };
 
 const STATUS_PRIORITY: Record<GitStatus, number> = {
@@ -46,6 +47,7 @@ const STATUS_PRIORITY: Record<GitStatus, number> = {
   copied: 4,
   untracked: 5,
   ignored: 6,
+  conflicted: 7,
 };
 
 interface FileChangeListProps {

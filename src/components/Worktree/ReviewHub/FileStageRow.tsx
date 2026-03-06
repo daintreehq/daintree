@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import type React from "react";
 import type { StagingFileEntry } from "@shared/types";
 import type { GitStatus } from "@shared/types";
 import { cn } from "@/lib/utils";
@@ -13,6 +14,7 @@ const STATUS_CONFIG: Record<GitStatus, { label: string; color: string }> = {
   renamed: { label: "R", color: "text-[var(--color-status-info)]" },
   copied: { label: "C", color: "text-[var(--color-status-info)]" },
   ignored: { label: "I", color: "text-canopy-text/40" },
+  conflicted: { label: "!", color: "text-[var(--color-status-error)]" },
 };
 
 interface FileStageRowProps {
@@ -45,10 +47,23 @@ export function FileStageRow({ file, isStaged, onToggle, onFileClick }: FileStag
     onFileClick(file.path, file.status);
   }, [onFileClick, file.path, file.status]);
 
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        onFileClick(file.path, file.status);
+      }
+    },
+    [onFileClick, file.path, file.status]
+  );
+
   return (
     <div
-      className="group flex items-center text-xs font-mono hover:bg-white/5 rounded px-1.5 py-0.5 cursor-pointer transition-colors"
+      role="button"
+      tabIndex={0}
+      className="group flex items-center text-xs font-mono hover:bg-white/5 rounded px-1.5 py-0.5 cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
       onClick={handleClick}
+      onKeyDown={handleKeyDown}
     >
       <TooltipProvider>
         <Tooltip>
