@@ -6,11 +6,11 @@ export const AGENT_BRAND_COLORS = {
 } as const;
 
 export const PANEL_KIND_BRAND_COLORS = {
-  terminal: "#6b7280",
-  agent: AGENT_BRAND_COLORS.claude,
-  browser: "#3b82f6",
-  notes: "#f59e0b",
-  "dev-preview": "#8b5cf6",
+  terminal: "var(--theme-activity-idle)",
+  agent: "var(--theme-accent-primary)",
+  browser: "var(--theme-category-blue)",
+  notes: "var(--theme-category-amber)",
+  "dev-preview": "var(--theme-category-violet)",
 } as const;
 
 export const BRANCH_TYPE_COLOR_CLASSES = {

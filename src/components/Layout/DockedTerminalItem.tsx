@@ -194,12 +194,12 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
           <button
             className={cn(
               "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition-all duration-150 max-w-[280px]",
-              "bg-white/[0.02] border-divider text-canopy-text/70",
-              "hover:text-canopy-text hover:bg-white/[0.04]",
+              "bg-[var(--dock-item-bg)] border-[var(--dock-item-border)] text-canopy-text/70",
+              "hover:text-canopy-text hover:bg-[var(--dock-item-bg-hover)]",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
               "cursor-grab active:cursor-grabbing",
               isOpen &&
-                "bg-white/[0.08] text-canopy-text border-canopy-accent/40 ring-1 ring-inset ring-canopy-accent/30"
+                "bg-[var(--dock-item-bg-active)] text-canopy-text border-[var(--dock-item-border-active)] ring-1 ring-inset ring-canopy-accent/30"
             )}
             onClick={(e) => {
               // Explicitly toggle popover state on click
@@ -242,7 +242,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
 
             {isActive && commandText && (
               <>
-                <div className="h-3 w-px bg-white/10 shrink-0" aria-hidden="true" />
+                <div className="h-3 w-px bg-border-subtle shrink-0" aria-hidden="true" />
                 <TooltipProvider>
                   <Tooltip>
                     <TooltipTrigger asChild>

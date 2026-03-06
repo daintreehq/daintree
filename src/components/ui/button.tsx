@@ -17,11 +17,11 @@ const buttonVariants = cva(
           "border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground active:scale-[0.98]",
         secondary:
           "bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80 active:scale-[0.98]",
-        ghost: "hover:bg-white/[0.06] hover:text-accent-foreground active:scale-[0.98]",
+        ghost: "hover:bg-overlay-strong hover:text-accent-foreground active:scale-[0.98]",
         link: "text-primary underline-offset-4 hover:underline",
         subtle:
-          "bg-canopy-bg text-canopy-text/60 hover:bg-white/[0.06] hover:text-canopy-text active:scale-[0.98]",
-        pill: "rounded-full bg-canopy-bg/50 border border-canopy-border text-canopy-text/60 hover:bg-white/[0.06] hover:text-canopy-text/80 active:scale-[0.98]",
+          "bg-canopy-bg text-canopy-text/60 hover:bg-overlay-strong hover:text-canopy-text active:scale-[0.98]",
+        pill: "rounded-full bg-canopy-bg/50 border border-canopy-border text-canopy-text/60 hover:bg-overlay-strong hover:text-canopy-text/80 active:scale-[0.98]",
         "ghost-danger":
           "text-status-error hover:bg-status-error/10 active:scale-[0.98] focus-visible:ring-status-error",
         "ghost-success": "text-status-success hover:bg-status-success/10 active:scale-[0.98]",

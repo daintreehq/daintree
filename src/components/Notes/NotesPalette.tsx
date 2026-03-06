@@ -788,10 +788,10 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                             "relative flex items-start px-3 py-2 cursor-pointer transition-colors group rounded-[var(--radius-md)] mb-0.5 border",
                             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1",
                             selectedNote?.id === note.id
-                              ? "bg-white/[0.03] border-overlay text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+                              ? "bg-overlay-soft border-overlay text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
                               : index === selectedIndex
-                                ? "bg-white/[0.03] border-transparent text-canopy-text"
-                                : "border-transparent text-canopy-text/70 hover:bg-white/[0.02] hover:text-canopy-text"
+                                ? "bg-overlay-soft border-transparent text-canopy-text"
+                                : "border-transparent text-canopy-text/70 hover:bg-overlay-subtle hover:text-canopy-text"
                           )}
                           onClick={() => handleSelectNote(note, index)}
                           onDoubleClick={(e) => handleStartRename(note, e)}
@@ -857,7 +857,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                 {selectedNote ? (
                   <>
                     {/* Note header */}
-                    <div className="px-3 h-10 border-b border-canopy-border flex items-center justify-between shrink-0 bg-white/[0.02]">
+                    <div className="px-3 h-10 border-b border-canopy-border flex items-center justify-between shrink-0 bg-overlay-subtle">
                       <TooltipProvider>
                         <Tooltip open={isEditingHeaderTitle ? false : undefined}>
                           <TooltipTrigger asChild>

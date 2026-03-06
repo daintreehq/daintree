@@ -54,8 +54,8 @@ describe("getActivityColor", () => {
 
   it("reads colors from CSS custom properties when document is available", () => {
     const mockGetPropertyValue = vi.fn((prop: string) => {
-      if (prop === "--color-state-working") return "#aabbcc";
-      if (prop === "--color-state-idle") return "#112233";
+      if (prop === "--theme-activity-working") return "#aabbcc";
+      if (prop === "--theme-activity-idle") return "#112233";
       return "";
     });
     vi.stubGlobal("document", { documentElement: {} });

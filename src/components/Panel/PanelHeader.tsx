@@ -379,7 +379,7 @@ function PanelHeaderComponent({
             : location === "dock"
               ? "bg-surface"
               : isFocused
-                ? "bg-white/[0.02]"
+                ? "bg-overlay-subtle"
                 : "bg-transparent",
           dragListeners && "cursor-grab active:cursor-grabbing",
           isPinged && !isMaximized && "animate-terminal-header-ping",

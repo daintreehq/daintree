@@ -29,7 +29,7 @@ export function NotificationCenterEntry({ entry }: NotificationCenterEntryProps)
   const Icon = config.icon;
 
   return (
-    <div className="flex items-start gap-2.5 px-3 py-2 hover:bg-white/[0.04] transition-colors">
+    <div className="flex items-start gap-2.5 px-3 py-2 hover:bg-overlay-medium transition-colors">
       <div className={cn("mt-0.5 shrink-0", config.className)}>
         <Icon className="h-3.5 w-3.5" />
       </div>

@@ -392,8 +392,8 @@ export function WorktreeCard({
         variant === "sidebar" && "border-b border-divider",
         variant === "grid" && "rounded-lg border border-divider bg-canopy-sidebar/50",
         isActive
-          ? "bg-white/[0.03] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]"
-          : "hover:bg-white/[0.02]",
+          ? "bg-overlay-soft shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]"
+          : "hover:bg-overlay-subtle",
         variant === "sidebar" && !isActive && "bg-transparent",
         isActive &&
           !isSingleWorktree &&
@@ -403,7 +403,7 @@ export function WorktreeCard({
         variant === "grid" &&
           !isActive &&
           "hover:border-canopy-accent/50 hover:shadow-lg hover:shadow-canopy-accent/5",
-        isFocused && !isActive && "bg-white/[0.02]",
+        isFocused && !isActive && "bg-overlay-subtle",
         (isIdleCard || isStaleCard) &&
           !isActive &&
           !isFocused &&

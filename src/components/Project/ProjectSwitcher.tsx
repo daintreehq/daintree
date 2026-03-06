@@ -170,8 +170,8 @@ export function ProjectSwitcher() {
                   "w-full justify-between h-12 px-2.5",
                   "rounded-[var(--radius-lg)]",
                   "border border-white/[0.06]",
-                  "bg-white/[0.02] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
-                  "hover:bg-white/[0.04] transition-colors",
+                  "bg-overlay-subtle shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
+                  "hover:bg-overlay-medium transition-colors",
                   "active:scale-100"
                 )}
                 disabled={isLoading}

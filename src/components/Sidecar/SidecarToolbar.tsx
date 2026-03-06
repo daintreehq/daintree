@@ -158,7 +158,7 @@ const SortableTab = memo(function SortableTab({
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
         isActive
           ? "bg-white/[0.08] text-canopy-text border-canopy-accent/40 ring-1 ring-inset ring-canopy-accent/30"
-          : "bg-white/[0.02] text-canopy-text/70 border-divider hover:bg-white/[0.04] hover:text-canopy-text",
+          : "bg-overlay-subtle text-canopy-text/70 border-divider hover:bg-overlay-medium hover:text-canopy-text",
         isDragging && "opacity-80 scale-105 shadow-xl cursor-grabbing"
       )}
     >
@@ -413,7 +413,7 @@ export function SidecarToolbar({
                           defaultNewTabUrl,
                         });
                       }}
-                      className="flex items-center justify-center w-8 h-[26px] rounded-full bg-white/[0.02] hover:bg-white/[0.03] text-canopy-text/70 hover:text-canopy-text border border-divider transition-all"
+                      className="flex items-center justify-center w-8 h-[26px] rounded-full bg-overlay-subtle hover:bg-overlay-soft text-canopy-text/70 hover:text-canopy-text border border-divider transition-all"
                       aria-label="New Tab"
                       aria-haspopup="menu"
                     >

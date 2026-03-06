@@ -51,8 +51,8 @@ export function TerminalListItem({
         "transition-colors",
         "border",
         isSelected
-          ? "bg-white/[0.03] border-overlay text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
-          : "border-transparent text-canopy-text/70 hover:bg-white/[0.02] hover:text-canopy-text"
+          ? "bg-overlay-soft border-overlay text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+          : "border-transparent text-canopy-text/70 hover:bg-overlay-subtle hover:text-canopy-text"
       )}
       onClick={onClick}
       aria-selected={isSelected}

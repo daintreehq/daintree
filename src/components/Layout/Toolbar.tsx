@@ -432,7 +432,7 @@ export function Toolbar({
           currentProject ? (
             <div
               key="github-stats"
-              className="relative flex items-center h-8 rounded-[var(--radius-md)] overflow-hidden bg-white/[0.03] border border-divider divide-x divide-[var(--border-divider)] mr-2"
+              className="relative flex items-center h-8 rounded-[var(--radius-md)] overflow-hidden bg-overlay-soft border border-divider divide-x divide-[var(--border-divider)] mr-2"
             >
               <TooltipProvider>
                 <Tooltip>
@@ -450,7 +450,7 @@ export function Toolbar({
                         }
                       }}
                       className={cn(
-                        "text-canopy-text hover:bg-white/[0.04] hover:text-canopy-accent h-full px-3 gap-2 rounded-none rounded-l-[var(--radius-md)]",
+                        "text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent h-full px-3 gap-2 rounded-none rounded-l-[var(--radius-md)]",
                         stats?.issueCount === 0 && "opacity-50",
                         isStale && "opacity-60",
                         issuesOpen &&
@@ -500,7 +500,7 @@ export function Toolbar({
                         }
                       }}
                       className={cn(
-                        "text-canopy-text hover:bg-white/[0.04] hover:text-canopy-accent h-full px-3 gap-2 rounded-none",
+                        "text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent h-full px-3 gap-2 rounded-none",
                         stats?.prCount === 0 && "opacity-50",
                         isStale && "opacity-60",
                         prsOpen && "bg-white/[0.04] ring-1 ring-canopy-accent/20 text-canopy-accent"
@@ -545,7 +545,7 @@ export function Toolbar({
                         setCommitsOpen(!commitsOpen);
                       }}
                       className={cn(
-                        "text-canopy-text hover:bg-white/[0.04] hover:text-canopy-accent h-full px-3 gap-2 rounded-none rounded-r-[var(--radius-md)]",
+                        "text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent h-full px-3 gap-2 rounded-none rounded-r-[var(--radius-md)]",
                         stats?.commitCount === 0 && "opacity-50",
                         commitsOpen &&
                           "bg-white/[0.04] ring-1 ring-canopy-accent/20 text-canopy-accent"
@@ -832,7 +832,7 @@ export function Toolbar({
 
   return (
     <>
-      <header className="relative flex h-12 items-center justify-between px-4 pt-1 shrink-0 app-drag-region bg-canopy-sidebar/95 backdrop-blur-sm border-b border-divider shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+      <header className="relative flex h-12 items-center justify-between px-4 pt-1 shrink-0 app-drag-region surface-chrome border-b border-divider">
         <div className="window-resize-strip" />
 
         {/* LEFT GROUP */}

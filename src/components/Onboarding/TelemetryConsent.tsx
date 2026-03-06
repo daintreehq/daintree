@@ -30,7 +30,7 @@ export function TelemetryConsent() {
     <div
       className={cn(
         "fixed bottom-4 left-1/2 -translate-x-1/2 z-50 w-full max-w-md",
-        "bg-canopy-surface border border-canopy-border rounded-[var(--radius-lg)] shadow-xl p-4"
+        "bg-surface border border-canopy-border rounded-[var(--radius-lg)] shadow-xl p-4"
       )}
       role="dialog"
       aria-label="Crash reporting consent"

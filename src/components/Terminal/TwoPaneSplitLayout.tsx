@@ -251,7 +251,7 @@ export function TwoPaneSplitLayout({
             {/* Overlay to hide terminal content during resize drag */}
             {isDraggingDivider && (
               <div
-                className="absolute inset-0 z-10 bg-canopy-panel-bg flex items-center justify-center"
+                className="absolute inset-0 z-10 bg-surface flex items-center justify-center"
                 aria-hidden="true"
               >
                 <div className="text-canopy-text/30 text-sm">Resizing...</div>
@@ -291,7 +291,7 @@ export function TwoPaneSplitLayout({
             {/* Overlay to hide terminal content during resize drag */}
             {isDraggingDivider && (
               <div
-                className="absolute inset-0 z-10 bg-canopy-panel-bg flex items-center justify-center"
+                className="absolute inset-0 z-10 bg-surface flex items-center justify-center"
                 aria-hidden="true"
               >
                 <div className="text-canopy-text/30 text-sm">Resizing...</div>
