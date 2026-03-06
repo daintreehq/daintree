@@ -443,3 +443,6 @@ export type {
   EditorSetConfigPayload,
   EditorGetConfigResult,
 } from "./editor.js";
+
+// App theme types - app-wide color scheme system
+export type { AppColorSchemeTokens, AppColorScheme, AppThemeConfig } from "./appTheme.js";

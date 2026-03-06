@@ -116,6 +116,7 @@ import type {
 import type { SpawnResult, TerminalStatusPayload } from "../pty-host.js";
 import type { HibernationConfig } from "./hibernation.js";
 import type { AgentRegistry, AgentMetadata } from "./agentCapabilities.js";
+import type { AppThemeConfig } from "../appTheme.js";
 
 // IPC Contract Maps
 
@@ -1164,6 +1165,34 @@ export interface IpcInvokeMap {
   "notification:play-sound": {
     args: [string];
     result: void;
+  };
+
+  // App theme channels
+  "app-theme:get": {
+    args: [];
+    result: AppThemeConfig;
+  };
+  "app-theme:set-color-scheme": {
+    args: [schemeId: string];
+    result: void;
+  };
+  "app-theme:set-custom-schemes": {
+    args: [schemesJson: string];
+    result: void;
+  };
+  "app-theme:import": {
+    args: [];
+    result:
+      | {
+          ok: true;
+          scheme: {
+            id: string;
+            name: string;
+            type: "dark" | "light";
+            colors: Record<string, string>;
+          };
+        }
+      | { ok: false; errors: string[] };
   };
 }
 

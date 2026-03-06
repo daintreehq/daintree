@@ -24,6 +24,7 @@ export type {
   UseProjectSwitcherPaletteReturn,
 } from "./useProjectSwitcherPalette";
 export { useTerminalConfig } from "./useTerminalConfig";
+export { useAppThemeConfig } from "./useAppThemeConfig";
 
 export { useWorktreeTerminals } from "./useWorktreeTerminals";
 export type { WorktreeTerminalCounts, UseWorktreeTerminalsResult } from "./useWorktreeTerminals";

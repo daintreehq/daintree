@@ -20,3 +20,4 @@ export { worktreeClient } from "./worktreeClient";
 export { worktreeConfigClient } from "./worktreeConfigClient";
 export { commandsClient } from "./commandsClient";
 export { editorClient } from "./editorClient";
+export { appThemeClient } from "./appThemeClient";

@@ -472,6 +472,12 @@ const CHANNELS = {
 
   // Clipboard channels
   CLIPBOARD_SAVE_IMAGE: "clipboard:save-image",
+
+  // App Theme channels
+  APP_THEME_GET: "app-theme:get",
+  APP_THEME_SET_COLOR_SCHEME: "app-theme:set-color-scheme",
+  APP_THEME_SET_CUSTOM_SCHEMES: "app-theme:set-custom-schemes",
+  APP_THEME_IMPORT: "app-theme:import",
 } as const;
 
 const api: ElectronAPI = {
@@ -1515,6 +1521,18 @@ const api: ElectronAPI = {
   // Clipboard API
   clipboard: {
     saveImage: () => _typedInvoke(CHANNELS.CLIPBOARD_SAVE_IMAGE),
+  },
+
+  appTheme: {
+    get: () => _typedInvoke(CHANNELS.APP_THEME_GET),
+
+    setColorScheme: (schemeId: string) =>
+      _typedInvoke(CHANNELS.APP_THEME_SET_COLOR_SCHEME, schemeId),
+
+    setCustomSchemes: (schemesJson: string) =>
+      _typedInvoke(CHANNELS.APP_THEME_SET_CUSTOM_SCHEMES, schemesJson),
+
+    importTheme: () => _typedInvoke(CHANNELS.APP_THEME_IMPORT),
   },
 };
 

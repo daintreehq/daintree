@@ -102,6 +102,7 @@ import type {
 import type { AppAgentConfig } from "../appAgent.js";
 import type { ActionContext } from "../actions.js";
 import type { AgentRegistry, AgentMetadata } from "./agentCapabilities.js";
+import type { AppThemeConfig } from "../appTheme.js";
 
 export interface NotificationSettings {
   completedEnabled: boolean;
@@ -752,6 +753,23 @@ export interface ElectronAPI {
   clipboard: {
     saveImage(): Promise<
       { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string }
+    >;
+  };
+  appTheme: {
+    get(): Promise<AppThemeConfig>;
+    setColorScheme(schemeId: string): Promise<void>;
+    setCustomSchemes(schemesJson: string): Promise<void>;
+    importTheme(): Promise<
+      | {
+          ok: true;
+          scheme: {
+            id: string;
+            name: string;
+            type: "dark" | "light";
+            colors: Record<string, string>;
+          };
+        }
+      | { ok: false; errors: string[] }
     >;
   };
 }

@@ -19,6 +19,7 @@ import {
   usePanelPalette,
   useProjectSwitcherPalette,
   useTerminalConfig,
+  useAppThemeConfig,
   useGlobalKeybindings,
   useContextInjection,
   useProjectSettings,
@@ -621,6 +622,7 @@ function App() {
 
   const loadRecipes = useRecipeStore((state) => state.loadRecipes);
   useTerminalConfig();
+  useAppThemeConfig();
   useWindowNotifications();
   useUpdateListener();
   const [homeDir, setHomeDir] = useState<string | undefined>(undefined);

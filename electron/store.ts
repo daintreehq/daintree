@@ -9,6 +9,7 @@ import type {
 } from "../shared/types/index.js";
 import type { IssueAssociation } from "../shared/types/ipc/worktree.js";
 import { DEFAULT_AGENT_SETTINGS, DEFAULT_APP_AGENT_CONFIG } from "../shared/types/index.js";
+import type { AppThemeConfig } from "../shared/types/appTheme.js";
 
 export interface StoreSchema {
   _schemaVersion: number;
@@ -111,6 +112,7 @@ export interface StoreSchema {
   projectEnv: Record<string, string>;
   appAgentConfig: AppAgentConfig;
   worktreeIssueMap: Record<string, IssueAssociation>;
+  appTheme: AppThemeConfig;
 }
 
 const storeOptions = {
@@ -169,6 +171,9 @@ const storeOptions = {
     projectEnv: {},
     appAgentConfig: DEFAULT_APP_AGENT_CONFIG,
     worktreeIssueMap: {},
+    appTheme: {
+      colorSchemeId: "canopy",
+    },
   },
   cwd: process.env.CANOPY_USER_DATA,
 };

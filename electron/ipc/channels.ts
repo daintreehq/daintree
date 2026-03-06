@@ -320,6 +320,11 @@ export const CHANNELS = {
   CLI_GET_STATUS: "cli:get-status",
 
   CLIPBOARD_SAVE_IMAGE: "clipboard:save-image",
+
+  APP_THEME_GET: "app-theme:get",
+  APP_THEME_SET_COLOR_SCHEME: "app-theme:set-color-scheme",
+  APP_THEME_SET_CUSTOM_SCHEMES: "app-theme:set-custom-schemes",
+  APP_THEME_IMPORT: "app-theme:import",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];
