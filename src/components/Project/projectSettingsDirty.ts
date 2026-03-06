@@ -97,7 +97,12 @@ export function createProjectSettingsSnapshot(
     delete normalizedCopyTreeSettings.alwaysExclude;
   }
 
-  const normalizedMode = branchPrefixMode ?? "none";
+  const trimmedCustom = branchPrefixCustom.trim();
+  // Mirrors the save-path logic: custom with empty prefix is equivalent to none
+  const normalizedMode =
+    (branchPrefixMode ?? "none") === "custom" && !trimmedCustom
+      ? "none"
+      : (branchPrefixMode ?? "none");
   return {
     name: name.trim(),
     emoji,
@@ -110,7 +115,7 @@ export function createProjectSettingsSnapshot(
     commandOverrides: sortedCommandOverrides,
     copyTreeSettings: normalizedCopyTreeSettings,
     branchPrefixMode: normalizedMode,
-    branchPrefixCustom: normalizedMode === "custom" ? branchPrefixCustom.trim() : "",
+    branchPrefixCustom: normalizedMode === "custom" ? trimmedCustom : "",
   };
 }
 
