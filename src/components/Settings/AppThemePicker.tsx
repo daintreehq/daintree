@@ -25,16 +25,10 @@ function ThemePreview({ scheme }: { scheme: AppColorScheme }) {
   );
 }
 
-async function persistCustomSchemes() {
-  const { customSchemes } = useAppThemeStore.getState();
-  await appThemeClient.setCustomSchemes(JSON.stringify(customSchemes));
-}
-
 export function AppThemePicker() {
   const selectedSchemeId = useAppThemeStore((s) => s.selectedSchemeId);
   const customSchemes = useAppThemeStore((s) => s.customSchemes);
   const setSelectedSchemeId = useAppThemeStore((s) => s.setSelectedSchemeId);
-  const addCustomScheme = useAppThemeStore((s) => s.addCustomScheme);
 
   const allSchemes = [...BUILT_IN_APP_SCHEMES, ...customSchemes];
 
@@ -49,28 +43,6 @@ export function AppThemePicker() {
     },
     [setSelectedSchemeId]
   );
-
-  const handleImport = useCallback(async () => {
-    try {
-      const result = await appThemeClient.importTheme();
-      if (!result.ok) return;
-
-      const imported = result.scheme;
-      const scheme: AppColorScheme = {
-        id: imported.id,
-        name: imported.name,
-        type: imported.type,
-        builtin: false,
-        tokens: imported.colors as unknown as AppColorScheme["tokens"],
-      };
-      addCustomScheme(scheme);
-      setSelectedSchemeId(scheme.id);
-      await appThemeClient.setColorScheme(scheme.id);
-      await persistCustomSchemes();
-    } catch (error) {
-      console.error("Failed to import app theme:", error);
-    }
-  }, [addCustomScheme, setSelectedSchemeId]);
 
   return (
     <div className="space-y-3">
@@ -96,12 +68,6 @@ export function AppThemePicker() {
           </button>
         ))}
       </div>
-      <button
-        onClick={handleImport}
-        className="text-xs text-canopy-accent hover:text-canopy-accent/80 transition-colors"
-      >
-        Import theme...
-      </button>
     </div>
   );
 }

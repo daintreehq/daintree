@@ -39,18 +39,23 @@ function injectSchemeToDOM(scheme: AppColorScheme): void {
   }
 }
 
+function resolveScheme(id: string, customSchemes: AppColorScheme[]): AppColorScheme {
+  const allSchemes = [...BUILT_IN_APP_SCHEMES, ...customSchemes];
+  return (
+    allSchemes.find((s) => s.id === id) ??
+    BUILT_IN_APP_SCHEMES.find((s) => s.id === DEFAULT_APP_SCHEME_ID)!
+  );
+}
+
 export const useAppThemeStore = create<AppThemeState>()((set, get) => ({
   selectedSchemeId: DEFAULT_APP_SCHEME_ID,
   customSchemes: [],
 
   setSelectedSchemeId: (id) => {
-    set({ selectedSchemeId: id });
     const { customSchemes } = get();
-    const allSchemes = [...BUILT_IN_APP_SCHEMES, ...customSchemes];
-    const scheme = allSchemes.find((s) => s.id === id);
-    if (scheme) {
-      injectSchemeToDOM(scheme);
-    }
+    const scheme = resolveScheme(id, customSchemes);
+    set({ selectedSchemeId: scheme.id });
+    injectSchemeToDOM(scheme);
   },
 
   addCustomScheme: (scheme) =>
@@ -58,12 +63,18 @@ export const useAppThemeStore = create<AppThemeState>()((set, get) => ({
       customSchemes: [...state.customSchemes.filter((s) => s.id !== scheme.id), scheme],
     })),
 
-  removeCustomScheme: (id) =>
+  removeCustomScheme: (id) => {
+    const { selectedSchemeId } = get();
+    const needsFallback = selectedSchemeId === id;
     set((state) => ({
       customSchemes: state.customSchemes.filter((s) => s.id !== id),
-      selectedSchemeId:
-        state.selectedSchemeId === id ? DEFAULT_APP_SCHEME_ID : state.selectedSchemeId,
-    })),
+      selectedSchemeId: needsFallback ? DEFAULT_APP_SCHEME_ID : state.selectedSchemeId,
+    }));
+    if (needsFallback) {
+      const defaultScheme = BUILT_IN_APP_SCHEMES.find((s) => s.id === DEFAULT_APP_SCHEME_ID)!;
+      injectSchemeToDOM(defaultScheme);
+    }
+  },
 
   injectTheme: (scheme) => {
     injectSchemeToDOM(scheme);

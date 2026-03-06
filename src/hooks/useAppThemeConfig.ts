@@ -1,6 +1,5 @@
 import { useEffect } from "react";
-import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
-import { useAppThemeStore, injectSchemeToDOM } from "@/store/appThemeStore";
+import { useAppThemeStore } from "@/store/appThemeStore";
 import { appThemeClient } from "@/clients/appThemeClient";
 import type { AppColorScheme } from "@shared/types/appTheme";
 
@@ -30,16 +29,7 @@ export function useAppThemeConfig() {
         }
 
         if (typeof config.colorSchemeId === "string" && config.colorSchemeId.trim()) {
-          const id = config.colorSchemeId.trim();
-          const { customSchemes } = useAppThemeStore.getState();
-          const allSchemes = [...BUILT_IN_APP_SCHEMES, ...customSchemes];
-          const scheme = allSchemes.find((s) => s.id === id);
-          if (scheme) {
-            injectSchemeToDOM(scheme);
-            useAppThemeStore.setState({ selectedSchemeId: id });
-          } else {
-            setSelectedSchemeId(id);
-          }
+          setSelectedSchemeId(config.colorSchemeId.trim());
         }
       })
       .catch((error) => {
