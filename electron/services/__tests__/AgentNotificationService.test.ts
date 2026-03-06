@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentState } from "../../../shared/types/domain.js";
 
 const storeMock = vi.hoisted(() => ({
   get: vi.fn(),
@@ -30,7 +31,7 @@ vi.mock("fs", () => ({
 import { events } from "../events.js";
 import { agentNotificationService } from "../AgentNotificationService.js";
 
-function makePayload(state: string, previousState = "working") {
+function makePayload(state: AgentState, previousState: AgentState = "working") {
   return {
     state,
     previousState,
