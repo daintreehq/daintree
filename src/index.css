@@ -980,7 +980,7 @@ body,
 }
 
 .github-status-error {
-  background: var(--color-status-warning);
+  background: var(--color-status-error);
   animation: github-status-error-pulse 2s ease-in-out infinite;
   will-change: opacity;
 }
