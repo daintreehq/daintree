@@ -27,14 +27,14 @@ describe("getActivityColor", () => {
   it("returns 100% accent at t=0 (immediate activity)", () => {
     const now = Date.now();
     vi.setSystemTime(now);
-    expect(getActivityColor(now)).toBe("color-mix(in oklab, #6b8de6 100%, #52525b)");
+    expect(getActivityColor(now)).toBe("color-mix(in oklab, #22c55e 100%, #52525b)");
   });
 
   it("returns ~50% mix at midpoint (45s)", () => {
     const start = Date.now();
     vi.setSystemTime(start + 45_000);
     const result = getActivityColor(start);
-    expect(result).toBe("color-mix(in oklab, #6b8de6 50%, #52525b)");
+    expect(result).toBe("color-mix(in oklab, #22c55e 50%, #52525b)");
   });
 
   it("returns idle color at or beyond 90 seconds", () => {

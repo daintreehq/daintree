@@ -11,10 +11,10 @@ interface PulseHeatmapProps {
 
 const HEAT_COLORS = [
   "bg-surface-highlight",
-  "bg-canopy-accent/20",
-  "bg-canopy-accent/40",
-  "bg-canopy-accent/60",
-  "bg-canopy-accent/80",
+  "bg-[color-mix(in_oklab,var(--color-state-working)_20%,transparent)]",
+  "bg-[color-mix(in_oklab,var(--color-state-working)_40%,transparent)]",
+  "bg-[color-mix(in_oklab,var(--color-state-working)_60%,transparent)]",
+  "bg-[color-mix(in_oklab,var(--color-state-working)_80%,transparent)]",
 ] as const;
 
 const BEFORE_PROJECT_COLOR = "bg-canopy-bg";

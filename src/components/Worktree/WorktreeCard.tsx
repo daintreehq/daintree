@@ -398,8 +398,8 @@ export function WorktreeCard({
         isActive &&
           !isSingleWorktree &&
           variant === "sidebar" &&
-          "before:absolute before:right-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-l before:bg-canopy-accent before:content-[''] before:z-10 motion-safe:before:animate-in motion-safe:before:fade-in motion-safe:before:duration-200",
-        variant === "grid" && isActive && "border-canopy-accent/70 shadow-md",
+          "before:absolute before:right-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-l before:bg-[var(--color-state-active)] before:content-[''] before:z-10 motion-safe:before:animate-in motion-safe:before:fade-in motion-safe:before:duration-200",
+        variant === "grid" && isActive && "border-[var(--color-state-active)]/70 shadow-md",
         variant === "grid" &&
           !isActive &&
           "hover:border-canopy-accent/50 hover:shadow-lg hover:shadow-canopy-accent/5",

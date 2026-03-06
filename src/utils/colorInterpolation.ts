@@ -26,7 +26,7 @@ export function getActivityColor(lastActivityTimestamp: number | null | undefine
   const factor = elapsed / DECAY_DURATION;
   const percentage = Math.max(0, Math.min(100, Math.round((1 - factor) * 100)));
 
-  const accent = getCSSColor("--color-state-working", "#6b8de6");
+  const accent = getCSSColor("--color-state-working", "#22c55e");
   const idle = getCSSColor("--color-state-idle", "#52525b");
 
   return `color-mix(in oklab, ${accent} ${percentage}%, ${idle})`;
