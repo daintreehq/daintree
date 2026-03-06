@@ -450,7 +450,7 @@ export function Toolbar({
                         }
                       }}
                       className={cn(
-                        "text-github-open hover:bg-white/[0.04] hover:text-canopy-accent h-full px-3 gap-2 rounded-none rounded-l-[var(--radius-md)]",
+                        "text-canopy-text hover:bg-white/[0.04] hover:text-canopy-accent h-full px-3 gap-2 rounded-none rounded-l-[var(--radius-md)]",
                         stats?.issueCount === 0 && "opacity-50",
                         isStale && "opacity-60",
                         issuesOpen &&
@@ -458,7 +458,7 @@ export function Toolbar({
                       )}
                       aria-label={`${stats?.issueCount ?? "\u2014"} open issues${isStale ? " (cached)" : ""}`}
                     >
-                      <CircleDot className="h-4 w-4" />
+                      <CircleDot className="h-4 w-4 text-github-open" />
                       <span className="text-xs font-medium tabular-nums">
                         {stats?.issueCount ?? "\u2014"}
                       </span>
@@ -500,14 +500,14 @@ export function Toolbar({
                         }
                       }}
                       className={cn(
-                        "text-github-open hover:bg-white/[0.04] hover:text-canopy-accent h-full px-3 gap-2 rounded-none",
+                        "text-canopy-text hover:bg-white/[0.04] hover:text-canopy-accent h-full px-3 gap-2 rounded-none",
                         stats?.prCount === 0 && "opacity-50",
                         isStale && "opacity-60",
                         prsOpen && "bg-white/[0.04] ring-1 ring-canopy-accent/20 text-canopy-accent"
                       )}
                       aria-label={`${stats?.prCount ?? "\u2014"} open pull requests${isStale ? " (cached)" : ""}`}
                     >
-                      <GitPullRequest className="h-4 w-4" />
+                      <GitPullRequest className="h-4 w-4 text-github-merged" />
                       <span className="text-xs font-medium tabular-nums">
                         {stats?.prCount ?? "\u2014"}
                       </span>
