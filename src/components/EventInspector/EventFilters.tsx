@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Search, X, Filter, Tag } from "lucide-react";
 import type { EventRecord, EventFilterOptions, EventCategory } from "@/store/eventStore";
+import { EVENT_CATEGORY_STYLES } from "@/config/categoryColors";
 
 const ALL_CATEGORIES: EventCategory[] = [
   "system",
@@ -14,17 +15,6 @@ const ALL_CATEGORIES: EventCategory[] = [
   "watcher",
   "artifact",
 ];
-
-const CATEGORY_CONFIG: Record<EventCategory, { label: string; color: string }> = {
-  system: { label: "System", color: "bg-status-info/20 text-status-info border-status-info/30" },
-  agent: { label: "Agent", color: "bg-status-success/20 text-status-success border-status-success/30" },
-  task: { label: "Task", color: "bg-status-success/20 text-status-success border-status-success/30" },
-  server: { label: "Server", color: "bg-status-warning/20 text-status-warning border-status-warning/30" },
-  file: { label: "File", color: "bg-canopy-accent/20 text-canopy-accent border-canopy-accent/30" },
-  ui: { label: "UI", color: "bg-github-merged/20 text-github-merged border-github-merged/30" },
-  watcher: { label: "Watcher", color: "bg-status-info/20 text-status-info border-status-info/30" },
-  artifact: { label: "Artifact", color: "bg-status-error/20 text-status-error border-status-error/30" },
-};
 
 type FilterSubset = Pick<EventFilterOptions, "types" | "categories" | "search" | "traceId">;
 
@@ -240,7 +230,7 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
             {ALL_CATEGORIES.map((category) => {
               const isActive = filters.categories?.includes(category) || false;
               const count = categoryCounts.get(category) || 0;
-              const config = CATEGORY_CONFIG[category];
+              const config = EVENT_CATEGORY_STYLES[category];
 
               return (
                 <Button

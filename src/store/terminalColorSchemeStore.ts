@@ -5,7 +5,7 @@ import {
   DEFAULT_SCHEME_ID,
   type TerminalColorScheme,
 } from "@/config/terminalColorSchemes";
-import { CANOPY_TERMINAL_THEME } from "@/utils/terminalTheme";
+import { getTerminalThemeFromCSS } from "@/utils/terminalTheme";
 
 interface TerminalColorSchemeState {
   selectedSchemeId: string;
@@ -45,7 +45,7 @@ export const useTerminalColorSchemeStore = create<TerminalColorSchemeState>()((s
     const scheme = allSchemes.find((s) => s.id === selectedSchemeId);
 
     if (!scheme || scheme.id === DEFAULT_SCHEME_ID) {
-      return { ...CANOPY_TERMINAL_THEME };
+      return getTerminalThemeFromCSS();
     }
 
     return {

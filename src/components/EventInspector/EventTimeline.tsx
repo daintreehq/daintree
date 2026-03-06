@@ -5,17 +5,7 @@ import type { EventRecord, EventCategory } from "@/store/eventStore";
 import { Circle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
-
-const CATEGORY_STYLES: Record<EventCategory, { label: string; color: string }> = {
-  system: { label: "SYS", color: "bg-status-info/20 text-status-info border-status-info/30" },
-  agent: { label: "AGT", color: "bg-status-success/20 text-status-success border-status-success/30" },
-  task: { label: "TSK", color: "bg-status-success/20 text-status-success border-status-success/30" },
-  server: { label: "SRV", color: "bg-status-warning/20 text-status-warning border-status-warning/30" },
-  file: { label: "FIL", color: "bg-canopy-accent/20 text-canopy-accent border-canopy-accent/30" },
-  ui: { label: "UI", color: "bg-github-merged/20 text-github-merged border-github-merged/30" },
-  watcher: { label: "WCH", color: "bg-status-info/20 text-status-info border-status-info/30" },
-  artifact: { label: "ART", color: "bg-status-error/20 text-status-error border-status-error/30" },
-};
+import { EVENT_CATEGORY_STYLES } from "@/config/categoryColors";
 
 interface EventTimelineProps {
   events: EventRecord[];
@@ -65,12 +55,13 @@ export function EventTimeline({
   };
 
   const getCategoryStyle = (category: EventCategory) => {
-    return (
-      CATEGORY_STYLES[category] || {
+    const style = EVENT_CATEGORY_STYLES[category];
+    if (!style)
+      return {
         label: "???",
         color: "bg-canopy-border/20 text-canopy-text/60 border-canopy-border/30",
-      }
-    );
+      };
+    return { label: style.shortLabel, color: style.color };
   };
 
   const getPayloadSummary = (event: EventRecord): string => {

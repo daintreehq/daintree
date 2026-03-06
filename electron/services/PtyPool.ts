@@ -2,6 +2,7 @@ import * as pty from "node-pty";
 import type { IDisposable } from "node-pty";
 import os from "os";
 import { getDefaultShell, getDefaultShellArgs } from "./pty/terminalShell.js";
+import { filterEnvironment } from "./pty/EnvironmentFilter.js";
 
 export interface PtyPoolConfig {
   poolSize?: number;
@@ -229,11 +230,7 @@ export class PtyPool {
   }
 
   private getFilteredEnv(): Record<string, string> {
-    const env = process.env as Record<string, string | undefined>;
-
-    const filtered = Object.fromEntries(
-      Object.entries(env).filter(([, value]) => value !== undefined)
-    ) as Record<string, string>;
+    const filtered = filterEnvironment(process.env as Record<string, string | undefined>);
 
     // TUI reliability: ensure rich terminal capabilities for Claude/Gemini CLIs
     filtered.TERM = "xterm-256color";

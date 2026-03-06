@@ -38,7 +38,7 @@ export const CANOPY_TERMINAL_THEME = CANOPY_TERMINAL_THEME_FALLBACK;
  * determined by the terminal application at runtime.
  */
 export function getTerminalThemeFromCSS(): typeof CANOPY_TERMINAL_THEME_FALLBACK {
-  if (typeof document === "undefined") return CANOPY_TERMINAL_THEME_FALLBACK;
+  if (typeof document === "undefined") return { ...CANOPY_TERMINAL_THEME_FALLBACK };
 
   const styles = getComputedStyle(document.documentElement);
   const getVar = (name: string, fallback: string): string => {
@@ -67,16 +67,16 @@ export function getTerminalThemeFromCSS(): typeof CANOPY_TERMINAL_THEME_FALLBACK
     green: CANOPY_TERMINAL_THEME_FALLBACK.green,
     yellow: getVar("--color-status-warning", CANOPY_TERMINAL_THEME_FALLBACK.yellow),
     blue: getVar("--color-status-info", CANOPY_TERMINAL_THEME_FALLBACK.blue),
-    magenta: "#a855f7",
-    cyan: "#22d3ee",
+    magenta: CANOPY_TERMINAL_THEME_FALLBACK.magenta,
+    cyan: CANOPY_TERMINAL_THEME_FALLBACK.cyan,
     white: getVar("--color-canopy-text", CANOPY_TERMINAL_THEME_FALLBACK.white),
     brightBlack: getVar("--color-state-idle", CANOPY_TERMINAL_THEME_FALLBACK.brightBlack),
-    brightRed: "#fca5a5",
+    brightRed: CANOPY_TERMINAL_THEME_FALLBACK.brightRed,
     brightGreen: getVar("--color-status-success", CANOPY_TERMINAL_THEME_FALLBACK.brightGreen),
-    brightYellow: "#fcd34d",
-    brightBlue: "#7dd3fc",
-    brightMagenta: "#c084fc",
-    brightCyan: "#67e8f9",
+    brightYellow: CANOPY_TERMINAL_THEME_FALLBACK.brightYellow,
+    brightBlue: CANOPY_TERMINAL_THEME_FALLBACK.brightBlue,
+    brightMagenta: CANOPY_TERMINAL_THEME_FALLBACK.brightMagenta,
+    brightCyan: CANOPY_TERMINAL_THEME_FALLBACK.brightCyan,
     brightWhite: "#fafafa",
     scrollbarSliderBackground: "rgba(82, 82, 91, 0.4)",
     scrollbarSliderHoverBackground: "rgba(82, 82, 91, 0.6)",
