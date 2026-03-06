@@ -380,6 +380,8 @@ export function WorktreeCard({
     onShowDeleteDialog: () => setShowDeleteDialog(true),
     onShowIssuePicker: () => setShowIssuePicker(true),
     onShowReviewHub: () => setShowReviewHub(true),
+    onShowCompareDiff: () =>
+      useWorktreeSelectionStore.getState().openCrossWorktreeDiff(worktree.id),
   });
 
   const cardContent = (
@@ -487,6 +489,8 @@ export function WorktreeCard({
             onOpenPRExternal: worktree.prUrl ? handleOpenPRExternal : undefined,
             onAttachIssue: () => setShowIssuePicker(true),
             onOpenReviewHub: () => setShowReviewHub(true),
+            onCompareDiff: () =>
+              useWorktreeSelectionStore.getState().openCrossWorktreeDiff(worktree.id),
             onRunRecipe: (recipeId) => void handleRunRecipe(recipeId),
             onSaveLayout,
             onTogglePin: handleTogglePin,

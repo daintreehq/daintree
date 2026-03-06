@@ -545,6 +545,12 @@ export interface ElectronAPI {
     commit(cwd: string, message: string): Promise<{ hash: string; summary: string }>;
     push(cwd: string, setUpstream?: boolean): Promise<{ success: boolean; error?: string }>;
     getStagingStatus(cwd: string): Promise<StagingStatus>;
+    compareWorktrees(
+      cwd: string,
+      branch1: string,
+      branch2: string,
+      filePath?: string
+    ): Promise<import("./git.js").CrossWorktreeDiffResult | string>;
   };
   terminalConfig: {
     get(): Promise<TerminalConfig>;
