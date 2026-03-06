@@ -19,35 +19,44 @@ const DEFAULT_SETTINGS: NotificationSettings = {
   soundFile: "chime.wav",
 };
 
+type LoadState = "loading" | "ready" | "error";
+
 export function NotificationSettingsTab() {
   const [settings, setSettings] = useState<NotificationSettings>(DEFAULT_SETTINGS);
-  const [loading, setLoading] = useState(true);
+  const [loadState, setLoadState] = useState<LoadState>("loading");
 
   useEffect(() => {
     window.electron?.notification
       ?.getSettings()
-      .then((s) => setSettings(s))
-      .catch(() => {})
-      .finally(() => setLoading(false));
+      .then((s) => {
+        setSettings(s);
+        setLoadState("ready");
+      })
+      .catch(() => setLoadState("error"));
   }, []);
 
   const update = async (patch: Partial<NotificationSettings>) => {
-    const next = { ...settings, ...patch };
-    setSettings(next);
-    try {
-      await window.electron?.notification?.setSettings(patch);
-    } catch {
-      // Revert on failure
-      setSettings(settings);
-    }
+    setSettings((prev) => {
+      const next = { ...prev, ...patch };
+      window.electron?.notification?.setSettings(patch).catch(() => setSettings(prev));
+      return next;
+    });
   };
 
   const handlePreview = () => {
     window.electron?.notification?.playSound(settings.soundFile).catch(() => {});
   };
 
-  if (loading) {
+  if (loadState === "loading") {
     return <div className="text-sm text-muted-foreground">Loading…</div>;
+  }
+
+  if (loadState === "error") {
+    return (
+      <div className="text-sm text-canopy-text/60">
+        Could not load notification settings. Restart Canopy and try again.
+      </div>
+    );
   }
 
   return (
@@ -67,8 +76,8 @@ export function NotificationSettingsTab() {
           />
           <ToggleRow
             id="notif-waiting"
-            label="Agent waiting (always on)"
-            description="Show a notification immediately when an agent needs input — fires regardless of focus"
+            label="Agent waiting for input"
+            description="Show a notification immediately when an agent needs input — always fires regardless of focus"
             checked={settings.waitingEnabled}
             onChange={(v) => update({ waitingEnabled: v })}
           />
@@ -97,7 +106,7 @@ export function NotificationSettingsTab() {
           />
 
           {settings.soundEnabled && (
-            <div className="pl-0 space-y-2">
+            <div className="space-y-2">
               <label className="text-sm font-medium text-canopy-text block">Sound</label>
               <div className="flex items-center gap-2">
                 <select

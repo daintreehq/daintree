@@ -9,7 +9,8 @@ import { playSound, type SoundHandle } from "../utils/soundPlayer.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const SOUNDS_DIR = path.join(__dirname, "resources", "sounds");
+// AgentNotificationService lives in electron/services/; sounds are in electron/resources/sounds/
+const SOUNDS_DIR = path.join(__dirname, "..", "resources", "sounds");
 
 const COMPLETION_DEBOUNCE_MS = 2000;
 const NOTIFICATION_STAGGER_MS = 500;
@@ -22,7 +23,6 @@ interface PendingNotification {
 }
 
 class AgentNotificationService {
-  private activeWorktreeId: string | undefined;
   private completionTimers = new Map<string, NodeJS.Timeout>();
   private notificationQueue: PendingNotification[] = [];
   private staggerTimer: NodeJS.Timeout | null = null;
@@ -34,11 +34,7 @@ class AgentNotificationService {
       this.handleStateChanged(payload);
     });
 
-    const unsubWorktreeSwitch = events.on("sys:worktree:switch", (payload) => {
-      this.activeWorktreeId = payload.worktreeId;
-    });
-
-    this.unsubscribers.push(unsubStateChanged, unsubWorktreeSwitch);
+    this.unsubscribers.push(unsubStateChanged);
   }
 
   private handleStateChanged(payload: {
@@ -54,20 +50,23 @@ class AgentNotificationService {
 
     if (state === previousState) return;
 
+    // Cancel any pending completion timer for this agent when it leaves "completed"
+    if (previousState === "completed" && state !== "completed") {
+      const key = agentId ?? worktreeId ?? "agent";
+      const timer = this.completionTimers.get(key);
+      if (timer) {
+        clearTimeout(timer);
+        this.completionTimers.delete(key);
+      }
+    }
+
     if (state === "completed" && settings.completedEnabled) {
       this.scheduleCompletionNotification(agentId ?? worktreeId ?? "agent", worktreeId, agentId);
     } else if (state === "waiting" && settings.waitingEnabled) {
-      // Waiting (permission request) fires immediately regardless of focus
+      // Waiting (permission request) is urgent — show immediately, bypass queue stagger
       const label = this.getLabel(agentId, worktreeId);
-      this.enqueue(
-        {
-          title: "Agent waiting",
-          body: `${label} is waiting for input`,
-          worktreeId,
-          triggerSound: settings.soundEnabled,
-        },
-        true
-      );
+      this.playNotificationSound(settings.soundEnabled);
+      notificationService.showNativeNotification("Agent waiting", `${label} is waiting for input`);
     } else if (state === "failed" && settings.failedEnabled) {
       const label = this.getLabel(agentId, worktreeId);
       this.enqueue(
@@ -139,7 +138,9 @@ class AgentNotificationService {
   private isFocusedOnWorktree(worktreeId?: string): boolean {
     if (!notificationService.isWindowFocused()) return false;
     if (!worktreeId) return true;
-    return this.activeWorktreeId === worktreeId;
+    // Read active worktree directly from store — always reflects current state
+    const activeWorktreeId = store.get("appState").activeWorktreeId;
+    return activeWorktreeId === worktreeId;
   }
 
   private getLabel(agentId?: string, worktreeId?: string): string {
@@ -186,6 +187,8 @@ class AgentNotificationService {
       clearTimeout(this.staggerTimer);
       this.staggerTimer = null;
     }
+
+    this.notificationQueue = [];
 
     if (this.lastSoundHandle) {
       this.lastSoundHandle.cancel();
