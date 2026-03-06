@@ -358,6 +358,13 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
   ipcMain.handle(CHANNELS.SYSTEM_START_AGENT_UPDATE, handleSystemStartAgentUpdate);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_START_AGENT_UPDATE));
 
+  const handleSystemHealthCheck = async () => {
+    const { runSystemHealthCheck } = await import("../../services/SystemHealthCheck.js");
+    return await runSystemHealthCheck();
+  };
+  ipcMain.handle(CHANNELS.SYSTEM_HEALTH_CHECK, handleSystemHealthCheck);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_HEALTH_CHECK));
+
   const handleProjectGetAll = async () => {
     return projectStore.getAllProjects();
   };

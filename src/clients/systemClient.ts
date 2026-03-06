@@ -41,6 +41,10 @@ export const systemClient = {
     return window.electron.system.getTmpDir();
   },
 
+  healthCheck: (): ReturnType<typeof window.electron.system.healthCheck> => {
+    return window.electron.system.healthCheck();
+  },
+
   onWake: (
     callback: (data: { sleepDuration: number; timestamp: number }) => void
   ): (() => void) => {

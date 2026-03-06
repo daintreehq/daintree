@@ -3,6 +3,7 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { AgentSetupStep } from "./AgentSetupStep";
 import { EmbeddedTerminal } from "./EmbeddedTerminal";
+import { SystemHealthCheckStep } from "./SystemHealthCheckStep";
 import { AGENT_REGISTRY, getAgentConfig } from "@/config/agents";
 import { cliAvailabilityClient } from "@/clients";
 import type { CliAvailability } from "@shared/types";
@@ -55,7 +56,7 @@ interface AgentSetupWizardProps {
   agentIds?: readonly string[];
 }
 
-type WizardStep = "welcome" | "agent" | "complete";
+type WizardStep = "health" | "welcome" | "agent" | "complete";
 
 export function AgentSetupWizard({
   isOpen,
@@ -69,7 +70,7 @@ export function AgentSetupWizard({
     return filtered.length > 0 ? filtered : AGENT_ORDER;
   }, [agentIds]);
 
-  const [step, setStep] = useState<WizardStep>("welcome");
+  const [step, setStep] = useState<WizardStep>("health");
   const [agentIndex, setAgentIndex] = useState(0);
   const [availability, setAvailability] = useState<CliAvailability>(
     initialAvailability ?? ({} as CliAvailability)
@@ -96,7 +97,7 @@ export function AgentSetupWizard({
   const prevIsOpenRef = useRef(false);
   useEffect(() => {
     if (isOpen && !prevIsOpenRef.current) {
-      setStep("welcome");
+      setStep("health");
       setAgentIndex(0);
     }
     prevIsOpenRef.current = isOpen;
@@ -126,7 +127,9 @@ export function AgentSetupWizard({
   }, [isOpen]);
 
   const handleNext = useCallback(() => {
-    if (step === "welcome") {
+    if (step === "health") {
+      setStep("welcome");
+    } else if (step === "welcome") {
       setStep("agent");
       setAgentIndex(0);
     } else if (step === "agent") {
@@ -139,7 +142,9 @@ export function AgentSetupWizard({
   }, [step, agentIndex, effectiveAgentOrder]);
 
   const handleBack = useCallback(() => {
-    if (step === "agent") {
+    if (step === "welcome") {
+      setStep("health");
+    } else if (step === "agent") {
       if (agentIndex > 0) {
         setAgentIndex((i) => i - 1);
       } else {
@@ -161,8 +166,14 @@ export function AgentSetupWizard({
   }, [onClose]);
 
   const stepNumber =
-    step === "welcome" ? 0 : step === "agent" ? agentIndex + 1 : effectiveAgentOrder.length + 1;
-  const totalSteps = effectiveAgentOrder.length + 2;
+    step === "health"
+      ? 0
+      : step === "welcome"
+        ? 1
+        : step === "agent"
+          ? agentIndex + 2
+          : effectiveAgentOrder.length + 2;
+  const totalSteps = effectiveAgentOrder.length + 3;
 
   return (
     <AppDialog isOpen={isOpen} onClose={handleFinish} size="lg" dismissible={true}>
@@ -179,6 +190,7 @@ export function AgentSetupWizard({
       </AppDialog.Header>
 
       <AppDialog.Body>
+        {step === "health" && <SystemHealthCheckStep onReady={handleNext} />}
         {step === "welcome" && (
           <WelcomeStep availability={availability} agentOrder={effectiveAgentOrder} />
         )}
@@ -220,7 +232,7 @@ export function AgentSetupWizard({
             ))}
           </div>
           <div className="flex items-center gap-2">
-            {step !== "welcome" && (
+            {step !== "health" && (
               <Button variant="ghost" onClick={handleBack} className="text-canopy-text/70">
                 <ChevronLeft className="w-4 h-4" />
                 Back

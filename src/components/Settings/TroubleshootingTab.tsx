@@ -1,10 +1,82 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useTransition } from "react";
 import { Button } from "@/components/ui/button";
-import { FileText, Trash2, Bug, AlertTriangle } from "lucide-react";
+import {
+  FileText,
+  Trash2,
+  Bug,
+  AlertTriangle,
+  ShieldCheck,
+  CircleCheck,
+  CircleX,
+  RotateCw,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
-import { appClient } from "@/clients";
-import type { AppState } from "@shared/types";
+import { appClient, systemClient } from "@/clients";
+import type { AppState, SystemHealthCheckResult } from "@shared/types";
 import { actionService } from "@/services/ActionService";
+
+function SystemHealthSection() {
+  const [result, setResult] = useState<SystemHealthCheckResult | null>(null);
+  const [isPending, startTransition] = useTransition();
+
+  const runCheck = useCallback(() => {
+    startTransition(async () => {
+      const data = await systemClient.healthCheck();
+      setResult(data);
+    });
+  }, []);
+
+  return (
+    <div>
+      <h4 className="text-sm font-medium text-canopy-text mb-1 flex items-center gap-2">
+        <ShieldCheck className="w-4 h-4" />
+        System Health Check
+      </h4>
+      <p className="text-xs text-canopy-text/60 mb-3">
+        Verify that required tools (Git, Node.js, npm) are installed and available.
+      </p>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={runCheck}
+        disabled={isPending}
+        className="text-canopy-text border-canopy-border hover:bg-canopy-border hover:text-canopy-text mb-3"
+      >
+        <RotateCw className={cn("w-4 h-4", isPending && "animate-spin")} />
+        {isPending ? "Checking…" : result ? "Re-run Check" : "Run Health Check"}
+      </Button>
+      {result && (
+        <div className="space-y-1.5">
+          {result.prerequisites.map((check) => {
+            const labels: Record<string, string> = { git: "Git", node: "Node.js", npm: "npm" };
+            const label = labels[check.tool] ?? check.tool;
+            return (
+              <div
+                key={check.tool}
+                className="flex items-center gap-2.5 px-3 py-2 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg/30"
+              >
+                {check.available ? (
+                  <CircleCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                ) : (
+                  <CircleX className="w-3.5 h-3.5 text-[var(--color-status-error)] shrink-0" />
+                )}
+                <span className="text-sm text-canopy-text">{label}</span>
+                {check.version && (
+                  <span className="text-xs text-canopy-text/40">v{check.version}</span>
+                )}
+                {!check.available && (
+                  <span className="ml-auto text-xs text-[var(--color-status-error)]">
+                    Not found
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function TroubleshootingTab() {
   const [developerMode, setDeveloperMode] = useState(false);
@@ -157,6 +229,10 @@ export function TroubleshootingTab() {
 
   return (
     <div className="space-y-6">
+      <div className="space-y-4">
+        <SystemHealthSection />
+      </div>
+
       <div className="space-y-4">
         <div>
           <h4 className="text-sm font-medium text-canopy-text mb-1">Application Logs</h4>

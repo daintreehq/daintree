@@ -228,6 +228,7 @@ const CHANNELS = {
   SYSTEM_GET_AGENT_UPDATE_SETTINGS: "system:get-agent-update-settings",
   SYSTEM_SET_AGENT_UPDATE_SETTINGS: "system:set-agent-update-settings",
   SYSTEM_START_AGENT_UPDATE: "system:start-agent-update",
+  SYSTEM_HEALTH_CHECK: "system:health-check",
   SYSTEM_WAKE: "system:wake",
 
   // PR detection channels
@@ -780,6 +781,8 @@ const api: ElectronAPI = {
 
     startAgentUpdate: (payload: { agentId: string; method?: string }) =>
       _typedInvoke(CHANNELS.SYSTEM_START_AGENT_UPDATE, payload),
+
+    healthCheck: () => _typedInvoke(CHANNELS.SYSTEM_HEALTH_CHECK),
 
     onWake: (callback: (data: { sleepDuration: number; timestamp: number }) => void) => {
       const handler = (

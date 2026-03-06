@@ -68,6 +68,7 @@ import type {
   StartAgentUpdatePayload,
   StartAgentUpdateResult,
   CliInstallStatus,
+  SystemHealthCheckResult,
 } from "./system.js";
 import type { AppState, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
@@ -389,6 +390,10 @@ export interface IpcInvokeMap {
   "system:start-agent-update": {
     args: [StartAgentUpdatePayload];
     result: StartAgentUpdateResult;
+  };
+  "system:health-check": {
+    args: [];
+    result: SystemHealthCheckResult;
   };
 
   // App state channels

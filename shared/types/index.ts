@@ -122,6 +122,8 @@ export type {
   AgentUpdateSettings,
   StartAgentUpdatePayload,
   StartAgentUpdateResult,
+  PrerequisiteCheckResult,
+  SystemHealthCheckResult,
   // PR detection IPC types
   PRDetectedPayload,
   PRClearedPayload,

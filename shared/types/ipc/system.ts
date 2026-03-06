@@ -69,6 +69,24 @@ export interface StartAgentUpdateResult {
   command: string;
 }
 
+/** Result of checking a single system prerequisite */
+export interface PrerequisiteCheckResult {
+  /** Tool name (e.g. "git", "node", "npm") */
+  tool: string;
+  /** Whether the tool was found in PATH */
+  available: boolean;
+  /** Detected version string (e.g. "2.43.0"), null if not available */
+  version: string | null;
+}
+
+/** Full system health check result */
+export interface SystemHealthCheckResult {
+  /** Results for each checked prerequisite */
+  prerequisites: PrerequisiteCheckResult[];
+  /** True when all required prerequisites are available */
+  allRequired: boolean;
+}
+
 /** Status of the installed Canopy CLI tool */
 export interface CliInstallStatus {
   /** Whether the CLI script is installed */

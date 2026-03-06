@@ -5,3 +5,4 @@ export {
   resetAgentSetupFlag,
 } from "./AgentSetupWizard";
 export { AgentSelectionStep, shouldShowAgentSelection } from "./AgentSelectionStep";
+export { SystemHealthCheckStep } from "./SystemHealthCheckStep";
