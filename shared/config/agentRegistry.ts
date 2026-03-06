@@ -1,4 +1,5 @@
 import type { AgentRoutingConfig } from "../types/agentSettings.js";
+import { AGENT_BRAND_COLORS } from "../theme/index.js";
 
 export interface AgentHelpConfig {
   args: string[];
@@ -182,7 +183,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     id: "claude",
     name: "Claude",
     command: "claude",
-    color: "#CC785C",
+    color: AGENT_BRAND_COLORS.claude,
     iconId: "claude",
     supportsContextInjection: true,
     shortcut: "Cmd/Ctrl+Alt+C",
@@ -283,7 +284,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     id: "gemini",
     name: "Gemini",
     command: "gemini",
-    color: "#4285F4",
+    color: AGENT_BRAND_COLORS.gemini,
     iconId: "gemini",
     supportsContextInjection: true,
     shortcut: "Cmd/Ctrl+Alt+G",
@@ -383,7 +384,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     id: "codex",
     name: "Codex",
     command: "codex",
-    color: "#e4e4e7",
+    color: AGENT_BRAND_COLORS.codex,
     iconId: "codex",
     supportsContextInjection: true,
     shortcut: "Cmd/Ctrl+Alt+X",
@@ -485,7 +486,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     id: "opencode",
     name: "OpenCode",
     command: "opencode",
-    color: "#10b981",
+    color: AGENT_BRAND_COLORS.opencode,
     iconId: "opencode",
     supportsContextInjection: true,
     shortcut: "Cmd/Ctrl+Alt+O",

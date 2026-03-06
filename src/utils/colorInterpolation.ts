@@ -14,20 +14,20 @@ function getCSSColor(property: string, fallback: string): string {
 
 export function getActivityColor(lastActivityTimestamp: number | null | undefined): string {
   if (lastActivityTimestamp == null || !Number.isFinite(lastActivityTimestamp)) {
-    return getCSSColor("--color-state-idle", "#52525b");
+    return getCSSColor("--theme-activity-idle", "#52525b");
   }
 
   const elapsed = Math.max(0, Date.now() - lastActivityTimestamp);
 
   if (elapsed >= DECAY_DURATION) {
-    return getCSSColor("--color-state-idle", "#52525b");
+    return getCSSColor("--theme-activity-idle", "#52525b");
   }
 
   const factor = elapsed / DECAY_DURATION;
   const percentage = Math.max(0, Math.min(100, Math.round((1 - factor) * 100)));
 
-  const accent = getCSSColor("--color-state-working", "#22c55e");
-  const idle = getCSSColor("--color-state-idle", "#52525b");
+  const accent = getCSSColor("--theme-activity-working", "#22c55e");
+  const idle = getCSSColor("--theme-activity-idle", "#52525b");
 
   return `color-mix(in oklab, ${accent} ${percentage}%, ${idle})`;
 }

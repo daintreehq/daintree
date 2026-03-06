@@ -28,19 +28,19 @@ export const inputTheme = EditorView.theme({
     fontSize: "12px",
     lineHeight: "20px",
     padding: "0 4px 0 0",
-    caretColor: "var(--color-canopy-accent)",
+    caretColor: "var(--theme-accent-primary)",
   },
   "&.cm-focused .cm-cursor": {
-    borderLeft: "2px solid var(--color-canopy-accent)",
+    borderLeft: "2px solid var(--theme-accent-primary)",
   },
   "&.cm-focused .cm-selectionBackground": {
-    backgroundColor: "rgba(96, 211, 224, 0.22)",
+    backgroundColor: "color-mix(in oklab, var(--theme-syntax-chip) 22%, transparent)",
   },
   ".cm-dropCursor": {
-    borderLeftColor: "var(--color-canopy-accent)",
+    borderLeftColor: "var(--theme-accent-primary)",
   },
   ".cm-placeholder": {
-    color: "rgba(255,255,255,0.25)",
+    color: "color-mix(in oklab, var(--theme-text-primary) 25%, transparent)",
   },
   ".cm-scroller": {
     overflow: "hidden",
@@ -50,18 +50,18 @@ export const inputTheme = EditorView.theme({
   },
   ".cm-slash-command-chip": {
     fontWeight: 600,
-    color: "var(--color-canopy-accent)",
+    color: "var(--theme-accent-primary)",
     textDecoration: "underline dotted 1px",
     textUnderlineOffset: "2px",
   },
   ".cm-slash-command-chip-invalid": {
-    color: "rgb(248, 113, 113)",
+    color: "var(--theme-terminal-red)",
     textDecoration: "underline wavy 1px",
     textUnderlineOffset: "2px",
   },
   ".cm-file-chip": {
     fontWeight: 600,
-    color: "rgb(96, 211, 224)",
+    color: "var(--theme-syntax-chip)",
     textDecoration: "underline dotted 1px",
     textUnderlineOffset: "2px",
   },
@@ -83,9 +83,9 @@ export const inputTheme = EditorView.theme({
     whiteSpace: "nowrap",
     gap: "4px",
     padding: "0 5px",
-    color: "var(--color-canopy-accent)",
+    color: "var(--theme-accent-primary)",
     fontWeight: 600,
-    background: "rgba(96, 211, 224, 0.1)",
+    background: "color-mix(in oklab, var(--theme-syntax-chip) 10%, transparent)",
     borderRadius: "3px",
   },
   ".cm-image-chip img": {
@@ -103,9 +103,9 @@ export const inputTheme = EditorView.theme({
     whiteSpace: "nowrap",
     gap: "4px",
     padding: "0 5px",
-    color: "var(--color-canopy-accent)",
+    color: "var(--theme-accent-primary)",
     fontWeight: 600,
-    background: "rgba(96, 211, 224, 0.1)",
+    background: "color-mix(in oklab, var(--theme-syntax-chip) 10%, transparent)",
     borderRadius: "3px",
   },
   ".cm-file-drop-chip svg": {
@@ -156,7 +156,7 @@ function createTooltipContent(command: SlashCommand): HTMLElement {
 
   // Simple one-line description
   const description = document.createElement("p");
-  description.className = "text-[11px] text-canopy-text/80 leading-snug";
+  description.className = "text-[11px] text-text-primary/80 leading-snug";
   description.textContent = command.description ?? command.label ?? "";
   container.appendChild(description);
 
@@ -179,8 +179,9 @@ export function createSlashTooltip(commandMap: Map<string, SlashCommand>) {
         const dom = document.createElement("div");
         dom.className = "px-2 py-1 text-xs";
         dom.style.cssText = `
-          background: rgba(24, 24, 27, 0.95);
+          background: color-mix(in oklab, var(--theme-surface-canvas) 95%, transparent);
           border-radius: 4px;
+          border: 1px solid var(--theme-border-subtle);
           box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
         `;
 

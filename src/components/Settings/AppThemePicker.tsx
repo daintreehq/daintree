@@ -3,22 +3,50 @@ import { cn } from "@/lib/utils";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { appThemeClient } from "@/clients/appThemeClient";
+import { APP_THEME_PREVIEW_KEYS } from "@shared/theme";
 import type { AppColorScheme } from "@shared/types/appTheme";
 
 function ThemePreview({ scheme }: { scheme: AppColorScheme }) {
   const t = scheme.tokens;
   return (
-    <div className="rounded p-1.5" style={{ backgroundColor: t["canopy-bg"] }}>
+    <div
+      className="rounded p-1.5"
+      style={{ backgroundColor: t[APP_THEME_PREVIEW_KEYS.background] }}
+    >
       <div className="flex gap-0.5">
-        <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: t["canopy-sidebar"] }} />
+        <div
+          className="w-3 h-3 rounded-sm"
+          style={{ backgroundColor: t[APP_THEME_PREVIEW_KEYS.sidebar] }}
+        />
         <div className="flex-1 flex gap-0.5 flex-wrap">
-          <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: t["canopy-accent"] }} />
-          <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: t["status-success"] }} />
-          <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: t["status-warning"] }} />
-          <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: t["status-error"] }} />
-          <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: t["canopy-text"] }} />
-          <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: t["canopy-border"] }} />
-          <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: t["surface"] }} />
+          <div
+            className="w-3 h-3 rounded-sm"
+            style={{ backgroundColor: t[APP_THEME_PREVIEW_KEYS.accent] }}
+          />
+          <div
+            className="w-3 h-3 rounded-sm"
+            style={{ backgroundColor: t[APP_THEME_PREVIEW_KEYS.success] }}
+          />
+          <div
+            className="w-3 h-3 rounded-sm"
+            style={{ backgroundColor: t[APP_THEME_PREVIEW_KEYS.warning] }}
+          />
+          <div
+            className="w-3 h-3 rounded-sm"
+            style={{ backgroundColor: t[APP_THEME_PREVIEW_KEYS.danger] }}
+          />
+          <div
+            className="w-3 h-3 rounded-sm"
+            style={{ backgroundColor: t[APP_THEME_PREVIEW_KEYS.text] }}
+          />
+          <div
+            className="w-3 h-3 rounded-sm"
+            style={{ backgroundColor: t[APP_THEME_PREVIEW_KEYS.border] }}
+          />
+          <div
+            className="w-3 h-3 rounded-sm"
+            style={{ backgroundColor: t[APP_THEME_PREVIEW_KEYS.panel] }}
+          />
         </div>
       </div>
     </div>

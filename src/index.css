@@ -2,6 +2,68 @@
 @plugin "@tailwindcss/typography";
 
 @theme inline {
+  --color-surface-canvas: var(--theme-surface-canvas);
+  --color-surface-sidebar: var(--theme-surface-sidebar);
+  --color-surface-panel: var(--theme-surface-panel);
+  --color-surface-panel-elevated: var(--theme-surface-panel-elevated);
+  --color-surface-grid: var(--theme-surface-grid);
+  --color-text-primary: var(--theme-text-primary);
+  --color-text-secondary: var(--theme-text-secondary);
+  --color-text-muted: var(--theme-text-muted);
+  --color-text-inverse: var(--theme-text-inverse);
+  --color-border-default: var(--theme-border-default);
+  --color-border-subtle: var(--theme-border-subtle);
+  --color-border-strong: var(--theme-border-strong);
+  --color-border-divider: var(--theme-border-divider);
+  --color-accent-primary: var(--theme-accent-primary);
+  --color-accent-foreground: var(--theme-accent-foreground);
+  --color-accent-soft: var(--theme-accent-soft);
+  --color-accent-muted: var(--theme-accent-muted);
+  --color-focus-ring: var(--theme-focus-ring);
+  --color-status-success: var(--theme-status-success);
+  --color-status-warning: var(--theme-status-warning);
+  --color-status-danger: var(--theme-status-danger);
+  --color-status-info: var(--theme-status-info);
+  --color-activity-active: var(--theme-activity-active);
+  --color-activity-idle: var(--theme-activity-idle);
+  --color-activity-working: var(--theme-activity-working);
+  --color-activity-waiting: var(--theme-activity-waiting);
+  --color-overlay-subtle: var(--theme-overlay-subtle);
+  --color-overlay-soft: var(--theme-overlay-soft);
+  --color-overlay-medium: var(--theme-overlay-medium);
+  --color-overlay-strong: var(--theme-overlay-strong);
+  --color-overlay-emphasis: var(--theme-overlay-emphasis);
+  --color-scrim-soft: var(--theme-scrim-soft);
+  --color-scrim-medium: var(--theme-scrim-medium);
+  --color-scrim-strong: var(--theme-scrim-strong);
+  --color-github-open: var(--theme-github-open);
+  --color-github-merged: var(--theme-github-merged);
+  --color-github-closed: var(--theme-github-closed);
+  --color-github-draft: var(--theme-github-draft);
+  --color-terminal-selection: var(--theme-terminal-selection);
+  --color-syntax-comment: var(--theme-syntax-comment);
+  --color-syntax-punctuation: var(--theme-syntax-punctuation);
+  --color-syntax-number: var(--theme-syntax-number);
+  --color-syntax-string: var(--theme-syntax-string);
+  --color-syntax-operator: var(--theme-syntax-operator);
+  --color-syntax-keyword: var(--theme-syntax-keyword);
+  --color-syntax-function: var(--theme-syntax-function);
+  --color-syntax-link: var(--theme-syntax-link);
+  --color-syntax-quote: var(--theme-syntax-quote);
+  --color-syntax-chip: var(--theme-syntax-chip);
+  --color-category-blue: var(--theme-category-blue);
+  --color-category-purple: var(--theme-category-purple);
+  --color-category-cyan: var(--theme-category-cyan);
+  --color-category-green: var(--theme-category-green);
+  --color-category-amber: var(--theme-category-amber);
+  --color-category-orange: var(--theme-category-orange);
+  --color-category-teal: var(--theme-category-teal);
+  --color-category-indigo: var(--theme-category-indigo);
+  --color-category-rose: var(--theme-category-rose);
+  --color-category-pink: var(--theme-category-pink);
+  --color-category-violet: var(--theme-category-violet);
+  --color-category-slate: var(--theme-category-slate);
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -46,77 +108,37 @@
   --height-sm: 2rem;
   --height-md: 2.5rem;
   --height-lg: 3rem;
-
-  /* Digital Ecology theme colors - The Forest Floor (Backgrounds)
-   * Surfaces use warm-shifted neutrals: still neutral enough to host
-   * agent brands, diffs, and semantic colors without clashing,
-   * but warmer than pure zinc to avoid "default Tailwind" feel. */
-  --color-canopy-bg: #19191a; /* Warm charcoal: slightly warmer than zinc-950 */
-  --color-canopy-sidebar: #131312; /* Warm dark: distinct from main content */
-  --color-canopy-border: #282828; /* Warm border: subtle separation */
-  --color-canopy-text: #e4e4e7; /* Zinc-200: Soft white, not harsh */
-  --color-canopy-accent: #3f9366; /* Canopy Eucalyptus: Brand accent (~4.7:1 on bg) */
-  --color-canopy-accent-rgb: 63, 147, 102; /* RGB values for accent color */
-  --color-terminal-selection: #1a2c22; /* Green-tinted: Terminal selection background */
-
-  /* Semantic status colors - earthy/mineral palette harmonized with brand
-   * Brand green (#3F9366) is intentionally distinct from success (#5F8B6D):
-   * brand = habitat/place/focus, success = completed/healthy/merged */
-  --color-status-success: #5f8b6d; /* Fern: completed/healthy, distinct from brand */
-  --color-status-warning: #c59a4e; /* Pollen: warm amber, harmonized */
-  --color-status-error: #c8746c; /* Clay: earthy coral, clear but not harsh */
-  --color-status-info: #7b8c96; /* River slate: cool neutral, distinct from muted text */
-
-  /* Semantic state colors - for agent/terminal lifecycle states
-   * Green communicates "alive / in-progress" independent of brand identity.
-   * Brand blue (canopy-accent) belongs on interactive elements only
-   * (buttons, focus rings, text selections, active tab underlines).
-   * state-working/state-active are intentionally distinct from status-success
-   * (#5F8B6D fern = completed) — vivid green means "in progress". */
-  --color-state-active: #22c55e; /* Green-500: Active Worktree — 7.84:1 on bg (WCAG AAA) */
-  --color-state-idle: #52525b; /* Zinc-600: Dormant */
-  --color-state-working: #22c55e; /* Green-500: AI is Working — 7.84:1 on bg (WCAG AAA) */
-  --color-state-waiting: #fbbf24; /* Amber-400: Needs Attention */
-
-  /* Server status colors - for dev server states */
-  --color-server-running: #5f8b6d; /* Same as status-success: Server running */
-  --color-server-stopped: #52525b; /* Same as state-idle: Server inactive */
-  --color-server-starting: #c59a4e; /* Same as status-warning: Server starting */
-  --color-server-error: #c8746c; /* Same as status-error: Server error */
-
-  /* GitHub entity state colors — adapted from Primer dark mode */
-  --color-github-open: #3fb950; /* Green: open issues & PRs */
-  --color-github-merged: #a371f7; /* Purple: merged PRs & closed-completed issues */
-  --color-github-closed: #f85149; /* Red: closed PRs (not merged) */
-  --color-github-draft: #8b949e; /* Grey: draft PRs, closed-not-planned issues */
-
-  /* Grid background - off-black base for noise texture */
-  --color-grid-bg: #0e0e0d;
-
-  /* Terminal surface background - lighter for contrast with grid */
-  --color-surface: #1d1d1e;
-  --color-surface-highlight: #2b2b2c;
-
-  /* Subtle focus indicator - low opacity white for keyboard navigation */
-  --color-canopy-focus: rgba(255, 255, 255, 0.18);
-
-  /* Category differentiation colors
-   * 12 curated OKLCH hues for labeling distinct UI categories.
-   * Used for action palette badges, event inspector chips, and other category indicators.
-   * L≈0.70, C≈0.11–0.14: readable as text on dark bg, muted enough as low-opacity badge bg.
-   */
-  --color-cat-blue: oklch(0.7 0.13 250);
-  --color-cat-purple: oklch(0.7 0.13 310);
-  --color-cat-cyan: oklch(0.72 0.11 215);
-  --color-cat-green: oklch(0.7 0.13 145);
-  --color-cat-amber: oklch(0.73 0.14 75);
-  --color-cat-orange: oklch(0.7 0.14 45);
-  --color-cat-teal: oklch(0.7 0.11 185);
-  --color-cat-indigo: oklch(0.7 0.13 275);
-  --color-cat-rose: oklch(0.7 0.14 5);
-  --color-cat-pink: oklch(0.72 0.13 340);
-  --color-cat-violet: oklch(0.7 0.13 295);
-  --color-cat-slate: oklch(0.65 0.04 240);
+  --color-canopy-bg: var(--theme-legacy-canopy-bg);
+  --color-canopy-sidebar: var(--theme-legacy-canopy-sidebar);
+  --color-canopy-border: var(--theme-legacy-canopy-border);
+  --color-canopy-text: var(--theme-legacy-canopy-text);
+  --color-canopy-accent: var(--theme-legacy-canopy-accent);
+  --color-canopy-accent-rgb: var(--theme-accent-rgb);
+  --color-surface: var(--theme-legacy-surface);
+  --color-surface-highlight: var(--theme-legacy-surface-highlight);
+  --color-grid-bg: var(--theme-legacy-grid-bg);
+  --color-canopy-focus: var(--theme-legacy-canopy-focus);
+  --color-status-error: var(--theme-legacy-status-error);
+  --color-state-active: var(--theme-legacy-state-active);
+  --color-state-idle: var(--theme-legacy-state-idle);
+  --color-state-working: var(--theme-legacy-state-working);
+  --color-state-waiting: var(--theme-legacy-state-waiting);
+  --color-server-running: var(--theme-legacy-server-running);
+  --color-server-stopped: var(--theme-legacy-server-stopped);
+  --color-server-starting: var(--theme-legacy-server-starting);
+  --color-server-error: var(--theme-legacy-server-error);
+  --color-cat-blue: var(--theme-category-blue);
+  --color-cat-purple: var(--theme-category-purple);
+  --color-cat-cyan: var(--theme-category-cyan);
+  --color-cat-green: var(--theme-category-green);
+  --color-cat-amber: var(--theme-category-amber);
+  --color-cat-orange: var(--theme-category-orange);
+  --color-cat-teal: var(--theme-category-teal);
+  --color-cat-indigo: var(--theme-category-indigo);
+  --color-cat-rose: var(--theme-category-rose);
+  --color-cat-pink: var(--theme-category-pink);
+  --color-cat-violet: var(--theme-category-violet);
+  --color-cat-slate: var(--theme-category-slate);
 }
 
 :root {
@@ -140,25 +162,17 @@
   --z-nested-dialog: 75;
   --z-toast: 80;
 
-  /* Overlay elevation system
-   * Shadows use large blur + low alpha for soft, diffused depth.
-   * Inset highlight creates subtle lift without harsh edges.
-   */
-  --shadow-overlay: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 12px 40px rgba(0, 0, 0, 0.4);
-  --shadow-modal: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 20px 56px rgba(0, 0, 0, 0.5);
+  --shadow-overlay: 0 1px 0 var(--theme-overlay-soft) inset, 0 12px 40px rgba(0, 0, 0, 0.4);
+  --shadow-modal: 0 1px 0 var(--theme-overlay-medium) inset, 0 20px 56px rgba(0, 0, 0, 0.5);
   --shadow-dock-popover:
-    0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 25px 70px -10px rgba(0, 0, 0, 0.6);
-  /* Strong multi-layered shadow for docked terminal/tab panels (no scrim overlay) */
+    0 1px 0 var(--theme-overlay-strong) inset, 0 25px 70px -10px rgba(0, 0, 0, 0.6);
   --shadow-dock-panel-popover:
-    0 1px 0 rgba(255, 255, 255, 0.06) inset, 0 10px 40px -10px rgba(0, 0, 0, 0.35),
+    0 1px 0 var(--theme-overlay-strong) inset, 0 10px 40px -10px rgba(0, 0, 0, 0.35),
     0 20px 60px -15px rgba(0, 0, 0, 0.25), 0 30px 80px -20px rgba(0, 0, 0, 0.15);
-  --border-overlay: rgba(255, 255, 255, 0.06);
-  --border-dock-popup: rgba(255, 255, 255, 0.12);
+  --border-overlay: var(--theme-border-strong);
+  --border-dock-popup: color-mix(in oklab, var(--theme-border-strong) 85%, white);
+  --border-divider: var(--theme-border-divider);
 
-  /* Subtle divider - lighter than borders for internal separations */
-  --border-divider: rgba(255, 255, 255, 0.04);
-
-  /* Dock system tokens - bottom bar styling */
   --dock-bg: var(--color-canopy-sidebar);
   --dock-border: var(--border-divider);
   --dock-shadow: 0 -2px 12px rgba(0, 0, 0, 0.15);
@@ -166,11 +180,11 @@
   --dock-padding-y: 0.375rem;
   --dock-gap: 0.375rem;
   --dock-item-height: 2rem;
-  --dock-item-bg: rgba(255, 255, 255, 0.02);
-  --dock-item-bg-hover: rgba(255, 255, 255, 0.04);
-  --dock-item-bg-active: rgba(255, 255, 255, 0.05);
-  --dock-item-border: rgba(255, 255, 255, 0.06);
-  --dock-item-border-active: rgba(var(--color-canopy-accent-rgb), 0.3);
+  --dock-item-bg: var(--theme-overlay-subtle);
+  --dock-item-bg-hover: var(--theme-overlay-medium);
+  --dock-item-bg-active: color-mix(in oklab, var(--theme-accent-primary) 12%, transparent);
+  --dock-item-border: var(--theme-border-subtle);
+  --dock-item-border-active: rgba(var(--theme-accent-rgb), 0.32);
 
   --animation-duration: 150ms;
   --transition-duration: 150ms;
@@ -218,82 +232,39 @@
   --dock-item-height: 1.75rem;
 }
 
-/* Dark Mode - Unified Token System
- *
- * CANONICAL SOURCE: Canopy tokens (defined in @theme inline above)
- * This .dark class projects Canopy values into Shadcn semantic tokens.
- *
- * Surface Layering (darkest to lightest):
- * 1. App Background (canopy-bg) - Deepest layer
- * 2. Sidebar (canopy-sidebar) - Between background and cards
- * 3. Cards (surface) - Elevated from background
- * 4. Popovers/Modals (surface-highlight) - Highest elevation
- *
- * Primary Action: Eucalyptus Green (canopy-accent) - The Brand Color
- */
 .dark {
-  /* Background surfaces - sourced from Canopy */
-  --background: var(--color-canopy-bg);
-  --foreground: var(--color-canopy-text);
-
-  /* Card surface - elevated from background */
-  --card: var(--color-surface);
-  --card-foreground: var(--color-canopy-text);
-
-  /* Popover/Modal - highest elevation */
-  --popover: var(--color-surface-highlight);
-  --popover-foreground: var(--color-canopy-text);
-
-  /* Primary actions - aligned with brand accent (eucalyptus green)
-   * Dark background on green provides strong contrast (~4.7:1)
-   */
-  --primary: var(--color-canopy-accent);
-  --primary-foreground: var(--color-canopy-bg);
-
-  /* Secondary surfaces */
-  --secondary: var(--color-surface-highlight);
-  --secondary-foreground: var(--color-canopy-text);
-
-  /* Muted surfaces - for secondary content */
-  --muted: var(--color-surface);
-  --muted-foreground: color-mix(in oklab, var(--color-canopy-text) 65%, var(--color-canopy-bg));
-
-  /* Accent surfaces - for highlights/hovers */
-  --accent: var(--color-surface-highlight);
-  --accent-foreground: var(--color-canopy-text);
-
-  /* Destructive actions - sourced from Canopy status
-   * Dark background color on red provides better contrast
-   * Note: White text on red-400 fails WCAG AA (2.77:1)
-   */
-  --destructive: var(--color-status-error);
-  --destructive-foreground: var(--color-canopy-bg);
-
-  /* Borders - sourced from Canopy */
-  --border: var(--color-canopy-border);
-
-  /* Input fields */
-  --input: var(--color-canopy-border);
-
-  /* Focus rings - subtle white for keyboard navigation (not accent) */
-  --ring: var(--color-canopy-focus);
-
-  /* Chart colors - unchanged (no Canopy equivalent) */
+  --background: var(--color-surface-canvas);
+  --foreground: var(--color-text-primary);
+  --card: var(--color-surface-panel);
+  --card-foreground: var(--color-text-primary);
+  --popover: var(--color-surface-panel-elevated);
+  --popover-foreground: var(--color-text-primary);
+  --primary: var(--color-accent-primary);
+  --primary-foreground: var(--color-accent-foreground);
+  --secondary: var(--color-surface-panel-elevated);
+  --secondary-foreground: var(--color-text-primary);
+  --muted: var(--color-surface-panel);
+  --muted-foreground: var(--color-text-secondary);
+  --accent: var(--color-accent-soft);
+  --accent-foreground: var(--color-text-primary);
+  --destructive: var(--color-status-danger);
+  --destructive-foreground: var(--color-text-inverse);
+  --border: var(--color-border-default);
+  --input: var(--color-border-default);
+  --ring: var(--color-focus-ring);
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
   --chart-4: oklch(0.627 0.265 303.9);
   --chart-5: oklch(0.645 0.246 16.439);
-
-  /* Sidebar - sourced from Canopy */
-  --sidebar: var(--color-canopy-sidebar);
-  --sidebar-foreground: var(--color-canopy-text);
-  --sidebar-primary: var(--color-canopy-accent);
-  --sidebar-primary-foreground: var(--color-canopy-bg);
-  --sidebar-accent: var(--color-canopy-border);
-  --sidebar-accent-foreground: var(--color-canopy-text);
-  --sidebar-border: var(--color-canopy-border);
-  --sidebar-ring: var(--color-canopy-focus);
+  --sidebar: var(--color-surface-sidebar);
+  --sidebar-foreground: var(--color-text-primary);
+  --sidebar-primary: var(--color-accent-primary);
+  --sidebar-primary-foreground: var(--color-accent-foreground);
+  --sidebar-accent: var(--color-overlay-soft);
+  --sidebar-accent-foreground: var(--color-text-primary);
+  --sidebar-border: var(--color-border-default);
+  --sidebar-ring: var(--color-focus-ring);
 }
 
 @layer base {
@@ -1109,39 +1080,39 @@ body[data-performance-mode="true"] .github-status-error {
 
 /* Added lines - Tokyo Night green */
 .diff-viewer .diff-code-insert {
-  background: rgba(158, 206, 106, 0.12);
+  background: color-mix(in oklab, var(--color-status-success) 12%, transparent);
 }
 
 .diff-viewer .diff-gutter-insert {
-  background: rgba(158, 206, 106, 0.2);
-  color: #9ece6a;
+  background: color-mix(in oklab, var(--color-status-success) 20%, transparent);
+  color: var(--color-status-success);
 }
 
-/* Deleted lines - Tokyo Night red */
+/* Deleted lines */
 .diff-viewer .diff-code-delete {
-  background: rgba(247, 118, 142, 0.12);
+  background: color-mix(in oklab, var(--color-status-danger) 12%, transparent);
 }
 
 .diff-viewer .diff-gutter-delete {
-  background: rgba(247, 118, 142, 0.2);
-  color: #f7768e;
+  background: color-mix(in oklab, var(--color-status-danger) 20%, transparent);
+  color: var(--color-status-danger);
 }
 
 /* Word-level change highlighting */
 .diff-viewer .diff-code-edit .diff-code-insert-edit {
-  background: rgba(158, 206, 106, 0.3);
+  background: color-mix(in oklab, var(--color-status-success) 30%, transparent);
   border-radius: var(--radius-xs);
 }
 
 .diff-viewer .diff-code-edit .diff-code-delete-edit {
-  background: rgba(247, 118, 142, 0.3);
+  background: color-mix(in oklab, var(--color-status-danger) 30%, transparent);
   border-radius: var(--radius-xs);
 }
 
 /* Hunk header styling */
 .diff-viewer .diff-hunk-header {
   background: var(--color-surface);
-  color: #7aa2f7;
+  color: var(--color-status-info);
   padding: 4px 12px;
   font-size: 11px;
   border-top: 1px solid var(--color-canopy-border);
@@ -1196,11 +1167,11 @@ body[data-performance-mode="true"] .github-status-error {
 .diff-viewer .token.prolog,
 .diff-viewer .token.doctype,
 .diff-viewer .token.cdata {
-  color: #565f89;
+  color: var(--color-syntax-comment);
 }
 
 .diff-viewer .token.punctuation {
-  color: #c0caf5;
+  color: var(--color-syntax-punctuation);
 }
 
 .diff-viewer .token.property,
@@ -1209,7 +1180,7 @@ body[data-performance-mode="true"] .github-status-error {
 .diff-viewer .token.number,
 .diff-viewer .token.constant,
 .diff-viewer .token.symbol {
-  color: #ff9e64;
+  color: var(--color-syntax-number);
 }
 
 .diff-viewer .token.selector,
@@ -1217,7 +1188,7 @@ body[data-performance-mode="true"] .github-status-error {
 .diff-viewer .token.string,
 .diff-viewer .token.char,
 .diff-viewer .token.builtin {
-  color: #9ece6a;
+  color: var(--color-syntax-string);
 }
 
 .diff-viewer .token.operator,
@@ -1225,24 +1196,24 @@ body[data-performance-mode="true"] .github-status-error {
 .diff-viewer .token.url,
 .diff-viewer .language-css .token.string,
 .diff-viewer .style .token.string {
-  color: #89ddff;
+  color: var(--color-syntax-operator);
 }
 
 .diff-viewer .token.atrule,
 .diff-viewer .token.attr-value,
 .diff-viewer .token.keyword {
-  color: #bb9af7;
+  color: var(--color-syntax-keyword);
 }
 
 .diff-viewer .token.function,
 .diff-viewer .token.class-name {
-  color: #7aa2f7;
+  color: var(--color-syntax-function);
 }
 
 .diff-viewer .token.regex,
 .diff-viewer .token.important,
 .diff-viewer .token.variable {
-  color: #e0af68;
+  color: var(--color-syntax-number);
 }
 
 /* Ensure proper table layout */

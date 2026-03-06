@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { BUILT_IN_APP_SCHEMES } from "../appColorSchemes";
-import type { AppColorSchemeTokens } from "@shared/types/appTheme";
+import { APP_THEME_TOKEN_KEYS } from "@shared/theme";
 
 function getScheme(id: string) {
   const scheme = BUILT_IN_APP_SCHEMES.find((s) => s.id === id);
@@ -18,35 +18,10 @@ describe("appColorSchemes rebrand — semantic color separation", () => {
   });
 
   describe("all schemes are structurally complete", () => {
-    const requiredKeys: (keyof AppColorSchemeTokens)[] = [
-      "canopy-bg",
-      "canopy-sidebar",
-      "canopy-border",
-      "canopy-text",
-      "canopy-accent",
-      "surface",
-      "surface-highlight",
-      "grid-bg",
-      "canopy-focus",
-      "status-success",
-      "status-warning",
-      "status-error",
-      "status-info",
-      "state-active",
-      "state-idle",
-      "state-working",
-      "state-waiting",
-      "server-running",
-      "server-stopped",
-      "server-starting",
-      "server-error",
-      "terminal-selection",
-    ];
-
     it.each(BUILT_IN_APP_SCHEMES.map((s) => [s.id, s]))(
       'scheme "%s" has all required token keys',
       (_id, scheme) => {
-        for (const key of requiredKeys) {
+        for (const key of APP_THEME_TOKEN_KEYS) {
           expect(scheme.tokens).toHaveProperty(key, expect.any(String));
         }
       }
@@ -58,98 +33,58 @@ describe("appColorSchemes rebrand — semantic color separation", () => {
       expect(getScheme("canopy").tokens["status-warning"]).toBe("#C59A4E");
     });
 
-    it("status-error is clay coral (#C8746C)", () => {
-      expect(getScheme("canopy").tokens["status-error"]).toBe("#C8746C");
+    it("status-danger is clay coral (#C8746C)", () => {
+      expect(getScheme("canopy").tokens["status-danger"]).toBe("#C8746C");
     });
 
     it("status-info is river slate (#7B8C96)", () => {
       expect(getScheme("canopy").tokens["status-info"]).toBe("#7B8C96");
     });
 
-    it("state-working is green, not canopy-accent", () => {
+    it("activity-working is green, not accent-primary", () => {
       const tokens = getScheme("canopy").tokens;
-      expect(tokens["state-working"]).not.toBe(tokens["canopy-accent"]);
-      expect(tokens["state-working"]).toBe("#22c55e");
+      expect(tokens["activity-working"]).not.toBe(tokens["accent-primary"]);
+      expect(tokens["activity-working"]).toBe("#22c55e");
     });
 
-    it("state-active is green, not canopy-accent", () => {
+    it("activity-active is green, not accent-primary", () => {
       const tokens = getScheme("canopy").tokens;
-      expect(tokens["state-active"]).not.toBe(tokens["canopy-accent"]);
-      expect(tokens["state-active"]).toBe("#22c55e");
+      expect(tokens["activity-active"]).not.toBe(tokens["accent-primary"]);
+      expect(tokens["activity-active"]).toBe("#22c55e");
     });
 
-    it("state-active matches state-working (same green family)", () => {
+    it("activity-active matches activity-working (same green family)", () => {
       const tokens = getScheme("canopy").tokens;
-      expect(tokens["state-active"]).toBe(tokens["state-working"]);
+      expect(tokens["activity-active"]).toBe(tokens["activity-working"]);
     });
 
-    it("state-working differs from status-success (in-progress vs completed)", () => {
+    it("activity-working differs from status-success (in-progress vs completed)", () => {
       const tokens = getScheme("canopy").tokens;
-      expect(tokens["state-working"]).not.toBe(tokens["status-success"]);
-    });
-
-    it("server-running matches status-success", () => {
-      const tokens = getScheme("canopy").tokens;
-      expect(tokens["server-running"]).toBe(tokens["status-success"]);
-    });
-
-    it("server-stopped matches state-idle", () => {
-      const tokens = getScheme("canopy").tokens;
-      expect(tokens["server-stopped"]).toBe(tokens["state-idle"]);
-    });
-
-    it("server-starting matches status-warning", () => {
-      const tokens = getScheme("canopy").tokens;
-      expect(tokens["server-starting"]).toBe(tokens["status-warning"]);
-    });
-
-    it("server-error matches status-error", () => {
-      const tokens = getScheme("canopy").tokens;
-      expect(tokens["server-error"]).toBe(tokens["status-error"]);
+      expect(tokens["activity-working"]).not.toBe(tokens["status-success"]);
     });
   });
 
   describe("semantic alias invariants — canopy-slate scheme", () => {
-    it("state-working is green, not canopy-accent", () => {
+    it("activity-working is green, not accent-primary", () => {
       const tokens = getScheme("canopy-slate").tokens;
-      expect(tokens["state-working"]).not.toBe(tokens["canopy-accent"]);
-      expect(tokens["state-working"]).toBe("#22c55e");
+      expect(tokens["activity-working"]).not.toBe(tokens["accent-primary"]);
+      expect(tokens["activity-working"]).toBe("#22c55e");
     });
 
-    it("state-active is green, not canopy-accent", () => {
+    it("activity-active is green, not accent-primary", () => {
       const tokens = getScheme("canopy-slate").tokens;
-      expect(tokens["state-active"]).not.toBe(tokens["canopy-accent"]);
-      expect(tokens["state-active"]).toBe("#22c55e");
+      expect(tokens["activity-active"]).not.toBe(tokens["accent-primary"]);
+      expect(tokens["activity-active"]).toBe("#22c55e");
     });
 
-    it("state-active matches state-working (same green family)", () => {
+    it("activity-active matches activity-working (same green family)", () => {
       const tokens = getScheme("canopy-slate").tokens;
-      expect(tokens["state-active"]).toBe(tokens["state-working"]);
+      expect(tokens["activity-active"]).toBe(tokens["activity-working"]);
     });
 
-    it("state-working differs from status-success (in-progress vs completed)", () => {
+    it("activity-working differs from status-success (in-progress vs completed)", () => {
       const tokens = getScheme("canopy-slate").tokens;
-      expect(tokens["state-working"]).not.toBe(tokens["status-success"]);
-    });
-
-    it("server-running matches status-success", () => {
-      const tokens = getScheme("canopy-slate").tokens;
-      expect(tokens["server-running"]).toBe(tokens["status-success"]);
-    });
-
-    it("server-stopped matches state-idle", () => {
-      const tokens = getScheme("canopy-slate").tokens;
-      expect(tokens["server-stopped"]).toBe(tokens["state-idle"]);
-    });
-
-    it("server-starting matches status-warning", () => {
-      const tokens = getScheme("canopy-slate").tokens;
-      expect(tokens["server-starting"]).toBe(tokens["status-warning"]);
-    });
-
-    it("server-error matches status-error", () => {
-      const tokens = getScheme("canopy-slate").tokens;
-      expect(tokens["server-error"]).toBe(tokens["status-error"]);
+      expect(tokens["activity-working"]).not.toBe(tokens["status-success"]);
     });
   });
 });

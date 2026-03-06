@@ -1,4 +1,9 @@
 import type { ITheme } from "@xterm/xterm";
+import {
+  DEFAULT_APP_SCHEME_ID as DEFAULT_APP_THEME_ID,
+  getTerminalThemeFromAppScheme,
+  resolveAppTheme,
+} from "@shared/theme";
 
 export interface TerminalColorScheme {
   id: string;
@@ -37,36 +42,15 @@ export type AnsiColorKey = (typeof ANSI_COLOR_KEYS)[number];
 
 export const DEFAULT_SCHEME_ID = "canopy";
 
+const defaultAppScheme = resolveAppTheme(DEFAULT_APP_THEME_ID);
+
 export const BUILT_IN_SCHEMES: TerminalColorScheme[] = [
   {
     id: "canopy",
-    name: "Canopy (Default)",
-    type: "dark",
+    name: "Match App Theme",
+    type: defaultAppScheme.type,
     builtin: true,
-    colors: {
-      background: "#19191a",
-      foreground: "#e4e4e7",
-      cursor: "#3F9366",
-      cursorAccent: "#19191a",
-      selectionBackground: "#1a2c22",
-      selectionForeground: "#e4e4e7",
-      black: "#19191a",
-      red: "#f87171",
-      green: "#10b981",
-      yellow: "#fbbf24",
-      blue: "#38bdf8",
-      magenta: "#a855f7",
-      cyan: "#22d3ee",
-      white: "#e4e4e7",
-      brightBlack: "#52525b",
-      brightRed: "#fca5a5",
-      brightGreen: "#34d399",
-      brightYellow: "#fcd34d",
-      brightBlue: "#7dd3fc",
-      brightMagenta: "#c084fc",
-      brightCyan: "#67e8f9",
-      brightWhite: "#fafafa",
-    },
+    colors: getTerminalThemeFromAppScheme(defaultAppScheme),
   },
   {
     id: "dracula",

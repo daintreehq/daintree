@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { ITheme } from "@xterm/xterm";
+import { TERMINAL_SCROLLBAR_DEFAULTS } from "@shared/theme";
 import {
   BUILT_IN_SCHEMES,
   DEFAULT_SCHEME_ID,
@@ -15,12 +16,6 @@ interface TerminalColorSchemeState {
   removeCustomScheme: (id: string) => void;
   getEffectiveTheme: () => ITheme;
 }
-
-const SCROLLBAR_DEFAULTS = {
-  scrollbarSliderBackground: "rgba(82, 82, 91, 0.4)",
-  scrollbarSliderHoverBackground: "rgba(82, 82, 91, 0.6)",
-  scrollbarSliderActiveBackground: "rgba(82, 82, 91, 0.8)",
-};
 
 export const useTerminalColorSchemeStore = create<TerminalColorSchemeState>()((set, get) => ({
   selectedSchemeId: DEFAULT_SCHEME_ID,
@@ -50,7 +45,7 @@ export const useTerminalColorSchemeStore = create<TerminalColorSchemeState>()((s
 
     return {
       ...scheme.colors,
-      ...SCROLLBAR_DEFAULTS,
+      ...TERMINAL_SCROLLBAR_DEFAULTS,
     };
   },
 }));

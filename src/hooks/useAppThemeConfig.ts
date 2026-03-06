@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { appThemeClient } from "@/clients/appThemeClient";
+import { normalizeAppColorScheme } from "@shared/theme";
 import type { AppColorScheme } from "@shared/types/appTheme";
 
 export function useAppThemeConfig() {
@@ -20,7 +21,7 @@ export function useAppThemeConfig() {
             const schemes = JSON.parse(config.customSchemes);
             if (Array.isArray(schemes)) {
               for (const scheme of schemes) {
-                addCustomScheme(scheme as AppColorScheme);
+                addCustomScheme(normalizeAppColorScheme(scheme as AppColorScheme));
               }
             }
           } catch {
