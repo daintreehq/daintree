@@ -326,6 +326,61 @@ describe("ActivityMonitor", () => {
 
       monitor.dispose();
     });
+
+    it("should not keep busy from echoed typing while prompt is visible", () => {
+      const onStateChange = vi.fn();
+      let typed = "";
+      let visibleLines = ["Working (esc to interrupt)", "> "];
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines: () => visibleLines,
+        getCursorLine: () => visibleLines[visibleLines.length - 1],
+        idleDebounceMs: 400,
+      });
+
+      monitor.startPolling();
+      vi.advanceTimersByTime(100);
+      expect(monitor.getState()).toBe("busy");
+      onStateChange.mockClear();
+
+      for (const ch of ["h", "e", "l", "l", "o"]) {
+        typed += ch;
+        visibleLines = ["Working (esc to interrupt)", `> ${typed}`];
+        monitor.onInput(ch);
+        monitor.onData(ch);
+        vi.advanceTimersByTime(120);
+      }
+
+      vi.advanceTimersByTime(500);
+
+      expect(monitor.getState()).toBe("idle");
+      const busyCalls = onStateChange.mock.calls.filter((call) => call[2] === "busy");
+      expect(busyCalls.length).toBe(0);
+
+      monitor.dispose();
+    });
+
+    it("should still keep busy for spinner-style flashing output", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        idleDebounceMs: 200,
+      });
+
+      monitor.onInput("run\r");
+      expect(monitor.getState()).toBe("busy");
+      onStateChange.mockClear();
+
+      monitor.onInput("h");
+      for (let i = 0; i < 5; i++) {
+        monitor.onData("\r⠋ Working (esc to interrupt)");
+        vi.advanceTimersByTime(100);
+      }
+
+      expect(monitor.getState()).toBe("busy");
+      const idleCalls = onStateChange.mock.calls.filter((call) => call[2] === "idle");
+      expect(idleCalls.length).toBe(0);
+
+      monitor.dispose();
+    });
   });
 
   describe("notifySubmission (hybrid input bar)", () => {
