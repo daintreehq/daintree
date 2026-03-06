@@ -29,8 +29,8 @@ const STATE_CONFIG: Record<
   },
   running: {
     icon: "▶",
-    color: "text-[var(--color-status-info)]",
-    borderColor: "border-[var(--color-status-info)]",
+    color: "text-status-info",
+    borderColor: "border-status-info",
     pulse: false,
     label: "running",
     tooltip: "Process is running",
@@ -38,7 +38,7 @@ const STATE_CONFIG: Record<
   waiting: {
     icon: "?",
     color: "text-canopy-bg",
-    bgColor: "bg-[var(--color-state-waiting)]",
+    bgColor: "bg-state-waiting",
     glow: "shadow-[0_0_8px_rgba(251,191,36,0.4)]",
     pulse: false,
     label: "waiting",
@@ -46,15 +46,15 @@ const STATE_CONFIG: Record<
   },
   completed: {
     icon: "✓",
-    color: "text-[var(--color-status-success)]",
+    color: "text-status-success",
     pulse: false,
     label: "completed",
     tooltip: "Agent finished this task",
   },
   failed: {
     icon: "✗",
-    color: "text-[var(--color-status-error)]",
-    borderColor: "border-[var(--color-status-error)]",
+    color: "text-status-error",
+    borderColor: "border-status-error",
     pulse: false,
     label: "failed",
     tooltip: "Agent ran into an issue",

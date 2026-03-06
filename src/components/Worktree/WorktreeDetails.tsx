@@ -152,7 +152,7 @@ export function WorktreeDetails({
                       href={segment.content}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-[var(--color-status-info)] underline hover:brightness-110 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
+                      className="text-status-info underline hover:brightness-110 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
                       onClick={(e) => handleLinkClick(e, segment.content)}
                     >
                       {segment.content}

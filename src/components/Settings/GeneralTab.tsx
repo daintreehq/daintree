@@ -266,7 +266,7 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
         <h4 className="text-sm font-medium text-canopy-text">System Status</h4>
         <div className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] p-4 space-y-3">
           {cliCheckFailed ? (
-            <div className="text-sm text-[var(--color-status-error)]/80">
+            <div className="text-sm text-status-error/80">
               Failed to check agent status
             </div>
           ) : !cliAvailability || !agentSettings ? (
@@ -315,7 +315,7 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
 
       {configError ? (
         <div className="p-4 rounded-[var(--radius-lg)] border border-[color-mix(in_oklab,var(--color-status-error)_50%,transparent)] bg-[color-mix(in_oklab,var(--color-status-error)_10%,transparent)]">
-          <p className="text-sm text-[var(--color-status-error)]">
+          <p className="text-sm text-status-error">
             Failed to load hibernation settings: {configError}
           </p>
         </div>

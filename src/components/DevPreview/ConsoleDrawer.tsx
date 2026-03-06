@@ -92,7 +92,7 @@ export function ConsoleDrawer({
   );
 
   return (
-    <div className="flex flex-col border-t border-overlay bg-[var(--color-surface)]">
+    <div className="flex flex-col border-t border-overlay bg-surface">
       <div className="flex items-stretch bg-black/20">
         <button
           type="button"

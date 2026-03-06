@@ -169,7 +169,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
   if (loadError || !settings) {
     return (
       <div className="flex flex-col items-center justify-center h-32 gap-3">
-        <div className="text-[var(--color-status-error)] text-sm">
+        <div className="text-status-error text-sm">
           {loadError || "Failed to load settings"}
         </div>
         <button
@@ -245,7 +245,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
                     />
                   )}
                   {agent.dangerousEnabled && (
-                    <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-status-error)]" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-status-error" />
                   )}
                 </div>
               </button>
@@ -359,7 +359,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
                   className={cn(
                     "relative w-11 h-6 rounded-full transition-colors",
                     activeEntry.dangerousEnabled
-                      ? "bg-[var(--color-status-error)]"
+                      ? "bg-status-error"
                       : "bg-canopy-border"
                   )}
                 >
@@ -373,8 +373,8 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
               </div>
 
               {activeEntry.dangerousEnabled && defaultDangerousArg && (
-                <div className="flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-[var(--color-status-error)]/10 border border-[var(--color-status-error)]/20">
-                  <code className="text-xs text-[var(--color-status-error)] font-mono">
+                <div className="flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
+                  <code className="text-xs text-status-error font-mono">
                     {defaultDangerousArg}
                   </code>
                   <span className="text-xs text-canopy-text/40">added to command</span>
@@ -518,8 +518,8 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
                   </div>
 
                   {cliError && (
-                    <div className="px-3 py-2 rounded-[var(--radius-md)] bg-[var(--color-status-error)]/10 border border-[var(--color-status-error)]/20">
-                      <p className="text-xs text-[var(--color-status-error)]">
+                    <div className="px-3 py-2 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
+                      <p className="text-xs text-status-error">
                         Re-check failed. Try again or restart the app.
                       </p>
                     </div>
@@ -594,8 +594,8 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
 
                       {agentConfig?.install?.troubleshooting &&
                         agentConfig.install.troubleshooting.length > 0 && (
-                          <div className="px-3 py-2 rounded-[var(--radius-md)] bg-[var(--color-status-warning)]/10 border border-[var(--color-status-warning)]/20">
-                            <div className="text-xs font-medium text-[var(--color-status-warning)] mb-1">
+                          <div className="px-3 py-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
+                            <div className="text-xs font-medium text-status-warning mb-1">
                               Troubleshooting
                             </div>
                             <ul className="space-y-0.5 text-xs text-canopy-text/60">

@@ -11,12 +11,12 @@ export const STATE_ICONS: Record<AgentState, React.ComponentType<{ className?: s
 };
 
 export const STATE_COLORS: Record<AgentState, string> = {
-  working: "text-[var(--color-state-working)]",
-  running: "text-[var(--color-status-info)]",
-  waiting: "text-[var(--color-state-waiting)]",
+  working: "text-state-working",
+  running: "text-status-info",
+  waiting: "text-state-waiting",
   idle: "text-canopy-text/40",
-  completed: "text-[var(--color-status-success)]",
-  failed: "text-[var(--color-status-error)]",
+  completed: "text-status-success",
+  failed: "text-status-error",
 };
 
 export const STATE_LABELS: Record<AgentState, string> = {

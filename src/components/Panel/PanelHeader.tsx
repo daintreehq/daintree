@@ -338,7 +338,7 @@ function PanelHeaderComponent({
           isMaximized
             ? "h-10 bg-canopy-sidebar border-canopy-border"
             : location === "dock"
-              ? "bg-[var(--color-surface)]"
+              ? "bg-surface"
               : isFocused
                 ? "bg-white/[0.02]"
                 : "bg-transparent",
@@ -545,7 +545,7 @@ function PanelHeaderComponent({
               <Grid2X2 className="w-3 h-3 shrink-0" aria-hidden="true" />
               <span className="truncate">{activeCount} Background</span>
               {workingCount > 0 && (
-                <span className="flex items-center gap-1 text-[var(--color-state-working)] ml-1">
+                <span className="flex items-center gap-1 text-state-working ml-1">
                   <Activity
                     className="w-3 h-3 animate-pulse motion-reduce:animate-none"
                     aria-hidden="true"
@@ -704,7 +704,7 @@ function PanelHeaderComponent({
                         onClose(true);
                       }
                     }}
-                    className="p-1.5 hover:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-status-error)] focus-visible:outline-offset-2 text-canopy-text/60 hover:text-[var(--color-status-error)] transition-colors"
+                    className="p-1.5 hover:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-error focus-visible:outline-offset-2 text-canopy-text/60 hover:text-status-error transition-colors"
                     data-testid="panel-close"
                     aria-label={formatShortcutForTooltip(
                       "Close session. Hold Alt and click to force close without recovery."

@@ -17,7 +17,7 @@ const ERROR_TYPE_COLORS: Record<string, string> = {
   git: "text-status-warning",
   process: "text-status-warning",
   filesystem: "text-status-info",
-  network: "text-purple-400",
+  network: "text-status-info",
   config: "text-status-warning",
   unknown: "text-status-error",
 };
@@ -42,7 +42,7 @@ interface ErrorRowProps {
 
 function ErrorRow({ error, isExpanded, onToggleExpand, onDismiss, onRetry }: ErrorRowProps) {
   const typeLabel = ERROR_TYPE_LABELS[error.type] || "Error";
-  const typeColor = ERROR_TYPE_COLORS[error.type] || "text-[var(--color-status-error)]";
+  const typeColor = ERROR_TYPE_COLORS[error.type] || "text-status-error";
   const canRetry = error.isTransient && error.retryAction && onRetry;
   const [copied, setCopied] = useState(false);
   const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null);

@@ -20,10 +20,10 @@ const CATEGORY_CONFIG: Record<EventCategory, { label: string; color: string }> =
   agent: { label: "Agent", color: "bg-status-success/20 text-status-success border-status-success/30" },
   task: { label: "Task", color: "bg-status-success/20 text-status-success border-status-success/30" },
   server: { label: "Server", color: "bg-status-warning/20 text-status-warning border-status-warning/30" },
-  file: { label: "File", color: "bg-pink-500/20 text-pink-400 border-pink-500/30" },
-  ui: { label: "UI", color: "bg-indigo-500/20 text-indigo-400 border-indigo-500/30" },
-  watcher: { label: "Watcher", color: "bg-cyan-500/20 text-cyan-400 border-cyan-500/30" },
-  artifact: { label: "Artifact", color: "bg-rose-500/20 text-rose-400 border-rose-500/30" },
+  file: { label: "File", color: "bg-canopy-accent/20 text-canopy-accent border-canopy-accent/30" },
+  ui: { label: "UI", color: "bg-github-merged/20 text-github-merged border-github-merged/30" },
+  watcher: { label: "Watcher", color: "bg-status-info/20 text-status-info border-status-info/30" },
+  artifact: { label: "Artifact", color: "bg-status-error/20 text-status-error border-status-error/30" },
 };
 
 type FilterSubset = Pick<EventFilterOptions, "types" | "categories" | "search" | "traceId">;

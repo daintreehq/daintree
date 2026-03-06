@@ -17,22 +17,22 @@ const STATUS_CONFIG: Record<
 > = {
   installing: {
     icon: Loader2,
-    iconClass: "text-[var(--color-status-warning)] animate-spin",
+    iconClass: "text-status-warning animate-spin",
     ariaLabel: "Installing dependencies",
   },
   starting: {
     icon: Loader2,
-    iconClass: "text-[var(--color-status-info)] animate-spin",
+    iconClass: "text-status-info animate-spin",
     ariaLabel: "Starting dev server",
   },
   running: {
     icon: CheckCircle2,
-    iconClass: "text-[var(--color-status-success)]",
+    iconClass: "text-status-success",
     ariaLabel: "Dev server running",
   },
   error: {
     icon: XCircle,
-    iconClass: "text-[var(--color-status-error)]",
+    iconClass: "text-status-error",
     ariaLabel: "Dev server error",
   },
   stopped: {
@@ -74,7 +74,7 @@ export function DevPreviewToolbar({
   };
 
   return (
-    <div className="flex items-center gap-1.5 px-2 py-1.5 bg-[var(--color-surface)] border-b border-overlay">
+    <div className="flex items-center gap-1.5 px-2 py-1.5 bg-surface border-b border-overlay">
       {/* Status indicator */}
       <div
         className="flex items-center gap-1.5 min-w-0"

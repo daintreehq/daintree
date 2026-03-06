@@ -171,7 +171,7 @@ export function BrowserToolbar({
     "p-1.5 rounded hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed transition-colors";
 
   return (
-    <div className="flex items-center gap-1.5 px-2 py-1.5 bg-[var(--color-surface)] border-b border-overlay">
+    <div className="flex items-center gap-1.5 px-2 py-1.5 bg-surface border-b border-overlay">
       {/* Navigation buttons */}
       <TooltipProvider>
         <Tooltip>

@@ -47,7 +47,7 @@ const TabButton = memo(function TabButton({
     >
       {label}
       {badge !== undefined && badge > 0 && (
-        <span className="ml-1.5 px-1.5 py-0.5 text-xs bg-[var(--color-status-error)]/15 text-[var(--color-status-error)] rounded-full">
+        <span className="ml-1.5 px-1.5 py-0.5 text-xs bg-status-error/15 text-status-error rounded-full">
           {badge}
         </span>
       )}

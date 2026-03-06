@@ -261,13 +261,13 @@ export function EditorIntegrationTab() {
               </span>
             )}
             {testResult === "error" && (
-              <span className="flex items-center gap-1 text-xs text-[var(--color-status-error)]">
+              <span className="flex items-center gap-1 text-xs text-status-error">
                 <AlertCircle className="w-3.5 h-3.5" /> Failed to open
               </span>
             )}
           </div>
 
-          {saveError && <p className="text-xs text-[var(--color-status-error)]">{saveError}</p>}
+          {saveError && <p className="text-xs text-status-error">{saveError}</p>}
 
           {preferredEditor && (
             <p className="text-xs text-canopy-text/40">

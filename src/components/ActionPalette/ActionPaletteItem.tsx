@@ -10,21 +10,21 @@ interface ActionPaletteItemProps {
 
 const CATEGORY_COLORS: Record<string, string> = {
   terminal: "bg-status-info/15 text-status-info",
-  agents: "bg-purple-500/15 text-purple-400",
-  panels: "bg-cyan-500/15 text-cyan-400",
+  agents: "bg-canopy-accent/15 text-canopy-accent",
+  panels: "bg-status-info/15 text-status-info",
   navigation: "bg-status-success/15 text-status-success",
   worktree: "bg-status-warning/15 text-status-warning",
-  github: "bg-gray-500/15 text-gray-400",
+  github: "bg-canopy-text/[0.06] text-canopy-text/50",
   git: "bg-status-warning/15 text-status-warning",
-  project: "bg-teal-500/15 text-teal-400",
-  preferences: "bg-slate-500/15 text-slate-400",
-  app: "bg-indigo-500/15 text-indigo-400",
-  system: "bg-rose-500/15 text-rose-400",
-  logs: "bg-yellow-500/15 text-yellow-400",
-  recipes: "bg-pink-500/15 text-pink-400",
+  project: "bg-status-success/15 text-status-success",
+  preferences: "bg-canopy-text/[0.06] text-canopy-text/50",
+  app: "bg-github-merged/15 text-github-merged",
+  system: "bg-status-error/15 text-status-error",
+  logs: "bg-status-warning/15 text-status-warning",
+  recipes: "bg-canopy-accent/15 text-canopy-accent",
   sidecar: "bg-github-merged/15 text-github-merged",
-  notes: "bg-lime-500/15 text-lime-400",
-  browser: "bg-github-open/15 text-github-open",
+  notes: "bg-status-success/15 text-status-success",
+  browser: "bg-status-info/15 text-status-info",
 };
 
 const DEFAULT_CATEGORY_COLOR = "bg-white/[0.06] text-canopy-text/50";

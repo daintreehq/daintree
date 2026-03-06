@@ -69,8 +69,8 @@ export function SystemHealthCheckStep({ onSkip }: SystemHealthCheckStepProps) {
       </div>
 
       {error && (
-        <div className="px-3 py-2.5 rounded-[var(--radius-md)] border border-[var(--color-status-error)]/20 bg-[var(--color-status-error)]/5">
-          <p className="text-xs text-[var(--color-status-error)]">
+        <div className="px-3 py-2.5 rounded-[var(--radius-md)] border border-status-error/20 bg-status-error/5">
+          <p className="text-xs text-status-error">
             Could not run health check: {error}
           </p>
         </div>
@@ -154,5 +154,5 @@ function StatusIcon({ available, loading }: { available: boolean; loading: boole
   if (available) {
     return <CircleCheck className="w-4 h-4 text-status-success shrink-0" />;
   }
-  return <CircleX className="w-4 h-4 text-[var(--color-status-error)] shrink-0" />;
+  return <CircleX className="w-4 h-4 text-status-error shrink-0" />;
 }

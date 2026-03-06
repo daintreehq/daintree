@@ -179,35 +179,35 @@ export function WorktreeTerminalSection({
                       <div className="flex items-center gap-2.5 shrink-0">
                         {term.agentState === "working" && (
                           <Loader2
-                            className="w-3 h-3 animate-spin motion-reduce:animate-none text-[var(--color-state-working)]"
+                            className="w-3 h-3 animate-spin motion-reduce:animate-none text-state-working"
                             aria-label="Working"
                           />
                         )}
 
                         {term.agentState === "running" && (
                           <Play
-                            className="w-3 h-3 text-[var(--color-status-info)]"
+                            className="w-3 h-3 text-status-info"
                             aria-label="Running"
                           />
                         )}
 
                         {term.agentState === "waiting" && (
                           <AlertCircle
-                            className="w-3 h-3 text-amber-400"
+                            className="w-3 h-3 text-status-warning"
                             aria-label="Waiting for input"
                           />
                         )}
 
                         {term.agentState === "failed" && (
                           <XCircle
-                            className="w-3 h-3 text-[var(--color-status-error)]"
+                            className="w-3 h-3 text-status-error"
                             aria-label="Failed"
                           />
                         )}
 
                         {term.agentState === "completed" && (
                           <CheckCircle2
-                            className="w-3 h-3 text-[var(--color-status-success)]"
+                            className="w-3 h-3 text-status-success"
                             aria-label="Completed"
                           />
                         )}
