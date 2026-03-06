@@ -45,10 +45,12 @@ export function VoiceInputSettingsTab() {
       .catch(() => setLoadState("error"));
 
     // Check mic permission status
+    let permissionStatus: PermissionStatus | null = null;
     if (navigator.permissions) {
       navigator.permissions
         .query({ name: "microphone" as PermissionName })
         .then((result) => {
+          permissionStatus = result;
           setMicPermission(result.state as "granted" | "denied" | "prompt");
           result.onchange = () => {
             setMicPermission(result.state as "granted" | "denied" | "prompt");
@@ -56,6 +58,11 @@ export function VoiceInputSettingsTab() {
         })
         .catch(() => setMicPermission("unknown"));
     }
+    return () => {
+      if (permissionStatus) {
+        permissionStatus.onchange = null;
+      }
+    };
   }, []);
 
   const update = (patch: Partial<VoiceInputSettings>) => {
@@ -123,7 +130,7 @@ export function VoiceInputSettingsTab() {
                     onChange={(e) => update({ apiKey: e.target.value })}
                     placeholder="sk-..."
                     className="w-full rounded-lg border border-divider bg-canopy-sidebar/30 px-3 py-2 pr-10 font-mono text-sm text-canopy-text placeholder:text-canopy-text/30 focus:border-canopy-accent/50 focus:outline-none focus:ring-1 focus:ring-canopy-accent/30"
-                    autoComplete="off"
+                    autoComplete="new-password"
                     spellCheck={false}
                   />
                   <button

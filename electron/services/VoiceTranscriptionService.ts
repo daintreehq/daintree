@@ -9,6 +9,8 @@ export type VoiceTranscriptionEvent =
 
 export class VoiceTranscriptionService {
   private ws: WebSocket | null = null;
+  private sessionId = 0;
+  private connectTimeout: ReturnType<typeof setTimeout> | null = null;
   private listeners: Set<(event: VoiceTranscriptionEvent) => void> = new Set();
 
   onEvent(listener: (event: VoiceTranscriptionEvent) => void): () => void {
@@ -22,14 +24,22 @@ export class VoiceTranscriptionService {
     }
   }
 
-  async start(settings: VoiceInputSettings): Promise<{ ok: true } | { ok: false; error: string }> {
-    if (this.ws) {
-      this.stop();
+  private clearConnectTimeout(): void {
+    if (this.connectTimeout !== null) {
+      clearTimeout(this.connectTimeout);
+      this.connectTimeout = null;
     }
+  }
 
+  async start(settings: VoiceInputSettings): Promise<{ ok: true } | { ok: false; error: string }> {
     if (!settings.apiKey) {
       return { ok: false, error: "OpenAI API key not configured" };
     }
+
+    // Increment session ID before stopping the old connection so stale handlers
+    // from the previous session ignore their events.
+    const mySessionId = ++this.sessionId;
+    this.stop();
 
     this.emit({ type: "status", status: "connecting" });
 
@@ -41,13 +51,23 @@ export class VoiceTranscriptionService {
         },
       });
 
-      const timeout = setTimeout(() => {
+      this.connectTimeout = setTimeout(() => {
+        this.connectTimeout = null;
         ws.terminate();
-        resolve({ ok: false, error: "Connection timed out" });
+        if (this.sessionId === mySessionId) {
+          this.emit({ type: "error", message: "Connection timed out" });
+          this.emit({ type: "status", status: "error" });
+          resolve({ ok: false, error: "Connection timed out" });
+        }
       }, 10000);
 
       ws.on("open", () => {
-        clearTimeout(timeout);
+        this.clearConnectTimeout();
+        if (this.sessionId !== mySessionId) {
+          ws.terminate();
+          return;
+        }
+
         this.ws = ws;
 
         const prompt =
@@ -79,6 +99,7 @@ export class VoiceTranscriptionService {
       });
 
       ws.on("message", (data: WebSocket.RawData) => {
+        if (this.sessionId !== mySessionId) return;
         try {
           const event = JSON.parse(data.toString()) as Record<string, unknown>;
           this.handleServerEvent(event);
@@ -88,17 +109,18 @@ export class VoiceTranscriptionService {
       });
 
       ws.on("error", (err) => {
-        clearTimeout(timeout);
+        this.clearConnectTimeout();
+        if (this.sessionId !== mySessionId) return;
         const message = err instanceof Error ? err.message : "WebSocket error";
+        this.ws = null;
         this.emit({ type: "error", message });
         this.emit({ type: "status", status: "error" });
-        if (!this.ws) {
-          resolve({ ok: false, error: message });
-        }
-        this.ws = null;
+        resolve({ ok: false, error: message });
       });
 
       ws.on("close", () => {
+        this.clearConnectTimeout();
+        if (this.sessionId !== mySessionId) return;
         this.ws = null;
         this.emit({ type: "status", status: "idle" });
       });
@@ -136,6 +158,9 @@ export class VoiceTranscriptionService {
   }
 
   stop(): void {
+    // Invalidate the current session so stale event handlers become no-ops.
+    this.sessionId++;
+    this.clearConnectTimeout();
     if (this.ws) {
       try {
         this.ws.close();

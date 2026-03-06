@@ -26,10 +26,15 @@ export function VoiceInputButton({
   const autoStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTimeRef = useRef<number>(0);
+  // Generation token: each start() call increments this; stop/stale callbacks check it.
+  const generationRef = useRef(0);
 
   const isRecording = status === "recording";
 
   const stopRecording = useCallback(async () => {
+    // Increment generation so any in-flight startRecording async steps become no-ops.
+    generationRef.current++;
+
     if (autoStopTimerRef.current) {
       clearTimeout(autoStopTimerRef.current);
       autoStopTimerRef.current = null;
@@ -39,8 +44,11 @@ export function VoiceInputButton({
       elapsedTimerRef.current = null;
     }
 
-    workletNodeRef.current?.disconnect();
-    workletNodeRef.current = null;
+    if (workletNodeRef.current) {
+      workletNodeRef.current.port.onmessage = null;
+      workletNodeRef.current.disconnect();
+      workletNodeRef.current = null;
+    }
 
     if (audioContextRef.current) {
       await audioContextRef.current.close().catch(() => {});
@@ -61,8 +69,11 @@ export function VoiceInputButton({
   const startRecording = useCallback(async () => {
     setErrorMessage(null);
 
+    const generation = ++generationRef.current;
+
     // First start the WebSocket session
     const result = await window.electron?.voiceInput?.start();
+    if (generationRef.current !== generation) return; // Cancelled by a concurrent stop/start
     if (!result?.ok) {
       setErrorMessage(result?.error ?? "Failed to start voice session");
       setStatus("error");
@@ -74,6 +85,7 @@ export function VoiceInputButton({
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     } catch (err) {
+      if (generationRef.current !== generation) return;
       const message =
         err instanceof DOMException && err.name === "NotAllowedError"
           ? "Microphone permission denied. Enable it in System Preferences → Privacy → Microphone."
@@ -84,19 +96,31 @@ export function VoiceInputButton({
       return;
     }
 
+    if (generationRef.current !== generation) {
+      stream.getTracks().forEach((t) => t.stop());
+      return;
+    }
+
     streamRef.current = stream;
 
     const audioContext = new AudioContext({ sampleRate: 48000 });
     audioContextRef.current = audioContext;
 
-    // Resume AudioContext (required by autoplay policy)
+    // Resume AudioContext (required by autoplay policy in Chromium)
     if (audioContext.state === "suspended") {
       await audioContext.resume();
+    }
+
+    if (generationRef.current !== generation) {
+      await audioContext.close().catch(() => {});
+      stream.getTracks().forEach((t) => t.stop());
+      return;
     }
 
     try {
       await audioContext.audioWorklet.addModule("/pcm-processor.js");
     } catch {
+      if (generationRef.current !== generation) return;
       setErrorMessage("Failed to load audio processor");
       setStatus("error");
       stream.getTracks().forEach((t) => t.stop());
@@ -105,18 +129,24 @@ export function VoiceInputButton({
       return;
     }
 
+    if (generationRef.current !== generation) {
+      await audioContext.close().catch(() => {});
+      stream.getTracks().forEach((t) => t.stop());
+      return;
+    }
+
     const source = audioContext.createMediaStreamSource(stream);
     const workletNode = new AudioWorkletNode(audioContext, "pcm-processor");
     workletNodeRef.current = workletNode;
 
     workletNode.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+      if (generationRef.current !== generation) return;
       window.electron?.voiceInput?.sendAudioChunk(event.data);
     };
 
     source.connect(workletNode);
-    // Don't connect workletNode to destination — we only want to capture, not play back
+    // Don't connect workletNode to destination — capture only, no playback
 
-    // Auto-stop after 60 seconds
     startTimeRef.current = Date.now();
     setElapsedSeconds(0);
     elapsedTimerRef.current = setInterval(() => {
@@ -140,7 +170,10 @@ export function VoiceInputButton({
   useEffect(() => {
     const unsubs: (() => void)[] = [];
 
-    const unsubStatus = window.electron?.voiceInput?.onStatus((s) => setStatus(s));
+    const unsubStatus = window.electron?.voiceInput?.onStatus((s) => {
+      // Gate status updates by checking if they apply to the current session
+      setStatus(s);
+    });
     if (unsubStatus) unsubs.push(unsubStatus);
 
     const unsubDelta = window.electron?.voiceInput?.onTranscriptionDelta((delta) => {

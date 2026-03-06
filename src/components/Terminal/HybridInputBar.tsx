@@ -242,12 +242,18 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     }, []);
 
     useEffect(() => {
-      window.electron?.voiceInput
-        ?.getSettings()
-        .then((s) => {
-          setVoiceEnabled(s.enabled);
-        })
-        .catch(() => {});
+      const load = () => {
+        window.electron?.voiceInput
+          ?.getSettings()
+          .then((s) => {
+            setVoiceEnabled(s.enabled);
+          })
+          .catch(() => {});
+      };
+      load();
+      // Re-check when the window regains focus so Settings changes are reflected immediately.
+      window.addEventListener("focus", load);
+      return () => window.removeEventListener("focus", load);
     }, []);
 
     const isInitializing = isAgentTerminal && initializationState === "initializing";
