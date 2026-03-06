@@ -7,6 +7,8 @@ import { openExternalUrl } from "../../utils/openExternal.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { runCommandDetector } from "../../services/RunCommandDetector.js";
 import { ProjectSwitchService } from "../../services/ProjectSwitchService.js";
+import { sendToRenderer } from "../utils.js";
+import { randomUUID } from "crypto";
 import type { HandlerDependencies } from "../types.js";
 import type { Project, ProjectSettings, TerminalRecipe, TabGroup } from "../../types/index.js";
 import type {
@@ -25,21 +27,12 @@ import {
 import type { TerminalSnapshot } from "../../types/index.js";
 
 export function registerProjectHandlers(deps: HandlerDependencies): () => void {
-  const {
-    mainWindow,
-    worktreeService,
-    cliAvailabilityService,
-    agentVersionService,
-    agentUpdateHandler,
-  } = deps;
+  const { mainWindow, cliAvailabilityService, agentVersionService, agentUpdateHandler } = deps;
   const handlers: Array<() => void> = [];
 
-  const projectSwitchService = new ProjectSwitchService({
-    mainWindow: deps.mainWindow,
-    ptyClient: deps.ptyClient,
-    worktreeService: deps.worktreeService,
-    eventBuffer: deps.eventBuffer,
-  });
+  // Pass deps directly so ProjectSwitchService sees late-init services
+  // (worktreeService, eventBuffer) when they become available.
+  const projectSwitchService = new ProjectSwitchService(deps);
 
   const handleSystemOpenExternal = async (
     _event: Electron.IpcMainInvokeEvent,
@@ -325,9 +318,9 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
   const handleProjectGetCurrent = async () => {
     const currentProject = projectStore.getCurrentProject();
 
-    if (currentProject && worktreeService) {
+    if (currentProject && deps.worktreeService) {
       try {
-        await worktreeService.loadProject(currentProject.path);
+        await deps.worktreeService.loadProject(currentProject.path);
       } catch (err) {
         console.error("Failed to load worktrees for current project:", err);
       }
@@ -480,11 +473,11 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
     }
 
     try {
-      const ptyStats = await deps.ptyClient.getProjectStats(projectId);
+      const ptyStats = await deps.ptyClient!.getProjectStats(projectId);
 
       if (killTerminals) {
         // Kill terminals when explicitly requested (freeing resources completely)
-        const terminalsKilled = await deps.ptyClient.killByProject(projectId);
+        const terminalsKilled = await deps.ptyClient!.killByProject(projectId);
 
         // Clear persisted state
         await projectStore.clearProjectState(projectId);
@@ -544,6 +537,19 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
       throw new Error(`Project not found: ${projectId}`);
     }
 
+    // Idempotent: if already active, emit switch event and return current state
+    if (project.status === "active") {
+      console.log(
+        `[IPC] project:reopen: Project ${projectId} already active, emitting switch event`
+      );
+      const switchId = randomUUID();
+      sendToRenderer(mainWindow, CHANNELS.PROJECT_ON_SWITCH, {
+        project,
+        switchId,
+      });
+      return project;
+    }
+
     // Reopen is only meaningful for background projects
     if (project.status !== "background") {
       throw new Error(
@@ -562,7 +568,7 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
       throw new Error("Invalid project ID");
     }
 
-    const ptyStats = await deps.ptyClient.getProjectStats(projectId);
+    const ptyStats = await deps.ptyClient!.getProjectStats(projectId);
 
     // Estimate memory (rough approximation)
     const MEMORY_PER_TERMINAL_MB = 50;

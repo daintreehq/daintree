@@ -12,7 +12,6 @@ import type {
 } from "../../../shared/types/sidecar.js";
 
 export function registerSidecarHandlers(deps: HandlerDependencies): () => void {
-  const { sidecarManager } = deps;
   const handlers: Array<() => void> = [];
 
   const handleSidecarCreate = async (
@@ -20,14 +19,14 @@ export function registerSidecarHandlers(deps: HandlerDependencies): () => void {
     payload: SidecarCreatePayload
   ) => {
     try {
-      if (!sidecarManager) return;
+      if (!deps.sidecarManager) return;
       if (!payload?.tabId || typeof payload.tabId !== "string") {
         throw new Error("Invalid tabId");
       }
       if (!payload?.url || typeof payload.url !== "string") {
         throw new Error("Invalid url");
       }
-      sidecarManager.createTab(payload.tabId, payload.url);
+      deps.sidecarManager.createTab(payload.tabId, payload.url);
     } catch (error) {
       console.error("[SidecarHandler] Error in create:", error);
       throw error;
@@ -41,14 +40,14 @@ export function registerSidecarHandlers(deps: HandlerDependencies): () => void {
     payload: SidecarShowPayload
   ) => {
     try {
-      if (!sidecarManager) return;
+      if (!deps.sidecarManager) return;
       if (!payload?.tabId || typeof payload.tabId !== "string") {
         throw new Error("Invalid tabId");
       }
       if (!payload?.bounds || typeof payload.bounds !== "object") {
         throw new Error("Invalid bounds");
       }
-      sidecarManager.showTab(payload.tabId, payload.bounds);
+      deps.sidecarManager.showTab(payload.tabId, payload.bounds);
     } catch (error) {
       console.error("[SidecarHandler] Error in show:", error);
       throw error;
@@ -58,8 +57,8 @@ export function registerSidecarHandlers(deps: HandlerDependencies): () => void {
   handlers.push(() => ipcMain.removeHandler(CHANNELS.SIDECAR_SHOW));
 
   const handleSidecarHide = async () => {
-    if (!sidecarManager) return;
-    sidecarManager.hideAll();
+    if (!deps.sidecarManager) return;
+    deps.sidecarManager.hideAll();
   };
   ipcMain.handle(CHANNELS.SIDECAR_HIDE, handleSidecarHide);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.SIDECAR_HIDE));
@@ -69,11 +68,11 @@ export function registerSidecarHandlers(deps: HandlerDependencies): () => void {
     bounds: SidecarBounds
   ) => {
     try {
-      if (!sidecarManager) return;
+      if (!deps.sidecarManager) return;
       if (!bounds || typeof bounds !== "object") {
         throw new Error("Invalid bounds");
       }
-      sidecarManager.updateBounds(bounds);
+      deps.sidecarManager.updateBounds(bounds);
     } catch (error) {
       console.error("[SidecarHandler] Error in resize:", error);
       throw error;
@@ -86,11 +85,11 @@ export function registerSidecarHandlers(deps: HandlerDependencies): () => void {
     _event: Electron.IpcMainInvokeEvent,
     payload: SidecarCloseTabPayload
   ) => {
-    if (!sidecarManager) return;
+    if (!deps.sidecarManager) return;
     if (!payload || typeof payload !== "object" || typeof payload.tabId !== "string") {
       return;
     }
-    sidecarManager.closeTab(payload.tabId);
+    deps.sidecarManager.closeTab(payload.tabId);
   };
   ipcMain.handle(CHANNELS.SIDECAR_CLOSE_TAB, handleSidecarCloseTab);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.SIDECAR_CLOSE_TAB));
@@ -99,7 +98,7 @@ export function registerSidecarHandlers(deps: HandlerDependencies): () => void {
     _event: Electron.IpcMainInvokeEvent,
     payload: SidecarNavigatePayload
   ) => {
-    if (!sidecarManager) return;
+    if (!deps.sidecarManager) return;
     if (
       !payload ||
       typeof payload !== "object" ||
@@ -108,7 +107,7 @@ export function registerSidecarHandlers(deps: HandlerDependencies): () => void {
     ) {
       return;
     }
-    sidecarManager.navigate(payload.tabId, payload.url);
+    deps.sidecarManager.navigate(payload.tabId, payload.url);
   };
   ipcMain.handle(CHANNELS.SIDECAR_NAVIGATE, handleSidecarNavigate);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.SIDECAR_NAVIGATE));
@@ -117,9 +116,9 @@ export function registerSidecarHandlers(deps: HandlerDependencies): () => void {
     _event: Electron.IpcMainInvokeEvent,
     tabId: string
   ): Promise<boolean> => {
-    if (!sidecarManager) return false;
+    if (!deps.sidecarManager) return false;
     if (typeof tabId !== "string") return false;
-    return sidecarManager.goBack(tabId);
+    return deps.sidecarManager.goBack(tabId);
   };
   ipcMain.handle(CHANNELS.SIDECAR_GO_BACK, handleSidecarGoBack);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.SIDECAR_GO_BACK));
@@ -128,17 +127,17 @@ export function registerSidecarHandlers(deps: HandlerDependencies): () => void {
     _event: Electron.IpcMainInvokeEvent,
     tabId: string
   ): Promise<boolean> => {
-    if (!sidecarManager) return false;
+    if (!deps.sidecarManager) return false;
     if (typeof tabId !== "string") return false;
-    return sidecarManager.goForward(tabId);
+    return deps.sidecarManager.goForward(tabId);
   };
   ipcMain.handle(CHANNELS.SIDECAR_GO_FORWARD, handleSidecarGoForward);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.SIDECAR_GO_FORWARD));
 
   const handleSidecarReload = async (_event: Electron.IpcMainInvokeEvent, tabId: string) => {
-    if (!sidecarManager) return;
+    if (!deps.sidecarManager) return;
     if (typeof tabId !== "string") return;
-    sidecarManager.reload(tabId);
+    deps.sidecarManager.reload(tabId);
   };
   ipcMain.handle(CHANNELS.SIDECAR_RELOAD, handleSidecarReload);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.SIDECAR_RELOAD));

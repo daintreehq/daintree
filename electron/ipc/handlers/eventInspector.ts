@@ -8,14 +8,13 @@ const subscribedWebContents = new Map<WebContents, () => void>();
 let eventBufferUnsubscribe: (() => void) | null = null;
 
 export function registerEventInspectorHandlers(deps: HandlerDependencies): () => void {
-  const { eventBuffer } = deps;
   const handlers: Array<() => void> = [];
 
   const handleEventInspectorGetEvents = async () => {
-    if (!eventBuffer) {
+    if (!deps.eventBuffer) {
       return [];
     }
-    return eventBuffer.getAll();
+    return deps.eventBuffer.getAll();
   };
   ipcMain.handle(CHANNELS.EVENT_INSPECTOR_GET_EVENTS, handleEventInspectorGetEvents);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.EVENT_INSPECTOR_GET_EVENTS));
@@ -24,19 +23,19 @@ export function registerEventInspectorHandlers(deps: HandlerDependencies): () =>
     _event: Electron.IpcMainInvokeEvent,
     filters: EventFilterOptions
   ) => {
-    if (!eventBuffer) {
+    if (!deps.eventBuffer) {
       return [];
     }
-    return eventBuffer.getFiltered(filters);
+    return deps.eventBuffer.getFiltered(filters);
   };
   ipcMain.handle(CHANNELS.EVENT_INSPECTOR_GET_FILTERED, handleEventInspectorGetFiltered);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.EVENT_INSPECTOR_GET_FILTERED));
 
   const handleEventInspectorClear = async () => {
-    if (!eventBuffer) {
+    if (!deps.eventBuffer) {
       return;
     }
-    eventBuffer.clear();
+    deps.eventBuffer.clear();
   };
   ipcMain.handle(CHANNELS.EVENT_INSPECTOR_CLEAR, handleEventInspectorClear);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.EVENT_INSPECTOR_CLEAR));
@@ -83,8 +82,8 @@ export function registerEventInspectorHandlers(deps: HandlerDependencies): () =>
     subscribedWebContents.set(sender, destroyListener);
     sender.once("destroyed", destroyListener);
 
-    if (!eventBufferUnsubscribe && eventBuffer) {
-      eventBufferUnsubscribe = eventBuffer.onRecord(broadcastEvent);
+    if (!eventBufferUnsubscribe && deps.eventBuffer) {
+      eventBufferUnsubscribe = deps.eventBuffer.onRecord(broadcastEvent);
     }
   };
   ipcMain.on(CHANNELS.EVENT_INSPECTOR_SUBSCRIBE, handleSubscribe);

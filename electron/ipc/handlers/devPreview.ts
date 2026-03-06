@@ -26,7 +26,7 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
     }
   };
 
-  const sessionService = new DevPreviewSessionService(deps.ptyClient, (state) => {
+  const sessionService = new DevPreviewSessionService(deps.ptyClient!, (state) => {
     const payload: DevPreviewStateChangedPayload = { state };
     sendToRenderer(CHANNELS.DEV_PREVIEW_STATE_CHANGED, payload);
   });

@@ -11,6 +11,9 @@ import type { PtyHostActivityTier } from "../../../../shared/types/pty-host.js";
 
 export function registerTerminalIOHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
+  if (!ptyClient) {
+    return () => {};
+  }
   const handlers: Array<() => void> = [];
 
   const handleTerminalInput = (_event: Electron.IpcMainEvent, id: string, data: string) => {

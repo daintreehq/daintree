@@ -245,6 +245,7 @@ protocol.registerSchemesAsPrivileged([
 app.commandLine.appendSwitch("js-flags", "--max-old-space-size=4096");
 
 import { registerIpcHandlers, sendToRenderer } from "./ipc/handlers.js";
+import type { HandlerDependencies } from "./ipc/types.js";
 import { registerErrorHandlers } from "./ipc/errorHandlers.js";
 import { PtyClient, disposePtyClient } from "./services/PtyClient.js";
 import {
@@ -751,7 +752,6 @@ async function createWindow(): Promise<void> {
     });
   }
 
-  const deferRendererLoad = process.env.CANOPY_E2E_DEFER_RENDERER_LOAD === "1" || isSmokeTest;
   let rendererLoadRequested = false;
   const loadRenderer = (reason: string): void => {
     if (!mainWindow || mainWindow.isDestroyed() || rendererLoadRequested) return;
@@ -766,12 +766,8 @@ async function createWindow(): Promise<void> {
     }
   };
 
-  if (deferRendererLoad) {
-    console.log("[MAIN] Deferring renderer load until IPC handlers are registered");
-  } else {
-    console.log("[MAIN] Window created, loading content immediately (Paint First)...");
-    loadRenderer("paint-first");
-  }
+  // Renderer load is deferred until after IPC handlers are registered to prevent
+  // race conditions where the renderer makes IPC calls before handlers exist.
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     console.log("[MAIN] setWindowOpenHandler triggered with URL:", url);
@@ -979,6 +975,25 @@ async function createWindow(): Promise<void> {
     }
   });
 
+  // Initialize synchronous services before handler registration
+  eventBuffer = new EventBuffer(1000);
+  sidecarManager = new SidecarManager(mainWindow);
+
+  // Register IPC handlers BEFORE loading the renderer so that no IPC calls
+  // arrive before handlers exist. The deps object is mutable — workspaceClient
+  // is assigned after pty-host is ready, and handlers access it lazily.
+  console.log("[MAIN] Registering IPC handlers...");
+  const handlerDeps: HandlerDependencies = {
+    mainWindow,
+    ptyClient,
+    eventBuffer,
+    sidecarManager,
+    cliAvailabilityService,
+    agentVersionService,
+    agentUpdateHandler,
+  };
+  cleanupIpcHandlers = registerIpcHandlers(handlerDeps);
+
   // Wait for pty-host to be ready before forking workspace-host.
   // Staggering prevents two utility processes from simultaneously loading
   // native modules (node-pty, simple-git) which can crash on Windows CI.
@@ -996,27 +1011,15 @@ async function createWindow(): Promise<void> {
     showCrashDialog: true,
   });
 
-  // Initialize Placeholder Services
-  eventBuffer = new EventBuffer(1000);
-  sidecarManager = new SidecarManager(mainWindow);
+  // Assign late-init workspaceClient to deps so handlers see it
+  handlerDeps.worktreeService = workspaceClient;
 
-  // Register Handlers IMMEDIATELY (so IPC doesn't fail if UI is fast)
-  console.log("[MAIN] Registering IPC handlers...");
-  cleanupIpcHandlers = registerIpcHandlers(
-    mainWindow,
-    ptyClient,
-    workspaceClient,
-    eventBuffer,
-    cliAvailabilityService,
-    agentVersionService,
-    agentUpdateHandler,
-    sidecarManager
-  );
+  // Now safe to load renderer — all handlers registered and all services ready
+  loadRenderer("after-services-ready");
+
   cleanupErrorHandlers = registerErrorHandlers(mainWindow, workspaceClient, ptyClient);
 
-  if (deferRendererLoad) {
-    loadRenderer("after-ipc-registration");
-  }
+  console.log("[MAIN] All critical services ready");
 
   function createAndDistributePorts(): void {
     // Close previous ports before creating new ones
