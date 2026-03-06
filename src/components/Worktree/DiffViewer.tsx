@@ -3,12 +3,17 @@ import { parseDiff, Diff, Hunk, tokenize, markEdits, DiffType, ViewType } from "
 import type { HunkData, HunkTokens, TokenizeOptions } from "react-diff-view";
 import { refractor } from "refractor";
 import "react-diff-view/style/index.css";
+import { ExternalLink } from "lucide-react";
+import path from "path-browserify";
 import { getLanguageForFile } from "@/components/FileViewer/languageUtils";
+import { actionService } from "@/services/ActionService";
 
 export interface DiffViewerProps {
   diff: string;
   filePath: string;
   viewType?: ViewType;
+  /** Absolute path to the worktree root, used to resolve per-file open-in-editor paths */
+  rootPath?: string;
 }
 
 function useTokens(hunks: HunkData[], language: string): HunkTokens | null {
@@ -30,7 +35,7 @@ function useTokens(hunks: HunkData[], language: string): HunkTokens | null {
   }, [hunks, language]);
 }
 
-export function DiffViewer({ diff, filePath, viewType = "split" }: DiffViewerProps) {
+export function DiffViewer({ diff, filePath, viewType = "split", rootPath }: DiffViewerProps) {
   const files = useMemo(() => {
     try {
       return parseDiff(diff);
@@ -75,12 +80,13 @@ export function DiffViewer({ diff, filePath, viewType = "split" }: DiffViewerPro
 
   return (
     <div className="diff-viewer overflow-auto">
-      {files.map((file: any, index: number) => (
+      {files.map((file, index) => (
         <FileDiff
           key={file.newRevision || file.oldRevision || index}
           file={file}
           viewType={viewType}
           language={language}
+          rootPath={rootPath}
         />
       ))}
     </div>
@@ -91,22 +97,69 @@ interface FileDiffProps {
   file: ReturnType<typeof parseDiff>[0];
   viewType: ViewType;
   language: string;
+  rootPath?: string;
 }
 
-function FileDiff({ file, viewType, language }: FileDiffProps) {
+function FileDiff({ file, viewType, language, rootPath }: FileDiffProps) {
   const tokens = useTokens(file.hunks ?? [], language);
   const diffType: DiffType = file.type as DiffType;
 
+  const fileTyped = file as ReturnType<typeof parseDiff>[0] & {
+    newPath?: string;
+    oldPath?: string;
+  };
+  // Prefer newPath (the post-change path); fall back to oldPath for deletions.
+  // Filter out /dev/null which git uses as a sentinel for added/deleted files.
+  const rawPath =
+    fileTyped.newPath && fileTyped.newPath !== "/dev/null"
+      ? fileTyped.newPath
+      : fileTyped.oldPath && fileTyped.oldPath !== "/dev/null"
+        ? fileTyped.oldPath
+        : undefined;
+  const relPath = rawPath;
+  const absolutePath =
+    rootPath && relPath && !relPath.startsWith("/")
+      ? path.join(rootPath, relPath)
+      : relPath || null;
+
+  const firstHunkLine = file.hunks?.[0]?.newStart;
+
+  const handleOpenInEditor = () => {
+    if (!absolutePath) return;
+    void actionService.dispatch(
+      "file.openInEditor",
+      { path: absolutePath, line: firstHunkLine },
+      { source: "user" }
+    );
+  };
+
   return (
-    <Diff
-      viewType={viewType}
-      diffType={diffType}
-      hunks={file.hunks ?? []}
-      tokens={tokens ?? undefined}
-    >
-      {(hunks: HunkData[]) =>
-        hunks.map((hunk) => <Hunk key={`${hunk.oldStart}-${hunk.newStart}`} hunk={hunk} />)
-      }
-    </Diff>
+    <div className="mb-2">
+      {relPath && (
+        <div className="flex items-center justify-between px-3 py-1.5 bg-canopy-sidebar border-b border-canopy-border text-xs text-canopy-text/60 font-mono">
+          <span className="truncate">{relPath}</span>
+          {absolutePath && (
+            <button
+              onClick={handleOpenInEditor}
+              title={`Open in editor${firstHunkLine ? ` at line ${firstHunkLine}` : ""}`}
+              className="ml-2 shrink-0 flex items-center gap-1 px-2 py-0.5 rounded hover:bg-white/5 hover:text-canopy-text transition-colors"
+            >
+              <ExternalLink className="w-3 h-3" />
+              Open
+            </button>
+          )}
+        </div>
+      )}
+      <Diff
+        viewType={viewType}
+        diffType={diffType}
+        hunks={file.hunks ?? []}
+        tokens={tokens ?? undefined}
+      >
+        {(hunks: HunkData[]) =>
+          hunks.map((hunk) => <Hunk key={`${hunk.oldStart}-${hunk.newStart}`} hunk={hunk} />)
+        }
+      </Diff>
+    </div>
   );
 }

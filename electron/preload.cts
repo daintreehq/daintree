@@ -208,6 +208,11 @@ const CHANNELS = {
   COPYTREE_GET_FILE_TREE: "copytree:get-file-tree",
   COPYTREE_TEST_CONFIG: "copytree:test-config",
 
+  // Editor channels
+  EDITOR_GET_CONFIG: "editor:get-config",
+  EDITOR_SET_CONFIG: "editor:set-config",
+  EDITOR_DISCOVER: "editor:discover",
+
   // System channels
   SYSTEM_OPEN_EXTERNAL: "system:open-external",
   SYSTEM_OPEN_PATH: "system:open-path",
@@ -717,13 +722,29 @@ const api: ElectronAPI = {
       _typedOn(CHANNELS.COPYTREE_PROGRESS, callback),
   },
 
+  // Editor API
+  editor: {
+    getConfig: (projectId?: string) => _typedInvoke(CHANNELS.EDITOR_GET_CONFIG, projectId),
+
+    setConfig: (payload: {
+      editor: { id: string; customCommand?: string; customTemplate?: string };
+      projectId?: string;
+    }) =>
+      _typedInvoke(
+        CHANNELS.EDITOR_SET_CONFIG,
+        payload as import("../shared/types/editor.js").EditorSetConfigPayload
+      ),
+
+    discover: () => _typedInvoke(CHANNELS.EDITOR_DISCOVER),
+  },
+
   // System API
   system: {
     openExternal: (url: string) => _typedInvoke(CHANNELS.SYSTEM_OPEN_EXTERNAL, { url }),
 
     openPath: (path: string) => _typedInvoke(CHANNELS.SYSTEM_OPEN_PATH, { path }),
 
-    openInEditor: (payload: { path: string; line?: number; col?: number }) =>
+    openInEditor: (payload: { path: string; line?: number; col?: number; projectId?: string }) =>
       _typedInvoke(CHANNELS.SYSTEM_OPEN_IN_EDITOR, payload),
 
     checkCommand: (command: string) => _typedInvoke(CHANNELS.SYSTEM_CHECK_COMMAND, command),

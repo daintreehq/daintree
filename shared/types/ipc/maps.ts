@@ -318,6 +318,20 @@ export interface IpcInvokeMap {
     result: CopyTreeTestConfigResult;
   };
 
+  // Editor channels
+  "editor:get-config": {
+    args: [projectId?: string];
+    result: import("../editor.js").EditorGetConfigResult;
+  };
+  "editor:set-config": {
+    args: [payload: import("../editor.js").EditorSetConfigPayload];
+    result: void;
+  };
+  "editor:discover": {
+    args: [];
+    result: import("../editor.js").DiscoveredEditor[];
+  };
+
   // System channels
   "system:open-external": {
     args: [payload: SystemOpenExternalPayload];

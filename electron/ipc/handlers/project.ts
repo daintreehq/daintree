@@ -94,53 +94,102 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
       throw new Error(`Invalid payload: ${parseResult.error.message}`);
     }
 
-    const { path: targetPath, line, col } = parseResult.data;
+    const { path: targetPath, line, col, projectId } = parseResult.data;
 
-    if (!path.isAbsolute(targetPath)) {
-      throw new Error("Only absolute paths are allowed");
-    }
-
-    // Try VS Code with --goto flag first
-    try {
-      const { execFile } = await import("child_process");
-      const { promisify } = await import("util");
-      const execFileAsync = promisify(execFile);
-
-      const gotoArg =
-        line !== undefined
-          ? col !== undefined
-            ? `${targetPath}:${line}:${col}`
-            : `${targetPath}:${line}`
-          : targetPath;
-
-      // On Windows, VS Code's CLI entry point is code.cmd
-      const candidates = process.platform === "win32" ? ["code.cmd", "code"] : ["code"];
-
-      let launched = false;
-      for (const cmd of candidates) {
-        try {
-          await execFileAsync(cmd, ["--goto", gotoArg], {
-            timeout: 5000,
-            ...(process.platform === "win32" ? { shell: true } : {}),
-          });
-          launched = true;
-          break;
-        } catch {
-          // Try next candidate
-        }
+    let editorConfig = null;
+    if (projectId) {
+      try {
+        const settings = await projectStore.getProjectSettings(projectId);
+        editorConfig = settings.preferredEditor ?? null;
+      } catch {
+        // ignore — fall through to EditorService defaults
       }
-      if (launched) return;
-    } catch {
-      // Fall through to shell.openPath
     }
 
-    const errorString = await shell.openPath(targetPath);
-    if (errorString) {
-      throw new Error(`Failed to open path: ${errorString}`);
-    }
+    const { openFile } = await import("../../services/EditorService.js");
+    await openFile(targetPath, line, col, editorConfig);
   };
   ipcMain.handle(CHANNELS.SYSTEM_OPEN_IN_EDITOR, handleSystemOpenInEditor);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_OPEN_IN_EDITOR));
+
+  const handleEditorGetConfig = async (_event: Electron.IpcMainInvokeEvent, projectId: unknown) => {
+    const { discover } = await import("../../services/EditorService.js");
+    const discoveredEditors = discover();
+
+    let preferredEditor = null;
+    if (typeof projectId === "string" && projectId) {
+      try {
+        const settings = await projectStore.getProjectSettings(projectId);
+        preferredEditor = settings.preferredEditor ?? null;
+      } catch {
+        // return null preference on error
+      }
+    }
+
+    return { preferredEditor, discoveredEditors };
+  };
+  ipcMain.handle(CHANNELS.EDITOR_GET_CONFIG, handleEditorGetConfig);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.EDITOR_GET_CONFIG));
+
+  const handleEditorSetConfig = async (_event: Electron.IpcMainInvokeEvent, payload: unknown) => {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid payload");
+    }
+    const { editor, projectId } = payload as { editor: unknown; projectId?: unknown };
+
+    if (!editor || typeof editor !== "object") {
+      throw new Error("Invalid editor config");
+    }
+    const editorObj = editor as Record<string, unknown>;
+    const validIds = [
+      "vscode",
+      "vscode-insiders",
+      "cursor",
+      "windsurf",
+      "zed",
+      "neovim",
+      "webstorm",
+      "sublime",
+      "custom",
+    ];
+    if (typeof editorObj.id !== "string" || !validIds.includes(editorObj.id)) {
+      throw new Error(`Invalid editor id: ${String(editorObj.id)}`);
+    }
+    if (editorObj.customCommand !== undefined) {
+      if (typeof editorObj.customCommand !== "string" || editorObj.customCommand.length > 512) {
+        throw new Error("Invalid customCommand");
+      }
+    }
+    if (editorObj.customTemplate !== undefined) {
+      if (typeof editorObj.customTemplate !== "string" || editorObj.customTemplate.length > 512) {
+        throw new Error("Invalid customTemplate");
+      }
+    }
+    const editorConfig = {
+      id: editorObj.id as import("../../../shared/types/editor.js").KnownEditorId,
+      customCommand:
+        typeof editorObj.customCommand === "string" ? editorObj.customCommand : undefined,
+      customTemplate:
+        typeof editorObj.customTemplate === "string" ? editorObj.customTemplate : undefined,
+    };
+
+    const pid = typeof projectId === "string" ? projectId : null;
+    if (!pid) {
+      throw new Error("projectId is required");
+    }
+
+    const settings = await projectStore.getProjectSettings(pid);
+    await projectStore.saveProjectSettings(pid, { ...settings, preferredEditor: editorConfig });
+  };
+  ipcMain.handle(CHANNELS.EDITOR_SET_CONFIG, handleEditorSetConfig);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.EDITOR_SET_CONFIG));
+
+  const handleEditorDiscover = async () => {
+    const { discover } = await import("../../services/EditorService.js");
+    return discover();
+  };
+  ipcMain.handle(CHANNELS.EDITOR_DISCOVER, handleEditorDiscover);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.EDITOR_DISCOVER));
 
   const handleSystemCheckCommand = async (
     _event: Electron.IpcMainInvokeEvent,

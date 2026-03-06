@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { systemClient } from "@/clients";
+import { useProjectStore } from "@/store";
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 
 const viewArgsSchema = z.object({
@@ -46,7 +47,8 @@ export function registerFileActions(actions: ActionRegistry, _callbacks: ActionC
     argsSchema: openInEditorArgsSchema,
     run: async (args: unknown) => {
       const { path, line, col } = args as z.infer<typeof openInEditorArgsSchema>;
-      await systemClient.openInEditor({ path, line, col });
+      const projectId = useProjectStore.getState().currentProject?.id;
+      await systemClient.openInEditor({ path, line, col, projectId });
     },
   }));
 }

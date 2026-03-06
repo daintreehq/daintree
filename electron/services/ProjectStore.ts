@@ -683,6 +683,12 @@ export class ProjectStore {
           sanitizedCommandOverrides && sanitizedCommandOverrides.length > 0
             ? sanitizedCommandOverrides
             : undefined,
+        preferredEditor:
+          parsed.preferredEditor &&
+          typeof parsed.preferredEditor === "object" &&
+          typeof (parsed.preferredEditor as Record<string, unknown>).id === "string"
+            ? (parsed.preferredEditor as import("../../shared/types/editor.js").EditorConfig)
+            : undefined,
       };
 
       return settings;
