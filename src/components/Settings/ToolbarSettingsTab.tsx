@@ -27,6 +27,7 @@ import {
   AlertCircle,
   Bot,
   PackagePlus,
+  Bell,
 } from "lucide-react";
 import { useToolbarPreferencesStore } from "@/store";
 import type { ToolbarButtonId } from "@/../../shared/types/domain";
@@ -78,6 +79,11 @@ const BUTTON_METADATA: Partial<Record<ToolbarButtonId, ButtonMetadata>> = {
     label: "GitHub Stats",
     icon: <AlertTriangle className="h-4 w-4" />,
     description: "GitHub issues, PRs, and commits",
+  },
+  "notification-center": {
+    label: "Notifications",
+    icon: <Bell className="h-4 w-4" />,
+    description: "Notification history dropdown",
   },
   notes: {
     label: "Notes",
