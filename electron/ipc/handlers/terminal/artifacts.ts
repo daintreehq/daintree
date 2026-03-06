@@ -9,7 +9,7 @@ import { CHANNELS } from "../../channels.js";
 import type { HandlerDependencies } from "../../types.js";
 
 export function registerArtifactHandlers(deps: HandlerDependencies): () => void {
-  const { mainWindow, worktreeService: workspaceClient } = deps;
+  const { mainWindow } = deps;
   const handlers: Array<() => void> = [];
 
   const handleArtifactSaveToFile = async (
@@ -123,8 +123,8 @@ export function registerArtifactHandlers(deps: HandlerDependencies): () => void 
           };
         }
 
-        if (workspaceClient) {
-          const states = await workspaceClient.getAllStatesAsync();
+        if (deps.worktreeService) {
+          const states = await deps.worktreeService.getAllStatesAsync();
           const isValidWorktree = states.some(
             (wt: { path: string }) => path.resolve(wt.path) === resolvedCwd
           );

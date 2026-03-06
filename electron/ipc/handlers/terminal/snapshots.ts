@@ -10,6 +10,9 @@ import { logDebug, logInfo, logWarn, logError } from "../../../utils/logger.js";
 
 export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
+  if (!ptyClient) {
+    return () => {};
+  }
   const handlers: Array<() => void> = [];
 
   const handleTerminalWake = async (

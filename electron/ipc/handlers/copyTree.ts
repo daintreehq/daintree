@@ -145,7 +145,7 @@ async function getCurrentProjectSettings(): Promise<
 }
 
 export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void {
-  const { mainWindow, worktreeService: workspaceClient, ptyClient } = deps;
+  const { mainWindow } = deps;
   const handlers: Array<() => void> = [];
 
   const injectionsInProgress = new Set<string>();
@@ -173,7 +173,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
 
     const validated = parseResult.data;
 
-    if (!workspaceClient) {
+    if (!deps.worktreeService) {
       return {
         content: "",
         fileCount: 0,
@@ -181,7 +181,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       };
     }
 
-    const states = await workspaceClient.getAllStatesAsync();
+    const states = await deps.worktreeService.getAllStatesAsync();
     const worktree = states.find((wt) => wt.id === validated.worktreeId);
 
     if (!worktree) {
@@ -200,7 +200,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     const projectSettings = await getCurrentProjectSettings();
     const mergedOptions = mergeCopyTreeOptions(projectSettings, validated.options);
 
-    return workspaceClient.generateContext(worktree.path, mergedOptions, onProgress);
+    return deps.worktreeService.generateContext(worktree.path, mergedOptions, onProgress);
   };
   ipcMain.handle(CHANNELS.COPYTREE_GENERATE, handleCopyTreeGenerate);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.COPYTREE_GENERATE));
@@ -231,7 +231,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
 
     const validated = parseResult.data;
 
-    if (!workspaceClient) {
+    if (!deps.worktreeService) {
       return {
         content: "",
         fileCount: 0,
@@ -239,7 +239,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       };
     }
 
-    const states = await workspaceClient.getAllStatesAsync();
+    const states = await deps.worktreeService.getAllStatesAsync();
     const worktree = states.find((wt) => wt.id === validated.worktreeId);
 
     if (!worktree) {
@@ -258,7 +258,11 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     const projectSettings = await getCurrentProjectSettings();
     const mergedOptions = mergeCopyTreeOptions(projectSettings, validated.options);
 
-    const result = await workspaceClient.generateContext(worktree.path, mergedOptions, onProgress);
+    const result = await deps.worktreeService.generateContext(
+      worktree.path,
+      mergedOptions,
+      onProgress
+    );
 
     if (result.error) {
       return result;
@@ -359,7 +363,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       };
     }
 
-    if (!workspaceClient) {
+    if (!deps.worktreeService) {
       return {
         content: "",
         fileCount: 0,
@@ -371,7 +375,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     activeInjectionIds.set(validated.terminalId, injectionId);
 
     try {
-      const states = await workspaceClient.getAllStatesAsync();
+      const states = await deps.worktreeService.getAllStatesAsync();
       const worktree = states.find((wt) => wt.id === validated.worktreeId);
 
       if (!worktree) {
@@ -382,7 +386,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
         };
       }
 
-      if (!ptyClient.hasTerminal(validated.terminalId)) {
+      if (!deps.ptyClient!.hasTerminal(validated.terminalId)) {
         return {
           content: "",
           fileCount: 0,
@@ -398,7 +402,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       const projectSettings = await getCurrentProjectSettings();
       const mergedOptions = mergeCopyTreeOptions(projectSettings, validated.options || {});
 
-      const result = await workspaceClient.generateContext(
+      const result = await deps.worktreeService.generateContext(
         worktree.path,
         mergedOptions,
         onProgress
@@ -422,7 +426,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
           };
         }
 
-        if (!ptyClient.hasTerminal(validated.terminalId)) {
+        if (!deps.ptyClient!.hasTerminal(validated.terminalId)) {
           return {
             content: "",
             fileCount: 0,
@@ -431,7 +435,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
         }
 
         const chunk = content.slice(i, i + CHUNK_SIZE);
-        ptyClient.write(validated.terminalId, chunk, traceId);
+        deps.ptyClient!.write(validated.terminalId, chunk, traceId);
         if (i + CHUNK_SIZE < content.length) {
           await new Promise((resolve) => setTimeout(resolve, 1));
         }
@@ -449,7 +453,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
   handlers.push(() => ipcMain.removeHandler(CHANNELS.COPYTREE_INJECT));
 
   const handleCopyTreeAvailable = async (): Promise<boolean> => {
-    return !!workspaceClient && workspaceClient.isReady();
+    return !!deps.worktreeService && deps.worktreeService.isReady();
   };
   ipcMain.handle(CHANNELS.COPYTREE_AVAILABLE, handleCopyTreeAvailable);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.COPYTREE_AVAILABLE));
@@ -482,8 +486,8 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       Array.from(activeInjectionIds.values()).forEach((id) => {
         cancelledInjections.add(id);
       });
-      if (workspaceClient) {
-        workspaceClient.cancelAllContext();
+      if (deps.worktreeService) {
+        deps.worktreeService.cancelAllContext();
       }
       console.log(
         `[cancel] Marked all ${activeInjectionIds.size} active injections for cancellation`
@@ -515,17 +519,17 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       }
     }
 
-    if (!workspaceClient) {
+    if (!deps.worktreeService) {
       throw new Error("Worktree service not available");
     }
 
-    const monitor = await workspaceClient.getMonitorAsync(validated.worktreeId);
+    const monitor = await deps.worktreeService.getMonitorAsync(validated.worktreeId);
 
     if (!monitor) {
       throw new Error(`Worktree not found: ${validated.worktreeId}`);
     }
 
-    return workspaceClient.getFileTree(monitor.path, validated.dirPath);
+    return deps.worktreeService.getFileTree(monitor.path, validated.dirPath);
   };
   ipcMain.handle(CHANNELS.COPYTREE_GET_FILE_TREE, handleCopyTreeGetFileTree);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.COPYTREE_GET_FILE_TREE));
@@ -556,7 +560,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
 
     const validated = parseResult.data;
 
-    if (!workspaceClient) {
+    if (!deps.worktreeService) {
       return {
         includedFiles: 0,
         includedSize: 0,
@@ -565,7 +569,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       };
     }
 
-    const states = await workspaceClient.getAllStatesAsync();
+    const states = await deps.worktreeService.getAllStatesAsync();
     const worktree = states.find((wt) => wt.id === validated.worktreeId);
 
     if (!worktree) {
@@ -581,7 +585,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     const projectSettings = await getCurrentProjectSettings();
     const mergedOptions = mergeCopyTreeOptions(projectSettings, validated.options);
 
-    return workspaceClient.testConfig(worktree.path, mergedOptions);
+    return deps.worktreeService.testConfig(worktree.path, mergedOptions);
   };
   ipcMain.handle(CHANNELS.COPYTREE_TEST_CONFIG, handleCopyTreeTestConfig);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.COPYTREE_TEST_CONFIG));

@@ -1,11 +1,3 @@
-import { BrowserWindow } from "electron";
-import type { CliAvailabilityService } from "../services/CliAvailabilityService.js";
-import type { AgentVersionService } from "../services/AgentVersionService.js";
-import type { AgentUpdateHandler } from "../services/AgentUpdateHandler.js";
-import type { EventBuffer } from "../services/EventBuffer.js";
-import type { SidecarManager } from "../services/SidecarManager.js";
-import type { PtyClient } from "../services/PtyClient.js";
-import type { WorkspaceClient } from "../services/WorkspaceClient.js";
 import type { HandlerDependencies } from "./types.js";
 import { registerWorktreeHandlers } from "./handlers/worktree.js";
 import { registerTerminalHandlers } from "./handlers/terminal.js";
@@ -49,27 +41,10 @@ function runCleanups(cleanupFunctions: CleanupFn[]): void {
   }
 }
 
-export function registerIpcHandlers(
-  mainWindow: BrowserWindow,
-  ptyClient: PtyClient,
-  worktreeService?: WorkspaceClient,
-  eventBuffer?: EventBuffer,
-  cliAvailabilityService?: CliAvailabilityService,
-  agentVersionService?: AgentVersionService,
-  agentUpdateHandler?: AgentUpdateHandler,
-  sidecarManager?: SidecarManager
-): () => void {
-  const deps: HandlerDependencies = {
-    mainWindow,
-    ptyClient,
-    worktreeService,
-    eventBuffer,
-    cliAvailabilityService,
-    agentVersionService,
-    agentUpdateHandler,
-    sidecarManager,
-    events,
-  };
+export function registerIpcHandlers(deps: HandlerDependencies): () => void {
+  if (!deps.events) {
+    deps.events = events;
+  }
 
   const cleanupFunctions: CleanupFn[] = [];
 

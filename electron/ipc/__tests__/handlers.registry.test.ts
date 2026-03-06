@@ -137,7 +137,7 @@ describe("registerIpcHandlers", () => {
   }
 
   it("registers every handler module exactly once", () => {
-    registerIpcHandlers({} as never, {} as never);
+    registerIpcHandlers({} as never);
 
     for (const register of allRegisterMocks) {
       expect(register).toHaveBeenCalledTimes(1);
@@ -150,9 +150,7 @@ describe("registerIpcHandlers", () => {
       throw new Error("github registration failed");
     });
 
-    expect(() => registerIpcHandlers({} as never, {} as never)).toThrow(
-      "github registration failed"
-    );
+    expect(() => registerIpcHandlers({} as never)).toThrow("github registration failed");
 
     expect(cleanups.length).toBeGreaterThan(0);
     for (const cleanup of cleanups) {
@@ -162,7 +160,7 @@ describe("registerIpcHandlers", () => {
 
   it("attempts every cleanup even if one throws", () => {
     const cleanups = registerWithTrackedCleanups();
-    const cleanupAll = registerIpcHandlers({} as never, {} as never);
+    const cleanupAll = registerIpcHandlers({} as never);
 
     cleanups[0].mockImplementation(() => {
       throw new Error("cleanup failed");

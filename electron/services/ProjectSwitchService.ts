@@ -1,8 +1,5 @@
-import type { BrowserWindow } from "electron";
-import type { PtyClient } from "./PtyClient.js";
-import type { WorkspaceClient } from "./WorkspaceClient.js";
-import type { EventBuffer } from "./EventBuffer.js";
 import type { Project } from "../types/index.js";
+import type { HandlerDependencies } from "../ipc/types.js";
 import { projectStore } from "./ProjectStore.js";
 import { logBuffer } from "./LogBuffer.js";
 import { taskQueueService } from "./TaskQueueService.js";
@@ -13,18 +10,11 @@ import { store } from "../store.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { markPerformance } from "../utils/performance.js";
 
-export interface ProjectSwitchDependencies {
-  mainWindow: BrowserWindow;
-  ptyClient: PtyClient;
-  worktreeService?: WorkspaceClient;
-  eventBuffer?: EventBuffer;
-}
-
 export class ProjectSwitchService {
-  private deps: ProjectSwitchDependencies;
+  private deps: HandlerDependencies;
   private switchChain: Promise<void> = Promise.resolve();
 
-  constructor(deps: ProjectSwitchDependencies) {
+  constructor(deps: HandlerDependencies) {
     this.deps = deps;
   }
 
@@ -95,9 +85,9 @@ export class ProjectSwitchService {
       console.error("[ProjectSwitch] Project switch failed, rolling back:", error);
       try {
         if (previousProjectId) {
-          this.deps.ptyClient.onProjectSwitch(previousProjectId);
+          this.deps.ptyClient!.onProjectSwitch(previousProjectId);
         } else {
-          this.deps.ptyClient.setActiveProject(null);
+          this.deps.ptyClient!.setActiveProject(null);
         }
       } catch (rollbackError) {
         console.error("[ProjectSwitch] Rollback failed:", rollbackError);
@@ -162,7 +152,7 @@ export class ProjectSwitchService {
 
     const safeCall = (fn: () => unknown): Promise<unknown> => Promise.resolve().then(fn);
     const cleanupResults = await Promise.allSettled([
-      safeCall(() => this.deps.ptyClient.onProjectSwitch(projectId)),
+      safeCall(() => this.deps.ptyClient!.onProjectSwitch(projectId)),
       safeCall(() => logBuffer.onProjectSwitch()),
       this.deps.eventBuffer?.onProjectSwitch
         ? safeCall(() => this.deps.eventBuffer!.onProjectSwitch())

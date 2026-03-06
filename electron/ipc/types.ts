@@ -10,7 +10,7 @@ import type { AgentUpdateHandler } from "../services/AgentUpdateHandler.js";
 
 export interface HandlerDependencies {
   mainWindow: BrowserWindow;
-  ptyClient: PtyClient;
+  ptyClient?: PtyClient;
   worktreeService?: WorkspaceClient;
   eventBuffer?: EventBuffer;
   cliAvailabilityService?: CliAvailabilityService;

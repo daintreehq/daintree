@@ -15,6 +15,9 @@ import { getDefaultShell } from "../../../services/pty/terminalShell.js";
 
 export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
+  if (!ptyClient) {
+    return () => {};
+  }
   const handlers: Array<() => void> = [];
 
   const handleTerminalSpawn = async (
