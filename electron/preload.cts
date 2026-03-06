@@ -364,6 +364,13 @@ const CHANNELS = {
   GIT_GET_FILE_DIFF: "git:get-file-diff",
   GIT_GET_PROJECT_PULSE: "git:get-project-pulse",
   GIT_LIST_COMMITS: "git:list-commits",
+  GIT_STAGE_FILE: "git:stage-file",
+  GIT_UNSTAGE_FILE: "git:unstage-file",
+  GIT_STAGE_ALL: "git:stage-all",
+  GIT_UNSTAGE_ALL: "git:unstage-all",
+  GIT_COMMIT: "git:commit",
+  GIT_PUSH: "git:push",
+  GIT_GET_STAGING_STATUS: "git:get-staging-status",
 
   // Sidecar channels
   SIDECAR_CREATE: "sidecar:create",

@@ -7,6 +7,7 @@ import type {
   TerminalRecipe,
   TerminalSnapshot,
   TabGroup,
+  StagingStatus,
 } from "../domain.js";
 import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitInit.js";
 import type { AgentSettings } from "../agentSettings.js";
@@ -800,6 +801,34 @@ export interface IpcInvokeMap {
   "git:list-commits": {
     args: [options: GitCommitListOptions];
     result: GitCommitListResponse;
+  };
+  "git:stage-file": {
+    args: [payload: { cwd: string; filePath: string }];
+    result: void;
+  };
+  "git:unstage-file": {
+    args: [payload: { cwd: string; filePath: string }];
+    result: void;
+  };
+  "git:stage-all": {
+    args: [cwd: string];
+    result: void;
+  };
+  "git:unstage-all": {
+    args: [cwd: string];
+    result: void;
+  };
+  "git:commit": {
+    args: [payload: { cwd: string; message: string }];
+    result: { hash: string; summary: string };
+  };
+  "git:push": {
+    args: [payload: { cwd: string; setUpstream?: boolean }];
+    result: { success: boolean; error?: string };
+  };
+  "git:get-staging-status": {
+    args: [cwd: string];
+    result: StagingStatus;
   };
 
   // Sidecar channels

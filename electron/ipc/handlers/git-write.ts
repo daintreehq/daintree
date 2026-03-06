@@ -14,6 +14,7 @@ interface StagingFileEntry {
 export interface StagingStatus {
   staged: StagingFileEntry[];
   unstaged: StagingFileEntry[];
+  conflicted: string[];
   isDetachedHead: boolean;
   currentBranch: string | null;
   hasRemote: boolean;
