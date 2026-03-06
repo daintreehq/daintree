@@ -44,9 +44,9 @@ jobs:
         run: |
           PLATFORM="${{ inputs.platform || 'all' }}"
 
-          # PRs always run Linux-only regardless of input
+          # PRs run on Linux, macOS, and Windows
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo 'matrix={"include":[{"os":"ubuntu-22.04","name":"Linux"}]}' >> "$GITHUB_OUTPUT"
+            echo 'matrix={"include":[{"os":"macos-14","name":"macOS"},{"os":"ubuntu-22.04","name":"Linux"},{"os":"windows-latest","name":"Windows"}]}' >> "$GITHUB_OUTPUT"
           elif [ "$PLATFORM" = "macos" ]; then
             echo 'matrix={"include":[{"os":"macos-14","name":"macOS"}]}' >> "$GITHUB_OUTPUT"
           elif [ "$PLATFORM" = "linux" ]; then
