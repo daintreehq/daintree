@@ -11,6 +11,7 @@ import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { terminalClient } from "@/clients";
 import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol";
+import { fireWatchNotification } from "@/lib/watchNotification";
 
 interface TerminalContextMenuProps {
   terminalId: string;
@@ -45,6 +46,10 @@ export function TerminalContextMenu({
   }, [maximizeTarget, terminalId, getPanelGroup]);
 
   const { worktrees } = useWorktrees();
+
+  const isWatched = useTerminalStore((state) => state.watchedPanels.has(terminalId));
+  const watchPanel = useTerminalStore((state) => state.watchPanel);
+  const unwatchPanel = useTerminalStore((state) => state.unwatchPanel);
 
   const isPaused = terminal?.flowStatus === "paused-backpressure";
 
@@ -234,6 +239,15 @@ export function TerminalContextMenu({
         id: "toggle-input-lock",
         label: terminal.isInputLocked ? "Unlock Input" : "Lock Input",
       },
+      ...(terminal.agentId
+        ? [
+            {
+              id: "toggle-watch",
+              label: isWatched ? "Cancel Watch" : "Watch Terminal",
+              sublabel: isMac ? "⌘⇧W" : "Ctrl+⇧W",
+            },
+          ]
+        : []),
       ...(convertToSubmenu.length > 0
         ? [
             {
@@ -278,6 +292,7 @@ export function TerminalContextMenu({
     currentLocation,
     isMaximized,
     isPaused,
+    isWatched,
     terminal,
     worktrees.length,
     worktreeSubmenu,
@@ -402,6 +417,20 @@ export function TerminalContextMenu({
             { source: "context-menu" }
           );
           break;
+        case "toggle-watch":
+          if (isWatched) {
+            unwatchPanel(terminalId);
+          } else if (terminal.agentState === "completed" || terminal.agentState === "waiting") {
+            fireWatchNotification(
+              terminalId,
+              terminal.title ?? terminalId,
+              terminal.agentState,
+              terminal.worktreeId ?? undefined
+            );
+          } else {
+            watchPanel(terminalId);
+          }
+          break;
         case "duplicate":
           void actionService.dispatch(
             "terminal.duplicate",
@@ -476,7 +505,7 @@ export function TerminalContextMenu({
           break;
       }
     },
-    [showMenu, terminal, template, terminalId]
+    [showMenu, terminal, template, terminalId, isWatched, watchPanel, unwatchPanel]
   );
 
   return (

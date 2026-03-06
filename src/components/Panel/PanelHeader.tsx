@@ -1,15 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import {
-  X,
-  Maximize2,
-  Minimize2,
-  RotateCcw,
-  Grid2X2,
-  Activity,
-  Plus,
-  Bell,
-  BellOff,
-} from "lucide-react";
+import { X, Maximize2, Minimize2, RotateCcw, Grid2X2, Activity, Plus, Bell } from "lucide-react";
 import {
   DndContext,
   closestCenter,
@@ -599,7 +589,7 @@ function PanelHeaderComponent({
         <div className="flex items-center gap-1.5">
           {/* Window controls - hover only */}
           {/* Watch toggle — rendered outside hover container so the active bell is always visible */}
-          {showWatchButton && (
+          {showWatchButton && isWatched && (
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -607,32 +597,16 @@ function PanelHeaderComponent({
                     type="button"
                     onClick={handleToggleWatch}
                     onPointerDown={(e) => e.stopPropagation()}
-                    className={cn(
-                      "p-1.5 transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-canopy-accent",
-                      isWatched
-                        ? "text-canopy-accent hover:text-canopy-accent/80"
-                        : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 text-canopy-text/60 hover:text-canopy-text pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto"
-                    )}
-                    aria-label={
-                      isWatched
-                        ? "Cancel watch — stop waiting for completion"
-                        : "Watch this terminal — notify on completion"
-                    }
-                    aria-pressed={isWatched}
+                    className="p-1.5 transition-all text-canopy-accent hover:text-canopy-accent/80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-canopy-accent"
+                    aria-label="Cancel watch — stop waiting for completion"
                   >
-                    {isWatched ? (
-                      <Bell
-                        className="w-3 h-3 animate-pulse motion-reduce:animate-none"
-                        aria-hidden="true"
-                      />
-                    ) : (
-                      <BellOff className="w-3 h-3" aria-hidden="true" />
-                    )}
+                    <Bell
+                      className="w-3 h-3 animate-pulse motion-reduce:animate-none"
+                      aria-hidden="true"
+                    />
                   </button>
                 </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {isWatched ? "Cancel watch" : "Watch this terminal"}
-                </TooltipContent>
+                <TooltipContent side="bottom">Cancel watch</TooltipContent>
               </Tooltip>
             </TooltipProvider>
           )}
