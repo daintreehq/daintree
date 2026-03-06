@@ -248,6 +248,7 @@ export interface WorktreeHeaderProps {
     onEndAll: () => void;
     onAttachIssue?: () => void;
     onOpenReviewHub?: () => void;
+    onCompareDiff?: () => void;
     onDeleteWorktree?: () => void;
   };
 }
@@ -411,6 +412,7 @@ export function WorktreeHeader({
                 onOpenPRExternal={menu.onOpenPRExternal}
                 onAttachIssue={menu.onAttachIssue}
                 onOpenReviewHub={menu.onOpenReviewHub}
+                onCompareDiff={menu.onCompareDiff}
                 onRunRecipe={menu.onRunRecipe}
                 onSaveLayout={menu.onSaveLayout}
                 onTogglePin={menu.onTogglePin}

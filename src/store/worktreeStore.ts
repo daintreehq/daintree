@@ -12,12 +12,18 @@ interface CreateDialogState {
   initialIssue: GitHubIssue | null;
 }
 
+interface CrossDiffDialogState {
+  isOpen: boolean;
+  initialWorktreeId: string | null;
+}
+
 interface WorktreeSelectionState {
   activeWorktreeId: string | null;
   focusedWorktreeId: string | null;
   expandedWorktrees: Set<string>;
   expandedTerminals: Set<string>;
   createDialog: CreateDialogState;
+  crossDiffDialog: CrossDiffDialogState;
   _policyGeneration: number;
   lastFocusedTerminalByWorktree: Map<string, string>;
 
@@ -31,6 +37,8 @@ interface WorktreeSelectionState {
   setTerminalsExpanded: (id: string, expanded: boolean) => void;
   openCreateDialog: (initialIssue?: GitHubIssue | null) => void;
   closeCreateDialog: () => void;
+  openCrossWorktreeDiff: (initialWorktreeId?: string | null) => void;
+  closeCrossWorktreeDiff: () => void;
   trackTerminalFocus: (worktreeId: string, terminalId: string) => void;
   clearWorktreeFocusTracking: (worktreeId: string) => void;
   reset: () => void;
@@ -189,6 +197,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
   expandedWorktrees: new Set<string>(),
   expandedTerminals: new Set<string>(),
   createDialog: { isOpen: false, initialIssue: null },
+  crossDiffDialog: { isOpen: false, initialWorktreeId: null },
   _policyGeneration: 0,
   lastFocusedTerminalByWorktree: new Map<string, string>(),
 
@@ -350,6 +359,12 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
 
   closeCreateDialog: () => set({ createDialog: { isOpen: false, initialIssue: null } }),
 
+  openCrossWorktreeDiff: (initialWorktreeId = null) =>
+    set({ crossDiffDialog: { isOpen: true, initialWorktreeId } }),
+
+  closeCrossWorktreeDiff: () =>
+    set({ crossDiffDialog: { isOpen: false, initialWorktreeId: null } }),
+
   trackTerminalFocus: (worktreeId, terminalId) =>
     set((state) => {
       const next = new Map(state.lastFocusedTerminalByWorktree);
@@ -371,6 +386,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       expandedWorktrees: new Set<string>(),
       expandedTerminals: new Set<string>(),
       createDialog: { isOpen: false, initialIssue: null },
+      crossDiffDialog: { isOpen: false, initialWorktreeId: null },
       lastFocusedTerminalByWorktree: new Map<string, string>(),
     }),
 });

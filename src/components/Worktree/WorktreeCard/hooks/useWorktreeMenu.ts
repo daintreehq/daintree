@@ -20,6 +20,7 @@ export function useWorktreeMenu({
   onShowDeleteDialog,
   onShowIssuePicker,
   onShowReviewHub,
+  onShowCompareDiff,
 }: {
   worktree: WorktreeState;
   recipes: TerminalRecipe[];
@@ -42,6 +43,7 @@ export function useWorktreeMenu({
   onShowDeleteDialog: () => void;
   onShowIssuePicker?: () => void;
   onShowReviewHub?: () => void;
+  onShowCompareDiff?: () => void;
 }): {
   contextMenuTemplate: MenuItemOption[];
   handleContextMenu: (event: React.MouseEvent) => Promise<void>;
@@ -124,6 +126,10 @@ export function useWorktreeMenu({
       {
         id: "worktree:review-hub",
         label: "Review & Commit",
+      },
+      {
+        id: "worktree:compare-diff",
+        label: "Compare Worktrees…",
       },
       {
         id: "worktree:copy-context",
@@ -214,6 +220,7 @@ export function useWorktreeMenu({
     onLaunchAgent,
     onSaveLayout,
     onShowIssuePicker,
+    onShowCompareDiff,
     recipes,
     runningRecipeId,
     worktree.issueNumber,
@@ -376,6 +383,9 @@ export function useWorktreeMenu({
         case "worktree:review-hub":
           onShowReviewHub?.();
           break;
+        case "worktree:compare-diff":
+          onShowCompareDiff?.();
+          break;
         case "worktree:delete":
           onShowDeleteDialog();
           break;
@@ -389,6 +399,7 @@ export function useWorktreeMenu({
       onShowDeleteDialog,
       onShowIssuePicker,
       onShowReviewHub,
+      onShowCompareDiff,
       showMenu,
       worktree.id,
     ]

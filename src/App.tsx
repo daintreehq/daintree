@@ -53,6 +53,7 @@ import {
   WorktreeFilterPopover,
   WorktreeOverviewModal,
 } from "./components/Worktree";
+import { CrossWorktreeDiff } from "./components/Worktree/CrossWorktreeDiff";
 import { NewWorktreeDialog } from "./components/Worktree/NewWorktreeDialog";
 import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
 import { FileViewerModalHost } from "./components/FileViewer/FileViewerModalHost";
@@ -564,6 +565,13 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 }
 
 function App() {
+  const { crossDiffDialog, closeCrossWorktreeDiff } = useWorktreeSelectionStore(
+    useShallow((state) => ({
+      crossDiffDialog: state.crossDiffDialog,
+      closeCrossWorktreeDiff: state.closeCrossWorktreeDiff,
+    }))
+  );
+
   const { focusedId, addTerminal, setReconnectError, hydrateTabGroups, hydrateMru } =
     useTerminalStore(
       useShallow((state) => ({
@@ -1170,6 +1178,12 @@ function App() {
         agentAvailability={availability}
         agentSettings={agentSettings}
         homeDir={homeDir}
+      />
+
+      <CrossWorktreeDiff
+        isOpen={crossDiffDialog.isOpen}
+        onClose={closeCrossWorktreeDiff}
+        initialWorktreeId={crossDiffDialog.initialWorktreeId}
       />
 
       <SettingsDialog

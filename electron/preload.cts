@@ -376,6 +376,7 @@ const CHANNELS = {
   GIT_COMMIT: "git:commit",
   GIT_PUSH: "git:push",
   GIT_GET_STAGING_STATUS: "git:get-staging-status",
+  GIT_COMPARE_WORKTREES: "git:compare-worktrees",
 
   // Sidecar channels
   SIDECAR_CREATE: "sidecar:create",
@@ -1166,6 +1167,9 @@ const api: ElectronAPI = {
       _typedInvoke(CHANNELS.GIT_PUSH, { cwd, setUpstream }),
 
     getStagingStatus: (cwd: string) => _typedInvoke(CHANNELS.GIT_GET_STAGING_STATUS, cwd),
+
+    compareWorktrees: (cwd: string, branch1: string, branch2: string, filePath?: string) =>
+      _typedInvoke(CHANNELS.GIT_COMPARE_WORKTREES, { cwd, branch1, branch2, filePath }),
   },
 
   // Terminal Config API
