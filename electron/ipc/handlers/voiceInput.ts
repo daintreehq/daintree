@@ -5,12 +5,20 @@ import { VoiceTranscriptionService } from "../../services/VoiceTranscriptionServ
 import type { HandlerDependencies } from "../types.js";
 
 let service: VoiceTranscriptionService | null = null;
+let activeEventUnsubscribe: (() => void) | null = null;
 
 function getService(): VoiceTranscriptionService {
   if (!service) {
     service = new VoiceTranscriptionService();
   }
   return service;
+}
+
+function cleanupActiveSubscription(): void {
+  if (activeEventUnsubscribe) {
+    activeEventUnsubscribe();
+    activeEventUnsubscribe = null;
+  }
 }
 
 export function registerVoiceInputHandlers(deps: HandlerDependencies): () => void {
@@ -35,6 +43,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     const svc = getService();
     const settings = store.get("voiceInput");
 
+    // Clean up any existing subscription before starting a new session
+    cleanupActiveSubscription();
+
     const unsubscribe = svc.onEvent((voiceEvent) => {
       const win = deps.mainWindow;
       if (!win || win.isDestroyed()) return;
@@ -50,17 +61,32 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       }
     });
 
-    // Clean up listener when renderer disconnects
-    event.sender.once("destroyed", unsubscribe);
+    activeEventUnsubscribe = unsubscribe;
+
+    // Also clean up if the renderer is destroyed unexpectedly
+    const onDestroyed = () => {
+      if (activeEventUnsubscribe === unsubscribe) {
+        activeEventUnsubscribe = null;
+      }
+      unsubscribe();
+      service?.stop();
+    };
+    event.sender.once("destroyed", onDestroyed);
 
     const result = await svc.start(settings);
     if (!result.ok) {
+      // Failed to start — clean up subscription immediately
+      if (activeEventUnsubscribe === unsubscribe) {
+        activeEventUnsubscribe = null;
+      }
       unsubscribe();
+      event.sender.removeListener("destroyed", onDestroyed);
     }
     return result;
   };
 
   const handleStop = async () => {
+    cleanupActiveSubscription();
     service?.stop();
   };
 
@@ -79,7 +105,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     ipcMain.removeHandler(CHANNELS.VOICE_INPUT_SET_SETTINGS);
     ipcMain.removeHandler(CHANNELS.VOICE_INPUT_START);
     ipcMain.removeHandler(CHANNELS.VOICE_INPUT_STOP);
-    ipcMain.removeAllListeners(CHANNELS.VOICE_INPUT_AUDIO_CHUNK);
+    ipcMain.removeListener(CHANNELS.VOICE_INPUT_AUDIO_CHUNK, handleAudioChunk);
+    cleanupActiveSubscription();
     service?.destroy();
     service = null;
   };
