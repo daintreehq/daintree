@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useMemo } from "react";
-import { X, Maximize2, FilterX } from "lucide-react";
+import { X, Maximize2, FilterX, Shield } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useShallow } from "zustand/react/shallow";
 import { WorktreeCard } from "./WorktreeCard";
@@ -343,15 +343,35 @@ export function WorktreeOverviewModal({
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <label className="flex items-center gap-1.5 text-xs text-canopy-text/60 cursor-pointer hover:text-canopy-text/80 transition-colors">
-                      <input
-                        type="checkbox"
-                        checked={hideMainWorktree}
-                        onChange={(e) => setHideMainWorktree(e.target.checked)}
-                        className="w-3 h-3 rounded border-canopy-border text-canopy-accent focus:ring-canopy-accent focus:ring-offset-0 bg-canopy-bg cursor-pointer"
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={!hideMainWorktree}
+                      aria-label={hideMainWorktree ? "Show main worktree" : "Hide main worktree"}
+                      onClick={() => setHideMainWorktree(!hideMainWorktree)}
+                      className={cn(
+                        "flex items-center gap-1.5 px-2 py-1 rounded-full text-xs transition-colors",
+                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent",
+                        hideMainWorktree
+                          ? "bg-white/[0.06] text-canopy-text/40 hover:text-canopy-text/60"
+                          : "bg-white/[0.10] text-canopy-text/70 hover:text-canopy-text/90"
+                      )}
+                    >
+                      <Shield
+                        className={cn(
+                          "w-3 h-3 transition-colors",
+                          hideMainWorktree ? "text-canopy-text/30" : "text-canopy-text/50"
+                        )}
                       />
-                      <span>Hide main</span>
-                    </label>
+                      <span
+                        className={cn(
+                          "transition-all",
+                          hideMainWorktree && "line-through decoration-canopy-text/30"
+                        )}
+                      >
+                        main
+                      </span>
+                    </button>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
                     {hideMainWorktree ? "Show main worktree" : "Hide main worktree"}
