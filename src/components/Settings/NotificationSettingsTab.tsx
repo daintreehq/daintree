@@ -12,10 +12,10 @@ const AVAILABLE_SOUNDS: { file: string; label: string }[] = [
 ];
 
 const DEFAULT_SETTINGS: NotificationSettings = {
-  completedEnabled: true,
-  waitingEnabled: true,
-  failedEnabled: true,
-  soundEnabled: true,
+  completedEnabled: false,
+  waitingEnabled: false,
+  failedEnabled: false,
+  soundEnabled: false,
   soundFile: "chime.wav",
 };
 
@@ -64,7 +64,7 @@ export function NotificationSettingsTab() {
       <SettingsSection
         icon={Bell}
         title="Agent Notifications"
-        description="Configure when Canopy shows OS notifications for agent activity. Notifications are suppressed when you are already viewing the relevant worktree."
+        description="OS notifications are off by default. Enable individual event types below to receive native alerts for agent activity. Notifications are suppressed when you are already viewing the relevant worktree."
       >
         <div className="space-y-3">
           <ToggleRow

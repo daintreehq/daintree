@@ -50,6 +50,12 @@ class AgentNotificationService {
 
     if (state === previousState) return;
 
+    // Skip if all OS notification types are disabled (off by default).
+    // TODO: Scope to watched terminals once #2539 ships.
+    if (!settings.completedEnabled && !settings.waitingEnabled && !settings.failedEnabled) {
+      return;
+    }
+
     // Cancel any pending completion timer for this agent when it leaves "completed"
     if (previousState === "completed" && state !== "completed") {
       const key = agentId ?? worktreeId ?? "agent";
