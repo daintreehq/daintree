@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import type { StagingStatus, GitStatus } from "@shared/types";
 import { cn } from "@/lib/utils";
 import { useOverlayState } from "@/hooks";
-import { X, RefreshCw, CheckSquare, Square, Loader2, AlertTriangle } from "lucide-react";
+import { X, RefreshCw, CheckSquare, Square, Loader2, AlertTriangle, GitBranch } from "lucide-react";
 import { FileStageRow } from "./FileStageRow";
 import { CommitPanel } from "./CommitPanel";
 import { FileDiffModal } from "../FileDiffModal";
@@ -195,7 +195,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
         <div
           className={cn(
             "relative flex flex-col",
-            "w-[min(520px,calc(100vw-80px))] max-h-[calc(100vh-120px)]",
+            "w-[min(600px,calc(100vw-80px))] max-h-[calc(100vh-80px)] min-h-[320px]",
             "bg-canopy-bg rounded-xl",
             "border border-divider",
             "shadow-2xl shadow-black/40",
@@ -205,20 +205,21 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
         >
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-divider shrink-0">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 min-w-0">
               <h2
                 id="review-hub-title"
-                className="text-canopy-text font-semibold text-sm tracking-wide"
+                className="text-canopy-text font-semibold text-sm tracking-wide shrink-0"
               >
                 Review & Commit
               </h2>
-              {status && (
-                <span className="text-canopy-text/50 text-xs">
-                  ({totalChanges} file{totalChanges !== 1 ? "s" : ""})
+              {status?.currentBranch && (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/[0.07] border border-white/[0.08] text-[11px] text-canopy-text/60 font-mono truncate max-w-[200px]">
+                  <GitBranch className="w-3 h-3 shrink-0" />
+                  <span className="truncate">{status.currentBranch}</span>
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 shrink-0">
               <button
                 onClick={() => void refresh()}
                 disabled={loading}
@@ -300,8 +301,11 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                 {/* Staged section */}
                 <div className="border-b border-divider">
                   <div className="flex items-center justify-between px-4 py-2 bg-white/[0.02]">
-                    <span className="text-xs font-medium text-canopy-text/70">
-                      Staged ({status.staged.length})
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-canopy-text/60">
+                      Staged
+                      <span className="ml-1.5 tabular-nums bg-white/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal">
+                        {status.staged.length}
+                      </span>
                     </span>
                     {status.staged.length > 0 && (
                       <Button
@@ -337,8 +341,11 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                 {/* Unstaged section */}
                 <div>
                   <div className="flex items-center justify-between px-4 py-2 bg-white/[0.02]">
-                    <span className="text-xs font-medium text-canopy-text/70">
-                      Changes ({status.unstaged.length})
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-canopy-text/60">
+                      Changes
+                      <span className="ml-1.5 tabular-nums bg-white/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal">
+                        {status.unstaged.length}
+                      </span>
                     </span>
                     {status.unstaged.length > 0 && (
                       <Button

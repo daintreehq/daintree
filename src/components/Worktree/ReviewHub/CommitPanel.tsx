@@ -20,7 +20,6 @@ export function CommitPanel({
   isDetachedHead,
   hasConflicts,
   hasRemote,
-  currentBranch,
   onCommit,
   onCommitAndPush,
 }: CommitPanelProps) {
@@ -78,19 +77,13 @@ export function CommitPanel({
         </div>
       )}
 
-      {currentBranch && (
-        <div className="text-[11px] text-canopy-text/50">
-          On branch <span className="text-canopy-text/80 font-medium">{currentBranch}</span>
-        </div>
-      )}
-
       <div className="relative">
         <textarea
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="Commit message…"
-          rows={3}
+          rows={4}
           disabled={isBusy || isDetachedHead}
           className={cn(
             "w-full resize-none rounded-md border bg-canopy-bg px-3 py-2 text-xs font-mono",
@@ -111,49 +104,52 @@ export function CommitPanel({
       </div>
 
       <div className="flex items-center gap-2">
-        <Button
-          variant="default"
-          size="sm"
-          onClick={() => void handleCommit()}
-          disabled={!canCommit || isBusy}
-          className="flex-1"
-        >
-          {isCommitting ? (
-            <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-          ) : (
-            <GitCommit className="w-3.5 h-3.5 mr-1.5" />
-          )}
-          Commit ({stagedCount})
-        </Button>
-
-        {hasRemote && (
+        {hasRemote ? (
+          <>
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() => void handleCommitAndPush()}
+              disabled={!canCommit || isBusy}
+              className="flex-1"
+            >
+              {isPushing ? (
+                <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <ArrowUpFromLine className="w-3.5 h-3.5 mr-1.5" />
+              )}
+              Commit & Push
+            </Button>
+            <Button
+              variant="subtle"
+              size="sm"
+              onClick={() => void handleCommit()}
+              disabled={!canCommit || isBusy}
+              className="flex-1"
+            >
+              {isCommitting ? (
+                <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <GitCommit className="w-3.5 h-3.5 mr-1.5" />
+              )}
+              Commit ({stagedCount})
+            </Button>
+          </>
+        ) : (
           <Button
-            variant="subtle"
+            variant="default"
             size="sm"
-            onClick={() => void handleCommitAndPush()}
+            onClick={() => void handleCommit()}
             disabled={!canCommit || isBusy}
             className="flex-1"
           >
-            {isPushing ? (
+            {isCommitting ? (
               <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
             ) : (
-              <ArrowUpFromLine className="w-3.5 h-3.5 mr-1.5" />
+              <GitCommit className="w-3.5 h-3.5 mr-1.5" />
             )}
-            Commit & Push
+            Commit ({stagedCount})
           </Button>
-        )}
-      </div>
-
-      <div className="text-[10px] text-canopy-text/30 text-center">
-        {hasRemote ? (
-          <>
-            <kbd className="px-1 py-0.5 bg-white/[0.06] rounded">⌘ Enter</kbd> commit ·{" "}
-            <kbd className="px-1 py-0.5 bg-white/[0.06] rounded">⌘ ⇧ Enter</kbd> commit & push
-          </>
-        ) : (
-          <>
-            <kbd className="px-1 py-0.5 bg-white/[0.06] rounded">⌘ Enter</kbd> commit
-          </>
         )}
       </div>
     </div>
