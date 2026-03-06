@@ -109,11 +109,7 @@ function TerminalHeaderContentComponent({
 
       {/* Exit code badge */}
       {isExited && (
-        <span
-          className="text-xs font-mono text-status-error ml-1"
-          role="status"
-          aria-live="polite"
-        >
+        <span className="text-xs font-mono text-status-error ml-1" role="status" aria-live="polite">
           [exit {exitCode}]
         </span>
       )}

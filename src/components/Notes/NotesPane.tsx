@@ -382,7 +382,11 @@ export function NotesPane({
                 className="flex items-center gap-1.5 px-2 py-1 text-xs rounded-[var(--radius-sm)] hover:bg-canopy-text/10 text-canopy-text/60 hover:text-canopy-text transition-colors"
                 aria-label="Send to agent"
               >
-                {sent ? <Check className="w-3 h-3 text-status-success" /> : <Send className="w-3 h-3" />}
+                {sent ? (
+                  <Check className="w-3 h-3 text-status-success" />
+                ) : (
+                  <Send className="w-3 h-3" />
+                )}
                 <span>Send to...</span>
               </button>
             </TooltipTrigger>

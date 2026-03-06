@@ -96,9 +96,7 @@ export function FileStageRow({ file, isStaged, onToggle, onFileClick }: FileStag
       className={cn(
         "group flex items-center text-xs rounded px-1.5 py-1.5 cursor-pointer transition-colors",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent",
-        isStaged
-          ? "bg-status-success/[0.06] hover:bg-status-success/[0.10]"
-          : "hover:bg-white/5"
+        isStaged ? "bg-status-success/[0.06] hover:bg-status-success/[0.10]" : "hover:bg-white/5"
       )}
       onClick={handleClick}
       onKeyDown={handleKeyDown}

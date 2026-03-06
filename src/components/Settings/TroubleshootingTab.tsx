@@ -74,9 +74,7 @@ function SystemHealthSection() {
                   <span className="text-xs text-canopy-text/40">v{check.version}</span>
                 )}
                 {!check.available && (
-                  <span className="ml-auto text-xs text-status-error">
-                    Not found
-                  </span>
+                  <span className="ml-auto text-xs text-status-error">Not found</span>
                 )}
               </div>
             );

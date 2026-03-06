@@ -474,7 +474,9 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                                   className="text-xs font-medium text-canopy-text/80"
                                 >
                                   {arg.name}
-                                  {arg.required && <span className="text-status-error ml-1">*</span>}
+                                  {arg.required && (
+                                    <span className="text-status-error ml-1">*</span>
+                                  )}
                                 </label>
                                 {hasDefaultValue && (
                                   <span className="text-[10px] text-canopy-accent bg-canopy-accent/10 px-1.5 py-0.5 rounded">

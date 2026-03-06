@@ -100,7 +100,9 @@ export function TrashGroupItem({
             {worktreeName ? (
               <span className="text-canopy-text/50 ml-1 font-normal">({worktreeName})</span>
             ) : isOrphan ? (
-              <span className="text-status-warning/70 ml-1 font-normal text-[11px]">(deleted tree)</span>
+              <span className="text-status-warning/70 ml-1 font-normal text-[11px]">
+                (deleted tree)
+              </span>
             ) : null}
           </div>
           <div className="text-[11px] text-canopy-text/40" aria-live="off">

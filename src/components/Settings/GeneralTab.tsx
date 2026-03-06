@@ -266,9 +266,7 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
         <h4 className="text-sm font-medium text-canopy-text">System Status</h4>
         <div className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] p-4 space-y-3">
           {cliCheckFailed ? (
-            <div className="text-sm text-status-error/80">
-              Failed to check agent status
-            </div>
+            <div className="text-sm text-status-error/80">Failed to check agent status</div>
           ) : !cliAvailability || !agentSettings ? (
             <div className="text-sm text-canopy-text/40">Loading agent status...</div>
           ) : (

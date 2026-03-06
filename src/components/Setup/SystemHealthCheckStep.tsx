@@ -70,9 +70,7 @@ export function SystemHealthCheckStep({ onSkip }: SystemHealthCheckStepProps) {
 
       {error && (
         <div className="px-3 py-2.5 rounded-[var(--radius-md)] border border-status-error/20 bg-status-error/5">
-          <p className="text-xs text-status-error">
-            Could not run health check: {error}
-          </p>
+          <p className="text-xs text-status-error">Could not run health check: {error}</p>
         </div>
       )}
 

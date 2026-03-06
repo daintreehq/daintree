@@ -24,10 +24,8 @@ const buttonVariants = cva(
         pill: "rounded-full bg-canopy-bg/50 border border-canopy-border text-canopy-text/60 hover:bg-white/[0.06] hover:text-canopy-text/80 active:scale-[0.98]",
         "ghost-danger":
           "text-status-error hover:bg-status-error/10 active:scale-[0.98] focus-visible:ring-status-error",
-        "ghost-success":
-          "text-status-success hover:bg-status-success/10 active:scale-[0.98]",
-        "ghost-info":
-          "text-status-info hover:bg-status-info/10 active:scale-[0.98]",
+        "ghost-success": "text-status-success hover:bg-status-success/10 active:scale-[0.98]",
+        "ghost-info": "text-status-info hover:bg-status-info/10 active:scale-[0.98]",
         info: "bg-status-info text-canopy-bg hover:brightness-110 active:scale-[0.98]",
       },
       size: {
