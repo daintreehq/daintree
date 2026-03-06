@@ -416,11 +416,8 @@ describe("createAutoSize integration", () => {
     });
 
     const scrollDOM = view.scrollDOM;
-    const overflowSetter = vi.fn();
-    // Track how many times overflowY is actually assigned
+    // Track how many times overflowY is actually written to the DOM
     let overflowWriteCount = 0;
-    const originalDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "style");
-    // Intercept style.overflowY sets on scrollDOM specifically
     const originalStyleSetter = Object.getOwnPropertyDescriptor(
       CSSStyleDeclaration.prototype,
       "overflowY"
@@ -428,25 +425,26 @@ describe("createAutoSize integration", () => {
     if (originalStyleSetter?.set) {
       vi.spyOn(scrollDOM.style, "overflowY", "set").mockImplementation(function (val) {
         overflowWriteCount++;
-        overflowSetter(val);
         originalStyleSetter.set!.call(this, val);
       });
     }
 
     // First dispatch — should write overflowY once ("hidden")
     view.dispatch({ changes: { from: 0, insert: "a" } });
-    const firstWriteCount = overflowWriteCount;
+    // Confirm the spy captured the first write (validates spy is active)
+    expect(overflowWriteCount).toBe(1);
 
     // Second dispatch with same contentHeight — overflowY value unchanged, should NOT re-write
     view.dispatch({ changes: { from: 1, insert: "b" } });
-    expect(overflowWriteCount).toBe(firstWriteCount);
+    expect(overflowWriteCount).toBe(1);
 
     view.destroy();
   });
 
   it("near-wrap-boundary: adding exactly one newline snaps height up by one line only", () => {
-    // Regression test for the core bug: content near a wrap boundary should not jump
-    // multiple lines when a single newline is inserted.
+    // Regression test for the core bug: tests the production code path (no explicit lineHeightPx)
+    // where view.defaultLineHeight governs the snap increment. With the old DOM-measurement
+    // approach a chip-decorated line could inflate the increment, causing a multi-line jump.
     const parent = document.createElement("div");
     let currentContentHeight = 60; // 3 visual lines at 20px each
 
@@ -454,7 +452,8 @@ describe("createAutoSize integration", () => {
       parent,
       state: EditorState.create({
         doc: "",
-        extensions: [createAutoSize({ lineHeightPx: 20, maxHeightPx: 160 })],
+        // No lineHeightPx — matches the production call site in HybridInputBar.tsx
+        extensions: [createAutoSize({ maxHeightPx: 160 })],
       }),
     });
 
@@ -462,6 +461,10 @@ describe("createAutoSize integration", () => {
       get: () => currentContentHeight,
       configurable: true,
     });
+    // Stub defaultLineHeight to 20px — this is what the production code path uses when no
+    // lineHeightPx is explicitly configured. With the old DOM-measurement approach, a chip
+    // decoration could make this 28px, causing the snap to wrongly jump to 100px instead of 80px.
+    Object.defineProperty(view, "defaultLineHeight", { get: () => 20, configurable: true });
 
     const originalRequestMeasure = view.requestMeasure.bind(view);
     vi.spyOn(view, "requestMeasure").mockImplementation((measure: any) => {
@@ -482,6 +485,7 @@ describe("createAutoSize integration", () => {
     view.dispatch({ changes: { from: view.state.doc.length, insert: "\n" } });
 
     // Should snap to exactly 80px (4 lines × 20px), not 100px or 120px
+    // Old behavior with chip-inflated lineHeight=28: (80-2)/28=2.79 → ceil=3 → 84px (wrong)
     expect(view.dom.style.height).toBe("80px");
 
     view.destroy();

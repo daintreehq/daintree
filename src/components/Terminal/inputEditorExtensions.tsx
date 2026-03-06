@@ -318,8 +318,11 @@ export function createAutoSize(config: AutoSizeConfig = {}) {
         // .cm-line height and cause the snap increment to be wrong on lines without chips).
         // An explicit configLineHeightPx takes priority (used in tests and custom configurations).
         const lineHeight =
-          configLineHeightPx ??
-          (view.defaultLineHeight > 0 ? view.defaultLineHeight : LINE_HEIGHT_PX);
+          configLineHeightPx != null && configLineHeightPx > 0
+            ? configLineHeightPx
+            : view.defaultLineHeight > 0
+              ? view.defaultLineHeight
+              : LINE_HEIGHT_PX;
         const isEmpty = view.state.doc.length === 0;
         return computeAutoSize(view.contentHeight, lineHeight, maxHeightPx, isEmpty);
       },
