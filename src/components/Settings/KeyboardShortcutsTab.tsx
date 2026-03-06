@@ -9,6 +9,7 @@ import {
 import { actionService } from "@/services/ActionService";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { KeybindingProfileActions } from "./KeybindingProfileActions";
 
 interface ShortcutBinding extends KeybindingConfig {
   effectiveCombo: string;
@@ -401,6 +402,7 @@ export function KeyboardShortcutsTab() {
             className="w-full pl-9 pr-3 py-2 bg-canopy-bg border border-canopy-border rounded text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:border-canopy-accent"
           />
         </div>
+        <KeybindingProfileActions onImportComplete={loadBindings} />
         <button
           onClick={handleOpenResetDialog}
           disabled={isResetting}

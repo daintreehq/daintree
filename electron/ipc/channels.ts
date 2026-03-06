@@ -248,6 +248,8 @@ export const CHANNELS = {
   KEYBINDING_SET_OVERRIDE: "keybinding:set-override",
   KEYBINDING_REMOVE_OVERRIDE: "keybinding:remove-override",
   KEYBINDING_RESET_ALL: "keybinding:reset-all",
+  KEYBINDING_EXPORT_PROFILE: "keybinding:export-profile",
+  KEYBINDING_IMPORT_PROFILE: "keybinding:import-profile",
 
   WORKTREE_CONFIG_GET: "worktree-config:get",
   WORKTREE_CONFIG_SET_PATTERN: "worktree-config:set-pattern",

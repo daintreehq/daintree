@@ -415,6 +415,8 @@ const CHANNELS = {
   KEYBINDING_SET_OVERRIDE: "keybinding:set-override",
   KEYBINDING_REMOVE_OVERRIDE: "keybinding:remove-override",
   KEYBINDING_RESET_ALL: "keybinding:reset-all",
+  KEYBINDING_EXPORT_PROFILE: "keybinding:export-profile",
+  KEYBINDING_IMPORT_PROFILE: "keybinding:import-profile",
 
   // Worktree Config channels
   WORKTREE_CONFIG_GET: "worktree-config:get",
@@ -1312,6 +1314,10 @@ const api: ElectronAPI = {
       _typedInvoke(CHANNELS.KEYBINDING_REMOVE_OVERRIDE, actionId),
 
     resetAll: () => _typedInvoke(CHANNELS.KEYBINDING_RESET_ALL),
+
+    exportProfile: () => _typedInvoke(CHANNELS.KEYBINDING_EXPORT_PROFILE),
+
+    importProfile: () => _typedInvoke(CHANNELS.KEYBINDING_IMPORT_PROFILE),
   },
 
   // Worktree Config API

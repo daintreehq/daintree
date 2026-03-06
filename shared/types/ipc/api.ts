@@ -75,6 +75,14 @@ import type { TerminalConfig } from "./config.js";
 import type { HibernationConfig } from "./hibernation.js";
 import type { SystemSleepMetrics } from "./systemSleep.js";
 import type { KeyAction } from "../keymap.js";
+
+export interface KeybindingImportResult {
+  ok: boolean;
+  overrides: Record<string, string[]>;
+  applied: number;
+  skipped: number;
+  errors: string[];
+}
 import type { TerminalStatusPayload, PtyHostActivityTier, SpawnResult } from "../pty-host.js";
 import type { ShowContextMenuPayload } from "../menu.js";
 import type {
@@ -641,6 +649,10 @@ export interface ElectronAPI {
     removeOverride(actionId: KeyAction): Promise<void>;
     /** Reset all overrides to defaults */
     resetAll(): Promise<void>;
+    /** Export current overrides to a file via save dialog; returns false if cancelled */
+    exportProfile(): Promise<boolean>;
+    /** Import overrides from a file via open dialog; returns import result */
+    importProfile(): Promise<KeybindingImportResult>;
   };
   worktreeConfig: {
     /** Get worktree path pattern configuration */
