@@ -660,6 +660,8 @@ export interface Project {
   color?: string;
   /** Project lifecycle status (defaults to 'closed' for backward compatibility) */
   status?: ProjectStatus;
+  /** Whether a .canopy/project.json was found in the repository root */
+  canopyConfigPresent?: boolean;
 }
 
 /**
