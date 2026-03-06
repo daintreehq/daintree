@@ -19,6 +19,12 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     }
   }, [open, markAllRead]);
 
+  useEffect(() => {
+    if (open && entries.length > 0) {
+      markAllRead();
+    }
+  }, [open, entries, markAllRead]);
+
   return (
     <div className="w-[360px] max-h-[420px] flex flex-col">
       <div className="flex items-center justify-between px-3 py-2 border-b border-divider">

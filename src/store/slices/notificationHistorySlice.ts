@@ -37,7 +37,7 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>((set
       if (updated.length > MAX_ENTRIES) {
         updated.length = MAX_ENTRIES;
       }
-      return { entries: updated, unreadCount: state.unreadCount + 1 };
+      return { entries: updated, unreadCount: Math.min(state.unreadCount + 1, MAX_ENTRIES) };
     });
   },
   clearAll: () => set({ entries: [], unreadCount: 0 }),

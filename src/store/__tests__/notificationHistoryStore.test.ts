@@ -56,6 +56,14 @@ describe("notificationHistorySlice", () => {
     expect(entries[49].message).toBe("msg-5");
   });
 
+  it("unreadCount never exceeds 50 even with overflow", () => {
+    for (let i = 0; i < 100; i++) {
+      addEntry({ message: `msg-${i}` });
+    }
+    expect(getState().unreadCount).toBe(50);
+    expect(getState().entries).toHaveLength(50);
+  });
+
   it("markAllRead resets unread count but keeps entries", () => {
     addEntry();
     addEntry();

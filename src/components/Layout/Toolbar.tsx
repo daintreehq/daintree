@@ -594,7 +594,13 @@ export function Toolbar({
                     size="icon"
                     onClick={() => setNotificationCenterOpen((prev) => !prev)}
                     className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
-                    aria-label="Notifications"
+                    aria-label={
+                      notificationUnreadCount > 0
+                        ? `Notifications — ${notificationUnreadCount} unread`
+                        : "Notifications"
+                    }
+                    aria-expanded={notificationCenterOpen}
+                    aria-haspopup="dialog"
                   >
                     <Bell />
                     {notificationUnreadCount > 0 && (
