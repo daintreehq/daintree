@@ -784,4 +784,9 @@ export interface ElectronAPI {
       | { ok: false; errors: string[] }
     >;
   };
+  telemetry: {
+    get(): Promise<{ enabled: boolean; hasSeenPrompt: boolean }>;
+    setEnabled(enabled: boolean): Promise<void>;
+    markPromptShown(): Promise<void>;
+  };
 }

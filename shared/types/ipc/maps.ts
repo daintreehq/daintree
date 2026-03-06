@@ -1203,6 +1203,18 @@ export interface IpcInvokeMap {
         }
       | { ok: false; errors: string[] };
   };
+  "telemetry:get": {
+    args: [];
+    result: { enabled: boolean; hasSeenPrompt: boolean };
+  };
+  "telemetry:set-enabled": {
+    args: [enabled: boolean];
+    result: void;
+  };
+  "telemetry:mark-prompt-shown": {
+    args: [];
+    result: void;
+  };
 }
 
 /**

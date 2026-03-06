@@ -79,6 +79,7 @@ import { SettingsDialog, type SettingsTab } from "./components/Settings";
 import { ShortcutReferenceDialog } from "./components/KeyboardShortcuts";
 import { Toaster } from "./components/ui/toaster";
 import { UpdateNotification } from "./components/UpdateNotification";
+import { TelemetryConsent } from "./components/Onboarding/TelemetryConsent";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { DndProvider } from "./components/DragDrop";
 import {
@@ -1250,6 +1251,7 @@ function App() {
 
       <Toaster />
       <UpdateNotification />
+      <TelemetryConsent />
     </ErrorBoundary>
   );
 }
