@@ -643,6 +643,14 @@ export interface IpcInvokeMap {
     args: [payload: { projectId: string; content: string }];
     result: void;
   };
+  "project:enable-in-repo-settings": {
+    args: [projectId: string];
+    result: Project;
+  };
+  "project:disable-in-repo-settings": {
+    args: [projectId: string];
+    result: Project;
+  };
 
   // GitHub channels
   "github:get-repo-stats": {

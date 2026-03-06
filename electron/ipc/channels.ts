@@ -179,6 +179,8 @@ export const CHANNELS = {
   PROJECT_SET_FOCUS_MODE: "project:set-focus-mode",
   PROJECT_READ_CLAUDE_MD: "project:read-claude-md",
   PROJECT_WRITE_CLAUDE_MD: "project:write-claude-md",
+  PROJECT_ENABLE_IN_REPO_SETTINGS: "project:enable-in-repo-settings",
+  PROJECT_DISABLE_IN_REPO_SETTINGS: "project:disable-in-repo-settings",
 
   AGENT_SETTINGS_GET: "agent-settings:get",
   AGENT_SETTINGS_SET: "agent-settings:set",
