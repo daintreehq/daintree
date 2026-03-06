@@ -9,6 +9,9 @@ import {
   Globe,
   ZoomIn,
   ZoomOut,
+  Camera,
+  Terminal,
+  Code,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { normalizeBrowserUrl, getDisplayUrl } from "./browserUtils";
@@ -34,12 +37,17 @@ interface BrowserToolbarProps {
   isLoading: boolean;
   urlMightBeStale?: boolean;
   zoomFactor?: number;
+  isConsoleOpen?: boolean;
+  isWebviewReady?: boolean;
   onNavigate: (url: string) => void;
   onBack: () => void;
   onForward: () => void;
   onReload: () => void;
   onOpenExternal: () => void;
   onZoomChange?: (zoomFactor: number) => void;
+  onCaptureScreenshot?: () => void;
+  onToggleConsole?: () => void;
+  onToggleDevTools?: () => void;
 }
 
 export function BrowserToolbar({
@@ -50,12 +58,17 @@ export function BrowserToolbar({
   isLoading,
   urlMightBeStale = false,
   zoomFactor = 1.0,
+  isConsoleOpen = false,
+  isWebviewReady = false,
   onNavigate,
   onBack,
   onForward,
   onReload,
   onOpenExternal,
   onZoomChange,
+  onCaptureScreenshot,
+  onToggleConsole,
+  onToggleDevTools,
 }: BrowserToolbarProps) {
   const [inputValue, setInputValue] = useState(getDisplayUrl(url));
   const [isEditing, setIsEditing] = useState(false);
@@ -341,6 +354,66 @@ export function BrowserToolbar({
           <TooltipContent side="bottom">Copy URL</TooltipContent>
         </Tooltip>
       </TooltipProvider>
+
+      {onCaptureScreenshot && (
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={onCaptureScreenshot}
+                disabled={!isWebviewReady}
+                className={buttonClass}
+                aria-label="Capture screenshot"
+              >
+                <Camera className="w-4 h-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Copy screenshot to clipboard</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      )}
+
+      {onToggleConsole && (
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={onToggleConsole}
+                className={cn(buttonClass, isConsoleOpen && "bg-white/15 text-canopy-text")}
+                aria-label="Toggle console"
+                aria-pressed={isConsoleOpen}
+              >
+                <Terminal className="w-4 h-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {isConsoleOpen ? "Hide console" : "Show console"}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      )}
+
+      {onToggleDevTools && (
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={onToggleDevTools}
+                disabled={!isWebviewReady}
+                className={buttonClass}
+                aria-label="Toggle DevTools"
+              >
+                <Code className="w-4 h-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Open DevTools</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      )}
+
       <TooltipProvider>
         <Tooltip>
           <TooltipTrigger asChild>
