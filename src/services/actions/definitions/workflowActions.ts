@@ -107,7 +107,10 @@ export function registerWorkflowActions(actions: ActionRegistry): void {
       // Run recipe if specified (already validated above)
       let recipeLaunched = false;
       if (recipeId) {
-        await useRecipeStore.getState().runRecipe(recipeId, path, worktreeId);
+        await useRecipeStore.getState().runRecipe(recipeId, path, worktreeId, {
+          worktreePath: path,
+          branchName: availableBranch,
+        });
         recipeLaunched = true;
       }
 

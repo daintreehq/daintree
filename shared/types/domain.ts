@@ -778,7 +778,7 @@ export interface RecipeTerminal {
   command?: string;
   /** Environment variables to set (optional) */
   env?: Record<string, string>;
-  /** Initial prompt to send to agent terminals after boot (optional) */
+  /** Initial prompt to send to agent terminals after boot (optional). Supports {{issue_number}}, {{pr_number}}, {{worktree_path}}, {{branch_name}} variables replaced at runtime. */
   initialPrompt?: string;
   /** Dev server command for dev-preview terminals (optional). Falls back to project devServerCommand if not set. */
   devCommand?: string;

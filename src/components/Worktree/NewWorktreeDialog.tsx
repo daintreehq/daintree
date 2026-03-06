@@ -607,7 +607,11 @@ export function NewWorktreeDialog({
       if (selectedRecipe) {
         try {
           const worktreeId = result.result as string | undefined;
-          await runRecipe(selectedRecipe.id, worktreePath.trim(), worktreeId);
+          await runRecipe(selectedRecipe.id, worktreePath.trim(), worktreeId, {
+            issueNumber: selectedIssue?.number,
+            worktreePath: worktreePath.trim(),
+            branchName: fullBranchName,
+          });
         } catch (recipeErr) {
           const message = recipeErr instanceof Error ? recipeErr.message : "Failed to run recipe";
           addNotification({

@@ -421,7 +421,11 @@ export function RecipeEditor({
                         id={`terminal-initial-prompt-help-${index}`}
                         className="text-xs text-canopy-muted mt-1"
                       >
-                        This prompt will be sent to the agent when it starts
+                        This prompt will be sent to the agent when it starts. Variables:{" "}
+                        <code className="text-canopy-text/70">{"{{issue_number}}"}</code>,{" "}
+                        <code className="text-canopy-text/70">{"{{pr_number}}"}</code>,{" "}
+                        <code className="text-canopy-text/70">{"{{worktree_path}}"}</code>,{" "}
+                        <code className="text-canopy-text/70">{"{{branch_name}}"}</code>
                       </p>
                     </div>
                     <div className="mt-2">
