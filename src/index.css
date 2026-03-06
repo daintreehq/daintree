@@ -83,6 +83,24 @@
 
   /* Subtle focus indicator - low opacity white for keyboard navigation */
   --color-canopy-focus: rgba(255, 255, 255, 0.18);
+
+  /* Category differentiation colors
+   * 12 curated OKLCH hues for labeling distinct UI categories.
+   * Used for action palette badges, event inspector chips, and other category indicators.
+   * L≈0.70, C≈0.11–0.14: readable as text on dark bg, muted enough as low-opacity badge bg.
+   */
+  --color-cat-blue:   oklch(0.70 0.13 250);
+  --color-cat-purple: oklch(0.70 0.13 310);
+  --color-cat-cyan:   oklch(0.72 0.11 215);
+  --color-cat-green:  oklch(0.70 0.13 145);
+  --color-cat-amber:  oklch(0.73 0.14 75);
+  --color-cat-orange: oklch(0.70 0.14 45);
+  --color-cat-teal:   oklch(0.70 0.11 185);
+  --color-cat-indigo: oklch(0.70 0.13 275);
+  --color-cat-rose:   oklch(0.70 0.14 5);
+  --color-cat-pink:   oklch(0.72 0.13 340);
+  --color-cat-violet: oklch(0.70 0.13 295);
+  --color-cat-slate:  oklch(0.65 0.04 240);
 }
 
 :root {
@@ -907,7 +925,7 @@ body,
 }
 
 .github-status-loading {
-  background: rgba(59, 130, 246, 0.2); /* Blue-500 at 20% */
+  background: color-mix(in oklab, var(--color-canopy-accent) 20%, transparent);
 }
 
 .github-status-loading::after {
@@ -917,7 +935,12 @@ body,
   left: 0;
   width: 25%;
   height: 100%;
-  background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.8), transparent);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in oklab, var(--color-canopy-accent) 80%, transparent),
+    transparent
+  );
   animation: github-status-shimmer 1.5s ease-in-out infinite;
   will-change: transform;
 }
@@ -939,7 +962,7 @@ body,
 }
 
 .github-status-success {
-  background: rgb(74 222 128); /* Green-400 */
+  background: var(--color-status-success);
   transform-origin: left;
   animation: github-status-success-fade 500ms ease-out forwards;
   will-change: opacity, transform;
@@ -957,7 +980,7 @@ body,
 }
 
 .github-status-error {
-  background: rgb(251 146 60); /* Orange-400 - less alarming than red */
+  background: var(--color-status-error);
   animation: github-status-error-pulse 2s ease-in-out infinite;
   will-change: opacity;
 }
@@ -969,7 +992,7 @@ body,
   }
 
   .github-status-loading {
-    background: rgba(59, 130, 246, 0.6); /* Solid bar when motion disabled */
+    background: color-mix(in oklab, var(--color-canopy-accent) 60%, transparent);
   }
 
   .github-status-success {
@@ -990,7 +1013,7 @@ body[data-performance-mode="true"] .github-status-loading::after {
 }
 
 body[data-performance-mode="true"] .github-status-loading {
-  background: rgba(59, 130, 246, 0.6) !important;
+  background: color-mix(in oklab, var(--color-canopy-accent) 60%, transparent) !important;
 }
 
 body[data-performance-mode="true"] .github-status-success {

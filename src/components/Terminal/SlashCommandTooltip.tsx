@@ -14,10 +14,10 @@ export const SlashCommandTooltipContent = memo(function SlashCommandTooltipConte
     (command.scope as string) === "canopy"
       ? "text-canopy-accent"
       : command.agentId === "claude"
-        ? "text-sky-400"
+        ? "text-cat-blue"
         : command.agentId === "gemini"
-          ? "text-violet-400"
-          : "text-emerald-400";
+          ? "text-cat-violet"
+          : "text-cat-green";
 
   return (
     <div className="space-y-1.5 max-w-[280px]">

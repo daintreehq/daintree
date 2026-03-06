@@ -14,11 +14,11 @@ const ERROR_TYPE_LABELS: Record<string, string> = {
 };
 
 const ERROR_TYPE_COLORS: Record<string, string> = {
-  git: "text-orange-400",
+  git: "text-[var(--color-cat-orange)]",
   process: "text-[var(--color-status-warning)]",
   filesystem: "text-[var(--color-status-info)]",
-  network: "text-purple-400",
-  config: "text-amber-400",
+  network: "text-[var(--color-cat-purple)]",
+  config: "text-[var(--color-status-warning)]",
   unknown: "text-[var(--color-status-error)]",
 };
 
@@ -127,7 +127,7 @@ function ErrorRow({ error, isExpanded, onToggleExpand, onDismiss, onRetry }: Err
                   e.stopPropagation();
                   onRetry();
                 }}
-                className="px-2 py-0.5 text-xs text-green-300 hover:text-green-200 border border-green-600 hover:bg-green-800/50 rounded"
+                className="px-2 py-0.5 text-xs text-status-success border border-status-success/60 hover:bg-status-success/10 rounded"
               >
                 Retry
               </button>
@@ -164,7 +164,7 @@ function ErrorRow({ error, isExpanded, onToggleExpand, onDismiss, onRetry }: Err
                       }
                     >
                       {copied ? (
-                        <Check className="w-4 h-4 text-green-400" />
+                        <Check className="w-4 h-4 text-status-success" />
                       ) : (
                         <Copy className="w-4 h-4" />
                       )}
