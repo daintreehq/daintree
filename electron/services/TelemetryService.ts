@@ -5,11 +5,13 @@ import { store } from "../store.js";
 export interface SentryEvent {
   exception?: {
     values?: Array<{
+      value?: string;
       stacktrace?: {
         frames?: Array<{ filename?: string; abs_path?: string }>;
       };
     }>;
   };
+  message?: string;
   request?: { url?: string };
   [key: string]: unknown;
 }
@@ -17,11 +19,13 @@ export interface SentryEvent {
 const HOME_DIR = os.homedir();
 
 export function sanitizePath(str: string): string {
+  const escaped = HOME_DIR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return str
-    .replace(/\/Users\/[^/\s]+\//g, "/Users/USER/")
-    .replace(/\/home\/[^/\s]+\//g, "/home/USER/")
-    .replace(/C:\\Users\\[^\\\s]+\\/gi, "C:\\Users\\USER\\")
-    .replace(new RegExp(HOME_DIR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"), "~");
+    .replace(new RegExp(escaped, "g"), "~")
+    .replace(/\/Users\/[^/]+\//g, "/Users/USER/")
+    .replace(/\/home\/[^/]+\//g, "/home/USER/")
+    .replace(/C:\\Users\\[^\\]+\\/gi, "C:\\Users\\USER\\")
+    .replace(/C:\/Users\/[^/]+\//gi, "C:/Users/USER/");
 }
 
 function sanitizeEvent(event: SentryEvent): SentryEvent | null {
@@ -33,7 +37,11 @@ function sanitizeEvent(event: SentryEvent): SentryEvent | null {
           if (frame.abs_path) frame.abs_path = sanitizePath(frame.abs_path);
         }
       }
+      if (ex.value) ex.value = sanitizePath(ex.value);
     }
+  }
+  if (typeof event.message === "string") {
+    event.message = sanitizePath(event.message);
   }
   if (event.request?.url) {
     try {
@@ -57,7 +65,6 @@ export async function initializeTelemetry(): Promise<void> {
   if (!dsn) return;
 
   if (initialized) return;
-  initialized = true;
 
   try {
     const { init } = await import("@sentry/electron/main");
@@ -76,6 +83,7 @@ export async function initializeTelemetry(): Promise<void> {
         },
       },
     });
+    initialized = true;
   } catch (err) {
     console.warn("[Telemetry] Failed to initialize Sentry:", err);
   }

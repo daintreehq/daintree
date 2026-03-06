@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import os from "os";
+
+const sentryInitMock = vi.hoisted(() => vi.fn());
 
 const storeMock = vi.hoisted(() => {
   const data: Record<string, unknown> = {
@@ -19,13 +22,17 @@ vi.mock("electron", () => ({
   app: { getVersion: () => "1.0.0", isPackaged: false },
 }));
 
+vi.mock("@sentry/electron/main", () => ({
+  init: sentryInitMock,
+}));
+
 import {
   sanitizePath,
+  initializeTelemetry,
   isTelemetryEnabled,
   setTelemetryEnabled,
   hasTelemetryPromptBeenShown,
   markTelemetryPromptShown,
-  type SentryEvent,
 } from "../TelemetryService.js";
 
 describe("sanitizePath", () => {
@@ -33,6 +40,12 @@ describe("sanitizePath", () => {
     expect(sanitizePath("/Users/johndoe/Projects/canopy/src/main.ts")).toBe(
       "/Users/USER/Projects/canopy/src/main.ts"
     );
+  });
+
+  it("redacts actual os.homedir() value", () => {
+    const home = os.homedir();
+    const result = sanitizePath(`${home}/Projects/canopy/src/main.ts`);
+    expect(result).not.toContain(home);
   });
 
   it("redacts Linux home dir username", () => {
@@ -136,20 +149,43 @@ describe("markTelemetryPromptShown", () => {
 });
 
 describe("sanitizeEvent (via beforeSend logic)", () => {
-  it("sanitizes stack frame filenames", async () => {
-    const { sanitizePath: sp } = await import("../TelemetryService.js");
-    const event: SentryEvent = {
-      exception: {
-        values: [
-          {
-            stacktrace: {
-              frames: [{ filename: "/Users/johndoe/projects/canopy/electron/main.ts" }],
-            },
-          },
-        ],
-      },
-    };
-    const filename = event.exception?.values?.[0]?.stacktrace?.frames?.[0]?.filename ?? "";
-    expect(sp(filename)).toBe("/Users/USER/projects/canopy/electron/main.ts");
+  it("sanitizes stack frame filenames", () => {
+    const filename = "/Users/johndoe/projects/canopy/electron/main.ts";
+    expect(sanitizePath(filename)).toBe("/Users/USER/projects/canopy/electron/main.ts");
+  });
+
+  it("sanitizes error message text containing paths", () => {
+    const msg = "ENOENT: no such file or directory, open '/Users/alice/code/app/config.json'";
+    expect(sanitizePath(msg)).toBe(
+      "ENOENT: no such file or directory, open '/Users/USER/code/app/config.json'"
+    );
+  });
+
+  it("sanitizes Windows-style forward-slash paths", () => {
+    expect(sanitizePath("C:/Users/bob/AppData/Roaming/canopy/log.txt")).toBe(
+      "C:/Users/USER/AppData/Roaming/canopy/log.txt"
+    );
+  });
+});
+
+describe("initializeTelemetry", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sentryInitMock.mockReset();
+  });
+
+  it("does not call Sentry.init when telemetry is disabled", async () => {
+    storeMock.get.mockReturnValue({ enabled: false, hasSeenPrompt: false });
+    await initializeTelemetry();
+    expect(sentryInitMock).not.toHaveBeenCalled();
+  });
+
+  it("does not call Sentry.init when DSN is empty", async () => {
+    storeMock.get.mockReturnValue({ enabled: true, hasSeenPrompt: true });
+    const original = process.env.SENTRY_DSN;
+    process.env.SENTRY_DSN = "";
+    await initializeTelemetry();
+    expect(sentryInitMock).not.toHaveBeenCalled();
+    process.env.SENTRY_DSN = original;
   });
 });

@@ -248,8 +248,8 @@ export function TroubleshootingTab() {
               <div className="flex-1">
                 <span className="text-sm text-canopy-text font-medium">Enable Crash Reporting</span>
                 <p className="text-xs text-canopy-text/60">
-                  Collects: error messages, stack traces, app version, OS. Requires restart to take
-                  effect.
+                  Collects: error messages, stack traces, app version, OS. Changes apply on next app
+                  restart.
                 </p>
               </div>
             </label>

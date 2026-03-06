@@ -29,9 +29,12 @@ describe("registerTelemetryHandlers", () => {
     cleanup();
   });
 
-  it("returns cleanup that removes all handlers", () => {
+  it("returns cleanup that removes all handlers by channel name", () => {
     const cleanup = registerTelemetryHandlers();
     cleanup();
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("telemetry:get");
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("telemetry:set-enabled");
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("telemetry:mark-prompt-shown");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(3);
   });
 
@@ -46,6 +49,30 @@ describe("registerTelemetryHandlers", () => {
     expect(channel).toBe("telemetry:get");
     const result = await handler();
     expect(result).toEqual({ enabled: true, hasSeenPrompt: true });
+  });
+
+  it("TELEMETRY_GET handler returns default false/false state", async () => {
+    telemetryServiceMock.isTelemetryEnabled.mockReturnValue(false);
+    telemetryServiceMock.hasTelemetryPromptBeenShown.mockReturnValue(false);
+
+    registerTelemetryHandlers();
+
+    const [, handler] =
+      ipcMainMock.handle.mock.calls.find(([ch]) => ch.includes("telemetry:get")) ?? [];
+    const result = await handler();
+    expect(result).toEqual({ enabled: false, hasSeenPrompt: false });
+  });
+
+  it("TELEMETRY_GET handler returns mixed state (enabled=false, hasSeenPrompt=true)", async () => {
+    telemetryServiceMock.isTelemetryEnabled.mockReturnValue(false);
+    telemetryServiceMock.hasTelemetryPromptBeenShown.mockReturnValue(true);
+
+    registerTelemetryHandlers();
+
+    const [, handler] =
+      ipcMainMock.handle.mock.calls.find(([ch]) => ch.includes("telemetry:get")) ?? [];
+    const result = await handler();
+    expect(result).toEqual({ enabled: false, hasSeenPrompt: true });
   });
 
   it("TELEMETRY_SET_ENABLED handler sets value when boolean", async () => {
