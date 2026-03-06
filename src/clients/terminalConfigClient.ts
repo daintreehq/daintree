@@ -28,4 +28,16 @@ export const terminalConfigClient = {
   setHybridInputAutoFocus: (enabled: boolean): Promise<void> => {
     return window.electron.terminalConfig.setHybridInputAutoFocus(enabled);
   },
+
+  setColorScheme: (schemeId: string): Promise<void> => {
+    return window.electron.terminalConfig.setColorScheme(schemeId);
+  },
+
+  setCustomSchemes: (schemesJson: string): Promise<void> => {
+    return window.electron.terminalConfig.setCustomSchemes(schemesJson);
+  },
+
+  importColorScheme: () => {
+    return window.electron.terminalConfig.importColorScheme();
+  },
 } as const;

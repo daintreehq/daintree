@@ -52,6 +52,8 @@ export { usePerformanceModeStore } from "./performanceModeStore";
 
 export { useTerminalFontStore } from "./terminalFontStore";
 
+export { useTerminalColorSchemeStore } from "./terminalColorSchemeStore";
+
 export { useTerminalInputStore } from "./terminalInputStore";
 
 export { useSidecarStore } from "./sidecarStore";

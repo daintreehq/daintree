@@ -16,4 +16,8 @@ export interface TerminalConfig {
   hybridInputEnabled?: boolean;
   /** When selecting a terminal pane, focus the hybrid input bar instead of xterm (default: true) */
   hybridInputAutoFocus?: boolean;
+  /** Selected terminal color scheme ID */
+  colorSchemeId?: string;
+  /** Custom imported color schemes (serialized) */
+  customSchemes?: string;
 }

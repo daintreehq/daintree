@@ -198,6 +198,9 @@ export const CHANNELS = {
   TERMINAL_CONFIG_SET_FONT_FAMILY: "terminal-config:set-font-family",
   TERMINAL_CONFIG_SET_HYBRID_INPUT_ENABLED: "terminal-config:set-hybrid-input-enabled",
   TERMINAL_CONFIG_SET_HYBRID_INPUT_AUTO_FOCUS: "terminal-config:set-hybrid-input-auto-focus",
+  TERMINAL_CONFIG_SET_COLOR_SCHEME: "terminal-config:set-color-scheme",
+  TERMINAL_CONFIG_SET_CUSTOM_SCHEMES: "terminal-config:set-custom-schemes",
+  TERMINAL_CONFIG_IMPORT_COLOR_SCHEME: "terminal-config:import-color-scheme",
 
   GIT_GET_FILE_DIFF: "git:get-file-diff",
   GIT_GET_PROJECT_PULSE: "git:get-project-pulse",

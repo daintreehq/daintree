@@ -779,6 +779,28 @@ export interface IpcInvokeMap {
     args: [enabled: boolean];
     result: void;
   };
+  "terminal-config:set-color-scheme": {
+    args: [schemeId: string];
+    result: void;
+  };
+  "terminal-config:set-custom-schemes": {
+    args: [schemesJson: string];
+    result: void;
+  };
+  "terminal-config:import-color-scheme": {
+    args: [];
+    result:
+      | {
+          ok: true;
+          scheme: {
+            id: string;
+            name: string;
+            type: "dark" | "light";
+            colors: Record<string, string>;
+          };
+        }
+      | { ok: false; errors: string[] };
+  };
 
   // Git channels
   "git:get-file-diff": {
