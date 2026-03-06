@@ -92,8 +92,15 @@ The hardened runtime entitlements are in `build/entitlements.mac.plist`:
 
 ## Local Development Builds
 
-To build locally without code signing or notarization (e.g. for testing):
+To build locally without Developer ID signing or notarization (e.g. for testing), first compile the app then package it with signing disabled. On macOS (Unix shell only):
 
 ```bash
-CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --publish never -c.mac.notarize=false -c.mac.forceCodeSigning=false
+npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --publish never -c.mac.notarize=false -c.mac.forceCodeSigning=false
 ```
+
+Notes:
+
+- `npm run build` is required first — electron-builder packages whatever is in `dist/` and `dist-electron/`, so skipping it produces a stale or broken bundle.
+- `CSC_IDENTITY_AUTO_DISCOVERY=false` suppresses auto-discovery of local Developer ID certificates. If `CSC_LINK`, `CSC_NAME`, or `APPLE_*` variables are exported in your shell, unset them as well.
+- The `CSC_IDENTITY_AUTO_DISCOVERY=false` inline syntax is POSIX-only (bash/zsh). On Windows use `set CSC_IDENTITY_AUTO_DISCOVERY=false` (cmd) or `$env:CSC_IDENTITY_AUTO_DISCOVERY='false'` (PowerShell) before the build command.
+- On macOS, universal and arm64 builds still apply ad-hoc signing even with these flags — the resulting app will not be Gatekeeper-trusted, but it will launch on the machine it was built on.
