@@ -259,7 +259,7 @@ export function SidecarSettingsTab() {
                 type="button"
                 onClick={handleCustomUrlSave}
                 aria-label="Save custom URL"
-                className="px-3 py-2 rounded-[var(--radius-md)] bg-canopy-accent text-white text-sm hover:bg-canopy-accent/90 transition-colors"
+                className="px-3 py-2 rounded-[var(--radius-md)] bg-canopy-accent text-canopy-bg text-sm hover:bg-canopy-accent/90 transition-colors"
               >
                 <Check className="w-4 h-4" />
               </button>
@@ -321,7 +321,7 @@ export function SidecarSettingsTab() {
                   </button>
                   <button
                     onClick={handleCancelEdit}
-                    className="p-1.5 rounded hover:bg-canopy-border text-zinc-500"
+                    className="p-1.5 rounded hover:bg-canopy-border text-muted-foreground"
                   >
                     <X className="w-4 h-4" />
                   </button>
@@ -335,7 +335,7 @@ export function SidecarSettingsTab() {
                       <TooltipProvider>
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <span className="text-[11px] font-mono text-zinc-500 truncate min-w-0">
+                            <span className="text-[11px] font-mono text-muted-foreground truncate min-w-0">
                               {link.url}
                             </span>
                           </TooltipTrigger>
@@ -348,7 +348,7 @@ export function SidecarSettingsTab() {
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => handleStartEdit(link.id, link.title, link.url)}
-                      className="text-xs text-zinc-500 hover:text-canopy-text px-2 py-1 rounded hover:bg-canopy-border"
+                      className="text-xs text-muted-foreground hover:text-canopy-text px-2 py-1 rounded hover:bg-canopy-border"
                     >
                       Edit
                     </button>
@@ -412,7 +412,7 @@ export function SidecarSettingsTab() {
                   </button>
                   <button
                     onClick={handleCancelEdit}
-                    className="p-1.5 rounded hover:bg-canopy-border text-zinc-500"
+                    className="p-1.5 rounded hover:bg-canopy-border text-muted-foreground"
                   >
                     <X className="w-4 h-4" />
                   </button>
@@ -426,7 +426,7 @@ export function SidecarSettingsTab() {
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => handleStartEdit(link.id, link.title, link.url)}
-                      className="text-xs text-zinc-500 hover:text-canopy-text px-2 py-1 rounded hover:bg-canopy-border"
+                      className="text-xs text-muted-foreground hover:text-canopy-text px-2 py-1 rounded hover:bg-canopy-border"
                     >
                       Edit
                     </button>
@@ -462,7 +462,7 @@ export function SidecarSettingsTab() {
                       }
                       disabled={link.alwaysEnabled}
                       className={cn(
-                        "p-1.5 rounded hover:bg-canopy-border text-zinc-500 hover:text-red-500",
+                        "p-1.5 rounded hover:bg-canopy-border text-muted-foreground hover:text-red-500",
                         link.alwaysEnabled && "opacity-50 cursor-not-allowed"
                       )}
                     >
@@ -503,7 +503,7 @@ export function SidecarSettingsTab() {
             <button
               onClick={handleAddLink}
               disabled={!newLinkName.trim() || !newLinkUrl.trim()}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-[var(--radius-md)] bg-canopy-accent text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-canopy-accent/90 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-[var(--radius-md)] bg-canopy-accent text-canopy-bg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-canopy-accent/90 transition-colors"
             >
               <Plus className="w-4 h-4" />
               Add

@@ -79,7 +79,7 @@ export function ErrorFallback({
             type="button"
             onClick={resetError}
             className={cn(
-              "bg-[var(--color-status-error)] hover:bg-[color-mix(in_oklab,var(--color-status-error)_85%,transparent)] text-white rounded transition-colors",
+              "bg-[var(--color-status-error)] hover:bg-[color-mix(in_oklab,var(--color-status-error)_85%,transparent)] text-canopy-bg rounded transition-colors",
               sizes.button
             )}
           >
