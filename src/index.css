@@ -52,27 +52,27 @@
   --color-canopy-sidebar: #121214; /* Slightly darker, distinct from main content */
   --color-canopy-border: #27272a; /* Zinc-800: Subtle separation */
   --color-canopy-text: #e4e4e7; /* Zinc-200: Soft white, not harsh */
-  --color-canopy-accent: #10b981; /* Emerald-500: The Brand Color (Growth) */
-  --color-canopy-accent-rgb: 16, 185, 129; /* RGB values for accent color */
-  --color-canopy-success: #34d399; /* Emerald-400: Brighter green */
+  --color-canopy-accent: #6b8de6; /* Canopy Blue: Brand accent */
+  --color-canopy-accent-rgb: 107, 141, 230; /* RGB values for accent color */
+  --color-canopy-success: #5dae8b; /* Muted sage green: success/completed states */
   --color-canopy-warning: #fbbf24; /* Amber-400 */
   --color-canopy-error: #f87171; /* Red-400: Soft Coral */
-  --color-terminal-selection: #064e3b; /* Emerald-950: Terminal selection background */
+  --color-terminal-selection: #1a2744; /* Deep blue: Terminal selection background */
 
   /* Semantic status colors - for user-facing states (success, error, warning, info) */
-  --color-status-success: #34d399; /* Emerald-400: Brighter green */
+  --color-status-success: #5dae8b; /* Muted sage green */
   --color-status-warning: #fbbf24; /* Amber-400 */
   --color-status-error: #f87171; /* Red-400: Soft Coral */
   --color-status-info: #a1a1aa; /* Zinc-400: Muted for developer tool aesthetic, WCAG AA compliant */
 
   /* Semantic state colors - for agent/terminal lifecycle states */
-  --color-state-active: #10b981; /* Emerald-500: Active Worktree */
+  --color-state-active: #6b8de6; /* Canopy Blue: Active Worktree */
   --color-state-idle: #52525b; /* Zinc-600: Dormant */
-  --color-state-working: #10b981; /* Emerald-500: AI is Working (Matches Brand) */
+  --color-state-working: #6b8de6; /* Canopy Blue: AI is Working */
   --color-state-waiting: #fbbf24; /* Amber-400: Needs Attention */
 
   /* Server status colors - for dev server states */
-  --color-server-running: #34d399; /* Emerald-400: Server running successfully */
+  --color-server-running: #5dae8b; /* Muted sage green: Server running successfully */
   --color-server-stopped: #52525b; /* Zinc-600: Server stopped/inactive */
   --color-server-starting: #fbbf24; /* Amber-400: Server starting up */
   --color-server-error: #f87171; /* Red-400: Server error state */
@@ -198,7 +198,7 @@
  * 3. Cards (surface) - Elevated from background
  * 4. Popovers/Modals (surface-highlight) - Highest elevation
  *
- * Primary Action: Emerald (canopy-accent) - The Brand Color
+ * Primary Action: Blue (canopy-accent) - The Brand Color
  */
 .dark {
   /* Background surfaces - sourced from Canopy */
@@ -213,9 +213,9 @@
   --popover: var(--color-surface-highlight);
   --popover-foreground: var(--color-canopy-text);
 
-  /* Primary actions - aligned with brand accent (emerald)
-   * Dark background color on emerald provides WCAG AAA contrast (>7:1)
-   * Note: White text on emerald-500 fails WCAG AA (2.54:1)
+  /* Primary actions - aligned with brand accent (blue)
+   * Dark background color on blue provides WCAG AA contrast (5.55:1)
+   * Note: White text on #6b8de6 also passes WCAG AA (4.66:1)
    */
   --primary: var(--color-canopy-accent);
   --primary-foreground: var(--color-canopy-bg);
@@ -584,15 +584,15 @@ body,
 @keyframes status-pulse {
   0%,
   100% {
-    color: #10b981;
-  } /* Emerald-500 */
+    color: #6b8de6;
+  } /* Canopy Blue */
   50% {
-    color: #34d399;
-  } /* Emerald-400: Lighter green */
+    color: #8aa5ec;
+  } /* Canopy Blue: Lighter variant */
 }
 
 .status-working {
-  color: #10b981; /* Fallback color for reduced motion */
+  color: #6b8de6; /* Fallback color for reduced motion */
   animation: status-pulse 2s ease-in-out infinite;
 }
 

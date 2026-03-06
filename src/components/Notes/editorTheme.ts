@@ -6,15 +6,15 @@ export const canopyTheme = createTheme({
   settings: {
     background: "#18181b",
     foreground: "#e4e4e7",
-    caret: "#10b981",
-    selection: "#064e3b",
-    selectionMatch: "#064e3b",
+    caret: "#6b8de6",
+    selection: "#1a2744",
+    selectionMatch: "#1a2744",
     lineHighlight: "#27272a",
     gutterBackground: "#18181b",
     gutterForeground: "#52525b",
   },
   styles: [
-    { tag: t.heading, color: "#10b981", fontWeight: "bold" },
+    { tag: t.heading, color: "#6b8de6", fontWeight: "bold" },
     { tag: t.heading1, fontSize: "1.4em" },
     { tag: t.heading2, fontSize: "1.2em" },
     { tag: t.heading3, fontSize: "1.1em" },
@@ -24,6 +24,6 @@ export const canopyTheme = createTheme({
     { tag: t.url, color: "#38bdf8", textDecoration: "underline" },
     { tag: t.quote, color: "#a1a1aa", fontStyle: "italic" },
     { tag: t.link, color: "#38bdf8" },
-    { tag: t.list, color: "#10b981" },
+    { tag: t.list, color: "#6b8de6" },
   ],
 });

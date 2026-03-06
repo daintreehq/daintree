@@ -1,7 +1,7 @@
 /**
- * Linear decay from Emerald-500 to Zinc-600 over 90 seconds.
+ * Linear decay from Canopy Blue to Zinc-600 over 90 seconds.
  * Uses CSS color-mix(in oklab) for perceptually accurate interpolation.
- * 0s → #10b981, 90s+ → #52525b
+ * 0s → #6b8de6, 90s+ → #52525b
  */
 export function getActivityColor(lastActivityTimestamp: number | null | undefined): string {
   if (lastActivityTimestamp == null || !Number.isFinite(lastActivityTimestamp)) {
@@ -18,5 +18,5 @@ export function getActivityColor(lastActivityTimestamp: number | null | undefine
   const factor = elapsed / DECAY_DURATION;
   const percentage = Math.max(0, Math.min(100, Math.round((1 - factor) * 100)));
 
-  return `color-mix(in oklab, #10b981 ${percentage}%, #52525b)`;
+  return `color-mix(in oklab, #6b8de6 ${percentage}%, #52525b)`;
 }
