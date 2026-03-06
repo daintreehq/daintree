@@ -130,6 +130,32 @@ describe("importProfile", () => {
     expect(result.overrides).toEqual({});
   });
 
+  it("strips whitespace-only combo strings from imported entries", () => {
+    const result = importProfile(
+      makeProfileJson({ "terminal.new": ["   ", "  "] }),
+      VALID_ACTION_IDS
+    );
+    expect(result.ok).toBe(true);
+    expect(result.overrides["terminal.new"]).toEqual([]);
+  });
+
+  it("preserves empty combo arrays (unbound overrides)", () => {
+    const result = importProfile(makeProfileJson({ "terminal.new": [] }), VALID_ACTION_IDS);
+    expect(result.ok).toBe(true);
+    expect(result.overrides["terminal.new"]).toEqual([]);
+  });
+
+  it("rejects profiles where overrides value is not an array", () => {
+    const json = JSON.stringify({
+      schemaVersion: 1,
+      exportedAt: new Date().toISOString(),
+      app: "canopy",
+      overrides: { "terminal.new": "Cmd+T" },
+    });
+    const result = importProfile(json, VALID_ACTION_IDS);
+    expect(result.ok).toBe(false);
+  });
+
   it("round-trips through export → import with identical overrides", () => {
     const original: Record<string, string[]> = {
       "terminal.new": ["Cmd+T"],

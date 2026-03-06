@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Upload, Download } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { keybindingService } from "@/services/KeybindingService";
 import { useNotificationStore } from "@/store/notificationStore";
 import type { KeybindingImportResult } from "@shared/types/ipc/api";
 
@@ -9,13 +10,12 @@ interface KeybindingProfileActionsProps {
 }
 
 export function KeybindingProfileActions({ onImportComplete }: KeybindingProfileActionsProps) {
-  const [isExporting, setIsExporting] = useState(false);
-  const [isImporting, setIsImporting] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const addNotification = useNotificationStore((state) => state.addNotification);
 
   const handleExport = async () => {
-    if (isExporting) return;
-    setIsExporting(true);
+    if (isLoading) return;
+    setIsLoading(true);
     try {
       const saved = await window.electron.keybinding.exportProfile();
       if (saved) {
@@ -32,13 +32,13 @@ export function KeybindingProfileActions({ onImportComplete }: KeybindingProfile
         message: "Could not save the keybinding profile.",
       });
     } finally {
-      setIsExporting(false);
+      setIsLoading(false);
     }
   };
 
   const handleImport = async () => {
-    if (isImporting) return;
-    setIsImporting(true);
+    if (isLoading) return;
+    setIsLoading(true);
     try {
       const result: KeybindingImportResult = await window.electron.keybinding.importProfile();
       if (!result.ok) {
@@ -51,6 +51,7 @@ export function KeybindingProfileActions({ onImportComplete }: KeybindingProfile
         return;
       }
 
+      await keybindingService.loadOverrides();
       onImportComplete();
 
       const parts: string[] = [];
@@ -73,7 +74,7 @@ export function KeybindingProfileActions({ onImportComplete }: KeybindingProfile
         message: "Could not read the keybinding profile.",
       });
     } finally {
-      setIsImporting(false);
+      setIsLoading(false);
     }
   };
 
@@ -81,10 +82,10 @@ export function KeybindingProfileActions({ onImportComplete }: KeybindingProfile
     <div className="flex items-center gap-2">
       <button
         onClick={handleExport}
-        disabled={isExporting}
+        disabled={isLoading}
         className={cn(
           "flex items-center gap-1.5 px-3 py-2 text-sm border border-canopy-border rounded transition-colors",
-          isExporting
+          isLoading
             ? "opacity-50 cursor-not-allowed text-canopy-text/40"
             : "text-canopy-text/60 hover:text-canopy-text hover:border-canopy-accent"
         )}
@@ -94,10 +95,10 @@ export function KeybindingProfileActions({ onImportComplete }: KeybindingProfile
       </button>
       <button
         onClick={handleImport}
-        disabled={isImporting}
+        disabled={isLoading}
         className={cn(
           "flex items-center gap-1.5 px-3 py-2 text-sm border border-canopy-border rounded transition-colors",
-          isImporting
+          isLoading
             ? "opacity-50 cursor-not-allowed text-canopy-text/40"
             : "text-canopy-text/60 hover:text-canopy-text hover:border-canopy-accent"
         )}
