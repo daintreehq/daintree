@@ -115,8 +115,13 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
   const handleCommit = useCallback(
     async (message: string) => {
       setActionError(null);
-      await window.electron.git.commit(worktreePath, message);
-      await refresh();
+      try {
+        await window.electron.git.commit(worktreePath, message);
+        await refresh();
+      } catch (err) {
+        setActionError(err instanceof Error ? err.message : String(err));
+        throw err;
+      }
     },
     [worktreePath, refresh]
   );
@@ -125,11 +130,20 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
     async (message: string) => {
       setActionError(null);
       setPushError(null);
-      await window.electron.git.commit(worktreePath, message);
+      try {
+        await window.electron.git.commit(worktreePath, message);
+      } catch (err) {
+        setActionError(err instanceof Error ? err.message : String(err));
+        throw err;
+      }
       await refresh();
-      const result = await window.electron.git.push(worktreePath);
-      if (!result.success) {
-        setPushError(`Push failed: ${result.error}`);
+      try {
+        const result = await window.electron.git.push(worktreePath);
+        if (!result.success) {
+          setPushError(`Push failed: ${result.error}`);
+        }
+      } catch (err) {
+        setPushError(`Push failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
     [worktreePath, refresh]
@@ -385,7 +399,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
           </div>
 
           {/* Commit panel */}
-          {status && totalChanges > 0 && (
+          {status && totalChanges > 0 && !loadError && (
             <CommitPanel
               stagedCount={status.staged.length}
               isDetachedHead={status.isDetachedHead}

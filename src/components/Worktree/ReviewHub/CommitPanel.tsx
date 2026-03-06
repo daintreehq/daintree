@@ -38,6 +38,8 @@ export function CommitPanel({
     try {
       await onCommit(message);
       setMessage("");
+    } catch {
+      // Error is handled by the parent via setActionError
     } finally {
       setIsCommitting(false);
     }
@@ -49,6 +51,8 @@ export function CommitPanel({
     try {
       await onCommitAndPush(message);
       setMessage("");
+    } catch {
+      // Error is handled by the parent via setActionError
     } finally {
       setIsPushing(false);
     }
