@@ -118,6 +118,18 @@ describe("runSystemHealthCheck", () => {
     expect(git?.version).toBeNull();
   });
 
+  it("allRequired is false when all tools are missing", async () => {
+    mockedExecFileSync.mockImplementation(() => {
+      throw new Error("not found");
+    });
+
+    const result = await runSystemHealthCheck();
+
+    expect(result.allRequired).toBe(false);
+    expect(result.prerequisites.every((p) => !p.available)).toBe(true);
+    expect(result.prerequisites.every((p) => p.version === null)).toBe(true);
+  });
+
   it("runs all checks and returns results for git, node, and npm", async () => {
     mockedExecFileSync.mockReturnValue(Buffer.from(""));
 

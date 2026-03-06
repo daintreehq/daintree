@@ -70,7 +70,7 @@ export function AgentSetupWizard({
     return filtered.length > 0 ? filtered : AGENT_ORDER;
   }, [agentIds]);
 
-  const [step, setStep] = useState<WizardStep>("health");
+  const [step, setStep] = useState<WizardStep>(SKIP_FIRST_RUN_DIALOGS ? "welcome" : "health");
   const [agentIndex, setAgentIndex] = useState(0);
   const [availability, setAvailability] = useState<CliAvailability>(
     initialAvailability ?? ({} as CliAvailability)
@@ -97,7 +97,7 @@ export function AgentSetupWizard({
   const prevIsOpenRef = useRef(false);
   useEffect(() => {
     if (isOpen && !prevIsOpenRef.current) {
-      setStep("health");
+      setStep(SKIP_FIRST_RUN_DIALOGS ? "welcome" : "health");
       setAgentIndex(0);
     }
     prevIsOpenRef.current = isOpen;
@@ -190,7 +190,7 @@ export function AgentSetupWizard({
       </AppDialog.Header>
 
       <AppDialog.Body>
-        {step === "health" && <SystemHealthCheckStep onReady={handleNext} />}
+        {step === "health" && <SystemHealthCheckStep onSkip={handleNext} />}
         {step === "welcome" && (
           <WelcomeStep availability={availability} agentOrder={effectiveAgentOrder} />
         )}
@@ -236,6 +236,12 @@ export function AgentSetupWizard({
               <Button variant="ghost" onClick={handleBack} className="text-canopy-text/70">
                 <ChevronLeft className="w-4 h-4" />
                 Back
+              </Button>
+            )}
+            {step === "health" && (
+              <Button onClick={handleNext}>
+                Continue
+                <ChevronRight className="w-4 h-4 ml-1" />
               </Button>
             )}
             {step === "welcome" && (

@@ -1,12 +1,10 @@
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CircleCheck, CircleDashed, CircleX, ExternalLink, RotateCw } from "lucide-react";
 import { systemClient } from "@/clients";
 import type { PrerequisiteCheckResult, SystemHealthCheckResult } from "@shared/types";
 
-const SKIP_FIRST_RUN_DIALOGS = process.env.CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS === "1";
-
 interface SystemHealthCheckStepProps {
-  onReady: () => void;
+  onSkip: () => void;
 }
 
 const INSTALL_LINKS: Record<string, { label: string; url: string }> = {
@@ -24,31 +22,30 @@ const TOOL_LABELS: Record<string, string> = {
   npm: "npm",
 };
 
-export function SystemHealthCheckStep({ onReady }: SystemHealthCheckStepProps) {
+export function SystemHealthCheckStep({ onSkip }: SystemHealthCheckStepProps) {
   const [result, setResult] = useState<SystemHealthCheckResult | null>(null);
-  const [isPending, startTransition] = useTransition();
+  const [isChecking, setIsChecking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const hasRunRef = useRef(false);
 
-  const runCheck = () => {
-    startTransition(async () => {
+  const runCheck = async () => {
+    setIsChecking(true);
+    setError(null);
+    try {
       const data = await systemClient.healthCheck();
       setResult(data);
-    });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Health check failed");
+    } finally {
+      setIsChecking(false);
+    }
   };
 
   useEffect(() => {
-    if (SKIP_FIRST_RUN_DIALOGS) {
-      onReady();
-      return;
-    }
     if (hasRunRef.current) return;
     hasRunRef.current = true;
-    runCheck();
-    // onReady is stable (callback ref), eslint-disable-next-line is intentional
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    void runCheck();
   }, []);
-
-  const isChecking = isPending || (!result && !SKIP_FIRST_RUN_DIALOGS);
 
   return (
     <div className="space-y-5">
@@ -66,10 +63,18 @@ export function SystemHealthCheckStep({ onReady }: SystemHealthCheckStepProps) {
               <PrerequisiteRow
                 key={tool}
                 check={{ tool, available: false, version: null }}
-                loading
+                loading={isChecking}
               />
             ))}
       </div>
+
+      {error && (
+        <div className="px-3 py-2.5 rounded-[var(--radius-md)] border border-[var(--color-status-error)]/20 bg-[var(--color-status-error)]/5">
+          <p className="text-xs text-[var(--color-status-error)]">
+            Could not run health check: {error}
+          </p>
+        </div>
+      )}
 
       {result && !result.allRequired && (
         <div className="px-3 py-2.5 rounded-[var(--radius-md)] border border-amber-500/20 bg-amber-500/5">
@@ -83,10 +88,7 @@ export function SystemHealthCheckStep({ onReady }: SystemHealthCheckStepProps) {
       <div className="flex items-center justify-between pt-1">
         <button
           type="button"
-          onClick={() => {
-            hasRunRef.current = true;
-            runCheck();
-          }}
+          onClick={() => void runCheck()}
           disabled={isChecking}
           className="inline-flex items-center gap-1.5 text-xs text-canopy-text/50 hover:text-canopy-text disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
@@ -95,7 +97,7 @@ export function SystemHealthCheckStep({ onReady }: SystemHealthCheckStepProps) {
         </button>
         <button
           type="button"
-          onClick={onReady}
+          onClick={onSkip}
           className="text-xs text-canopy-text/40 hover:text-canopy-text transition-colors"
         >
           Skip

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useTransition } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import {
   FileText,
@@ -17,13 +17,20 @@ import { actionService } from "@/services/ActionService";
 
 function SystemHealthSection() {
   const [result, setResult] = useState<SystemHealthCheckResult | null>(null);
-  const [isPending, startTransition] = useTransition();
+  const [isChecking, setIsChecking] = useState(false);
+  const [checkError, setCheckError] = useState<string | null>(null);
 
-  const runCheck = useCallback(() => {
-    startTransition(async () => {
+  const runCheck = useCallback(async () => {
+    setIsChecking(true);
+    setCheckError(null);
+    try {
       const data = await systemClient.healthCheck();
       setResult(data);
-    });
+    } catch (err) {
+      setCheckError(err instanceof Error ? err.message : "Health check failed");
+    } finally {
+      setIsChecking(false);
+    }
   }, []);
 
   return (
@@ -38,13 +45,14 @@ function SystemHealthSection() {
       <Button
         variant="outline"
         size="sm"
-        onClick={runCheck}
-        disabled={isPending}
+        onClick={() => void runCheck()}
+        disabled={isChecking}
         className="text-canopy-text border-canopy-border hover:bg-canopy-border hover:text-canopy-text mb-3"
       >
-        <RotateCw className={cn("w-4 h-4", isPending && "animate-spin")} />
-        {isPending ? "Checking…" : result ? "Re-run Check" : "Run Health Check"}
+        <RotateCw className={cn("w-4 h-4", isChecking && "animate-spin")} />
+        {isChecking ? "Checking…" : result ? "Re-run Check" : "Run Health Check"}
       </Button>
+      {checkError && <p className="text-xs text-[var(--color-status-error)] mb-3">{checkError}</p>}
       {result && (
         <div className="space-y-1.5">
           {result.prerequisites.map((check) => {
