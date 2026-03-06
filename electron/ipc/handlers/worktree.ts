@@ -256,6 +256,36 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
   ipcMain.handle(CHANNELS.WORKTREE_DELETE, handleWorktreeDelete);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_DELETE));
 
+  const handleGitCompareWorktrees = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: { cwd: string; branch1: string; branch2: string; filePath?: string }
+  ) => {
+    checkRateLimit(CHANNELS.GIT_COMPARE_WORKTREES, 20, 10_000);
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid payload");
+    }
+
+    const { cwd, branch1, branch2, filePath } = payload;
+
+    if (typeof cwd !== "string" || !cwd) {
+      throw new Error("Invalid working directory");
+    }
+    if (typeof branch1 !== "string" || !branch1) {
+      throw new Error("Invalid branch1");
+    }
+    if (typeof branch2 !== "string" || !branch2) {
+      throw new Error("Invalid branch2");
+    }
+    if (filePath !== undefined && (typeof filePath !== "string" || !filePath)) {
+      throw new Error("Invalid filePath");
+    }
+
+    const gitService = new GitService(cwd);
+    return gitService.compareWorktrees(branch1, branch2, filePath);
+  };
+  ipcMain.handle(CHANNELS.GIT_COMPARE_WORKTREES, handleGitCompareWorktrees);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_COMPARE_WORKTREES));
+
   const handleGitGetFileDiff = async (
     _event: Electron.IpcMainInvokeEvent,
     payload: { cwd: string; filePath: string; status: string }

@@ -223,7 +223,8 @@ export type ActionId =
   | "notes.create"
   | "notes.delete"
   | "notes.reveal"
-  | "devServer.start";
+  | "devServer.start"
+  | "worktree.compareDiff";
 
 export interface ActionContext {
   projectId?: string;

@@ -744,6 +744,22 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     },
   }));
 
+  actions.set("worktree.compareDiff", () => ({
+    id: "worktree.compareDiff",
+    title: "Compare Worktrees",
+    description: "Open cross-worktree diff comparison to review changes between two branches",
+    category: "worktree",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { worktreeId } = (args ?? {}) as { worktreeId?: string };
+      const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId ?? null;
+      useWorktreeSelectionStore.getState().openCrossWorktreeDiff(targetWorktreeId);
+    },
+  }));
+
   actions.set("worktree.openIssueInSidecar", () => ({
     id: "worktree.openIssueInSidecar",
     title: "Open Worktree Issue in Sidecar",

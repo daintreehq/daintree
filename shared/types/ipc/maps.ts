@@ -84,7 +84,11 @@ import type {
   IssueDetectedPayload,
   IssueNotFoundPayload,
 } from "./github.js";
-import type { GitGetFileDiffPayload } from "./git.js";
+import type {
+  GitGetFileDiffPayload,
+  GitCompareWorktreesPayload,
+  CrossWorktreeDiffResult,
+} from "./git.js";
 import type { TerminalConfig } from "./config.js";
 import type { SystemSleepMetrics } from "./systemSleep.js";
 import type { ShowContextMenuPayload } from "../menu.js";
@@ -859,6 +863,10 @@ export interface IpcInvokeMap {
   "git:get-staging-status": {
     args: [cwd: string];
     result: StagingStatus;
+  };
+  "git:compare-worktrees": {
+    args: [payload: GitCompareWorktreesPayload];
+    result: CrossWorktreeDiffResult | string;
   };
 
   // Sidecar channels
