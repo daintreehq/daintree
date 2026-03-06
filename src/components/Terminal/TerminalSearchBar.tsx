@@ -183,7 +183,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
               className={cn(
                 "px-1.5 py-1 text-xs rounded transition-colors",
                 caseSensitive
-                  ? "bg-[var(--color-status-info)] text-white"
+                  ? "bg-[var(--color-status-info)] text-canopy-bg"
                   : "text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-bg"
               )}
               aria-label="Toggle case sensitivity"
@@ -204,7 +204,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
               className={cn(
                 "px-1.5 py-1 text-xs font-mono rounded transition-colors",
                 regexEnabled
-                  ? "bg-[var(--color-status-info)] text-white"
+                  ? "bg-[var(--color-status-info)] text-canopy-bg"
                   : "text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-bg"
               )}
               aria-label="Toggle regex mode"
