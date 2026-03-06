@@ -50,12 +50,6 @@ class AgentNotificationService {
 
     if (state === previousState) return;
 
-    // Skip if all OS notification types are disabled (off by default).
-    // TODO: Scope to watched terminals once #2539 ships.
-    if (!settings.completedEnabled && !settings.waitingEnabled && !settings.failedEnabled) {
-      return;
-    }
-
     // Cancel any pending completion timer for this agent when it leaves "completed"
     if (previousState === "completed" && state !== "completed") {
       const key = agentId ?? worktreeId ?? "agent";
@@ -64,6 +58,12 @@ class AgentNotificationService {
         clearTimeout(timer);
         this.completionTimers.delete(key);
       }
+    }
+
+    // Skip if all OS notification types are disabled (off by default).
+    // TODO: Scope to watched terminals once #2539 ships.
+    if (!settings.completedEnabled && !settings.waitingEnabled && !settings.failedEnabled) {
+      return;
     }
 
     if (state === "completed" && settings.completedEnabled) {
@@ -96,6 +96,7 @@ class AgentNotificationService {
     const timer = setTimeout(() => {
       this.completionTimers.delete(key);
       const settings = store.get("notificationSettings");
+      if (!settings.completedEnabled) return;
       const label = this.getLabel(agentId, worktreeId);
       this.enqueue({
         title: "Agent completed",

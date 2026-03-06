@@ -173,4 +173,56 @@ describe("AgentNotificationService", () => {
 
     expect(playSoundMock).not.toHaveBeenCalled();
   });
+
+  it("fires only waiting notification when only waitingEnabled is true (mixed sequence)", () => {
+    storeMock.get.mockReturnValue({
+      completedEnabled: false,
+      waitingEnabled: true,
+      failedEnabled: false,
+      soundEnabled: false,
+      soundFile: "chime.wav",
+    });
+
+    events.emit("agent:state-changed", makePayload("completed"));
+    vi.advanceTimersByTime(5000);
+
+    events.emit("agent:state-changed", makePayload("waiting", "completed"));
+    vi.advanceTimersByTime(1000);
+
+    events.emit("agent:state-changed", makePayload("failed", "waiting"));
+    vi.advanceTimersByTime(1000);
+
+    expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+    expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+      "Agent waiting",
+      expect.stringContaining("waiting for input")
+    );
+  });
+
+  it("does not fire stale completion notification after completedEnabled is disabled", () => {
+    // Start with completedEnabled=true so the timer is scheduled
+    storeMock.get.mockReturnValue({
+      completedEnabled: true,
+      waitingEnabled: false,
+      failedEnabled: false,
+      soundEnabled: false,
+      soundFile: "chime.wav",
+    });
+
+    events.emit("agent:state-changed", makePayload("completed"));
+
+    // Before debounce fires, disable all notifications
+    storeMock.get.mockReturnValue({
+      completedEnabled: false,
+      waitingEnabled: false,
+      failedEnabled: false,
+      soundEnabled: false,
+      soundFile: "chime.wav",
+    });
+
+    // Advance past the 2000ms completion debounce
+    vi.advanceTimersByTime(3000);
+
+    expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+  });
 });
