@@ -7,6 +7,7 @@ const storeMock = vi.hoisted(() => ({
 
 const notificationServiceMock = vi.hoisted(() => ({
   showNativeNotification: vi.fn(),
+  showWatchNotification: vi.fn(),
   isWindowFocused: vi.fn(() => false),
 }));
 
@@ -49,6 +50,8 @@ describe("AgentNotificationService", () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     agentNotificationService.initialize();
+    // Register the test terminal as watched so gate passes by default
+    agentNotificationService.syncWatchedPanels(["term-1"]);
   });
 
   afterEach(() => {
@@ -75,7 +78,32 @@ describe("AgentNotificationService", () => {
     events.emit("agent:state-changed", makePayload("failed"));
     vi.advanceTimersByTime(5000);
 
-    expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+    expect(playSoundMock).not.toHaveBeenCalled();
+  });
+
+  it("does not fire notifications for unwatched terminals", () => {
+    storeMock.get.mockReturnValue({
+      completedEnabled: true,
+      waitingEnabled: true,
+      failedEnabled: true,
+      soundEnabled: false,
+      soundFile: "chime.wav",
+    });
+
+    // Clear watched set — no terminals are watched
+    agentNotificationService.syncWatchedPanels([]);
+
+    events.emit("agent:state-changed", makePayload("completed"));
+    vi.advanceTimersByTime(5000);
+
+    events.emit("agent:state-changed", makePayload("waiting"));
+    vi.advanceTimersByTime(1000);
+
+    events.emit("agent:state-changed", makePayload("failed"));
+    vi.advanceTimersByTime(1000);
+
+    expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
     expect(playSoundMock).not.toHaveBeenCalled();
   });
 
@@ -91,9 +119,12 @@ describe("AgentNotificationService", () => {
     events.emit("agent:state-changed", makePayload("completed"));
     vi.advanceTimersByTime(5000);
 
-    expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+    expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
       "Agent completed",
-      expect.stringContaining("finished")
+      expect.stringContaining("finished"),
+      expect.objectContaining({ panelId: "term-1" }),
+      "notification:watch-navigate",
+      false
     );
   });
 
@@ -108,9 +139,12 @@ describe("AgentNotificationService", () => {
 
     events.emit("agent:state-changed", makePayload("waiting"));
 
-    expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+    expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
       "Agent waiting",
-      expect.stringContaining("waiting for input")
+      expect.stringContaining("waiting for input"),
+      expect.objectContaining({ panelId: "term-1" }),
+      "notification:watch-navigate",
+      false
     );
   });
 
@@ -126,9 +160,12 @@ describe("AgentNotificationService", () => {
     events.emit("agent:state-changed", makePayload("failed"));
     vi.advanceTimersByTime(1000);
 
-    expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+    expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
       "Agent failed",
-      expect.stringContaining("error")
+      expect.stringContaining("error"),
+      expect.objectContaining({ panelId: "term-1" }),
+      "notification:watch-navigate",
+      false
     );
   });
 
@@ -144,7 +181,7 @@ describe("AgentNotificationService", () => {
     events.emit("agent:state-changed", makePayload("completed", "completed"));
     vi.advanceTimersByTime(5000);
 
-    expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
   });
 
   it("plays sound when soundEnabled is true and a notification type is enabled", () => {
@@ -193,10 +230,13 @@ describe("AgentNotificationService", () => {
     events.emit("agent:state-changed", makePayload("failed", "waiting"));
     vi.advanceTimersByTime(1000);
 
-    expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
-    expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+    expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
+    expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
       "Agent waiting",
-      expect.stringContaining("waiting for input")
+      expect.stringContaining("waiting for input"),
+      expect.objectContaining({ panelId: "term-1" }),
+      "notification:watch-navigate",
+      false
     );
   });
 
@@ -224,6 +264,34 @@ describe("AgentNotificationService", () => {
     // Advance past the 2000ms completion debounce
     vi.advanceTimersByTime(3000);
 
-    expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+  });
+
+  it("fires completion notification for watched terminal even after one-shot unwatch", () => {
+    storeMock.get.mockReturnValue({
+      completedEnabled: true,
+      waitingEnabled: false,
+      failedEnabled: false,
+      soundEnabled: false,
+      soundFile: "chime.wav",
+    });
+
+    // Agent state changes — watched status is snapshotted here
+    events.emit("agent:state-changed", makePayload("completed"));
+
+    // Simulate one-shot unwatch: renderer removes the terminal from watched set
+    // (this happens before the 2s debounce fires)
+    agentNotificationService.syncWatchedPanels([]);
+
+    // Advance past the 2000ms debounce — should still fire because isWatched was captured at event time
+    vi.advanceTimersByTime(3000);
+
+    expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+      "Agent completed",
+      expect.stringContaining("finished"),
+      expect.objectContaining({ panelId: "term-1" }),
+      "notification:watch-navigate",
+      false
+    );
   });
 });

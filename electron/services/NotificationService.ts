@@ -134,11 +134,12 @@ class NotificationService {
     title: string,
     body: string,
     context: WatchNotificationContext,
-    navigateChannel: string
+    navigateChannel: string,
+    silent = false
   ): void {
     if (!Notification.isSupported()) return;
 
-    const notification = new Notification({ title, body, silent: false });
+    const notification = new Notification({ title, body, silent });
     this.activeNotifications.add(notification);
 
     const cleanup = () => {

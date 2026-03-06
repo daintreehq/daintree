@@ -441,6 +441,7 @@ const CHANNELS = {
   NOTIFICATION_PLAY_SOUND: "notification:play-sound",
   NOTIFICATION_SHOW_WATCH: "notification:show-watch",
   NOTIFICATION_WATCH_NAVIGATE: "notification:watch-navigate",
+  NOTIFICATION_SYNC_WATCHED: "notification:sync-watched",
 
   // Auto-update channels
   UPDATE_AVAILABLE: "update:available",
@@ -1387,6 +1388,8 @@ const api: ElectronAPI = {
     onWatchNavigate: (
       callback: (context: { panelId: string; panelTitle: string; worktreeId?: string }) => void
     ) => _typedOn(CHANNELS.NOTIFICATION_WATCH_NAVIGATE, callback),
+    syncWatchedPanels: (panelIds: string[]) =>
+      ipcRenderer.send(CHANNELS.NOTIFICATION_SYNC_WATCHED, panelIds),
   },
 
   // Auto-Update API

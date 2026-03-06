@@ -59,6 +59,12 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
     agentNotificationService.playSoundPreview(soundFile);
   };
 
+  const handleSyncWatched = (_event: Electron.IpcMainEvent, payload: unknown): void => {
+    if (!Array.isArray(payload)) return;
+    const ids = payload.filter((v): v is string => typeof v === "string");
+    agentNotificationService.syncWatchedPanels(ids);
+  };
+
   const handleShowWatch = (_event: Electron.IpcMainEvent, payload: unknown): void => {
     if (!payload || typeof payload !== "object") return;
     const p = payload as Record<string, unknown>;
@@ -84,6 +90,7 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
   ipcMain.handle(CHANNELS.NOTIFICATION_SETTINGS_SET, handleSettingsSet);
   ipcMain.handle(CHANNELS.NOTIFICATION_PLAY_SOUND, handlePlaySound);
   ipcMain.on(CHANNELS.NOTIFICATION_SHOW_WATCH, handleShowWatch);
+  ipcMain.on(CHANNELS.NOTIFICATION_SYNC_WATCHED, handleSyncWatched);
 
   return () => {
     ipcMain.removeListener(CHANNELS.NOTIFICATION_UPDATE, handleNotificationUpdate);
@@ -91,5 +98,6 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
     ipcMain.removeHandler(CHANNELS.NOTIFICATION_SETTINGS_SET);
     ipcMain.removeHandler(CHANNELS.NOTIFICATION_PLAY_SOUND);
     ipcMain.removeListener(CHANNELS.NOTIFICATION_SHOW_WATCH, handleShowWatch);
+    ipcMain.removeListener(CHANNELS.NOTIFICATION_SYNC_WATCHED, handleSyncWatched);
   };
 }

@@ -703,6 +703,8 @@ export interface ElectronAPI {
     onWatchNavigate(
       callback: (context: { panelId: string; panelTitle: string; worktreeId?: string }) => void
     ): () => void;
+    /** Sync the renderer's watched panel set to main so AgentNotificationService can gate on it */
+    syncWatchedPanels(panelIds: string[]): void;
   };
   update: {
     onUpdateAvailable(callback: (info: { version: string }) => void): () => void;
