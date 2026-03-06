@@ -14,6 +14,7 @@ export interface FileViewerModalProps {
   isOpen: boolean;
   filePath: string;
   rootPath: string;
+  branch?: string;
   initialLine?: number;
   initialCol?: number;
   diff?: string;
@@ -36,6 +37,7 @@ export function FileViewerModal({
   isOpen,
   filePath,
   rootPath,
+  branch,
   initialLine,
   initialCol,
   diff,
@@ -133,7 +135,15 @@ export function FileViewerModal({
   }, [hasDiff, diff]);
 
   const fileName = filePath.split("/").pop() || filePath;
-  const dirPart = filePath.replace(fileName, "");
+
+  // Compute relative path by stripping rootPath prefix
+  const normalizedRoot = rootPath.endsWith("/") ? rootPath : rootPath + "/";
+  const relativePath = filePath.startsWith(normalizedRoot)
+    ? filePath.slice(normalizedRoot.length)
+    : fileName;
+  const relativeDir = relativePath.includes("/")
+    ? relativePath.slice(0, relativePath.lastIndexOf("/") + 1)
+    : "";
 
   const canShowView = loadState === "loaded" && content !== null;
 
@@ -141,10 +151,20 @@ export function FileViewerModal({
     <AppDialog isOpen={isOpen} onClose={onClose} size="6xl" maxHeight="max-h-[90vh]">
       <AppDialog.Header className="py-3">
         <div className="flex items-center gap-3 min-w-0">
-          <AppDialog.Title className="text-sm font-medium truncate">
-            <span className="text-muted-foreground">{dirPart}</span>
-            <span className="text-canopy-text">{fileName}</span>
-          </AppDialog.Title>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <AppDialog.Title className="text-sm font-medium truncate">
+                  {branch && <span className="text-muted-foreground/70 mr-1.5">{branch}</span>}
+                  {relativeDir && <span className="text-muted-foreground">{relativeDir}</span>}
+                  <span className="text-canopy-text">{fileName}</span>
+                </AppDialog.Title>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="max-w-lg break-all">
+                {filePath}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
 
           {/* Show view/diff toggle only when both are potentially available */}
           {hasDiff && (canShowView || loadState !== "loading") && (
