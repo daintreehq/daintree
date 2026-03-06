@@ -7,6 +7,7 @@ import {
   Copy,
   Folder,
   GitCommitHorizontal,
+  GitCompare,
   GitPullRequest,
   Globe,
   Layers,
@@ -74,6 +75,7 @@ export interface WorktreeMenuItemsProps {
   onOpenPRExternal?: () => void;
   onAttachIssue?: () => void;
   onOpenReviewHub?: () => void;
+  onCompareDiff?: () => void;
   onRunRecipe: (recipeId: string) => void;
   onSaveLayout?: () => void;
   onTogglePin?: () => void;
@@ -110,6 +112,7 @@ export function WorktreeMenuItems({
   onOpenPRExternal,
   onAttachIssue,
   onOpenReviewHub,
+  onCompareDiff,
   onRunRecipe,
   onSaveLayout,
   onTogglePin,
@@ -245,6 +248,13 @@ export function WorktreeMenuItems({
         <C.Item onSelect={onOpenReviewHub}>
           <GitCommitHorizontal className="w-3.5 h-3.5 mr-2" />
           Review & Commit
+        </C.Item>
+      )}
+
+      {onCompareDiff && (
+        <C.Item onSelect={onCompareDiff}>
+          <GitCompare className="w-3.5 h-3.5 mr-2" />
+          Compare Worktrees…
         </C.Item>
       )}
 
