@@ -298,6 +298,7 @@ import { initializeWorkflowEngine, disposeWorkflowEngine } from "./services/Work
 import { workflowLoader } from "./services/WorkflowLoader.js";
 import { autoUpdaterService } from "./services/AutoUpdaterService.js";
 import { SMOKE_BOOT_TIMEOUT_MS, runSmokeFunctionalChecks } from "./services/smokeTest.js";
+import { initializeTelemetry } from "./services/TelemetryService.js";
 
 // Initialize logger early with userData path
 initializeLogger(app.getPath("userData"));
@@ -307,6 +308,9 @@ registerCommands();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Telemetry must be initialized before error handlers so Sentry captures uncaught errors
+void initializeTelemetry();
 
 process.on("uncaughtException", (error) => {
   console.error("[FATAL] Uncaught Exception:", error);

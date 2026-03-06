@@ -26,6 +26,9 @@ const common = {
   external,
   logLevel: "info",
   absWorkingDir: root,
+  define: {
+    "process.env.SENTRY_DSN": JSON.stringify(process.env.SENTRY_DSN || ""),
+  },
 };
 
 async function run() {

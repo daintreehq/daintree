@@ -113,6 +113,10 @@ export interface StoreSchema {
   appAgentConfig: AppAgentConfig;
   worktreeIssueMap: Record<string, IssueAssociation>;
   appTheme: AppThemeConfig;
+  telemetry: {
+    enabled: boolean;
+    hasSeenPrompt: boolean;
+  };
 }
 
 const storeOptions = {
@@ -173,6 +177,10 @@ const storeOptions = {
     worktreeIssueMap: {},
     appTheme: {
       colorSchemeId: "canopy",
+    },
+    telemetry: {
+      enabled: false,
+      hasSeenPrompt: false,
     },
   },
   cwd: process.env.CANOPY_USER_DATA,

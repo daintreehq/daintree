@@ -27,6 +27,7 @@ const registerMocks = vi.hoisted(() => ({
   registerCliHandlers: vi.fn(),
   registerClipboardHandlers: vi.fn(),
   registerGitWriteHandlers: vi.fn(),
+  registerTelemetryHandlers: vi.fn(),
 }));
 
 vi.mock("../handlers/worktree.js", () => ({
@@ -106,6 +107,9 @@ vi.mock("../handlers/clipboard.js", () => ({
 }));
 vi.mock("../handlers/git-write.js", () => ({
   registerGitWriteHandlers: registerMocks.registerGitWriteHandlers,
+}));
+vi.mock("../handlers/telemetry.js", () => ({
+  registerTelemetryHandlers: registerMocks.registerTelemetryHandlers,
 }));
 vi.mock("../../services/events.js", () => ({
   events: { emit: vi.fn(), on: vi.fn(), off: vi.fn() },

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { FileText, Trash2, Bug, AlertTriangle } from "lucide-react";
+import { FileText, Trash2, Bug, AlertTriangle, Shield } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { appClient } from "@/clients";
 import type { AppState } from "@shared/types";
@@ -12,8 +12,16 @@ export function TroubleshootingTab() {
   const [focusEventsTab, setFocusEventsTab] = useState(false);
   const [verboseLogging, setVerboseLogging] = useState(false);
   const [verboseLoggingPending, setVerboseLoggingPending] = useState(false);
+  const [telemetryEnabled, setTelemetryEnabled] = useState(false);
+  const [telemetryPending, setTelemetryPending] = useState(false);
 
   useEffect(() => {
+    if (window.electron?.telemetry) {
+      window.electron.telemetry.get().then(({ enabled }) => {
+        setTelemetryEnabled(enabled);
+      });
+    }
+
     appClient.getState().then((appState) => {
       if (appState?.developerMode) {
         setDeveloperMode(appState.developerMode.enabled);
@@ -33,6 +41,21 @@ export function TroubleshootingTab() {
         console.error("Failed to get verbose logging state:", error);
       });
   }, []);
+
+  const handleToggleTelemetry = useCallback(async () => {
+    if (telemetryPending || !window.electron?.telemetry) return;
+    const newState = !telemetryEnabled;
+    setTelemetryPending(true);
+    setTelemetryEnabled(newState);
+    try {
+      await window.electron.telemetry.setEnabled(newState);
+    } catch (err) {
+      console.error("Failed to set telemetry:", err);
+      setTelemetryEnabled(!newState);
+    } finally {
+      setTelemetryPending(false);
+    }
+  }, [telemetryEnabled, telemetryPending]);
 
   const saveDeveloperModeSettings = useCallback(
     async (settings: NonNullable<AppState["developerMode"]>) => {
@@ -184,6 +207,52 @@ export function TroubleshootingTab() {
               <Trash2 />
               Clear Logs
             </Button>
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        <div>
+          <h4 className="text-sm font-medium text-canopy-text mb-1 flex items-center gap-2">
+            <Shield className="w-4 h-4" />
+            Crash Reporting
+          </h4>
+          <p className="text-xs text-canopy-text/60 mb-3">
+            Automatically send crash reports and error details to help improve Canopy. No personal
+            data, file contents, or credentials are collected.
+          </p>
+          <div className="p-3 border border-canopy-border rounded-[var(--radius-md)]">
+            <label
+              className="flex items-center gap-3 cursor-pointer"
+              onClick={handleToggleTelemetry}
+            >
+              <button
+                type="button"
+                role="switch"
+                aria-checked={telemetryEnabled}
+                aria-label="Enable crash reporting"
+                disabled={telemetryPending}
+                className={cn(
+                  "relative w-11 h-6 rounded-full transition-colors shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
+                  telemetryEnabled ? "bg-canopy-accent" : "bg-canopy-border",
+                  telemetryPending && "opacity-50 cursor-wait"
+                )}
+              >
+                <span
+                  className={cn(
+                    "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform",
+                    telemetryEnabled && "translate-x-5"
+                  )}
+                />
+              </button>
+              <div className="flex-1">
+                <span className="text-sm text-canopy-text font-medium">Enable Crash Reporting</span>
+                <p className="text-xs text-canopy-text/60">
+                  Collects: error messages, stack traces, app version, OS. Requires restart to take
+                  effect.
+                </p>
+              </div>
+            </label>
           </div>
         </div>
       </div>

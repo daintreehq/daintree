@@ -478,6 +478,11 @@ const CHANNELS = {
   APP_THEME_SET_COLOR_SCHEME: "app-theme:set-color-scheme",
   APP_THEME_SET_CUSTOM_SCHEMES: "app-theme:set-custom-schemes",
   APP_THEME_IMPORT: "app-theme:import",
+
+  // Telemetry channels
+  TELEMETRY_GET: "telemetry:get",
+  TELEMETRY_SET_ENABLED: "telemetry:set-enabled",
+  TELEMETRY_MARK_PROMPT_SHOWN: "telemetry:mark-prompt-shown",
 } as const;
 
 const api: ElectronAPI = {
@@ -1533,6 +1538,12 @@ const api: ElectronAPI = {
       _typedInvoke(CHANNELS.APP_THEME_SET_CUSTOM_SCHEMES, schemesJson),
 
     importTheme: () => _typedInvoke(CHANNELS.APP_THEME_IMPORT),
+  },
+
+  telemetry: {
+    get: () => _typedInvoke(CHANNELS.TELEMETRY_GET),
+    setEnabled: (enabled: boolean) => _typedInvoke(CHANNELS.TELEMETRY_SET_ENABLED, enabled),
+    markPromptShown: () => _typedInvoke(CHANNELS.TELEMETRY_MARK_PROMPT_SHOWN),
   },
 };
 
