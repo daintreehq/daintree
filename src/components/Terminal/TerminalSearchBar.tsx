@@ -170,7 +170,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
         className={cn(
           "w-44 px-2 py-1 text-sm",
           "bg-canopy-bg border border-canopy-border rounded",
-          "focus:outline-none focus:ring-1 focus:ring-[var(--color-status-info)]",
+          "focus:outline-none focus:ring-1 focus:ring-status-info",
           "text-canopy-text placeholder:text-canopy-text/40"
         )}
       />
@@ -183,7 +183,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
               className={cn(
                 "px-1.5 py-1 text-xs rounded transition-colors",
                 caseSensitive
-                  ? "bg-[var(--color-status-info)] text-canopy-bg"
+                  ? "bg-status-info text-canopy-bg"
                   : "text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-bg"
               )}
               aria-label="Toggle case sensitivity"
@@ -204,7 +204,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
               className={cn(
                 "px-1.5 py-1 text-xs font-mono rounded transition-colors",
                 regexEnabled
-                  ? "bg-[var(--color-status-info)] text-canopy-bg"
+                  ? "bg-status-info text-canopy-bg"
                   : "text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-bg"
               )}
               aria-label="Toggle regex mode"
@@ -221,7 +221,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
         <span
           className={cn(
             "text-xs px-1.5",
-            searchStatus === "found" ? "text-canopy-text/60" : "text-[var(--color-status-error)]"
+            searchStatus === "found" ? "text-canopy-text/60" : "text-status-error"
           )}
         >
           {searchStatus === "found" && "Found"}

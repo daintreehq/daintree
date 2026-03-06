@@ -75,7 +75,7 @@ export function CommitPanel({
   return (
     <div className="border-t border-divider p-3 space-y-2">
       {isDetachedHead && (
-        <div className="text-xs text-[var(--color-status-warning)] bg-[var(--color-status-warning)]/10 rounded px-2 py-1.5">
+        <div className="text-xs text-status-warning bg-status-warning/10 rounded px-2 py-1.5">
           Detached HEAD — commits are not allowed in this state.
         </div>
       )}
@@ -93,13 +93,13 @@ export function CommitPanel({
             "placeholder:text-canopy-text/30 text-canopy-text",
             "focus:outline-none focus:ring-2 focus:ring-canopy-accent focus:border-transparent",
             "disabled:opacity-50 disabled:cursor-not-allowed",
-            isOverLimit ? "border-[var(--color-status-warning)]" : "border-divider"
+            isOverLimit ? "border-status-warning" : "border-divider"
           )}
         />
         <div
           className={cn(
             "absolute bottom-1.5 right-2 text-[10px]",
-            isOverLimit ? "text-[var(--color-status-warning)]" : "text-canopy-text/30"
+            isOverLimit ? "text-status-warning" : "text-canopy-text/30"
           )}
         >
           {subjectLine.length}/{MAX_SUBJECT_LENGTH}

@@ -73,7 +73,7 @@ export function UpdateNotification() {
         <div
           className={cn(
             "mt-0.5 shrink-0",
-            status === "error" ? "text-[var(--color-status-error)]" : "text-canopy-accent"
+            status === "error" ? "text-status-error" : "text-canopy-accent"
           )}
         >
           {status === "downloaded" ? (
@@ -140,7 +140,7 @@ export function UpdateNotification() {
 
           {status === "error" && (
             <>
-              <h4 className="font-medium leading-tight tracking-tight text-xs font-mono text-[var(--color-status-error)]">
+              <h4 className="font-medium leading-tight tracking-tight text-xs font-mono text-status-error">
                 Update Failed
               </h4>
               <div className="text-xs text-canopy-text/90 leading-snug">

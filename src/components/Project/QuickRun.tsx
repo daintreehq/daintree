@@ -359,7 +359,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
               )}
             >
               {/* Prompt Symbol */}
-              <div className="pl-3 pr-2 select-none text-green-500 font-mono font-bold">$</div>
+              <div className="pl-3 pr-2 select-none text-status-success font-mono font-bold">$</div>
 
               {/* Input */}
               <input
@@ -530,7 +530,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                               className="opacity-0 group-hover:opacity-100 p-1 hover:bg-white/10 rounded transition-opacity ml-2 shrink-0"
                               aria-label="Unpin this command"
                             >
-                              <PinOff className="h-3 w-3 text-canopy-text/40 hover:text-red-400" />
+                              <PinOff className="h-3 w-3 text-canopy-text/40 hover:text-status-error" />
                             </button>
                           ) : (
                             <button

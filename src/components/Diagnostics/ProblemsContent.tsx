@@ -14,12 +14,12 @@ const ERROR_TYPE_LABELS: Record<string, string> = {
 };
 
 const ERROR_TYPE_COLORS: Record<string, string> = {
-  git: "text-[var(--color-cat-orange)]",
-  process: "text-[var(--color-status-warning)]",
-  filesystem: "text-[var(--color-status-info)]",
-  network: "text-[var(--color-cat-purple)]",
-  config: "text-[var(--color-status-warning)]",
-  unknown: "text-[var(--color-status-error)]",
+  git: "text-status-warning",
+  process: "text-status-warning",
+  filesystem: "text-status-info",
+  network: "text-status-info",
+  config: "text-status-warning",
+  unknown: "text-status-error",
 };
 
 function formatTimestamp(timestamp: number): string {
@@ -42,7 +42,7 @@ interface ErrorRowProps {
 
 function ErrorRow({ error, isExpanded, onToggleExpand, onDismiss, onRetry }: ErrorRowProps) {
   const typeLabel = ERROR_TYPE_LABELS[error.type] || "Error";
-  const typeColor = ERROR_TYPE_COLORS[error.type] || "text-[var(--color-status-error)]";
+  const typeColor = ERROR_TYPE_COLORS[error.type] || "text-status-error";
   const canRetry = error.isTransient && error.retryAction && onRetry;
   const [copied, setCopied] = useState(false);
   const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -127,7 +127,7 @@ function ErrorRow({ error, isExpanded, onToggleExpand, onDismiss, onRetry }: Err
                   e.stopPropagation();
                   onRetry();
                 }}
-                className="px-2 py-0.5 text-xs text-status-success border border-status-success/60 hover:bg-status-success/10 rounded"
+                className="px-2 py-0.5 text-xs text-status-success hover:text-status-success/70 border border-status-success/50 hover:bg-status-success/10 rounded"
               >
                 Retry
               </button>

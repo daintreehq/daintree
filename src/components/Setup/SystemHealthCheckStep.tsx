@@ -69,16 +69,16 @@ export function SystemHealthCheckStep({ onSkip }: SystemHealthCheckStepProps) {
       </div>
 
       {error && (
-        <div className="px-3 py-2.5 rounded-[var(--radius-md)] border border-[var(--color-status-error)]/20 bg-[var(--color-status-error)]/5">
-          <p className="text-xs text-[var(--color-status-error)]">
+        <div className="px-3 py-2.5 rounded-[var(--radius-md)] border border-status-error/20 bg-status-error/5">
+          <p className="text-xs text-status-error">
             Could not run health check: {error}
           </p>
         </div>
       )}
 
       {result && !result.allRequired && (
-        <div className="px-3 py-2.5 rounded-[var(--radius-md)] border border-amber-500/20 bg-amber-500/5">
-          <p className="text-xs text-amber-400">
+        <div className="px-3 py-2.5 rounded-[var(--radius-md)] border border-status-warning/20 bg-status-warning/5">
+          <p className="text-xs text-status-warning">
             Some required tools are missing. Canopy may not work correctly without them. You can
             still continue and install them later.
           </p>
@@ -127,7 +127,7 @@ function PrerequisiteRow({
       {loading ? (
         <span className="text-[11px] text-canopy-text/30">Checking…</span>
       ) : check.available ? (
-        <span className="text-[11px] text-emerald-400 font-medium">Found</span>
+        <span className="text-[11px] text-status-success font-medium">Found</span>
       ) : (
         link && (
           <a
@@ -152,7 +152,7 @@ function StatusIcon({ available, loading }: { available: boolean; loading: boole
     return <CircleDashed className="w-4 h-4 text-canopy-text/20 animate-pulse shrink-0" />;
   }
   if (available) {
-    return <CircleCheck className="w-4 h-4 text-emerald-400 shrink-0" />;
+    return <CircleCheck className="w-4 h-4 text-status-success shrink-0" />;
   }
-  return <CircleX className="w-4 h-4 text-[var(--color-status-error)] shrink-0" />;
+  return <CircleX className="w-4 h-4 text-status-error shrink-0" />;
 }

@@ -266,13 +266,13 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
 
           {/* Inline error banners */}
           {actionError && (
-            <div className="px-4 py-2 text-xs text-[var(--color-status-error)] bg-[var(--color-status-error)]/10 flex items-start gap-2 shrink-0">
+            <div className="px-4 py-2 text-xs text-status-error bg-status-error/10 flex items-start gap-2 shrink-0">
               <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
               <span>{actionError}</span>
             </div>
           )}
           {pushError && (
-            <div className="px-4 py-2 text-xs text-[var(--color-status-warning)] bg-[var(--color-status-warning)]/10 flex items-start gap-2 shrink-0">
+            <div className="px-4 py-2 text-xs text-status-warning bg-status-warning/10 flex items-start gap-2 shrink-0">
               <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
               <span>Committed locally. {pushError}</span>
             </div>
@@ -285,7 +285,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                 <Loader2 className="w-5 h-5 text-canopy-text/40 animate-spin" />
               </div>
             ) : loadError ? (
-              <div className="p-4 text-xs text-[var(--color-status-error)]">
+              <div className="p-4 text-xs text-status-error">
                 <p className="mb-2">{loadError}</p>
                 <Button variant="subtle" size="sm" onClick={() => void refresh()}>
                   Retry
@@ -301,9 +301,9 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
               <div>
                 {/* Conflict warning */}
                 {hasConflicts && (
-                  <div className="px-4 py-2.5 bg-[var(--color-status-error)]/10 border-b border-divider flex items-start gap-2">
-                    <AlertTriangle className="w-3.5 h-3.5 text-[var(--color-status-error)] mt-0.5 shrink-0" />
-                    <div className="text-xs text-[var(--color-status-error)]">
+                  <div className="px-4 py-2.5 bg-status-error/10 border-b border-divider flex items-start gap-2">
+                    <AlertTriangle className="w-3.5 h-3.5 text-status-error mt-0.5 shrink-0" />
+                    <div className="text-xs text-status-error">
                       <span className="font-medium">
                         {status.conflicted.length} conflicted file
                         {status.conflicted.length !== 1 ? "s" : ""}

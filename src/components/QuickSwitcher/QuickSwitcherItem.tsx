@@ -51,7 +51,7 @@ export function QuickSwitcherItem({ item, isSelected, onClick }: QuickSwitcherIt
               "shrink-0 px-1.5 py-0.5 text-xs rounded-[var(--radius-sm)] border",
               item.type === "terminal"
                 ? "bg-canopy-accent/10 text-canopy-accent border-canopy-accent/30"
-                : "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+                : "bg-status-success/10 text-status-success border-status-success/30"
             )}
           >
             {item.type === "terminal" ? (item.terminalType ?? "terminal") : "worktree"}

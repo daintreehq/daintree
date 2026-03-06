@@ -12,12 +12,12 @@ interface ArtifactOverlayProps {
 }
 
 const ARTIFACT_TYPE_COLORS: Record<string, string> = {
-  code: "border-[var(--color-status-info)] bg-[color-mix(in_oklab,var(--color-status-info)_10%,transparent)] text-[var(--color-status-info)]",
+  code: "border-status-info bg-[color-mix(in_oklab,var(--color-status-info)_10%,transparent)] text-status-info",
   patch:
-    "border-[var(--color-status-success)] bg-[color-mix(in_oklab,var(--color-status-success)_10%,transparent)] text-[var(--color-status-success)]",
-  file: "border-[var(--color-state-working)] bg-[color-mix(in_oklab,var(--color-state-working)_10%,transparent)] text-[var(--color-state-working)]",
+    "border-status-success bg-[color-mix(in_oklab,var(--color-status-success)_10%,transparent)] text-status-success",
+  file: "border-state-working bg-[color-mix(in_oklab,var(--color-state-working)_10%,transparent)] text-state-working",
   summary:
-    "border-[var(--color-status-warning)] bg-[color-mix(in_oklab,var(--color-status-warning)_10%,transparent)] text-[var(--color-status-warning)]",
+    "border-status-warning bg-[color-mix(in_oklab,var(--color-status-warning)_10%,transparent)] text-status-warning",
   other: "border-canopy-border bg-canopy-sidebar/10 text-canopy-text/60",
 };
 
@@ -142,7 +142,7 @@ function ArtifactItem({
               disabled={isProcessing}
               className={cn(
                 "px-3 py-1 text-xs rounded transition-colors",
-                "bg-[var(--color-status-info)] hover:brightness-110 text-canopy-bg",
+                "bg-status-info hover:brightness-110 text-canopy-bg",
                 "disabled:opacity-50 disabled:cursor-not-allowed"
               )}
             >
@@ -169,7 +169,7 @@ function ArtifactItem({
                         disabled={isProcessing || !canApplyPatch}
                         className={cn(
                           "px-3 py-1 text-xs rounded transition-colors",
-                          "bg-[var(--color-status-success)] hover:brightness-110 text-canopy-bg",
+                          "bg-status-success hover:brightness-110 text-canopy-bg",
                           "disabled:opacity-50 disabled:cursor-not-allowed"
                         )}
                       >
@@ -190,8 +190,8 @@ function ArtifactItem({
                 className={cn(
                   "ml-auto text-xs animate-pulse",
                   feedback.tone === "success"
-                    ? "text-[var(--color-status-success)]"
-                    : "text-[var(--color-status-error)]"
+                    ? "text-status-success"
+                    : "text-status-error"
                 )}
               >
                 {feedback.text}
@@ -328,7 +328,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
           onClick={() => setIsExpanded(true)}
           className={cn(
             "px-3 py-2 rounded-[var(--radius-md)] shadow-lg",
-            "bg-[var(--color-status-info)] hover:brightness-110 text-canopy-bg",
+            "bg-status-info hover:brightness-110 text-canopy-bg",
             "text-sm font-medium transition-all",
             "flex items-center gap-2"
           )}
@@ -348,7 +348,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
           <div className="bg-canopy-bg border-b border-canopy-border">
             <div className="flex items-center justify-between px-4 py-3">
               <div className="flex items-center gap-2">
-                <span className="font-mono text-[var(--color-status-info)]">{"{ }"}</span>
+                <span className="font-mono text-status-info">{"{ }"}</span>
                 <span className="text-sm font-medium text-canopy-text">
                   {artifacts.length} Artifact{artifacts.length !== 1 ? "s" : ""}
                 </span>
@@ -385,7 +385,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                       disabled={isBulkActionRunning || !canCopyAll}
                       className={cn(
                         "px-3 py-1 text-xs rounded transition-colors",
-                        "bg-[var(--color-status-info)] hover:brightness-110 text-canopy-bg",
+                        "bg-status-info hover:brightness-110 text-canopy-bg",
                         "disabled:opacity-50 disabled:cursor-not-allowed"
                       )}
                     >
@@ -444,7 +444,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                             disabled={isBulkActionRunning || !canApplyAll}
                             className={cn(
                               "px-3 py-1 text-xs rounded transition-colors",
-                              "bg-[var(--color-status-success)] hover:brightness-110 text-canopy-bg",
+                              "bg-status-success hover:brightness-110 text-canopy-bg",
                               "disabled:opacity-50 disabled:cursor-not-allowed"
                             )}
                           >
@@ -474,8 +474,8 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                     className={cn(
                       "text-xs ml-auto animate-pulse",
                       bulkResult.tone === "success"
-                        ? "text-[var(--color-status-success)]"
-                        : "text-[var(--color-status-error)]"
+                        ? "text-status-success"
+                        : "text-status-error"
                     )}
                   >
                     {bulkResult.text}

@@ -836,7 +836,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                                 <button
                                   type="button"
                                   onClick={(e) => handleDeleteNote(note, e)}
-                                  className="shrink-0 opacity-0 group-hover:opacity-100 p-1 rounded-[var(--radius-sm)] hover:bg-[var(--color-status-error)]/10 text-canopy-text/40 hover:text-[var(--color-status-error)] transition-all"
+                                  className="shrink-0 opacity-0 group-hover:opacity-100 p-1 rounded-[var(--radius-sm)] hover:bg-status-error/10 text-canopy-text/40 hover:text-status-error transition-all"
                                   aria-label="Delete note"
                                 >
                                   <Trash2 size={12} />
@@ -930,15 +930,15 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
 
                     {/* Conflict warning */}
                     {hasConflict && (
-                      <div className="px-4 py-2 bg-amber-500/[0.03] border-l-2 border-amber-500 flex items-center justify-between shrink-0">
-                        <div className="flex items-center gap-2 text-amber-500 text-xs">
+                      <div className="px-4 py-2 bg-status-warning/[0.03] border-l-2 border-status-warning flex items-center justify-between shrink-0">
+                        <div className="flex items-center gap-2 text-status-warning text-xs">
                           <AlertTriangle size={14} />
                           <span>Note modified externally</span>
                         </div>
                         <button
                           type="button"
                           onClick={handleReloadNote}
-                          className="px-2 py-1 rounded-[var(--radius-sm)] text-xs bg-amber-500/20 hover:bg-amber-500/30 text-amber-500 transition-colors"
+                          className="px-2 py-1 rounded-[var(--radius-sm)] text-xs bg-status-warning/20 hover:bg-status-warning/30 text-status-warning transition-colors"
                         >
                           Reload
                         </button>

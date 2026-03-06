@@ -375,7 +375,7 @@ export function Toolbar({
                   variant="ghost"
                   size="icon"
                   onClick={() => onLaunchAgent("browser")}
-                  className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-blue-400 focus-visible:text-blue-400"
+                  className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-status-info focus-visible:text-status-info"
                   aria-label="Open Browser"
                 >
                   <Globe />
@@ -604,7 +604,7 @@ export function Toolbar({
                   >
                     <Bell />
                     {notificationUnreadCount > 0 && (
-                      <span className="absolute top-1 right-1 min-w-[14px] h-[14px] flex items-center justify-center rounded-full bg-amber-400 text-[9px] font-bold text-amber-950 px-0.5 leading-none">
+                      <span className="absolute top-1 right-1 min-w-[14px] h-[14px] flex items-center justify-center rounded-full bg-status-warning text-[9px] font-bold text-canopy-bg px-0.5 leading-none">
                         {notificationUnreadCount > 99 ? "99+" : notificationUnreadCount}
                       </span>
                     )}
@@ -662,7 +662,7 @@ export function Toolbar({
                   className={cn(
                     "transition-colors",
                     treeCopied
-                      ? "text-[var(--color-status-success)] bg-[var(--color-status-success)]/10"
+                      ? "text-status-success bg-status-success/10"
                       : "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent",
                     isCopyingTree && "cursor-wait opacity-70",
                     !activeWorktree && "opacity-50"
@@ -729,13 +729,13 @@ export function Toolbar({
                   onClick={onToggleProblems}
                   className={cn(
                     "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent relative transition-colors",
-                    errorCount > 0 && "text-[var(--color-status-error)]"
+                    errorCount > 0 && "text-status-error"
                   )}
                   aria-label={`Problems: ${errorCount} error${errorCount !== 1 ? "s" : ""}`}
                 >
                   <AlertCircle />
                   {errorCount > 0 && (
-                    <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-[var(--color-status-error)] rounded-full" />
+                    <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-status-error rounded-full" />
                   )}
                 </Button>
               </TooltipTrigger>

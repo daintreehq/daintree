@@ -87,7 +87,7 @@ export function IssueSelector({
         >
           {selectedIssue ? (
             <span className="flex items-center gap-2 truncate">
-              <CircleDot className="w-3 h-3 text-green-400 shrink-0" />
+              <CircleDot className="w-3 h-3 text-status-success shrink-0" />
               <span className="truncate">
                 #{selectedIssue.number} {selectedIssue.title}
               </span>
@@ -159,7 +159,7 @@ export function IssueSelector({
                   selectedIssue?.number === issue.number && "bg-canopy-border"
                 )}
               >
-                <CircleDot className="w-3 h-3 text-green-400 shrink-0" />
+                <CircleDot className="w-3 h-3 text-status-success shrink-0" />
                 <span className="truncate flex-1">
                   #{issue.number} {issue.title}
                 </span>

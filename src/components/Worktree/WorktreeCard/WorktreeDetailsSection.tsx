@@ -112,7 +112,7 @@ export function WorktreeDetailsSection({
                     (worktree.worktreeChanges.deletions ?? 0) > 0) && (
                     <span className="flex items-center gap-0.5">
                       {(worktree.worktreeChanges.insertions ?? 0) > 0 && (
-                        <span className="text-[var(--color-status-success)]">
+                        <span className="text-status-success">
                           +{worktree.worktreeChanges.insertions}
                         </span>
                       )}
@@ -121,7 +121,7 @@ export function WorktreeDetailsSection({
                           <span className="text-canopy-text/30">/</span>
                         )}
                       {(worktree.worktreeChanges.deletions ?? 0) > 0 && (
-                        <span className="text-[var(--color-status-error)]">
+                        <span className="text-status-error">
                           -{worktree.worktreeChanges.deletions}
                         </span>
                       )}
@@ -131,9 +131,9 @@ export function WorktreeDetailsSection({
               ) : (
                 <span
                   className={cn(
-                    computedSubtitle.tone === "error" && "text-[var(--color-status-error)]",
-                    computedSubtitle.tone === "warning" && "text-[var(--color-status-warning)]",
-                    computedSubtitle.tone === "info" && "text-[var(--color-status-info)]",
+                    computedSubtitle.tone === "error" && "text-status-error",
+                    computedSubtitle.tone === "warning" && "text-status-warning",
+                    computedSubtitle.tone === "info" && "text-status-info",
                     computedSubtitle.tone === "muted" && "text-canopy-text/50"
                   )}
                 >

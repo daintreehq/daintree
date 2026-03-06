@@ -22,19 +22,19 @@ const LEVEL_COLORS: Record<LogLevel, { bg: string; text: string; border: string 
     border: "border-canopy-border/30",
   },
   info: {
-    bg: "bg-blue-500/20",
-    text: "text-[var(--color-status-info)]",
-    border: "border-blue-500/30",
+    bg: "bg-status-info/20",
+    text: "text-status-info",
+    border: "border-status-info/30",
   },
   warn: {
-    bg: "bg-yellow-500/20",
-    text: "text-[var(--color-status-warning)]",
-    border: "border-yellow-500/30",
+    bg: "bg-status-warning/20",
+    text: "text-status-warning",
+    border: "border-status-warning/30",
   },
   error: {
-    bg: "bg-red-500/20",
-    text: "text-[var(--color-status-error)]",
-    border: "border-red-500/30",
+    bg: "bg-status-error/20",
+    text: "text-status-error",
+    border: "border-status-error/30",
   },
 };
 
@@ -115,7 +115,7 @@ function LogEntryComponent({ entry, isExpanded, onToggle }: LogEntryProps) {
         </span>
 
         {entry.source && (
-          <span className="text-purple-400 text-xs font-mono shrink-0">[{entry.source}]</span>
+          <span className="text-github-merged text-xs font-mono shrink-0">[{entry.source}]</span>
         )}
 
         <span className="text-canopy-text text-xs font-mono break-words min-w-0 flex-1">

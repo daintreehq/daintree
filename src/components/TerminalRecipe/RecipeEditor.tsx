@@ -526,7 +526,7 @@ export function RecipeEditor({
         </div>
 
         {error && (
-          <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-[var(--radius-md)] text-[var(--color-status-error)] text-sm">
+          <div className="mb-4 p-3 bg-status-error/10 border border-status-error/30 rounded-[var(--radius-md)] text-status-error text-sm">
             {error}
           </div>
         )}

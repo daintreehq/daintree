@@ -4,9 +4,9 @@ import { StatusContainer, type StatusContainerConfig } from "./StatusContainer";
 
 const failedConfig: StatusContainerConfig = {
   icon: XCircle,
-  iconColor: "text-red-400",
-  badgeColor: "bg-red-400",
-  badgeTextColor: "text-red-950",
+  iconColor: "text-status-error",
+  badgeColor: "bg-status-error",
+  badgeTextColor: "text-canopy-bg",
   headerLabel: "Failed Sessions",
   buttonLabel: "Failed",
   statusAriaLabel: "Failed",

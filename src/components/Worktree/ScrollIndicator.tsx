@@ -23,9 +23,9 @@ export function ScrollIndicator({ direction, count, onClick }: ScrollIndicatorPr
         "flex items-center justify-center gap-1.5",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1",
         direction === "above" &&
-          "top-0 bg-gradient-to-b from-[var(--color-canopy-sidebar)] via-[var(--color-canopy-sidebar)]/80 to-transparent",
+          "top-0 bg-gradient-to-b from-canopy-sidebar via-canopy-sidebar/80 to-transparent",
         direction === "below" &&
-          "bottom-0 bg-gradient-to-t from-[var(--color-canopy-sidebar)] via-[var(--color-canopy-sidebar)]/80 to-transparent"
+          "bottom-0 bg-gradient-to-t from-canopy-sidebar via-canopy-sidebar/80 to-transparent"
       )}
     >
       <Icon className="w-3 h-3" />

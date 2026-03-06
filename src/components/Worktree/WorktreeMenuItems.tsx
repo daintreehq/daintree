@@ -165,7 +165,7 @@ export function WorktreeMenuItems({
             Open Terminal
           </C.Item>
           <C.Item onSelect={() => onLaunchAgent?.("browser")} disabled={!onLaunchAgent}>
-            <Globe className="w-3.5 h-3.5 mr-2 text-blue-400" />
+            <Globe className="w-3.5 h-3.5 mr-2 text-status-info" />
             Open Browser
           </C.Item>
         </C.SubContent>
@@ -225,7 +225,7 @@ export function WorktreeMenuItems({
           <C.Item
             onSelect={onEndAll}
             disabled={!hasSessions}
-            className="text-[var(--color-status-error)] focus:text-[var(--color-status-error)]"
+            className="text-status-error focus:text-status-error"
           >
             <X className="w-3.5 h-3.5 mr-2" />
             End All (Kill)
@@ -363,7 +363,7 @@ export function WorktreeMenuItems({
           <C.Separator />
           <C.Item
             onSelect={onDeleteWorktree}
-            className="text-[var(--color-status-error)] focus:text-[var(--color-status-error)]"
+            className="text-status-error focus:text-status-error"
           >
             <Trash2 className="w-3.5 h-3.5 mr-2" />
             Delete Worktree...

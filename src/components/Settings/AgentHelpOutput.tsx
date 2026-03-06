@@ -124,8 +124,8 @@ export function AgentHelpOutput({ agentId, agentName, usageUrl }: AgentHelpOutpu
     return (
       <div className="space-y-2">
         {hasError && (
-          <div className="px-3 py-2 rounded-[var(--radius-md)] bg-[var(--color-status-warning)]/10 border border-[var(--color-status-warning)]/20">
-            <p className="text-xs text-[var(--color-status-warning)]">
+          <div className="px-3 py-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
+            <p className="text-xs text-status-warning">
               {helpResult.timedOut
                 ? "Command timed out"
                 : `Command exited with code ${helpResult.exitCode}`}
@@ -216,8 +216,8 @@ export function AgentHelpOutput({ agentId, agentName, usageUrl }: AgentHelpOutpu
       )}
 
       {!isLoading && error && (
-        <div className="px-4 py-6 rounded-[var(--radius-md)] border border-[var(--color-status-error)]/20 bg-[var(--color-status-error)]/5 text-center">
-          <p className="text-sm text-[var(--color-status-error)]">{error}</p>
+        <div className="px-4 py-6 rounded-[var(--radius-md)] border border-status-error/20 bg-status-error/5 text-center">
+          <p className="text-sm text-status-error">{error}</p>
         </div>
       )}
 

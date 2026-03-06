@@ -9,25 +9,25 @@ const STATUS_CONFIG = {
     icon: CheckCircle2,
     containerClass:
       "bg-[color-mix(in_oklab,var(--color-status-success)_18%,transparent)] border-[color:color-mix(in_oklab,var(--color-status-success)_30%,transparent)] backdrop-blur-sm",
-    accentClass: "text-[var(--color-status-success)]",
+    accentClass: "text-status-success",
   },
   error: {
     icon: XCircle,
     containerClass:
       "bg-[color-mix(in_oklab,var(--color-status-error)_18%,transparent)] border-[color:color-mix(in_oklab,var(--color-status-error)_30%,transparent)] backdrop-blur-sm",
-    accentClass: "text-[var(--color-status-error)]",
+    accentClass: "text-status-error",
   },
   info: {
     icon: Info,
     containerClass:
       "bg-[color-mix(in_oklab,var(--color-status-info)_18%,transparent)] border-[color:color-mix(in_oklab,var(--color-status-info)_30%,transparent)] backdrop-blur-sm",
-    accentClass: "text-[var(--color-status-info)]",
+    accentClass: "text-status-info",
   },
   warning: {
     icon: AlertTriangle,
     containerClass:
       "bg-[color-mix(in_oklab,var(--color-status-warning)_18%,transparent)] border-[color:color-mix(in_oklab,var(--color-status-warning)_30%,transparent)] backdrop-blur-sm",
-    accentClass: "text-[var(--color-status-warning)]",
+    accentClass: "text-status-warning",
   },
 };
 

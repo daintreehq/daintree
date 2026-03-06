@@ -110,7 +110,7 @@ function BuilderTextField({
           "bg-canopy-bg border text-canopy-text placeholder:text-canopy-text/40",
           "focus:outline-none focus:ring-1",
           error
-            ? "border-[var(--color-status-error)] focus:border-[var(--color-status-error)] focus:ring-[var(--color-status-error)]"
+            ? "border-status-error focus:border-status-error focus:ring-status-error"
             : "border-canopy-border focus:border-canopy-accent focus:ring-canopy-accent"
         )}
       />
@@ -122,7 +122,7 @@ function BuilderTextField({
       {error && (
         <p
           id={errorId}
-          className="text-xs text-[var(--color-status-error)] flex items-center gap-1"
+          className="text-xs text-status-error flex items-center gap-1"
           role="alert"
         >
           <AlertCircle className="h-3 w-3" />
@@ -166,7 +166,7 @@ function BuilderTextareaField({
           "bg-canopy-bg border text-canopy-text placeholder:text-canopy-text/40",
           "focus:outline-none focus:ring-1",
           error
-            ? "border-[var(--color-status-error)] focus:border-[var(--color-status-error)] focus:ring-[var(--color-status-error)]"
+            ? "border-status-error focus:border-status-error focus:ring-status-error"
             : "border-canopy-border focus:border-canopy-accent focus:ring-canopy-accent"
         )}
       />
@@ -178,7 +178,7 @@ function BuilderTextareaField({
       {error && (
         <p
           id={errorId}
-          className="text-xs text-[var(--color-status-error)] flex items-center gap-1"
+          className="text-xs text-status-error flex items-center gap-1"
           role="alert"
         >
           <AlertCircle className="h-3 w-3" />
@@ -220,7 +220,7 @@ function BuilderSelectField({
           "bg-canopy-bg border text-canopy-text",
           "focus:outline-none focus:ring-1",
           error
-            ? "border-[var(--color-status-error)] focus:border-[var(--color-status-error)] focus:ring-[var(--color-status-error)]"
+            ? "border-status-error focus:border-status-error focus:ring-status-error"
             : "border-canopy-border focus:border-canopy-accent focus:ring-canopy-accent"
         )}
       >
@@ -239,7 +239,7 @@ function BuilderSelectField({
       {error && (
         <p
           id={errorId}
-          className="text-xs text-[var(--color-status-error)] flex items-center gap-1"
+          className="text-xs text-status-error flex items-center gap-1"
           role="alert"
         >
           <AlertCircle className="h-3 w-3" />
@@ -460,7 +460,7 @@ export function CommandBuilder({
       <AppDialog.Body>
         {showSuccessState ? (
           <div className="flex flex-col items-center justify-center py-8 space-y-4">
-            <CheckCircle className="h-12 w-12 text-[var(--color-status-success)]" />
+            <CheckCircle className="h-12 w-12 text-status-success" />
             <div className="text-center">
               <h3 className="text-lg font-medium text-canopy-text">Command Executed</h3>
               <p className="text-sm text-canopy-text/70 mt-1">
@@ -470,7 +470,7 @@ export function CommandBuilder({
           </div>
         ) : hasEmptySteps ? (
           <div className="flex flex-col items-center justify-center py-8 space-y-4">
-            <AlertCircle className="h-12 w-12 text-[var(--color-status-error)]" />
+            <AlertCircle className="h-12 w-12 text-status-error" />
             <div className="text-center">
               <h3 className="text-lg font-medium text-canopy-text">Configuration Error</h3>
               <p className="text-sm text-canopy-text/70 mt-1">
@@ -504,9 +504,9 @@ export function CommandBuilder({
             )}
 
             {executionError && (
-              <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-[var(--color-status-error)]/10 border border-[var(--color-status-error)]/30">
-                <AlertCircle className="h-4 w-4 text-[var(--color-status-error)] shrink-0 mt-0.5" />
-                <div className="text-sm text-[var(--color-status-error)]">{executionError}</div>
+              <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/30">
+                <AlertCircle className="h-4 w-4 text-status-error shrink-0 mt-0.5" />
+                <div className="text-sm text-status-error">{executionError}</div>
               </div>
             )}
           </div>

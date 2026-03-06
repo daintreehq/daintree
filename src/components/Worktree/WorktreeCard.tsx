@@ -438,7 +438,7 @@ export function WorktreeCard({
       {isComplete && (
         <div
           className={cn(
-            "absolute w-3 h-3 bg-[var(--color-status-success)]/60 pointer-events-none z-10",
+            "absolute w-3 h-3 bg-status-success/60 pointer-events-none z-10",
             variant === "sidebar" ? "top-0 left-[1px]" : "top-0 left-0 rounded-tl-lg"
           )}
           style={{ clipPath: "polygon(0 0, 100% 0, 0 100%)" }}

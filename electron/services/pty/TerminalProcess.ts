@@ -278,9 +278,7 @@ export class TerminalProcess {
       normalizedAgentId ? (AGENT_ENV_EXCLUSIONS[normalizedAgentId] ?? []) : []
     );
     const filteredAgentEnv = Object.fromEntries(
-      Object.entries(agentEnv).filter(
-        ([key]) => !exclusions.has(key) && !key.startsWith("CANOPY_")
-      )
+      Object.entries(agentEnv).filter(([key]) => !exclusions.has(key) && !key.startsWith("CANOPY_"))
     ) as Record<string, string>;
     const env: Record<string, string> = this.isAgentTerminal
       ? { ...buildNonInteractiveEnv(mergedEnv, shell, agentId), ...filteredAgentEnv }

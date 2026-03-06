@@ -963,7 +963,7 @@ export function NewWorktreeDialog({
                 {branchWasAutoResolved && (
                   <p
                     id="branch-resolved-hint"
-                    className="text-xs text-green-500 flex items-center gap-1.5 mt-1"
+                    className="text-xs text-status-success flex items-center gap-1.5 mt-1"
                     role="status"
                     aria-live="polite"
                   >
@@ -1038,7 +1038,7 @@ export function NewWorktreeDialog({
                 </div>
                 {pathWasAutoResolved && (
                   <p
-                    className="text-xs text-green-500 flex items-center gap-1.5 mt-1"
+                    className="text-xs text-status-success flex items-center gap-1.5 mt-1"
                     role="status"
                     aria-live="polite"
                   >
@@ -1206,9 +1206,9 @@ export function NewWorktreeDialog({
               )}
 
               {error && (
-                <div className="flex items-start gap-2 p-3 bg-red-500/10 border border-red-500/20 rounded-[var(--radius-md)]">
-                  <AlertCircle className="w-4 h-4 text-[var(--color-status-error)] mt-0.5 flex-shrink-0" />
-                  <p className="text-sm text-[var(--color-status-error)]">{error}</p>
+                <div className="flex items-start gap-2 p-3 bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)]">
+                  <AlertCircle className="w-4 h-4 text-status-error mt-0.5 flex-shrink-0" />
+                  <p className="text-sm text-status-error">{error}</p>
                 </div>
               )}
             </div>

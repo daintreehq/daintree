@@ -722,7 +722,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
               )}
               {error && (
                 <div
-                  className="text-sm text-[var(--color-status-error)] bg-red-900/20 border border-red-900/30 rounded p-3 mb-4"
+                  className="text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3 mb-4"
                   role="alert"
                 >
                   Failed to load settings: {error}
@@ -730,7 +730,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
               )}
               {saveError && (
                 <div
-                  className="text-sm text-[var(--color-status-error)] bg-red-900/20 border border-red-900/30 rounded p-3 mb-4"
+                  className="text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3 mb-4"
                   role="alert"
                 >
                   {saveError}
@@ -901,7 +901,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                       )}
 
                       {iconError && (
-                        <div className="mt-2 text-xs text-[var(--color-status-error)] bg-red-900/20 border border-red-900/30 rounded p-2">
+                        <div className="mt-2 text-xs text-status-error bg-status-error/10 border border-status-error/20 rounded p-2">
                           {iconError}
                         </div>
                       )}
@@ -952,10 +952,10 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                                   setExcludedPaths((prev) => prev.filter((_, i) => i !== index));
                                   setTestConfigResult(null);
                                 }}
-                                className="p-1 rounded hover:bg-red-900/30 transition-colors"
+                                className="p-1 rounded hover:bg-status-error/15 transition-colors"
                                 aria-label="Delete excluded path"
                               >
-                                <Trash2 className="h-4 w-4 text-[var(--color-status-error)]" />
+                                <Trash2 className="h-4 w-4 text-status-error" />
                               </button>
                             </div>
                           ))
@@ -1128,10 +1128,10 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                                     }));
                                     setTestConfigResult(null);
                                   }}
-                                  className="p-1 rounded hover:bg-red-900/30 transition-colors"
+                                  className="p-1 rounded hover:bg-status-error/15 transition-colors"
                                   aria-label="Delete pattern"
                                 >
-                                  <Trash2 className="h-4 w-4 text-[var(--color-status-error)]" />
+                                  <Trash2 className="h-4 w-4 text-status-error" />
                                 </button>
                               </div>
                             ))}
@@ -1192,10 +1192,10 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                                     }));
                                     setTestConfigResult(null);
                                   }}
-                                  className="p-1 rounded hover:bg-red-900/30 transition-colors"
+                                  className="p-1 rounded hover:bg-status-error/15 transition-colors"
                                   aria-label="Delete pattern"
                                 >
-                                  <Trash2 className="h-4 w-4 text-[var(--color-status-error)]" />
+                                  <Trash2 className="h-4 w-4 text-status-error" />
                                 </button>
                               </div>
                             ))}
@@ -1251,21 +1251,21 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                               className={cn(
                                 "mt-4 p-4 rounded-[var(--radius-md)] border",
                                 testConfigResult.error
-                                  ? "bg-red-900/10 border-red-900/30"
+                                  ? "bg-status-error/5 border-status-error/15"
                                   : "bg-canopy-bg border-canopy-border"
                               )}
                             >
                               {testConfigResult.error ? (
                                 <div className="flex items-start gap-2">
-                                  <AlertTriangle className="h-4 w-4 text-[var(--color-status-error)] mt-0.5 shrink-0" />
-                                  <p className="text-sm text-[var(--color-status-error)]">
+                                  <AlertTriangle className="h-4 w-4 text-status-error mt-0.5 shrink-0" />
+                                  <p className="text-sm text-status-error">
                                     {testConfigResult.error}
                                   </p>
                                 </div>
                               ) : (
                                 <div className="space-y-3">
                                   <div className="flex items-center gap-2">
-                                    <Check className="h-4 w-4 text-[var(--color-status-success)]" />
+                                    <Check className="h-4 w-4 text-status-success" />
                                     <span className="text-sm font-medium text-canopy-text">
                                       {testConfigResult.includedFiles} files would be included
                                     </span>
@@ -1314,20 +1314,20 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
 
                       {settings?.insecureEnvironmentVariables &&
                         settings.insecureEnvironmentVariables.length > 0 && (
-                          <div className="mb-4 p-3 bg-yellow-900/20 border border-yellow-600/30 rounded-[var(--radius-md)] flex items-start gap-2">
-                            <ShieldAlert className="h-4 w-4 text-yellow-500 mt-0.5 flex-shrink-0" />
+                          <div className="mb-4 p-3 bg-status-warning/10 border border-status-warning/20 rounded-[var(--radius-md)] flex items-start gap-2">
+                            <ShieldAlert className="h-4 w-4 text-status-warning mt-0.5 flex-shrink-0" />
                             <div className="flex-1 text-xs">
-                              <p className="text-yellow-200 font-semibold mb-1">
+                              <p className="text-status-warning font-semibold mb-1">
                                 Insecure sensitive variables detected
                               </p>
-                              <p className="text-yellow-300/80 mb-2">
+                              <p className="text-status-warning/80 mb-2">
                                 The following variables contain sensitive keywords but are stored in
                                 plaintext:{" "}
                                 <span className="font-mono">
                                   {settings.insecureEnvironmentVariables.join(", ")}
                                 </span>
                               </p>
-                              <p className="text-yellow-300/80">
+                              <p className="text-status-warning/80">
                                 Click Save to automatically move them to secure storage.
                               </p>
                             </div>
@@ -1355,13 +1355,13 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                               >
                                 {isSecured && (
                                   <Lock
-                                    className="h-3.5 w-3.5 text-green-500/60 flex-shrink-0"
+                                    className="h-3.5 w-3.5 text-status-success/60 flex-shrink-0"
                                     aria-label="Stored securely"
                                   />
                                 )}
                                 {isInsecure && (
                                   <ShieldAlert
-                                    className="h-3.5 w-3.5 text-yellow-500/60 flex-shrink-0"
+                                    className="h-3.5 w-3.5 text-status-warning/60 flex-shrink-0"
                                     aria-label="Stored in plaintext"
                                   />
                                 )}
@@ -1441,10 +1441,10 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                                       return next;
                                     });
                                   }}
-                                  className="p-1 rounded hover:bg-red-900/30 transition-colors"
+                                  className="p-1 rounded hover:bg-status-error/15 transition-colors"
                                   aria-label="Delete environment variable"
                                 >
-                                  <Trash2 className="h-4 w-4 text-[var(--color-status-error)]" />
+                                  <Trash2 className="h-4 w-4 text-status-error" />
                                 </button>
                               </div>
                             );
@@ -1578,10 +1578,10 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                                     onClick={() => {
                                       setRunCommands((prev) => prev.filter((_, i) => i !== index));
                                     }}
-                                    className="p-1 rounded hover:bg-red-900/30 transition-colors"
+                                    className="p-1 rounded hover:bg-status-error/15 transition-colors"
                                     aria-label="Delete run command"
                                   >
-                                    <Trash2 className="h-4 w-4 text-[var(--color-status-error)]" />
+                                    <Trash2 className="h-4 w-4 text-status-error" />
                                   </button>
                                 </div>
                               </div>
@@ -1677,10 +1677,10 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                                 )}
 
                                 {recipeNotFound && (
-                                  <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-yellow-500/10 border border-yellow-500/20">
-                                    <AlertTriangle className="h-4 w-4 text-yellow-500 mt-0.5 shrink-0" />
+                                  <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
+                                    <AlertTriangle className="h-4 w-4 text-status-warning mt-0.5 shrink-0" />
                                     <div>
-                                      <p className="text-sm text-yellow-500">
+                                      <p className="text-sm text-status-warning">
                                         Selected recipe no longer exists
                                       </p>
                                       <p className="text-xs text-canopy-text/60 mt-1">
@@ -1829,7 +1829,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                                           {recipe.terminals.length !== 1 ? "s" : ""}
                                         </span>
                                         {recipe.showInEmptyState && (
-                                          <span className="text-[11px] text-[var(--color-status-info)] bg-[var(--color-status-info)]/10 px-1.5 py-0.5 rounded font-medium shrink-0">
+                                          <span className="text-[11px] text-status-info bg-status-info/10 px-1.5 py-0.5 rounded font-medium shrink-0">
                                             Empty State
                                           </span>
                                         )}
@@ -1876,7 +1876,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                                               }
                                             >
                                               {exported ? (
-                                                <Check className="text-[var(--color-status-success)]" />
+                                                <Check className="text-status-success" />
                                               ) : (
                                                 <Download />
                                               )}
@@ -1897,7 +1897,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                                               className="h-7 px-2"
                                               aria-label={`Delete recipe ${recipe.name}`}
                                             >
-                                              <Trash2 className="text-[var(--color-status-error)]" />
+                                              <Trash2 className="text-status-error" />
                                             </Button>
                                           </TooltipTrigger>
                                           <TooltipContent side="bottom">
@@ -1914,7 +1914,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                         )}
                         {exportError && (
                           <div
-                            className="text-sm text-[var(--color-status-error)] bg-red-900/20 border border-red-900/30 rounded p-3"
+                            className="text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3"
                             role="alert"
                           >
                             {exportError}
@@ -2011,7 +2011,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
             spellCheck={false}
           />
           {importError && (
-            <div className="mt-3 text-sm text-[var(--color-status-error)] bg-red-900/20 border border-red-900/30 rounded p-3">
+            <div className="mt-3 text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3">
               {importError}
             </div>
           )}

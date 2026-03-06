@@ -317,20 +317,20 @@ export function WorktreeOverviewModal({
                 aria-label="Agent activity statistics"
               >
                 {aggregateStats.workingCount > 0 && (
-                  <span className="flex items-center gap-1 text-xs text-emerald-400">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 motion-safe:animate-pulse motion-reduce:bg-emerald-500" />
+                  <span className="flex items-center gap-1 text-xs text-status-success">
+                    <span className="w-1.5 h-1.5 rounded-full bg-status-success motion-safe:animate-pulse" />
                     {aggregateStats.workingCount} working
                   </span>
                 )}
                 {aggregateStats.waitingCount > 0 && (
-                  <span className="flex items-center gap-1 text-xs text-amber-400">
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                  <span className="flex items-center gap-1 text-xs text-status-warning">
+                    <span className="w-1.5 h-1.5 rounded-full bg-status-warning" />
                     {aggregateStats.waitingCount} waiting
                   </span>
                 )}
                 {aggregateStats.failedCount > 0 && (
-                  <span className="flex items-center gap-1 text-xs text-red-400">
-                    <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
+                  <span className="flex items-center gap-1 text-xs text-status-error">
+                    <span className="w-1.5 h-1.5 rounded-full bg-status-error" />
                     {aggregateStats.failedCount} failed
                   </span>
                 )}

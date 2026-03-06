@@ -91,7 +91,7 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
             <label className="block text-sm font-medium text-canopy-text/70 mb-1">
               Current (invalid):
             </label>
-            <code className="block p-2 bg-[color-mix(in_oklab,var(--color-status-error)_10%,transparent)] border border-[var(--color-status-error)]/30 rounded text-sm text-[var(--color-status-error)] font-mono truncate">
+            <code className="block p-2 bg-[color-mix(in_oklab,var(--color-status-error)_10%,transparent)] border border-status-error/30 rounded text-sm text-status-error font-mono truncate">
               {currentCwd}
             </code>
           </div>
@@ -121,7 +121,7 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
             {validationError && (
               <div
                 id="cwd-error"
-                className="flex items-center gap-1 mt-1.5 text-sm text-[var(--color-status-error)]"
+                className="flex items-center gap-1 mt-1.5 text-sm text-status-error"
                 role="alert"
               >
                 <AlertCircle className="w-3.5 h-3.5" aria-hidden="true" />

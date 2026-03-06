@@ -296,10 +296,10 @@ export function ProjectOnboardingWizard({
                               onClick={() =>
                                 setRunCommands((prev) => prev.filter((_, i) => i !== index))
                               }
-                              className="p-1 rounded hover:bg-red-900/30 transition-colors"
+                              className="p-1 rounded hover:bg-status-error/15 transition-colors"
                               aria-label="Delete command"
                             >
-                              <Trash2 className="h-3.5 w-3.5 text-[var(--color-status-error)]" />
+                              <Trash2 className="h-3.5 w-3.5 text-status-error" />
                             </button>
                           </div>
                         </div>
@@ -328,7 +328,7 @@ export function ProjectOnboardingWizard({
 
       {saveError && (
         <div
-          className="shrink-0 px-6 py-3 border-t border-canopy-border text-sm text-[var(--color-status-error)] bg-red-900/20"
+          className="shrink-0 px-6 py-3 border-t border-canopy-border text-sm text-status-error bg-status-error/10"
           role="alert"
         >
           {saveError}

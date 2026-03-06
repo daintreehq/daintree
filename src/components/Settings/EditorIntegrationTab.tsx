@@ -189,7 +189,7 @@ export function EditorIntegrationTab() {
                 {discoveredEditors.map((d) => (
                   <div key={d.id} className="flex items-center gap-2 text-xs text-canopy-text/60">
                     {d.available ? (
-                      <CheckCircle className="w-3.5 h-3.5 text-green-400 shrink-0" />
+                      <CheckCircle className="w-3.5 h-3.5 text-status-success shrink-0" />
                     ) : (
                       <AlertCircle className="w-3.5 h-3.5 text-canopy-text/30 shrink-0" />
                     )}
@@ -256,18 +256,18 @@ export function EditorIntegrationTab() {
             </button>
 
             {testResult === "ok" && (
-              <span className="flex items-center gap-1 text-xs text-green-400">
+              <span className="flex items-center gap-1 text-xs text-status-success">
                 <CheckCircle className="w-3.5 h-3.5" /> Opened successfully
               </span>
             )}
             {testResult === "error" && (
-              <span className="flex items-center gap-1 text-xs text-[var(--color-status-error)]">
+              <span className="flex items-center gap-1 text-xs text-status-error">
                 <AlertCircle className="w-3.5 h-3.5" /> Failed to open
               </span>
             )}
           </div>
 
-          {saveError && <p className="text-xs text-[var(--color-status-error)]">{saveError}</p>}
+          {saveError && <p className="text-xs text-status-error">{saveError}</p>}
 
           {preferredEditor && (
             <p className="text-xs text-canopy-text/40">

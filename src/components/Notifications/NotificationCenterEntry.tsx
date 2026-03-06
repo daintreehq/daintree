@@ -3,10 +3,10 @@ import { cn } from "@/lib/utils";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 
 const TYPE_CONFIG = {
-  success: { icon: CheckCircle2, className: "text-[var(--color-status-success)]" },
-  error: { icon: XCircle, className: "text-[var(--color-status-error)]" },
-  info: { icon: Info, className: "text-[var(--color-status-info)]" },
-  warning: { icon: AlertTriangle, className: "text-[var(--color-status-warning)]" },
+  success: { icon: CheckCircle2, className: "text-status-success" },
+  error: { icon: XCircle, className: "text-status-error" },
+  info: { icon: Info, className: "text-status-info" },
+  warning: { icon: AlertTriangle, className: "text-status-warning" },
 };
 
 function formatRelativeTime(timestamp: number): string {

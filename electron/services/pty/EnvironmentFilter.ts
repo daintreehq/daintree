@@ -92,9 +92,7 @@ export function isSensitiveVar(name: string): boolean {
  * Filter an environment object, removing sensitive variables and CANOPY_* vars.
  * Undefined values are also stripped (node-pty requires Record<string, string>).
  */
-export function filterEnvironment(
-  env: Record<string, string | undefined>
-): Record<string, string> {
+export function filterEnvironment(env: Record<string, string | undefined>): Record<string, string> {
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
     if (value === undefined) continue;

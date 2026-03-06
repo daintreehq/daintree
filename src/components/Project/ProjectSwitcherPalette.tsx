@@ -99,7 +99,7 @@ function ProjectListItem({
 
           {project.isBackground && !project.isActive && (
             <Circle
-              className="h-2 w-2 fill-green-500 text-green-500 shrink-0"
+              className="h-2 w-2 fill-status-success text-status-success shrink-0"
               aria-label="Running in background"
             />
           )}
@@ -129,7 +129,7 @@ function ProjectListItem({
                           }}
                           className={cn(
                             "p-0.5 rounded transition-colors cursor-pointer",
-                            "text-[var(--color-status-error)] hover:bg-red-500/10",
+                            "text-status-error hover:bg-status-error/10",
                             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
                           )}
                           aria-label="Stop project"
@@ -740,11 +740,11 @@ export function ProjectSwitcherPalette({
             </div>
             {removeConfirmProject.isActive
               ? hasRunningProcesses && (
-                  <div className="rounded-[var(--radius-md)] bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs text-amber-200">
+                  <div className="rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20 px-3 py-2 text-xs text-status-warning">
                     <div className="font-medium">
                       Warning: All running processes will be terminated
                     </div>
-                    <div className="mt-1 text-amber-200/80">
+                    <div className="mt-1 text-status-warning/80">
                       {removeConfirmProject.processCount > 0 && (
                         <div>• {removeConfirmProject.processCount} running process(es)</div>
                       )}
@@ -758,9 +758,9 @@ export function ProjectSwitcherPalette({
                   </div>
                 )
               : hasRunningProcesses && (
-                  <div className="rounded-[var(--radius-md)] bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs text-amber-200">
+                  <div className="rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20 px-3 py-2 text-xs text-status-warning">
                     <div className="font-medium">Warning: Active sessions detected</div>
-                    <div className="mt-1 text-amber-200/80">
+                    <div className="mt-1 text-status-warning/80">
                       {removeConfirmProject.processCount > 0 && (
                         <div>• {removeConfirmProject.processCount} running process(es)</div>
                       )}

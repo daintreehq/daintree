@@ -51,12 +51,12 @@ function TerminalHeaderContentComponent({
 
     const chipStyle =
       agentState === "working"
-        ? "bg-[color-mix(in_oklab,var(--color-state-working)_15%,transparent)] border-[var(--color-state-working)]/40"
+        ? "bg-[color-mix(in_oklab,var(--color-state-working)_15%,transparent)] border-state-working/40"
         : agentState === "waiting"
-          ? "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-[var(--color-state-waiting)]/40"
+          ? "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-state-waiting/40"
           : agentState === "running"
-            ? "bg-[color-mix(in_oklab,var(--color-status-info)_15%,transparent)] border-[var(--color-status-info)]/40"
-            : "bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] border-[var(--color-status-error)]/40";
+            ? "bg-[color-mix(in_oklab,var(--color-status-info)_15%,transparent)] border-status-info/40"
+            : "bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] border-status-error/40";
 
     // Build tooltip - show activity headline or just the agent state
     const tooltip = activity?.headline?.trim() || `Agent ${agentState}`;
@@ -110,7 +110,7 @@ function TerminalHeaderContentComponent({
       {/* Exit code badge */}
       {isExited && (
         <span
-          className="text-xs font-mono text-[var(--color-status-error)] ml-1"
+          className="text-xs font-mono text-status-error ml-1"
           role="status"
           aria-live="polite"
         >
@@ -145,7 +145,7 @@ function TerminalHeaderContentComponent({
           <Tooltip>
             <TooltipTrigger asChild>
               <div
-                className="flex items-center gap-1 text-xs font-sans bg-[var(--color-status-warning)]/15 text-[var(--color-status-warning)] px-1.5 py-0.5 rounded ml-1"
+                className="flex items-center gap-1 text-xs font-sans bg-status-warning/15 text-status-warning px-1.5 py-0.5 rounded ml-1"
                 role="status"
                 aria-live="polite"
               >
@@ -166,7 +166,7 @@ function TerminalHeaderContentComponent({
           <Tooltip>
             <TooltipTrigger asChild>
               <div
-                className="flex items-center gap-1 text-xs font-sans bg-[var(--color-status-warning)]/15 text-[var(--color-status-warning)] px-1.5 py-0.5 rounded ml-1"
+                className="flex items-center gap-1 text-xs font-sans bg-status-warning/15 text-status-warning px-1.5 py-0.5 rounded ml-1"
                 role="status"
                 aria-live="polite"
               >

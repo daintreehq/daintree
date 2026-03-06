@@ -123,7 +123,7 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
           </AppDialog.Header>
           <AppDialog.Body>
             <div className="flex flex-col items-center justify-center py-8 space-y-4">
-              <AlertCircle className="h-12 w-12 text-[var(--color-status-error)]" />
+              <AlertCircle className="h-12 w-12 text-status-error" />
               <div className="text-center">
                 <h3 className="text-lg font-medium text-canopy-text">Failed to Load Command</h3>
                 <p className="text-sm text-canopy-text/70 mt-1">{builderLoadError}</p>

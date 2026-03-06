@@ -135,7 +135,7 @@ export function AgentSelectionStep({ isOpen, onContinue, onSkip }: AgentSelectio
                       )}
                     </div>
                     {isInstalled ? (
-                      <span className="text-[11px] text-emerald-400 font-medium shrink-0">
+                      <span className="text-[11px] text-status-success font-medium shrink-0">
                         Installed
                       </span>
                     ) : (

@@ -4,9 +4,9 @@ import { StatusContainer, type StatusContainerConfig } from "./StatusContainer";
 
 const waitingConfig: StatusContainerConfig = {
   icon: AlertCircle,
-  iconColor: "text-amber-400",
-  badgeColor: "bg-amber-400",
-  badgeTextColor: "text-amber-950",
+  iconColor: "text-status-warning",
+  badgeColor: "bg-status-warning",
+  badgeTextColor: "text-canopy-bg",
   headerLabel: "Waiting For Input",
   buttonLabel: "Waiting",
   statusAriaLabel: "Waiting for input",

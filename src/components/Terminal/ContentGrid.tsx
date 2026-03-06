@@ -257,7 +257,7 @@ function EmptyState({
 
         {!hasActiveWorktree && (
           <div
-            className="flex items-center gap-2 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded px-3 py-2 mb-6 max-w-md text-center"
+            className="flex items-center gap-2 text-xs text-status-warning bg-status-warning/10 border border-status-warning/20 rounded px-3 py-2 mb-6 max-w-md text-center"
             role="status"
             aria-live="polite"
           >

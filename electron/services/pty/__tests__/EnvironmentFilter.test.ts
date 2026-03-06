@@ -1,9 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  isSensitiveVar,
-  filterEnvironment,
-  injectCanopyMetadata,
-} from "../EnvironmentFilter.js";
+import { isSensitiveVar, filterEnvironment, injectCanopyMetadata } from "../EnvironmentFilter.js";
 
 describe("isSensitiveVar", () => {
   describe("exact blocklist", () => {

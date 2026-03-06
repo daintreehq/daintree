@@ -16,15 +16,15 @@ interface CrossWorktreeDiffProps {
 function statusLabel(status: string): { label: string; className: string } {
   switch (status) {
     case "A":
-      return { label: "A", className: "text-emerald-400" };
+      return { label: "A", className: "text-status-success" };
     case "D":
-      return { label: "D", className: "text-red-400" };
+      return { label: "D", className: "text-status-error" };
     case "M":
-      return { label: "M", className: "text-amber-400" };
+      return { label: "M", className: "text-status-warning" };
     case "R":
-      return { label: "R", className: "text-blue-400" };
+      return { label: "R", className: "text-status-info" };
     case "C":
-      return { label: "C", className: "text-purple-400" };
+      return { label: "C", className: "text-github-merged" };
     default:
       return { label: status, className: "text-neutral-400" };
   }
@@ -224,7 +224,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
                 </div>
               )}
               {error && (
-                <div className="flex items-start gap-2 p-4 text-red-400 text-xs">
+                <div className="flex items-start gap-2 p-4 text-status-error text-xs">
                   <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                   <span>{error}</span>
                 </div>
@@ -278,7 +278,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
               </div>
             )}
             {selectedFile && !fileDiffLoading && fileDiffError && (
-              <div className="flex items-center justify-center gap-2 h-full text-red-400 text-sm">
+              <div className="flex items-center justify-center gap-2 h-full text-status-error text-sm">
                 <AlertCircle className="w-4 h-4" />
                 Failed to load diff
               </div>

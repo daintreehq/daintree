@@ -56,7 +56,11 @@ export function EventTimeline({
 
   const getCategoryStyle = (category: EventCategory) => {
     const style = EVENT_CATEGORY_STYLES[category];
-    if (!style) return { label: "???", color: "bg-canopy-border/20 text-canopy-text/60 border-canopy-border/30" };
+    if (!style)
+      return {
+        label: "???",
+        color: "bg-canopy-border/20 text-canopy-text/60 border-canopy-border/30",
+      };
     return { label: style.shortLabel, color: style.color };
   };
 

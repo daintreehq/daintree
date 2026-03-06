@@ -401,8 +401,8 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                           className={cn(
                             "p-1.5 rounded transition-colors",
                             isDisabled
-                              ? "text-red-500 hover:bg-red-900/30"
-                              : "text-green-500 hover:bg-green-900/30"
+                              ? "text-status-error hover:bg-status-error/10"
+                              : "text-status-success hover:bg-status-success/10"
                           )}
                           aria-label={
                             isDisabled ? "Command disabled for this project" : "Command enabled"
@@ -474,7 +474,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                                   className="text-xs font-medium text-canopy-text/80"
                                 >
                                   {arg.name}
-                                  {arg.required && <span className="text-red-500 ml-1">*</span>}
+                                  {arg.required && <span className="text-status-error ml-1">*</span>}
                                 </label>
                                 {hasDefaultValue && (
                                   <span className="text-[10px] text-canopy-accent bg-canopy-accent/10 px-1.5 py-0.5 rounded">
@@ -599,7 +599,7 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
           className={cn(
             "w-full bg-canopy-sidebar border rounded px-2 py-1.5 text-sm text-canopy-text font-mono focus:outline-none focus:ring-1 min-h-[120px] resize-y",
             validation && !validation.valid
-              ? "border-red-500/50 focus:border-red-500 focus:ring-red-500/30"
+              ? "border-status-error/50 focus:border-status-error focus:ring-status-error/30"
               : "border-canopy-border focus:border-canopy-accent focus:ring-canopy-accent/30"
           )}
           placeholder={`Example: Work on issue {issueNumber}...\n\nUse {variableName} to include argument values.`}
@@ -607,7 +607,7 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
       </div>
 
       {validation && !validation.valid && (
-        <div className="flex items-start gap-2 text-red-400 bg-red-900/20 rounded-md px-3 py-2">
+        <div className="flex items-start gap-2 text-status-error bg-status-error/10 rounded-md px-3 py-2">
           <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
           <p className="text-xs">{validation.error}</p>
         </div>
