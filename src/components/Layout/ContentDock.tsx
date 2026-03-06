@@ -182,7 +182,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
           className={cn(
             "flex items-center gap-[var(--dock-gap)] overflow-x-auto flex-1 min-h-[var(--dock-item-height)] no-scrollbar scroll-smooth px-1",
             isOver &&
-              "bg-white/[0.03] ring-2 ring-canopy-accent/30 ring-inset rounded-[var(--radius-md)]"
+              "bg-overlay-soft ring-2 ring-canopy-accent/30 ring-inset rounded-[var(--radius-md)]"
           )}
         >
           <SortableContext

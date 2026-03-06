@@ -447,8 +447,8 @@ function NavButton({ active, onClick, icon, children }: NavButtonProps) {
         "relative text-left px-3 py-2 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2 w-full",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
         active
-          ? "bg-white/[0.03] text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
-          : "text-canopy-text/60 hover:bg-white/[0.03] hover:text-canopy-text"
+          ? "bg-overlay-soft text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+          : "text-canopy-text/60 hover:bg-overlay-soft hover:text-canopy-text"
       )}
     >
       {icon}
@@ -498,7 +498,7 @@ function SearchResults({ results, query, onResultClick }: SearchResultsProps) {
           onClick={() => onResultClick(result.tab)}
           className={cn(
             "w-full text-left p-3 rounded-[var(--radius-md)] border border-transparent transition-all",
-            "hover:bg-white/[0.03] hover:border-canopy-border",
+            "hover:bg-overlay-soft hover:border-canopy-border",
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
           )}
         >

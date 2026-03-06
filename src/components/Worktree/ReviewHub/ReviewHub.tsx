@@ -317,7 +317,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
 
                 {/* Staged section */}
                 <div className="border-b border-divider">
-                  <div className="flex items-center justify-between px-4 py-2 bg-white/[0.02]">
+                  <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle">
                     <span className="text-[11px] font-semibold uppercase tracking-wider text-canopy-text/60">
                       Staged
                       <span className="ml-1.5 tabular-nums bg-white/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal">
@@ -357,7 +357,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
 
                 {/* Unstaged section */}
                 <div>
-                  <div className="flex items-center justify-between px-4 py-2 bg-white/[0.02]">
+                  <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle">
                     <span className="text-[11px] font-semibold uppercase tracking-wider text-canopy-text/60">
                       Changes
                       <span className="ml-1.5 tabular-nums bg-white/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal">

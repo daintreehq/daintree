@@ -189,7 +189,7 @@ export function CommitList({ projectPath, onClose, initialCount }: CommitListPro
             aria-label="Search commits"
             className={cn(
               "w-full h-8 pl-8 pr-3 rounded-[var(--radius-md)] text-sm",
-              "bg-white/[0.03] border border-[var(--border-overlay)]",
+              "bg-overlay-soft border border-[var(--border-overlay)]",
               "text-canopy-text placeholder:text-muted-foreground",
               "focus:outline-none focus:ring-1 focus:ring-canopy-accent focus:border-canopy-accent",
               "transition-colors"

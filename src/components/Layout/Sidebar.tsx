@@ -140,9 +140,8 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
         ref={sidebarRef}
         className={cn(
           "relative shrink-0 flex flex-col",
-          "bg-canopy-sidebar/95 backdrop-blur-sm",
+          "surface-chrome",
           "border-r border-divider",
-          "shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
           className
         )}
         style={{ width }}
@@ -164,7 +163,7 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
           tabIndex={0}
           className={cn(
             "group absolute top-0 -right-0.5 w-1.5 h-full cursor-col-resize flex items-center justify-center z-50",
-            "hover:bg-white/[0.03] transition-colors focus-visible:outline-none focus-visible:bg-white/[0.04] focus-visible:ring-1 focus-visible:ring-canopy-accent/50",
+            "hover:bg-overlay-soft transition-colors focus-visible:outline-none focus-visible:bg-overlay-medium focus-visible:ring-1 focus-visible:ring-canopy-accent/50",
             isResizing && "bg-canopy-accent/20"
           )}
           onMouseDown={startResizing}

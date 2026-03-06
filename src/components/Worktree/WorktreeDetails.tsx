@@ -165,12 +165,12 @@ export function WorktreeDetails({
             </div>
           )}
           {!effectiveNote && effectiveSummary && (
-            <div className="text-xs text-canopy-text/70 whitespace-pre-wrap leading-relaxed p-2 bg-white/[0.02] rounded">
+            <div className="text-xs text-canopy-text/70 whitespace-pre-wrap leading-relaxed p-2 bg-overlay-subtle rounded">
               {effectiveSummary}
             </div>
           )}
           {!effectiveNote && !effectiveSummary && showLastCommit && rawLastCommitMsg && (
-            <div className="text-xs text-canopy-text/60 italic flex gap-2 p-2 bg-white/[0.02] rounded">
+            <div className="text-xs text-canopy-text/60 italic flex gap-2 p-2 bg-overlay-subtle rounded">
               <GitCommit className="w-3.5 h-3.5 mt-0.5 shrink-0 opacity-60" />
               <div className="whitespace-pre-wrap leading-relaxed min-w-0">{rawLastCommitMsg}</div>
             </div>

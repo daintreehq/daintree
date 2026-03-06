@@ -13,7 +13,7 @@ export interface PanelKindConfig {
   name: string;
   /** Icon identifier (for TerminalIcon/PanelIcon component) */
   iconId: string;
-  /** Brand/accent color (hex) */
+  /** Brand/accent color */
   color: string;
   /** Whether this panel kind uses a PTY process */
   hasPty: boolean;

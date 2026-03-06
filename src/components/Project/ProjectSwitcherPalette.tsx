@@ -66,7 +66,7 @@ function ProjectListItem({
           ? cn("text-canopy-text", index === selectedIndex && "bg-white/[0.04]")
           : index === selectedIndex
             ? "bg-white/[0.04] text-canopy-text cursor-pointer"
-            : "text-canopy-text/70 hover:bg-white/[0.02] hover:text-canopy-text cursor-pointer"
+            : "text-canopy-text/70 hover:bg-overlay-subtle hover:text-canopy-text cursor-pointer"
       )}
       onClick={() => !project.isActive && onSelect(project)}
     >
@@ -278,7 +278,7 @@ function ProjectListContent({
                     "px-2 py-1.5",
                     sectionIdx === 0 && "pt-2",
                     isLast && !showActions && "pb-2",
-                    isActiveSection && "bg-white/[0.02]"
+                    isActiveSection && "bg-overlay-subtle"
                   )}
                 >
                   {section.map(renderItem)}
@@ -311,7 +311,7 @@ function ProjectListContent({
               <button
                 type="button"
                 onClick={() => onOpenProjectSettings?.()}
-                className="w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors hover:bg-white/[0.02]"
+                className="w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors hover:bg-overlay-subtle"
               >
                 <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] bg-white/[0.04] text-muted-foreground">
                   <Settings2 className="h-4 w-4" />
@@ -325,7 +325,7 @@ function ProjectListContent({
               <button
                 type="button"
                 onClick={() => onAddProject?.()}
-                className="w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors hover:bg-white/[0.02]"
+                className="w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors hover:bg-overlay-subtle"
                 data-testid="project-add-button"
               >
                 <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
@@ -338,7 +338,7 @@ function ProjectListContent({
               <button
                 type="button"
                 onClick={() => onCreateFolder?.()}
-                className="w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors hover:bg-white/[0.02]"
+                className="w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors hover:bg-overlay-subtle"
               >
                 <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
                   <FolderPlus className="h-4 w-4" />

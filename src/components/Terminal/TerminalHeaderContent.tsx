@@ -98,7 +98,7 @@ function TerminalHeaderContentComponent({
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>
-              <span className="px-3 py-1 rounded-full text-[11px] font-mono bg-white/[0.03] text-canopy-text/60 border border-divider truncate max-w-[20rem]">
+              <span className="px-3 py-1 rounded-full text-[11px] font-mono bg-overlay-soft text-canopy-text/60 border border-divider truncate max-w-[20rem]">
                 {lastCommand}
               </span>
             </TooltipTrigger>

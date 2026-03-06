@@ -29,7 +29,7 @@ describe("terminalColorSchemes", () => {
 
   it("default scheme ID exists", () => {
     expect(getSchemeById(DEFAULT_SCHEME_ID)).toBeDefined();
-    expect(getSchemeById(DEFAULT_SCHEME_ID)!.name).toBe("Canopy (Default)");
+    expect(getSchemeById(DEFAULT_SCHEME_ID)!.name).toBe("Match App Theme");
   });
 
   it("solarized-light is the only light scheme", () => {

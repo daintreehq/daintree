@@ -178,7 +178,7 @@ export function TwoPaneSplitDivider({
       tabIndex={0}
       className={cn(
         "group cursor-col-resize flex items-center justify-center z-10 shrink-0",
-        "hover:bg-white/[0.03] transition-colors focus-visible:outline-none focus-visible:bg-white/[0.04] focus-visible:ring-1 focus-visible:ring-canopy-accent/50",
+        "hover:bg-overlay-soft transition-colors focus-visible:outline-none focus-visible:bg-overlay-medium focus-visible:ring-1 focus-visible:ring-canopy-accent/50",
         isDragging && "bg-canopy-accent/20"
       )}
       style={{ width: DIVIDER_WIDTH_PX }}

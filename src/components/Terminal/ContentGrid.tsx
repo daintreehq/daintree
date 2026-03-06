@@ -302,7 +302,7 @@ function EmptyState({
                         </>
                       )}
                     </div>
-                    <p className="text-xs text-canopy-muted leading-relaxed">
+                    <p className="text-xs text-text-muted leading-relaxed">
                       {getRecipeTerminalSummary(recipe.terminals)}
                     </p>
                   </button>

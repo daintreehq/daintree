@@ -22,7 +22,7 @@ const DropdownMenuSubTrigger = React.forwardRef<
   <DropdownMenuPrimitive.SubTrigger
     ref={ref}
     className={cn(
-      "flex cursor-default select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-none focus:bg-white/[0.08] data-[state=open]:bg-white/[0.08]",
+      "flex cursor-default select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-none focus:bg-overlay-emphasis data-[state=open]:bg-overlay-emphasis",
       inset && "pl-8",
       className
     )}
@@ -81,7 +81,7 @@ const DropdownMenuItem = React.forwardRef<
   <DropdownMenuPrimitive.Item
     ref={ref}
     className={cn(
-      "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-none transition-colors focus:bg-white/[0.08] data-[highlighted]:bg-white/[0.08] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-none transition-colors focus:bg-overlay-emphasis data-[highlighted]:bg-overlay-emphasis data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       inset && "pl-8",
       className
     )}
@@ -96,7 +96,7 @@ const DropdownMenuSeparator = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DropdownMenuPrimitive.Separator
     ref={ref}
-    className={cn("-mx-1 my-1 h-px bg-white/[0.06]", className)}
+    className={cn("-mx-1 my-1 h-px bg-border-divider", className)}
     {...props}
   />
 ));
@@ -137,7 +137,7 @@ const DropdownMenuCheckboxItem = React.forwardRef<
   <DropdownMenuPrimitive.CheckboxItem
     ref={ref}
     className={cn(
-      "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-none transition-colors focus:bg-white/[0.08] data-[highlighted]:bg-white/[0.08] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-none transition-colors focus:bg-overlay-emphasis data-[highlighted]:bg-overlay-emphasis data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       className
     )}
     checked={checked}
