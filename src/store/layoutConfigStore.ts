@@ -29,7 +29,20 @@ export const useLayoutConfigStore = create<LayoutConfigState>()((set, get) => ({
   setLayoutConfig: (config) => set({ layoutConfig: config }),
 
   gridDimensions: null,
-  setGridDimensions: (dimensions) => set({ gridDimensions: dimensions }),
+  setGridDimensions: (dimensions) =>
+    set((state) => {
+      const current = state.gridDimensions;
+      if (current === dimensions) {
+        return state;
+      }
+      if (current === null || dimensions === null) {
+        return current === dimensions ? state : { gridDimensions: dimensions };
+      }
+      if (current.width === dimensions.width && current.height === dimensions.height) {
+        return state;
+      }
+      return { gridDimensions: dimensions };
+    }),
 
   getMaxGridCapacity: () => {
     const { gridDimensions } = get();

@@ -2,6 +2,7 @@ import React, { Component, type ReactNode } from "react";
 import { ErrorFallback, type ErrorFallbackProps } from "./ErrorFallback";
 import { useErrorStore } from "@/store/errorStore";
 import { actionService } from "@/services/ActionService";
+import { logError } from "@/utils/logger";
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -41,6 +42,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo): void {
     const { onError, context, componentName } = this.props;
+    const componentStack = errorInfo.componentStack || "";
 
     this.setState({
       errorInfo,
@@ -50,7 +52,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       useErrorStore.getState().addError({
         type: "unknown",
         message: error.message || "Component rendering error",
-        details: `${error.stack || ""}\n\nComponent Stack:${errorInfo.componentStack || ""}`,
+        details: `${error.stack || ""}\n\nComponent Stack:${componentStack}`,
         source: componentName || "ErrorBoundary",
         context,
         isTransient: false,
@@ -66,6 +68,12 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         console.error("Error in onError handler:", handlerError);
       }
     }
+
+    logError("React error boundary caught render error", error, {
+      componentName: componentName || "ErrorBoundary",
+      context,
+      componentStack,
+    });
 
     console.error("ErrorBoundary caught error:", error, errorInfo);
   }

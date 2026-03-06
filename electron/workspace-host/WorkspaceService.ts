@@ -158,8 +158,8 @@ export class WorkspaceService {
       let name: string;
       if (wt.isMainWorktree) {
         name = wt.path.split(/[/\\]/).pop() || "Main";
-      } else if (wt.isDetached && wt.head) {
-        name = wt.head.substring(0, 7);
+      } else if (wt.isDetached) {
+        name = wt.path.split(/[/\\]/).pop() || wt.head?.substring(0, 7) || "Detached";
       } else if (wt.branch) {
         name = wt.branch;
       } else {

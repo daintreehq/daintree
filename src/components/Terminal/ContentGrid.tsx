@@ -47,6 +47,7 @@ import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import { getMaximizedGroupFocusTarget } from "./contentGridFocus";
 
 export interface ContentGridProps {
   className?: string;
@@ -407,6 +408,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
     clearPreMaximizeLayout,
     validateMaximizeTarget,
     getTerminal,
+    getActiveTabId,
     setFocused,
   } = useTerminalStore(
     useShallow((state) => ({
@@ -418,6 +420,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
       clearPreMaximizeLayout: state.clearPreMaximizeLayout,
       validateMaximizeTarget: state.validateMaximizeTarget,
       getTerminal: state.getTerminal,
+      getActiveTabId: state.getActiveTabId,
       setFocused: state.setFocused,
     }))
   );
@@ -555,6 +558,14 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
   const showPlaceholder = placeholderInGrid && sourceContainer === "dock" && !isGridFull;
   // Use tab groups count for grid layout (each group takes one cell)
   const gridItemCount = tabGroups.length + (showPlaceholder ? 1 : 0);
+
+  const combinedGridRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      setNodeRef(node);
+      gridContainerRef.current = node;
+    },
+    [setNodeRef]
+  );
 
   // Attach ResizeObserver to track container dimensions
   useEffect(() => {
@@ -807,39 +818,61 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
     }
   }, [maximizedId, maximizeTarget, validateMaximizeTarget, getPanelGroup, getTerminal, terminals]);
 
+  const maximizedGroup =
+    maximizedId && maximizeTarget?.type === "group"
+      ? tabGroups.find((group) => group.id === maximizeTarget.id)
+      : undefined;
+  const maximizedGroupPanels = useMemo(
+    () => (maximizedGroup ? getTabGroupPanels(maximizedGroup.id, "grid") : []),
+    [getTabGroupPanels, maximizedGroup, terminals]
+  );
+  const maximizedGroupFocusTarget = useMemo(
+    () =>
+      maximizedGroup
+        ? getMaximizedGroupFocusTarget({
+            focusedId,
+            groupId: maximizedGroup.id,
+            groupPanels: maximizedGroupPanels,
+            getActiveTabId,
+          })
+        : null,
+    [focusedId, getActiveTabId, maximizedGroup, maximizedGroupPanels]
+  );
+
+  useEffect(() => {
+    if (
+      maximizedGroupFocusTarget &&
+      maximizedGroupPanels.length > 0 &&
+      maximizedGroupFocusTarget !== focusedId
+    ) {
+      setFocused(maximizedGroupFocusTarget);
+    }
+  }, [focusedId, maximizedGroupFocusTarget, maximizedGroupPanels.length, setFocused]);
+
   // Maximized terminal or group takes full screen
   if (maximizedId && maximizeTarget) {
     if (maximizeTarget.type === "group") {
       // Find the group and render it maximized with tab bar
-      const group = tabGroups.find((g) => g.id === maximizeTarget.id);
-      if (group) {
-        const groupPanels = getTabGroupPanels(group.id, "grid");
-        if (groupPanels.length > 0) {
-          // Ensure focus is set on a panel in the maximized group
-          if (!focusedId || !groupPanels.some((p) => p.id === focusedId)) {
-            const activeTabId = useTerminalStore.getState().getActiveTabId(group.id);
-            const panelToFocus = groupPanels.find((p) => p.id === activeTabId) || groupPanels[0];
-            if (panelToFocus) {
-              setFocused(panelToFocus.id);
-            }
-          }
+      const group = maximizedGroup;
+      const groupPanels = maximizedGroupPanels;
+      if (group && groupPanels.length > 0) {
+        const effectiveFocusedId = maximizedGroupFocusTarget ?? focusedId;
 
-          return (
-            <div className={cn("h-full flex flex-col bg-canopy-bg", className)}>
-              <GridNotificationBar className="mx-1 mt-1 shrink-0" />
-              <div className="relative min-h-0 flex-1">
-                <GridTabGroup
-                  group={group}
-                  panels={groupPanels}
-                  focusedId={focusedId}
-                  gridPanelCount={1}
-                  gridCols={1}
-                  isMaximized={true}
-                />
-              </div>
+        return (
+          <div className={cn("h-full flex flex-col bg-canopy-bg", className)}>
+            <GridNotificationBar className="mx-1 mt-1 shrink-0" />
+            <div className="relative min-h-0 flex-1">
+              <GridTabGroup
+                group={group}
+                panels={groupPanels}
+                focusedId={effectiveFocusedId}
+                gridPanelCount={1}
+                gridCols={1}
+                isMaximized={true}
+              />
             </div>
-          );
-        }
+          </div>
+        );
       }
       return null;
     } else {
@@ -878,10 +911,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
           <GridNotificationBar className="mx-1 mt-1 shrink-0" />
           <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
           <div
-            ref={(node) => {
-              setNodeRef(node);
-              gridContainerRef.current = node;
-            }}
+            ref={combinedGridRef}
             onContextMenu={handleGridContextMenu}
             className={cn(
               "relative flex-1 min-h-0",
@@ -910,10 +940,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
       <div className="relative flex-1 min-h-0">
         <SortableContext id="grid-container" items={terminalIds} strategy={rectSortingStrategy}>
           <div
-            ref={(node) => {
-              setNodeRef(node);
-              gridContainerRef.current = node;
-            }}
+            ref={combinedGridRef}
             onContextMenu={handleGridContextMenu}
             className={cn(
               "h-full bg-noise p-1",
