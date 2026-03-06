@@ -1,7 +1,10 @@
-import { useEffect, useRef, useMemo } from "react";
-import { refractor } from "refractor";
-import type { Element, Text, RootContent } from "hast";
-import { getLanguageForFile } from "./languageUtils";
+import { useMemo, useState, useEffect, useCallback } from "react";
+import CodeMirror from "@uiw/react-codemirror";
+import { languages } from "@codemirror/language-data";
+import { EditorView } from "@codemirror/view";
+import { type Extension } from "@codemirror/state";
+import { LanguageDescription } from "@codemirror/language";
+import { canopyTheme } from "@/components/Notes/editorTheme";
 import { cn } from "@/lib/utils";
 
 export interface CodeViewerProps {
@@ -11,87 +14,78 @@ export interface CodeViewerProps {
   className?: string;
 }
 
-function toHtml(nodes: RootContent[]): string {
-  return nodes
-    .map((node) => {
-      if (node.type === "text") {
-        return escapeHtml((node as Text).value);
-      }
-      if (node.type === "element") {
-        const el = node as Element;
-        const classNameProp = el.properties?.className;
-        const className =
-          typeof classNameProp === "string"
-            ? classNameProp
-            : Array.isArray(classNameProp)
-              ? classNameProp.join(" ")
-              : "";
-        return `<span class="${className}">${toHtml(el.children as RootContent[])}</span>`;
-      }
-      return "";
-    })
-    .join("");
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-function highlightLine(line: string, language: string): string {
-  try {
-    const result = refractor.highlight(line, language);
-    return toHtml(result.children as RootContent[]);
-  } catch {
-    return escapeHtml(line);
-  }
-}
+const highlightLineStyle = EditorView.baseTheme({
+  "&dark .cm-highlightedLine": {
+    backgroundColor: "rgba(234, 179, 8, 0.1)",
+  },
+});
 
 export function CodeViewer({ content, filePath, initialLine, className }: CodeViewerProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const language = useMemo(() => getLanguageForFile(filePath), [filePath]);
-  const lines = useMemo(() => content.split("\n"), [content]);
-  const highlightedLines = useMemo(
-    () => lines.map((line) => highlightLine(line, language)),
-    [lines, language]
-  );
+  const [langExtension, setLangExtension] = useState<Extension | null>(null);
 
   useEffect(() => {
-    if (initialLine === undefined || !containerRef.current) return;
-    const lineEl = containerRef.current.querySelector(`[data-line="${initialLine}"]`);
-    if (lineEl) {
-      lineEl.scrollIntoView({ block: "center" });
+    const basename = filePath.split("/").pop() ?? filePath;
+    const desc = LanguageDescription.matchFilename(languages, basename);
+    if (!desc) {
+      setLangExtension(null);
+      return;
     }
-  }, [initialLine]);
+    let cancelled = false;
+    desc.load().then((lang) => {
+      if (!cancelled) setLangExtension(lang);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [filePath]);
+
+  const extensions = useMemo(() => {
+    const exts: Extension[] = [];
+    if (langExtension) exts.push(langExtension);
+    if (initialLine !== undefined) exts.push(highlightLineStyle);
+    return exts;
+  }, [langExtension, initialLine]);
+
+  const handleCreateEditor = useCallback(
+    (view: EditorView) => {
+      if (initialLine === undefined || initialLine < 1) return;
+      const lineNum = Math.min(initialLine, view.state.doc.lines);
+      const line = view.state.doc.line(lineNum);
+
+      requestAnimationFrame(() => {
+        view.dispatch({
+          effects: EditorView.scrollIntoView(line.from, { y: "center" }),
+        });
+        const domLine = view.domAtPos(line.from)?.node?.parentElement;
+        const cmLine = domLine?.closest(".cm-line");
+        if (cmLine) cmLine.classList.add("cm-highlightedLine");
+      });
+    },
+    [initialLine]
+  );
 
   return (
-    <div ref={containerRef} className={cn("font-mono text-xs leading-5 overflow-auto", className)}>
-      <table className="w-full border-collapse">
-        <tbody>
-          {lines.map((_line, idx) => {
-            const lineNumber = idx + 1;
-            const isHighlighted = lineNumber === initialLine;
-            return (
-              <tr
-                key={lineNumber}
-                data-line={lineNumber}
-                className={cn(isHighlighted && "bg-[var(--color-status-warning)]/10")}
-              >
-                <td className="select-none text-right pr-4 pl-4 text-muted-foreground/50 w-12 shrink-0 border-r border-canopy-border/30">
-                  {lineNumber}
-                </td>
-                <td
-                  className="pl-4 pr-4 whitespace-pre text-canopy-text/90"
-                  dangerouslySetInnerHTML={{ __html: highlightedLines[idx] }}
-                />
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+    <div
+      className={cn(
+        "overflow-auto [&_.cm-editor]:min-h-full [&_.cm-scroller]:!overflow-visible",
+        className
+      )}
+    >
+      <CodeMirror
+        value={content}
+        theme={canopyTheme}
+        extensions={extensions}
+        editable={false}
+        readOnly={true}
+        basicSetup={{
+          lineNumbers: true,
+          foldGutter: false,
+          highlightActiveLine: false,
+          highlightSelectionMatches: false,
+          autocompletion: false,
+        }}
+        onCreateEditor={handleCreateEditor}
+      />
     </div>
   );
 }
