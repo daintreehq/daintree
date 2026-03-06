@@ -14,11 +14,11 @@ const ERROR_TYPE_LABELS: Record<string, string> = {
 };
 
 const ERROR_TYPE_COLORS: Record<string, string> = {
-  git: "text-orange-400",
+  git: "text-[var(--color-cat-orange)]",
   process: "text-[var(--color-status-warning)]",
   filesystem: "text-[var(--color-status-info)]",
-  network: "text-purple-400",
-  config: "text-amber-400",
+  network: "text-[var(--color-cat-purple)]",
+  config: "text-[var(--color-status-warning)]",
   unknown: "text-[var(--color-status-error)]",
 };
 

@@ -1,6 +1,7 @@
 import { cn } from "@/lib/utils";
 import type { ActionPaletteItem as ActionPaletteItemType } from "@/hooks/useActionPalette";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { ACTION_CATEGORY_COLORS, ACTION_CATEGORY_DEFAULT_COLOR } from "@/config/categoryColors";
 
 interface ActionPaletteItemProps {
   item: ActionPaletteItemType;
@@ -8,29 +9,8 @@ interface ActionPaletteItemProps {
   onSelect: (item: ActionPaletteItemType) => void;
 }
 
-const CATEGORY_COLORS: Record<string, string> = {
-  terminal: "bg-blue-500/15 text-blue-400",
-  agents: "bg-purple-500/15 text-purple-400",
-  panels: "bg-cyan-500/15 text-cyan-400",
-  navigation: "bg-green-500/15 text-green-400",
-  worktree: "bg-amber-500/15 text-amber-400",
-  github: "bg-gray-500/15 text-gray-400",
-  git: "bg-orange-500/15 text-orange-400",
-  project: "bg-teal-500/15 text-teal-400",
-  preferences: "bg-slate-500/15 text-slate-400",
-  app: "bg-indigo-500/15 text-indigo-400",
-  system: "bg-rose-500/15 text-rose-400",
-  logs: "bg-yellow-500/15 text-yellow-400",
-  recipes: "bg-pink-500/15 text-pink-400",
-  sidecar: "bg-violet-500/15 text-violet-400",
-  notes: "bg-lime-500/15 text-lime-400",
-  browser: "bg-sky-500/15 text-sky-400",
-};
-
-const DEFAULT_CATEGORY_COLOR = "bg-white/[0.06] text-canopy-text/50";
-
 export function ActionPaletteItem({ item, isSelected, onSelect }: ActionPaletteItemProps) {
-  const categoryColor = CATEGORY_COLORS[item.category] ?? DEFAULT_CATEGORY_COLOR;
+  const categoryColor = ACTION_CATEGORY_COLORS[item.category] ?? ACTION_CATEGORY_DEFAULT_COLOR;
 
   const buttonContent = (
     <button
