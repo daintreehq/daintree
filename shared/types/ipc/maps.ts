@@ -13,6 +13,7 @@ import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitI
 import type { AgentSettings } from "../agentSettings.js";
 import type { UserAgentRegistry, UserAgentConfig } from "../userAgentRegistry.js";
 import type { KeyAction } from "../keymap.js";
+import type { KeybindingImportResult } from "./api.js";
 
 import type {
   WorktreeSetActivePayload,
@@ -970,6 +971,14 @@ export interface IpcInvokeMap {
   "keybinding:reset-all": {
     args: [];
     result: void;
+  };
+  "keybinding:export-profile": {
+    args: [];
+    result: boolean;
+  };
+  "keybinding:import-profile": {
+    args: [];
+    result: KeybindingImportResult;
   };
 
   // Worktree Config channels

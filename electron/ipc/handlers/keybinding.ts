@@ -1,8 +1,12 @@
-import { ipcMain } from "electron";
+import { ipcMain, dialog } from "electron";
+import { promises as fs } from "node:fs";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import type { HandlerDependencies } from "../types.js";
 import type { KeyAction } from "../../../shared/types/keymap.js";
+import { KEY_ACTION_VALUES } from "../../../shared/types/keymap.js";
+import { exportProfile, importProfile } from "../../utils/keybindingProfileIO.js";
+import type { ImportResult } from "../../utils/keybindingProfileIO.js";
 
 function getValidatedOverrides(): Record<string, string[]> {
   const raw = store.get("keybindingOverrides.overrides");
@@ -73,6 +77,49 @@ export function registerKeybindingHandlers(_deps: HandlerDependencies): () => vo
   };
   ipcMain.handle(CHANNELS.KEYBINDING_RESET_ALL, handleResetAll);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.KEYBINDING_RESET_ALL));
+
+  const handleExportProfile = async (): Promise<boolean> => {
+    const overrides = getValidatedOverrides();
+    const json = exportProfile(overrides);
+
+    const { filePath, canceled } = await dialog.showSaveDialog({
+      title: "Export Keyboard Shortcuts",
+      defaultPath: "canopy-keybindings.json",
+      filters: [{ name: "Keybinding Profile", extensions: ["json"] }],
+    });
+
+    if (canceled || !filePath) return false;
+
+    await fs.writeFile(filePath, json, "utf-8");
+    return true;
+  };
+  ipcMain.handle(CHANNELS.KEYBINDING_EXPORT_PROFILE, handleExportProfile);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.KEYBINDING_EXPORT_PROFILE));
+
+  const handleImportProfile = async (): Promise<ImportResult> => {
+    const { filePaths, canceled } = await dialog.showOpenDialog({
+      title: "Import Keyboard Shortcuts",
+      filters: [{ name: "Keybinding Profile", extensions: ["json"] }],
+      properties: ["openFile"],
+    });
+
+    if (canceled || filePaths.length === 0) {
+      return { ok: false, overrides: {}, applied: 0, skipped: 0, errors: ["Cancelled"] };
+    }
+
+    const json = await fs.readFile(filePaths[0], "utf-8");
+    const result = importProfile(json, KEY_ACTION_VALUES);
+
+    if (result.ok) {
+      const existing = getValidatedOverrides();
+      const merged = { ...existing, ...result.overrides };
+      store.set("keybindingOverrides.overrides", merged);
+    }
+
+    return result;
+  };
+  ipcMain.handle(CHANNELS.KEYBINDING_IMPORT_PROFILE, handleImportProfile);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.KEYBINDING_IMPORT_PROFILE));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }
