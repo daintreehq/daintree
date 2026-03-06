@@ -7,6 +7,7 @@ interface SettingsSectionProps {
   description: string;
   iconColor?: string;
   children: ReactNode;
+  id?: string;
 }
 
 export function SettingsSection({
@@ -15,9 +16,10 @@ export function SettingsSection({
   description,
   iconColor = "text-canopy-text/70",
   children,
+  id,
 }: SettingsSectionProps) {
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" id={id}>
       <div>
         <h4 className="text-sm font-medium text-canopy-text mb-2 flex items-center gap-2">
           <Icon className={cn("w-4 h-4", iconColor)} aria-hidden="true" />
