@@ -27,6 +27,7 @@ import {
   CookingPot,
   Lock,
   ShieldAlert,
+  GitBranch,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -115,6 +116,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   const [copyTreeSettings, setCopyTreeSettings] = useState<CopyTreeSettings>({});
   const [testConfigResult, setTestConfigResult] = useState<CopyTreeTestConfigResult | null>(null);
   const [isTestingConfig, setIsTestingConfig] = useState(false);
+  const [branchPrefixMode, setBranchPrefixMode] = useState<"none" | "username" | "custom">("none");
+  const [branchPrefixCustom, setBranchPrefixCustom] = useState<string>("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const initialSnapshotRef = useRef<ProjectSettingsSnapshot | null>(null);
   const [showUnsavedChangesDialog, setShowUnsavedChangesDialog] = useState(false);
@@ -152,7 +155,9 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       runCommands,
       defaultWorktreeRecipeId,
       commandOverrides,
-      copyTreeSettings
+      copyTreeSettings,
+      branchPrefixMode,
+      branchPrefixCustom
     );
   }, [
     name,
@@ -165,6 +170,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
     defaultWorktreeRecipeId,
     commandOverrides,
     copyTreeSettings,
+    branchPrefixMode,
+    branchPrefixCustom,
     currentProject,
   ]);
 
@@ -253,6 +260,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       const initialDevServerCommand = settings.devServerCommand || "";
       const initialCommandOverrides = settings.commandOverrides || [];
       const initialCopyTreeSettings = settings.copyTreeSettings || {};
+      const initialBranchPrefixMode = settings.branchPrefixMode ?? "none";
+      const initialBranchPrefixCustom = settings.branchPrefixCustom ?? "";
 
       setName(currentProject.name);
       setEmoji(currentProject.emoji || "🌲");
@@ -264,6 +273,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       setDevServerCommand(initialDevServerCommand);
       setCommandOverrides(initialCommandOverrides);
       setCopyTreeSettings(initialCopyTreeSettings);
+      setBranchPrefixMode(initialBranchPrefixMode);
+      setBranchPrefixCustom(initialBranchPrefixCustom);
 
       initialSnapshotRef.current = createProjectSettingsSnapshot(
         currentProject.name,
@@ -275,7 +286,9 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         initialRunCommands,
         initialDefaultWorktreeRecipeId,
         initialCommandOverrides,
-        initialCopyTreeSettings
+        initialCopyTreeSettings,
+        initialBranchPrefixMode,
+        initialBranchPrefixCustom
       );
 
       setIsInitialized(true);
@@ -293,6 +306,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       setTestConfigResult(null);
       setIsTestingConfig(false);
       setSaveError(null);
+      setBranchPrefixMode("none");
+      setBranchPrefixCustom("");
       hasLoadedRecipes.current = false;
       setActiveTab("general");
       initialSnapshotRef.current = null;
@@ -428,6 +443,10 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       }
       const hasCopyTreeSettings = Object.keys(sanitizedCopyTreeSettings).length > 0;
 
+      const sanitizedBranchPrefixCustom = branchPrefixCustom.trim();
+      const effectivePrefixMode =
+        branchPrefixMode === "custom" && !sanitizedBranchPrefixCustom ? "none" : branchPrefixMode;
+
       await saveSettings({
         ...settings,
         runCommands: sanitizedRunCommands,
@@ -438,6 +457,9 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         devServerCommand: devServerCommand.trim() || undefined,
         commandOverrides: commandOverrides.length > 0 ? commandOverrides : undefined,
         copyTreeSettings: hasCopyTreeSettings ? sanitizedCopyTreeSettings : undefined,
+        branchPrefixMode: effectivePrefixMode !== "none" ? effectivePrefixMode : undefined,
+        branchPrefixCustom:
+          effectivePrefixMode === "custom" ? sanitizedBranchPrefixCustom : undefined,
         insecureEnvironmentVariables: undefined,
         unresolvedSecureEnvironmentVariables: undefined,
       });
@@ -464,7 +486,9 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         sanitizedRunCommandsWithIds,
         defaultWorktreeRecipeId,
         commandOverrides.length > 0 ? commandOverrides : [],
-        hasCopyTreeSettings ? sanitizedCopyTreeSettings : {}
+        hasCopyTreeSettings ? sanitizedCopyTreeSettings : {},
+        branchPrefixMode,
+        sanitizedBranchPrefixCustom
       );
 
       requestClose({ bypassDirty: true });
@@ -1671,6 +1695,84 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                           </div>
                         );
                       })()}
+                    </div>
+
+                    <div className="pt-2">
+                      <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+                        <GitBranch className="h-4 w-4" />
+                        Branch Prefix
+                      </h3>
+                      <p className="text-xs text-canopy-text/60 mb-4">
+                        Automatically prefix new branch names when creating worktrees.
+                      </p>
+
+                      <div className="space-y-2">
+                        {(
+                          [
+                            { value: "none", label: "None", description: "No prefix added" },
+                            {
+                              value: "username",
+                              label: "Username",
+                              description: "Prefix with your git user.name (e.g. alice/)",
+                            },
+                            {
+                              value: "custom",
+                              label: "Custom",
+                              description: "Use a custom prefix string",
+                            },
+                          ] as const
+                        ).map(({ value, label, description }) => (
+                          <label
+                            key={value}
+                            className="flex items-start gap-3 p-2.5 rounded-[var(--radius-md)] border border-canopy-border cursor-pointer hover:bg-canopy-border/30 transition-colors"
+                          >
+                            <input
+                              type="radio"
+                              name="branchPrefixMode"
+                              value={value}
+                              checked={branchPrefixMode === value}
+                              onChange={() => setBranchPrefixMode(value)}
+                              className="mt-0.5 accent-canopy-accent"
+                            />
+                            <div>
+                              <span className="text-sm font-medium text-canopy-text">{label}</span>
+                              <p className="text-xs text-canopy-text/50">{description}</p>
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+
+                      {branchPrefixMode === "custom" && (
+                        <div className="mt-3">
+                          <input
+                            type="text"
+                            value={branchPrefixCustom}
+                            onChange={(e) => setBranchPrefixCustom(e.target.value)}
+                            placeholder="e.g. feature/ or myteam/"
+                            className="w-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-sm text-canopy-text font-mono focus:outline-none focus:ring-2 focus:ring-canopy-accent"
+                          />
+                        </div>
+                      )}
+
+                      {branchPrefixMode !== "none" && (
+                        <div className="mt-3 p-3 rounded-[var(--radius-md)] bg-canopy-bg/50 border border-canopy-border">
+                          <span className="block text-xs font-medium text-canopy-text/70 mb-1">
+                            Preview:
+                          </span>
+                          <code className="text-xs text-canopy-accent">
+                            {branchPrefixMode === "username"
+                              ? "alice/fix-bug"
+                              : branchPrefixCustom.trim()
+                                ? `${branchPrefixCustom.trim()}fix-bug`
+                                : "fix-bug"}
+                          </code>
+                          {branchPrefixMode === "username" && (
+                            <p className="text-xs text-canopy-text/40 mt-1">
+                              Username is read from git config user.name at worktree creation time.
+                            </p>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
 

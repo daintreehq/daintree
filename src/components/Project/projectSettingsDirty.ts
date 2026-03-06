@@ -12,6 +12,8 @@ export interface ProjectSettingsSnapshot {
   defaultWorktreeRecipeId: string | undefined;
   commandOverrides: CommandOverride[];
   copyTreeSettings: CopyTreeSettings;
+  branchPrefixMode: "none" | "username" | "custom";
+  branchPrefixCustom: string;
 }
 
 interface EnvVar {
@@ -38,7 +40,9 @@ export function createProjectSettingsSnapshot(
   runCommands: RunCommand[],
   defaultWorktreeRecipeId: string | undefined,
   commandOverrides: CommandOverride[],
-  copyTreeSettings: CopyTreeSettings
+  copyTreeSettings: CopyTreeSettings,
+  branchPrefixMode: "none" | "username" | "custom" = "none",
+  branchPrefixCustom: string = ""
 ): ProjectSettingsSnapshot {
   const envVarRecord: Record<string, string> = {};
   const seenKeys = new Map<string, number>();
@@ -93,6 +97,12 @@ export function createProjectSettingsSnapshot(
     delete normalizedCopyTreeSettings.alwaysExclude;
   }
 
+  const trimmedCustom = branchPrefixCustom.trim();
+  // Mirrors the save-path logic: custom with empty prefix is equivalent to none
+  const normalizedMode =
+    (branchPrefixMode ?? "none") === "custom" && !trimmedCustom
+      ? "none"
+      : (branchPrefixMode ?? "none");
   return {
     name: name.trim(),
     emoji,
@@ -104,6 +114,8 @@ export function createProjectSettingsSnapshot(
     defaultWorktreeRecipeId,
     commandOverrides: sortedCommandOverrides,
     copyTreeSettings: normalizedCopyTreeSettings,
+    branchPrefixMode: normalizedMode,
+    branchPrefixCustom: normalizedMode === "custom" ? trimmedCustom : "",
   };
 }
 
@@ -179,6 +191,9 @@ export function areSnapshotsEqual(a: ProjectSettingsSnapshot, b: ProjectSettings
   if (aSettings.strategy !== bSettings.strategy) return false;
   if (!areStringArraysEqual(aSettings.alwaysInclude, bSettings.alwaysInclude)) return false;
   if (!areStringArraysEqual(aSettings.alwaysExclude, bSettings.alwaysExclude)) return false;
+
+  if (a.branchPrefixMode !== b.branchPrefixMode) return false;
+  if (a.branchPrefixCustom !== b.branchPrefixCustom) return false;
 
   return true;
 }

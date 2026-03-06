@@ -689,6 +689,14 @@ export class ProjectStore {
           typeof (parsed.preferredEditor as Record<string, unknown>).id === "string"
             ? (parsed.preferredEditor as import("../../shared/types/editor.js").EditorConfig)
             : undefined,
+        branchPrefixMode:
+          parsed.branchPrefixMode === "none" ||
+          parsed.branchPrefixMode === "username" ||
+          parsed.branchPrefixMode === "custom"
+            ? parsed.branchPrefixMode
+            : undefined,
+        branchPrefixCustom:
+          typeof parsed.branchPrefixCustom === "string" ? parsed.branchPrefixCustom : undefined,
       };
 
       return settings;

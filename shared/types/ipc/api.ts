@@ -574,6 +574,7 @@ export interface ElectronAPI {
       branch2: string,
       filePath?: string
     ): Promise<import("./git.js").CrossWorktreeDiffResult | string>;
+    getUsername(cwd: string): Promise<string | null>;
   };
   terminalConfig: {
     get(): Promise<TerminalConfig>;

@@ -882,6 +882,10 @@ export interface IpcInvokeMap {
     args: [payload: GitCompareWorktreesPayload];
     result: CrossWorktreeDiffResult | string;
   };
+  "git:get-username": {
+    args: [cwd: string];
+    result: string | null;
+  };
 
   // Sidecar channels
   "sidecar:create": {
