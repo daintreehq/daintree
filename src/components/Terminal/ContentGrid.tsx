@@ -824,7 +824,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
       : undefined;
   const maximizedGroupPanels = useMemo(
     () => (maximizedGroup ? getTabGroupPanels(maximizedGroup.id, "grid") : []),
-    [getTabGroupPanels, maximizedGroup, terminals]
+    [getTabGroupPanels, maximizedGroup]
   );
   const maximizedGroupFocusTarget = useMemo(
     () =>
