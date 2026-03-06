@@ -1,4 +1,4 @@
-import { BrowserWindow, app } from "electron";
+import { BrowserWindow, app, Notification } from "electron";
 
 export interface NotificationState {
   waitingCount: number;
@@ -15,6 +15,7 @@ class NotificationService {
   private windowFocused = true;
   private focusHandler: (() => void) | null = null;
   private blurHandler: (() => void) | null = null;
+  private activeNotifications = new Set<Notification>();
 
   private detachWindowListeners(): void {
     if (!this.mainWindow || !this.focusHandler || !this.blurHandler) {
@@ -108,6 +109,21 @@ class NotificationService {
     return this.windowFocused;
   }
 
+  showNativeNotification(title: string, body: string): void {
+    if (!Notification.isSupported()) return;
+
+    const notification = new Notification({ title, body, silent: true });
+    this.activeNotifications.add(notification);
+
+    const cleanup = () => {
+      this.activeNotifications.delete(notification);
+    };
+    notification.on("close", cleanup);
+    notification.on("failed" as "close", cleanup);
+
+    notification.show();
+  }
+
   dispose(): void {
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
@@ -115,9 +131,8 @@ class NotificationService {
     }
 
     this.detachWindowListeners();
-
-    // Clear notifications before disposing
     this.clearNotifications();
+    this.activeNotifications.clear();
 
     this.focusHandler = null;
     this.blurHandler = null;

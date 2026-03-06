@@ -283,6 +283,7 @@ import {
   getSystemSleepService,
 } from "./services/SystemSleepService.js";
 import { notificationService } from "./services/NotificationService.js";
+import { agentNotificationService } from "./services/AgentNotificationService.js";
 import { registerCommands } from "./services/commands/index.js";
 import {
   initializeTaskOrchestrator,
@@ -919,6 +920,7 @@ async function createWindow(): Promise<void> {
 
   // Initialize Notification Service
   notificationService.initialize(mainWindow);
+  agentNotificationService.initialize();
   console.log("[MAIN] NotificationService initialized");
 
   // Initialize Service Instances
@@ -1369,6 +1371,7 @@ async function createWindow(): Promise<void> {
 
     getSystemSleepService().dispose();
     notificationService.dispose();
+    agentNotificationService.dispose();
     autoUpdaterService.dispose();
 
     setLoggerWindow(null);

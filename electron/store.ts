@@ -96,6 +96,13 @@ export interface StoreSchema {
     pathPattern: string;
   };
   agentSettings: AgentSettings;
+  notificationSettings: {
+    completedEnabled: boolean;
+    waitingEnabled: boolean;
+    failedEnabled: boolean;
+    soundEnabled: boolean;
+    soundFile: string;
+  };
   userAgentRegistry: UserAgentRegistry;
   agentUpdateSettings: AgentUpdateSettings;
   keybindingOverrides: {
@@ -143,6 +150,13 @@ const storeOptions = {
       pathPattern: "{parent-dir}/{base-folder}-worktrees/{branch-slug}",
     },
     agentSettings: DEFAULT_AGENT_SETTINGS,
+    notificationSettings: {
+      completedEnabled: true,
+      waitingEnabled: true,
+      failedEnabled: true,
+      soundEnabled: true,
+      soundFile: "chime.wav",
+    },
     userAgentRegistry: {},
     agentUpdateSettings: {
       autoCheck: true,
