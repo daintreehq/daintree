@@ -165,7 +165,7 @@ export function WorktreeMenuItems({
             Open Terminal
           </C.Item>
           <C.Item onSelect={() => onLaunchAgent?.("browser")} disabled={!onLaunchAgent}>
-            <Globe className="w-3.5 h-3.5 mr-2 text-blue-400" />
+            <Globe className="w-3.5 h-3.5 mr-2 text-status-info" />
             Open Browser
           </C.Item>
         </C.SubContent>

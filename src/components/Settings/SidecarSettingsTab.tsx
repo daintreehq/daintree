@@ -275,7 +275,7 @@ export function SidecarSettingsTab() {
           )}
 
           {customUrlError && (
-            <p id="custom-url-error" role="alert" className="text-xs text-red-500">
+            <p id="custom-url-error" role="alert" className="text-xs text-status-error">
               {customUrlError}
             </p>
           )}
@@ -315,7 +315,7 @@ export function SidecarSettingsTab() {
                   />
                   <button
                     onClick={handleSaveEdit}
-                    className="p-1.5 rounded hover:bg-canopy-border text-green-500"
+                    className="p-1.5 rounded hover:bg-canopy-border text-status-success"
                   >
                     <Check className="w-4 h-4" />
                   </button>
@@ -406,7 +406,7 @@ export function SidecarSettingsTab() {
                   />
                   <button
                     onClick={handleSaveEdit}
-                    className="p-1.5 rounded hover:bg-canopy-border text-green-500"
+                    className="p-1.5 rounded hover:bg-canopy-border text-status-success"
                   >
                     <Check className="w-4 h-4" />
                   </button>
@@ -462,7 +462,7 @@ export function SidecarSettingsTab() {
                       }
                       disabled={link.alwaysEnabled}
                       className={cn(
-                        "p-1.5 rounded hover:bg-canopy-border text-muted-foreground hover:text-red-500",
+                        "p-1.5 rounded hover:bg-canopy-border text-muted-foreground hover:text-status-error",
                         link.alwaysEnabled && "opacity-50 cursor-not-allowed"
                       )}
                     >
@@ -509,7 +509,7 @@ export function SidecarSettingsTab() {
               Add
             </button>
           </div>
-          {urlError && <p className="text-xs text-red-500 mt-1">{urlError}</p>}
+          {urlError && <p className="text-xs text-status-error mt-1">{urlError}</p>}
         </div>
       </section>
 

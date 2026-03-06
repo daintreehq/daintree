@@ -249,7 +249,7 @@ export function BrowserToolbar({
                     className={cn(
                       "px-1.5 py-1 rounded text-xs font-medium transition-colors",
                       "hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed",
-                      isNonDefaultZoom ? "text-blue-400" : "text-canopy-text/60"
+                      isNonDefaultZoom ? "text-status-info" : "text-canopy-text/60"
                     )}
                     aria-label="Reset zoom"
                   >
@@ -289,7 +289,7 @@ export function BrowserToolbar({
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <span className="absolute left-6 w-1.5 h-1.5 rounded-full bg-amber-400/60" />
+                  <span className="absolute left-6 w-1.5 h-1.5 rounded-full bg-status-warning/60" />
                 </TooltipTrigger>
                 <TooltipContent side="bottom">
                   URL may differ from page shown (in-page navigation)
@@ -314,13 +314,13 @@ export function BrowserToolbar({
               "bg-canopy-bg border border-overlay",
               "focus:outline-none focus:border-white/20",
               "text-canopy-text placeholder:text-canopy-text/40",
-              error && "border-red-500/50"
+              error && "border-status-error/50"
             )}
             placeholder="localhost:3000"
           />
         </div>
         {error && (
-          <div className="absolute mt-1 text-xs text-red-400 bg-canopy-bg border border-red-500/30 rounded px-2 py-1 z-10">
+          <div className="absolute mt-1 text-xs text-status-error bg-canopy-bg border border-status-error/30 rounded px-2 py-1 z-10">
             {error}
           </div>
         )}
@@ -331,7 +331,7 @@ export function BrowserToolbar({
         <Tooltip>
           <TooltipTrigger asChild>
             <button type="button" onClick={handleCopy} className={buttonClass}>
-              {copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
+              {copied ? <Check className="w-4 h-4 text-status-success" /> : <Copy className="w-4 h-4" />}
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">Copy URL</TooltipContent>

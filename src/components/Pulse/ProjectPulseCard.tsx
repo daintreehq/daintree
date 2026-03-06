@@ -114,7 +114,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
         )}
       >
         <div className="flex items-center gap-2 text-canopy-text/50">
-          <GitBranch className="w-4 h-4 text-blue-400/70" aria-hidden="true" />
+          <GitBranch className="w-4 h-4 text-status-info/70" aria-hidden="true" />
           <span className="text-xs">
             New repository — make your first commit to start tracking activity
           </span>
@@ -175,7 +175,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     >
       <div className="px-4 py-3 border-b border-canopy-border flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Activity className="w-4 h-4 text-emerald-400/70" />
+          <Activity className="w-4 h-4 text-status-success/70" />
           <span className="text-sm font-medium text-canopy-text/80">{title}</span>
           {isLoading && <Loader2 className="w-3 h-3 animate-spin text-canopy-text/40" />}
         </div>

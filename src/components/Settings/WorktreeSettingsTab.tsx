@@ -159,7 +159,7 @@ export function WorktreeSettingsTab() {
               className={cn(
                 "flex-1 px-3 py-2 bg-canopy-bg border rounded-[var(--radius-md)] text-canopy-text font-mono text-sm",
                 "focus:outline-none focus:ring-2 focus:ring-canopy-accent",
-                !validation.valid ? "border-red-500/50" : "border-canopy-border"
+                !validation.valid ? "border-status-error/50" : "border-canopy-border"
               )}
               placeholder="{parent-dir}/{base-folder}-worktrees/{branch-slug}"
             />
@@ -180,14 +180,14 @@ export function WorktreeSettingsTab() {
           </div>
 
           {!validation.valid && validation.error && (
-            <div className="flex items-start gap-2 text-xs text-red-400">
+            <div className="flex items-start gap-2 text-xs text-status-error">
               <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />
               <span>{validation.error}</span>
             </div>
           )}
 
           {error && (
-            <div className="flex items-start gap-2 text-xs text-red-400">
+            <div className="flex items-start gap-2 text-xs text-status-error">
               <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />
               <span>{error}</span>
             </div>
@@ -268,7 +268,7 @@ export function WorktreeSettingsTab() {
       <div className="flex items-center justify-between pt-4 border-t border-canopy-border">
         <div className="flex items-center gap-2">
           {savedMessage && (
-            <span className="flex items-center gap-1 text-xs text-green-400">
+            <span className="flex items-center gap-1 text-xs text-status-success">
               <Check className="w-3 h-3" />
               Saved
             </span>

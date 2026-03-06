@@ -234,7 +234,7 @@ export function WorktreeDetails({
                   aria-label={pathCopied ? "Path copied to clipboard" : "Copy path to clipboard"}
                 >
                   {pathCopied ? (
-                    <Check className="w-3 h-3 text-green-400" />
+                    <Check className="w-3 h-3 text-status-success" />
                   ) : (
                     <Copy className="w-3 h-3" />
                   )}

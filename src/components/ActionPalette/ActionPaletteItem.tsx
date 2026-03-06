@@ -9,22 +9,22 @@ interface ActionPaletteItemProps {
 }
 
 const CATEGORY_COLORS: Record<string, string> = {
-  terminal: "bg-blue-500/15 text-blue-400",
+  terminal: "bg-status-info/15 text-status-info",
   agents: "bg-purple-500/15 text-purple-400",
   panels: "bg-cyan-500/15 text-cyan-400",
-  navigation: "bg-green-500/15 text-green-400",
-  worktree: "bg-amber-500/15 text-amber-400",
+  navigation: "bg-status-success/15 text-status-success",
+  worktree: "bg-status-warning/15 text-status-warning",
   github: "bg-gray-500/15 text-gray-400",
-  git: "bg-orange-500/15 text-orange-400",
+  git: "bg-status-warning/15 text-status-warning",
   project: "bg-teal-500/15 text-teal-400",
   preferences: "bg-slate-500/15 text-slate-400",
   app: "bg-indigo-500/15 text-indigo-400",
   system: "bg-rose-500/15 text-rose-400",
   logs: "bg-yellow-500/15 text-yellow-400",
   recipes: "bg-pink-500/15 text-pink-400",
-  sidecar: "bg-violet-500/15 text-violet-400",
+  sidecar: "bg-github-merged/15 text-github-merged",
   notes: "bg-lime-500/15 text-lime-400",
-  browser: "bg-sky-500/15 text-sky-400",
+  browser: "bg-github-open/15 text-github-open",
 };
 
 const DEFAULT_CATEGORY_COLOR = "bg-white/[0.06] text-canopy-text/50";

@@ -28,23 +28,23 @@ const STATUS_LABEL: Record<
   },
   starting: {
     label: "Starting",
-    textClass: "text-blue-400",
-    dotClass: "bg-blue-400",
+    textClass: "text-server-starting",
+    dotClass: "bg-server-starting",
   },
   installing: {
     label: "Installing",
-    textClass: "text-yellow-400",
-    dotClass: "bg-yellow-400",
+    textClass: "text-server-starting",
+    dotClass: "bg-server-starting",
   },
   running: {
     label: "Running",
-    textClass: "text-green-400",
-    dotClass: "bg-green-400",
+    textClass: "text-server-running",
+    dotClass: "bg-server-running",
   },
   error: {
     label: "Error",
-    textClass: "text-red-400",
-    dotClass: "bg-red-400",
+    textClass: "text-server-error",
+    dotClass: "bg-server-error",
   },
 };
 
@@ -77,7 +77,7 @@ export function ConsoleDrawer({
   }, [isOpen]);
 
   const statusLabel = isRestarting
-    ? { label: "Restarting", textClass: "text-blue-400", dotClass: "bg-blue-400" }
+    ? { label: "Restarting", textClass: "text-server-starting", dotClass: "bg-server-starting" }
     : (STATUS_LABEL[status] ?? STATUS_LABEL.stopped);
   const toggleLabel = isOpen ? "Hide Terminal" : "Show Terminal";
   const hardRestartDisabled = !onHardRestart || isRestarting || status === "starting";
@@ -97,7 +97,7 @@ export function ConsoleDrawer({
         <button
           type="button"
           onClick={toggleDrawer}
-          className="flex min-h-8 min-w-0 flex-1 items-center gap-2 border-r border-overlay/70 px-3 py-1.5 text-xs font-semibold text-canopy-text/80 transition-colors hover:bg-black/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-400"
+          className="flex min-h-8 min-w-0 flex-1 items-center gap-2 border-r border-overlay/70 px-3 py-1.5 text-xs font-semibold text-canopy-text/80 transition-colors hover:bg-black/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-status-info"
           aria-expanded={isOpen}
           aria-controls={`console-drawer-${terminalId}`}
           aria-label={toggleLabel}
@@ -125,8 +125,8 @@ export function ConsoleDrawer({
                     disabled={hardRestartDisabled}
                     className={cn(
                       "flex min-h-8 shrink-0 items-center gap-2 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-canopy-text/80 transition-colors",
-                      "hover:bg-black/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-400 disabled:cursor-not-allowed disabled:opacity-40",
-                      isRestarting && "text-blue-400"
+                      "hover:bg-black/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-status-info disabled:cursor-not-allowed disabled:opacity-40",
+                      isRestarting && "text-server-starting"
                     )}
                     aria-label={restartTooltip}
                     aria-busy={isRestarting}

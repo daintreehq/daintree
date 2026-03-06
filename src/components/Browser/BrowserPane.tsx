@@ -446,7 +446,7 @@ export function BrowserPane({
           </div>
         ) : loadError ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
-            <AlertTriangle className="w-6 h-6 text-amber-400 mb-3" />
+            <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
             <h3 className="text-sm font-medium text-canopy-text/70 mb-1">Unable to Display Page</h3>
             <p className="text-xs text-canopy-text/50 text-center mb-3 max-w-md">{loadError}</p>
             <button
@@ -465,7 +465,7 @@ export function BrowserPane({
             {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
             {isLoading && (
               <div className="absolute inset-0 flex items-center justify-center bg-canopy-bg z-10">
-                <div className="w-8 h-8 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                <div className="w-8 h-8 border-2 border-status-info border-t-transparent rounded-full animate-spin" />
               </div>
             )}
             <webview

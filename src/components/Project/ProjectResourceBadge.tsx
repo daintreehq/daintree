@@ -75,7 +75,7 @@ export function ProjectResourceBadge() {
   return (
     <div className="px-4 py-2 border-t border-divider bg-canopy-sidebar/95 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] flex items-center justify-between shrink-0">
       <div className="flex items-center gap-2 min-w-0">
-        <span className="inline-flex h-2 w-2 rounded-full bg-green-500/60 shrink-0" />
+        <span className="inline-flex h-2 w-2 rounded-full bg-status-success/60 shrink-0" />
         <span className="text-[10px] text-canopy-text/40 font-medium truncate">
           {stats.runningProjects} project{stats.runningProjects !== 1 ? "s" : ""} active
         </span>

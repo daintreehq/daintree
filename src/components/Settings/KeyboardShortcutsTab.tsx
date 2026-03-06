@@ -168,7 +168,7 @@ function KeyRecorder({ onCapture, onCancel, excludeActionId }: KeyRecorderProps)
       </div>
 
       {conflicts.length > 0 && (
-        <div className="flex items-start gap-2 text-amber-400 text-sm">
+        <div className="flex items-start gap-2 text-status-warning text-sm">
           <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
           <span>
             Conflicts with: {conflicts.map((c) => c.description || c.actionId).join(", ")}

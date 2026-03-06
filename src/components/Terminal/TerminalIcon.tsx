@@ -81,17 +81,17 @@ export function TerminalIcon({
 
   // Browser panes get a globe icon
   if (kind === "browser") {
-    return <Globe {...finalProps} className={cn(finalProps.className, "text-blue-400")} />;
+    return <Globe {...finalProps} className={cn(finalProps.className, "text-status-info")} />;
   }
 
   // Notes panes get a sticky note icon
   if (kind === "notes") {
-    return <StickyNote {...finalProps} className={cn(finalProps.className, "text-amber-400")} />;
+    return <StickyNote {...finalProps} className={cn(finalProps.className, "text-status-warning")} />;
   }
 
   // Dev preview panes get a monitor icon
   if (kind === "dev-preview") {
-    return <Monitor {...finalProps} className={cn(finalProps.className, "text-violet-400")} />;
+    return <Monitor {...finalProps} className={cn(finalProps.className, "text-github-merged")} />;
   }
 
   // Get effective agent ID - either from explicit agentId prop or from type (backward compat)

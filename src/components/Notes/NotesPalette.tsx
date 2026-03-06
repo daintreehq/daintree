@@ -930,15 +930,15 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
 
                     {/* Conflict warning */}
                     {hasConflict && (
-                      <div className="px-4 py-2 bg-amber-500/[0.03] border-l-2 border-amber-500 flex items-center justify-between shrink-0">
-                        <div className="flex items-center gap-2 text-amber-500 text-xs">
+                      <div className="px-4 py-2 bg-status-warning/[0.03] border-l-2 border-status-warning flex items-center justify-between shrink-0">
+                        <div className="flex items-center gap-2 text-status-warning text-xs">
                           <AlertTriangle size={14} />
                           <span>Note modified externally</span>
                         </div>
                         <button
                           type="button"
                           onClick={handleReloadNote}
-                          className="px-2 py-1 rounded-[var(--radius-sm)] text-xs bg-amber-500/20 hover:bg-amber-500/30 text-amber-500 transition-colors"
+                          className="px-2 py-1 rounded-[var(--radius-sm)] text-xs bg-status-warning/20 hover:bg-status-warning/30 text-status-warning transition-colors"
                         >
                           Reload
                         </button>

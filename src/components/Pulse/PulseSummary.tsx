@@ -62,7 +62,7 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
         />
         {hasStreak && (
           <Stat
-            icon={<Flame className="w-3 h-3 text-orange-400" />}
+            icon={<Flame className="w-3 h-3 text-status-warning" />}
             value={pulse.currentStreakDays!}
             label="streak"
             highlight
@@ -70,7 +70,7 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
         )}
         {hasUncommitted && (
           <Stat
-            icon={<FilePenLine className="w-3 h-3 text-sky-400" />}
+            icon={<FilePenLine className="w-3 h-3 text-status-info" />}
             value={pulse.uncommitted!.changedFiles}
             label="files"
           />
@@ -95,7 +95,7 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
         />
         {hasStreak && (
           <Stat
-            icon={<Flame className="w-3.5 h-3.5 text-orange-400" />}
+            icon={<Flame className="w-3.5 h-3.5 text-status-warning" />}
             value={pulse.currentStreakDays!}
             label="day streak"
             highlight
@@ -103,7 +103,7 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
         )}
         {hasUncommitted && (
           <Stat
-            icon={<FilePenLine className="w-3.5 h-3.5 text-sky-400" />}
+            icon={<FilePenLine className="w-3.5 h-3.5 text-status-info" />}
             value={`${pulse.uncommitted!.changedFiles} files`}
             label={`+${pulse.uncommitted!.insertions ?? 0}/-${pulse.uncommitted!.deletions ?? 0}`}
           />
@@ -120,14 +120,14 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
           </div>
 
           {pulse.deltaToMain!.ahead > 0 && (
-            <div className="flex items-center gap-0.5 text-emerald-400">
+            <div className="flex items-center gap-0.5 text-status-success">
               <ArrowUp className="w-3 h-3" />
               <span className="font-mono">{pulse.deltaToMain!.ahead}</span>
             </div>
           )}
 
           {pulse.deltaToMain!.behind > 0 && (
-            <div className="flex items-center gap-0.5 text-amber-400">
+            <div className="flex items-center gap-0.5 text-status-warning">
               <ArrowDown className="w-3 h-3" />
               <span className="font-mono">{pulse.deltaToMain!.behind}</span>
             </div>
@@ -142,10 +142,10 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
           )}
 
           {(pulse.deltaToMain!.insertions ?? 0) > 0 && (
-            <span className="font-mono text-emerald-400/70">+{pulse.deltaToMain!.insertions}</span>
+            <span className="font-mono text-status-success/70">+{pulse.deltaToMain!.insertions}</span>
           )}
           {(pulse.deltaToMain!.deletions ?? 0) > 0 && (
-            <span className="font-mono text-red-400/70">-{pulse.deltaToMain!.deletions}</span>
+            <span className="font-mono text-status-error/70">-{pulse.deltaToMain!.deletions}</span>
           )}
         </div>
       )}

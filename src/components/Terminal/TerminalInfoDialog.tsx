@@ -203,7 +203,7 @@ Performance & Diagnostics:
 
         {error && (
           <div
-            className="bg-red-500/10 border border-red-500/30 rounded-[var(--radius-lg)] p-4 text-red-400 select-text"
+            className="bg-status-error/10 border border-status-error/30 rounded-[var(--radius-lg)] p-4 text-status-error select-text"
             role="alert"
           >
             <p className="font-semibold mb-1">Failed to load terminal information</p>

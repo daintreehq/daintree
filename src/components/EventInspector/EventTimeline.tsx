@@ -7,10 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 const CATEGORY_STYLES: Record<EventCategory, { label: string; color: string }> = {
-  system: { label: "SYS", color: "bg-blue-500/20 text-blue-400 border-blue-500/30" },
-  agent: { label: "AGT", color: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30" },
-  task: { label: "TSK", color: "bg-green-500/20 text-green-400 border-green-500/30" },
-  server: { label: "SRV", color: "bg-orange-500/20 text-orange-400 border-orange-500/30" },
+  system: { label: "SYS", color: "bg-status-info/20 text-status-info border-status-info/30" },
+  agent: { label: "AGT", color: "bg-status-success/20 text-status-success border-status-success/30" },
+  task: { label: "TSK", color: "bg-status-success/20 text-status-success border-status-success/30" },
+  server: { label: "SRV", color: "bg-status-warning/20 text-status-warning border-status-warning/30" },
   file: { label: "FIL", color: "bg-pink-500/20 text-pink-400 border-pink-500/30" },
   ui: { label: "UI", color: "bg-indigo-500/20 text-indigo-400 border-indigo-500/30" },
   watcher: { label: "WCH", color: "bg-cyan-500/20 text-cyan-400 border-cyan-500/30" },

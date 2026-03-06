@@ -754,12 +754,12 @@ function TerminalPaneComponent({
             >
               {isBackendRecovering ? (
                 <div className="flex flex-col items-center gap-3">
-                  <Loader2 className="w-8 h-8 animate-spin motion-reduce:animate-none text-amber-400" />
+                  <Loader2 className="w-8 h-8 animate-spin motion-reduce:animate-none text-status-warning" />
                   <span className="text-white font-medium">Reconnecting...</span>
                 </div>
               ) : (
                 <div className="flex flex-col items-center gap-4 p-6 bg-canopy-sidebar border border-canopy-border rounded-xl shadow-2xl max-w-md text-center">
-                  <div className="flex items-center gap-3 text-red-400">
+                  <div className="flex items-center gap-3 text-status-error">
                     <AlertTriangle className="w-6 h-6" />
                     <h3 className="font-semibold text-lg">
                       {lastCrashType === "OUT_OF_MEMORY"
@@ -806,7 +806,7 @@ function TerminalPaneComponent({
                     onClick={() =>
                       void actionService.dispatch("ui.refresh", undefined, { source: "user" })
                     }
-                    className="px-4 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-lg border border-red-500/30 transition-colors"
+                    className="px-4 py-2 bg-status-error/20 hover:bg-status-error/30 text-status-error rounded-lg border border-status-error/30 transition-colors"
                   >
                     Restart Application
                   </button>

@@ -9,10 +9,10 @@ const COLOR_SCHEMES = {
     focus: "focus-visible:outline-canopy-accent",
   },
   amber: {
-    enabled: "bg-amber-500/10 border-amber-500 text-amber-500",
-    icon: "text-amber-500",
-    toggle: "bg-amber-500",
-    focus: "focus-visible:outline-amber-500",
+    enabled: "bg-status-warning/10 border-status-warning text-status-warning",
+    icon: "text-status-warning",
+    toggle: "bg-status-warning",
+    focus: "focus-visible:outline-status-warning",
   },
 } as const;
 

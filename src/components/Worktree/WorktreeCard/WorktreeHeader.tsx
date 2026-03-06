@@ -91,9 +91,9 @@ const IssueBadge = memo(function IssueBadge({
                 : `Open issue #${issueNumber} on GitHub`
             }
           >
-            <CircleDot className="w-3 h-3 text-emerald-400 shrink-0" aria-hidden="true" />
+            <CircleDot className="w-3 h-3 text-status-success shrink-0" aria-hidden="true" />
             <span className="truncate text-canopy-text/90 flex-1 min-w-0">
-              {issueTitle || <span className="text-emerald-400 font-mono">#{issueNumber}</span>}
+              {issueTitle || <span className="text-status-success font-mono">#{issueNumber}</span>}
             </span>
           </button>
         </TooltipTrigger>
@@ -145,10 +145,10 @@ const PRBadge = memo(function PRBadge({
 
   const prStateColor =
     prState === "merged"
-      ? "text-violet-400"
+      ? "text-github-merged"
       : prState === "closed"
-        ? "text-red-400"
-        : "text-sky-400";
+        ? "text-github-closed"
+        : "text-github-open";
 
   const prStateLabel = prState === "merged" ? "merged" : prState === "closed" ? "closed" : "open";
 
@@ -291,7 +291,7 @@ export function WorktreeHeader({
           )}
           <BranchLabel label={branchLabel} isActive={isActive} isMainWorktree={isMainWorktree} />
           {worktree.isDetached && (
-            <span className="text-amber-500 text-xs font-medium shrink-0">(detached)</span>
+            <span className="text-status-warning text-xs font-medium shrink-0">(detached)</span>
           )}
         </div>
 
@@ -328,7 +328,7 @@ export function WorktreeHeader({
                   className={cn(
                     "p-1 rounded transition-colors",
                     copy.treeCopied
-                      ? "text-green-400 bg-green-400/10"
+                      ? "text-status-success bg-status-success/10"
                       : "text-canopy-text/40 hover:text-canopy-text hover:bg-white/5",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
                     copy.isCopyingTree && "cursor-wait opacity-70"

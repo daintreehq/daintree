@@ -375,7 +375,7 @@ export function Toolbar({
                   variant="ghost"
                   size="icon"
                   onClick={() => onLaunchAgent("browser")}
-                  className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-blue-400 focus-visible:text-blue-400"
+                  className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-status-info focus-visible:text-status-info"
                   aria-label="Open Browser"
                 >
                   <Globe />
@@ -604,7 +604,7 @@ export function Toolbar({
                   >
                     <Bell />
                     {notificationUnreadCount > 0 && (
-                      <span className="absolute top-1 right-1 min-w-[14px] h-[14px] flex items-center justify-center rounded-full bg-amber-400 text-[9px] font-bold text-amber-950 px-0.5 leading-none">
+                      <span className="absolute top-1 right-1 min-w-[14px] h-[14px] flex items-center justify-center rounded-full bg-status-warning text-[9px] font-bold text-canopy-bg px-0.5 leading-none">
                         {notificationUnreadCount > 99 ? "99+" : notificationUnreadCount}
                       </span>
                     )}

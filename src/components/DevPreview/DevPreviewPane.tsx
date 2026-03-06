@@ -477,7 +477,7 @@ export function DevPreviewPane({
         <div className="relative flex-1 min-h-0 bg-white">
           {isRestarting || status === "starting" || status === "installing" ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg">
-              <div className="w-12 h-12 border-2 border-blue-400 border-t-transparent rounded-full animate-spin mb-4" />
+              <div className="w-12 h-12 border-2 border-status-info border-t-transparent rounded-full animate-spin mb-4" />
               <p className="text-sm text-canopy-text/60">
                 {isRestarting ? "Restarting" : status === "installing" ? "Installing" : "Starting"}
                 ...
@@ -485,7 +485,7 @@ export function DevPreviewPane({
             </div>
           ) : status === "error" && error ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
-              <AlertTriangle className="w-6 h-6 text-amber-400 mb-3" />
+              <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
               <h3 className="text-sm font-medium text-canopy-text/70 mb-1">Dev Server Error</h3>
               <p className="text-xs text-canopy-text/50 text-center mb-3 max-w-md">
                 {error.message}

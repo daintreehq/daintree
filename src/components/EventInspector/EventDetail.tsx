@@ -157,7 +157,7 @@ export function EventDetail({ event, className }: EventDetailProps) {
                   className="flex-shrink-0 p-2 hover:bg-muted rounded transition-colors"
                 >
                   {copied ? (
-                    <Check className="w-4 h-4 text-green-500" />
+                    <Check className="w-4 h-4 text-status-success" />
                   ) : (
                     <Copy className="w-4 h-4" />
                   )}

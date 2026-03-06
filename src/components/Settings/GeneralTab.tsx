@@ -287,13 +287,13 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
                       <span className="text-canopy-text/40 text-xs">Disabled</span>
                     ) : isAvailable ? (
                       <>
-                        <CheckCircle className="w-4 h-4 text-green-400" />
-                        <span className="text-green-400 text-xs">Ready</span>
+                        <CheckCircle className="w-4 h-4 text-status-success" />
+                        <span className="text-status-success text-xs">Ready</span>
                       </>
                     ) : (
                       <>
-                        <AlertCircle className="w-4 h-4 text-amber-400" />
-                        <span className="text-amber-400 text-xs">CLI not found</span>
+                        <AlertCircle className="w-4 h-4 text-status-warning" />
+                        <span className="text-status-warning text-xs">CLI not found</span>
                       </>
                     )}
                   </div>

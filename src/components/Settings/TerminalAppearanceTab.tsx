@@ -141,7 +141,7 @@ export function TerminalAppearanceTab() {
             Current: <span className="font-mono">{fontSize}px</span>. Smaller fonts reduce the
             number of cells on screen and can improve performance.
           </p>
-          {fontSizeError && <p className="text-xs text-red-500">{fontSizeError}</p>}
+          {fontSizeError && <p className="text-xs text-status-error">{fontSizeError}</p>}
         </div>
       </div>
 

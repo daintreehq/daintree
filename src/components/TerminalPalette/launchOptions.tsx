@@ -55,7 +55,7 @@ export function getLaunchOptions(): LaunchOption[] {
       kind: "browser",
       label: "Browser",
       description: "Embed localhost dev server preview.",
-      icon: <Globe className="w-4 h-4 text-blue-400" />,
+      icon: <Globe className="w-4 h-4 text-status-info" />,
     },
   ];
 }

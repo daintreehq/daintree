@@ -197,7 +197,7 @@ export function TerminalSettingsTab() {
         icon={Zap}
         title="Performance Mode"
         description={`Manual safe mode for low-end hardware or high-density workflows. Reduces scrollback to ${PERFORMANCE_MODE_SCROLLBACK} lines and disables animations for maximum performance.`}
-        iconColor="text-amber-500"
+        iconColor="text-status-warning"
       >
         <SettingsSwitchCard
           icon={Zap}
@@ -214,7 +214,7 @@ export function TerminalSettingsTab() {
         />
 
         {performanceMode && (
-          <p className="text-xs text-amber-500/80 flex items-center gap-1.5">
+          <p className="text-xs text-status-warning/80 flex items-center gap-1.5">
             <AlertTriangle className="w-3 h-3" />
             New terminals will use reduced scrollback. Existing terminals are unchanged until
             respawned.

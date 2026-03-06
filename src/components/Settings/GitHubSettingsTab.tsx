@@ -221,7 +221,7 @@ export function GitHubSettingsTab() {
               onClick={handleClearToken}
               variant="outline"
               size="sm"
-              className="text-[var(--color-status-error)] border-canopy-border hover:bg-red-900/20 hover:text-red-300 hover:border-red-900/30"
+              className="text-status-error border-canopy-border hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
             >
               Clear
             </Button>

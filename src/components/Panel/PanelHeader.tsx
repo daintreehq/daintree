@@ -572,7 +572,7 @@ function PanelHeaderComponent({
                       className={cn(
                         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 transition-colors flex items-center gap-1.5",
                         armedRestartId === id
-                          ? "px-2 py-1 bg-amber-500/20 text-amber-500 ring-2 ring-amber-500/50 focus-visible:outline-amber-500"
+                          ? "px-2 py-1 bg-status-warning/20 text-status-warning ring-2 ring-status-warning/50 focus-visible:outline-status-warning"
                           : "p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline-canopy-accent text-canopy-text/60 hover:text-canopy-text"
                       )}
                       aria-label={

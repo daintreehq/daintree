@@ -314,7 +314,7 @@ function WelcomeStep({
                 )}
               </div>
               {isInstalled ? (
-                <span className="text-[11px] text-emerald-400 font-medium">Installed</span>
+                <span className="text-[11px] text-status-success font-medium">Installed</span>
               ) : (
                 <span className="text-[11px] text-canopy-text/30">Not installed</span>
               )}
@@ -330,8 +330,8 @@ function CompleteStep({ installedAgents }: { installedAgents: string[] }) {
   return (
     <div className="space-y-6 text-center py-4">
       <div>
-        <div className="w-12 h-12 rounded-full bg-emerald-500/15 flex items-center justify-center mx-auto mb-4">
-          <Sparkles className="w-6 h-6 text-emerald-400" />
+        <div className="w-12 h-12 rounded-full bg-status-success/15 flex items-center justify-center mx-auto mb-4">
+          <Sparkles className="w-6 h-6 text-status-success" />
         </div>
         <h3 className="text-base font-semibold text-canopy-text mb-2">Setup Complete</h3>
         <p className="text-sm text-canopy-text/60">
@@ -351,7 +351,7 @@ function CompleteStep({ installedAgents }: { installedAgents: string[] }) {
             return (
               <div
                 key={id}
-                className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border border-emerald-500/20 bg-emerald-500/5"
+                className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border border-status-success/20 bg-status-success/5"
               >
                 <Icon size={18} brandColor={agent.color} />
                 <span className="text-sm text-canopy-text font-medium">{agent.name}</span>

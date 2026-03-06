@@ -146,7 +146,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
           </div>
 
           {hasChanges && !force && (
-            <div className="flex items-start gap-2 p-3 bg-amber-500/10 border border-amber-500/20 rounded text-amber-500 text-xs">
+            <div className="flex items-start gap-2 p-3 bg-status-warning/10 border border-status-warning/20 rounded text-status-warning text-xs">
               <AlertTriangle className="w-4 h-4 shrink-0" />
               <p>This worktree has uncommitted changes. Standard deletion will fail.</p>
             </div>
@@ -156,7 +156,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
             <div
               role="alert"
               aria-live="assertive"
-              className="p-3 bg-red-500/10 border border-red-500/20 rounded text-[var(--color-status-error)] text-xs"
+              className="p-3 bg-status-error/10 border border-status-error/20 rounded text-status-error text-xs"
             >
               {error}
             </div>
