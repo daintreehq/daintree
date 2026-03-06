@@ -18,9 +18,9 @@ export function replaceRecipeVariables(text: string, context: RecipeContext): st
   return text.replace(VARIABLE_PATTERN, (match, name: string) => {
     switch (name.toLowerCase()) {
       case "issue_number":
-        return context.issueNumber != null ? String(context.issueNumber) : "";
+        return context.issueNumber != null ? `#${context.issueNumber}` : "";
       case "pr_number":
-        return context.prNumber != null ? String(context.prNumber) : "";
+        return context.prNumber != null ? `#${context.prNumber}` : "";
       case "worktree_path":
         return context.worktreePath ?? "";
       case "branch_name":

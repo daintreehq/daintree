@@ -12,15 +12,15 @@ describe("replaceRecipeVariables", () => {
 
   it("replaces all supported variables", () => {
     const text =
-      "Issue #{{issue_number}}, PR #{{pr_number}}, path: {{worktree_path}}, branch: {{branch_name}}";
+      "Issue {{issue_number}}, PR {{pr_number}}, path: {{worktree_path}}, branch: {{branch_name}}";
     expect(replaceRecipeVariables(text, fullContext)).toBe(
       "Issue #123, PR #456, path: /home/user/project/worktrees/feature-123, branch: feature/issue-123-add-variables"
     );
   });
 
   it("replaces missing context values with empty string", () => {
-    const text = "Issue #{{issue_number}} on {{branch_name}}";
-    expect(replaceRecipeVariables(text, {})).toBe("Issue # on ");
+    const text = "Issue {{issue_number}} on {{branch_name}}";
+    expect(replaceRecipeVariables(text, {})).toBe("Issue  on ");
   });
 
   it("leaves unknown variables unchanged", () => {
@@ -30,7 +30,7 @@ describe("replaceRecipeVariables", () => {
 
   it("handles multiple occurrences of the same variable", () => {
     const text = "{{issue_number}} and {{issue_number}}";
-    expect(replaceRecipeVariables(text, { issueNumber: 42 })).toBe("42 and 42");
+    expect(replaceRecipeVariables(text, { issueNumber: 42 })).toBe("#42 and #42");
   });
 
   it("handles empty string input", () => {
@@ -44,7 +44,7 @@ describe("replaceRecipeVariables", () => {
 
   it("is case-insensitive for variable names", () => {
     const text = "{{ISSUE_NUMBER}} {{Issue_Number}} {{issue_number}}";
-    expect(replaceRecipeVariables(text, { issueNumber: 7 })).toBe("7 7 7");
+    expect(replaceRecipeVariables(text, { issueNumber: 7 })).toBe("#7 #7 #7");
   });
 
   it("does not replace malformed syntax", () => {
@@ -55,7 +55,7 @@ describe("replaceRecipeVariables", () => {
   });
 
   it("handles undefined vs zero for numeric values", () => {
-    expect(replaceRecipeVariables("{{issue_number}}", { issueNumber: 0 })).toBe("0");
+    expect(replaceRecipeVariables("{{issue_number}}", { issueNumber: 0 })).toBe("#0");
     expect(replaceRecipeVariables("{{issue_number}}", {})).toBe("");
   });
 });
