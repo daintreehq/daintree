@@ -280,7 +280,7 @@ export function WorktreeSettingsTab() {
           className={cn(
             "px-4 py-2 text-sm font-medium rounded-[var(--radius-md)] transition-colors",
             hasChanges && validation.valid
-              ? "bg-canopy-accent text-white hover:bg-canopy-accent/90"
+              ? "bg-canopy-accent text-canopy-bg hover:bg-canopy-accent/90"
               : "bg-canopy-border text-canopy-text/50 cursor-not-allowed"
           )}
         >
