@@ -121,7 +121,7 @@ const ITERM_KEY_MAP: Record<string, keyof ImportedSchemeColors> = {
   "Selected Text Color": "selectionForeground",
 };
 
-function parseItermColors(content: string): ImportResult {
+function parseItermColors(content: string, filename: string): ImportResult {
   const colors: ImportedSchemeColors = {};
 
   for (const [itermKey, schemeKey] of Object.entries(ITERM_KEY_MAP)) {
@@ -134,7 +134,9 @@ function parseItermColors(content: string): ImportResult {
 
     const dictContent = dictMatch[1];
     const components: Record<string, number> = {};
-    const compPattern = /<key>(Red|Green|Blue) Component<\/key>\s*<real>([\d.eE+-]+)<\/real>/gi;
+    // Support both <real> (float 0.0-1.0) and <integer> (0 or 1) component formats
+    const compPattern =
+      /<key>(Red|Green|Blue) Component<\/key>\s*<(?:real|integer)>([\d.eE+-]+)<\/(?:real|integer)>/gi;
     let compMatch;
     while ((compMatch = compPattern.exec(dictContent)) !== null) {
       components[compMatch[1].toLowerCase()] = parseFloat(compMatch[2]);
@@ -150,7 +152,9 @@ function parseItermColors(content: string): ImportResult {
   }
 
   const filled = fillDefaults(colors);
-  const name = "Imported iTerm Theme";
+  // Derive name from filename (strip extension), fall back to generic name
+  const baseName = path.basename(filename, path.extname(filename));
+  const name = baseName.length > 0 && baseName !== filename ? baseName : "Imported iTerm Theme";
   return {
     ok: true,
     scheme: {
@@ -167,52 +171,76 @@ function escapeRegex(s: string): string {
 }
 
 // --- Base16 JSON parser ---
-
+// Mapping follows the base16-shell convention:
+// https://github.com/chriskempson/base16-shell/blob/master/templates/default.mustache
+// ANSI 0=base00(bg), 1=base08(red), 2=base0B(green), 3=base0A(yellow),
+//      4=base0D(blue), 5=base0E(magenta), 6=base0C(cyan), 7=base05(fg-normal),
+//      8=base03(comment), 9=base09(orange→brightRed), 10=base01(dark),
+//      11=base02(selection), 12=base04(dark-fg), 13=base06(light),
+//      14=base0F(deprecated/brown), 15=base07(light-bg)
 const BASE16_MAP: Record<string, keyof ImportedSchemeColors> = {
-  base00: "background",
-  base01: "selectionBackground",
-  base02: "brightBlack",
-  base03: "brightBlack",
-  base04: "selectionForeground",
-  base05: "foreground",
-  base06: "white",
-  base07: "brightWhite",
-  base08: "red",
-  base09: "brightRed",
-  base0A: "yellow",
-  base0B: "green",
-  base0C: "cyan",
-  base0D: "blue",
-  base0E: "magenta",
-  base0F: "brightYellow",
+  BASE00: "black",
+  BASE01: "brightBlack",
+  BASE02: "selectionBackground",
+  BASE03: "brightBlack",
+  BASE04: "selectionForeground",
+  BASE05: "foreground",
+  BASE06: "white",
+  BASE07: "brightWhite",
+  BASE08: "red",
+  BASE09: "brightRed",
+  BASE0A: "yellow",
+  BASE0B: "green",
+  BASE0C: "cyan",
+  BASE0D: "blue",
+  BASE0E: "magenta",
+  BASE0F: "brightYellow",
 };
+
+function toBase16Key(k: string): string {
+  return k.toUpperCase();
+}
 
 function parseBase16Json(data: Record<string, unknown>): ImportResult {
   const colors: ImportedSchemeColors = {};
 
+  // Normalize all keys to uppercase for case-insensitive matching
+  const normalizedData: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(data)) {
+    normalizedData[toBase16Key(k)] = v;
+  }
+
+  // Derive background from base00
+  const bg = normalizedData["BASE00"];
+  if (typeof bg === "string") {
+    colors.background = bg.startsWith("#") ? bg : `#${bg}`;
+    colors.black = colors.background;
+    colors.cursorAccent = colors.background;
+  }
+
   for (const [b16Key, schemeKey] of Object.entries(BASE16_MAP)) {
-    const value = data[b16Key];
+    const value = normalizedData[b16Key];
     if (typeof value === "string") {
-      colors[schemeKey] = value.startsWith("#") ? value : `#${value}`;
+      const hex = value.startsWith("#") ? value : `#${value}`;
+      colors[schemeKey] = hex;
     }
   }
 
-  // Fill bright variants from base colors where not set
+  if (!colors.cursor && colors.foreground) colors.cursor = colors.foreground;
+  // Fill missing bright variants from their normal counterparts
   if (colors.red && !colors.brightRed) colors.brightRed = colors.red;
   if (colors.green && !colors.brightGreen) colors.brightGreen = colors.green;
   if (colors.blue && !colors.brightBlue) colors.brightBlue = colors.blue;
   if (colors.magenta && !colors.brightMagenta) colors.brightMagenta = colors.magenta;
   if (colors.cyan && !colors.brightCyan) colors.brightCyan = colors.cyan;
-  if (!colors.cursor && colors.foreground) colors.cursor = colors.foreground;
-  if (!colors.cursorAccent && colors.background) colors.cursorAccent = colors.background;
-  if (!colors.black && colors.background) colors.black = colors.background;
 
   if (Object.keys(colors).length === 0) {
     return { ok: false, errors: ["No valid base16 color keys found"] };
   }
 
   const filled = fillDefaults(colors);
-  const name = typeof data.scheme === "string" ? data.scheme : "Imported Base16 Theme";
+  const name =
+    typeof data.scheme === "string" && data.scheme ? data.scheme : "Imported Base16 Theme";
   return {
     ok: true,
     scheme: {
@@ -289,7 +317,7 @@ export function parseColorSchemeContent(content: string, filename: string): Impo
   const ext = path.extname(filename).toLowerCase();
 
   if (ext === ".itermcolors") {
-    return parseItermColors(content);
+    return parseItermColors(content, filename);
   }
 
   // Try JSON-based formats

@@ -15,9 +15,9 @@ export function useTerminalConfig() {
   const setFontFamily = useTerminalFontStore((state) => state.setFontFamily);
 
   const selectedSchemeId = useTerminalColorSchemeStore((state) => state.selectedSchemeId);
+  const customSchemes = useTerminalColorSchemeStore((state) => state.customSchemes);
   const setSelectedSchemeId = useTerminalColorSchemeStore((state) => state.setSelectedSchemeId);
   const addCustomScheme = useTerminalColorSchemeStore((state) => state.addCustomScheme);
-  const getEffectiveTheme = useTerminalColorSchemeStore((state) => state.getEffectiveTheme);
 
   useEffect(() => {
     let cancelled = false;
@@ -58,11 +58,12 @@ export function useTerminalConfig() {
   }, [setFontSize, setFontFamily, setSelectedSchemeId, addCustomScheme]);
 
   useEffect(() => {
-    const theme = getEffectiveTheme();
+    const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
     terminalInstanceService.applyGlobalOptions({
       theme,
       fontSize,
       fontFamily,
     });
-  }, [selectedSchemeId, fontSize, fontFamily, getEffectiveTheme]);
+    // customSchemes in deps ensures re-run when a custom scheme is added/changed
+  }, [selectedSchemeId, customSchemes, fontSize, fontFamily]);
 }

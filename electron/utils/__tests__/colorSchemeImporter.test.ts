@@ -110,18 +110,72 @@ describe("colorSchemeImporter", () => {
       // brightRed is not in the test fixture, should be filled with default
       expect(result.scheme.colors.brightRed).toBeDefined();
     });
+
+    it("derives scheme name from filename", () => {
+      const result = parseColorSchemeContent(VALID_ITERMCOLORS, "Dracula.itermcolors");
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.scheme.name).toBe("Dracula");
+      expect(result.scheme.id).toBe("custom-dracula");
+    });
+
+    it("parses .itermcolors with integer component values", () => {
+      const integerPlist = `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+  <key>Background Color</key>
+  <dict>
+    <key>Red Component</key> <integer>0</integer>
+    <key>Green Component</key> <integer>0</integer>
+    <key>Blue Component</key> <integer>0</integer>
+  </dict>
+  <key>Foreground Color</key>
+  <dict>
+    <key>Red Component</key> <integer>1</integer>
+    <key>Green Component</key> <integer>1</integer>
+    <key>Blue Component</key> <integer>1</integer>
+  </dict>
+</dict></plist>`;
+      const result = parseColorSchemeContent(integerPlist, "int-test.itermcolors");
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.scheme.colors.background).toBe("#000000");
+      expect(result.scheme.colors.foreground).toBe("#ffffff");
+    });
   });
 
   describe("Base16 JSON", () => {
-    it("parses valid Base16 JSON", () => {
+    it("parses valid Base16 JSON with correct ANSI slot mapping", () => {
       const result = parseColorSchemeContent(VALID_BASE16, "theme.json");
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       expect(result.scheme.name).toBe("My Base16 Theme");
+      // base00 → background and black
       expect(result.scheme.colors.background).toBe("#1a1a2e");
+      expect(result.scheme.colors.black).toBe("#1a1a2e");
+      // base05 → foreground
       expect(result.scheme.colors.foreground).toBe("#eaeaea");
+      // base08 → red
       expect(result.scheme.colors.red).toBe("#ff6b6b");
+      // base0B → green
+      expect(result.scheme.colors.green).toBe("#6bff6b");
+      // base0D → blue
+      expect(result.scheme.colors.blue).toBe("#6b6bff");
       expect(result.scheme.type).toBe("dark");
+    });
+
+    it("parses lowercase Base16 keys", () => {
+      const lower = JSON.stringify({
+        scheme: "Lowercase",
+        base00: "#111111",
+        base05: "#eeeeee",
+        base08: "#ff0000",
+      });
+      const result = parseColorSchemeContent(lower, "lower.json");
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.scheme.colors.background).toBe("#111111");
+      expect(result.scheme.colors.foreground).toBe("#eeeeee");
+      expect(result.scheme.colors.red).toBe("#ff0000");
     });
 
     it("returns error for empty JSON object", () => {

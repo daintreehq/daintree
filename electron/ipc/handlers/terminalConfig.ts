@@ -152,16 +152,19 @@ export function registerTerminalConfigHandlers(): () => void {
   ipcMain.handle(CHANNELS.TERMINAL_CONFIG_SET_CUSTOM_SCHEMES, handleTerminalConfigSetCustomSchemes);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_CUSTOM_SCHEMES));
 
-  const handleTerminalConfigImportColorScheme = async (_event: Electron.IpcMainInvokeEvent) => {
-    const win = BrowserWindow.getFocusedWindow();
-    const result = await dialog.showOpenDialog(win ?? BrowserWindow.getAllWindows()[0], {
+  const handleTerminalConfigImportColorScheme = async (event: Electron.IpcMainInvokeEvent) => {
+    const win = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow();
+    const dialogOptions = {
       title: "Import Color Scheme",
       filters: [
         { name: "Color Schemes", extensions: ["itermcolors", "json"] },
         { name: "All Files", extensions: ["*"] },
       ],
-      properties: ["openFile"],
-    });
+      properties: ["openFile" as const],
+    };
+    const result = win
+      ? await dialog.showOpenDialog(win, dialogOptions)
+      : await dialog.showOpenDialog(dialogOptions);
 
     if (result.canceled || result.filePaths.length === 0) {
       return { ok: false, errors: ["Import cancelled"] };
