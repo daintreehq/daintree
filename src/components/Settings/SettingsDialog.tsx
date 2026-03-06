@@ -3,6 +3,7 @@ import { useSidecarStore } from "@/store";
 import {
   X,
   Bot,
+  Code,
   Github,
   LayoutGrid,
   PanelRight,
@@ -24,6 +25,7 @@ import { SidecarSettingsTab } from "./SidecarSettingsTab";
 import { KeyboardShortcutsTab } from "./KeyboardShortcutsTab";
 import { WorktreeSettingsTab } from "./WorktreeSettingsTab";
 import { ToolbarSettingsTab } from "./ToolbarSettingsTab";
+import { EditorIntegrationTab } from "./EditorIntegrationTab";
 
 interface SettingsDialogProps {
   isOpen: boolean;
@@ -42,6 +44,7 @@ export type SettingsTab =
   | "github"
   | "sidecar"
   | "toolbar"
+  | "editor"
   | "troubleshooting";
 
 export function SettingsDialog({
@@ -90,6 +93,7 @@ export function SettingsDialog({
     github: "GitHub Integration",
     sidecar: "Sidecar Links",
     toolbar: "Toolbar Customization",
+    editor: "Editor Integration",
     troubleshooting: "Troubleshooting",
   };
 
@@ -164,6 +168,13 @@ export function SettingsDialog({
             Toolbar
           </NavButton>
           <NavButton
+            active={activeTab === "editor"}
+            onClick={() => setActiveTab("editor")}
+            icon={<Code className="w-4 h-4" />}
+          >
+            Editor
+          </NavButton>
+          <NavButton
             active={activeTab === "troubleshooting"}
             onClick={() => setActiveTab("troubleshooting")}
           >
@@ -221,6 +232,10 @@ export function SettingsDialog({
 
             <div className={activeTab === "toolbar" ? "" : "hidden"}>
               <ToolbarSettingsTab />
+            </div>
+
+            <div className={activeTab === "editor" ? "" : "hidden"}>
+              <EditorIntegrationTab />
             </div>
 
             <div className={activeTab === "troubleshooting" ? "" : "hidden"}>

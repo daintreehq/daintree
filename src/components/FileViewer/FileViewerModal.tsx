@@ -319,7 +319,7 @@ export function FileViewerModal({
         )}
 
         {mode === "diff" && diff && (
-          <DiffViewer diff={diff} filePath={filePath} viewType={viewType} />
+          <DiffViewer diff={diff} filePath={filePath} viewType={viewType} rootPath={rootPath} />
         )}
 
         {mode === "diff" && !diff && (

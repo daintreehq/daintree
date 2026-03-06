@@ -433,3 +433,12 @@ export type {
   EvaluatedCondition,
   WorkflowRun,
 } from "./workflowRun.js";
+
+// Editor integration types - external editor configuration and discovery
+export type {
+  KnownEditorId,
+  EditorConfig,
+  DiscoveredEditor,
+  EditorSetConfigPayload,
+  EditorGetConfigResult,
+} from "./editor.js";

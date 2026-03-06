@@ -74,6 +74,10 @@ export const CHANNELS = {
   COPYTREE_GET_FILE_TREE: "copytree:get-file-tree",
   COPYTREE_TEST_CONFIG: "copytree:test-config",
 
+  EDITOR_GET_CONFIG: "editor:get-config",
+  EDITOR_SET_CONFIG: "editor:set-config",
+  EDITOR_DISCOVER: "editor:discover",
+
   SYSTEM_OPEN_EXTERNAL: "system:open-external",
   SYSTEM_OPEN_PATH: "system:open-path",
   SYSTEM_OPEN_IN_EDITOR: "system:open-in-editor",

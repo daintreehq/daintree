@@ -96,51 +96,74 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
 
     const { path: targetPath, line, col } = parseResult.data;
 
-    if (!path.isAbsolute(targetPath)) {
-      throw new Error("Only absolute paths are allowed");
-    }
-
-    // Try VS Code with --goto flag first
+    // Resolve the project's preferred editor config if a project is active
+    let editorConfig = null;
     try {
-      const { execFile } = await import("child_process");
-      const { promisify } = await import("util");
-      const execFileAsync = promisify(execFile);
-
-      const gotoArg =
-        line !== undefined
-          ? col !== undefined
-            ? `${targetPath}:${line}:${col}`
-            : `${targetPath}:${line}`
-          : targetPath;
-
-      // On Windows, VS Code's CLI entry point is code.cmd
-      const candidates = process.platform === "win32" ? ["code.cmd", "code"] : ["code"];
-
-      let launched = false;
-      for (const cmd of candidates) {
-        try {
-          await execFileAsync(cmd, ["--goto", gotoArg], {
-            timeout: 5000,
-            ...(process.platform === "win32" ? { shell: true } : {}),
-          });
-          launched = true;
-          break;
-        } catch {
-          // Try next candidate
-        }
+      const activeProject = mainWindow?.webContents ? undefined : undefined;
+      if (activeProject) {
+        const settings = await projectStore.getProjectSettings(activeProject);
+        editorConfig = settings.preferredEditor ?? null;
       }
-      if (launched) return;
     } catch {
-      // Fall through to shell.openPath
+      // ignore — fall through to EditorService defaults
     }
 
-    const errorString = await shell.openPath(targetPath);
-    if (errorString) {
-      throw new Error(`Failed to open path: ${errorString}`);
-    }
+    const { openFile } = await import("../../services/EditorService.js");
+    await openFile(targetPath, line, col, editorConfig);
   };
   ipcMain.handle(CHANNELS.SYSTEM_OPEN_IN_EDITOR, handleSystemOpenInEditor);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_OPEN_IN_EDITOR));
+
+  const handleEditorGetConfig = async (_event: Electron.IpcMainInvokeEvent, projectId: unknown) => {
+    const { discover } = await import("../../services/EditorService.js");
+    const discoveredEditors = discover();
+
+    let preferredEditor = null;
+    if (typeof projectId === "string" && projectId) {
+      try {
+        const settings = await projectStore.getProjectSettings(projectId);
+        preferredEditor = settings.preferredEditor ?? null;
+      } catch {
+        // return null preference on error
+      }
+    }
+
+    return { preferredEditor, discoveredEditors };
+  };
+  ipcMain.handle(CHANNELS.EDITOR_GET_CONFIG, handleEditorGetConfig);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.EDITOR_GET_CONFIG));
+
+  const handleEditorSetConfig = async (_event: Electron.IpcMainInvokeEvent, payload: unknown) => {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid payload");
+    }
+    const { editor, projectId } = payload as { editor: unknown; projectId?: unknown };
+
+    if (!editor || typeof editor !== "object") {
+      throw new Error("Invalid editor config");
+    }
+    const editorConfig = editor as import("../../../shared/types/editor.js").EditorConfig;
+    if (typeof editorConfig.id !== "string") {
+      throw new Error("Invalid editor id");
+    }
+
+    const pid = typeof projectId === "string" ? projectId : null;
+    if (!pid) {
+      throw new Error("projectId is required");
+    }
+
+    const settings = await projectStore.getProjectSettings(pid);
+    await projectStore.saveProjectSettings(pid, { ...settings, preferredEditor: editorConfig });
+  };
+  ipcMain.handle(CHANNELS.EDITOR_SET_CONFIG, handleEditorSetConfig);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.EDITOR_SET_CONFIG));
+
+  const handleEditorDiscover = async () => {
+    const { discover } = await import("../../services/EditorService.js");
+    return discover();
+  };
+  ipcMain.handle(CHANNELS.EDITOR_DISCOVER, handleEditorDiscover);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.EDITOR_DISCOVER));
 
   const handleSystemCheckCommand = async (
     _event: Electron.IpcMainInvokeEvent,

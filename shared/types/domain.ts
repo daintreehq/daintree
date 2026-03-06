@@ -896,6 +896,8 @@ export interface ProjectSettings {
     /** Gitignore template to use (default: "node") */
     gitignoreTemplate?: "node" | "python" | "minimal" | "none";
   };
+  /** Preferred external editor for this project */
+  preferredEditor?: import("./editor.js").EditorConfig;
 }
 
 // Toolbar Customization Types

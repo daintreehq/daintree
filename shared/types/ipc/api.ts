@@ -220,6 +220,11 @@ export interface ElectronAPI {
     ): Promise<import("./copyTree.js").CopyTreeTestConfigResult>;
     onProgress(callback: (progress: CopyTreeProgress) => void): () => void;
   };
+  editor: {
+    getConfig(projectId?: string): Promise<import("../editor.js").EditorGetConfigResult>;
+    setConfig(payload: import("../editor.js").EditorSetConfigPayload): Promise<void>;
+    discover(): Promise<import("../editor.js").DiscoveredEditor[]>;
+  };
   system: {
     openExternal(url: string): Promise<void>;
     openPath(path: string): Promise<void>;
