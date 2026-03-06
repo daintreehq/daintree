@@ -444,6 +444,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       const hasCopyTreeSettings = Object.keys(sanitizedCopyTreeSettings).length > 0;
 
       const sanitizedBranchPrefixCustom = branchPrefixCustom.trim();
+      const effectivePrefixMode =
+        branchPrefixMode === "custom" && !sanitizedBranchPrefixCustom ? "none" : branchPrefixMode;
 
       await saveSettings({
         ...settings,
@@ -455,11 +457,9 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         devServerCommand: devServerCommand.trim() || undefined,
         commandOverrides: commandOverrides.length > 0 ? commandOverrides : undefined,
         copyTreeSettings: hasCopyTreeSettings ? sanitizedCopyTreeSettings : undefined,
-        branchPrefixMode: branchPrefixMode !== "none" ? branchPrefixMode : undefined,
+        branchPrefixMode: effectivePrefixMode !== "none" ? effectivePrefixMode : undefined,
         branchPrefixCustom:
-          branchPrefixMode === "custom" && sanitizedBranchPrefixCustom
-            ? sanitizedBranchPrefixCustom
-            : undefined,
+          effectivePrefixMode === "custom" ? sanitizedBranchPrefixCustom : undefined,
         insecureEnvironmentVariables: undefined,
         unresolvedSecureEnvironmentVariables: undefined,
       });

@@ -124,7 +124,19 @@ export function NewWorktreeDialog({
             if (settings.branchPrefixMode === "username") {
               window.electron.git
                 .getUsername(currentProject.path)
-                .then((username) => setGitUsername(username))
+                .then((username) => {
+                  if (!username) {
+                    setGitUsername(null);
+                    return;
+                  }
+                  // Slugify: lowercase, replace spaces and invalid branch chars with hyphens, collapse/trim
+                  const slug = username
+                    .toLowerCase()
+                    .replace(/[^a-z0-9-]/g, "-")
+                    .replace(/-+/g, "-")
+                    .replace(/^-|-$/g, "");
+                  setGitUsername(slug || null);
+                })
                 .catch(() => setGitUsername(null));
             }
           }

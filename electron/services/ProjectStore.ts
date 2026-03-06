@@ -681,6 +681,14 @@ export class ProjectStore {
           sanitizedCommandOverrides && sanitizedCommandOverrides.length > 0
             ? sanitizedCommandOverrides
             : undefined,
+        branchPrefixMode:
+          parsed.branchPrefixMode === "none" ||
+          parsed.branchPrefixMode === "username" ||
+          parsed.branchPrefixMode === "custom"
+            ? parsed.branchPrefixMode
+            : undefined,
+        branchPrefixCustom:
+          typeof parsed.branchPrefixCustom === "string" ? parsed.branchPrefixCustom : undefined,
       };
 
       return settings;

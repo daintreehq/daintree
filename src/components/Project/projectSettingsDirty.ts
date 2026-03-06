@@ -97,6 +97,7 @@ export function createProjectSettingsSnapshot(
     delete normalizedCopyTreeSettings.alwaysExclude;
   }
 
+  const normalizedMode = branchPrefixMode ?? "none";
   return {
     name: name.trim(),
     emoji,
@@ -108,8 +109,8 @@ export function createProjectSettingsSnapshot(
     defaultWorktreeRecipeId,
     commandOverrides: sortedCommandOverrides,
     copyTreeSettings: normalizedCopyTreeSettings,
-    branchPrefixMode,
-    branchPrefixCustom: branchPrefixCustom.trim(),
+    branchPrefixMode: normalizedMode,
+    branchPrefixCustom: normalizedMode === "custom" ? branchPrefixCustom.trim() : "",
   };
 }
 
