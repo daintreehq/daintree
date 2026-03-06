@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { useConsoleCaptureStore } from "../consoleCaptureStore";
+import { useConsoleCaptureStore, EMPTY_MESSAGES } from "../consoleCaptureStore";
 
 describe("consoleCaptureStore", () => {
   beforeEach(() => {
@@ -26,6 +26,11 @@ describe("consoleCaptureStore", () => {
     store.addMessage("pane1", 99, "unknown level");
     const messages = useConsoleCaptureStore.getState().getMessages("pane1");
     expect(messages[0].level).toBe("log");
+  });
+
+  it("EMPTY_MESSAGES is a stable reference (same array each access)", () => {
+    expect(EMPTY_MESSAGES).toBe(EMPTY_MESSAGES);
+    expect(EMPTY_MESSAGES).toHaveLength(0);
   });
 
   it("stores message text, timestamp, line and sourceId", () => {

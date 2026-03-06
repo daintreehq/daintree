@@ -1,7 +1,11 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { Trash2, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useConsoleCaptureStore, type ConsoleLevel } from "@/store/consoleCaptureStore";
+import {
+  useConsoleCaptureStore,
+  type ConsoleLevel,
+  EMPTY_MESSAGES,
+} from "@/store/consoleCaptureStore";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 interface ConsolePanelProps {
@@ -32,11 +36,6 @@ const LEVEL_STYLES: Record<ConsoleLevel, { row: string; badge: string; label: st
     badge: "text-status-error bg-status-error/15",
     label: "ERR",
   },
-  debug: {
-    row: "text-canopy-text/50",
-    badge: "text-canopy-text/40 bg-canopy-text/8",
-    label: "DBG",
-  },
 };
 
 const FILTER_BUTTONS: { filter: LevelFilter; label: string }[] = [
@@ -60,9 +59,14 @@ export function ConsolePanel({ paneId, height = 200 }: ConsolePanelProps) {
   const [search, setSearch] = useState("");
   const [isAtBottom, setIsAtBottom] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const prevLengthRef = useRef(0);
+  // Track the last visible message ID to correctly trigger scroll even when
+  // filtered.length doesn't change (e.g. at 500-message buffer cap)
+  const prevLastIdRef = useRef<number | null>(null);
 
-  const allMessages = useConsoleCaptureStore((state) => state.messages.get(paneId) ?? []);
+  // Use stable empty array to avoid unnecessary rerenders when pane has no messages
+  const allMessages = useConsoleCaptureStore(
+    (state) => state.messages.get(paneId) ?? EMPTY_MESSAGES
+  );
   const clearMessages = useConsoleCaptureStore((state) => state.clearMessages);
 
   const filtered = useMemo(() => {
@@ -70,13 +74,8 @@ export function ConsolePanel({ paneId, height = 200 }: ConsolePanelProps) {
       if (levelFilter !== "all") {
         if (levelFilter === "warning" && msg.level !== "warning") return false;
         if (levelFilter === "error" && msg.level !== "error") return false;
-        if (
-          levelFilter === "log" &&
-          msg.level !== "log" &&
-          msg.level !== "info" &&
-          msg.level !== "debug"
-        )
-          return false;
+        // "log" filter: show log and info (non-warning/non-error output)
+        if (levelFilter === "log" && msg.level !== "log" && msg.level !== "info") return false;
       }
       if (search) {
         return msg.message.toLowerCase().includes(search.toLowerCase());
@@ -101,16 +100,19 @@ export function ConsolePanel({ paneId, height = 200 }: ConsolePanelProps) {
     setIsAtBottom(el.scrollTop + el.clientHeight >= el.scrollHeight - threshold);
   }, []);
 
+  // Auto-scroll: track last visible message ID so we also scroll when a new
+  // message arrives after the 500-msg buffer is full (length stays the same)
+  const lastVisibleId = filtered.length > 0 ? filtered[filtered.length - 1].id : null;
   useEffect(() => {
-    if (filtered.length === prevLengthRef.current) return;
-    prevLengthRef.current = filtered.length;
+    if (lastVisibleId === prevLastIdRef.current) return;
+    prevLastIdRef.current = lastVisibleId;
     if (isAtBottom) {
       requestAnimationFrame(() => {
         const el = scrollRef.current;
         if (el) el.scrollTop = el.scrollHeight;
       });
     }
-  }, [filtered.length, isAtBottom]);
+  }, [lastVisibleId, isAtBottom]);
 
   const handleScrollToBottom = useCallback(() => {
     const el = scrollRef.current;

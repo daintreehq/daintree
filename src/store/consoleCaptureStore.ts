@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type ConsoleLevel = "log" | "info" | "warning" | "error" | "debug";
+export type ConsoleLevel = "log" | "info" | "warning" | "error";
 
 // Electron webview console-message event level mapping:
 // 0 = verbose/log, 1 = info, 2 = warning, 3 = error
@@ -19,6 +19,9 @@ export interface ConsoleMessage {
   line?: number;
   sourceId?: string;
 }
+
+// Stable empty array to prevent unnecessary selector rerenders for panes with no messages
+export const EMPTY_MESSAGES: ConsoleMessage[] = [];
 
 const MAX_MESSAGES = 500;
 let _nextId = 0;

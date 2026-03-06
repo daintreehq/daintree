@@ -298,8 +298,11 @@ export function BrowserPane({
 
   const handleCaptureScreenshot = useCallback(async () => {
     const webview = webviewRef.current;
-    if (!webview || !isWebviewReady) return;
+    // Check webviewRef directly to avoid stale closure over isWebviewReady state
+    if (!webview) return;
     try {
+      const url = webview.getURL();
+      if (!url || url === "about:blank") return;
       const image = await webview.capturePage();
       const pngData = new Uint8Array(image.toPNG());
       const blob = new Blob([pngData], { type: "image/png" });
@@ -307,7 +310,7 @@ export function BrowserPane({
     } catch (err) {
       console.error("[BrowserPane] Screenshot capture failed:", err);
     }
-  }, [isWebviewReady]);
+  }, []);
 
   const handleToggleDevTools = useCallback(() => {
     const webview = webviewRef.current;
