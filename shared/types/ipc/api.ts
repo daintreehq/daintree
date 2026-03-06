@@ -103,6 +103,14 @@ import type { AppAgentConfig } from "../appAgent.js";
 import type { ActionContext } from "../actions.js";
 import type { AgentRegistry, AgentMetadata } from "./agentCapabilities.js";
 
+export interface NotificationSettings {
+  completedEnabled: boolean;
+  waitingEnabled: boolean;
+  failedEnabled: boolean;
+  soundEnabled: boolean;
+  soundFile: string;
+}
+
 // ElectronAPI Type (exposed via preload)
 
 /** Complete Electron API exposed to renderer */
@@ -640,6 +648,12 @@ export interface ElectronAPI {
   notification: {
     /** Update window title and dock badge based on terminal attention state */
     updateBadge(state: { waitingCount: number; failedCount: number }): void;
+    /** Get notification settings */
+    getSettings(): Promise<NotificationSettings>;
+    /** Update notification settings (partial update) */
+    setSettings(settings: Partial<NotificationSettings>): Promise<void>;
+    /** Play a sound file by name for preview */
+    playSound(soundFile: string): Promise<void>;
   };
   update: {
     onUpdateAvailable(callback: (info: { version: string }) => void): () => void;

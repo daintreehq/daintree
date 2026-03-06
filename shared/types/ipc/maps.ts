@@ -1103,6 +1103,34 @@ export interface IpcInvokeMap {
     args: [];
     result: { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string };
   };
+
+  // Notification settings channels
+  "notification:settings-get": {
+    args: [];
+    result: {
+      completedEnabled: boolean;
+      waitingEnabled: boolean;
+      failedEnabled: boolean;
+      soundEnabled: boolean;
+      soundFile: string;
+    };
+  };
+  "notification:settings-set": {
+    args: [
+      Partial<{
+        completedEnabled: boolean;
+        waitingEnabled: boolean;
+        failedEnabled: boolean;
+        soundEnabled: boolean;
+        soundFile: string;
+      }>,
+    ];
+    result: void;
+  };
+  "notification:play-sound": {
+    args: [string];
+    result: void;
+  };
 }
 
 /**

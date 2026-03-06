@@ -182,6 +182,7 @@ export type {
   FileReadErrorCode,
   // Electron API
   ElectronAPI,
+  NotificationSettings,
   BranchInfo,
   CreateWorktreeOptions,
   // Adaptive backoff

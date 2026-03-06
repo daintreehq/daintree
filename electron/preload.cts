@@ -424,6 +424,9 @@ const CHANNELS = {
 
   // Notification channels
   NOTIFICATION_UPDATE: "notification:update",
+  NOTIFICATION_SETTINGS_GET: "notification:settings-get",
+  NOTIFICATION_SETTINGS_SET: "notification:settings-set",
+  NOTIFICATION_PLAY_SOUND: "notification:play-sound",
 
   // Auto-update channels
   UPDATE_AVAILABLE: "update:available",
@@ -1299,6 +1302,23 @@ const api: ElectronAPI = {
   notification: {
     updateBadge: (state: { waitingCount: number; failedCount: number }) =>
       ipcRenderer.send(CHANNELS.NOTIFICATION_UPDATE, state),
+    getSettings: (): Promise<{
+      completedEnabled: boolean;
+      waitingEnabled: boolean;
+      failedEnabled: boolean;
+      soundEnabled: boolean;
+      soundFile: string;
+    }> => _typedInvoke(CHANNELS.NOTIFICATION_SETTINGS_GET),
+    setSettings: (
+      settings: Partial<{
+        completedEnabled: boolean;
+        waitingEnabled: boolean;
+        failedEnabled: boolean;
+        soundEnabled: boolean;
+        soundFile: string;
+      }>
+    ) => _typedInvoke(CHANNELS.NOTIFICATION_SETTINGS_SET, settings),
+    playSound: (soundFile: string) => _typedInvoke(CHANNELS.NOTIFICATION_PLAY_SOUND, soundFile),
   },
 
   // Auto-Update API

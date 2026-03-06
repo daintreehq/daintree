@@ -255,6 +255,9 @@ export const CHANNELS = {
   WINDOW_CLOSE: "window:close",
 
   NOTIFICATION_UPDATE: "notification:update",
+  NOTIFICATION_SETTINGS_GET: "notification:settings-get",
+  NOTIFICATION_SETTINGS_SET: "notification:settings-set",
+  NOTIFICATION_PLAY_SOUND: "notification:play-sound",
 
   // Auto-update channels
   UPDATE_AVAILABLE: "update:available",
