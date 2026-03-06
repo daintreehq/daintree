@@ -87,12 +87,18 @@ export function WorktreeDetailsSection({
           </div>
         </div>
       ) : (
-        <div className="-m-3">
+        <div className="-m-3 flex items-stretch">
           <button
             onClick={onToggleExpand}
             aria-expanded={false}
             aria-controls={detailsPanelId}
-            className="w-full px-3 py-2.5 flex items-center justify-between min-w-0 text-left rounded-[var(--radius-lg)] transition-colors hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]"
+            className={cn(
+              "flex-1 px-3 py-2.5 flex items-center justify-between min-w-0 text-left transition-colors hover:bg-white/5",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]",
+              onOpenReviewHub && hasChanges
+                ? "rounded-l-[var(--radius-lg)]"
+                : "rounded-[var(--radius-lg)]"
+            )}
             id={`${detailsId}-button`}
           >
             <span className="text-xs truncate min-w-0 flex-1">
@@ -120,29 +126,6 @@ export function WorktreeDetailsSection({
                         </span>
                       )}
                     </span>
-                  )}
-                  {onOpenReviewHub && (
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onOpenReviewHub();
-                            }}
-                            className={cn(
-                              "ml-1 px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors",
-                              "text-canopy-accent/80 hover:text-canopy-accent hover:bg-canopy-accent/10",
-                              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
-                            )}
-                          >
-                            <GitCommitHorizontal className="w-3 h-3 inline mr-0.5" />
-                            Review
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent side="bottom">Open Review & Commit</TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
                   )}
                 </span>
               ) : (
@@ -178,6 +161,28 @@ export function WorktreeDetailsSection({
               </Tooltip>
             </TooltipProvider>
           </button>
+
+          {onOpenReviewHub && hasChanges && (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={onOpenReviewHub}
+                    className={cn(
+                      "px-2 py-1 border-l border-white/5 transition-colors shrink-0",
+                      "text-canopy-accent/70 hover:text-canopy-accent hover:bg-canopy-accent/10",
+                      "rounded-r-[var(--radius-lg)]",
+                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
+                    )}
+                    aria-label="Open Review & Commit"
+                  >
+                    <GitCommitHorizontal className="w-3.5 h-3.5" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Review & Commit</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
         </div>
       )}
     </div>

@@ -40,7 +40,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
 
     const { simpleGit } = await import("simple-git");
     const git = simpleGit(payload.cwd);
-    await git.add(payload.filePath);
+    await git.add(["--", payload.filePath]);
   };
   ipcMain.handle(CHANNELS.GIT_STAGE_FILE, handleStageFile);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_STAGE_FILE));
@@ -57,7 +57,19 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
 
     const { simpleGit } = await import("simple-git");
     const git = simpleGit(payload.cwd);
-    await git.reset(["HEAD", "--", payload.filePath]);
+
+    let hasHead = true;
+    try {
+      await git.revparse(["HEAD"]);
+    } catch {
+      hasHead = false;
+    }
+
+    if (hasHead) {
+      await git.reset(["HEAD", "--", payload.filePath]);
+    } else {
+      await git.raw(["rm", "--cached", "--", payload.filePath]);
+    }
   };
   ipcMain.handle(CHANNELS.GIT_UNSTAGE_FILE, handleUnstageFile);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_UNSTAGE_FILE));
@@ -85,7 +97,19 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
 
     const { simpleGit } = await import("simple-git");
     const git = simpleGit(cwd);
-    await git.reset(["HEAD"]);
+
+    let hasHead = true;
+    try {
+      await git.revparse(["HEAD"]);
+    } catch {
+      hasHead = false;
+    }
+
+    if (hasHead) {
+      await git.reset(["HEAD"]);
+    } else {
+      await git.raw(["rm", "--cached", "-r", "."]);
+    }
   };
   ipcMain.handle(CHANNELS.GIT_UNSTAGE_ALL, handleUnstageAll);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_UNSTAGE_ALL));
@@ -171,6 +195,8 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
           return "renamed";
         case "C":
           return "copied";
+        case "U":
+          return "conflicted";
         case "?":
           return "untracked";
         case "!":
@@ -182,10 +208,17 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
 
     const staged: StagingFileEntry[] = [];
     const unstaged: StagingFileEntry[] = [];
+    const conflicted: string[] = status.conflicted ?? [];
+
+    const conflictedSet = new Set(conflicted);
 
     for (const file of status.files) {
       const indexStatus = file.index;
       const workingStatus = file.working_dir;
+
+      if (conflictedSet.has(file.path)) {
+        continue;
+      }
 
       if (indexStatus && indexStatus !== " " && indexStatus !== "?") {
         staged.push({
@@ -221,7 +254,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       // no remotes
     }
 
-    return { staged, unstaged, isDetachedHead, currentBranch, hasRemote };
+    return { staged, unstaged, conflicted, isDetachedHead, currentBranch, hasRemote };
   };
   ipcMain.handle(CHANNELS.GIT_GET_STAGING_STATUS, handleGetStagingStatus);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_GET_STAGING_STATUS));

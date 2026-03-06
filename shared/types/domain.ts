@@ -8,7 +8,8 @@ export type GitStatus =
   | "untracked"
   | "ignored"
   | "renamed"
-  | "copied";
+  | "copied"
+  | "conflicted";
 
 /** Details about a single file change in a worktree */
 export interface FileChangeDetail {
@@ -64,6 +65,7 @@ export interface StagingFileEntry {
 export interface StagingStatus {
   staged: StagingFileEntry[];
   unstaged: StagingFileEntry[];
+  conflicted: string[];
   isDetachedHead: boolean;
   currentBranch: string | null;
   hasRemote: boolean;
