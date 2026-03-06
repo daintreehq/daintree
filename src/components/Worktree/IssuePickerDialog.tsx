@@ -125,7 +125,7 @@ export function IssuePickerDialog({
   return (
     <AppDialog isOpen={isOpen} onClose={onClose} size="md" maxHeight="max-h-[70vh]">
       <AppDialog.Header>
-        <AppDialog.Title icon={<Link className="w-5 h-5 text-status-success" />}>
+        <AppDialog.Title icon={<Link className="w-5 h-5 text-github-open" />}>
           Attach Issue
         </AppDialog.Title>
         <AppDialog.CloseButton />
