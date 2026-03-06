@@ -7,6 +7,8 @@ const projectStoreMock = vi.hoisted(() => ({
   setCurrentProject: vi.fn<(id: string) => Promise<void>>(),
   getProjectState: vi.fn<(id: string) => Promise<Record<string, unknown>>>(),
   saveProjectState: vi.fn<(id: string, state: Record<string, unknown>) => Promise<void>>(),
+  readInRepoProjectIdentity: vi.fn<(p: string) => Promise<{ found: boolean }>>(),
+  updateProject: vi.fn<(id: string, updates: Record<string, unknown>) => Record<string, unknown>>(),
 }));
 
 const logBufferMock = vi.hoisted(() => ({
@@ -29,6 +31,7 @@ const storeMock = vi.hoisted(() => ({
 
 vi.mock("../ProjectStore.js", () => ({
   projectStore: projectStoreMock,
+  DEFAULT_PROJECT_EMOJI: "🌲",
 }));
 
 vi.mock("../LogBuffer.js", () => ({
@@ -75,6 +78,10 @@ describe("ProjectSwitchService", () => {
       terminals: [],
     });
     projectStoreMock.saveProjectState.mockResolvedValue(undefined);
+    projectStoreMock.readInRepoProjectIdentity.mockResolvedValue({ found: false });
+    projectStoreMock.updateProject.mockImplementation(
+      (id: string, updates: Record<string, unknown>) => ({ id, ...updates })
+    );
 
     logBufferMock.onProjectSwitch.mockImplementation(() => undefined);
     taskQueueServiceMock.onProjectSwitch.mockResolvedValue(undefined);

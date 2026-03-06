@@ -5,6 +5,7 @@ import os from "os";
 
 const MAX_PROJECT_NAME_LENGTH = 100;
 const CANOPY_PROJECT_JSON = ".canopy/project.json";
+const UTF8_BOM = "\uFEFF";
 
 /**
  * Standalone implementation of readInRepoProjectIdentity for testing.
@@ -15,14 +16,17 @@ async function readInRepoProjectIdentity(
 ): Promise<{ name?: string; emoji?: string; color?: string; found: boolean }> {
   const filePath = path.join(projectPath, CANOPY_PROJECT_JSON);
   try {
-    const content = await fs.readFile(filePath, "utf-8");
+    let content = await fs.readFile(filePath, "utf-8");
+    if (content.startsWith(UTF8_BOM)) {
+      content = content.slice(1);
+    }
     const parsed = JSON.parse(content);
 
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       return { found: false };
     }
 
-    if (typeof parsed.version !== "number") {
+    if (!Number.isFinite(parsed.version) || !Number.isInteger(parsed.version)) {
       return { found: false };
     }
 
@@ -117,6 +121,25 @@ describe("readInRepoProjectIdentity", () => {
     await writeProjectJson(JSON.stringify({ version: "1", name: "Bad Version" }));
     const result = await readInRepoProjectIdentity(tmpDir);
     expect(result).toEqual({ found: false });
+  });
+
+  it("returns empty object when version is a float", async () => {
+    await writeProjectJson(JSON.stringify({ version: 1.5, name: "Float Version" }));
+    const result = await readInRepoProjectIdentity(tmpDir);
+    expect(result).toEqual({ found: false });
+  });
+
+  it("accepts version: 0 as a valid version number", async () => {
+    await writeProjectJson(JSON.stringify({ version: 0, name: "Zero Version" }));
+    const result = await readInRepoProjectIdentity(tmpDir);
+    expect(result).toEqual({ found: true, name: "Zero Version" });
+  });
+
+  it("strips UTF-8 BOM before parsing", async () => {
+    const bom = "\uFEFF";
+    await writeProjectJson(bom + JSON.stringify({ version: 1, name: "BOM Project", emoji: "🎉" }));
+    const result = await readInRepoProjectIdentity(tmpDir);
+    expect(result).toEqual({ found: true, name: "BOM Project", emoji: "🎉" });
   });
 
   it("ignores unknown fields (forward-compatibility)", async () => {

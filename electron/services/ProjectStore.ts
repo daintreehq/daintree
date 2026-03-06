@@ -28,6 +28,9 @@ const WORKFLOWS_FILENAME = "workflows.json";
 const PROJECT_STATE_CACHE_TTL_MS = 60_000;
 const CANOPY_PROJECT_JSON = ".canopy/project.json";
 const MAX_PROJECT_NAME_LENGTH = 100;
+export const DEFAULT_PROJECT_EMOJI = "🌲";
+// UTF-8 BOM that editors may prepend to JSON files
+const UTF8_BOM = "\uFEFF";
 
 interface ProjectStateCacheEntry {
   expiresAt: number;
@@ -66,14 +69,17 @@ export class ProjectStore {
   ): Promise<{ name?: string; emoji?: string; color?: string; found: boolean }> {
     const filePath = path.join(projectPath, CANOPY_PROJECT_JSON);
     try {
-      const content = await fs.readFile(filePath, "utf-8");
+      let content = await fs.readFile(filePath, "utf-8");
+      if (content.startsWith(UTF8_BOM)) {
+        content = content.slice(1);
+      }
       const parsed = JSON.parse(content);
 
       if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
         return { found: false };
       }
 
-      if (typeof parsed.version !== "number") {
+      if (!Number.isFinite(parsed.version) || !Number.isInteger(parsed.version)) {
         return { found: false };
       }
 
@@ -169,7 +175,7 @@ export class ProjectStore {
       id: this.generateProjectId(normalizedPath),
       path: normalizedPath,
       name: inRepo.name ?? path.basename(normalizedPath),
-      emoji: inRepo.emoji ?? "🌲",
+      emoji: inRepo.emoji ?? DEFAULT_PROJECT_EMOJI,
       lastOpened: Date.now(),
       status: "closed",
       ...(inRepo.color ? { color: inRepo.color } : {}),

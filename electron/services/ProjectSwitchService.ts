@@ -1,7 +1,7 @@
 import path from "path";
 import type { Project } from "../types/index.js";
 import type { HandlerDependencies } from "../ipc/types.js";
-import { projectStore } from "./ProjectStore.js";
+import { projectStore, DEFAULT_PROJECT_EMOJI } from "./ProjectStore.js";
 import { logBuffer } from "./LogBuffer.js";
 import { taskQueueService } from "./TaskQueueService.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -203,7 +203,7 @@ export class ProjectSwitchService {
       }
 
       const defaultName = path.basename(project.path);
-      const defaultEmoji = "🌲";
+      const defaultEmoji = DEFAULT_PROJECT_EMOJI;
 
       if (inRepo.name && project.name === defaultName) {
         updates.name = inRepo.name;
