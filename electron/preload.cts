@@ -738,7 +738,7 @@ const api: ElectronAPI = {
 
     openPath: (path: string) => _typedInvoke(CHANNELS.SYSTEM_OPEN_PATH, { path }),
 
-    openInEditor: (payload: { path: string; line?: number; col?: number }) =>
+    openInEditor: (payload: { path: string; line?: number; col?: number; projectId?: string }) =>
       _typedInvoke(CHANNELS.SYSTEM_OPEN_IN_EDITOR, payload),
 
     checkCommand: (command: string) => _typedInvoke(CHANNELS.SYSTEM_CHECK_COMMAND, command),

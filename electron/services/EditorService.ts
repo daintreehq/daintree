@@ -201,9 +201,10 @@ export async function openFile(
         detached: true,
         stdio: "ignore",
         cleanup: false,
-        ...(process.platform === "win32" ? { shell: true } : {}),
       });
       child.unref();
+      // Suppress unhandled async rejection from the detached process
+      child.catch(() => {});
       return true;
     } catch {
       return false;

@@ -53,10 +53,11 @@ export function EditorIntegrationTab() {
 
   useEffect(() => {
     if (!activeProjectId) return;
+    let cancelled = false;
     editorClient
       .getConfig(activeProjectId)
       .then(({ preferredEditor: pref, discoveredEditors: discovered }) => {
-        if (!isMountedRef.current) return;
+        if (cancelled || !isMountedRef.current) return;
         setDiscoveredEditors(discovered);
         if (pref) {
           setPreferredEditor(pref);
@@ -72,9 +73,12 @@ export function EditorIntegrationTab() {
         }
       })
       .catch((err) => {
-        if (!isMountedRef.current) return;
+        if (cancelled || !isMountedRef.current) return;
         console.error("[EditorIntegrationTab] Failed to load config:", err);
       });
+    return () => {
+      cancelled = true;
+    };
   }, [activeProjectId]);
 
   const handleRescan = async () => {

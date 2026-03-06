@@ -108,7 +108,15 @@ function FileDiff({ file, viewType, language, rootPath }: FileDiffProps) {
     newPath?: string;
     oldPath?: string;
   };
-  const relPath = fileTyped.newPath || fileTyped.oldPath;
+  // Prefer newPath (the post-change path); fall back to oldPath for deletions.
+  // Filter out /dev/null which git uses as a sentinel for added/deleted files.
+  const rawPath =
+    fileTyped.newPath && fileTyped.newPath !== "/dev/null"
+      ? fileTyped.newPath
+      : fileTyped.oldPath && fileTyped.oldPath !== "/dev/null"
+        ? fileTyped.oldPath
+        : undefined;
+  const relPath = rawPath;
   const absolutePath =
     rootPath && relPath && !relPath.startsWith("/")
       ? path.join(rootPath, relPath)

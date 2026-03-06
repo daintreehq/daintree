@@ -94,18 +94,16 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
       throw new Error(`Invalid payload: ${parseResult.error.message}`);
     }
 
-    const { path: targetPath, line, col } = parseResult.data;
+    const { path: targetPath, line, col, projectId } = parseResult.data;
 
-    // Resolve the project's preferred editor config if a project is active
     let editorConfig = null;
-    try {
-      const activeProject = mainWindow?.webContents ? undefined : undefined;
-      if (activeProject) {
-        const settings = await projectStore.getProjectSettings(activeProject);
+    if (projectId) {
+      try {
+        const settings = await projectStore.getProjectSettings(projectId);
         editorConfig = settings.preferredEditor ?? null;
+      } catch {
+        // ignore — fall through to EditorService defaults
       }
-    } catch {
-      // ignore — fall through to EditorService defaults
     }
 
     const { openFile } = await import("../../services/EditorService.js");
@@ -142,10 +140,38 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
     if (!editor || typeof editor !== "object") {
       throw new Error("Invalid editor config");
     }
-    const editorConfig = editor as import("../../../shared/types/editor.js").EditorConfig;
-    if (typeof editorConfig.id !== "string") {
-      throw new Error("Invalid editor id");
+    const editorObj = editor as Record<string, unknown>;
+    const validIds = [
+      "vscode",
+      "vscode-insiders",
+      "cursor",
+      "windsurf",
+      "zed",
+      "neovim",
+      "webstorm",
+      "sublime",
+      "custom",
+    ];
+    if (typeof editorObj.id !== "string" || !validIds.includes(editorObj.id)) {
+      throw new Error(`Invalid editor id: ${String(editorObj.id)}`);
     }
+    if (editorObj.customCommand !== undefined) {
+      if (typeof editorObj.customCommand !== "string" || editorObj.customCommand.length > 512) {
+        throw new Error("Invalid customCommand");
+      }
+    }
+    if (editorObj.customTemplate !== undefined) {
+      if (typeof editorObj.customTemplate !== "string" || editorObj.customTemplate.length > 512) {
+        throw new Error("Invalid customTemplate");
+      }
+    }
+    const editorConfig = {
+      id: editorObj.id as import("../../../shared/types/editor.js").KnownEditorId,
+      customCommand:
+        typeof editorObj.customCommand === "string" ? editorObj.customCommand : undefined,
+      customTemplate:
+        typeof editorObj.customTemplate === "string" ? editorObj.customTemplate : undefined,
+    };
 
     const pid = typeof projectId === "string" ? projectId : null;
     if (!pid) {

@@ -16,7 +16,12 @@ export const systemClient = {
     return window.electron.system.openPath(path);
   },
 
-  openInEditor: (payload: { path: string; line?: number; col?: number }): Promise<void> => {
+  openInEditor: (payload: {
+    path: string;
+    line?: number;
+    col?: number;
+    projectId?: string;
+  }): Promise<void> => {
     return window.electron.system.openInEditor(payload);
   },
 

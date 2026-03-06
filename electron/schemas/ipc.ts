@@ -339,6 +339,7 @@ export const SystemOpenInEditorPayloadSchema = z.object({
   path: z.string().min(1).max(4096),
   line: z.number().int().positive().optional(),
   col: z.number().int().positive().optional(),
+  projectId: z.string().optional(),
 });
 
 const MAX_REPLAY_LINES = 100000;
