@@ -20,6 +20,7 @@ import {
   Globe,
   StickyNote,
   Monitor,
+  Bell,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { isMac, createTooltipWithShortcut } from "@/lib/platform";
@@ -49,6 +50,8 @@ import type { MenuItemOption } from "@/types";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { ProjectSwitcherPalette } from "@/components/Project/ProjectSwitcherPalette";
+import { NotificationCenter } from "@/components/Notifications/NotificationCenter";
+import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 
 interface ToolbarProps {
   onLaunchAgent: (
@@ -126,6 +129,9 @@ export function Toolbar({
   const prsButtonRef = useRef<HTMLButtonElement>(null);
   const commitsButtonRef = useRef<HTMLButtonElement>(null);
   const treeCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [notificationCenterOpen, setNotificationCenterOpen] = useState(false);
+  const notificationCenterButtonRef = useRef<HTMLButtonElement>(null);
+  const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
   const [statsJustUpdated, setStatsJustUpdated] = useState(false);
   const prevLastUpdatedRef = useRef<number | null>(null);
 
@@ -576,6 +582,52 @@ export function Toolbar({
           ) : null,
         isAvailable: !!currentProject,
       },
+      "notification-center": {
+        render: () => (
+          <div key="notification-center" className="relative">
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    ref={notificationCenterButtonRef}
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setNotificationCenterOpen((prev) => !prev)}
+                    className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
+                    aria-label={
+                      notificationUnreadCount > 0
+                        ? `Notifications — ${notificationUnreadCount} unread`
+                        : "Notifications"
+                    }
+                    aria-expanded={notificationCenterOpen}
+                    aria-haspopup="dialog"
+                  >
+                    <Bell />
+                    {notificationUnreadCount > 0 && (
+                      <span className="absolute top-1 right-1 min-w-[14px] h-[14px] flex items-center justify-center rounded-full bg-canopy-accent text-[9px] font-bold text-white px-0.5 leading-none">
+                        {notificationUnreadCount > 99 ? "99+" : notificationUnreadCount}
+                      </span>
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Notifications</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+            <FixedDropdown
+              open={notificationCenterOpen}
+              onOpenChange={setNotificationCenterOpen}
+              anchorRef={notificationCenterButtonRef}
+              className="p-0"
+            >
+              <NotificationCenter
+                open={notificationCenterOpen}
+                onClose={() => setNotificationCenterOpen(false)}
+              />
+            </FixedDropdown>
+          </div>
+        ),
+        isAvailable: true,
+      },
       notes: {
         render: () => (
           <TooltipProvider key="notes">
@@ -761,6 +813,8 @@ export function Toolbar({
       toggleSidecar,
       sidecarOpen,
       getTimeSinceUpdate,
+      notificationCenterOpen,
+      notificationUnreadCount,
     ]
   );
 

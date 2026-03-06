@@ -897,6 +897,7 @@ export type ToolbarButtonId =
   | "copy-tree"
   | "settings"
   | "problems"
+  | "notification-center"
   | "sidecar-toggle";
 
 /** Configuration for which toolbar buttons are visible and their order */
