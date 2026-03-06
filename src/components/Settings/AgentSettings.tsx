@@ -169,9 +169,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
   if (loadError || !settings) {
     return (
       <div className="flex flex-col items-center justify-center h-32 gap-3">
-        <div className="text-status-error text-sm">
-          {loadError || "Failed to load settings"}
-        </div>
+        <div className="text-status-error text-sm">{loadError || "Failed to load settings"}</div>
         <button
           onClick={() => void actionService.dispatch("ui.refresh", undefined, { source: "user" })}
           className="text-xs px-3 py-1.5 bg-canopy-accent/10 hover:bg-canopy-accent/20 text-canopy-accent rounded transition-colors"
@@ -358,9 +356,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
                   }}
                   className={cn(
                     "relative w-11 h-6 rounded-full transition-colors",
-                    activeEntry.dangerousEnabled
-                      ? "bg-status-error"
-                      : "bg-canopy-border"
+                    activeEntry.dangerousEnabled ? "bg-status-error" : "bg-canopy-border"
                   )}
                 >
                   <span
@@ -374,9 +370,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
 
               {activeEntry.dangerousEnabled && defaultDangerousArg && (
                 <div className="flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
-                  <code className="text-xs text-status-error font-mono">
-                    {defaultDangerousArg}
-                  </code>
+                  <code className="text-xs text-status-error font-mono">{defaultDangerousArg}</code>
                   <span className="text-xs text-canopy-text/40">added to command</span>
                 </div>
               )}

@@ -107,12 +107,8 @@ export function ErrorBanner({
         <span className="shrink-0 text-lg">{typeIcon}</span>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-xs text-status-error font-medium">
-              {typeLabel}
-            </span>
-            {error.source && (
-              <span className="text-xs text-status-error/80">• {error.source}</span>
-            )}
+            <span className="text-xs text-status-error font-medium">{typeLabel}</span>
+            {error.source && <span className="text-xs text-status-error/80">• {error.source}</span>}
           </div>
           <p className="text-sm text-status-error truncate">{error.message}</p>
         </div>

@@ -331,7 +331,11 @@ export function BrowserToolbar({
         <Tooltip>
           <TooltipTrigger asChild>
             <button type="button" onClick={handleCopy} className={buttonClass}>
-              {copied ? <Check className="w-4 h-4 text-status-success" /> : <Copy className="w-4 h-4" />}
+              {copied ? (
+                <Check className="w-4 h-4 text-status-success" />
+              ) : (
+                <Copy className="w-4 h-4" />
+              )}
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">Copy URL</TooltipContent>

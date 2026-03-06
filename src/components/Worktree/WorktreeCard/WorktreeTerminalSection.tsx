@@ -185,10 +185,7 @@ export function WorktreeTerminalSection({
                         )}
 
                         {term.agentState === "running" && (
-                          <Play
-                            className="w-3 h-3 text-status-info"
-                            aria-label="Running"
-                          />
+                          <Play className="w-3 h-3 text-status-info" aria-label="Running" />
                         )}
 
                         {term.agentState === "waiting" && (
@@ -199,10 +196,7 @@ export function WorktreeTerminalSection({
                         )}
 
                         {term.agentState === "failed" && (
-                          <XCircle
-                            className="w-3 h-3 text-status-error"
-                            aria-label="Failed"
-                          />
+                          <XCircle className="w-3 h-3 text-status-error" aria-label="Failed" />
                         )}
 
                         {term.agentState === "completed" && (

@@ -189,9 +189,7 @@ function ArtifactItem({
                 aria-live="polite"
                 className={cn(
                   "ml-auto text-xs animate-pulse",
-                  feedback.tone === "success"
-                    ? "text-status-success"
-                    : "text-status-error"
+                  feedback.tone === "success" ? "text-status-success" : "text-status-error"
                 )}
               >
                 {feedback.text}
@@ -473,9 +471,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                     aria-live="polite"
                     className={cn(
                       "text-xs ml-auto animate-pulse",
-                      bulkResult.tone === "success"
-                        ? "text-status-success"
-                        : "text-status-error"
+                      bulkResult.tone === "success" ? "text-status-success" : "text-status-error"
                     )}
                   >
                     {bulkResult.text}

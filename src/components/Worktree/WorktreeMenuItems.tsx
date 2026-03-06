@@ -361,10 +361,7 @@ export function WorktreeMenuItems({
       {onDeleteWorktree && (
         <>
           <C.Separator />
-          <C.Item
-            onSelect={onDeleteWorktree}
-            className="text-status-error focus:text-status-error"
-          >
+          <C.Item onSelect={onDeleteWorktree} className="text-status-error focus:text-status-error">
             <Trash2 className="w-3.5 h-3.5 mr-2" />
             Delete Worktree...
           </C.Item>

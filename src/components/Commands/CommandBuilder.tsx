@@ -120,11 +120,7 @@ function BuilderTextField({
         </p>
       )}
       {error && (
-        <p
-          id={errorId}
-          className="text-xs text-status-error flex items-center gap-1"
-          role="alert"
-        >
+        <p id={errorId} className="text-xs text-status-error flex items-center gap-1" role="alert">
           <AlertCircle className="h-3 w-3" />
           {error}
         </p>
@@ -176,11 +172,7 @@ function BuilderTextareaField({
         </p>
       )}
       {error && (
-        <p
-          id={errorId}
-          className="text-xs text-status-error flex items-center gap-1"
-          role="alert"
-        >
+        <p id={errorId} className="text-xs text-status-error flex items-center gap-1" role="alert">
           <AlertCircle className="h-3 w-3" />
           {error}
         </p>
@@ -237,11 +229,7 @@ function BuilderSelectField({
         </p>
       )}
       {error && (
-        <p
-          id={errorId}
-          className="text-xs text-status-error flex items-center gap-1"
-          role="alert"
-        >
+        <p id={errorId} className="text-xs text-status-error flex items-center gap-1" role="alert">
           <AlertCircle className="h-3 w-3" />
           {error}
         </p>

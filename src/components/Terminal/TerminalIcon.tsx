@@ -86,7 +86,9 @@ export function TerminalIcon({
 
   // Notes panes get a sticky note icon
   if (kind === "notes") {
-    return <StickyNote {...finalProps} className={cn(finalProps.className, "text-status-warning")} />;
+    return (
+      <StickyNote {...finalProps} className={cn(finalProps.className, "text-status-warning")} />
+    );
   }
 
   // Dev preview panes get a monitor icon

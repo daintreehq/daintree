@@ -109,9 +109,7 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
       <div className="flex items-center gap-3">
         <AlertTriangle className="h-5 w-5 text-status-warning shrink-0" />
         <div>
-          <p className="text-sm font-medium text-status-warning">
-            {activeCount} terminals open
-          </p>
+          <p className="text-sm font-medium text-status-warning">{activeCount} terminals open</p>
           <p className="text-xs text-canopy-text/70 mt-0.5">
             Consider closing idle terminals to keep the board light.
             {completedCount > 0 && (
