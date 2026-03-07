@@ -450,11 +450,10 @@ export function Toolbar({
                         }
                       }}
                       className={cn(
-                        "text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent h-full px-3 gap-2 rounded-none rounded-l-[var(--radius-md)]",
+                        "text-canopy-text hover:bg-overlay-medium hover:text-white h-full px-3 gap-2 rounded-none rounded-l-[var(--radius-md)]",
                         stats?.issueCount === 0 && "opacity-50",
                         isStale && "opacity-60",
-                        issuesOpen &&
-                          "bg-white/[0.04] ring-1 ring-canopy-accent/20 text-canopy-accent"
+                        issuesOpen && "bg-white/[0.04] ring-1 ring-github-open/20 text-white"
                       )}
                       aria-label={`${stats?.issueCount ?? "\u2014"} open issues${isStale ? " (cached)" : ""}`}
                     >
@@ -500,10 +499,10 @@ export function Toolbar({
                         }
                       }}
                       className={cn(
-                        "text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent h-full px-3 gap-2 rounded-none",
+                        "text-canopy-text hover:bg-overlay-medium hover:text-white h-full px-3 gap-2 rounded-none",
                         stats?.prCount === 0 && "opacity-50",
                         isStale && "opacity-60",
-                        prsOpen && "bg-white/[0.04] ring-1 ring-canopy-accent/20 text-canopy-accent"
+                        prsOpen && "bg-white/[0.04] ring-1 ring-github-merged/20 text-white"
                       )}
                       aria-label={`${stats?.prCount ?? "\u2014"} open pull requests${isStale ? " (cached)" : ""}`}
                     >
@@ -545,10 +544,9 @@ export function Toolbar({
                         setCommitsOpen(!commitsOpen);
                       }}
                       className={cn(
-                        "text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent h-full px-3 gap-2 rounded-none rounded-r-[var(--radius-md)]",
+                        "text-canopy-text hover:bg-overlay-medium hover:text-white h-full px-3 gap-2 rounded-none rounded-r-[var(--radius-md)]",
                         stats?.commitCount === 0 && "opacity-50",
-                        commitsOpen &&
-                          "bg-white/[0.04] ring-1 ring-canopy-accent/20 text-canopy-accent"
+                        commitsOpen && "bg-white/[0.04] ring-1 ring-white/20 text-white"
                       )}
                       aria-label={`${stats?.commitCount ?? "\u2014"} commits`}
                     >
