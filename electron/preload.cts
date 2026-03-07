@@ -1606,6 +1606,9 @@ const api: ElectronAPI = {
         language: string;
         customDictionary: string[];
         transcriptionModel: "gpt-4o-mini-transcribe" | "gpt-4o-transcribe";
+        correctionEnabled: boolean;
+        correctionModel: "gpt-5-nano" | "gpt-4o-mini" | "gpt-4o";
+        correctionSystemPrompt: string;
       }>
     ) => _typedInvoke(CHANNELS.VOICE_INPUT_SET_SETTINGS, patch),
     start: () => _typedInvoke(CHANNELS.VOICE_INPUT_START),
