@@ -219,7 +219,8 @@
       "category": "public.app-category.developer-tools",
       "icon": "build/icon.icns",
       "extendInfo": {
-        "NSPrefersDisplaySafeAreaCompatibilityMode": false
+        "NSPrefersDisplaySafeAreaCompatibilityMode": false,
+        "NSMicrophoneUsageDescription": "Canopy uses the microphone for voice dictation into terminal inputs."
       },
       "target": [
         {
