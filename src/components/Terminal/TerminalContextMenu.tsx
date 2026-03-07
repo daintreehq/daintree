@@ -411,6 +411,8 @@ export function TerminalContextMenu({
     );
   }
 
+  const showConvertTo = !isPlainTerminal || !!currentAgentId || AGENT_IDS.length > 0;
+
   const convertToItems = (
     <>
       {(!isPlainTerminal || !!currentAgentId) && (
@@ -478,10 +480,12 @@ export function TerminalContextMenu({
             <ContextMenuShortcut>{isMac ? "⌘⇧W" : "Ctrl+⇧W"}</ContextMenuShortcut>
           </ContextMenuItem>
         )}
-        <ContextMenuSub>
-          <ContextMenuSubTrigger>Convert to</ContextMenuSubTrigger>
-          <ContextMenuSubContent>{convertToItems}</ContextMenuSubContent>
-        </ContextMenuSub>
+        {showConvertTo && (
+          <ContextMenuSub>
+            <ContextMenuSubTrigger>Convert to</ContextMenuSubTrigger>
+            <ContextMenuSubContent>{convertToItems}</ContextMenuSubContent>
+          </ContextMenuSub>
+        )}
         <ContextMenuItem disabled>{modifierKey}+Click links to open in Browser</ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => handleAction("duplicate")}>
