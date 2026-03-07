@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Mic, MicOff, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { VoiceInputStatus } from "@shared/types";
+import { actionService } from "@/services/ActionService";
 
 const AUTO_STOP_MS = 60_000;
 
@@ -10,6 +11,7 @@ interface VoiceInputButtonProps {
   onTranscriptionComplete: (text: string) => void;
   onRecordingStateChange?: (isRecording: boolean) => void;
   disabled?: boolean;
+  isConfigured?: boolean;
 }
 
 export function VoiceInputButton({
@@ -17,6 +19,7 @@ export function VoiceInputButton({
   onTranscriptionComplete,
   onRecordingStateChange,
   disabled = false,
+  isConfigured = false,
 }: VoiceInputButtonProps) {
   const [status, setStatus] = useState<VoiceInputStatus>("idle");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -166,12 +169,23 @@ export function VoiceInputButton({
 
   const handleClick = useCallback(async () => {
     if (disabled) return;
+    // An active session always wins — let the user stop recording even if config was revoked.
     if (isRecording) {
       await stopRecording();
-    } else {
-      await startRecording();
+      return;
     }
-  }, [disabled, isRecording, startRecording, stopRecording]);
+    if (!isConfigured) {
+      // Re-check live: the Settings dialog is same-window so focus never fires after save.
+      const fresh = await window.electron?.voiceInput?.getSettings();
+      if (fresh?.enabled && !!fresh.apiKey) {
+        await startRecording();
+        return;
+      }
+      void actionService.dispatch("app.settings.openTab", { tab: "voice" }, { source: "user" });
+      return;
+    }
+    await startRecording();
+  }, [disabled, isConfigured, isRecording, startRecording, stopRecording]);
 
   useEffect(() => {
     const unsubs: (() => void)[] = [];
@@ -232,11 +246,13 @@ export function VoiceInputButton({
         onClick={handleClick}
         disabled={disabled || status === "connecting"}
         title={
-          status === "error"
-            ? (errorMessage ?? "Voice input error")
-            : isRecording
-              ? "Stop recording"
-              : "Start voice input"
+          !isConfigured
+            ? "Configure voice input"
+            : status === "error"
+              ? (errorMessage ?? "Voice input error")
+              : isRecording
+                ? "Stop recording"
+                : "Start voice input"
         }
         className={cn(
           "flex items-center justify-center rounded p-1 transition-colors",
@@ -250,8 +266,14 @@ export function VoiceInputButton({
                 : "text-canopy-text/40 hover:text-canopy-text/70",
           disabled && "pointer-events-none opacity-40"
         )}
-        aria-label={isRecording ? "Stop voice recording" : "Start voice recording"}
-        aria-pressed={isRecording}
+        aria-label={
+          !isConfigured
+            ? "Set up voice input"
+            : isRecording
+              ? "Stop voice recording"
+              : "Start voice recording"
+        }
+        aria-pressed={isConfigured ? isRecording : undefined}
       >
         {status === "connecting" ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
