@@ -90,6 +90,8 @@ function parsePositiveInt(value: string): number | undefined {
   if (!Number.isFinite(num) || num <= 0) return undefined;
   return Math.floor(num);
 }
+export const GITIGNORE_SNIPPET = `# Canopy in-repo settings — safe to commit\n.canopy/project.json\n.canopy/settings.json\n\n# Canopy machine-local settings — do not commit\n.canopy/*.local.json`;
+
 export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSettingsDialogProps) {
   const { settings, saveSettings, isLoading, error } = useProjectSettings(projectId);
   const { projects, updateProject, enableInRepoSettings, disableInRepoSettings } =
@@ -349,6 +351,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         exportTimeoutRef.current = null;
       }
       setInRepoExpanded(false);
+      setInRepoEnabling(false);
       setInRepoError(null);
       setGitignoreCopied(false);
       if (gitignoreCopyTimeoutRef.current) {
@@ -378,8 +381,6 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
     };
   }, []);
 
-  const GITIGNORE_SNIPPET = `# Canopy in-repo settings — safe to commit\n.canopy/project.json\n.canopy/settings.json\n\n# Canopy machine-local settings — do not commit\n.canopy/*.local.json`;
-
   const handleCopyGitignore = async () => {
     try {
       await navigator.clipboard.writeText(GITIGNORE_SNIPPET);
@@ -399,8 +400,12 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
     setInRepoEnabling(true);
     setInRepoError(null);
     try {
-      await enableInRepoSettings(projectId);
-      setInRepoExpanded(false);
+      const updated = await enableInRepoSettings(projectId);
+      if (!updated.inRepoSettings) {
+        setInRepoError("In-repo settings could not be enabled. Please try again.");
+      } else {
+        setInRepoExpanded(false);
+      }
     } catch (err) {
       setInRepoError(err instanceof Error ? err.message : "Failed to enable in-repo settings");
     } finally {
@@ -409,12 +414,15 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   };
 
   const handleDisableInRepoSettings = async () => {
-    if (!currentProject) return;
+    if (!currentProject || inRepoEnabling) return;
+    setInRepoEnabling(true);
     setInRepoError(null);
     try {
       await disableInRepoSettings(projectId);
     } catch (err) {
       setInRepoError(err instanceof Error ? err.message : "Failed to disable in-repo settings");
+    } finally {
+      setInRepoEnabling(false);
     }
   };
 

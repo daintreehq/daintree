@@ -1,101 +1,60 @@
 import { describe, it, expect } from "vitest";
+import { GITIGNORE_SNIPPET } from "../ProjectSettingsDialog";
 
-const GITIGNORE_SNIPPET = `# Canopy in-repo settings — safe to commit\n.canopy/project.json\n.canopy/settings.json\n\n# Canopy machine-local settings — do not commit\n.canopy/*.local.json`;
-
-describe("In-repo settings — gitignore snippet", () => {
-  it("contains the project.json path", () => {
+describe("GITIGNORE_SNIPPET", () => {
+  it("includes project.json path as safe to commit", () => {
     expect(GITIGNORE_SNIPPET).toContain(".canopy/project.json");
   });
 
-  it("contains the settings.json path", () => {
+  it("includes settings.json path as safe to commit", () => {
     expect(GITIGNORE_SNIPPET).toContain(".canopy/settings.json");
   });
 
-  it("contains guidance for local-only files", () => {
+  it("includes wildcard pattern for machine-local files", () => {
     expect(GITIGNORE_SNIPPET).toContain(".canopy/*.local.json");
   });
 });
 
-describe("In-repo settings — Project domain types", () => {
-  it("Project has canopyConfigPresent field for indicating detected .canopy/ dir", () => {
-    type MinimalProject = {
-      canopyConfigPresent?: boolean;
-      inRepoSettings?: boolean;
-    };
-
-    const projectWithConfig: MinimalProject = { canopyConfigPresent: true };
-    const projectWithSync: MinimalProject = { inRepoSettings: true };
-    const bareProject: MinimalProject = {};
-
-    expect(projectWithConfig.canopyConfigPresent).toBe(true);
-    expect(projectWithSync.inRepoSettings).toBe(true);
-    expect(bareProject.canopyConfigPresent).toBeUndefined();
-    expect(bareProject.inRepoSettings).toBeUndefined();
-  });
-
-  it("canopyConfigPresent and inRepoSettings are independent flags", () => {
-    type MinimalProject = {
-      canopyConfigPresent?: boolean;
-      inRepoSettings?: boolean;
-    };
-
-    // canopyConfigPresent can be true without inRepoSettings (loaded from repo but sync not yet enabled)
-    const detectedNotEnabled: MinimalProject = { canopyConfigPresent: true, inRepoSettings: false };
-    expect(detectedNotEnabled.canopyConfigPresent).toBe(true);
-    expect(detectedNotEnabled.inRepoSettings).toBe(false);
-  });
-});
-
-describe("In-repo settings — enable/disable logic", () => {
-  it("enabling transitions inRepoSettings from falsy to true", () => {
-    let inRepoSettings: boolean | undefined = undefined;
-    inRepoSettings = true;
-    expect(inRepoSettings).toBe(true);
-  });
-
-  it("disabling transitions inRepoSettings from true to false without deleting files", () => {
-    let inRepoSettings = true;
-    const canopyConfigPresent = true;
-
-    // disable: only clears the sync flag, leaves canopyConfigPresent untouched
-    inRepoSettings = false;
-
-    expect(inRepoSettings).toBe(false);
-    expect(canopyConfigPresent).toBe(true);
-  });
-
-  it("confirmation panel should be shown before enabling (toggle expansion logic)", () => {
+describe("In-repo settings — enable/disable UI logic", () => {
+  it("expands the confirmation panel before calling enable IPC", () => {
     const inRepoSettings = false;
     let inRepoExpanded = false;
 
-    // clicking toggle when off → expand confirmation panel, not call IPC
     if (!inRepoSettings) {
       inRepoExpanded = !inRepoExpanded;
     }
 
     expect(inRepoExpanded).toBe(true);
-    expect(inRepoSettings).toBe(false); // IPC not yet called
+    expect(inRepoSettings).toBe(false);
   });
 
-  it("cancelling collapse the panel without enabling", () => {
-    const inRepoSettings = false;
+  it("collapses the confirmation panel on cancel without enabling", () => {
     let inRepoExpanded = true;
+    const inRepoSettings = false;
 
-    // cancel
     inRepoExpanded = false;
 
     expect(inRepoExpanded).toBe(false);
     expect(inRepoSettings).toBe(false);
   });
 
-  it("error on enable should leave toggle in off state", () => {
+  it("disabling leaves .canopy/ files in place (canopyConfigPresent unchanged)", () => {
+    let inRepoSettings = true;
+    const canopyConfigPresent = true;
+
+    inRepoSettings = false;
+
+    expect(inRepoSettings).toBe(false);
+    expect(canopyConfigPresent).toBe(true);
+  });
+
+  it("shows error and keeps in-repo mode off when enable IPC fails", () => {
     const inRepoSettings = false;
     let inRepoError: string | null = null;
     let inRepoEnabling = true;
 
-    // simulate IPC error
     try {
-      throw new Error("EACCES: permission denied");
+      throw new Error("EACCES: permission denied, mkdir '.canopy'");
     } catch (err) {
       inRepoError = err instanceof Error ? err.message : "Failed to enable in-repo settings";
     } finally {
@@ -107,7 +66,7 @@ describe("In-repo settings — enable/disable logic", () => {
     expect(inRepoEnabling).toBe(false);
   });
 
-  it("double-click prevention: inRepoEnabling prevents re-entry", () => {
+  it("prevents duplicate enable calls while a request is in flight", () => {
     const inRepoEnabling = true;
     let callCount = 0;
 
@@ -118,8 +77,30 @@ describe("In-repo settings — enable/disable logic", () => {
 
     handleEnable();
     handleEnable();
-    handleEnable();
 
     expect(callCount).toBe(0);
+  });
+
+  it("prevents duplicate disable calls while a request is in flight", () => {
+    const inRepoEnabling = true;
+    let callCount = 0;
+
+    const handleDisable = () => {
+      if (inRepoEnabling) return;
+      callCount++;
+    };
+
+    handleDisable();
+    handleDisable();
+
+    expect(callCount).toBe(0);
+  });
+
+  it("canopyConfigPresent can be true while inRepoSettings is false (loaded but sync not enabled)", () => {
+    const canopyConfigPresent = true;
+    const inRepoSettings = false;
+
+    expect(canopyConfigPresent).toBe(true);
+    expect(inRepoSettings).toBe(false);
   });
 });
