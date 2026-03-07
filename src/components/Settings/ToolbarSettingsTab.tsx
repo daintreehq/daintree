@@ -25,10 +25,10 @@ import {
   Copy,
   Settings,
   AlertCircle,
-  Waypoints,
   PackagePlus,
   Bell,
 } from "lucide-react";
+import { ClaudeIcon, GeminiIcon, CodexIcon, OpenCodeIcon } from "@/components/icons";
 import { useToolbarPreferencesStore } from "@/store";
 import type { ToolbarButtonId } from "@/../../shared/types/domain";
 
@@ -42,22 +42,22 @@ const BUTTON_METADATA: Partial<Record<ToolbarButtonId, ButtonMetadata>> = {
   },
   claude: {
     label: "Claude Agent",
-    icon: <Waypoints className="h-4 w-4" />,
+    icon: <ClaudeIcon className="h-4 w-4" />,
     description: "Launch Claude AI agent",
   },
   gemini: {
     label: "Gemini Agent",
-    icon: <Waypoints className="h-4 w-4" />,
+    icon: <GeminiIcon className="h-4 w-4" />,
     description: "Launch Gemini AI agent",
   },
   codex: {
     label: "Codex Agent",
-    icon: <Waypoints className="h-4 w-4" />,
+    icon: <CodexIcon className="h-4 w-4" />,
     description: "Launch Codex AI agent",
   },
   opencode: {
     label: "OpenCode Agent",
-    icon: <Waypoints className="h-4 w-4" />,
+    icon: <OpenCodeIcon className="h-4 w-4" />,
     description: "Launch OpenCode AI agent",
   },
   terminal: {
