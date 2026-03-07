@@ -25,7 +25,7 @@ export const CORE_CORRECTION_PROMPT = `You are a speech-to-text correction engin
 
 TASK: Fix transcription errors in the CURRENT TEXT SEGMENT only. Do not repeat, summarize, or modify previous segments.
 
-CONTEXT: Previous corrected segments are provided for disambiguation only. Use them to maintain consistent terminology — if earlier segments mention "React", a later "racked" likely means "React". Do NOT repeat or modify previous segments.
+CONTEXT: The user message contains two XML sections: <history> (previous corrected segments — reference only) and <input> (the current segment to correct). Use <history> only to maintain consistent terminology — if earlier segments mention "React", a later "racked" likely means "React". Correct only the content of <input>. Do NOT repeat or modify previous segments.
 
 CORRECTION PRIORITY:
 1. REQUIRED TERMS / CUSTOM DICTIONARY — Always map phonetically similar words to their exact canonical form.

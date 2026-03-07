@@ -169,6 +169,48 @@ describe("VoiceCorrectionService", () => {
     expect(userMessage).not.toContain("sentence one");
   });
 
+  it("formats current input with <input> XML tags", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse("Corrected."));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const svc = new VoiceCorrectionService();
+    await svc.correct("test input text", BASE_SETTINGS);
+
+    const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+    const userMessage = body.messages[1].content as string;
+    expect(userMessage).toContain("<input>");
+    expect(userMessage).toContain("test input text");
+    expect(userMessage).toContain("</input>");
+  });
+
+  it("formats history with <history> XML tags when history is present", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse("Corrected."));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const svc = new VoiceCorrectionService();
+    await svc.correct("sentence one", BASE_SETTINGS);
+    await svc.correct("sentence two", BASE_SETTINGS);
+
+    const body = JSON.parse((fetchMock.mock.calls[1] as [string, RequestInit])[1].body as string);
+    const userMessage = body.messages[1].content as string;
+    expect(userMessage).toContain("<history>");
+    expect(userMessage).toContain("</history>");
+    expect(userMessage).toContain("Corrected.");
+  });
+
+  it("omits <history> section on first call when no history", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse("Corrected."));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const svc = new VoiceCorrectionService();
+    await svc.correct("first input", BASE_SETTINGS);
+
+    const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+    const userMessage = body.messages[1].content as string;
+    expect(userMessage).not.toContain("<history>");
+    expect(userMessage).toContain("<input>");
+  });
+
   it("always includes guardrail suffix in the system prompt", async () => {
     const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse("Corrected."));
     vi.stubGlobal("fetch", fetchMock);

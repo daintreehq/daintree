@@ -82,6 +82,11 @@ describe("buildCorrectionSystemPrompt", () => {
     expect(prompt).not.toContain("CUSTOM CONTEXT");
   });
 
+  it("omits custom instructions section when value is whitespace only", () => {
+    const prompt = buildCorrectionSystemPrompt({ customInstructions: "   \n  " });
+    expect(prompt).not.toContain("CUSTOM CONTEXT");
+  });
+
   it("includes project name in system prompt", () => {
     const prompt = buildCorrectionSystemPrompt({ projectName: "my-app" });
     expect(prompt).toContain("my-app");
