@@ -68,6 +68,7 @@ vi.mock("../slices", () => ({
   createTerminalCommandQueueSlice: vi.fn(() => () => ({})),
   createTerminalMruSlice: vi.fn(() => () => ({})),
   createTerminalBulkActionsSlice: vi.fn(() => () => ({})),
+  createWatchedPanelsSlice: vi.fn(() => () => ({})),
 }));
 
 const { useProjectStore } = await import("../projectStore");
