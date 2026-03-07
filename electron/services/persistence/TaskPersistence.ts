@@ -97,8 +97,16 @@ export class TaskPersistence {
         .from(schema.tasks)
         .where(eq(schema.tasks.projectId, projectId))
         .all();
-      console.log(`[TaskPersistence] Loaded ${rows.length} tasks for project ${projectId}`);
-      return rows.map(fromRow);
+      const tasks: TaskRecord[] = [];
+      for (const row of rows) {
+        try {
+          tasks.push(fromRow(row));
+        } catch (rowError) {
+          console.error(`[TaskPersistence] Skipping corrupt task row ${row.id}:`, rowError);
+        }
+      }
+      console.log(`[TaskPersistence] Loaded ${tasks.length} tasks for project ${projectId}`);
+      return tasks;
     } catch (error) {
       console.error(`[TaskPersistence] Failed to load tasks for ${projectId}:`, error);
       return [];
@@ -182,19 +190,18 @@ export class TaskPersistence {
     if (pending) {
       clearTimeout(pending.timer);
       this.pendingSaves.delete(projectId);
-      pending.resolvers.forEach((resolve) => resolve());
     }
 
-    if (!this.isValidProjectId(projectId)) {
-      return;
+    if (this.isValidProjectId(projectId)) {
+      try {
+        this.db.delete(schema.tasks).where(eq(schema.tasks.projectId, projectId)).run();
+        console.log(`[TaskPersistence] Cleared tasks for project ${projectId}`);
+      } catch (error) {
+        console.error(`[TaskPersistence] Failed to clear tasks for ${projectId}:`, error);
+      }
     }
 
-    try {
-      this.db.delete(schema.tasks).where(eq(schema.tasks.projectId, projectId)).run();
-      console.log(`[TaskPersistence] Cleared tasks for project ${projectId}`);
-    } catch (error) {
-      console.error(`[TaskPersistence] Failed to clear tasks for ${projectId}:`, error);
-    }
+    pending?.resolvers.forEach((resolve) => resolve());
   }
 }
 

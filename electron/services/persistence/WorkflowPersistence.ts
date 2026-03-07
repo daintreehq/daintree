@@ -88,10 +88,21 @@ export class WorkflowPersistence {
         .from(schema.workflowRuns)
         .where(eq(schema.workflowRuns.projectId, projectId))
         .all();
+      const runs: WorkflowRun[] = [];
+      for (const row of rows) {
+        try {
+          runs.push(fromRow(row));
+        } catch (rowError) {
+          console.error(
+            `[WorkflowPersistence] Skipping corrupt workflow run row ${row.runId}:`,
+            rowError
+          );
+        }
+      }
       console.log(
-        `[WorkflowPersistence] Loaded ${rows.length} workflow runs for project ${projectId}`
+        `[WorkflowPersistence] Loaded ${runs.length} workflow runs for project ${projectId}`
       );
-      return rows.map(fromRow);
+      return runs;
     } catch (error) {
       console.error(`[WorkflowPersistence] Failed to load workflow runs for ${projectId}:`, error);
       return [];
@@ -177,19 +188,24 @@ export class WorkflowPersistence {
     if (pending) {
       clearTimeout(pending.timer);
       this.pendingSaves.delete(projectId);
-      pending.resolvers.forEach((resolve) => resolve());
     }
 
-    if (!this.isValidProjectId(projectId)) {
-      return;
+    if (this.isValidProjectId(projectId)) {
+      try {
+        this.db
+          .delete(schema.workflowRuns)
+          .where(eq(schema.workflowRuns.projectId, projectId))
+          .run();
+        console.log(`[WorkflowPersistence] Cleared workflow runs for project ${projectId}`);
+      } catch (error) {
+        console.error(
+          `[WorkflowPersistence] Failed to clear workflow runs for ${projectId}:`,
+          error
+        );
+      }
     }
 
-    try {
-      this.db.delete(schema.workflowRuns).where(eq(schema.workflowRuns.projectId, projectId)).run();
-      console.log(`[WorkflowPersistence] Cleared workflow runs for project ${projectId}`);
-    } catch (error) {
-      console.error(`[WorkflowPersistence] Failed to clear workflow runs for ${projectId}:`, error);
-    }
+    pending?.resolvers.forEach((resolve) => resolve());
   }
 }
 
