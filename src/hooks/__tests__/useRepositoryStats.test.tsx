@@ -36,6 +36,38 @@ describe("useRepositoryStats", () => {
     vi.clearAllMocks();
   });
 
+  it("force-fetches when canopy:refresh-sidebar event is dispatched", async () => {
+    const project = { id: "project-a", path: "/repo/a" };
+    getCurrentMock.mockResolvedValue(project);
+    onSwitchMock.mockReturnValue(() => {});
+
+    const stats: RepositoryStats = {
+      commitCount: 5,
+      issueCount: 2,
+      prCount: 1,
+      loading: false,
+      stale: false,
+      lastUpdated: 1000,
+    };
+    getRepoStatsMock.mockResolvedValue(stats);
+
+    renderHook(() => useRepositoryStats());
+
+    await waitFor(() => {
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(1);
+    });
+
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent("canopy:refresh-sidebar"));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
+      expect(getRepoStatsMock.mock.calls[1]?.[1]).toBe(true);
+    });
+  });
+
   it("queues a refetch on project switch when an earlier fetch is still in flight", async () => {
     let currentProject = { id: "project-a", path: "/repo/a" };
     getCurrentMock.mockImplementation(async () => currentProject);

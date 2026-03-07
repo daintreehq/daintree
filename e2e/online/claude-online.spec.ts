@@ -1,7 +1,8 @@
 import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, mockOpenDialog, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
-import { waitForTerminalText, getTerminalText } from "../helpers/terminal";
+import { dismissTelemetryConsent } from "../helpers/project";
+import { getTerminalText } from "../helpers/terminal";
 import { SEL } from "../helpers/selectors";
 
 let ctx: AppContext;
@@ -35,6 +36,8 @@ test.describe("Claude Online Flow", () => {
 
       await window.getByRole("button", { name: "Finish" }).click();
       await expect(heading).not.toBeVisible({ timeout: 5_000 });
+
+      await dismissTelemetryConsent(window);
     });
 
     await test.step("launch Claude agent", async () => {
@@ -57,6 +60,9 @@ test.describe("Claude Online Flow", () => {
       let reachedWelcome = false;
 
       while (Date.now() < deadline && !reachedWelcome) {
+        // Dismiss telemetry consent if it appeared after agent launch
+        await dismissTelemetryConsent(window);
+
         const text = await getTerminalText(agentPanel);
         const lower = text.toLowerCase();
 

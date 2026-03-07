@@ -6,9 +6,10 @@ import {
   useMemo,
   useRef,
   useState,
+  useTransition,
 } from "react";
 import "@xterm/xterm/css/xterm.css";
-import { FolderOpen, FilterX, Maximize2 } from "lucide-react";
+import { FolderOpen, FilterX, Maximize2, RefreshCw } from "lucide-react";
 import { ScrollIndicator } from "./components/Worktree/ScrollIndicator";
 import {
   isElectronAvailable,
@@ -126,6 +127,7 @@ interface SidebarContentProps {
 
 function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const { worktrees, isLoading, error, refresh } = useWorktrees();
+  const [isRefreshing, startRefreshTransition] = useTransition();
   useProjectSettings();
   const { launchAgent, availability, agentSettings } = useAgentLauncher();
   const {
@@ -200,6 +202,13 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   useEffect(() => {
     systemClient.getHomeDir().then(setHomeDir).catch(console.error);
   }, []);
+
+  const handleRefreshAll = useCallback(() => {
+    if (isRefreshing) return;
+    startRefreshTransition(async () => {
+      await actionService.dispatch("worktree.refresh", undefined, { source: "user" });
+    });
+  }, [isRefreshing, startRefreshTransition]);
 
   // Clean up stale pinned worktrees
   useEffect(() => {
@@ -505,6 +514,15 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           </button>
         </div>
         <div className="flex items-center gap-1">
+          <button
+            onClick={handleRefreshAll}
+            disabled={isRefreshing}
+            className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/[0.06] rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Refresh sidebar"
+            aria-label="Refresh sidebar"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
+          </button>
           <WorktreeFilterPopover />
           <button
             onClick={() => openCreateDialog()}
