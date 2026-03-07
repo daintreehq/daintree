@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import path from "path";
 
 vi.mock("fs/promises", () => ({
   readFile: vi.fn(),
@@ -152,30 +153,38 @@ describe("WorktreeLifecycleService", () => {
     it("copies .canopy from src to dest even if dest already exists (force:false preserves existing)", async () => {
       mockAccess.mockResolvedValue(undefined); // src exists
       await service.copyCanopyDir("/main/repo", "/new/worktree");
-      expect(mockCp).toHaveBeenCalledWith("/main/repo/.canopy", "/new/worktree/.canopy", {
-        recursive: true,
-        force: false,
-        errorOnExist: false,
-      });
+      expect(mockCp).toHaveBeenCalledWith(
+        path.join("/main/repo", ".canopy"),
+        path.join("/new/worktree", ".canopy"),
+        {
+          recursive: true,
+          force: false,
+          errorOnExist: false,
+        }
+      );
     });
 
     it("copies .canopy from src to dest when src exists", async () => {
       mockAccess.mockImplementation(async (p: string) => {
-        if ((p as string).includes("/main/repo/.canopy")) return undefined; // src exists
+        if ((p as string).includes(path.join("/main/repo", ".canopy"))) return undefined; // src exists
         throw new Error("ENOENT"); // dest does not
       });
 
       await service.copyCanopyDir("/main/repo", "/new/worktree");
-      expect(mockCp).toHaveBeenCalledWith("/main/repo/.canopy", "/new/worktree/.canopy", {
-        recursive: true,
-        force: false,
-        errorOnExist: false,
-      });
+      expect(mockCp).toHaveBeenCalledWith(
+        path.join("/main/repo", ".canopy"),
+        path.join("/new/worktree", ".canopy"),
+        {
+          recursive: true,
+          force: false,
+          errorOnExist: false,
+        }
+      );
     });
 
     it("does not throw if cp fails", async () => {
       mockAccess.mockImplementation(async (p: string) => {
-        if ((p as string).includes("/main/repo/.canopy")) return undefined;
+        if ((p as string).includes(path.join("/main/repo", ".canopy"))) return undefined;
         throw new Error("ENOENT");
       });
       mockCp.mockRejectedValue(new Error("Permission denied"));
