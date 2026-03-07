@@ -37,12 +37,12 @@ exports.default = async function afterPack(context) {
   console.log(`[afterPack] node-pty found at: ${nodePtyPath}`);
 
   if (electronPlatformName === "win32") {
-    // Windows uses ConPTY + legacy winpty binaries (no pty.node on Windows)
+    // Windows uses ConPTY exclusively (winpty removed in node-pty 1.2.0-beta)
     const windowsBinaries = [
       "conpty.node",
       "conpty_console_list.node",
-      "winpty-agent.exe",
-      "winpty.dll",
+      "conpty/conpty.dll",
+      "conpty/OpenConsole.exe",
     ];
     for (const bin of windowsBinaries) {
       const binPath = path.join(nodePtyPath, "build/Release", bin);
@@ -54,7 +54,7 @@ exports.default = async function afterPack(context) {
       }
     }
     console.log(
-      "[afterPack] Windows node-pty binaries verified (conpty.node, conpty_console_list.node, winpty-agent.exe, winpty.dll)"
+      "[afterPack] Windows node-pty binaries verified (conpty.node, conpty_console_list.node, conpty/conpty.dll, conpty/OpenConsole.exe)"
     );
   } else {
     // macOS and Linux use pty.node
