@@ -26,12 +26,13 @@ class VoiceRecordingService {
   private generation = 0;
   private audioContext: AudioContext | null = null;
   private workletNode: AudioWorkletNode | null = null;
+  private keepAliveOscillator: OscillatorNode | null = null;
+  private keepAliveGain: GainNode | null = null;
   private stream: MediaStream | null = null;
   private elapsedTimer: ReturnType<typeof setInterval> | null = null;
   private sessionStartedAt = 0;
   private unsubscribers: Array<() => void> = [];
   private isStoppingSession = false;
-  private startRequestedAt = 0;
   private levelRaf: number | null = null;
   private pendingLevel = 0;
 
@@ -220,41 +221,11 @@ class VoiceRecordingService {
       })
     );
 
-    const handleWindowBlur = () => {
-      if (!useVoiceRecordingStore.getState().activeTarget) return;
-      const elapsed = Date.now() - this.startRequestedAt;
-      if (elapsed < 3000) {
-        logDebug(`${LOG_PREFIX} Ignoring window blur during startup grace period`, {
-          elapsedMs: elapsed,
-        });
-        return;
-      }
-      logDebug(`${LOG_PREFIX} Window blur detected, stopping session`);
-      void this.stop("Dictation stopped because the app lost focus.", {
-        preserveLiveText: true,
-      });
-    };
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState !== "hidden") return;
-      if (!useVoiceRecordingStore.getState().activeTarget) return;
-      logDebug(`${LOG_PREFIX} Visibility changed to hidden, stopping session`);
-      void this.stop("Dictation stopped because the app was hidden.", {
-        preserveLiveText: true,
-      });
-    };
-
     const handleSettingsChanged = () => {
       void this.refreshConfiguration();
     };
 
-    window.addEventListener("blur", handleWindowBlur);
-    document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener(VOICE_INPUT_SETTINGS_CHANGED_EVENT, handleSettingsChanged);
-    this.unsubscribers.push(() => window.removeEventListener("blur", handleWindowBlur));
-    this.unsubscribers.push(() =>
-      document.removeEventListener("visibilitychange", handleVisibilityChange)
-    );
     this.unsubscribers.push(() =>
       window.removeEventListener(VOICE_INPUT_SETTINGS_CHANGED_EVENT, handleSettingsChanged)
     );
@@ -329,7 +300,6 @@ class VoiceRecordingService {
 
   async start(target: VoiceRecordingTarget): Promise<void> {
     this.initialize();
-    this.startRequestedAt = Date.now();
     logDebug(`${LOG_PREFIX} start() called`, {
       panelId: target.panelId,
       generation: this.generation,
@@ -421,6 +391,19 @@ class VoiceRecordingService {
       await this.cleanupAudioCapture();
       return;
     }
+
+    // Keep the AudioContext in "running" state while backgrounded. Chromium
+    // suspends capture-only contexts (no output to destination) when the window
+    // loses focus. Connecting a silent oscillator to the destination tricks the
+    // engine into treating the context as audible so AudioWorkletNode keeps firing.
+    const keepAliveGain = audioContext.createGain();
+    keepAliveGain.gain.value = 0;
+    const keepAliveOscillator = audioContext.createOscillator();
+    keepAliveOscillator.connect(keepAliveGain);
+    keepAliveGain.connect(audioContext.destination);
+    keepAliveOscillator.start();
+    this.keepAliveOscillator = keepAliveOscillator;
+    this.keepAliveGain = keepAliveGain;
 
     logDebug(`${LOG_PREFIX} Loading pcm-processor worklet`);
     try {
@@ -731,6 +714,17 @@ class VoiceRecordingService {
       this.workletNode.port.onmessage = null;
       this.workletNode.disconnect();
       this.workletNode = null;
+    }
+
+    if (this.keepAliveOscillator) {
+      this.keepAliveOscillator.stop();
+      this.keepAliveOscillator.disconnect();
+      this.keepAliveOscillator = null;
+    }
+
+    if (this.keepAliveGain) {
+      this.keepAliveGain.disconnect();
+      this.keepAliveGain = null;
     }
 
     if (this.audioContext) {

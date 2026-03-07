@@ -245,6 +245,15 @@ protocol.registerSchemesAsPrivileged([
 // Maximum is 4GB due to V8 pointer compression in Electron 9+
 app.commandLine.appendSwitch("js-flags", "--max-old-space-size=4096");
 
+// Keep the renderer process at full priority and prevent AudioContext suspension
+// when the window loses focus — required for continuous voice recording in the background.
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+app.commandLine.appendSwitch("disable-background-timer-throttling");
+// Prevent macOS occlusion-based throttling when the window is covered by another app.
+if (process.platform === "darwin") {
+  app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
+}
+
 import { registerIpcHandlers, sendToRenderer } from "./ipc/handlers.js";
 import type { HandlerDependencies } from "./ipc/types.js";
 import { registerErrorHandlers } from "./ipc/errorHandlers.js";
@@ -750,6 +759,7 @@ async function createWindow(): Promise<void> {
       sandbox: true,
       webviewTag: true,
       navigateOnDragDrop: false,
+      backgroundThrottling: false,
     },
     ...(process.platform === "darwin"
       ? {
