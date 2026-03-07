@@ -68,6 +68,10 @@ export interface GitHubPR {
   author: GitHubUser;
   /** Number of reviews */
   reviewCount?: number;
+  /** Head branch name (short ref, e.g. "feature/my-branch") */
+  headRefName?: string;
+  /** Whether this PR originates from a fork repository */
+  isFork?: boolean;
 }
 
 /** Issue tooltip data (subset of full issue for hover display) */

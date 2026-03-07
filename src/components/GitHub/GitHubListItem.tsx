@@ -17,7 +17,7 @@ import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/comp
 interface GitHubListItemProps {
   item: GitHubIssue | GitHubPR;
   type: "issue" | "pr";
-  onCreateWorktree?: (issue: GitHubIssue) => void;
+  onCreateWorktree?: (item: GitHubIssue | GitHubPR) => void;
 }
 
 function getStateIcon(state: string, type: "issue" | "pr") {
@@ -133,8 +133,8 @@ export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemP
 
   const handleCreateWorktree = (e: MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
-    if (type === "issue" && onCreateWorktree) {
-      onCreateWorktree(item as GitHubIssue);
+    if (onCreateWorktree) {
+      onCreateWorktree(item);
     }
   };
 
@@ -241,7 +241,7 @@ export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemP
             <span>{item.author.login}</span>
             <span>&middot;</span>
             <span>{formatTimeAgo(item.updatedAt)}</span>
-            {type === "issue" && onCreateWorktree && item.state === "OPEN" && (
+            {onCreateWorktree && item.state === "OPEN" && (
               <>
                 <span>&middot;</span>
                 <TooltipProvider>
@@ -250,13 +250,25 @@ export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemP
                       <button
                         type="button"
                         onClick={handleCreateWorktree}
-                        className="hover:text-canopy-accent transition-colors flex items-center gap-1"
+                        disabled={isItemPR && (item as GitHubPR).isFork === true}
+                        className={cn(
+                          "transition-colors flex items-center gap-1",
+                          isItemPR && (item as GitHubPR).isFork === true
+                            ? "opacity-40 cursor-not-allowed"
+                            : "hover:text-canopy-accent"
+                        )}
                       >
                         <GitBranch className="w-3 h-3" />
                         <span>Create Worktree</span>
                       </button>
                     </TooltipTrigger>
-                    <TooltipContent side="bottom">Create Worktree from Issue</TooltipContent>
+                    <TooltipContent side="bottom">
+                      {isItemPR && (item as GitHubPR).isFork === true
+                        ? "Not available for fork PRs — the branch is on a different remote"
+                        : type === "issue"
+                          ? "Create Worktree from Issue"
+                          : "Create Worktree from PR"}
+                    </TooltipContent>
                   </Tooltip>
                 </TooltipProvider>
               </>

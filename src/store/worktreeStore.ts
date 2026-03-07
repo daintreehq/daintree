@@ -1,7 +1,7 @@
 import { create, type StateCreator } from "zustand";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@shared/types/domain";
-import type { GitHubIssue } from "@shared/types/github";
+import type { GitHubIssue, GitHubPR } from "@shared/types/github";
 import { useFocusStore } from "@/store/focusStore";
 import { logErrorWithContext } from "@/utils/errorContext";
 import { PERF_MARKS } from "@shared/perf/marks";
@@ -10,6 +10,7 @@ import { markRendererPerformance } from "@/utils/performance";
 interface CreateDialogState {
   isOpen: boolean;
   initialIssue: GitHubIssue | null;
+  initialPR: GitHubPR | null;
 }
 
 interface CrossDiffDialogState {
@@ -36,6 +37,7 @@ interface WorktreeSelectionState {
   toggleTerminalsExpanded: (id: string) => void;
   setTerminalsExpanded: (id: string, expanded: boolean) => void;
   openCreateDialog: (initialIssue?: GitHubIssue | null) => void;
+  openCreateDialogForPR: (pr: GitHubPR) => void;
   closeCreateDialog: () => void;
   openCrossWorktreeDiff: (initialWorktreeId?: string | null) => void;
   closeCrossWorktreeDiff: () => void;
@@ -196,7 +198,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
   focusedWorktreeId: null,
   expandedWorktrees: new Set<string>(),
   expandedTerminals: new Set<string>(),
-  createDialog: { isOpen: false, initialIssue: null },
+  createDialog: { isOpen: false, initialIssue: null, initialPR: null },
   crossDiffDialog: { isOpen: false, initialWorktreeId: null },
   _policyGeneration: 0,
   lastFocusedTerminalByWorktree: new Map<string, string>(),
@@ -354,10 +356,18 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     if (useFocusStore.getState().isFocusMode && typeof window !== "undefined") {
       window.dispatchEvent(new Event("canopy:toggle-focus-mode"));
     }
-    set({ createDialog: { isOpen: true, initialIssue } });
+    set({ createDialog: { isOpen: true, initialIssue, initialPR: null } });
   },
 
-  closeCreateDialog: () => set({ createDialog: { isOpen: false, initialIssue: null } }),
+  openCreateDialogForPR: (pr) => {
+    if (useFocusStore.getState().isFocusMode && typeof window !== "undefined") {
+      window.dispatchEvent(new Event("canopy:toggle-focus-mode"));
+    }
+    set({ createDialog: { isOpen: true, initialIssue: null, initialPR: pr } });
+  },
+
+  closeCreateDialog: () =>
+    set({ createDialog: { isOpen: false, initialIssue: null, initialPR: null } }),
 
   openCrossWorktreeDiff: (initialWorktreeId = null) =>
     set({ crossDiffDialog: { isOpen: true, initialWorktreeId } }),
@@ -385,7 +395,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       focusedWorktreeId: null,
       expandedWorktrees: new Set<string>(),
       expandedTerminals: new Set<string>(),
-      createDialog: { isOpen: false, initialIssue: null },
+      createDialog: { isOpen: false, initialIssue: null, initialPR: null },
       crossDiffDialog: { isOpen: false, initialWorktreeId: null },
       lastFocusedTerminalByWorktree: new Map<string, string>(),
     }),

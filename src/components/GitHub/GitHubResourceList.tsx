@@ -247,13 +247,18 @@ export function GitHubResourceList({
   };
 
   const openCreateDialog = useWorktreeSelectionStore((s) => s.openCreateDialog);
+  const openCreateDialogForPR = useWorktreeSelectionStore((s) => s.openCreateDialogForPR);
 
   const handleCreateWorktree = useCallback(
-    (issue: GitHubIssue) => {
-      openCreateDialog(issue);
+    (item: GitHubIssue | GitHubPR) => {
+      if ("isDraft" in item) {
+        openCreateDialogForPR(item);
+      } else {
+        openCreateDialog(item);
+      }
       onClose?.();
     },
-    [openCreateDialog, onClose]
+    [openCreateDialog, openCreateDialogForPR, onClose]
   );
 
   const handleRetry = () => {
@@ -407,7 +412,7 @@ export function GitHubResourceList({
                   key={item.number}
                   item={item}
                   type={type}
-                  onCreateWorktree={type === "issue" ? handleCreateWorktree : undefined}
+                  onCreateWorktree={handleCreateWorktree}
                 />
               ))}
             </div>
