@@ -26,7 +26,7 @@ import { cn } from "@/lib/utils";
 import { toBranchOption, filterBranches, type BranchOption } from "./branchPickerUtils";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useGitHubConfigStore } from "@/store/githubConfigStore";
-import { useNotificationStore } from "@/store/notificationStore";
+import { notify } from "@/lib/notify";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useProjectStore } from "@/store/projectStore";
 import type { ProjectSettings } from "@/types";
@@ -84,7 +84,6 @@ export function NewWorktreeDialog({
   const githubConfig = useGitHubConfigStore((s) => s.config);
   const initializeGitHubConfig = useGitHubConfigStore((s) => s.initialize);
   const refreshGitHubConfig = useGitHubConfigStore((s) => s.refresh);
-  const addNotification = useNotificationStore((s) => s.addNotification);
   const { recipes, runRecipe, loadRecipes } = useRecipeStore();
   const currentProject = useProjectStore((s) => s.currentProject);
   const projectId = currentProject?.id ?? "";
@@ -627,14 +626,14 @@ export function NewWorktreeDialog({
       if (selectedIssue && assignWorktreeToSelf && currentUser) {
         try {
           await githubClient.assignIssue(rootPath, selectedIssue.number, currentUser);
-          addNotification({
+          notify({
             type: "success",
             title: "Issue Assigned",
             message: `Issue #${selectedIssue.number} assigned to @${currentUser}`,
           });
         } catch (assignErr) {
           const message = assignErr instanceof Error ? assignErr.message : "Failed to assign issue";
-          addNotification({
+          notify({
             type: "warning",
             title: "Could not assign issue",
             message: `${message} — you can assign it manually on GitHub`,
@@ -653,7 +652,7 @@ export function NewWorktreeDialog({
           });
         } catch (recipeErr) {
           const message = recipeErr instanceof Error ? recipeErr.message : "Failed to run recipe";
-          addNotification({
+          notify({
             type: "warning",
             title: "Could not run recipe",
             message: `${message} — worktree was created successfully`,

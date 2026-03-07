@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import Fuse, { type IFuseOptions } from "fuse.js";
 import { useProjectStore } from "@/store/projectStore";
-import { useNotificationStore } from "@/store/notificationStore";
+import { notify } from "@/lib/notify";
 import type { Project, ProjectStats } from "@shared/types";
 import { projectClient, terminalClient } from "@/clients";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
@@ -90,8 +90,6 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const closeProject = useProjectStore((state) => state.closeProject);
   const closeActiveProject = useProjectStore((state) => state.closeActiveProject);
   const removeProject = useProjectStore((state) => state.removeProject);
-  const { addNotification } = useNotificationStore();
-
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -354,7 +352,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       }
 
       if (project.isBackground) {
-        addNotification({
+        notify({
           type: "info",
           title: "Reopening project",
           message: "Reconnecting to background terminals...",
@@ -363,7 +361,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         try {
           await reopenProject(project.id);
         } catch (error) {
-          addNotification({
+          notify({
             type: "error",
             title: "Failed to reopen project",
             message: error instanceof Error ? error.message : "Unknown error",
@@ -371,7 +369,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
           });
         }
       } else {
-        addNotification({
+        notify({
           type: "info",
           title: "Switching projects",
           message: "Resetting state for clean project isolation",
@@ -380,7 +378,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         try {
           await switchProject(project.id);
         } catch (error) {
-          addNotification({
+          notify({
             type: "error",
             title: "Failed to switch project",
             message: error instanceof Error ? error.message : "Unknown error",
@@ -389,7 +387,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         }
       }
     },
-    [close, switchProject, reopenProject, addNotification]
+    [close, switchProject, reopenProject]
   );
 
   const confirmSelection = useCallback(() => {
@@ -435,7 +433,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         return next;
       });
 
-      addNotification({
+      notify({
         type: "success",
         title: "Project stopped",
         message: `Terminated ${result.processesKilled} process(es)`,
@@ -444,7 +442,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
       setStopConfirmProjectId(null);
     } catch (error) {
-      addNotification({
+      notify({
         type: "error",
         title: "Failed to stop project",
         message: error instanceof Error ? error.message : "Unknown error",
@@ -453,7 +451,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     } finally {
       setIsStoppingProject(false);
     }
-  }, [stopConfirmProjectId, closeProject, addNotification]);
+  }, [stopConfirmProjectId, closeProject]);
 
   const removeProjectFromList = useCallback(
     async (projectId: string) => {
@@ -480,7 +478,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       }
       setRemoveConfirmProject(null);
     } catch (error) {
-      addNotification({
+      notify({
         type: "error",
         title: removeConfirmProject.isActive
           ? "Failed to close project"
@@ -491,7 +489,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     } finally {
       setIsRemovingProject(false);
     }
-  }, [removeConfirmProject, isRemovingProject, closeActiveProject, removeProject, addNotification]);
+  }, [removeConfirmProject, isRemovingProject, closeActiveProject, removeProject]);
 
   return {
     isOpen,

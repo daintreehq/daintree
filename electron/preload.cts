@@ -440,6 +440,7 @@ const CHANNELS = {
   NOTIFICATION_SETTINGS_GET: "notification:settings-get",
   NOTIFICATION_SETTINGS_SET: "notification:settings-set",
   NOTIFICATION_PLAY_SOUND: "notification:play-sound",
+  NOTIFICATION_SHOW_NATIVE: "notification:show-native",
   NOTIFICATION_SHOW_WATCH: "notification:show-watch",
   NOTIFICATION_WATCH_NAVIGATE: "notification:watch-navigate",
   NOTIFICATION_SYNC_WATCHED: "notification:sync-watched",
@@ -1405,6 +1406,8 @@ const api: ElectronAPI = {
       }>
     ) => _typedInvoke(CHANNELS.NOTIFICATION_SETTINGS_SET, settings),
     playSound: (soundFile: string) => _typedInvoke(CHANNELS.NOTIFICATION_PLAY_SOUND, soundFile),
+    showNative: (payload: { title: string; body: string }) =>
+      ipcRenderer.send(CHANNELS.NOTIFICATION_SHOW_NATIVE, payload),
     showWatchNotification: (payload: {
       title: string;
       body: string;

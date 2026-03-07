@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { useProjectStore, useTerminalStore } from "@/store";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useProjectSettings } from "../useProjectSettings";
+import { notify } from "@/lib/notify";
 import { useNotificationStore } from "@/store/notificationStore";
 import { findDevServerCandidate } from "@/utils/devServerDetection";
 
@@ -9,7 +10,7 @@ export function useDevServerDiscovery() {
   const currentProject = useProjectStore((state) => state.currentProject);
   const { settings, allDetectedRunners, projectId: settingsProjectId } = useProjectSettingsStore();
   const { saveSettings } = useProjectSettings();
-  const { addNotification, removeNotification } = useNotificationStore();
+  const removeNotification = useNotificationStore((s) => s.removeNotification);
   const lastNotifiedProjectRef = useRef<string | null>(null);
   const notificationIdRef = useRef<string | null>(null);
 
@@ -57,7 +58,7 @@ export function useDevServerDiscovery() {
 
     lastNotifiedProjectRef.current = currentProject.id;
 
-    const notificationId = addNotification({
+    const notificationId = notify({
       type: "info",
       placement: "grid-bar",
       title: "Dev Server Detected",
@@ -70,6 +71,7 @@ export function useDevServerDiscovery() {
           in package.json. Enable dev preview server for this project?
         </span>
       ),
+      inboxMessage: `Dev server detected: ${devServerCandidate.command}`,
       actions: [
         {
           label: "Enable",
@@ -88,7 +90,7 @@ export function useDevServerDiscovery() {
               removeNotification(notificationId);
             } catch (err) {
               console.error("Failed to enable dev server:", err);
-              addNotification({
+              notify({
                 type: "error",
                 title: "Failed to enable dev server",
                 message: err instanceof Error ? err.message : "Unknown error",
@@ -114,7 +116,7 @@ export function useDevServerDiscovery() {
               removeNotification(notificationId);
             } catch (err) {
               console.error("Failed to save dev server preference:", err);
-              addNotification({
+              notify({
                 type: "error",
                 title: "Failed to save preference",
                 message: err instanceof Error ? err.message : "Unknown error",
@@ -142,7 +144,6 @@ export function useDevServerDiscovery() {
     allDetectedRunners,
     hasDevPreviewPanel,
     saveSettings,
-    addNotification,
     removeNotification,
   ]);
 }

@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { useNotificationHistoryStore } from "../slices/notificationHistorySlice";
+import {
+  useNotificationHistoryStore,
+  getEntriesByCorrelationId,
+} from "../slices/notificationHistorySlice";
 
 const { getState } = useNotificationHistoryStore;
 
@@ -8,12 +11,14 @@ function addEntry(
     type: "success" | "error" | "info" | "warning";
     title: string;
     message: string;
+    correlationId: string;
   }> = {}
 ) {
   getState().addEntry({
     type: overrides.type ?? "info",
     message: overrides.message ?? "Test notification",
     title: overrides.title,
+    correlationId: overrides.correlationId,
   });
 }
 
@@ -79,5 +84,26 @@ describe("notificationHistorySlice", () => {
     getState().clearAll();
     expect(getState().entries).toHaveLength(0);
     expect(getState().unreadCount).toBe(0);
+  });
+
+  it("stores correlationId on entries", () => {
+    addEntry({ message: "first", correlationId: "panel-1" });
+    addEntry({ message: "second", correlationId: "panel-1" });
+    addEntry({ message: "third" });
+    const { entries } = getState();
+    expect(entries[0].correlationId).toBeUndefined();
+    expect(entries[1].correlationId).toBe("panel-1");
+    expect(entries[2].correlationId).toBe("panel-1");
+  });
+
+  it("getEntriesByCorrelationId returns matching entries", () => {
+    addEntry({ message: "first", correlationId: "panel-1" });
+    addEntry({ message: "second", correlationId: "panel-2" });
+    addEntry({ message: "third", correlationId: "panel-1" });
+    const results = getEntriesByCorrelationId("panel-1");
+    expect(results).toHaveLength(2);
+    expect(results.every((e: { correlationId?: string }) => e.correlationId === "panel-1")).toBe(
+      true
+    );
   });
 });

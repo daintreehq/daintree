@@ -15,7 +15,7 @@ import {
 } from "./worktreeDataStore";
 import { flushTerminalPersistence } from "./slices";
 import { terminalPersistence, terminalToSnapshot } from "./persistence/terminalPersistence";
-import { useNotificationStore } from "./notificationStore";
+import { notify } from "@/lib/notify";
 import { useTerminalStore } from "./terminalStore";
 import { useWorktreeSelectionStore } from "./worktreeStore";
 import {
@@ -213,7 +213,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       }
 
       const message = getProjectOpenErrorMessage(error);
-      useNotificationStore.getState().addNotification({
+      notify({
         type: "error",
         title: "Failed to add project",
         message,
@@ -399,7 +399,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
             details: { projectId, targetProjectName: targetProject?.name },
           });
           const message = getProjectOpenErrorMessage(error);
-          useNotificationStore.getState().addNotification({
+          notify({
             type: "error",
             title: "Failed to switch project",
             message,
@@ -433,7 +433,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         details: { projectId, targetProjectName: targetProject?.name },
       });
       const message = getProjectOpenErrorMessage(error);
-      useNotificationStore.getState().addNotification({
+      notify({
         type: "error",
         title: "Failed to switch project",
         message,
@@ -714,7 +714,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
             details: { projectId, targetProjectName: targetProject?.name },
           });
           const message = getProjectOpenErrorMessage(error);
-          useNotificationStore.getState().addNotification({
+          notify({
             type: "error",
             title: "Failed to reopen project",
             message,
@@ -743,7 +743,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         details: { projectId, targetProjectName: targetProject?.name },
       });
       const message = getProjectOpenErrorMessage(error);
-      useNotificationStore.getState().addNotification({
+      notify({
         type: "error",
         title: "Failed to reopen project",
         message,

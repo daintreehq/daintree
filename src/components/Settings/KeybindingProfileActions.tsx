@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Upload, Download } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { keybindingService } from "@/services/KeybindingService";
-import { useNotificationStore } from "@/store/notificationStore";
+import { notify } from "@/lib/notify";
 import type { KeybindingImportResult } from "@shared/types/ipc/api";
 
 interface KeybindingProfileActionsProps {
@@ -11,7 +11,6 @@ interface KeybindingProfileActionsProps {
 
 export function KeybindingProfileActions({ onImportComplete }: KeybindingProfileActionsProps) {
   const [isLoading, setIsLoading] = useState(false);
-  const addNotification = useNotificationStore((state) => state.addNotification);
 
   const handleExport = async () => {
     if (isLoading) return;
@@ -19,14 +18,14 @@ export function KeybindingProfileActions({ onImportComplete }: KeybindingProfile
     try {
       const saved = await window.electron.keybinding.exportProfile();
       if (saved) {
-        addNotification({
+        notify({
           type: "success",
           title: "Shortcuts exported",
           message: "Keybinding profile saved successfully.",
         });
       }
     } catch {
-      addNotification({
+      notify({
         type: "error",
         title: "Export failed",
         message: "Could not save the keybinding profile.",
@@ -43,7 +42,7 @@ export function KeybindingProfileActions({ onImportComplete }: KeybindingProfile
       const result: KeybindingImportResult = await window.electron.keybinding.importProfile();
       if (!result.ok) {
         if (result.errors[0] === "Cancelled") return;
-        addNotification({
+        notify({
           type: "error",
           title: "Import failed",
           message: result.errors[0] ?? "Unknown error",
@@ -62,13 +61,13 @@ export function KeybindingProfileActions({ onImportComplete }: KeybindingProfile
         parts.push(`skipped ${result.skipped} unknown action${result.skipped !== 1 ? "s" : ""}`);
       }
 
-      addNotification({
+      notify({
         type: "success",
         title: "Shortcuts imported",
         message: parts.length > 0 ? parts.join(", ") + "." : "No shortcuts were applied.",
       });
     } catch {
-      addNotification({
+      notify({
         type: "error",
         title: "Import failed",
         message: "Could not read the keybinding profile.",

@@ -22,9 +22,10 @@ function formatRelativeTime(timestamp: number): string {
 
 interface NotificationCenterEntryProps {
   entry: NotificationHistoryEntry;
+  threadCount?: number;
 }
 
-export function NotificationCenterEntry({ entry }: NotificationCenterEntryProps) {
+export function NotificationCenterEntry({ entry, threadCount }: NotificationCenterEntryProps) {
   const config = TYPE_CONFIG[entry.type];
   const Icon = config.icon;
 
@@ -38,6 +39,9 @@ export function NotificationCenterEntry({ entry }: NotificationCenterEntryProps)
           <p className="text-xs font-medium text-canopy-text truncate">{entry.title}</p>
         )}
         <p className="text-xs text-canopy-text/70 leading-snug break-words">{entry.message}</p>
+        {threadCount && threadCount > 1 && (
+          <p className="text-[10px] text-canopy-text/40 mt-0.5">{threadCount} events</p>
+        )}
       </div>
       <span className="shrink-0 text-[10px] text-canopy-text/40 tabular-nums mt-0.5">
         {formatRelativeTime(entry.timestamp)}

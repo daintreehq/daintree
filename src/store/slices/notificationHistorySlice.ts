@@ -6,6 +6,7 @@ export interface NotificationHistoryEntry {
   title?: string;
   message: string;
   timestamp: number;
+  correlationId?: string;
   context?: {
     projectId?: string;
     worktreeId?: string;
@@ -43,3 +44,10 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>((set
   clearAll: () => set({ entries: [], unreadCount: 0 }),
   markAllRead: () => set({ unreadCount: 0 }),
 }));
+
+/** Returns all history entries that share the given correlationId */
+export function getEntriesByCorrelationId(correlationId: string): NotificationHistoryEntry[] {
+  return useNotificationHistoryStore
+    .getState()
+    .entries.filter((e) => e.correlationId === correlationId);
+}

@@ -1,11 +1,44 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { Bell, Trash2 } from "lucide-react";
-import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
+import {
+  useNotificationHistoryStore,
+  type NotificationHistoryEntry,
+} from "@/store/slices/notificationHistorySlice";
 import { NotificationCenterEntry } from "./NotificationCenterEntry";
 
 interface NotificationCenterProps {
   open: boolean;
   onClose: () => void;
+}
+
+interface ThreadGroup {
+  correlationId: string | undefined;
+  entries: NotificationHistoryEntry[];
+  latestTimestamp: number;
+}
+
+function groupByCorrelationId(entries: NotificationHistoryEntry[]): ThreadGroup[] {
+  const groups = new Map<string, NotificationHistoryEntry[]>();
+  const order: string[] = [];
+
+  for (const entry of entries) {
+    const key = entry.correlationId ?? `solo:${entry.id}`;
+    if (!groups.has(key)) {
+      groups.set(key, []);
+      order.push(key);
+    }
+    groups.get(key)!.push(entry);
+  }
+
+  return order.map((key) => {
+    const groupEntries = groups.get(key)!;
+    const correlationId = key.startsWith("solo:") ? undefined : key;
+    return {
+      correlationId,
+      entries: groupEntries,
+      latestTimestamp: Math.max(...groupEntries.map((e) => e.timestamp)),
+    };
+  });
 }
 
 export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
@@ -24,6 +57,8 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       markAllRead();
     }
   }, [open, entries, markAllRead]);
+
+  const groups = useMemo(() => groupByCorrelationId(entries), [entries]);
 
   return (
     <div className="w-[360px] max-h-[420px] flex flex-col">
@@ -44,19 +79,33 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
         )}
       </div>
       <div className="flex-1 overflow-y-auto">
-        {entries.length === 0 ? (
+        {groups.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-10 text-canopy-text/30">
             <Bell className="h-6 w-6 mb-2" />
             <span className="text-xs">No notifications yet</span>
           </div>
         ) : (
           <div className="divide-y divide-white/[0.04]">
-            {entries.map((entry) => (
-              <NotificationCenterEntry key={entry.id} entry={entry} />
-            ))}
+            {groups.map((group) =>
+              group.correlationId && group.entries.length > 1 ? (
+                <NotificationThread key={group.correlationId} group={group} />
+              ) : (
+                <NotificationCenterEntry key={group.entries[0].id} entry={group.entries[0]} />
+              )
+            )}
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function NotificationThread({ group }: { group: ThreadGroup }) {
+  const latest = group.entries[0];
+
+  return (
+    <div className="relative">
+      <NotificationCenterEntry entry={latest} threadCount={group.entries.length} />
     </div>
   );
 }

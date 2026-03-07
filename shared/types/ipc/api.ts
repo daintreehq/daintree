@@ -693,6 +693,8 @@ export interface ElectronAPI {
     setSettings(settings: Partial<NotificationSettings>): Promise<void>;
     /** Play a sound file by name for preview */
     playSound(soundFile: string): Promise<void>;
+    /** Show a simple native OS notification with no navigation context */
+    showNative(payload: { title: string; body: string }): void;
     /** Show a high-priority watch notification unconditionally (no focus suppression) */
     showWatchNotification(payload: {
       title: string;

@@ -271,6 +271,7 @@ export const CHANNELS = {
   NOTIFICATION_SETTINGS_SET: "notification:settings-set",
   NOTIFICATION_PLAY_SOUND: "notification:play-sound",
   NOTIFICATION_SHOW_WATCH: "notification:show-watch",
+  NOTIFICATION_SHOW_NATIVE: "notification:show-native",
   NOTIFICATION_WATCH_NAVIGATE: "notification:watch-navigate",
   NOTIFICATION_SYNC_WATCHED: "notification:sync-watched",
 
