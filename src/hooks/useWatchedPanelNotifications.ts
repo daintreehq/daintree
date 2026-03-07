@@ -7,6 +7,20 @@ const NOTIFICATION_STAGGER_MS = 250;
 
 export function useWatchedPanelNotifications(): void {
   useEffect(() => {
+    // Sync initial watched set to main process
+    window.electron?.notification?.syncWatchedPanels?.(
+      Array.from(useTerminalStore.getState().watchedPanels)
+    );
+
+    // Keep main process in sync whenever the watched set changes
+    let prevWatchedPanels = useTerminalStore.getState().watchedPanels;
+    const unsubWatched = useTerminalStore.subscribe((state) => {
+      if (state.watchedPanels !== prevWatchedPanels) {
+        prevWatchedPanels = state.watchedPanels;
+        window.electron?.notification?.syncWatchedPanels?.(Array.from(state.watchedPanels));
+      }
+    });
+
     let prevAgentStates = new Map<string, string | undefined>(
       useTerminalStore.getState().terminals.map((t) => [t.id, t.agentState])
     );
@@ -92,6 +106,7 @@ export function useWatchedPanelNotifications(): void {
     }
 
     return () => {
+      unsubWatched();
       unsubscribe();
       unsubNavigate?.();
       if (staggerTimer) {

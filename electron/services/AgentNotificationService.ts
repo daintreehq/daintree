@@ -2,9 +2,10 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { existsSync } from "fs";
 import { events } from "./events.js";
-import { notificationService } from "./NotificationService.js";
+import { notificationService, type WatchNotificationContext } from "./NotificationService.js";
 import { store } from "../store.js";
 import { playSound, type SoundHandle } from "../utils/soundPlayer.js";
+import { CHANNELS } from "../ipc/channels.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,6 +20,8 @@ interface PendingNotification {
   title: string;
   body: string;
   worktreeId?: string;
+  terminalId?: string;
+  agentId?: string;
   triggerSound: boolean;
 }
 
@@ -28,6 +31,11 @@ class AgentNotificationService {
   private staggerTimer: NodeJS.Timeout | null = null;
   private lastSoundHandle: SoundHandle | null = null;
   private unsubscribers: Array<() => void> = [];
+  private watchedTerminals = new Set<string>();
+
+  syncWatchedPanels(panelIds: string[]): void {
+    this.watchedTerminals = new Set(panelIds);
+  }
 
   initialize(): void {
     const unsubStateChanged = events.on("agent:state-changed", (payload) => {
@@ -45,7 +53,7 @@ class AgentNotificationService {
     agentId?: string;
     timestamp: number;
   }): void {
-    const { state, previousState, worktreeId, agentId } = payload;
+    const { state, previousState, worktreeId, terminalId, agentId } = payload;
     const settings = store.get("notificationSettings");
 
     if (state === previousState) return;
@@ -61,18 +69,36 @@ class AgentNotificationService {
     }
 
     // Skip if all OS notification types are disabled (off by default).
-    // TODO: Scope to watched terminals once #2539 ships.
     if (!settings.completedEnabled && !settings.waitingEnabled && !settings.failedEnabled) {
       return;
     }
 
+    // Snapshot watched status at event time — not at debounce-fire time.
+    // The renderer one-shot unwatches immediately on state change, so by the time
+    // the 2s completion debounce fires, the terminal is already removed from the
+    // watched set. Capturing here preserves the intent.
+    const isWatched = terminalId !== undefined && this.watchedTerminals.has(terminalId);
+    if (!isWatched) return;
+
     if (state === "completed" && settings.completedEnabled) {
-      this.scheduleCompletionNotification(agentId ?? worktreeId ?? "agent", worktreeId, agentId);
+      this.scheduleCompletionNotification(
+        agentId ?? worktreeId ?? "agent",
+        worktreeId,
+        terminalId,
+        agentId
+      );
     } else if (state === "waiting" && settings.waitingEnabled) {
       // Waiting (permission request) is urgent — show immediately, bypass queue stagger
       const label = this.getLabel(agentId, worktreeId);
+      const context = this.makeContext(terminalId, agentId, worktreeId);
       this.playNotificationSound(settings.soundEnabled);
-      notificationService.showNativeNotification("Agent waiting", `${label} is waiting for input`);
+      notificationService.showWatchNotification(
+        "Agent waiting",
+        `${label} is waiting for input`,
+        context,
+        CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
+        true
+      );
     } else if (state === "failed" && settings.failedEnabled) {
       const label = this.getLabel(agentId, worktreeId);
       this.enqueue(
@@ -80,15 +106,22 @@ class AgentNotificationService {
           title: "Agent failed",
           body: `${label} encountered an error`,
           worktreeId,
+          terminalId,
+          agentId,
           triggerSound: settings.soundEnabled,
         },
-        false,
+        true,
         "error.wav"
       );
     }
   }
 
-  private scheduleCompletionNotification(key: string, worktreeId?: string, agentId?: string): void {
+  private scheduleCompletionNotification(
+    key: string,
+    worktreeId?: string,
+    terminalId?: string,
+    agentId?: string
+  ): void {
     if (this.completionTimers.has(key)) {
       clearTimeout(this.completionTimers.get(key)!);
     }
@@ -98,12 +131,17 @@ class AgentNotificationService {
       const settings = store.get("notificationSettings");
       if (!settings.completedEnabled) return;
       const label = this.getLabel(agentId, worktreeId);
-      this.enqueue({
-        title: "Agent completed",
-        body: `${label} finished its task`,
-        worktreeId,
-        triggerSound: settings.soundEnabled,
-      });
+      this.enqueue(
+        {
+          title: "Agent completed",
+          body: `${label} finished its task`,
+          worktreeId,
+          terminalId,
+          agentId,
+          triggerSound: settings.soundEnabled,
+        },
+        true
+      );
     }, COMPLETION_DEBOUNCE_MS);
 
     this.completionTimers.set(key, timer);
@@ -130,7 +168,14 @@ class AgentNotificationService {
     const item = this.notificationQueue.shift();
     if (!item) return;
 
-    notificationService.showNativeNotification(item.title, item.body);
+    const context = this.makeContext(item.terminalId, item.agentId, item.worktreeId);
+    notificationService.showWatchNotification(
+      item.title,
+      item.body,
+      context,
+      CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
+      true
+    );
 
     if (this.notificationQueue.length > 0) {
       this.staggerTimer = setTimeout(() => {
@@ -154,6 +199,18 @@ class AgentNotificationService {
     if (agentId) return agentId;
     if (worktreeId) return worktreeId;
     return "Agent";
+  }
+
+  private makeContext(
+    terminalId?: string,
+    agentId?: string,
+    worktreeId?: string
+  ): WatchNotificationContext {
+    return {
+      panelId: terminalId ?? agentId ?? "unknown",
+      panelTitle: agentId ?? terminalId ?? "Agent",
+      worktreeId,
+    };
   }
 
   private playNotificationSound(enabled: boolean, fileOverride?: string): void {

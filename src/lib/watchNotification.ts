@@ -28,14 +28,4 @@ export function fireWatchNotification(
       },
     },
   });
-
-  if (window.electron?.notification?.showWatchNotification) {
-    window.electron.notification.showWatchNotification({
-      title,
-      body: message,
-      panelId,
-      panelTitle: label,
-      worktreeId,
-    });
-  }
 }
