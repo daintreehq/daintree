@@ -273,11 +273,7 @@ export class McpServerService {
     });
   }
 
-  private dispatchAction(
-    actionId: string,
-    args: unknown,
-    confirmed: boolean
-  ): Promise<ActionDispatchResult> {
+  private dispatchAction(actionId: string, args: unknown): Promise<ActionDispatchResult> {
     return new Promise((resolve, reject) => {
       const requestId = randomUUID();
       const timer = setTimeout(() => {
@@ -291,7 +287,6 @@ export class McpServerService {
         requestId,
         actionId,
         args,
-        confirmed,
       });
     });
   }
@@ -307,7 +302,7 @@ export class McpServerService {
       return {
         tools: manifest.map((entry) => ({
           name: entry.id,
-          description: `[${entry.category}] ${entry.title}: ${entry.description}${entry.danger === "confirm" ? " ⚠️ Requires confirmation (pass __confirmed: true to proceed)" : ""}`,
+          description: `[${entry.category}] ${entry.title}: ${entry.description}${entry.danger === "confirm" ? " (⚠️ destructive)" : ""}`,
           inputSchema: (entry.inputSchema as { type: string }) ?? {
             type: "object",
             properties: {},
@@ -318,15 +313,11 @@ export class McpServerService {
 
     server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const actionId = request.params.name;
-      const rawArgs = request.params.arguments ?? {};
-      const confirmed = (rawArgs as Record<string, unknown>)["__confirmed"] === true;
-
-      const args = { ...(rawArgs as Record<string, unknown>) };
-      delete args["__confirmed"];
+      const args = request.params.arguments ?? {};
 
       let result: ActionDispatchResult;
       try {
-        result = await this.dispatchAction(actionId, args, confirmed);
+        result = await this.dispatchAction(actionId, args);
       } catch (err) {
         return {
           content: [
@@ -350,18 +341,6 @@ export class McpServerService {
                   : "OK",
             },
           ],
-        };
-      }
-
-      if (result.error.code === "CONFIRMATION_REQUIRED") {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `This action requires confirmation. Call again with "__confirmed": true to proceed.\nAction: ${actionId}\nMessage: ${result.error.message}`,
-            },
-          ],
-          isError: true,
         };
       }
 

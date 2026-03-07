@@ -23,11 +23,11 @@ export function useMcpBridge(): void {
     });
 
     const cleanupDispatch = window.electron.mcpBridge.onDispatchActionRequest(
-      async ({ requestId, actionId, args, confirmed }) => {
+      async ({ requestId, actionId, args }) => {
         try {
           const result = await actionService.dispatch(actionId as ActionId, args, {
             source: "agent",
-            confirmed: confirmed ?? false,
+            confirmed: true,
           });
           window.electron.mcpBridge.sendDispatchActionResponse({ requestId, result });
         } catch (err) {

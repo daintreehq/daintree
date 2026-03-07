@@ -829,27 +829,21 @@ export interface ElectronAPI {
       apiKey: string;
     }>;
     /** Enable or disable the MCP server */
-    setEnabled(
-      enabled: boolean
-    ): Promise<{
+    setEnabled(enabled: boolean): Promise<{
       enabled: boolean;
       port: number | null;
       configuredPort: number | null;
       apiKey: string;
     }>;
     /** Set a fixed port (null = auto-assign ephemeral port) */
-    setPort(
-      port: number | null
-    ): Promise<{
+    setPort(port: number | null): Promise<{
       enabled: boolean;
       port: number | null;
       configuredPort: number | null;
       apiKey: string;
     }>;
     /** Set the API key for bearer token authentication (empty string = no auth) */
-    setApiKey(
-      apiKey: string
-    ): Promise<{
+    setApiKey(apiKey: string): Promise<{
       enabled: boolean;
       port: number | null;
       configuredPort: number | null;
@@ -870,12 +864,7 @@ export interface ElectronAPI {
     ): void;
     /** Listen for action dispatch requests from main process */
     onDispatchActionRequest(
-      callback: (payload: {
-        requestId: string;
-        actionId: string;
-        args?: unknown;
-        confirmed?: boolean;
-      }) => void
+      callback: (payload: { requestId: string; actionId: string; args?: unknown }) => void
     ): () => void;
     /** Send action dispatch result to main process */
     sendDispatchActionResponse(payload: {

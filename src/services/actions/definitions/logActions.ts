@@ -119,13 +119,36 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
   actions.set("eventInspector.getEvents", () => ({
     id: "eventInspector.getEvents",
     title: "Get Events",
-    description: "Get captured events from the event inspector",
+    description: "Get captured events from the event inspector. Use limit/offset for pagination.",
     category: "diagnostics",
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    run: async () => {
-      return await eventInspectorClient.getEvents();
+    argsSchema: z
+      .object({
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(500)
+          .default(50)
+          .describe("Max events to return (default: 50, max: 500)"),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .default(0)
+          .describe("Number of events to skip (default: 0)"),
+      })
+      .optional(),
+    run: async (args: unknown) => {
+      const { limit = 50, offset = 0 } =
+        (args as { limit?: number; offset?: number } | undefined) ?? {};
+      const allEvents = await eventInspectorClient.getEvents();
+      const events = Array.isArray(allEvents) ? allEvents : [];
+      const total = events.length;
+      const sliced = events.slice(offset, offset + limit);
+      return { events: sliced, total, limit, offset, hasMore: offset + limit < total };
     },
   }));
 
@@ -137,10 +160,20 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ filters: z.any() }),
+    argsSchema: z.object({
+      category: z.string().optional().describe("Filter by event category"),
+      source: z.string().optional().describe("Filter by event source"),
+      search: z.string().optional().describe("Search text in event data"),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(500)
+        .default(50)
+        .describe("Max events to return (default: 50)"),
+    }),
     run: async (args: unknown) => {
-      const { filters } = args as { filters: unknown };
-      return await eventInspectorClient.getFiltered(filters as any);
+      return await eventInspectorClient.getFiltered(args as any);
     },
   }));
 

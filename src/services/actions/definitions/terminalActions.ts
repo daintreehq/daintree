@@ -358,16 +358,27 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
   actions.set("terminal.rename", () => ({
     id: "terminal.rename",
     title: "Rename Terminal",
-    description: "Rename the terminal tab",
+    description:
+      "Rename the terminal tab. If name is provided, renames programmatically. Otherwise opens the rename dialog.",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ terminalId: z.string().optional() }),
+    argsSchema: z.object({
+      terminalId: z.string().optional(),
+      name: z
+        .string()
+        .optional()
+        .describe("New name for the terminal. If omitted, opens the rename dialog."),
+    }),
     run: async (args: unknown) => {
-      const { terminalId } = args as { terminalId?: string };
+      const { terminalId, name } = args as { terminalId?: string; name?: string };
       const targetId = terminalId ?? useTerminalStore.getState().focusedId;
-      if (targetId) {
+      if (!targetId) return;
+
+      if (name !== undefined) {
+        useTerminalStore.getState().updateTitle(targetId, name);
+      } else {
         window.dispatchEvent(
           new CustomEvent("canopy:rename-terminal", { detail: { id: targetId } })
         );

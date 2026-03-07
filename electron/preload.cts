@@ -1640,16 +1640,11 @@ const api: ElectronAPI = {
     },
 
     onDispatchActionRequest: (
-      callback: (payload: {
-        requestId: string;
-        actionId: string;
-        args?: unknown;
-        confirmed?: boolean;
-      }) => void
+      callback: (payload: { requestId: string; actionId: string; args?: unknown }) => void
     ) => {
       const handler = (
         _event: Electron.IpcRendererEvent,
-        payload: { requestId: string; actionId: string; args?: unknown; confirmed?: boolean }
+        payload: { requestId: string; actionId: string; args?: unknown }
       ) => callback(payload);
       ipcRenderer.on("mcp:dispatch-action-request", handler);
       return () => ipcRenderer.removeListener("mcp:dispatch-action-request", handler);

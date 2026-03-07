@@ -209,6 +209,28 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
     },
   }));
 
+  actions.set("sidecar.listTabs", () => ({
+    id: "sidecar.listTabs",
+    title: "List Sidecar Tabs",
+    description: "List all sidecar tabs with their IDs, URLs, and titles",
+    category: "sidecar",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const state = useSidecarStore.getState();
+      return {
+        isOpen: state.isOpen,
+        activeTabId: state.activeTabId,
+        tabs: state.tabs.map((t) => ({
+          id: t.id,
+          url: t.url ?? null,
+          title: t.title,
+        })),
+      };
+    },
+  }));
+
   actions.set("sidecar.links.add", () => ({
     id: "sidecar.links.add",
     title: "Add Sidecar Link",
@@ -465,7 +487,10 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
     argsSchema: z.object({
       url: z.string(),
       title: z.string().optional(),
-      background: z.boolean().optional(),
+      background: z
+        .boolean()
+        .optional()
+        .describe("If true, create tab without showing sidecar (default: false)"),
     }),
     run: async (args: unknown) => {
       const { url, title, background } = args as {
@@ -494,6 +519,11 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
           }));
         }
         return;
+      }
+
+      // Ensure sidecar is visible before activating a tab
+      if (!state.isOpen) {
+        state.setOpen(true);
       }
 
       const activeTabId = state.activeTabId;
