@@ -11,7 +11,13 @@
  * All types are serializable (no functions, no circular refs) for IPC transport.
  */
 
-import type { Worktree, WorktreeChanges, FileChangeDetail, WorktreeMood } from "./domain.js";
+import type {
+  Worktree,
+  WorktreeChanges,
+  FileChangeDetail,
+  WorktreeMood,
+  WorktreeLifecycleStatus,
+} from "./domain.js";
 import type {
   CopyTreeOptions,
   CopyTreeProgress,
@@ -87,6 +93,8 @@ export interface WorktreeSnapshot {
   timestamp?: number;
   /** Task ID for task-scoped worktree orchestration */
   taskId?: string;
+  /** Current or last completed lifecycle script status */
+  lifecycleStatus?: WorktreeLifecycleStatus;
 }
 
 /** Monitor configuration for polling intervals */

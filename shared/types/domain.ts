@@ -76,6 +76,25 @@ export interface StagingStatus {
 /** Worktree mood indicator */
 export type WorktreeMood = "stable" | "active" | "stale" | "error";
 
+/** Phase of worktree lifecycle script execution */
+export type WorktreeLifecyclePhase = "setup" | "teardown";
+
+/** State of worktree lifecycle script execution */
+export type WorktreeLifecycleState = "running" | "success" | "failed" | "timed-out";
+
+/** Status of worktree lifecycle script execution (serializable) */
+export interface WorktreeLifecycleStatus {
+  phase: WorktreeLifecyclePhase;
+  state: WorktreeLifecycleState;
+  currentCommand?: string;
+  commandIndex?: number;
+  totalCommands?: number;
+  output?: string;
+  startedAt: number;
+  completedAt?: number;
+  error?: string;
+}
+
 /** Git worktree - multiple working trees on same repo */
 export interface Worktree {
   /** Stable identifier for this worktree (normalized absolute path) */
@@ -157,6 +176,9 @@ export interface Worktree {
 
   /** Task ID for task-scoped worktree orchestration */
   taskId?: string;
+
+  /** Current or last completed lifecycle script status */
+  lifecycleStatus?: WorktreeLifecycleStatus;
 }
 
 /** Runtime worktree state (internal to WorktreeService) */
