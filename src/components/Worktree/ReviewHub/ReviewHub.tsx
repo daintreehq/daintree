@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { StagingStatus, GitStatus } from "@shared/types";
 import { cn } from "@/lib/utils";
@@ -8,6 +8,7 @@ import { FileStageRow } from "./FileStageRow";
 import { CommitPanel } from "./CommitPanel";
 import { FileDiffModal } from "../FileDiffModal";
 import { Button } from "@/components/ui/button";
+import { debounce } from "@/utils/debounce";
 
 interface ReviewHubProps {
   isOpen: boolean;
@@ -18,15 +19,20 @@ interface ReviewHubProps {
 export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
   const [status, setStatus] = useState<StagingStatus | null>(null);
   const [loading, setLoading] = useState(false);
+  const [isBackgroundRefreshing, setIsBackgroundRefreshing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [pushError, setPushError] = useState<string | null>(null);
+  const [commitMessage, setCommitMessage] = useState("");
   const [selectedFile, setSelectedFile] = useState<{
     path: string;
     status: GitStatus;
   } | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const refreshIdRef = useRef(0);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const savedScrollTop = useRef(0);
+  const debouncedBgRefreshRef = useRef<ReturnType<typeof debounce> | null>(null);
 
   useOverlayState(isOpen);
 
@@ -51,6 +57,24 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
     }
   }, [worktreePath]);
 
+  const backgroundRefresh = useCallback(async () => {
+    if (!worktreePath) return;
+    const requestId = ++refreshIdRef.current;
+    setIsBackgroundRefreshing(true);
+    try {
+      const result = await window.electron.git.getStagingStatus(worktreePath);
+      if (refreshIdRef.current === requestId) {
+        setStatus(result);
+      }
+    } catch {
+      // Keep existing data visible; silently drop background errors
+    } finally {
+      if (refreshIdRef.current === requestId) {
+        setIsBackgroundRefreshing(false);
+      }
+    }
+  }, [worktreePath]);
+
   useEffect(() => {
     if (isOpen) {
       setActionError(null);
@@ -63,12 +87,34 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
       setActionError(null);
       setPushError(null);
       setSelectedFile(null);
+      setCommitMessage("");
+      setIsBackgroundRefreshing(false);
     }
   }, [isOpen, refresh]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const debouncedBgRefresh = debounce(() => void backgroundRefresh(), 800);
+    debouncedBgRefreshRef.current = debouncedBgRefresh;
+
+    const unsubscribe = window.electron.worktree.onUpdate((state) => {
+      if (state.path === worktreePath) {
+        debouncedBgRefresh();
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      debouncedBgRefresh.cancel();
+      debouncedBgRefreshRef.current = null;
+    };
+  }, [isOpen, worktreePath, backgroundRefresh]);
 
   const handleStageFile = useCallback(
     async (filePath: string) => {
       setActionError(null);
+      debouncedBgRefreshRef.current?.cancel();
       try {
         await window.electron.git.stageFile(worktreePath, filePath);
         await refresh();
@@ -82,6 +128,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
   const handleUnstageFile = useCallback(
     async (filePath: string) => {
       setActionError(null);
+      debouncedBgRefreshRef.current?.cancel();
       try {
         await window.electron.git.unstageFile(worktreePath, filePath);
         await refresh();
@@ -94,6 +141,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
 
   const handleStageAll = useCallback(async () => {
     setActionError(null);
+    debouncedBgRefreshRef.current?.cancel();
     try {
       await window.electron.git.stageAll(worktreePath);
       await refresh();
@@ -104,6 +152,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
 
   const handleUnstageAll = useCallback(async () => {
     setActionError(null);
+    debouncedBgRefreshRef.current?.cancel();
     try {
       await window.electron.git.unstageAll(worktreePath);
       await refresh();
@@ -115,6 +164,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
   const handleCommit = useCallback(
     async (message: string) => {
       setActionError(null);
+      debouncedBgRefreshRef.current?.cancel();
       try {
         await window.electron.git.commit(worktreePath, message);
         await refresh();
@@ -130,6 +180,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
     async (message: string) => {
       setActionError(null);
       setPushError(null);
+      debouncedBgRefreshRef.current?.cancel();
       try {
         await window.electron.git.commit(worktreePath, message);
       } catch (err) {
@@ -148,6 +199,16 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
     },
     [worktreePath, refresh]
   );
+
+  useLayoutEffect(() => {
+    if (scrollContainerRef.current && status) {
+      scrollContainerRef.current.scrollTop = savedScrollTop.current;
+    }
+  }, [status]);
+
+  const handleScrollContainer = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    savedScrollTop.current = e.currentTarget.scrollTop;
+  }, []);
 
   const handleFileClick = useCallback((filePath: string, fileStatus: GitStatus) => {
     setSelectedFile({ path: filePath, status: fileStatus });
@@ -247,7 +308,12 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                 )}
                 aria-label="Refresh"
               >
-                <RefreshCw className={cn("w-3.5 h-3.5", loading && "animate-spin")} />
+                <RefreshCw
+                  className={cn(
+                    "w-3.5 h-3.5",
+                    (loading || isBackgroundRefreshing) && "animate-spin"
+                  )}
+                />
               </button>
               <button
                 ref={closeButtonRef}
@@ -279,7 +345,11 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
           )}
 
           {/* Content */}
-          <div className="flex-1 overflow-y-auto min-h-0">
+          <div
+            ref={scrollContainerRef}
+            className="flex-1 overflow-y-auto min-h-0"
+            onScroll={handleScrollContainer}
+          >
             {loading && !status ? (
               <div className="flex items-center justify-center py-12">
                 <Loader2 className="w-5 h-5 text-canopy-text/40 animate-spin" />
@@ -405,6 +475,8 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
               isDetachedHead={status.isDetachedHead}
               hasConflicts={hasConflicts}
               hasRemote={status.hasRemote}
+              commitMessage={commitMessage}
+              onCommitMessageChange={setCommitMessage}
               onCommit={handleCommit}
               onCommitAndPush={handleCommitAndPush}
             />

@@ -10,6 +10,8 @@ interface CommitPanelProps {
   isDetachedHead: boolean;
   hasConflicts: boolean;
   hasRemote: boolean;
+  commitMessage: string;
+  onCommitMessageChange: (message: string) => void;
   onCommit: (message: string) => Promise<void>;
   onCommitAndPush: (message: string) => Promise<void>;
 }
@@ -19,47 +21,48 @@ export function CommitPanel({
   isDetachedHead,
   hasConflicts,
   hasRemote,
+  commitMessage,
+  onCommitMessageChange,
   onCommit,
   onCommitAndPush,
 }: CommitPanelProps) {
-  const [message, setMessage] = useState("");
   const [isCommitting, setIsCommitting] = useState(false);
   const [isPushing, setIsPushing] = useState(false);
 
-  const subjectLine = message.split("\n")[0] || "";
+  const subjectLine = commitMessage.split("\n")[0] || "";
   const isOverLimit = subjectLine.length > MAX_SUBJECT_LENGTH;
   const isBusy = isCommitting || isPushing;
   const canCommit =
-    stagedCount > 0 && message.trim().length > 0 && !isDetachedHead && !hasConflicts;
+    stagedCount > 0 && commitMessage.trim().length > 0 && !isDetachedHead && !hasConflicts;
 
   const handleCommit = useCallback(async () => {
     if (!canCommit || isBusy) return;
     setIsCommitting(true);
     try {
-      await onCommit(message);
-      setMessage("");
+      await onCommit(commitMessage);
+      onCommitMessageChange("");
     } catch {
       // Error is handled by the parent via setActionError
     } finally {
       setIsCommitting(false);
     }
-  }, [canCommit, isBusy, message, onCommit]);
+  }, [canCommit, isBusy, commitMessage, onCommit, onCommitMessageChange]);
 
   const handleCommitAndPush = useCallback(async () => {
     if (!canCommit || isBusy) return;
     setIsPushing(true);
     try {
-      await onCommitAndPush(message);
-      setMessage("");
+      await onCommitAndPush(commitMessage);
+      onCommitMessageChange("");
     } catch {
       // Error is handled by the parent via setActionError
     } finally {
       setIsPushing(false);
     }
-  }, [canCommit, isBusy, message, onCommitAndPush]);
+  }, [canCommit, isBusy, commitMessage, onCommitAndPush, onCommitMessageChange]);
 
   const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         if (e.shiftKey && hasRemote) {
@@ -82,8 +85,8 @@ export function CommitPanel({
 
       <div className="relative">
         <textarea
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
+          value={commitMessage}
+          onChange={(e) => onCommitMessageChange(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="Commit message…"
           rows={4}
