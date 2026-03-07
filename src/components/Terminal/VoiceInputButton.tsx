@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Mic, MicOff, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { VoiceInputStatus } from "@shared/types";
+import { actionService } from "@/services/ActionService";
 
 const AUTO_STOP_MS = 60_000;
 
@@ -9,12 +10,14 @@ interface VoiceInputButtonProps {
   onTranscriptionDelta: (delta: string) => void;
   onTranscriptionComplete: (text: string) => void;
   disabled?: boolean;
+  isConfigured?: boolean;
 }
 
 export function VoiceInputButton({
   onTranscriptionDelta,
   onTranscriptionComplete,
   disabled = false,
+  isConfigured = false,
 }: VoiceInputButtonProps) {
   const [status, setStatus] = useState<VoiceInputStatus>("idle");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -160,12 +163,16 @@ export function VoiceInputButton({
 
   const handleClick = useCallback(async () => {
     if (disabled) return;
+    if (!isConfigured) {
+      void actionService.dispatch("app.settings.openTab", { tab: "voice" }, { source: "user" });
+      return;
+    }
     if (isRecording) {
       await stopRecording();
     } else {
       await startRecording();
     }
-  }, [disabled, isRecording, startRecording, stopRecording]);
+  }, [disabled, isConfigured, isRecording, startRecording, stopRecording]);
 
   useEffect(() => {
     const unsubs: (() => void)[] = [];
@@ -225,11 +232,13 @@ export function VoiceInputButton({
         onClick={handleClick}
         disabled={disabled || status === "connecting"}
         title={
-          status === "error"
-            ? (errorMessage ?? "Voice input error")
-            : isRecording
-              ? "Stop recording"
-              : "Start voice input"
+          !isConfigured
+            ? "Configure voice input"
+            : status === "error"
+              ? (errorMessage ?? "Voice input error")
+              : isRecording
+                ? "Stop recording"
+                : "Start voice input"
         }
         className={cn(
           "flex items-center justify-center rounded p-1 transition-colors",

@@ -1245,6 +1245,22 @@ export interface IpcInvokeMap {
     args: [];
     result: void;
   };
+  "voice-input:check-mic-permission": {
+    args: [];
+    result: "granted" | "denied" | "not-determined" | "restricted" | "unknown";
+  };
+  "voice-input:request-mic-permission": {
+    args: [];
+    result: boolean;
+  };
+  "voice-input:open-mic-settings": {
+    args: [];
+    result: void;
+  };
+  "voice-input:validate-api-key": {
+    args: [apiKey: string];
+    result: { valid: boolean; error?: string };
+  };
 }
 
 /**
