@@ -283,7 +283,7 @@ export function VoiceInputButton({
             <span className="absolute -right-1 -top-1 h-1.5 w-1.5 animate-pulse rounded-full bg-red-400" />
           </div>
         ) : (
-          <MicOff className="h-3.5 w-3.5" />
+          <>{isConfigured ? <Mic className="h-3.5 w-3.5" /> : <MicOff className="h-3.5 w-3.5" />}</>
         )}
       </button>
 

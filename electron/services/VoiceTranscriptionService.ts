@@ -7,11 +7,15 @@ export type VoiceTranscriptionEvent =
   | { type: "error"; message: string }
   | { type: "status"; status: "idle" | "connecting" | "recording" | "error" };
 
+type VoiceStartResult = { ok: true } | { ok: false; error: string };
+
 export class VoiceTranscriptionService {
   private ws: WebSocket | null = null;
   private sessionId = 0;
   private connectTimeout: ReturnType<typeof setTimeout> | null = null;
   private listeners: Set<(event: VoiceTranscriptionEvent) => void> = new Set();
+  private pendingStart: { sessionId: number; resolve: (result: VoiceStartResult) => void } | null =
+    null;
 
   onEvent(listener: (event: VoiceTranscriptionEvent) => void): () => void {
     this.listeners.add(listener);
@@ -31,19 +35,26 @@ export class VoiceTranscriptionService {
     }
   }
 
-  async start(settings: VoiceInputSettings): Promise<{ ok: true } | { ok: false; error: string }> {
+  private settlePendingStart(sessionId: number, result: VoiceStartResult): void {
+    if (this.pendingStart?.sessionId !== sessionId) return;
+    const { resolve } = this.pendingStart;
+    this.pendingStart = null;
+    resolve(result);
+  }
+
+  async start(settings: VoiceInputSettings): Promise<VoiceStartResult> {
     if (!settings.apiKey) {
       return { ok: false, error: "OpenAI API key not configured" };
     }
 
-    // Increment session ID before stopping the old connection so stale handlers
-    // from the previous session ignore their events.
-    const mySessionId = ++this.sessionId;
+    const mySessionId = this.sessionId + 1;
     this.stop();
+    this.sessionId = mySessionId;
 
     this.emit({ type: "status", status: "connecting" });
 
     return new Promise((resolve) => {
+      this.pendingStart = { sessionId: mySessionId, resolve };
       const ws = new WebSocket("wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview", {
         headers: {
           Authorization: `Bearer ${settings.apiKey}`,
@@ -57,7 +68,7 @@ export class VoiceTranscriptionService {
         if (this.sessionId === mySessionId) {
           this.emit({ type: "error", message: "Connection timed out" });
           this.emit({ type: "status", status: "error" });
-          resolve({ ok: false, error: "Connection timed out" });
+          this.settlePendingStart(mySessionId, { ok: false, error: "Connection timed out" });
         }
       }, 10000);
 
@@ -95,7 +106,7 @@ export class VoiceTranscriptionService {
         );
 
         this.emit({ type: "status", status: "recording" });
-        resolve({ ok: true });
+        this.settlePendingStart(mySessionId, { ok: true });
       });
 
       ws.on("message", (data: WebSocket.RawData) => {
@@ -115,13 +126,14 @@ export class VoiceTranscriptionService {
         this.ws = null;
         this.emit({ type: "error", message });
         this.emit({ type: "status", status: "error" });
-        resolve({ ok: false, error: message });
+        this.settlePendingStart(mySessionId, { ok: false, error: message });
       });
 
       ws.on("close", () => {
         this.clearConnectTimeout();
         if (this.sessionId !== mySessionId) return;
         this.ws = null;
+        this.settlePendingStart(mySessionId, { ok: false, error: "Connection closed" });
         this.emit({ type: "status", status: "idle" });
       });
     });
@@ -159,8 +171,12 @@ export class VoiceTranscriptionService {
 
   stop(): void {
     // Invalidate the current session so stale event handlers become no-ops.
+    const pendingSessionId = this.pendingStart?.sessionId;
     this.sessionId++;
     this.clearConnectTimeout();
+    if (pendingSessionId !== undefined) {
+      this.settlePendingStart(pendingSessionId, { ok: false, error: "Voice session stopped" });
+    }
     if (this.ws) {
       try {
         this.ws.close();

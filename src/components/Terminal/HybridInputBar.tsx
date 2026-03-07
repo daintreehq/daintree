@@ -30,7 +30,9 @@ import { CommandPickerButton, CommandPickerHost } from "@/components/Commands";
 import { useCommandStore } from "@/store/commandStore";
 import { useProjectStore } from "@/store/projectStore";
 import { VoiceInputButton } from "./VoiceInputButton";
+import { VOICE_INPUT_SETTINGS_CHANGED_EVENT } from "@/lib/voiceInputSettingsEvents";
 import type { CommandContext, CommandResult } from "@shared/types/commands";
+import type { VoiceInputSettings } from "@shared/types";
 import { isEnterLikeLineBreakInputEvent } from "./hybridInputEvents";
 import {
   inputTheme,
@@ -244,17 +246,31 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     useEffect(() => {
       const load = () => {
-        window.electron?.voiceInput
+        return window.electron?.voiceInput
           ?.getSettings()
           .then((s) => {
             setIsVoiceConfigured(s.enabled && !!s.apiKey);
           })
           .catch(() => {});
       };
+
+      const handleSettingsChanged = (event: Event) => {
+        const { detail } = event as CustomEvent<VoiceInputSettings>;
+        if (detail) {
+          setIsVoiceConfigured(detail.enabled && !!detail.apiKey);
+          return;
+        }
+        void load();
+      };
+
       load();
       // Re-check when the window regains focus so Settings changes are reflected immediately.
       window.addEventListener("focus", load);
-      return () => window.removeEventListener("focus", load);
+      window.addEventListener(VOICE_INPUT_SETTINGS_CHANGED_EVENT, handleSettingsChanged);
+      return () => {
+        window.removeEventListener("focus", load);
+        window.removeEventListener(VOICE_INPUT_SETTINGS_CHANGED_EVENT, handleSettingsChanged);
+      };
     }, []);
 
     const isInitializing = isAgentTerminal && initializationState === "initializing";

@@ -18,6 +18,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
+import { dispatchVoiceInputSettingsChanged } from "@/lib/voiceInputSettingsEvents";
 import type { VoiceInputSettings, MicPermissionStatus } from "@shared/types";
 
 const LANGUAGES = [
@@ -84,7 +85,10 @@ export function VoiceInputSettingsTab() {
   const update = (patch: Partial<VoiceInputSettings>) => {
     setSettings((prev) => {
       const next = { ...prev, ...patch };
-      window.electron?.voiceInput?.setSettings(patch).catch(() => setSettings(prev));
+      window.electron?.voiceInput
+        ?.setSettings(patch)
+        .then(() => dispatchVoiceInputSettingsChanged(next))
+        .catch(() => setSettings(prev));
       return next;
     });
   };
