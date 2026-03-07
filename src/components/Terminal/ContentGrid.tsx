@@ -14,6 +14,7 @@ import {
 } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
 import { useRecipeStore } from "@/store/recipeStore";
+import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { GridPanel } from "./GridPanel";
 import { GridTabGroup } from "./GridTabGroup";
 import { GridNotificationBar } from "./GridNotificationBar";
@@ -117,7 +118,15 @@ function EmptyState({
   const handleRunRecipe = async (recipeId: string) => {
     if (!defaultCwd) return;
     try {
-      await runRecipe(recipeId, defaultCwd, activeWorktreeId ?? undefined);
+      const worktreeData = activeWorktreeId
+        ? useWorktreeDataStore.getState().worktrees.get(activeWorktreeId)
+        : null;
+      await runRecipe(recipeId, defaultCwd, activeWorktreeId ?? undefined, {
+        issueNumber: worktreeData?.issueNumber,
+        prNumber: worktreeData?.prNumber,
+        worktreePath: defaultCwd,
+        branchName: worktreeData?.branch,
+      });
     } catch (error) {
       console.error("Failed to run recipe:", error);
     }
