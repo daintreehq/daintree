@@ -3,6 +3,9 @@ import { EventEmitter } from "events";
 import type { WorkspaceService } from "../WorkspaceService.js";
 import type { MonitorState } from "../types.js";
 
+/** Normalize a path to forward slashes for cross-platform mock matching */
+const n = (p: string) => (p as string).replace(/\\/g, "/");
+
 const mockSimpleGit = {
   raw: vi.fn().mockResolvedValue(undefined),
   branch: vi.fn().mockResolvedValue({ current: "main" }),
@@ -219,7 +222,7 @@ describe("WorkspaceService.deleteWorktree", () => {
 
     // Make the main repo config exist
     mockAccess.mockImplementation(async (p: unknown) => {
-      if ((p as string).endsWith("/test/root/.canopy/config.json")) return undefined;
+      if (n(p as string).endsWith("/test/root/.canopy/config.json")) return undefined;
       throw new Error("ENOENT");
     });
     mockReadFile.mockResolvedValue(JSON.stringify(teardownConfig));
@@ -271,7 +274,7 @@ describe("WorkspaceService.deleteWorktree", () => {
     const mockReadFile = vi.mocked(fsModule.readFile);
 
     mockAccess.mockImplementation(async (p: unknown) => {
-      if ((p as string).endsWith("/test/root/.canopy/config.json")) return undefined;
+      if (n(p as string).endsWith("/test/root/.canopy/config.json")) return undefined;
       throw new Error("ENOENT");
     });
     mockReadFile.mockResolvedValue(JSON.stringify(teardownConfig));

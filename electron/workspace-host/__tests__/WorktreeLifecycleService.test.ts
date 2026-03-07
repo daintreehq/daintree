@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import path from "path";
 
+/** Normalize a path to forward slashes for cross-platform mock matching */
+const n = (p: string) => (p as string).replace(/\\/g, "/");
+
 vi.mock("fs/promises", () => ({
   readFile: vi.fn(),
   access: vi.fn(),
@@ -44,8 +47,8 @@ describe("WorktreeLifecycleService", () => {
       const projectConfig = { setup: ["npm install"], teardown: ["docker compose down"] };
 
       mockAccess.mockImplementation(async (p: string) => {
-        if ((p as string).includes("/.canopy/projects/")) throw new Error("ENOENT");
-        if ((p as string).endsWith("/worktree/.canopy/config.json")) throw new Error("ENOENT");
+        if (n(p).includes("/.canopy/projects/")) throw new Error("ENOENT");
+        if (n(p).endsWith("/worktree/.canopy/config.json")) throw new Error("ENOENT");
         return undefined; // main repo config exists
       });
 
@@ -61,13 +64,13 @@ describe("WorktreeLifecycleService", () => {
 
       mockAccess.mockImplementation(async (p: string) => {
         // user config does not exist
-        if ((p as string).includes("/.canopy/projects/")) throw new Error("ENOENT");
+        if (n(p).includes("/.canopy/projects/")) throw new Error("ENOENT");
         // worktree config exists (second check)
         return undefined;
       });
 
       mockReadFile.mockImplementation(async (p: string) => {
-        if ((p as string).endsWith("/worktree/.canopy/config.json")) {
+        if (n(p).endsWith("/worktree/.canopy/config.json")) {
           return JSON.stringify(worktreeConfig);
         }
         return JSON.stringify(mainConfig);
@@ -93,7 +96,7 @@ describe("WorktreeLifecycleService", () => {
 
       let readCount = 0;
       mockAccess.mockImplementation(async (p: string) => {
-        if ((p as string).includes("/.canopy/projects/")) throw new Error("ENOENT");
+        if (n(p).includes("/.canopy/projects/")) throw new Error("ENOENT");
         return undefined;
       });
 
@@ -113,7 +116,7 @@ describe("WorktreeLifecycleService", () => {
 
       let readCount = 0;
       mockAccess.mockImplementation(async (p: string) => {
-        if ((p as string).includes("/.canopy/projects/")) throw new Error("ENOENT");
+        if (n(p).includes("/.canopy/projects/")) throw new Error("ENOENT");
         return undefined;
       });
 
@@ -131,7 +134,7 @@ describe("WorktreeLifecycleService", () => {
       const config = { teardown: ["docker compose down"] };
 
       mockAccess.mockImplementation(async (p: string) => {
-        if (!(p as string).endsWith("/project/.canopy/config.json")) throw new Error("ENOENT");
+        if (!n(p).endsWith("/project/.canopy/config.json")) throw new Error("ENOENT");
         return undefined;
       });
 
