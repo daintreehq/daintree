@@ -56,7 +56,7 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
 
       const template: MenuItemOption[] = [
         { id: "worktree:new", label: "New Worktree..." },
-        { id: "worktree:refresh", label: "Refresh Worktrees" },
+        { id: "worktree:refresh", label: "Refresh Sidebar" },
         { type: "separator" },
         { id: "project:reveal", label: "Reveal Project in Finder", enabled: !!currentProject },
         { id: "project:settings", label: "Project Settings...", enabled: !!currentProject },
