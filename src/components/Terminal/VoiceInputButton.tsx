@@ -1,16 +1,21 @@
 import { useCallback, useEffect, useRef } from "react";
-import { Mic, MicOff, Square, Loader2 } from "lucide-react";
+import { Mic, MicOff, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 
-// Flywheel — double-smoothed for S-curve easing (ease-in-out)
-const IDLE_SPEED = 72; // deg/sec — 1 revolution per 5s (calm breathing pace)
+// Flywheel — double-smoothed for S-curve easing
+const IDLE_SPEED = 72; // deg/sec — 1 revolution per 5s
 const ACTIVE_SPEED = 288; // deg/sec — 1 revolution per 1.25s
-const TAU_ATTACK = 0.25; // stacked with double-smooth → ~0.5s effective ease-in
-const TAU_RELEASE = 0.6; // stacked → ~1.2s effective ease-out
-const AUDIO_SMOOTH = 0.15; // low-pass filter on raw audio level
+const TAU_ATTACK = 0.22;
+const TAU_RELEASE = 0.5;
+const AUDIO_SMOOTH = 0.15;
+
+// Ring thickness via scale (avoids layout thrashing)
+const BASE_THICKNESS = 2; // px — fixed padding, animated via scale
+const SCALE_MIN = 0.88;
+const SCALE_MAX = 1.0;
 
 interface VoiceInputButtonProps {
   panelId: string;
@@ -41,12 +46,17 @@ export function VoiceInputButton({
   const isConnecting = activePanelId === panelId && status === "connecting";
   const isFinishing = activePanelId === panelId && status === "finishing";
   const isListening = isRecording || isConnecting;
+  // Keep orbit visible through finishing for graceful exit
+  const showOrbit = isListening || isFinishing;
   const isActive = isListening || isFinishing;
 
   // Animation refs
   const wrapperRef = useRef<HTMLDivElement>(null);
   const ringRef = useRef<HTMLSpanElement>(null);
-  const dotRef = useRef<HTMLSpanElement>(null);
+  const dotCoreRef = useRef<HTMLSpanElement>(null);
+  const dotHaloRef = useRef<HTMLSpanElement>(null);
+  const trackRef = useRef<HTMLSpanElement>(null);
+  const iconRef = useRef<HTMLSpanElement>(null);
   const rafRef = useRef<number>(0);
   const audioLevelRef = useRef(0);
 
@@ -55,25 +65,26 @@ export function VoiceInputButton({
   }, [audioLevel]);
 
   useEffect(() => {
-    if (!isListening) return;
+    if (!showOrbit) return;
 
     let lastTime = performance.now();
     let angle = 0;
-    let v1 = IDLE_SPEED; // intermediate velocity (first smooth)
-    let velocity = IDLE_SPEED; // drawn velocity (second smooth — creates S-curve)
+    let v1 = IDLE_SPEED;
+    let velocity = IDLE_SPEED;
     let smoothLevel = 0;
 
     const tick = (now: number) => {
-      const dt = Math.min((now - lastTime) / 1000, 0.1); // seconds, capped
+      const dt = Math.min((now - lastTime) / 1000, 0.1);
       lastTime = now;
 
-      // Low-pass filter on raw audio — prevents micro-jitter
-      smoothLevel += (audioLevelRef.current - smoothLevel) * AUDIO_SMOOTH;
+      // During finishing, force level to 0 so it winds down gracefully
+      const rawLevel = isFinishing ? 0 : audioLevelRef.current;
 
-      // Perceptual curve — background noise suppressed, speech pops
+      // Low-pass + perceptual curve
+      smoothLevel += (rawLevel - smoothLevel) * AUDIO_SMOOTH;
       const level = Math.pow(smoothLevel, 1.5);
 
-      // Double-smoothed flywheel — cascaded for S-curve (ease-in-ease-out)
+      // Double-smoothed flywheel
       const targetVelocity = IDLE_SPEED + level * (ACTIVE_SPEED - IDLE_SPEED);
       const tau = targetVelocity > velocity ? TAU_ATTACK : TAU_RELEASE;
       const alpha = 1 - Math.exp(-dt / tau);
@@ -82,35 +93,58 @@ export function VoiceInputButton({
 
       angle = (angle + velocity * dt) % 360;
 
-      // Arc visuals from smoothed audio level
+      // Energy ratio for visual mapping
       const opacity = (0.45 + level * 0.55).toFixed(3);
-      const thickness = (2 + level * 1).toFixed(2);
+      const opacityNum = Number(opacity);
+      const scale = SCALE_MIN + level * (SCALE_MAX - SCALE_MIN);
 
-      // Rotate wrapper
+      // Rotate wrapper with scale for thickness modulation
       const wrapper = wrapperRef.current;
       if (wrapper) {
-        wrapper.style.transform = `rotate(${angle}deg) translateZ(0)`;
+        wrapper.style.transform = `rotate(${angle}deg) scale(${scale}) translateZ(0)`;
       }
 
-      // Update ring — longer 180° tail with exponential brightness ramp
+      // Refined gradient — exponential clustering near the head
       const ring = ringRef.current;
       if (ring) {
-        ring.style.padding = `${thickness}px`;
         ring.style.background = [
           `conic-gradient(from 0deg,`,
-          `transparent 180deg,`,
-          `rgba(var(--theme-accent-rgb), ${Number(opacity) * 0.08}) 270deg,`,
-          `rgba(var(--theme-accent-rgb), ${Number(opacity) * 0.4}) 330deg,`,
-          `rgba(var(--theme-accent-rgb), ${opacity}) 360deg)`,
+          `transparent 200deg,`,
+          `rgba(var(--theme-accent-rgb), ${(opacityNum * 0.05).toFixed(3)}) 248deg,`,
+          `rgba(var(--theme-accent-rgb), ${(opacityNum * 0.18).toFixed(3)}) 292deg,`,
+          `rgba(var(--theme-accent-rgb), ${(opacityNum * 0.42).toFixed(3)}) 326deg,`,
+          `rgba(var(--theme-accent-rgb), ${(opacityNum * 0.82).toFixed(3)}) 348deg,`,
+          `rgba(var(--theme-accent-rgb), ${opacity}) 355deg,`,
+          `transparent 360deg)`,
         ].join(" ");
       }
 
-      // Update dot — soft glowing light source, no hard edges
-      const dot = dotRef.current;
-      if (dot) {
-        dot.style.opacity = String(0.7 + level * 0.3);
-        const glowSize = 5 + level * 7;
-        dot.style.boxShadow = `0 0 ${glowSize}px rgba(var(--theme-accent-rgb), ${(0.5 + level * 0.5).toFixed(3)})`;
+      // Dot core — crisp, no blur
+      const core = dotCoreRef.current;
+      if (core) {
+        core.style.opacity = String(0.82 + level * 0.18);
+      }
+
+      // Dot halo — soft glow
+      const halo = dotHaloRef.current;
+      if (halo) {
+        const haloAlpha = (0.18 + level * 0.22).toFixed(3);
+        const haloBlur = 6 + level * 6;
+        halo.style.boxShadow = `0 0 ${haloBlur}px rgba(var(--theme-accent-rgb), ${haloAlpha})`;
+        halo.style.opacity = String(0.5 + level * 0.5);
+      }
+
+      // Track ring — subtle response: dimmer when arc is bright (contrast)
+      const track = trackRef.current;
+      if (track) {
+        track.style.opacity = String(0.08 + level * 0.04);
+      }
+
+      // Icon — slight inverse scale on peaks
+      const icon = iconRef.current;
+      if (icon) {
+        const iconScale = 1 - level * 0.08;
+        icon.style.transform = `scale(${iconScale})`;
       }
 
       rafRef.current = requestAnimationFrame(tick);
@@ -118,7 +152,7 @@ export function VoiceInputButton({
 
     rafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [isListening]);
+  }, [showOrbit, isFinishing]);
 
   const handleClick = useCallback(async () => {
     if (disabled && !isActive) return;
@@ -162,39 +196,66 @@ export function VoiceInputButton({
   ]);
 
   return (
-    <div className="relative flex items-center">
-      {isListening && (
+    <div
+      className="relative flex items-center"
+      style={{ contain: "strict", width: 24, height: 24 }}
+    >
+      {showOrbit && (
         <>
-          {/* Faint static track */}
-          <span className="absolute inset-0 rounded-full pointer-events-none border border-canopy-accent/[0.08]" />
-          {/* Rotating wrapper — contains both the arc and the dot, locked together */}
+          {/* Static track — same mask technique as arc for consistent antialiasing */}
+          <span
+            ref={trackRef}
+            className="absolute inset-0 rounded-full pointer-events-none"
+            style={{
+              opacity: 0.08,
+              background: `rgba(var(--theme-accent-rgb), 1)`,
+              mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
+              WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
+              maskComposite: "exclude",
+              WebkitMaskComposite: "xor",
+              padding: `${BASE_THICKNESS}px`,
+              transition: "opacity 80ms ease-out",
+            }}
+          />
+          {/* Rotating wrapper */}
           <div
             ref={wrapperRef}
             className="absolute inset-0 pointer-events-none"
             style={{ willChange: "transform" }}
           >
-            {/* Arc ring — conic gradient masked to a thin stroke */}
+            {/* Arc ring */}
             <span
               ref={ringRef}
               className="absolute inset-0 rounded-full"
               style={{
-                padding: "1.5px",
+                padding: `${BASE_THICKNESS}px`,
                 mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
                 WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
                 maskComposite: "exclude",
                 WebkitMaskComposite: "xor",
               }}
             />
-            {/* Dot — positioned at top-center, exactly where the gradient peaks (360deg) */}
+            {/* Dot: core (crisp) + halo (soft glow) */}
             <span
-              ref={dotRef}
+              ref={dotHaloRef}
+              className="absolute rounded-full bg-canopy-accent/30"
+              style={{
+                width: "6px",
+                height: "6px",
+                top: 0,
+                left: "50%",
+                transform: "translate(-50%, -35%)",
+              }}
+            />
+            <span
+              ref={dotCoreRef}
               className="absolute rounded-full bg-canopy-accent"
               style={{
-                width: "4.5px",
-                height: "4.5px",
-                top: "-0.75px",
-                left: "calc(50% - 2.25px)",
-                filter: "blur(1px)",
+                width: "3.5px",
+                height: "3.5px",
+                top: 0,
+                left: "50%",
+                transform: "translate(-50%, -15%)",
               }}
             />
           </div>
@@ -216,18 +277,16 @@ export function VoiceInputButton({
                   : "Start voice input"
         }
         className={cn(
-          "relative flex items-center justify-center rounded-full transition-all",
+          "relative flex items-center justify-center rounded-full transition-all duration-200",
           "h-6 w-6",
           "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent",
-          isListening
+          showOrbit
             ? "bg-canopy-accent/10 text-canopy-accent hover:bg-canopy-accent/15"
-            : isFinishing
-              ? "text-yellow-400"
-              : cn(
-                  status === "error"
-                    ? "text-yellow-400 hover:text-yellow-300"
-                    : "text-canopy-text/50 hover:text-canopy-text/80 hover:bg-white/[0.06]"
-                ),
+            : cn(
+                status === "error"
+                  ? "text-yellow-400 hover:text-yellow-300"
+                  : "text-canopy-text/50 hover:text-canopy-text/80 hover:bg-white/[0.06]"
+              ),
           disabled && !isActive && "pointer-events-none opacity-40"
         )}
         aria-label={
@@ -239,10 +298,13 @@ export function VoiceInputButton({
         }
         aria-pressed={isConfigured ? isListening : undefined}
       >
-        {isFinishing ? (
+        {isFinishing && !showOrbit ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        ) : isListening ? (
-          <Square className="h-2.5 w-2.5 fill-current relative" />
+        ) : showOrbit ? (
+          <span
+            ref={iconRef}
+            className="block h-2 w-2 rounded-[1.5px] bg-current transition-transform duration-100"
+          />
         ) : isConfigured ? (
           <Mic className="h-3.5 w-3.5 relative" />
         ) : (
