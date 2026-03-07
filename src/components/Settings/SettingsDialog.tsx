@@ -11,6 +11,8 @@ import {
   GitBranch,
   Terminal,
   Settings as SettingsIcon,
+  Settings2,
+  LifeBuoy,
   Bell,
   Mic,
   Plug,
@@ -172,6 +174,23 @@ export function SettingsDialog({
     troubleshooting: "Troubleshooting",
   };
 
+  const tabIcons: Record<SettingsTab, React.ReactNode> = {
+    general: <Settings2 className="w-5 h-5 text-canopy-text/60" />,
+    keyboard: <Keyboard className="w-5 h-5 text-canopy-text/60" />,
+    terminal: <LayoutGrid className="w-5 h-5 text-canopy-text/60" />,
+    terminalAppearance: <Terminal className="w-5 h-5 text-canopy-text/60" />,
+    worktree: <GitBranch className="w-5 h-5 text-canopy-text/60" />,
+    agents: <Waypoints className="w-5 h-5 text-canopy-text/60" />,
+    github: <Github className="w-5 h-5 text-canopy-text/60" />,
+    sidecar: <PanelRight className="w-5 h-5 text-canopy-text/60" />,
+    toolbar: <SettingsIcon className="w-5 h-5 text-canopy-text/60" />,
+    notifications: <Bell className="w-5 h-5 text-canopy-text/60" />,
+    editor: <Code className="w-5 h-5 text-canopy-text/60" />,
+    voice: <Mic className="w-5 h-5 text-canopy-text/60" />,
+    mcp: <Plug className="w-5 h-5 text-canopy-text/60" />,
+    troubleshooting: <LifeBuoy className="w-5 h-5 text-canopy-text/60" />,
+  };
+
   return (
     <AppDialog
       isOpen={isOpen}
@@ -228,6 +247,7 @@ export function SettingsDialog({
               setActiveTab("general");
               setSearchQuery("");
             }}
+            icon={<Settings2 className="w-4 h-4" />}
           >
             <span className="flex-1">General</span>
             {matchCounts.general ? <MatchBadge count={matchCounts.general} /> : null}
@@ -372,6 +392,7 @@ export function SettingsDialog({
               setActiveTab("troubleshooting");
               setSearchQuery("");
             }}
+            icon={<LifeBuoy className="w-4 h-4" />}
           >
             <span className="flex-1">Troubleshooting</span>
             {matchCounts.troubleshooting ? (
@@ -382,8 +403,15 @@ export function SettingsDialog({
 
         <div className="flex-1 flex flex-col min-w-0">
           <div className="flex items-center justify-between px-6 py-4 border-b border-canopy-border bg-canopy-sidebar/50 shrink-0">
-            <h3 className="text-lg font-medium text-canopy-text">
-              {isSearching ? "Search Results" : tabTitles[activeTab]}
+            <h3 className="text-lg font-medium text-canopy-text flex items-center gap-2">
+              {isSearching ? (
+                "Search Results"
+              ) : (
+                <>
+                  {tabIcons[activeTab]}
+                  {tabTitles[activeTab]}
+                </>
+              )}
             </h3>
             <button
               onClick={onClose}

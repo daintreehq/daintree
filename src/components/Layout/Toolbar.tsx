@@ -3,7 +3,7 @@ import type React from "react";
 import { Button } from "@/components/ui/button";
 import { FixedDropdown } from "@/components/ui/fixed-dropdown";
 import {
-  Settings,
+  SlidersHorizontal,
   Terminal,
   AlertCircle,
   GitCommit,
@@ -720,7 +720,7 @@ export function Toolbar({
                   className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
                   aria-label="Open settings"
                 >
-                  <Settings />
+                  <SlidersHorizontal />
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom">Open Settings</TooltipContent>
