@@ -15,7 +15,6 @@ import {
   FlaskConical,
   ExternalLink,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
@@ -67,7 +66,9 @@ export function VoiceInputSettingsTab() {
 
     window.electron?.voiceInput
       ?.checkMicPermission()
-      .then(setMicPermission)
+      .then((status) => {
+        if (status) setMicPermission(status);
+      })
       .catch(() => {});
   }, []);
 
@@ -445,8 +446,9 @@ function MicPermissionCard({
   onOpenSettings,
   onRefresh,
 }: MicPermissionCardProps) {
-  const isMac = navigator.platform.toLowerCase().includes("mac");
-  const isWindows = navigator.platform.toLowerCase().includes("win");
+  const ua = navigator.userAgent;
+  const isMac = ua.includes("Mac OS X");
+  const isWindows = ua.includes("Windows");
   const appName = process.env.NODE_ENV === "development" ? "Electron" : "Canopy";
 
   if (status === "granted") {
@@ -469,23 +471,23 @@ function MicPermissionCard({
   }
 
   if (status === "denied" || status === "restricted") {
+    const settingsPath = isMac
+      ? `System Settings → Privacy & Security → Microphone → enable ${appName}`
+      : isWindows
+        ? "Windows Settings → Privacy & security → Microphone → allow desktop app access"
+        : "your system audio settings";
+
     return (
       <div className="space-y-3">
-        <div className="flex items-center justify-between p-3 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 text-status-error shrink-0" />
-            <div>
-              <span className="text-sm text-canopy-text">
-                Microphone access {status === "restricted" ? "restricted" : "denied"}
-              </span>
-              <p className="text-xs text-canopy-text/60 mt-0.5">
-                {isMac
-                  ? `Open System Settings → Privacy & Security → Microphone and enable access for ${appName}.`
-                  : isWindows
-                    ? "Open Windows Settings → Privacy → Microphone and allow access."
-                    : "Enable microphone access in your system settings."}
-              </p>
-            </div>
+        <div className="flex items-start gap-3 p-3 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
+          <AlertCircle className="w-4 h-4 text-status-error shrink-0 mt-0.5" />
+          <div>
+            <span className="text-sm text-canopy-text">
+              Microphone access {status === "restricted" ? "restricted" : "denied"}
+            </span>
+            <p className="text-xs text-canopy-text/60 mt-0.5">
+              Open {settingsPath} to grant access.
+            </p>
           </div>
         </div>
         <div className="flex gap-2">
@@ -496,7 +498,7 @@ function MicPermissionCard({
             className="text-canopy-text border-canopy-border hover:bg-canopy-border"
           >
             <ExternalLink className="w-3.5 h-3.5" />
-            Open System Settings
+            Open {isMac ? "System Settings" : isWindows ? "Windows Settings" : "System Settings"}
           </Button>
           <Button
             size="sm"
@@ -519,7 +521,7 @@ function MicPermissionCard({
           <span className="text-sm text-canopy-text">Microphone permission not yet requested</span>
         </div>
         <div className="flex gap-2">
-          {isMac && (
+          {(isMac || isWindows) && (
             <Button size="sm" onClick={onRequest} disabled={isRequesting} className="min-w-[140px]">
               {isRequesting ? (
                 <Loader2 className="animate-spin" />
@@ -538,7 +540,7 @@ function MicPermissionCard({
             className="text-canopy-text border-canopy-border hover:bg-canopy-border"
           >
             <ExternalLink className="w-3.5 h-3.5" />
-            Open System Settings
+            Open {isMac ? "System Settings" : isWindows ? "Windows Settings" : "System Settings"}
           </Button>
         </div>
       </div>
