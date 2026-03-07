@@ -213,6 +213,7 @@ export function VoiceInputButton({
   // Cleanup on unmount
   useEffect(() => {
     return () => {
+      onRecordingStateChange?.(false);
       stopRecording();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

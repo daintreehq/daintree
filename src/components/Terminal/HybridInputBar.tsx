@@ -1206,7 +1206,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
             <div
               className={cn(
-                "flex items-center gap-0.5 pr-1.5 transition-opacity",
+                "flex items-center gap-0.5 pr-1.5 transition-opacity motion-reduce:transition-none",
                 "opacity-0 group-hover:opacity-100 group-focus-within/shell:opacity-100",
                 isVoiceRecording && "opacity-100"
               )}
