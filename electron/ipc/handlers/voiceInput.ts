@@ -11,6 +11,23 @@ let service: VoiceTranscriptionService | null = null;
 let activeEventUnsubscribe: (() => void) | null = null;
 let correctionService: VoiceCorrectionService | null = null;
 
+const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
+  enabled: false,
+  apiKey: "",
+  language: "en",
+  customDictionary: [],
+  transcriptionModel: "gpt-4o-mini-transcribe",
+  correctionEnabled: false,
+  correctionModel: "gpt-5-nano",
+  correctionCustomInstructions: "",
+};
+
+/** Read voiceInput settings with defaults for fields added after initial store creation. */
+function getVoiceSettings(): VoiceInputSettings {
+  const stored = store.get("voiceInput") as Partial<VoiceInputSettings> | undefined;
+  return { ...VOICE_INPUT_DEFAULTS, ...stored };
+}
+
 function getService(): VoiceTranscriptionService {
   if (!service) {
     service = new VoiceTranscriptionService();
@@ -111,14 +128,14 @@ function getProjectInfo(): { name?: string; path?: string } {
 
 export function registerVoiceInputHandlers(deps: HandlerDependencies): () => void {
   const handleGetSettings = async () => {
-    return store.get("voiceInput");
+    return getVoiceSettings();
   };
 
   const handleSetSettings = async (
     _event: Electron.IpcMainInvokeEvent,
     patch: Partial<VoiceInputSettings>
   ) => {
-    const current = store.get("voiceInput");
+    const current = getVoiceSettings();
     store.set("voiceInput", { ...current, ...patch });
   };
 
@@ -126,7 +143,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     const svc = getService();
     // Snapshot transcription settings at session start (model, language, API key).
     // Correction settings are read live from store per-event so mid-session changes apply.
-    const settings = store.get("voiceInput") as VoiceInputSettings;
+    const settings = getVoiceSettings();
 
     // Clean up any existing subscription before starting a new session
     cleanupActiveSubscription();
@@ -150,7 +167,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         const rawText = voiceEvent.text.trim();
 
         // Read correction settings live so mid-session changes take effect immediately.
-        const liveSettings = store.get("voiceInput") as VoiceInputSettings;
+        // Use getVoiceSettings() to ensure new fields have defaults even if the
+        // persisted object predates their addition.
+        const liveSettings = getVoiceSettings();
         const willCorrect = !!(liveSettings.correctionEnabled && liveSettings.apiKey);
 
         // Send raw text + whether correction will happen so the renderer knows
