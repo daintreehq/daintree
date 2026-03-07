@@ -346,6 +346,10 @@ export const CHANNELS = {
   VOICE_INPUT_TRANSCRIPTION_COMPLETE: "voice-input:transcription-complete",
   VOICE_INPUT_ERROR: "voice-input:error",
   VOICE_INPUT_STATUS: "voice-input:status",
+  VOICE_INPUT_CHECK_MIC_PERMISSION: "voice-input:check-mic-permission",
+  VOICE_INPUT_REQUEST_MIC_PERMISSION: "voice-input:request-mic-permission",
+  VOICE_INPUT_OPEN_MIC_SETTINGS: "voice-input:open-mic-settings",
+  VOICE_INPUT_VALIDATE_API_KEY: "voice-input:validate-api-key",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

@@ -187,6 +187,7 @@ export type {
   NotificationSettings,
   VoiceInputSettings,
   VoiceInputStatus,
+  MicPermissionStatus,
   BranchInfo,
   CreateWorktreeOptions,
   // Adaptive backoff

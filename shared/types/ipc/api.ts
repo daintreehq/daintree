@@ -815,8 +815,19 @@ export interface ElectronAPI {
     onTranscriptionComplete(callback: (text: string) => void): () => void;
     onError(callback: (error: string) => void): () => void;
     onStatus(callback: (status: VoiceInputStatus) => void): () => void;
+    checkMicPermission(): Promise<MicPermissionStatus>;
+    requestMicPermission(): Promise<boolean>;
+    openMicSettings(): Promise<void>;
+    validateApiKey(apiKey: string): Promise<{ valid: boolean; error?: string }>;
   };
 }
+
+export type MicPermissionStatus =
+  | "granted"
+  | "denied"
+  | "not-determined"
+  | "restricted"
+  | "unknown";
 
 export interface VoiceInputSettings {
   enabled: boolean;
