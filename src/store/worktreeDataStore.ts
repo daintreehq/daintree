@@ -125,6 +125,20 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
           }
           return { worktrees: next };
         });
+
+        // If a worktree selection was queued while data hadn't arrived yet, apply
+        // the terminal streaming policy now that the data is available.
+        const selectionStore = useWorktreeSelectionStore.getState();
+        if (selectionStore.pendingWorktreeId === state.id) {
+          selectionStore.applyPendingWorktreeSelection(state.id);
+        }
+      });
+
+      const unsubActivated = worktreeClient.onActivated(({ worktreeId }) => {
+        const selectionStore = useWorktreeSelectionStore.getState();
+        // Mark as pending so terminal policy re-applies once worktree data arrives.
+        selectionStore.setPendingWorktree(worktreeId);
+        selectionStore.selectWorktree(worktreeId);
       });
 
       const unsubRemove = worktreeClient.onRemove(({ worktreeId }) => {
@@ -240,6 +254,7 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
       cleanupListeners = () => {
         unsubUpdate();
         unsubRemove();
+        unsubActivated();
         unsubPRDetected();
         unsubPRCleared();
         unsubIssueDetected();

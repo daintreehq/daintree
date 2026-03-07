@@ -21,6 +21,7 @@ interface CrossDiffDialogState {
 interface WorktreeSelectionState {
   activeWorktreeId: string | null;
   focusedWorktreeId: string | null;
+  pendingWorktreeId: string | null;
   expandedWorktrees: Set<string>;
   expandedTerminals: Set<string>;
   createDialog: CreateDialogState;
@@ -31,6 +32,8 @@ interface WorktreeSelectionState {
   setActiveWorktree: (id: string | null) => void;
   setFocusedWorktree: (id: string | null) => void;
   selectWorktree: (id: string) => void;
+  setPendingWorktree: (id: string | null) => void;
+  applyPendingWorktreeSelection: (worktreeId: string) => void;
   toggleWorktreeExpanded: (id: string) => void;
   setWorktreeExpanded: (id: string, expanded: boolean) => void;
   collapseAllWorktrees: () => void;
@@ -196,6 +199,7 @@ function persistActiveWorktree(id: string | null): void {
 const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set, get) => ({
   activeWorktreeId: null,
   focusedWorktreeId: null,
+  pendingWorktreeId: null,
   expandedWorktrees: new Set<string>(),
   expandedTerminals: new Set<string>(),
   createDialog: { isOpen: false, initialIssue: null, initialPR: null },
@@ -306,6 +310,19 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     }
   },
 
+  setPendingWorktree: (id) => set({ pendingWorktreeId: id }),
+
+  applyPendingWorktreeSelection: (worktreeId) => {
+    const state = get();
+    // Only apply if this ID is still pending and still the active worktree
+    if (state.pendingWorktreeId !== worktreeId || state.activeWorktreeId !== worktreeId) {
+      return;
+    }
+    const generation = state._policyGeneration;
+    set({ pendingWorktreeId: null });
+    applyWorktreeTerminalPolicy(get, set, worktreeId, generation);
+  },
+
   toggleWorktreeExpanded: (id) =>
     set((state) => {
       const next = new Set(state.expandedWorktrees);
@@ -393,6 +410,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     set({
       activeWorktreeId: null,
       focusedWorktreeId: null,
+      pendingWorktreeId: null,
       expandedWorktrees: new Set<string>(),
       expandedTerminals: new Set<string>(),
       createDialog: { isOpen: false, initialIssue: null, initialPR: null },

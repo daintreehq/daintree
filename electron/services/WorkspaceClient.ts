@@ -688,6 +688,8 @@ export class WorkspaceClient extends EventEmitter {
       requestId,
       worktreeId,
     });
+
+    this.sendToRenderer(CHANNELS.WORKTREE_ACTIVATED, { worktreeId });
   }
 
   async refresh(worktreeId?: string): Promise<void> {

@@ -1327,6 +1327,7 @@ export interface IpcEventMap {
   // Worktree events
   "worktree:update": WorktreeState;
   "worktree:remove": { worktreeId: string };
+  "worktree:activated": { worktreeId: string };
 
   // Terminal events
   "terminal:data": [id: string, data: string | Uint8Array];
