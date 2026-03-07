@@ -5,10 +5,12 @@ import { actionService } from "@/services/ActionService";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 
-// Flywheel — exponential smoothing with tau=0.85s (~2.5s to 95% convergence)
-const IDLE_SPEED = 120; // deg/sec — 1 revolution per 3s
-const ACTIVE_SPEED = 300; // deg/sec — 1 revolution per 1.2s
-const TAU = 0.85; // smoothing time constant in seconds
+// Flywheel — double-smoothed for S-curve easing (ease-in-out)
+const IDLE_SPEED = 72; // deg/sec — 1 revolution per 5s (calm breathing pace)
+const ACTIVE_SPEED = 288; // deg/sec — 1 revolution per 1.25s
+const TAU_ATTACK = 0.25; // stacked with double-smooth → ~0.5s effective ease-in
+const TAU_RELEASE = 0.6; // stacked → ~1.2s effective ease-out
+const AUDIO_SMOOTH = 0.15; // low-pass filter on raw audio level
 
 interface VoiceInputButtonProps {
   panelId: string;
@@ -57,47 +59,58 @@ export function VoiceInputButton({
 
     let lastTime = performance.now();
     let angle = 0;
-    let velocity = IDLE_SPEED;
+    let v1 = IDLE_SPEED; // intermediate velocity (first smooth)
+    let velocity = IDLE_SPEED; // drawn velocity (second smooth — creates S-curve)
+    let smoothLevel = 0;
 
     const tick = (now: number) => {
       const dt = Math.min((now - lastTime) / 1000, 0.1); // seconds, capped
       lastTime = now;
 
-      const level = audioLevelRef.current;
+      // Low-pass filter on raw audio — prevents micro-jitter
+      smoothLevel += (audioLevelRef.current - smoothLevel) * AUDIO_SMOOTH;
 
-      // Target velocity: idle when quiet, active when speaking
+      // Perceptual curve — background noise suppressed, speech pops
+      const level = Math.pow(smoothLevel, 1.5);
+
+      // Double-smoothed flywheel — cascaded for S-curve (ease-in-ease-out)
       const targetVelocity = IDLE_SPEED + level * (ACTIVE_SPEED - IDLE_SPEED);
-
-      // Exponential smoothing — smooth ramp up and down
-      velocity += (targetVelocity - velocity) * (1 - Math.exp(-dt / TAU));
+      const tau = targetVelocity > velocity ? TAU_ATTACK : TAU_RELEASE;
+      const alpha = 1 - Math.exp(-dt / tau);
+      v1 += (targetVelocity - v1) * alpha;
+      velocity += (v1 - velocity) * alpha;
 
       angle = (angle + velocity * dt) % 360;
 
-      // Arc brightness from real-time audio level
-      const opacity = (0.3 + level * 0.6).toFixed(3);
-      // Arc thickness from audio level
-      const thickness = (1.5 + level * 1).toFixed(2);
+      // Arc visuals from smoothed audio level
+      const opacity = (0.45 + level * 0.55).toFixed(3);
+      const thickness = (2 + level * 1).toFixed(2);
 
-      // Rotate the whole wrapper — dot is locked inside at the gradient's bright edge
+      // Rotate wrapper
       const wrapper = wrapperRef.current;
       if (wrapper) {
         wrapper.style.transform = `rotate(${angle}deg) translateZ(0)`;
       }
 
-      // Update ring gradient opacity and thickness
+      // Update ring — longer 180° tail with exponential brightness ramp
       const ring = ringRef.current;
       if (ring) {
         ring.style.padding = `${thickness}px`;
-        ring.style.background = `conic-gradient(from 0deg, transparent 240deg, rgba(var(--theme-accent-rgb), ${opacity}) 360deg)`;
+        ring.style.background = [
+          `conic-gradient(from 0deg,`,
+          `transparent 180deg,`,
+          `rgba(var(--theme-accent-rgb), ${Number(opacity) * 0.08}) 270deg,`,
+          `rgba(var(--theme-accent-rgb), ${Number(opacity) * 0.4}) 330deg,`,
+          `rgba(var(--theme-accent-rgb), ${opacity}) 360deg)`,
+        ].join(" ");
       }
 
-      // Update dot opacity
+      // Update dot — soft glowing light source, no hard edges
       const dot = dotRef.current;
       if (dot) {
-        dot.style.opacity = String(0.5 + level * 0.5);
-        const glowSize = 3 + level * 4;
-        const glowSpread = 1 + level * 2;
-        dot.style.boxShadow = `0 0 ${glowSize}px ${glowSpread}px rgba(var(--theme-accent-rgb), ${opacity})`;
+        dot.style.opacity = String(0.7 + level * 0.3);
+        const glowSize = 5 + level * 7;
+        dot.style.boxShadow = `0 0 ${glowSize}px rgba(var(--theme-accent-rgb), ${(0.5 + level * 0.5).toFixed(3)})`;
       }
 
       rafRef.current = requestAnimationFrame(tick);
@@ -177,11 +190,11 @@ export function VoiceInputButton({
               ref={dotRef}
               className="absolute rounded-full bg-canopy-accent"
               style={{
-                width: "4px",
-                height: "4px",
-                top: "-0.5px",
-                left: "calc(50% - 2px)",
-                filter: "blur(0.5px)",
+                width: "4.5px",
+                height: "4.5px",
+                top: "-0.75px",
+                left: "calc(50% - 2.25px)",
+                filter: "blur(1px)",
               }}
             />
           </div>
