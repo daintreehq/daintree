@@ -301,7 +301,7 @@ export function VoiceInputSettingsTab() {
               )}
             </div>
 
-            <div className="mt-4 space-y-3 border border-canopy-border rounded-[var(--radius-md)] p-4">
+            <div className="mt-4 space-y-3 rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4">
               <h4 className="text-sm font-medium text-canopy-text">Get an API Key</h4>
               <p className="text-xs text-canopy-text/60">
                 Create an OpenAI API key with access to the Realtime API. Voice input uses the{" "}
@@ -357,32 +357,19 @@ export function VoiceInputSettingsTab() {
           </SettingsSection>
 
           {/* Custom Dictionary */}
-          <SettingsSection
-            icon={BookText}
-            title="Custom Dictionary"
-            description="Add domain-specific terms, project names, and technical abbreviations to improve transcription accuracy."
-          >
-            <div className="space-y-3">
-              {settings.customDictionary.length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {settings.customDictionary.map((word) => (
-                    <span
-                      key={word}
-                      className="inline-flex items-center gap-1.5 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg px-2.5 py-1 text-xs text-canopy-text"
-                    >
-                      {word}
-                      <button
-                        type="button"
-                        onClick={() => removeDictionaryWord(word)}
-                        className="text-canopy-text/40 hover:text-canopy-text/80 transition-colors"
-                        aria-label={`Remove ${word}`}
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
+          <div className="space-y-4">
+            <div>
+              <h4 className="text-sm font-medium text-canopy-text mb-2 flex items-center gap-2">
+                <BookText className="w-4 h-4 text-canopy-text/70" aria-hidden="true" />
+                Custom Dictionary
+              </h4>
+              <p className="text-xs text-canopy-text/50 mb-4">
+                Add domain-specific terms, project names, and technical abbreviations to improve
+                transcription accuracy.
+              </p>
+            </div>
+
+            <div className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-4">
               <div className="flex gap-2">
                 <input
                   ref={dictionaryInputRef}
@@ -409,14 +396,34 @@ export function VoiceInputSettingsTab() {
                   Add
                 </Button>
               </div>
-              {settings.customDictionary.length === 0 && (
+
+              {settings.customDictionary.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {settings.customDictionary.map((word) => (
+                    <span
+                      key={word}
+                      className="inline-flex items-center gap-1.5 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg px-2.5 py-1 text-xs text-canopy-text"
+                    >
+                      {word}
+                      <button
+                        type="button"
+                        onClick={() => removeDictionaryWord(word)}
+                        className="text-canopy-text/40 hover:text-canopy-text/80 transition-colors"
+                        aria-label={`Remove ${word}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              ) : (
                 <p className="text-xs text-canopy-text/40">
                   No custom terms added. Terms like project names, framework abbreviations, or
                   domain-specific vocabulary help the transcription model understand your speech.
                 </p>
               )}
             </div>
-          </SettingsSection>
+          </div>
         </>
       )}
     </div>
@@ -538,23 +545,38 @@ function MicPermissionCard({
     );
   }
 
-  // unknown status (e.g. Linux)
+  // unknown status (e.g. Linux, or failed to check)
   return (
     <div className="space-y-3">
-      <div
-        className={cn(
-          "flex items-center gap-2 p-3 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border"
-        )}
-      >
+      <div className="flex items-center gap-2 p-3 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border">
         <div className="w-2 h-2 rounded-full bg-canopy-text/30" />
         <span className="text-sm text-canopy-text/70">
-          Permission status unavailable on this platform
+          Could not determine microphone permission status
         </span>
       </div>
       <p className="text-xs text-canopy-text/50">
-        Permission will be requested when you start recording. If recording fails, check your
-        system&apos;s audio settings.
+        Microphone access will be requested when you start recording. If recording fails, check your
+        system&apos;s audio settings to ensure microphone access is enabled.
       </p>
+      <div className="flex gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={onOpenSettings}
+          className="text-canopy-text border-canopy-border hover:bg-canopy-border"
+        >
+          <ExternalLink className="w-3.5 h-3.5" />
+          Open System Settings
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={onRefresh}
+          className="text-canopy-text/50 hover:text-canopy-text"
+        >
+          Re-check
+        </Button>
+      </div>
     </div>
   );
 }
