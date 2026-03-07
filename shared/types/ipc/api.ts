@@ -841,4 +841,4 @@ export interface VoiceInputSettings {
   transcriptionModel: VoiceTranscriptionModel;
 }
 
-export type VoiceInputStatus = "idle" | "connecting" | "recording" | "error";
+export type VoiceInputStatus = "idle" | "connecting" | "recording" | "finishing" | "error";

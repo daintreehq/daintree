@@ -16,55 +16,74 @@ export function VoiceRecordingToolbarButton() {
   const activeTarget = useVoiceRecordingStore((state) => state.activeTarget);
   const status = useVoiceRecordingStore((state) => state.status);
   const elapsedSeconds = useVoiceRecordingStore((state) => state.elapsedSeconds);
+  const audioLevel = useVoiceRecordingStore((state) => state.audioLevel);
   const shortcut = useKeybindingDisplay("voiceInput.toggle");
 
-  if (!activeTarget || (status !== "connecting" && status !== "recording")) {
+  if (
+    !activeTarget ||
+    (status !== "connecting" && status !== "recording" && status !== "finishing")
+  ) {
     return null;
   }
 
   const contextLabel = [activeTarget.projectName, activeTarget.worktreeLabel]
     .filter(Boolean)
     .join(" / ");
-  const title =
+  const tooltipTitle =
     status === "connecting"
-      ? "Preparing dictation"
-      : contextLabel
-        ? `Recording: ${contextLabel}`
-        : "Recording in another panel";
+      ? "Preparing dictation..."
+      : status === "finishing"
+        ? "Finishing transcription..."
+        : contextLabel
+          ? `Recording: ${contextLabel}`
+          : "Recording in another panel";
+  const tooltipExtra = [
+    status === "recording" ? formatDuration(elapsedSeconds) : null,
+    shortcut ? `Press ${shortcut} to stop` : "Click to jump to panel",
+  ]
+    .filter(Boolean)
+    .join(" \u00B7 ");
 
   return (
     <TooltipProvider>
       <Tooltip>
         <TooltipTrigger asChild>
-          <div role="status" aria-live="polite" aria-label={title}>
-            <Button
-              variant="ghost"
-              onClick={() => {
-                void voiceRecordingService.focusActiveTarget();
-              }}
-              className={cn(
-                "h-8 gap-2 rounded-full border border-red-400/25 bg-red-500/10 px-3 text-red-100",
-                "hover:border-red-300/40 hover:bg-red-500/15 hover:text-white"
-              )}
-            >
-              {status === "connecting" ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <span className="relative flex items-center">
-                  <Mic className="h-4 w-4" />
-                  <span className="absolute -right-1 -top-1 h-1.5 w-1.5 animate-pulse rounded-full bg-red-400" />
-                </span>
-              )}
-              <span className="max-w-44 truncate text-xs font-medium">{title}</span>
-              {status === "recording" && (
-                <span className="font-mono text-[11px] tabular-nums text-red-100/80">
-                  {formatDuration(elapsedSeconds)}
-                </span>
-              )}
-            </Button>
-          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => {
+              void voiceRecordingService.focusActiveTarget();
+            }}
+            className={cn(
+              "relative text-canopy-text transition-colors mr-0.5",
+              status === "recording"
+                ? "text-green-400 hover:bg-green-500/10 hover:text-green-300"
+                : status === "finishing"
+                  ? "text-yellow-400 hover:bg-yellow-500/10 hover:text-yellow-300"
+                  : "text-yellow-400 hover:bg-yellow-500/10 hover:text-yellow-300"
+            )}
+            aria-label={tooltipTitle}
+          >
+            {status === "recording" && (
+              <span
+                className="absolute inset-0 rounded-md transition-shadow"
+                style={{
+                  boxShadow: `0 0 ${3 + audioLevel * 6}px ${audioLevel * 2}px rgba(74, 222, 128, ${0.1 + audioLevel * 0.35})`,
+                  transitionDuration: "80ms",
+                }}
+              />
+            )}
+            {status === "connecting" || status === "finishing" ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Mic className="h-4 w-4" />
+            )}
+          </Button>
         </TooltipTrigger>
-        <TooltipContent side="bottom">{shortcut ? `${title} (${shortcut})` : title}</TooltipContent>
+        <TooltipContent side="bottom" className="text-center">
+          <div className="font-medium">{tooltipTitle}</div>
+          {tooltipExtra && <div className="text-[11px] text-canopy-text/60">{tooltipExtra}</div>}
+        </TooltipContent>
       </Tooltip>
     </TooltipProvider>
   );

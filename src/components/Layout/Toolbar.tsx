@@ -136,7 +136,10 @@ export function Toolbar({
   const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
   const hasActiveVoiceRecording = useVoiceRecordingStore(
     (state) =>
-      state.activeTarget !== null && (state.status === "connecting" || state.status === "recording")
+      state.activeTarget !== null &&
+      (state.status === "connecting" ||
+        state.status === "recording" ||
+        state.status === "finishing")
   );
   const [statsJustUpdated, setStatsJustUpdated] = useState(false);
   const prevLastUpdatedRef = useRef<number | null>(null);

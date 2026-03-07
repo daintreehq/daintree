@@ -32,6 +32,8 @@ class VoiceRecordingService {
   private unsubscribers: Array<() => void> = [];
   private isStoppingSession = false;
   private startRequestedAt = 0;
+  private levelRaf: number | null = null;
+  private pendingLevel = 0;
 
   initialize(): void {
     if (this.initialized) return;
@@ -102,6 +104,12 @@ class VoiceRecordingService {
 
     this.unsubscribers.push(
       voiceInput.onError((error) => {
+        // During graceful stop, the main process suppresses drain errors.
+        // If one leaks through, ignore it to avoid prematurely finalizing.
+        if (this.isStoppingSession) {
+          logWarn(`${LOG_PREFIX} Ignoring error during stop`, { error });
+          return;
+        }
         logError(`${LOG_PREFIX} Received error from backend`, { error });
         useVoiceRecordingStore.getState().setError(error);
         void this.stop("Dictation stopped because the connection failed.", {
@@ -232,16 +240,17 @@ class VoiceRecordingService {
     this.initialize();
     const state = useVoiceRecordingStore.getState();
     const isActiveTarget = state.activeTarget?.panelId === target.panelId;
-    const isRecording = state.status === "connecting" || state.status === "recording";
+    const isActive =
+      state.status === "connecting" || state.status === "recording" || state.status === "finishing";
 
     logDebug(`${LOG_PREFIX} toggle`, {
       panelId: target.panelId,
       isActiveTarget,
-      isRecording,
+      isActive,
       status: state.status,
     });
 
-    if (isActiveTarget && isRecording) {
+    if (isActiveTarget && isActive) {
       await this.stop("Dictation stopped.", { preserveLiveText: true });
       return;
     }
@@ -325,39 +334,11 @@ class VoiceRecordingService {
     logDebug(`${LOG_PREFIX} Beginning session`, { generation });
     useVoiceRecordingStore.getState().beginSession(target);
 
-    logDebug(`${LOG_PREFIX} Calling voiceInput.start() IPC`);
-    const result = await window.electron.voiceInput.start();
-    logDebug(`${LOG_PREFIX} voiceInput.start() returned`, {
-      ok: result.ok,
-      error: !result.ok ? result.error : undefined,
-    });
-    if (this.generation !== generation) {
-      logWarn(`${LOG_PREFIX} Generation mismatch after IPC start`, {
-        expected: generation,
-        current: this.generation,
-      });
-      stream.getTracks().forEach((track) => track.stop());
-      return;
-    }
-
-    if (!result.ok) {
-      logError(`${LOG_PREFIX} Backend start failed`, { error: result.error });
-      stream.getTracks().forEach((track) => track.stop());
-      useVoiceRecordingStore.getState().setError(result.error);
-      useVoiceRecordingStore.getState().finishSession({ nextStatus: "error" });
-      useVoiceRecordingStore.getState().announce("Voice dictation failed to start.");
-      return;
-    }
-
-    if (this.generation !== generation) {
-      logWarn(`${LOG_PREFIX} Generation mismatch after IPC start (late check)`);
-      stream.getTracks().forEach((track) => track.stop());
-      return;
-    }
-
     this.stream = stream;
 
-    logDebug(`${LOG_PREFIX} Creating AudioContext (24kHz)`);
+    // Start audio capture IMMEDIATELY — don't wait for WebSocket.
+    // Chunks are buffered in the main process until the connection is ready.
+    logDebug(`${LOG_PREFIX} Creating AudioContext (24kHz) — eager capture`);
     const audioContext = new AudioContext({ sampleRate: 24000 });
     this.audioContext = audioContext;
 
@@ -365,7 +346,6 @@ class VoiceRecordingService {
       logDebug(`${LOG_PREFIX} AudioContext suspended, resuming`);
       await audioContext.resume();
     }
-    logDebug(`${LOG_PREFIX} AudioContext state: ${audioContext.state}`);
 
     if (this.generation !== generation) {
       logWarn(`${LOG_PREFIX} Generation mismatch after AudioContext setup`);
@@ -403,18 +383,66 @@ class VoiceRecordingService {
       if (chunkCount <= 3 || chunkCount % 100 === 0) {
         logDebug(`${LOG_PREFIX} Audio chunk #${chunkCount}`, { bytes: event.data.byteLength });
       }
+
+      // Compute RMS audio level from PCM16 samples for the UI glow.
+      const samples = new Int16Array(event.data);
+      let sumSq = 0;
+      for (let i = 0; i < samples.length; i++) {
+        const n = samples[i] / 32768;
+        sumSq += n * n;
+      }
+      const rms = Math.sqrt(sumSq / samples.length);
+      this.pendingLevel = Math.min(1, rms * 6);
+      if (this.levelRaf === null) {
+        this.levelRaf = requestAnimationFrame(() => {
+          this.levelRaf = null;
+          useVoiceRecordingStore.getState().setAudioLevel(this.pendingLevel);
+        });
+      }
+
+      // Chunks sent during "connecting" are buffered in the main process.
       window.electron.voiceInput.sendAudioChunk(event.data);
     };
 
     source.connect(workletNode);
 
+    // Start the timer and announce immediately — user is already speaking.
     this.sessionStartedAt = Date.now();
     this.startElapsedTimer();
-    useVoiceRecordingStore.getState().setStatus("recording");
-    logDebug(`${LOG_PREFIX} Recording started successfully`);
+    logDebug(`${LOG_PREFIX} Eager audio capture started, connecting to backend...`);
     useVoiceRecordingStore
       .getState()
       .announce(`Dictation started in ${formatTargetLabel(target)}.`);
+
+    // Connect to OpenAI in parallel — audio is already flowing.
+    logDebug(`${LOG_PREFIX} Calling voiceInput.start() IPC`);
+    const result = await window.electron.voiceInput.start();
+    logDebug(`${LOG_PREFIX} voiceInput.start() returned`, {
+      ok: result.ok,
+      error: !result.ok ? result.error : undefined,
+    });
+
+    if (this.generation !== generation) {
+      logWarn(`${LOG_PREFIX} Generation mismatch after IPC start`);
+      return;
+    }
+
+    if (!result.ok) {
+      logError(`${LOG_PREFIX} Backend start failed`, { error: result.error });
+      useVoiceRecordingStore.getState().setError(result.error);
+      await this.cleanupAudioCapture();
+      useVoiceRecordingStore.getState().finishSession({ nextStatus: "error" });
+      useVoiceRecordingStore.getState().announce("Voice dictation failed to start.");
+      return;
+    }
+
+    if (this.generation !== generation) {
+      logWarn(`${LOG_PREFIX} Generation mismatch after IPC start (late check)`);
+      return;
+    }
+
+    // Backend is connected — status transitions to "recording" via the onStatus listener.
+    logDebug(`${LOG_PREFIX} Recording started successfully`);
   }
 
   async stop(
@@ -434,7 +462,8 @@ class VoiceRecordingService {
     const hasSession =
       storeState.activeTarget !== null ||
       storeState.status === "connecting" ||
-      storeState.status === "recording";
+      storeState.status === "recording" ||
+      storeState.status === "finishing";
 
     logDebug(`${LOG_PREFIX} stop() called`, {
       announcement,
@@ -445,13 +474,20 @@ class VoiceRecordingService {
       hasActiveTarget: !!storeState.activeTarget,
     });
 
-    this.generation++;
+    // Stop audio capture immediately — no new audio after this point.
+    // DON'T increment generation yet so in-flight worklet messages still
+    // get forwarded to the main process before the drain.
     this.clearTimers();
     await this.cleanupAudioCapture();
+    this.generation++;
 
     if (!skipRemoteStop) {
-      logDebug(`${LOG_PREFIX} Sending remote stop`);
+      // Graceful stop: the IPC handler drains pending transcriptions
+      // before resolving. Keep activeTarget alive so late transcription
+      // events are still applied to the correct panel.
+      logDebug(`${LOG_PREFIX} Sending remote stop (graceful drain)`);
       this.isStoppingSession = true;
+      useVoiceRecordingStore.getState().setStatus("finishing");
       await window.electron.voiceInput.stop().catch(() => {});
     }
 
@@ -459,14 +495,15 @@ class VoiceRecordingService {
       // Flush any remaining delta text (liveText) to the draft store before
       // finishSession clears it — this handles the case where recording stops
       // mid-utterance with un-committed delta text in the editor.
-      if (preserveLiveText && storeState.activeTarget) {
-        const { panelId } = storeState.activeTarget;
-        const buffer = useVoiceRecordingStore.getState().panelBuffers[panelId];
-        const remaining = buffer?.liveText.trim();
-        if (remaining) {
-          // liveText was already streamed as deltas — it's in the draft.
-          // Just bump revision so the editor syncs if needed.
-          useTerminalInputStore.getState().bumpVoiceDraftRevision();
+      if (preserveLiveText) {
+        const currentTarget = useVoiceRecordingStore.getState().activeTarget;
+        if (currentTarget) {
+          const { panelId } = currentTarget;
+          const buffer = useVoiceRecordingStore.getState().panelBuffers[panelId];
+          const remaining = buffer?.liveText.trim();
+          if (remaining) {
+            useTerminalInputStore.getState().bumpVoiceDraftRevision();
+          }
         }
       }
       useVoiceRecordingStore.getState().finishSession({ preserveLiveText, nextStatus });
@@ -616,6 +653,11 @@ class VoiceRecordingService {
   }
 
   private async cleanupAudioCapture(): Promise<void> {
+    if (this.levelRaf !== null) {
+      cancelAnimationFrame(this.levelRaf);
+      this.levelRaf = null;
+    }
+
     if (this.workletNode) {
       this.workletNode.port.onmessage = null;
       this.workletNode.disconnect();

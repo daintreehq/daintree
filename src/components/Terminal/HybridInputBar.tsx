@@ -26,7 +26,7 @@ import {
   type AtFileContext,
   type SlashCommandContext,
 } from "./hybridInputParsing";
-import { CommandPickerButton, CommandPickerHost } from "@/components/Commands";
+import { CommandPickerHost } from "@/components/Commands";
 import { useCommandStore } from "@/store/commandStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useTerminalStore, useVoiceRecordingStore, useWorktreeDataStore } from "@/store";
@@ -167,7 +167,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     );
     const isVoiceRecording = activeVoicePanelId === terminalId && voiceStatus === "recording";
     const isVoiceConnecting = activeVoicePanelId === terminalId && voiceStatus === "connecting";
-    const isVoiceActiveForPanel = isVoiceRecording || isVoiceConnecting;
+    const isVoiceFinishing = activeVoicePanelId === terminalId && voiceStatus === "finishing";
+    const isVoiceActiveForPanel = isVoiceRecording || isVoiceConnecting || isVoiceFinishing;
 
     const commandContext = useMemo(
       (): CommandContext => ({
@@ -1192,9 +1193,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               ariaLabel={activeMode === "command" ? "Command autocomplete" : "File autocomplete"}
             />
 
-            <div className="select-none pl-2 pr-1 font-mono text-xs font-semibold leading-5 text-canopy-accent/85">
+            <button
+              type="button"
+              onClick={openPicker}
+              disabled={disabled}
+              className="select-none pl-2 pr-1 font-mono text-xs font-semibold leading-5 text-canopy-accent/85 hover:text-canopy-accent transition-colors cursor-pointer focus-visible:outline-none"
+              aria-label="Open command picker"
+            >
               ❯
-            </div>
+            </button>
 
             <div className="relative flex-1">
               <div
@@ -1203,13 +1210,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               />
             </div>
 
-            <div
-              className={cn(
-                "flex items-center gap-0.5 pr-1.5 transition-opacity motion-reduce:transition-none",
-                "opacity-0 group-hover:opacity-100 group-focus-within/shell:opacity-100",
-                isVoiceActiveForPanel && "opacity-100"
-              )}
-            >
+            <div className="flex items-center pr-1.5">
               <VoiceInputButton
                 panelId={terminalId}
                 panelTitle={agentId ? getAgentConfig(agentId)?.name : undefined}
@@ -1219,7 +1220,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 worktreeLabel={panelWorktree?.branch || panelWorktree?.name}
                 disabled={disabled}
               />
-              <CommandPickerButton onClick={openPicker} disabled={disabled} />
             </div>
           </div>
         </div>

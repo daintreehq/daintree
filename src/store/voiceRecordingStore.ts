@@ -34,9 +34,11 @@ interface VoiceRecordingState {
   errorMessage: string | null;
   activeTarget: VoiceRecordingTarget | null;
   elapsedSeconds: number;
+  audioLevel: number;
   panelBuffers: Record<string, VoiceTranscriptBuffer>;
   announcement: VoiceAnnouncement | null;
   setConfigured: (isConfigured: boolean) => void;
+  setAudioLevel: (level: number) => void;
   beginSession: (target: VoiceRecordingTarget) => void;
   setStatus: (status: VoiceInputStatus) => void;
   setError: (message: string | null) => void;
@@ -66,10 +68,13 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
   errorMessage: null,
   activeTarget: null,
   elapsedSeconds: 0,
+  audioLevel: 0,
   panelBuffers: {},
   announcement: null,
 
   setConfigured: (isConfigured) => set({ isConfigured }),
+
+  setAudioLevel: (audioLevel) => set({ audioLevel }),
 
   beginSession: (target) =>
     set((state) => ({
@@ -163,6 +168,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
           activeTarget: null,
           status: nextStatus,
           elapsedSeconds: 0,
+          audioLevel: 0,
         };
       }
 
@@ -177,6 +183,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
         activeTarget: null,
         status: nextStatus,
         elapsedSeconds: 0,
+        audioLevel: 0,
         panelBuffers: {
           ...state.panelBuffers,
           [panelId]: {

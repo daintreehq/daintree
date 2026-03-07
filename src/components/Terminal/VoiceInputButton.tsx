@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { Mic, MicOff, Loader2 } from "lucide-react";
+import { Mic, MicOff, Square, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
@@ -28,14 +28,17 @@ export function VoiceInputButton({
   const isConfigured = useVoiceRecordingStore((state) => state.isConfigured);
   const errorMessage = useVoiceRecordingStore((state) => state.errorMessage);
   const activePanelId = useVoiceRecordingStore((state) => state.activeTarget?.panelId ?? null);
+  const audioLevel = useVoiceRecordingStore((state) => state.audioLevel);
 
   const isRecording = activePanelId === panelId && status === "recording";
   const isConnecting = activePanelId === panelId && status === "connecting";
+  const isFinishing = activePanelId === panelId && status === "finishing";
+  const isActive = isRecording || isConnecting || isFinishing;
 
   const handleClick = useCallback(async () => {
-    if (disabled && !isRecording && !isConnecting) return;
+    if (disabled && !isActive) return;
 
-    if (!isConfigured && !isRecording && !isConnecting) {
+    if (!isConfigured && !isActive) {
       const fresh = await window.electron?.voiceInput?.getSettings();
       if (fresh?.enabled && fresh.apiKey) {
         void voiceRecordingService.toggle({
@@ -63,9 +66,8 @@ export function VoiceInputButton({
     });
   }, [
     disabled,
+    isActive,
     isConfigured,
-    isConnecting,
-    isRecording,
     panelId,
     panelTitle,
     projectId,
@@ -79,30 +81,34 @@ export function VoiceInputButton({
       <button
         type="button"
         onClick={handleClick}
-        disabled={disabled && !isRecording && !isConnecting}
+        disabled={(disabled && !isActive) || isFinishing}
         title={
           !isConfigured
             ? "Configure voice input"
             : status === "error"
               ? (errorMessage ?? "Voice input error")
-              : isRecording
-                ? "Stop recording"
-                : "Start voice input"
+              : isFinishing
+                ? "Finishing transcription..."
+                : isRecording
+                  ? "Stop recording"
+                  : "Start voice input"
         }
         className={cn(
-          "relative flex items-center justify-center rounded-full transition-colors",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1",
+          "relative flex items-center justify-center rounded-[var(--radius-sm)] transition-colors",
+          "h-6 w-6",
+          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent",
           isRecording
-            ? "h-6 w-6 bg-canopy-accent/20 text-canopy-accent hover:bg-canopy-accent/30"
+            ? "bg-green-500/15 text-green-400 border border-green-500/40 hover:bg-green-500/25"
             : isConnecting
-              ? "h-6 w-6 p-1 text-canopy-text/40"
-              : cn(
-                  "p-1",
-                  status === "error"
-                    ? "text-yellow-400 hover:text-yellow-300"
-                    : "text-canopy-text/40 hover:text-canopy-text/70"
-                ),
-          disabled && !isRecording && "pointer-events-none opacity-40"
+              ? "text-canopy-text/40"
+              : isFinishing
+                ? "text-yellow-400"
+                : cn(
+                    status === "error"
+                      ? "text-yellow-400 hover:text-yellow-300"
+                      : "text-canopy-text/50 hover:text-canopy-text/80 hover:bg-white/[0.06]"
+                  ),
+          disabled && !isActive && "pointer-events-none opacity-40"
         )}
         aria-label={
           !isConfigured
@@ -115,20 +121,19 @@ export function VoiceInputButton({
       >
         {isRecording && (
           <span
-            className="absolute inset-0 animate-spin rounded-full"
+            className="absolute inset-[-3px] rounded-[var(--radius-sm)] pointer-events-none transition-shadow"
             style={{
-              background: `conic-gradient(rgba(var(--theme-accent-rgb), 0.7), rgba(var(--theme-accent-rgb), 0.15), rgba(var(--theme-accent-rgb), 0.7))`,
-              mask: "radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1.5px))",
-              WebkitMask:
-                "radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1.5px))",
-              animationDuration: "1.5s",
+              boxShadow: `0 0 ${4 + audioLevel * 10}px ${1 + audioLevel * 3}px rgba(74, 222, 128, ${0.1 + audioLevel * 0.4})`,
+              transitionDuration: "80ms",
             }}
           />
         )}
-        {isConnecting ? (
+        {isConnecting || isFinishing ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : isRecording ? (
+          <Square className="h-2.5 w-2.5 fill-current relative" />
         ) : isConfigured ? (
-          <Mic className="h-3 w-3 relative" />
+          <Mic className="h-3.5 w-3.5 relative" />
         ) : (
           <MicOff className="h-3.5 w-3.5" />
         )}

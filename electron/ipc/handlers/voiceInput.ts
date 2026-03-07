@@ -164,8 +164,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   };
 
   const handleStop = async () => {
+    if (service) {
+      // Drain first (waits for pending transcriptions), then clean up subscription.
+      await service.stopGracefully();
+    }
     cleanupActiveSubscription();
-    service?.stop();
   };
 
   const handleAudioChunk = (_event: Electron.IpcMainInvokeEvent, chunk: ArrayBuffer) => {
