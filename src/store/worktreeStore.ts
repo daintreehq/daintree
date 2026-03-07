@@ -242,8 +242,13 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
   setFocusedWorktree: (id) => set({ focusedWorktreeId: id }),
 
   selectWorktree: (id) => {
-    // Skip if already active to prevent terminal reload flicker
+    // Skip if already active to prevent terminal reload flicker.
+    // Also clear any pending selection for this ID — it's already active,
+    // so the terminal policy was applied when we first selected it.
     if (get().activeWorktreeId === id) {
+      if (get().pendingWorktreeId === id) {
+        set({ pendingWorktreeId: null });
+      }
       return;
     }
 
@@ -314,12 +319,16 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
 
   applyPendingWorktreeSelection: (worktreeId) => {
     const state = get();
-    // Only apply if this ID is still pending and still the active worktree
-    if (state.pendingWorktreeId !== worktreeId || state.activeWorktreeId !== worktreeId) {
+    if (state.pendingWorktreeId !== worktreeId) {
+      return;
+    }
+    // Always clear pending — if the active worktree has since changed, this pending is stale.
+    set({ pendingWorktreeId: null });
+    // Only apply terminal policy if this worktree is still the active one.
+    if (state.activeWorktreeId !== worktreeId) {
       return;
     }
     const generation = state._policyGeneration;
-    set({ pendingWorktreeId: null });
     applyWorktreeTerminalPolicy(get, set, worktreeId, generation);
   },
 

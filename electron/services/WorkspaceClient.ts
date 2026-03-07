@@ -682,6 +682,7 @@ export class WorkspaceClient extends EventEmitter {
 
   async setActiveWorktree(worktreeId: string): Promise<void> {
     const requestId = this.generateRequestId();
+    const scopeAtStart = this.currentProjectScopeId;
 
     await this.sendWithResponse({
       type: "set-active",
@@ -689,7 +690,10 @@ export class WorkspaceClient extends EventEmitter {
       worktreeId,
     });
 
-    this.sendToRenderer(CHANNELS.WORKTREE_ACTIVATED, { worktreeId });
+    // Only notify the renderer if the project hasn't changed since we started the call.
+    if (scopeAtStart !== null && scopeAtStart === this.currentProjectScopeId) {
+      this.sendToRenderer(CHANNELS.WORKTREE_ACTIVATED, { worktreeId });
+    }
   }
 
   async refresh(worktreeId?: string): Promise<void> {

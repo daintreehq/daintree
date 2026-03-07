@@ -139,6 +139,11 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
         // Mark as pending so terminal policy re-applies once worktree data arrives.
         selectionStore.setPendingWorktree(worktreeId);
         selectionStore.selectWorktree(worktreeId);
+        // If the worktree data is already in the store, onUpdate won't fire again.
+        // Apply the pending selection immediately so the pending ID doesn't stick.
+        if (useWorktreeDataStore.getState().worktrees.has(worktreeId)) {
+          selectionStore.applyPendingWorktreeSelection(worktreeId);
+        }
       });
 
       const unsubRemove = worktreeClient.onRemove(({ worktreeId }) => {
