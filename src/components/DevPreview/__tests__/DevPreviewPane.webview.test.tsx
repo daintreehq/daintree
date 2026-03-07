@@ -358,6 +358,88 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     expect(terminalStoreState.setBrowserUrl).toHaveBeenCalledWith("dev-preview-panel-1", "");
   });
 
+  it("retries loadURL with exponential backoff when did-fail-load fires with ERR_CONNECTION_REFUSED", async () => {
+    const { container } = render(<DevPreviewPane {...baseProps} />);
+    const webview = getWebviewElement(container);
+
+    act(() => {
+      emitWebviewEvent(webview, "did-fail-load", {
+        errorCode: -102,
+        errorDescription: "ERR_CONNECTION_REFUSED",
+        isMainFrame: true,
+        validatedURL: "http://localhost:5173/",
+      });
+    });
+
+    // First retry fires after 500ms (backoff: 500 * 2^0 = 500ms)
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+
+    expect(webview.loadURL).toHaveBeenCalled();
+  });
+
+  it("stops retrying after a successful load following did-fail-load", async () => {
+    const { container } = render(<DevPreviewPane {...baseProps} />);
+    const webview = getWebviewElement(container);
+
+    act(() => {
+      emitWebviewEvent(webview, "did-fail-load", {
+        errorCode: -102,
+        errorDescription: "ERR_CONNECTION_REFUSED",
+        isMainFrame: true,
+        validatedURL: "http://localhost:5173/",
+      });
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+
+    const callsAfterFirstRetry = webview.loadURL.mock.calls.length;
+
+    // Successful load resets retry counter
+    act(() => {
+      emitWebviewEvent(webview, "did-finish-load");
+    });
+
+    // Fail again — retry counter was reset so retry fires at 500ms again
+    act(() => {
+      emitWebviewEvent(webview, "did-fail-load", {
+        errorCode: -102,
+        errorDescription: "ERR_CONNECTION_REFUSED",
+        isMainFrame: true,
+        validatedURL: "http://localhost:5173/",
+      });
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+
+    expect(webview.loadURL.mock.calls.length).toBeGreaterThan(callsAfterFirstRetry);
+  });
+
+  it("does not retry did-fail-load for non-connection errors", () => {
+    const { container } = render(<DevPreviewPane {...baseProps} />);
+    const webview = getWebviewElement(container);
+
+    act(() => {
+      emitWebviewEvent(webview, "did-fail-load", {
+        errorCode: -3,
+        errorDescription: "ERR_ABORTED",
+        isMainFrame: true,
+        validatedURL: "http://localhost:5173/",
+      });
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+
+    expect(webview.loadURL).not.toHaveBeenCalled();
+  });
+
   it("cleans pending timeout on unmount", () => {
     const { container, unmount } = render(<DevPreviewPane {...baseProps} />);
     const webview = getWebviewElement(container);

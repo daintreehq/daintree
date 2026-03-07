@@ -84,7 +84,7 @@ export function registerAgentCapabilitiesHandlers(): () => void {
     }
     const agentSettings = store.get("agentSettings");
     const agentEntry = agentSettings?.agents?.[agentId];
-    return agentEntry?.enabled !== false;
+    return agentEntry?.selected !== false;
   };
   ipcMain.handle(CHANNELS.AGENT_CAPABILITIES_IS_AGENT_ENABLED, handleIsAgentEnabled);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.AGENT_CAPABILITIES_IS_AGENT_ENABLED));

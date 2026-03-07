@@ -8,6 +8,10 @@ import { AGENT_IDS, getAgentConfig } from "@/config/agents";
 import { isValidBrowserUrl } from "@/components/Browser/browserUtils";
 import { actionService } from "@/services/ActionService";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { terminalClient } from "@/clients";
+import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol";
+import { fireWatchNotification } from "@/lib/watchNotification";
 
 interface TerminalContextMenuProps {
   terminalId: string;
@@ -42,6 +46,10 @@ export function TerminalContextMenu({
   }, [maximizeTarget, terminalId, getPanelGroup]);
 
   const { worktrees } = useWorktrees();
+
+  const isWatched = useTerminalStore((state) => state.watchedPanels.has(terminalId));
+  const watchPanel = useTerminalStore((state) => state.watchPanel);
+  const unwatchPanel = useTerminalStore((state) => state.unwatchPanel);
 
   const isPaused = terminal?.flowStatus === "paused-backpressure";
 
@@ -210,6 +218,18 @@ export function TerminalContextMenu({
     const modifierKey = isMac ? "⌘" : "Ctrl";
     const hasPty = terminal.kind ? panelKindHasPty(terminal.kind) : true;
 
+    // Clipboard actions (Copy/Paste) — only for PTY-backed panels
+    const clipboardItems: MenuItemOption[] = hasPty
+      ? [
+          { id: "copy", label: "Copy", sublabel: `${modifierKey}C` },
+          {
+            id: "paste",
+            label: "Paste",
+            sublabel: isMac ? `${modifierKey}V` : "Ctrl+⇧V",
+          },
+        ]
+      : [];
+
     // Terminal actions section
     const terminalActions: MenuItemOption[] = [
       ...(hasPty ? [{ id: "restart", label: "Restart Terminal" }] : []),
@@ -219,6 +239,15 @@ export function TerminalContextMenu({
         id: "toggle-input-lock",
         label: terminal.isInputLocked ? "Unlock Input" : "Lock Input",
       },
+      ...(terminal.agentId
+        ? [
+            {
+              id: "toggle-watch",
+              label: isWatched ? "Cancel Watch" : "Watch Terminal",
+              sublabel: isMac ? "⌘⇧W" : "Ctrl+⇧W",
+            },
+          ]
+        : []),
       ...(convertToSubmenu.length > 0
         ? [
             {
@@ -249,6 +278,8 @@ export function TerminalContextMenu({
     ];
 
     return [
+      ...clipboardItems,
+      { type: "separator" },
       ...layoutItems,
       { type: "separator" },
       ...terminalActions,
@@ -261,6 +292,7 @@ export function TerminalContextMenu({
     currentLocation,
     isMaximized,
     isPaused,
+    isWatched,
     terminal,
     worktrees.length,
     worktreeSubmenu,
@@ -306,6 +338,36 @@ export function TerminalContextMenu({
       }
 
       switch (actionId) {
+        case "copy": {
+          const managed = terminalInstanceService.get(terminalId);
+          if (managed?.terminal) {
+            const selection = managed.terminal.getSelection();
+            if (selection) {
+              void navigator.clipboard.writeText(selection);
+            }
+          }
+          break;
+        }
+        case "paste":
+          if (!terminal.isInputLocked) {
+            void (async () => {
+              try {
+                const text = await navigator.clipboard.readText();
+                if (!text) return;
+                const managed = terminalInstanceService.get(terminalId);
+                if (!managed || managed.isInputLocked) return;
+                if (managed.terminal.modes.bracketedPasteMode) {
+                  terminalClient.write(terminalId, formatWithBracketedPaste(text));
+                } else {
+                  terminalClient.write(terminalId, text.replace(/\r?\n/g, "\r"));
+                }
+                terminalInstanceService.notifyUserInput(terminalId);
+              } catch {
+                // Clipboard API may be denied
+              }
+            })();
+          }
+          break;
         case "move-to-dock":
           void actionService.dispatch(
             "terminal.moveToDock",
@@ -354,6 +416,20 @@ export function TerminalContextMenu({
             { terminalId },
             { source: "context-menu" }
           );
+          break;
+        case "toggle-watch":
+          if (isWatched) {
+            unwatchPanel(terminalId);
+          } else if (terminal.agentState === "completed" || terminal.agentState === "waiting") {
+            fireWatchNotification(
+              terminalId,
+              terminal.title ?? terminalId,
+              terminal.agentState,
+              terminal.worktreeId ?? undefined
+            );
+          } else {
+            watchPanel(terminalId);
+          }
           break;
         case "duplicate":
           void actionService.dispatch(
@@ -429,7 +505,7 @@ export function TerminalContextMenu({
           break;
       }
     },
-    [showMenu, terminal, template, terminalId]
+    [showMenu, terminal, template, terminalId, isWatched, watchPanel, unwatchPanel]
   );
 
   return (

@@ -166,7 +166,8 @@ describe("recipeStore", () => {
     expect(spawned.kind).toBe("agent");
     expect(spawned.agentId).toBe("codex");
     expect(spawned.command).toContain("codex");
-    expect(spawned.command).toContain("'/prompts:merge-prs'");
+    expect(spawned.command).toContain("/prompts:merge-prs");
+    expect(spawned.command).toMatch(/['"]\/prompts:merge-prs['"]/);
     expect(spawned.command).not.toContain("gemini");
   });
 

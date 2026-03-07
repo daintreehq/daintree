@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import type { GitHubIssue, GitHubPR, LinkedPRInfo } from "@shared/types/github";
 import { Avatar } from "@/components/ui/Avatar";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 interface GitHubListItemProps {
   item: GitHubIssue | GitHubPR;
@@ -28,9 +29,11 @@ function getStateIcon(state: string, type: "issue" | "pr") {
   return GitPullRequestClosed;
 }
 
-function getStateColor(state: string): string {
-  if (state === "OPEN") return "text-[var(--color-status-info)]";
-  if (state === "MERGED") return "text-[var(--color-status-success)]";
+function getStateColor(state: string, isDraft?: boolean): string {
+  if (isDraft) return "text-github-draft";
+  if (state === "OPEN") return "text-github-open";
+  if (state === "MERGED") return "text-github-merged";
+  if (state === "CLOSED") return "text-github-closed";
   return "text-muted-foreground";
 }
 
@@ -58,21 +61,21 @@ function getPRBadgeInfo(linkedPR: LinkedPRInfo): {
   if (linkedPR.state === "MERGED") {
     return {
       icon: GitMerge,
-      color: "text-[var(--color-status-success)]",
-      bgColor: "bg-[var(--color-status-success)]/10",
+      color: "text-github-merged",
+      bgColor: "bg-github-merged/10",
     };
   }
   if (linkedPR.state === "OPEN") {
     return {
       icon: GitPullRequest,
-      color: "text-[var(--color-status-info)]",
-      bgColor: "bg-[var(--color-status-info)]/10",
+      color: "text-github-open",
+      bgColor: "bg-github-open/10",
     };
   }
   return {
     icon: GitPullRequestClosed,
-    color: "text-muted-foreground",
-    bgColor: "bg-muted",
+    color: "text-github-closed",
+    bgColor: "bg-github-closed/10",
   };
 }
 
@@ -80,9 +83,9 @@ export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemP
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
   const timeoutRef = useRef<number | undefined>(undefined);
-  const StateIcon = getStateIcon(item.state, type);
-  const stateColor = getStateColor(item.state);
   const isItemPR = isPR(item);
+  const StateIcon = getStateIcon(item.state, type);
+  const stateColor = getStateColor(item.state, isItemPR && item.isDraft);
 
   useEffect(() => {
     return () => {
@@ -123,8 +126,8 @@ export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemP
   };
 
   const getButtonStatus = () => {
-    if (copied) return { text: "✓", color: "text-[var(--color-status-success)]" };
-    if (copyError) return { text: `#${item.number}`, color: "text-[var(--color-status-error)]" };
+    if (copied) return { text: "✓", color: "text-status-success" };
+    if (copyError) return { text: `#${item.number}`, color: "text-status-error" };
     return { text: `#${item.number}`, color: "" };
   };
 
@@ -159,30 +162,42 @@ export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemP
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleOpenExternal}
-              className="text-sm font-medium text-foreground truncate hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 cursor-pointer text-left"
-              title="Open in GitHub"
-              aria-label={`Open ${type} "${item.title}" in GitHub`}
-            >
-              {item.title}
-            </button>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={handleOpenExternal}
+                    className="text-sm font-medium text-foreground truncate hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 cursor-pointer text-left"
+                    aria-label={`Open ${type} "${item.title}" in GitHub`}
+                  >
+                    {item.title}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Open in GitHub</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
             {prBadgeInfo && linkedPR && (
-              <button
-                type="button"
-                onClick={handleOpenLinkedPR}
-                className={cn(
-                  "shrink-0 text-[11px] px-1.5 py-0.5 rounded font-medium flex items-center gap-1 hover:opacity-80 transition-opacity cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-                  prBadgeInfo.color,
-                  prBadgeInfo.bgColor
-                )}
-                title={`Open PR #${linkedPR.number} (${linkedPR.state.toLowerCase()})`}
-                aria-label={`Open linked pull request #${linkedPR.number} (${linkedPR.state.toLowerCase()})`}
-              >
-                <prBadgeInfo.icon className="w-3 h-3" />
-                <span>#{linkedPR.number}</span>
-              </button>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={handleOpenLinkedPR}
+                      className={cn(
+                        "shrink-0 text-[11px] px-1.5 py-0.5 rounded font-medium flex items-center gap-1 hover:opacity-80 transition-opacity cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                        prBadgeInfo.color,
+                        prBadgeInfo.bgColor
+                      )}
+                      aria-label={`Open linked pull request #${linkedPR.number} (${linkedPR.state.toLowerCase()})`}
+                    >
+                      <prBadgeInfo.icon className="w-3 h-3" />
+                      <span>#{linkedPR.number}</span>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">{`Open PR #${linkedPR.number} (${linkedPR.state.toLowerCase()})`}</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             )}
             {isItemPR && item.isDraft && (
               <span className="shrink-0 text-[11px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-medium">
@@ -196,24 +211,32 @@ export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemP
             aria-live="polite"
             aria-atomic="true"
           >
-            <button
-              type="button"
-              onClick={handleCopyNumber}
-              className={cn(
-                "hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-                status.color
-              )}
-              title={copied ? "Copied!" : copyError ? "Failed to copy" : "Click to copy number"}
-              aria-label={
-                copied
-                  ? `Number ${item.number} copied to clipboard`
-                  : copyError
-                    ? `Failed to copy number ${item.number}`
-                    : `Copy ${type} number ${item.number}`
-              }
-            >
-              {status.text}
-            </button>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={handleCopyNumber}
+                    className={cn(
+                      "hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                      status.color
+                    )}
+                    aria-label={
+                      copied
+                        ? `Number ${item.number} copied to clipboard`
+                        : copyError
+                          ? `Failed to copy number ${item.number}`
+                          : `Copy ${type} number ${item.number}`
+                    }
+                  >
+                    {status.text}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {copied ? "Copied!" : copyError ? "Failed to copy" : "Click to copy number"}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
             <span>&middot;</span>
             <span>{item.author.login}</span>
             <span>&middot;</span>
@@ -221,15 +244,21 @@ export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemP
             {type === "issue" && onCreateWorktree && item.state === "OPEN" && (
               <>
                 <span>&middot;</span>
-                <button
-                  type="button"
-                  onClick={handleCreateWorktree}
-                  className="hover:text-canopy-accent transition-colors flex items-center gap-1"
-                  title="Create Worktree from Issue"
-                >
-                  <GitBranch className="w-3 h-3" />
-                  <span>Create Worktree</span>
-                </button>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={handleCreateWorktree}
+                        className="hover:text-canopy-accent transition-colors flex items-center gap-1"
+                      >
+                        <GitBranch className="w-3 h-3" />
+                        <span>Create Worktree</span>
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Create Worktree from Issue</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               </>
             )}
           </div>

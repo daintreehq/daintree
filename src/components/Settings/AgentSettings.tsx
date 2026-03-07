@@ -1,17 +1,17 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { getAgentIds, getAgentConfig } from "@/config/agents";
-import { useAgentSettingsStore } from "@/store";
+import { useAgentSettingsStore, useCliAvailabilityStore, migrateAgentSelection } from "@/store";
 import { Button } from "@/components/ui/button";
 import {
   DEFAULT_AGENT_SETTINGS,
   getAgentSettingsEntry,
   DEFAULT_DANGEROUS_ARGS,
 } from "@shared/types";
-import { RotateCcw, ExternalLink, RefreshCw, Copy, Check } from "lucide-react";
+import { RotateCcw, ExternalLink, RefreshCw, Copy, Check, PackagePlus } from "lucide-react";
 import { actionService } from "@/services/ActionService";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { AgentHelpOutput } from "./AgentHelpOutput";
-import { cliAvailabilityClient } from "@/clients";
 import { getInstallBlocksForCurrentOS } from "@/lib/agentInstall";
 
 interface AgentSettingsProps {
@@ -25,16 +25,22 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
     error: loadError,
     initialize,
     updateAgent,
+    setAgentSelected,
     reset,
   } = useAgentSettingsStore();
+
+  const cliAvailability = useCliAvailabilityStore((state) => state.availability);
+  const isCliLoading = useCliAvailabilityStore((state) => state.isLoading);
+  const isCliInitialized = useCliAvailabilityStore((state) => state.isInitialized);
+  const isRefreshingCli = useCliAvailabilityStore((state) => state.isRefreshing);
+  const cliError = useCliAvailabilityStore((state) => state.error);
+  const initializeCliAvailability = useCliAvailabilityStore((state) => state.initialize);
+  const refreshCliAvailability = useCliAvailabilityStore((state) => state.refresh);
+
   const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
-  const [cliAvailability, setCliAvailability] = useState<Record<string, boolean> | null>(null);
-  const [isRefreshingCli, setIsRefreshingCli] = useState(false);
-  const [cliCheckError, setCliCheckError] = useState<string | null>(null);
   const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
   const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isMountedRef = useRef(true);
-  const refreshRequestIdRef = useRef(0);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const activePillRef = useRef<HTMLButtonElement | null>(null);
 
@@ -43,23 +49,16 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
   }, [initialize]);
 
   useEffect(() => {
-    const loadCliAvailability = async () => {
-      try {
-        const availability = await cliAvailabilityClient.get();
-        if (isMountedRef.current) {
-          setCliAvailability(availability);
-          setCliCheckError(null);
-        }
-      } catch (error) {
-        console.error("[AgentSettings] Failed to load CLI availability:", error);
-        if (isMountedRef.current) {
-          setCliAvailability({});
-          setCliCheckError("Failed to check CLI availability");
-        }
-      }
-    };
-    void loadCliAvailability();
-  }, []);
+    void initializeCliAvailability();
+  }, [initializeCliAvailability]);
+
+  // Migrate selection state for agents that don't have `selected` set yet.
+  // Gate on CLI availability being fully initialized (not just not-loading) to avoid
+  // persisting incorrect `false` defaults when the CLI check errored or is still pending.
+  useEffect(() => {
+    if (!settings || !isCliInitialized || isCliLoading) return;
+    void migrateAgentSelection(cliAvailability);
+  }, [settings, isCliInitialized, isCliLoading, cliAvailability]);
 
   useEffect(() => {
     return () => {
@@ -72,26 +71,12 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
 
   const handleRefreshCliAvailability = useCallback(async () => {
     if (isRefreshingCli) return;
-
-    const requestId = ++refreshRequestIdRef.current;
-    setIsRefreshingCli(true);
-    setCliCheckError(null);
     try {
-      const availability = await cliAvailabilityClient.refresh();
-      if (isMountedRef.current && refreshRequestIdRef.current === requestId) {
-        setCliAvailability(availability);
-      }
+      await refreshCliAvailability();
     } catch (error) {
       console.error("[AgentSettings] Failed to refresh CLI availability:", error);
-      if (isMountedRef.current && refreshRequestIdRef.current === requestId) {
-        setCliCheckError("Re-check failed. Try again or restart the app.");
-      }
-    } finally {
-      if (isMountedRef.current && refreshRequestIdRef.current === requestId) {
-        setIsRefreshingCli(false);
-      }
     }
-  }, [isRefreshingCli]);
+  }, [isRefreshingCli, refreshCliAvailability]);
 
   const handleCopyCommand = useCallback(async (command: string) => {
     try {
@@ -147,7 +132,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
             color: config.color,
             Icon: config.icon,
             usageUrl: config.usageUrl,
-            enabled: entry.enabled ?? true,
+            selected: entry.selected !== false,
             dangerousEnabled: entry.dangerousEnabled ?? false,
             hasCustomFlags: Boolean(entry.customFlags?.trim()),
           };
@@ -184,9 +169,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
   if (loadError || !settings) {
     return (
       <div className="flex flex-col items-center justify-center h-32 gap-3">
-        <div className="text-[var(--color-status-error)] text-sm">
-          {loadError || "Failed to load settings"}
-        </div>
+        <div className="text-status-error text-sm">{loadError || "Failed to load settings"}</div>
         <button
           onClick={() => void actionService.dispatch("ui.refresh", undefined, { source: "user" })}
           className="text-xs px-3 py-1.5 bg-canopy-accent/10 hover:bg-canopy-accent/20 text-canopy-accent rounded transition-colors"
@@ -200,11 +183,24 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
   return (
     <div className="space-y-6">
       <div className="space-y-4">
-        <div>
-          <h3 className="text-sm font-medium mb-1">Agent Runtime Settings</h3>
-          <p className="text-xs text-canopy-text/50">
-            Configure CLI flags and options for each agent
-          </p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-medium mb-1">Agent Runtime Settings</h3>
+            <p className="text-xs text-canopy-text/50">
+              Configure CLI flags and options for each agent
+            </p>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              window.dispatchEvent(new CustomEvent("canopy:open-agent-setup-wizard"));
+            }}
+            className="text-canopy-text/60 hover:text-canopy-text shrink-0"
+          >
+            <PackagePlus className="w-3.5 h-3.5" />
+            Run Setup Wizard
+          </Button>
         </div>
 
         {/* Agent Selector - Horizontal scrolling pills */}
@@ -236,13 +232,18 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
                     className={cn(!isActive && "opacity-60")}
                   />
                 )}
-                <span className={cn("truncate", !agent.enabled && "opacity-50")}>{agent.name}</span>
+                <span className={cn("truncate", !agent.selected && "opacity-50")}>
+                  {agent.name}
+                </span>
                 <div className="flex items-center gap-1 shrink-0">
-                  {!agent.enabled && (
-                    <span className="w-1.5 h-1.5 rounded-full bg-canopy-text/30" />
+                  {!agent.selected && (
+                    <span
+                      className="w-1.5 h-1.5 rounded-full bg-canopy-text/30"
+                      title="Not in workflow"
+                    />
                   )}
                   {agent.dangerousEnabled && (
-                    <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-status-error)]" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-status-error" />
                   )}
                 </div>
               </button>
@@ -308,27 +309,33 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
               </div>
             </div>
 
-            {/* Enabled Toggle */}
+            {/* Enable Agent Toggle */}
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-sm font-medium text-canopy-text">Enabled</div>
-                <div className="text-xs text-canopy-text/50">Show in agent launcher</div>
+                <div className="text-sm font-medium text-canopy-text">Enable agent</div>
+                <div className="text-xs text-canopy-text/50">
+                  When disabled, this agent is hidden everywhere and treated as if it is not
+                  installed
+                </div>
               </div>
               <button
+                role="switch"
+                aria-checked={activeEntry.selected !== false}
+                aria-label={`Enable ${activeAgent.name}`}
                 onClick={async () => {
-                  const current = activeEntry.enabled ?? true;
-                  await updateAgent(activeAgent.id, { enabled: !current });
+                  const current = activeEntry.selected !== false;
+                  await setAgentSelected(activeAgent.id, !current);
                   onSettingsChange?.();
                 }}
                 className={cn(
-                  "relative w-11 h-6 rounded-full transition-colors",
-                  (activeEntry.enabled ?? true) ? "bg-canopy-accent" : "bg-canopy-border"
+                  "relative w-11 h-6 rounded-full transition-colors shrink-0",
+                  activeEntry.selected !== false ? "bg-canopy-accent" : "bg-canopy-border"
                 )}
               >
                 <span
                   className={cn(
                     "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform",
-                    (activeEntry.enabled ?? true) && "translate-x-5"
+                    activeEntry.selected !== false && "translate-x-5"
                   )}
                 />
               </button>
@@ -349,9 +356,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
                   }}
                   className={cn(
                     "relative w-11 h-6 rounded-full transition-colors",
-                    activeEntry.dangerousEnabled
-                      ? "bg-[var(--color-status-error)]"
-                      : "bg-canopy-border"
+                    activeEntry.dangerousEnabled ? "bg-status-error" : "bg-canopy-border"
                   )}
                 >
                   <span
@@ -364,10 +369,8 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
               </div>
 
               {activeEntry.dangerousEnabled && defaultDangerousArg && (
-                <div className="flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-[var(--color-status-error)]/10 border border-[var(--color-status-error)]/20">
-                  <code className="text-xs text-[var(--color-status-error)] font-mono">
-                    {defaultDangerousArg}
-                  </code>
+                <div className="flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
+                  <code className="text-xs text-status-error font-mono">{defaultDangerousArg}</code>
                   <span className="text-xs text-canopy-text/40">added to command</span>
                 </div>
               )}
@@ -408,6 +411,43 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
               );
             })()}
 
+            {/* Share Clipboard Directory Toggle - Gemini only */}
+            {activeAgent.id === "gemini" && (
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-sm font-medium text-canopy-text">
+                    Share Clipboard Directory
+                  </div>
+                  <div className="text-xs text-canopy-text/50">
+                    Allow Gemini to read pasted clipboard images via --include-directories
+                  </div>
+                </div>
+                <button
+                  role="switch"
+                  aria-checked={activeEntry.shareClipboardDirectory !== false}
+                  aria-label="Share clipboard directory with Gemini"
+                  onClick={async () => {
+                    const current = activeEntry.shareClipboardDirectory !== false;
+                    await updateAgent(activeAgent.id, { shareClipboardDirectory: !current });
+                    onSettingsChange?.();
+                  }}
+                  className={cn(
+                    "relative w-11 h-6 rounded-full transition-colors shrink-0",
+                    activeEntry.shareClipboardDirectory !== false
+                      ? "bg-canopy-accent"
+                      : "bg-canopy-border"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform",
+                      activeEntry.shareClipboardDirectory !== false && "translate-x-5"
+                    )}
+                  />
+                </button>
+              </div>
+            )}
+
             {/* Custom Arguments */}
             <div className="space-y-2 pt-2 border-t border-canopy-border">
               <label className="text-sm font-medium text-canopy-text">Custom Arguments</label>
@@ -430,8 +470,8 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
             {/* Installation Section */}
             {(() => {
               const agentConfig = getAgentConfig(activeAgent.id);
-              const isCliAvailable = cliAvailability?.[activeAgent.id];
-              const isLoading = cliAvailability === null;
+              const isCliAvailable = cliAvailability[activeAgent.id];
+              const isLoading = isCliLoading;
               const installBlocks = agentConfig ? getInstallBlocksForCurrentOS(agentConfig) : null;
               const hasInstallConfig = agentConfig?.install;
 
@@ -471,9 +511,11 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
                     </Button>
                   </div>
 
-                  {cliCheckError && (
-                    <div className="px-3 py-2 rounded-[var(--radius-md)] bg-[var(--color-status-error)]/10 border border-[var(--color-status-error)]/20">
-                      <p className="text-xs text-[var(--color-status-error)]">{cliCheckError}</p>
+                  {cliError && (
+                    <div className="px-3 py-2 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
+                      <p className="text-xs text-status-error">
+                        Re-check failed. Try again or restart the app.
+                      </p>
                     </div>
                   )}
 
@@ -511,17 +553,24 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
                                   <code className="flex-1 text-xs font-mono text-canopy-text">
                                     {command}
                                   </code>
-                                  <button
-                                    onClick={() => void handleCopyCommand(command)}
-                                    className="shrink-0 p-1 hover:bg-white/5 rounded transition-colors"
-                                    title="Copy command"
-                                  >
-                                    {copiedCommand === command ? (
-                                      <Check size={14} className="text-canopy-accent" />
-                                    ) : (
-                                      <Copy size={14} className="text-canopy-text/40" />
-                                    )}
-                                  </button>
+                                  <TooltipProvider>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <button
+                                          onClick={() => void handleCopyCommand(command)}
+                                          className="shrink-0 p-1 hover:bg-white/5 rounded transition-colors"
+                                          aria-label="Copy command"
+                                        >
+                                          {copiedCommand === command ? (
+                                            <Check size={14} className="text-canopy-accent" />
+                                          ) : (
+                                            <Copy size={14} className="text-canopy-text/40" />
+                                          )}
+                                        </button>
+                                      </TooltipTrigger>
+                                      <TooltipContent side="bottom">Copy command</TooltipContent>
+                                    </Tooltip>
+                                  </TooltipProvider>
                                 </div>
                               ))}
                             </div>
@@ -539,8 +588,8 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
 
                       {agentConfig?.install?.troubleshooting &&
                         agentConfig.install.troubleshooting.length > 0 && (
-                          <div className="px-3 py-2 rounded-[var(--radius-md)] bg-[var(--color-status-warning)]/10 border border-[var(--color-status-warning)]/20">
-                            <div className="text-xs font-medium text-[var(--color-status-warning)] mb-1">
+                          <div className="px-3 py-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
+                            <div className="text-xs font-medium text-status-warning mb-1">
                               Troubleshooting
                             </div>
                             <ul className="space-y-0.5 text-xs text-canopy-text/60">

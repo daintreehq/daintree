@@ -8,7 +8,8 @@ export type GitStatus =
   | "untracked"
   | "ignored"
   | "renamed"
-  | "copied";
+  | "copied"
+  | "conflicted";
 
 /** Details about a single file change in a worktree */
 export interface FileChangeDetail {
@@ -52,6 +53,22 @@ export interface WorktreeChanges {
   lastCommitMessage?: string;
   /** Last commit time (ms since epoch, committer date) */
   lastCommitTimestampMs?: number;
+}
+
+export interface StagingFileEntry {
+  path: string;
+  status: GitStatus;
+  insertions: number | null;
+  deletions: number | null;
+}
+
+export interface StagingStatus {
+  staged: StagingFileEntry[];
+  unstaged: StagingFileEntry[];
+  conflicted: string[];
+  isDetachedHead: boolean;
+  currentBranch: string | null;
+  hasRemote: boolean;
 }
 
 // Worktree Types
@@ -470,6 +487,8 @@ interface PtyPanelData extends BasePanelData {
   devPreviewConsoleOpen?: boolean;
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely */
   exitBehavior?: PanelExitBehavior;
+  /** Detected process icon ID for dynamic terminal icons (transient, not persisted) */
+  detectedProcessId?: string;
 }
 
 interface BrowserPanelData extends BasePanelData {
@@ -603,6 +622,8 @@ export interface TerminalInstance {
   exitBehavior?: PanelExitBehavior;
   /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */
   hasPty?: boolean;
+  /** Detected process icon ID for dynamic terminal icons (transient, not persisted) */
+  detectedProcessId?: string;
   // Note: Tab membership is now stored in TabGroup objects, not on panels
 }
 
@@ -656,6 +677,10 @@ export interface Project {
   color?: string;
   /** Project lifecycle status (defaults to 'closed' for backward compatibility) */
   status?: ProjectStatus;
+  /** Whether a .canopy/project.json was found in the repository root */
+  canopyConfigPresent?: boolean;
+  /** Whether in-repo settings mode is enabled (writes to .canopy/ on update) */
+  inRepoSettings?: boolean;
 }
 
 /**
@@ -705,6 +730,8 @@ export interface TerminalSnapshot {
   scope?: "worktree" | "project";
   /** Note creation timestamp (kind === 'notes') */
   createdAt?: number;
+  /** Behavior when terminal exits */
+  exitBehavior?: PanelExitBehavior;
   // Note: Tab membership is now stored in ProjectState.tabGroups, not on terminals
 }
 
@@ -760,7 +787,7 @@ export interface ProjectState {
 export type RecipeTerminalType = AgentId | "terminal" | "dev-preview";
 
 /** Exit behavior for panels/terminals after process exits */
-export type PanelExitBehavior = "keep" | "trash" | "remove";
+export type PanelExitBehavior = "keep" | "trash" | "remove" | "restart";
 
 /** A single terminal definition within a recipe */
 export interface RecipeTerminal {
@@ -772,7 +799,7 @@ export interface RecipeTerminal {
   command?: string;
   /** Environment variables to set (optional) */
   env?: Record<string, string>;
-  /** Initial prompt to send to agent terminals after boot (optional) */
+  /** Initial prompt to send to agent terminals after boot (optional). Supports {{issue_number}}, {{pr_number}}, {{worktree_path}}, {{branch_name}} variables replaced at runtime. */
   initialPrompt?: string;
   /** Dev server command for dev-preview terminals (optional). Falls back to project devServerCommand if not set. */
   devCommand?: string;
@@ -838,7 +865,7 @@ export interface ProjectSettings {
   runCommands: RunCommand[];
   /** Environment variables to set */
   environmentVariables?: Record<string, string>;
-  /** List of env var keys stored securely (values in safeStorage, not settings.json) */
+  /** List of env var keys stored separately from settings.json */
   secureEnvironmentVariables?: string[];
   /** List of env var keys found in plaintext that should be migrated (transient, not persisted) */
   insecureEnvironmentVariables?: string[];
@@ -871,6 +898,12 @@ export interface ProjectSettings {
     /** Gitignore template to use (default: "node") */
     gitignoreTemplate?: "node" | "python" | "minimal" | "none";
   };
+  /** Preferred external editor for this project */
+  preferredEditor?: import("./editor.js").EditorConfig;
+  /** Branch prefix mode for new worktrees */
+  branchPrefixMode?: "none" | "username" | "custom";
+  /** Custom branch prefix string when branchPrefixMode is "custom" (e.g., "feature/") */
+  branchPrefixCustom?: string;
 }
 
 // Toolbar Customization Types
@@ -878,6 +911,7 @@ export interface ProjectSettings {
 /** Unique identifier for toolbar buttons */
 export type ToolbarButtonId =
   | "sidebar-toggle"
+  | "agent-setup"
   | "claude"
   | "gemini"
   | "codex"
@@ -890,8 +924,8 @@ export type ToolbarButtonId =
   | "copy-tree"
   | "settings"
   | "problems"
-  | "sidecar-toggle"
-  | "assistant";
+  | "notification-center"
+  | "sidecar-toggle";
 
 /** Configuration for which toolbar buttons are visible and their order */
 export interface ToolbarLayout {

@@ -24,6 +24,7 @@ export type {
   UseProjectSwitcherPaletteReturn,
 } from "./useProjectSwitcherPalette";
 export { useTerminalConfig } from "./useTerminalConfig";
+export { useAppThemeConfig } from "./useAppThemeConfig";
 
 export { useWorktreeTerminals } from "./useWorktreeTerminals";
 export type { WorktreeTerminalCounts, UseWorktreeTerminalsResult } from "./useWorktreeTerminals";
@@ -39,8 +40,6 @@ export { useProjectBranding } from "./useProjectBranding";
 
 export { useWaitingTerminalIds, useBackgroundPanelStats } from "./useTerminalSelectors";
 
-export { useLinkDiscovery } from "./useLinkDiscovery";
-
 export { useOverlayState } from "./useOverlayState";
 
 export { useGridNavigation } from "./useGridNavigation";
@@ -50,6 +49,7 @@ export { useLayoutState } from "./useLayoutState";
 export type { LayoutState } from "./useLayoutState";
 
 export { useWindowNotifications } from "./useWindowNotifications";
+export { useWatchedPanelNotifications } from "./useWatchedPanelNotifications";
 
 export { useWorktreeActions } from "./useWorktreeActions";
 export type { UseWorktreeActionsOptions, WorktreeActions } from "./useWorktreeActions";
@@ -63,10 +63,6 @@ export { useHorizontalScrollControls } from "./useHorizontalScrollControls";
 export type { UseHorizontalScrollControlsReturn } from "./useHorizontalScrollControls";
 
 export { useDockRenderState } from "./useDockRenderState";
-
-export { useAppAgentDispatcher } from "./useAppAgentDispatcher";
-
-export { useAssistantStreamProcessor } from "./useAssistantStreamProcessor";
 
 export { useActionPalette } from "./useActionPalette";
 export type { ActionPaletteItem, UseActionPaletteReturn } from "./useActionPalette";

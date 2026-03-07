@@ -16,6 +16,15 @@ export const systemClient = {
     return window.electron.system.openPath(path);
   },
 
+  openInEditor: (payload: {
+    path: string;
+    line?: number;
+    col?: number;
+    projectId?: string;
+  }): Promise<void> => {
+    return window.electron.system.openInEditor(payload);
+  },
+
   checkCommand: (command: string): Promise<boolean> => {
     return window.electron.system.checkCommand(command);
   },
@@ -26,6 +35,14 @@ export const systemClient = {
 
   getHomeDir: (): Promise<string> => {
     return window.electron.system.getHomeDir();
+  },
+
+  getTmpDir: (): Promise<string> => {
+    return window.electron.system.getTmpDir();
+  },
+
+  healthCheck: (): ReturnType<typeof window.electron.system.healthCheck> => {
+    return window.electron.system.healthCheck();
   },
 
   onWake: (

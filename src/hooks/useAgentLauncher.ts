@@ -2,13 +2,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTerminalStore, type AddTerminalOptions } from "@/store/terminalStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useWorktrees } from "./useWorktrees";
 import { isElectronAvailable } from "./useElectron";
-import { cliAvailabilityClient, agentSettingsClient } from "@/clients";
+import { agentSettingsClient, systemClient } from "@/clients";
 import type { AgentSettings, CliAvailability } from "@shared/types";
 import { generateAgentCommand } from "@shared/types";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
-import { getAgentIds } from "@/config/agents";
+
+const CLIPBOARD_DIR_NAME = "canopy-clipboard";
 
 export interface LaunchAgentOptions {
   location?: AddTerminalOptions["location"];
@@ -32,51 +34,47 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const currentProject = useProjectStore((state) => state.currentProject);
 
-  const [availability, setAvailability] = useState<CliAvailability>(
-    Object.fromEntries(getAgentIds().map((id) => [id, false]))
-  );
-  const [isCheckingAvailability, setIsCheckingAvailability] = useState(true);
+  const availability = useCliAvailabilityStore((state) => state.availability);
+  const isLoading = useCliAvailabilityStore((state) => state.isLoading);
+  const isRefreshing = useCliAvailabilityStore((state) => state.isRefreshing);
+  const initializeCliAvailability = useCliAvailabilityStore((state) => state.initialize);
+  const refreshCliAvailability = useCliAvailabilityStore((state) => state.refresh);
+
   const [agentSettings, setAgentSettings] = useState<AgentSettings | null>(null);
 
   const isMounted = useRef(true);
 
   const checkAvailabilityAndLoadSettings = useCallback(async () => {
     if (!isElectronAvailable()) {
-      setIsCheckingAvailability(false);
       return;
     }
 
-    if (isMounted.current) {
-      setIsCheckingAvailability(true);
-    }
+    const [, settingsResult] = await Promise.allSettled([
+      refreshCliAvailability(),
+      agentSettingsClient.get(),
+    ]);
 
-    try {
-      const [cliAvailability, settings] = await Promise.all([
-        cliAvailabilityClient.refresh(),
-        agentSettingsClient.get(),
-      ]);
-
-      if (isMounted.current) {
-        setAvailability(cliAvailability);
-        setAgentSettings(settings);
-      }
-    } catch (error) {
-      console.error("Failed to check CLI availability or load settings:", error);
-    } finally {
-      if (isMounted.current) {
-        setIsCheckingAvailability(false);
-      }
+    if (isMounted.current && settingsResult.status === "fulfilled") {
+      setAgentSettings(settingsResult.value);
     }
-  }, []);
+  }, [refreshCliAvailability]);
 
   useEffect(() => {
     isMounted.current = true;
-    checkAvailabilityAndLoadSettings();
+    void initializeCliAvailability();
+    agentSettingsClient
+      .get()
+      .then((settings) => {
+        if (isMounted.current) setAgentSettings(settings);
+      })
+      .catch((error) => {
+        console.error("Failed to load agent settings:", error);
+      });
 
     return () => {
       isMounted.current = false;
     };
-  }, [checkAvailabilityAndLoadSettings]);
+  }, [initializeCliAvailability]);
 
   const launchAgent = useCallback(
     async (agentId: string, launchOptions?: LaunchAgentOptions): Promise<string | null> => {
@@ -118,9 +116,22 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
       let command: string | undefined;
       if (agentConfig) {
         const entry = agentSettings?.agents?.[agentId] ?? {};
+
+        // Resolve clipboard directory for agents that need it (e.g. Gemini)
+        let clipboardDirectory: string | undefined;
+        if (agentId === "gemini" && entry.shareClipboardDirectory !== false) {
+          try {
+            const tmpDir = await systemClient.getTmpDir();
+            clipboardDirectory = `${tmpDir}/${CLIPBOARD_DIR_NAME}`;
+          } catch {
+            // Non-critical: Gemini will work without clipboard access
+          }
+        }
+
         command = generateAgentCommand(agentConfig.command, entry, agentId, {
           initialPrompt: launchOptions?.prompt,
           interactive: launchOptions?.interactive ?? true,
+          clipboardDirectory,
         });
       }
 
@@ -149,7 +160,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
   return {
     launchAgent,
     availability,
-    isCheckingAvailability,
+    isCheckingAvailability: isLoading || isRefreshing,
     agentSettings,
     refreshSettings: checkAvailabilityAndLoadSettings,
   };

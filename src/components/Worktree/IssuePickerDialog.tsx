@@ -125,7 +125,7 @@ export function IssuePickerDialog({
   return (
     <AppDialog isOpen={isOpen} onClose={onClose} size="md" maxHeight="max-h-[70vh]">
       <AppDialog.Header>
-        <AppDialog.Title icon={<Link className="w-5 h-5 text-emerald-400" />}>
+        <AppDialog.Title icon={<Link className="w-5 h-5 text-github-open" />}>
           Attach Issue
         </AppDialog.Title>
         <AppDialog.CloseButton />
@@ -170,7 +170,7 @@ export function IssuePickerDialog({
             <span className="text-sm">Loading issues...</span>
           </div>
         ) : error ? (
-          <div className="text-center py-8 text-sm text-[var(--color-status-error)]">{error}</div>
+          <div className="text-center py-8 text-sm text-status-error">{error}</div>
         ) : issues.length === 0 ? (
           <div className="text-center py-8 text-sm text-canopy-text/50">
             {search ? "No issues match your search" : "No issues found"}
@@ -190,19 +190,19 @@ export function IssuePickerDialog({
                     index === selectedIndex
                       ? "bg-canopy-accent/10 border border-canopy-accent/30"
                       : "hover:bg-white/5 border border-transparent",
-                    isCurrentlyAttached && "ring-1 ring-emerald-400/30"
+                    isCurrentlyAttached && "ring-1 ring-status-success/30"
                   )}
                 >
                   {issue.state === "OPEN" ? (
-                    <CircleDot className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                    <CircleDot className="w-4 h-4 text-github-open shrink-0 mt-0.5" />
                   ) : (
-                    <CircleCheck className="w-4 h-4 text-violet-400 shrink-0 mt-0.5" />
+                    <CircleCheck className="w-4 h-4 text-github-merged shrink-0 mt-0.5" />
                   )}
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span className="text-sm text-canopy-text truncate">{issue.title}</span>
                       {isCurrentlyAttached && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-400/10 text-emerald-400 shrink-0">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-status-success/10 text-status-success shrink-0">
                           attached
                         </span>
                       )}

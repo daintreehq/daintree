@@ -23,6 +23,7 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -677,6 +678,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
           role="dialog"
           aria-modal="true"
           aria-label="Notes"
+          data-testid="notes-palette"
         >
           <div
             ref={dialogRef}
@@ -696,23 +698,39 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                 </span>
               </div>
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleCreateNote()}
-                  className="px-2.5 py-1 rounded-[var(--radius-md)] bg-canopy-accent hover:bg-canopy-accent/90 text-canopy-bg font-medium text-xs transition-colors flex items-center gap-1 active:scale-[0.98]"
-                  title={createTooltipWithShortcut("Create new note", "Cmd+N")}
-                >
-                  <Plus size={14} />
-                  New
-                </button>
-                <button
-                  type="button"
-                  onClick={handleClose}
-                  className="p-1 rounded-[var(--radius-sm)] text-canopy-text/50 hover:text-canopy-text hover:bg-white/5 transition-colors"
-                  title="Close (Esc)"
-                >
-                  <X size={16} />
-                </button>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={() => handleCreateNote()}
+                        className="px-2.5 py-1 rounded-[var(--radius-md)] bg-canopy-accent hover:bg-canopy-accent/90 text-canopy-bg font-medium text-xs transition-colors flex items-center gap-1 active:scale-[0.98]"
+                        aria-label="Create new note"
+                      >
+                        <Plus size={14} />
+                        New
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {createTooltipWithShortcut("Create new note", "Cmd+N")}
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={handleClose}
+                        className="p-1 rounded-[var(--radius-sm)] text-canopy-text/50 hover:text-canopy-text hover:bg-white/5 transition-colors"
+                        aria-label="Close"
+                      >
+                        <X size={16} />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Close (Esc)</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               </div>
             </div>
 
@@ -770,10 +788,10 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                             "relative flex items-start px-3 py-2 cursor-pointer transition-colors group rounded-[var(--radius-md)] mb-0.5 border",
                             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1",
                             selectedNote?.id === note.id
-                              ? "bg-white/[0.03] border-overlay text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+                              ? "bg-overlay-soft border-overlay text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
                               : index === selectedIndex
-                                ? "bg-white/[0.03] border-transparent text-canopy-text"
-                                : "border-transparent text-canopy-text/70 hover:bg-white/[0.02] hover:text-canopy-text"
+                                ? "bg-overlay-soft border-transparent text-canopy-text"
+                                : "border-transparent text-canopy-text/70 hover:bg-overlay-subtle hover:text-canopy-text"
                           )}
                           onClick={() => handleSelectNote(note, index)}
                           onDoubleClick={(e) => handleStartRename(note, e)}
@@ -812,14 +830,21 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                               {note.preview || "Empty note"}
                             </div>
                           </div>
-                          <button
-                            type="button"
-                            onClick={(e) => handleDeleteNote(note, e)}
-                            className="shrink-0 opacity-0 group-hover:opacity-100 p-1 rounded-[var(--radius-sm)] hover:bg-[var(--color-status-error)]/10 text-canopy-text/40 hover:text-[var(--color-status-error)] transition-all"
-                            title="Delete note"
-                          >
-                            <Trash2 size={12} />
-                          </button>
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <button
+                                  type="button"
+                                  onClick={(e) => handleDeleteNote(note, e)}
+                                  className="shrink-0 opacity-0 group-hover:opacity-100 p-1 rounded-[var(--radius-sm)] hover:bg-status-error/10 text-canopy-text/40 hover:text-status-error transition-all"
+                                  aria-label="Delete note"
+                                >
+                                  <Trash2 size={12} />
+                                </button>
+                              </TooltipTrigger>
+                              <TooltipContent side="bottom">Delete note</TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
                         </div>
                       );
                     })
@@ -832,32 +857,38 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                 {selectedNote ? (
                   <>
                     {/* Note header */}
-                    <div className="px-3 h-10 border-b border-canopy-border flex items-center justify-between shrink-0 bg-white/[0.02]">
-                      <input
-                        ref={isEditingHeaderTitle ? headerTitleInputRef : null}
-                        type="text"
-                        value={isEditingHeaderTitle ? headerTitleEdit : selectedNote.title}
-                        readOnly={!isEditingHeaderTitle}
-                        onChange={(e) => {
-                          if (isEditingHeaderTitle) setHeaderTitleEdit(e.target.value);
-                        }}
-                        onKeyDown={(e) => {
-                          if (isEditingHeaderTitle) handleHeaderTitleKeyDown(e);
-                        }}
-                        onBlur={() => {
-                          if (isEditingHeaderTitle) handleHeaderRename();
-                        }}
-                        onDoubleClick={() => {
-                          if (!isEditingHeaderTitle) handleStartHeaderRename();
-                        }}
-                        title={isEditingHeaderTitle ? undefined : "Double-click to rename"}
-                        className={cn(
-                          "flex-1 mr-3 text-sm font-medium px-1.5 py-1 border rounded appearance-none focus:outline-none box-border",
-                          isEditingHeaderTitle
-                            ? "bg-canopy-bg/60 border-canopy-accent/50 text-canopy-text cursor-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
-                            : "bg-transparent border-transparent text-canopy-text truncate cursor-text hover:text-canopy-text"
-                        )}
-                      />
+                    <div className="px-3 h-10 border-b border-canopy-border flex items-center justify-between shrink-0 bg-overlay-subtle">
+                      <TooltipProvider>
+                        <Tooltip open={isEditingHeaderTitle ? false : undefined}>
+                          <TooltipTrigger asChild>
+                            <input
+                              ref={isEditingHeaderTitle ? headerTitleInputRef : null}
+                              type="text"
+                              value={isEditingHeaderTitle ? headerTitleEdit : selectedNote.title}
+                              readOnly={!isEditingHeaderTitle}
+                              onChange={(e) => {
+                                if (isEditingHeaderTitle) setHeaderTitleEdit(e.target.value);
+                              }}
+                              onKeyDown={(e) => {
+                                if (isEditingHeaderTitle) handleHeaderTitleKeyDown(e);
+                              }}
+                              onBlur={() => {
+                                if (isEditingHeaderTitle) handleHeaderRename();
+                              }}
+                              onDoubleClick={() => {
+                                if (!isEditingHeaderTitle) handleStartHeaderRename();
+                              }}
+                              className={cn(
+                                "flex-1 mr-3 text-sm font-medium px-1.5 py-1 border rounded appearance-none focus:outline-none box-border",
+                                isEditingHeaderTitle
+                                  ? "bg-canopy-bg/60 border-canopy-accent/50 text-canopy-text cursor-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
+                                  : "bg-transparent border-transparent text-canopy-text truncate cursor-text hover:text-canopy-text"
+                              )}
+                            />
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom">Double-click to rename</TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
                       <DropdownMenu>
                         <div className="flex items-center shrink-0">
                           <button
@@ -899,15 +930,15 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
 
                     {/* Conflict warning */}
                     {hasConflict && (
-                      <div className="px-4 py-2 bg-amber-500/[0.03] border-l-2 border-amber-500 flex items-center justify-between shrink-0">
-                        <div className="flex items-center gap-2 text-amber-500 text-xs">
+                      <div className="px-4 py-2 bg-status-warning/[0.03] border-l-2 border-status-warning flex items-center justify-between shrink-0">
+                        <div className="flex items-center gap-2 text-status-warning text-xs">
                           <AlertTriangle size={14} />
                           <span>Note modified externally</span>
                         </div>
                         <button
                           type="button"
                           onClick={handleReloadNote}
-                          className="px-2 py-1 rounded-[var(--radius-sm)] text-xs bg-amber-500/20 hover:bg-amber-500/30 text-amber-500 transition-colors"
+                          className="px-2 py-1 rounded-[var(--radius-sm)] text-xs bg-status-warning/20 hover:bg-status-warning/30 text-status-warning transition-colors"
                         >
                           Reload
                         </button>

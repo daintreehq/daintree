@@ -55,8 +55,10 @@ export interface AgentStateChangePayload {
 export interface AgentDetectedPayload {
   /** Terminal ID where agent was detected */
   terminalId: string;
-  /** Type of agent detected */
-  agentType: AgentId;
+  /** Type of agent detected (undefined for non-agent process detections) */
+  agentType?: AgentId;
+  /** Icon identifier for the detected process (e.g., "npm", "python", "docker") */
+  processIconId?: string;
   /** Process name that was detected */
   processName: string;
   /** Timestamp when detected */
@@ -67,8 +69,8 @@ export interface AgentDetectedPayload {
 export interface AgentExitedPayload {
   /** Terminal ID where agent exited */
   terminalId: string;
-  /** Type of agent that exited */
-  agentType: AgentId;
+  /** Type of agent that exited (undefined for non-agent process exits) */
+  agentType?: AgentId;
   /** Timestamp when exited */
   timestamp: number;
 }

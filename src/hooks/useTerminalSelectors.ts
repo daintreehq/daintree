@@ -20,7 +20,10 @@ function isTerminalVisible(
   return true;
 }
 
-export function useTerminalNotificationCounts(): { waitingCount: number; failedCount: number } {
+export function useTerminalNotificationCounts(blurTime?: number | null): {
+  waitingCount: number;
+  failedCount: number;
+} {
   const worktreeIds = useWorktreeDataStore(
     useShallow((state) => {
       const ids = new Set<string>();
@@ -34,13 +37,26 @@ export function useTerminalNotificationCounts(): { waitingCount: number; failedC
 
   return useTerminalStore(
     useShallow((state) => {
+      if (blurTime === null) {
+        return { waitingCount: 0, failedCount: 0 };
+      }
+
       let waitingCount = 0;
       let failedCount = 0;
 
       for (const terminal of state.terminals) {
         if (!isTerminalVisible(terminal, state.isInTrash, worktreeIds)) continue;
+
+        const isNotifiable = terminal.agentState === "waiting" || terminal.agentState === "failed";
+        if (!isNotifiable) continue;
+
+        if (blurTime !== undefined) {
+          if (terminal.lastStateChange == null) continue;
+          if (terminal.lastStateChange <= blurTime) continue;
+        }
+
         if (terminal.agentState === "waiting") waitingCount += 1;
-        if (terminal.agentState === "failed") failedCount += 1;
+        else failedCount += 1;
       }
 
       return { waitingCount, failedCount };

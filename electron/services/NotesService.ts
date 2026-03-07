@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { resilientWriteFile, resilientRename, resilientUnlink } from "../utils/fs.js";
 import matter from "gray-matter";
 import { nanoid } from "nanoid";
 
@@ -176,7 +177,9 @@ export class NotesService {
 
     const frontmatter = matter.stringify("", metadata);
 
-    await fs.writeFile(absolutePath, frontmatter, "utf-8");
+    const tmpPath = `${absolutePath}.tmp`;
+    await resilientWriteFile(tmpPath, frontmatter, "utf-8");
+    await resilientRename(tmpPath, absolutePath);
 
     const stats = await fs.stat(absolutePath);
 
@@ -245,7 +248,9 @@ export class NotesService {
 
     const fileContent = matter.stringify(content, cleanMetadata);
 
-    await fs.writeFile(absolutePath, fileContent, "utf-8");
+    const tmpPath = `${absolutePath}.tmp`;
+    await resilientWriteFile(tmpPath, fileContent, "utf-8");
+    await resilientRename(tmpPath, absolutePath);
 
     const stats = await fs.stat(absolutePath);
     return { lastModified: stats.mtimeMs };
@@ -369,7 +374,7 @@ export class NotesService {
 
   async delete(notePath: string): Promise<void> {
     const absolutePath = this.validatePath(notePath);
-    await fs.unlink(absolutePath);
+    await resilientUnlink(absolutePath);
   }
 
   setProjectPath(projectPath: string): void {

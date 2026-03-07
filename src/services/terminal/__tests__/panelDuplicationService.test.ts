@@ -6,6 +6,9 @@ vi.mock("@/clients", () => ({
   agentSettingsClient: {
     get: vi.fn(),
   },
+  systemClient: {
+    getTmpDir: vi.fn().mockResolvedValue("/tmp"),
+  },
 }));
 
 vi.mock("@shared/types", () => ({

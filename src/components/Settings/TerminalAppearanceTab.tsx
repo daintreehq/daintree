@@ -3,6 +3,8 @@ import { cn } from "@/lib/utils";
 import { useTerminalFontStore } from "@/store";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
 import { actionService } from "@/services/ActionService";
+import { ColorSchemePicker } from "./ColorSchemePicker";
+import { AppThemePicker } from "./AppThemePicker";
 
 const MIN_FONT_SIZE = 8;
 const MAX_FONT_SIZE = 24;
@@ -101,6 +103,20 @@ export function TerminalAppearanceTab() {
   return (
     <div className="space-y-6">
       <div className="space-y-2">
+        <h4 className="text-sm font-medium text-canopy-text">App theme</h4>
+        <div className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] p-4">
+          <AppThemePicker />
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <h4 className="text-sm font-medium text-canopy-text">Terminal color scheme</h4>
+        <div className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] p-4">
+          <ColorSchemePicker />
+        </div>
+      </div>
+
+      <div className="space-y-2">
         <h4 className="text-sm font-medium text-canopy-text">Font size</h4>
         <div className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] p-4 space-y-2">
           <div className="flex items-center gap-2">
@@ -125,7 +141,7 @@ export function TerminalAppearanceTab() {
             Current: <span className="font-mono">{fontSize}px</span>. Smaller fonts reduce the
             number of cells on screen and can improve performance.
           </p>
-          {fontSizeError && <p className="text-xs text-red-500">{fontSizeError}</p>}
+          {fontSizeError && <p className="text-xs text-status-error">{fontSizeError}</p>}
         </div>
       </div>
 

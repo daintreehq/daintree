@@ -13,6 +13,7 @@ export const AppAgentConfigSchema = z.object({
   model: z.string(),
   apiKey: z.string().optional(),
   baseUrl: z.string().optional(),
+  enabled: z.boolean().optional(),
 });
 
 export type AppAgentConfig = z.infer<typeof AppAgentConfigSchema>;

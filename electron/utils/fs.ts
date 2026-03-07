@@ -1,4 +1,67 @@
 import { access } from "fs/promises";
+import { unlink as fsUnlink } from "fs/promises";
+import stubbornFs from "stubborn-fs";
+
+// Wall-clock retry budgets for transient file-locking errors (EPERM/EBUSY/EACCES).
+// IMPORTANT: stubborn-fs computes the deadline at the time options are passed, so
+// these must be called per-invocation — not pre-bound at module init.
+const RETRY_TIMEOUT_MS = 10_000;
+// Sync retries spin-block the event loop; keep the budget short
+const RETRY_TIMEOUT_SYNC_MS = 500;
+
+/**
+ * Rename with retry for transient file-locking errors (EPERM/EBUSY/EACCES).
+ * Uses stubborn-fs for cross-platform resilience.
+ */
+export async function resilientRename(src: string, dest: string): Promise<void> {
+  await stubbornFs.retry.rename({ timeout: RETRY_TIMEOUT_MS })(src, dest);
+}
+
+/**
+ * Synchronous rename with retry. Retry budget is kept short (500ms) to
+ * limit event-loop blocking during terminal disposal on Windows.
+ */
+export function resilientRenameSync(src: string, dest: string): void {
+  stubbornFs.retry.renameSync({ timeout: RETRY_TIMEOUT_SYNC_MS })(src, dest);
+}
+
+/**
+ * writeFile with retry for transient file-locking errors.
+ * Uses stubborn-fs for cross-platform resilience.
+ */
+export async function resilientWriteFile(
+  filePath: string,
+  data: string,
+  encoding: BufferEncoding = "utf-8"
+): Promise<void> {
+  await stubbornFs.retry.writeFile({ timeout: RETRY_TIMEOUT_MS })(filePath, data, encoding);
+}
+
+// stubborn-fs only provides attempt.unlink (swallows all errors), not retry.unlink.
+// We need retry-and-throw for callers that must know about ENOENT/permission failures.
+const TRANSIENT_CODES = new Set(["EPERM", "EBUSY", "EACCES"]);
+
+/**
+ * unlink with retry for transient file-locking errors. Throws on ENOENT and
+ * other non-transient errors. Uses exponential backoff up to 10s.
+ */
+export async function resilientUnlink(filePath: string): Promise<void> {
+  let delay = 50;
+  for (let attempt = 0; attempt <= 8; attempt++) {
+    try {
+      await fsUnlink(filePath);
+      return;
+    } catch (error) {
+      const code =
+        error != null && typeof error === "object" && "code" in error
+          ? (error as NodeJS.ErrnoException).code
+          : undefined;
+      if (typeof code !== "string" || !TRANSIENT_CODES.has(code) || attempt === 8) throw error;
+      await new Promise((r) => setTimeout(r, delay));
+      delay *= 2;
+    }
+  }
+}
 
 /**
  * Configuration for path existence polling

@@ -28,14 +28,18 @@ Keep the summary concise but informative - aim for someone to understand the pro
 export function getDefaultAgentId(
   defaultAgent: string | undefined,
   defaultSelection: string | undefined,
-  availability: CliAvailability
+  availability: CliAvailability,
+  selectedAgents?: Set<string>
 ): "claude" | "gemini" | "codex" | "opencode" | null {
   const agentIds = ["claude", "gemini", "codex", "opencode"] as const;
+
+  const isUsable = (id: string) =>
+    availability[id as keyof CliAvailability] && (!selectedAgents || selectedAgents.has(id));
 
   if (
     defaultAgent &&
     agentIds.includes(defaultAgent as (typeof agentIds)[number]) &&
-    availability[defaultAgent as keyof CliAvailability]
+    isUsable(defaultAgent)
   ) {
     return defaultAgent as "claude" | "gemini" | "codex" | "opencode";
   }
@@ -43,13 +47,13 @@ export function getDefaultAgentId(
   if (
     defaultSelection &&
     agentIds.includes(defaultSelection as (typeof agentIds)[number]) &&
-    availability[defaultSelection as keyof CliAvailability]
+    isUsable(defaultSelection)
   ) {
     return defaultSelection as "claude" | "gemini" | "codex" | "opencode";
   }
 
   for (const agentId of agentIds) {
-    if (availability[agentId]) {
+    if (isUsable(agentId)) {
       return agentId;
     }
   }

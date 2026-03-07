@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Search, X, Filter, Tag } from "lucide-react";
 import type { EventRecord, EventFilterOptions, EventCategory } from "@/store/eventStore";
+import { EVENT_CATEGORY_STYLES } from "@/config/categoryColors";
 
 const ALL_CATEGORIES: EventCategory[] = [
   "system",
@@ -14,17 +15,6 @@ const ALL_CATEGORIES: EventCategory[] = [
   "watcher",
   "artifact",
 ];
-
-const CATEGORY_CONFIG: Record<EventCategory, { label: string; color: string }> = {
-  system: { label: "System", color: "bg-blue-500/20 text-blue-400 border-blue-500/30" },
-  agent: { label: "Agent", color: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30" },
-  task: { label: "Task", color: "bg-green-500/20 text-green-400 border-green-500/30" },
-  server: { label: "Server", color: "bg-orange-500/20 text-orange-400 border-orange-500/30" },
-  file: { label: "File", color: "bg-pink-500/20 text-pink-400 border-pink-500/30" },
-  ui: { label: "UI", color: "bg-indigo-500/20 text-indigo-400 border-indigo-500/30" },
-  watcher: { label: "Watcher", color: "bg-cyan-500/20 text-cyan-400 border-cyan-500/30" },
-  artifact: { label: "Artifact", color: "bg-rose-500/20 text-rose-400 border-rose-500/30" },
-};
 
 type FilterSubset = Pick<EventFilterOptions, "types" | "categories" | "search" | "traceId">;
 
@@ -240,7 +230,7 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
             {ALL_CATEGORIES.map((category) => {
               const isActive = filters.categories?.includes(category) || false;
               const count = categoryCounts.get(category) || 0;
-              const config = CATEGORY_CONFIG[category];
+              const config = EVENT_CATEGORY_STYLES[category];
 
               return (
                 <Button

@@ -64,15 +64,9 @@ export type KeyAction =
   | "terminal.closeAll"
   | "terminal.killAll"
   | "terminal.restartAll"
-  | "terminal.minimize"
-  | "terminal.minimizeAll"
-  | "terminal.restore"
-  | "terminal.restoreAll"
   | "terminal.toggleDock"
   | "terminal.toggleDockAll"
   | "terminal.new"
-  | "terminal.spawnPalette"
-  | "terminal.palette"
   | "terminal.reopenLast"
   | "terminal.maximize"
   | "terminal.inject"
@@ -82,6 +76,7 @@ export type KeyAction =
   | "terminal.focusDown"
   | "terminal.focusLeft"
   | "terminal.focusRight"
+  | "terminal.focusDock"
   | "terminal.focusIndex1"
   | "terminal.focusIndex2"
   | "terminal.focusIndex3"
@@ -93,6 +88,7 @@ export type KeyAction =
   | "terminal.focusIndex9"
   | "terminal.moveLeft"
   | "terminal.moveRight"
+  | "terminal.watch"
 
   // Agent spawning
   | "agent.palette"
@@ -106,9 +102,6 @@ export type KeyAction =
   | "agent.focusNextFailed"
   | "agent.focusNextAgent"
   | "agent.focusPreviousAgent"
-
-  // Assistant panel
-  | "assistant.open"
 
   // Find/Search
   | "find.inFocusedPanel"
@@ -147,10 +140,130 @@ export type KeyAction =
   | "help.shortcutsAlt"
   | "app.settings"
 
+  // Voice input
+  | "voiceInput.toggle"
+
   // System actions
   | "app.quit"
   | "app.forceQuit"
   | "modal.close";
+
+/**
+ * All valid KeyAction values as a runtime set for validation.
+ * Used by import/export to filter unknown action IDs.
+ */
+export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
+  "nav.up",
+  "nav.down",
+  "nav.left",
+  "nav.right",
+  "nav.pageUp",
+  "nav.pageDown",
+  "nav.home",
+  "nav.end",
+  "nav.expand",
+  "nav.collapse",
+  "nav.primary",
+  "nav.toggleSidebar",
+  "nav.quickSwitcher",
+  "file.open",
+  "file.copyPath",
+  "file.copyTree",
+  "ui.refresh",
+  "ui.escape",
+  "git.toggle",
+  "worktree.next",
+  "worktree.previous",
+  "worktree.panel",
+  "worktree.switch1",
+  "worktree.switch2",
+  "worktree.switch3",
+  "worktree.switch4",
+  "worktree.switch5",
+  "worktree.switch6",
+  "worktree.switch7",
+  "worktree.switch8",
+  "worktree.switch9",
+  "worktree.up",
+  "worktree.down",
+  "worktree.upVim",
+  "worktree.downVim",
+  "worktree.home",
+  "worktree.end",
+  "worktree.select",
+  "worktree.selectSpace",
+  "worktree.copyTree",
+  "worktree.openEditor",
+  "worktree.openPalette",
+  "worktree.overview",
+  "tab.next",
+  "tab.previous",
+  "terminal.close",
+  "terminal.closeAll",
+  "terminal.killAll",
+  "terminal.restartAll",
+  "terminal.toggleDock",
+  "terminal.toggleDockAll",
+  "terminal.new",
+  "terminal.reopenLast",
+  "terminal.maximize",
+  "terminal.inject",
+  "terminal.focusNext",
+  "terminal.focusPrevious",
+  "terminal.focusUp",
+  "terminal.focusDown",
+  "terminal.focusLeft",
+  "terminal.focusRight",
+  "terminal.focusDock",
+  "terminal.focusIndex1",
+  "terminal.focusIndex2",
+  "terminal.focusIndex3",
+  "terminal.focusIndex4",
+  "terminal.focusIndex5",
+  "terminal.focusIndex6",
+  "terminal.focusIndex7",
+  "terminal.focusIndex8",
+  "terminal.focusIndex9",
+  "terminal.moveLeft",
+  "terminal.moveRight",
+  "terminal.watch",
+  "agent.palette",
+  "agent.claude",
+  "agent.gemini",
+  "agent.codex",
+  "agent.opencode",
+  "agent.terminal",
+  "agent.focusNextWaiting",
+  "agent.focusNextWorking",
+  "agent.focusNextFailed",
+  "agent.focusNextAgent",
+  "agent.focusPreviousAgent",
+  "find.inFocusedPanel",
+  "window.zoomIn",
+  "window.zoomOut",
+  "window.zoomReset",
+  "panel.palette",
+  "panel.toggleDiagnostics",
+  "panel.toggleSidecar",
+  "panel.diagnosticsLogs",
+  "panel.diagnosticsEvents",
+  "panel.diagnosticsMessages",
+  "sidecar.newTab",
+  "sidecar.closeTab",
+  "sidecar.nextTab",
+  "sidecar.prevTab",
+  "notes.openPalette",
+  "action.palette",
+  "action.palette.open",
+  "project.switcherPalette",
+  "help.shortcuts",
+  "help.shortcutsAlt",
+  "app.settings",
+  "voiceInput.toggle",
+  "app.quit",
+  "app.forceQuit",
+  "modal.close",
+]);
 
 /**
  * Available keymap presets.

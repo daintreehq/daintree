@@ -183,6 +183,7 @@ const CHANNELS = {
 
   // Files channels
   FILES_SEARCH: "files:search",
+  FILES_READ: "files:read",
 
   // Agent state channels
   AGENT_STATE_CHANGED: "agent:state-changed",
@@ -207,12 +208,19 @@ const CHANNELS = {
   COPYTREE_GET_FILE_TREE: "copytree:get-file-tree",
   COPYTREE_TEST_CONFIG: "copytree:test-config",
 
+  // Editor channels
+  EDITOR_GET_CONFIG: "editor:get-config",
+  EDITOR_SET_CONFIG: "editor:set-config",
+  EDITOR_DISCOVER: "editor:discover",
+
   // System channels
   SYSTEM_OPEN_EXTERNAL: "system:open-external",
   SYSTEM_OPEN_PATH: "system:open-path",
+  SYSTEM_OPEN_IN_EDITOR: "system:open-in-editor",
   SYSTEM_CHECK_COMMAND: "system:check-command",
   SYSTEM_CHECK_DIRECTORY: "system:check-directory",
   SYSTEM_GET_HOME_DIR: "system:get-home-dir",
+  SYSTEM_GET_TMP_DIR: "system:get-tmp-dir",
   SYSTEM_GET_CLI_AVAILABILITY: "system:get-cli-availability",
   SYSTEM_REFRESH_CLI_AVAILABILITY: "system:refresh-cli-availability",
   SYSTEM_GET_AGENT_VERSIONS: "system:get-agent-versions",
@@ -220,6 +228,7 @@ const CHANNELS = {
   SYSTEM_GET_AGENT_UPDATE_SETTINGS: "system:get-agent-update-settings",
   SYSTEM_SET_AGENT_UPDATE_SETTINGS: "system:set-agent-update-settings",
   SYSTEM_START_AGENT_UPDATE: "system:start-agent-update",
+  SYSTEM_HEALTH_CHECK: "system:health-check",
   SYSTEM_WAKE: "system:wake",
 
   // PR detection channels
@@ -315,6 +324,7 @@ const CHANNELS = {
   PROJECT_CLOSE: "project:close",
   PROJECT_REOPEN: "project:reopen",
   PROJECT_GET_STATS: "project:get-stats",
+  PROJECT_CREATE_FOLDER: "project:create-folder",
   PROJECT_INIT_GIT: "project:init-git",
   PROJECT_INIT_GIT_GUIDED: "project:init-git-guided",
   PROJECT_INIT_GIT_PROGRESS: "project:init-git-progress",
@@ -331,6 +341,10 @@ const CHANNELS = {
   PROJECT_SET_TAB_GROUPS: "project:set-tab-groups",
   PROJECT_GET_FOCUS_MODE: "project:get-focus-mode",
   PROJECT_SET_FOCUS_MODE: "project:set-focus-mode",
+  PROJECT_READ_CLAUDE_MD: "project:read-claude-md",
+  PROJECT_WRITE_CLAUDE_MD: "project:write-claude-md",
+  PROJECT_ENABLE_IN_REPO_SETTINGS: "project:enable-in-repo-settings",
+  PROJECT_DISABLE_IN_REPO_SETTINGS: "project:disable-in-repo-settings",
 
   // Agent settings channels
   AGENT_SETTINGS_GET: "agent-settings:get",
@@ -353,11 +367,23 @@ const CHANNELS = {
   TERMINAL_CONFIG_SET_FONT_FAMILY: "terminal-config:set-font-family",
   TERMINAL_CONFIG_SET_HYBRID_INPUT_ENABLED: "terminal-config:set-hybrid-input-enabled",
   TERMINAL_CONFIG_SET_HYBRID_INPUT_AUTO_FOCUS: "terminal-config:set-hybrid-input-auto-focus",
+  TERMINAL_CONFIG_SET_COLOR_SCHEME: "terminal-config:set-color-scheme",
+  TERMINAL_CONFIG_SET_CUSTOM_SCHEMES: "terminal-config:set-custom-schemes",
+  TERMINAL_CONFIG_IMPORT_COLOR_SCHEME: "terminal-config:import-color-scheme",
 
   // Git channels
   GIT_GET_FILE_DIFF: "git:get-file-diff",
   GIT_GET_PROJECT_PULSE: "git:get-project-pulse",
   GIT_LIST_COMMITS: "git:list-commits",
+  GIT_STAGE_FILE: "git:stage-file",
+  GIT_UNSTAGE_FILE: "git:unstage-file",
+  GIT_STAGE_ALL: "git:stage-all",
+  GIT_UNSTAGE_ALL: "git:unstage-all",
+  GIT_COMMIT: "git:commit",
+  GIT_PUSH: "git:push",
+  GIT_GET_STAGING_STATUS: "git:get-staging-status",
+  GIT_COMPARE_WORKTREES: "git:compare-worktrees",
+  GIT_GET_USERNAME: "git:get-username",
 
   // Sidecar channels
   SIDECAR_CREATE: "sidecar:create",
@@ -390,6 +416,8 @@ const CHANNELS = {
   KEYBINDING_SET_OVERRIDE: "keybinding:set-override",
   KEYBINDING_REMOVE_OVERRIDE: "keybinding:remove-override",
   KEYBINDING_RESET_ALL: "keybinding:reset-all",
+  KEYBINDING_EXPORT_PROFILE: "keybinding:export-profile",
+  KEYBINDING_IMPORT_PROFILE: "keybinding:import-profile",
 
   // Worktree Config channels
   WORKTREE_CONFIG_GET: "worktree-config:get",
@@ -408,6 +436,12 @@ const CHANNELS = {
 
   // Notification channels
   NOTIFICATION_UPDATE: "notification:update",
+  NOTIFICATION_SETTINGS_GET: "notification:settings-get",
+  NOTIFICATION_SETTINGS_SET: "notification:settings-set",
+  NOTIFICATION_PLAY_SOUND: "notification:play-sound",
+  NOTIFICATION_SHOW_WATCH: "notification:show-watch",
+  NOTIFICATION_WATCH_NAVIGATE: "notification:watch-navigate",
+  NOTIFICATION_SYNC_WATCHED: "notification:sync-watched",
 
   // Auto-update channels
   UPDATE_AVAILABLE: "update:available",
@@ -436,19 +470,48 @@ const CHANNELS = {
   APP_AGENT_TEST_API_KEY: "app-agent:test-api-key",
   APP_AGENT_TEST_MODEL: "app-agent:test-model",
 
-  // Assistant channels
-  ASSISTANT_SEND_MESSAGE: "assistant:send-message",
-  ASSISTANT_CANCEL: "assistant:cancel",
-  ASSISTANT_CHUNK: "assistant:chunk",
-  ASSISTANT_HAS_API_KEY: "assistant:has-api-key",
-  ASSISTANT_CLEAR_SESSION: "assistant:clear-session",
-  ASSISTANT_ACKNOWLEDGE_EVENT: "assistant:acknowledge-event",
-
   // Agent Capabilities channels
   AGENT_CAPABILITIES_GET_REGISTRY: "agent-capabilities:get-registry",
   AGENT_CAPABILITIES_GET_AGENT_IDS: "agent-capabilities:get-agent-ids",
   AGENT_CAPABILITIES_GET_AGENT_METADATA: "agent-capabilities:get-agent-metadata",
   AGENT_CAPABILITIES_IS_AGENT_ENABLED: "agent-capabilities:is-agent-enabled",
+
+  // Clipboard channels
+  CLIPBOARD_SAVE_IMAGE: "clipboard:save-image",
+
+  // App Theme channels
+  APP_THEME_GET: "app-theme:get",
+  APP_THEME_SET_COLOR_SCHEME: "app-theme:set-color-scheme",
+  APP_THEME_SET_CUSTOM_SCHEMES: "app-theme:set-custom-schemes",
+  APP_THEME_IMPORT: "app-theme:import",
+
+  // Telemetry channels
+  TELEMETRY_GET: "telemetry:get",
+  TELEMETRY_SET_ENABLED: "telemetry:set-enabled",
+  TELEMETRY_MARK_PROMPT_SHOWN: "telemetry:mark-prompt-shown",
+
+  // Voice Input channels
+  VOICE_INPUT_GET_SETTINGS: "voice-input:get-settings",
+  VOICE_INPUT_SET_SETTINGS: "voice-input:set-settings",
+  VOICE_INPUT_START: "voice-input:start",
+  VOICE_INPUT_STOP: "voice-input:stop",
+  VOICE_INPUT_AUDIO_CHUNK: "voice-input:audio-chunk",
+  VOICE_INPUT_TRANSCRIPTION_DELTA: "voice-input:transcription-delta",
+  VOICE_INPUT_TRANSCRIPTION_COMPLETE: "voice-input:transcription-complete",
+  VOICE_INPUT_ERROR: "voice-input:error",
+  VOICE_INPUT_STATUS: "voice-input:status",
+  VOICE_INPUT_CHECK_MIC_PERMISSION: "voice-input:check-mic-permission",
+  VOICE_INPUT_REQUEST_MIC_PERMISSION: "voice-input:request-mic-permission",
+  VOICE_INPUT_OPEN_MIC_SETTINGS: "voice-input:open-mic-settings",
+  VOICE_INPUT_VALIDATE_API_KEY: "voice-input:validate-api-key",
+
+  // MCP Server channels
+  MCP_SERVER_GET_STATUS: "mcp-server:get-status",
+  MCP_SERVER_SET_ENABLED: "mcp-server:set-enabled",
+  MCP_SERVER_SET_PORT: "mcp-server:set-port",
+  MCP_SERVER_SET_API_KEY: "mcp-server:set-api-key",
+  MCP_SERVER_GENERATE_API_KEY: "mcp-server:generate-api-key",
+  MCP_SERVER_GET_CONFIG_SNIPPET: "mcp-server:get-config-snippet",
 } as const;
 
 const api: ElectronAPI = {
@@ -651,6 +714,7 @@ const api: ElectronAPI = {
   // Files API
   files: {
     search: (payload) => _typedInvoke(CHANNELS.FILES_SEARCH, payload),
+    read: (payload) => _typedInvoke(CHANNELS.FILES_READ, payload),
   },
 
   // Slash Commands API
@@ -699,17 +763,38 @@ const api: ElectronAPI = {
       _typedOn(CHANNELS.COPYTREE_PROGRESS, callback),
   },
 
+  // Editor API
+  editor: {
+    getConfig: (projectId?: string) => _typedInvoke(CHANNELS.EDITOR_GET_CONFIG, projectId),
+
+    setConfig: (payload: {
+      editor: { id: string; customCommand?: string; customTemplate?: string };
+      projectId?: string;
+    }) =>
+      _typedInvoke(
+        CHANNELS.EDITOR_SET_CONFIG,
+        payload as import("../shared/types/editor.js").EditorSetConfigPayload
+      ),
+
+    discover: () => _typedInvoke(CHANNELS.EDITOR_DISCOVER),
+  },
+
   // System API
   system: {
     openExternal: (url: string) => _typedInvoke(CHANNELS.SYSTEM_OPEN_EXTERNAL, { url }),
 
     openPath: (path: string) => _typedInvoke(CHANNELS.SYSTEM_OPEN_PATH, { path }),
 
+    openInEditor: (payload: { path: string; line?: number; col?: number; projectId?: string }) =>
+      _typedInvoke(CHANNELS.SYSTEM_OPEN_IN_EDITOR, payload),
+
     checkCommand: (command: string) => _typedInvoke(CHANNELS.SYSTEM_CHECK_COMMAND, command),
 
     checkDirectory: (path: string) => _typedInvoke(CHANNELS.SYSTEM_CHECK_DIRECTORY, path),
 
     getHomeDir: () => _typedInvoke(CHANNELS.SYSTEM_GET_HOME_DIR),
+
+    getTmpDir: () => _typedInvoke(CHANNELS.SYSTEM_GET_TMP_DIR),
 
     getCliAvailability: () => _typedInvoke(CHANNELS.SYSTEM_GET_CLI_AVAILABILITY),
 
@@ -729,6 +814,8 @@ const api: ElectronAPI = {
 
     startAgentUpdate: (payload: { agentId: string; method?: string }) =>
       _typedInvoke(CHANNELS.SYSTEM_START_AGENT_UPDATE, payload),
+
+    healthCheck: () => _typedInvoke(CHANNELS.SYSTEM_HEALTH_CHECK),
 
     onWake: (callback: (data: { sleepDuration: number; timestamp: number }) => void) => {
       const handler = (
@@ -863,6 +950,9 @@ const api: ElectronAPI = {
 
     getStats: (projectId: string) => ipcRenderer.invoke(CHANNELS.PROJECT_GET_STATS, projectId),
 
+    createFolder: (parentPath: string, folderName: string): Promise<string> =>
+      _typedInvoke(CHANNELS.PROJECT_CREATE_FOLDER, { parentPath, folderName }),
+
     initGit: (directoryPath: string) =>
       ipcRenderer.invoke(CHANNELS.PROJECT_INIT_GIT, directoryPath),
 
@@ -941,6 +1031,18 @@ const api: ElectronAPI = {
       focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean }
     ): Promise<void> =>
       _typedInvoke(CHANNELS.PROJECT_SET_FOCUS_MODE, { projectId, focusMode, focusPanelState }),
+
+    readClaudeMd: (projectId: string): Promise<string | null> =>
+      _typedInvoke(CHANNELS.PROJECT_READ_CLAUDE_MD, projectId),
+
+    writeClaudeMd: (projectId: string, content: string): Promise<void> =>
+      _typedInvoke(CHANNELS.PROJECT_WRITE_CLAUDE_MD, { projectId, content }),
+
+    enableInRepoSettings: (projectId: string): Promise<Project> =>
+      _typedInvoke(CHANNELS.PROJECT_ENABLE_IN_REPO_SETTINGS, projectId),
+
+    disableInRepoSettings: (projectId: string): Promise<Project> =>
+      _typedInvoke(CHANNELS.PROJECT_DISABLE_IN_REPO_SETTINGS, projectId),
   },
 
   // Agent Settings API
@@ -1115,6 +1217,28 @@ const api: ElectronAPI = {
       skip?: number;
       limit?: number;
     }) => ipcRenderer.invoke(CHANNELS.GIT_LIST_COMMITS, options),
+
+    stageFile: (cwd: string, filePath: string) =>
+      _typedInvoke(CHANNELS.GIT_STAGE_FILE, { cwd, filePath }),
+
+    unstageFile: (cwd: string, filePath: string) =>
+      _typedInvoke(CHANNELS.GIT_UNSTAGE_FILE, { cwd, filePath }),
+
+    stageAll: (cwd: string) => _typedInvoke(CHANNELS.GIT_STAGE_ALL, cwd),
+
+    unstageAll: (cwd: string) => _typedInvoke(CHANNELS.GIT_UNSTAGE_ALL, cwd),
+
+    commit: (cwd: string, message: string) => _typedInvoke(CHANNELS.GIT_COMMIT, { cwd, message }),
+
+    push: (cwd: string, setUpstream?: boolean) =>
+      _typedInvoke(CHANNELS.GIT_PUSH, { cwd, setUpstream }),
+
+    getStagingStatus: (cwd: string) => _typedInvoke(CHANNELS.GIT_GET_STAGING_STATUS, cwd),
+
+    compareWorktrees: (cwd: string, branch1: string, branch2: string, filePath?: string) =>
+      _typedInvoke(CHANNELS.GIT_COMPARE_WORKTREES, { cwd, branch1, branch2, filePath }),
+
+    getUsername: (cwd: string) => _typedInvoke(CHANNELS.GIT_GET_USERNAME, cwd),
   },
 
   // Terminal Config API
@@ -1138,6 +1262,14 @@ const api: ElectronAPI = {
 
     setHybridInputAutoFocus: (enabled: boolean) =>
       _typedInvoke(CHANNELS.TERMINAL_CONFIG_SET_HYBRID_INPUT_AUTO_FOCUS, enabled),
+
+    setColorScheme: (schemeId: string) =>
+      _typedInvoke(CHANNELS.TERMINAL_CONFIG_SET_COLOR_SCHEME, schemeId),
+
+    setCustomSchemes: (schemesJson: string) =>
+      _typedInvoke(CHANNELS.TERMINAL_CONFIG_SET_CUSTOM_SCHEMES, schemesJson),
+
+    importColorScheme: () => _typedInvoke(CHANNELS.TERMINAL_CONFIG_IMPORT_COLOR_SCHEME),
   },
 
   // Sidecar API
@@ -1216,6 +1348,10 @@ const api: ElectronAPI = {
       _typedInvoke(CHANNELS.KEYBINDING_REMOVE_OVERRIDE, actionId),
 
     resetAll: () => _typedInvoke(CHANNELS.KEYBINDING_RESET_ALL),
+
+    exportProfile: () => _typedInvoke(CHANNELS.KEYBINDING_EXPORT_PROFILE),
+
+    importProfile: () => _typedInvoke(CHANNELS.KEYBINDING_IMPORT_PROFILE),
   },
 
   // Worktree Config API
@@ -1248,6 +1384,35 @@ const api: ElectronAPI = {
   notification: {
     updateBadge: (state: { waitingCount: number; failedCount: number }) =>
       ipcRenderer.send(CHANNELS.NOTIFICATION_UPDATE, state),
+    getSettings: (): Promise<{
+      completedEnabled: boolean;
+      waitingEnabled: boolean;
+      failedEnabled: boolean;
+      soundEnabled: boolean;
+      soundFile: string;
+    }> => _typedInvoke(CHANNELS.NOTIFICATION_SETTINGS_GET),
+    setSettings: (
+      settings: Partial<{
+        completedEnabled: boolean;
+        waitingEnabled: boolean;
+        failedEnabled: boolean;
+        soundEnabled: boolean;
+        soundFile: string;
+      }>
+    ) => _typedInvoke(CHANNELS.NOTIFICATION_SETTINGS_SET, settings),
+    playSound: (soundFile: string) => _typedInvoke(CHANNELS.NOTIFICATION_PLAY_SOUND, soundFile),
+    showWatchNotification: (payload: {
+      title: string;
+      body: string;
+      panelId: string;
+      panelTitle: string;
+      worktreeId?: string;
+    }) => ipcRenderer.send(CHANNELS.NOTIFICATION_SHOW_WATCH, payload),
+    onWatchNavigate: (
+      callback: (context: { panelId: string; panelTitle: string; worktreeId?: string }) => void
+    ) => _typedOn(CHANNELS.NOTIFICATION_WATCH_NAVIGATE, callback),
+    syncWatchedPanels: (panelIds: string[]) =>
+      ipcRenderer.send(CHANNELS.NOTIFICATION_SYNC_WATCHED, panelIds),
   },
 
   // Auto-Update API
@@ -1323,7 +1488,7 @@ const api: ElectronAPI = {
 
     testModel: (model: string) => ipcRenderer.invoke(CHANNELS.APP_AGENT_TEST_MODEL, model),
 
-    // Listen for action dispatch requests from main process (for Assistant tool calling)
+    // Listen for action dispatch requests from main process
     onDispatchActionRequest: (
       callback: (payload: {
         requestId: string;
@@ -1392,143 +1557,6 @@ const api: ElectronAPI = {
       ipcRenderer.send("app-agent:confirmation-response", payload),
   },
 
-  // Assistant API
-  assistant: {
-    sendMessage: (payload: {
-      sessionId: string;
-      messages: Array<{
-        id: string;
-        role: "user" | "assistant";
-        content: string;
-        toolCalls?: Array<{ id: string; name: string; args: Record<string, unknown> }>;
-        toolResults?: Array<{ toolCallId: string; result: unknown; error?: string }>;
-        createdAt: string;
-      }>;
-      actions?: Array<{
-        id: string;
-        name: string;
-        title: string;
-        description: string;
-        category: string;
-        kind: "query" | "command";
-        danger: "safe" | "confirm" | "restricted";
-        inputSchema?: Record<string, unknown>;
-        outputSchema?: Record<string, unknown>;
-        enabled: boolean;
-        disabledReason?: string;
-      }>;
-      context?: {
-        projectId?: string;
-        activeWorktreeId?: string;
-        focusedWorktreeId?: string;
-        focusedTerminalId?: string;
-        isTerminalPaletteOpen?: boolean;
-        isSettingsOpen?: boolean;
-      };
-    }) => ipcRenderer.invoke(CHANNELS.ASSISTANT_SEND_MESSAGE, payload),
-
-    cancel: (sessionId: string) => ipcRenderer.invoke(CHANNELS.ASSISTANT_CANCEL, sessionId),
-
-    clearSession: (sessionId: string) =>
-      ipcRenderer.invoke(CHANNELS.ASSISTANT_CLEAR_SESSION, sessionId),
-
-    hasApiKey: () => ipcRenderer.invoke(CHANNELS.ASSISTANT_HAS_API_KEY),
-
-    acknowledgeEvent: (sessionId: string, eventId: string): Promise<boolean> =>
-      ipcRenderer.invoke(CHANNELS.ASSISTANT_ACKNOWLEDGE_EVENT, { sessionId, eventId }),
-
-    onChunk: (
-      callback: (data: {
-        sessionId: string;
-        chunk: {
-          type:
-            | "text"
-            | "tool_call"
-            | "tool_result"
-            | "error"
-            | "done"
-            | "listener_triggered"
-            | "auto_resume"
-            | "retrying";
-          content?: string;
-          toolCall?: { id: string; name: string; args: Record<string, unknown> };
-          toolResult?: { toolCallId: string; toolName: string; result: unknown; error?: string };
-          error?: string;
-          finishReason?: string;
-          listenerData?: {
-            listenerId: string;
-            eventType: string;
-            data: Record<string, unknown>;
-          };
-          autoResumeData?: {
-            eventId: string;
-            listenerId: string;
-            eventType: string;
-            eventData: Record<string, unknown>;
-            resumePrompt: string;
-            context: {
-              plan?: string;
-              lastToolCalls?: unknown[];
-              metadata?: Record<string, unknown>;
-            };
-          };
-          retryInfo?: {
-            attempt: number;
-            maxAttempts: number;
-            reason: string;
-          };
-        };
-      }) => void
-    ) => {
-      const handler = (
-        _event: Electron.IpcRendererEvent,
-        data: {
-          sessionId: string;
-          chunk: {
-            type:
-              | "text"
-              | "tool_call"
-              | "tool_result"
-              | "error"
-              | "done"
-              | "listener_triggered"
-              | "auto_resume"
-              | "retrying";
-            content?: string;
-            toolCall?: { id: string; name: string; args: Record<string, unknown> };
-            toolResult?: { toolCallId: string; toolName: string; result: unknown; error?: string };
-            error?: string;
-            finishReason?: string;
-            listenerData?: {
-              listenerId: string;
-              eventType: string;
-              data: Record<string, unknown>;
-            };
-            autoResumeData?: {
-              eventId: string;
-              listenerId: string;
-              eventType: string;
-              eventData: Record<string, unknown>;
-              resumePrompt: string;
-              context: {
-                plan?: string;
-                lastToolCalls?: unknown[];
-                metadata?: Record<string, unknown>;
-              };
-            };
-            retryInfo?: {
-              attempt: number;
-              maxAttempts: number;
-              reason: string;
-            };
-          };
-        }
-      ) => callback(data);
-      ipcRenderer.on(CHANNELS.ASSISTANT_CHUNK, handler);
-      return () => ipcRenderer.removeListener(CHANNELS.ASSISTANT_CHUNK, handler);
-    },
-  },
-
   // Agent Capabilities API
   agentCapabilities: {
     getRegistry: () => _typedInvoke(CHANNELS.AGENT_CAPABILITIES_GET_REGISTRY),
@@ -1540,6 +1568,99 @@ const api: ElectronAPI = {
 
     isAgentEnabled: (agentId: string) =>
       _typedInvoke(CHANNELS.AGENT_CAPABILITIES_IS_AGENT_ENABLED, agentId),
+  },
+
+  // Clipboard API
+  clipboard: {
+    saveImage: () => _typedInvoke(CHANNELS.CLIPBOARD_SAVE_IMAGE),
+  },
+
+  appTheme: {
+    get: () => _typedInvoke(CHANNELS.APP_THEME_GET),
+
+    setColorScheme: (schemeId: string) =>
+      _typedInvoke(CHANNELS.APP_THEME_SET_COLOR_SCHEME, schemeId),
+
+    setCustomSchemes: (schemesJson: string) =>
+      _typedInvoke(CHANNELS.APP_THEME_SET_CUSTOM_SCHEMES, schemesJson),
+
+    importTheme: () => _typedInvoke(CHANNELS.APP_THEME_IMPORT),
+  },
+
+  telemetry: {
+    get: () => _typedInvoke(CHANNELS.TELEMETRY_GET),
+    setEnabled: (enabled: boolean) => _typedInvoke(CHANNELS.TELEMETRY_SET_ENABLED, enabled),
+    markPromptShown: () => _typedInvoke(CHANNELS.TELEMETRY_MARK_PROMPT_SHOWN),
+  },
+
+  // Voice Input API
+  voiceInput: {
+    getSettings: () => _typedInvoke(CHANNELS.VOICE_INPUT_GET_SETTINGS),
+    setSettings: (
+      patch: Partial<{
+        enabled: boolean;
+        apiKey: string;
+        language: string;
+        customDictionary: string[];
+      }>
+    ) => _typedInvoke(CHANNELS.VOICE_INPUT_SET_SETTINGS, patch),
+    start: () => _typedInvoke(CHANNELS.VOICE_INPUT_START),
+    stop: () => _typedInvoke(CHANNELS.VOICE_INPUT_STOP),
+    sendAudioChunk: (chunk: ArrayBuffer) =>
+      ipcRenderer.send(CHANNELS.VOICE_INPUT_AUDIO_CHUNK, chunk),
+    onTranscriptionDelta: (callback: (delta: string) => void) =>
+      _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_DELTA, callback),
+    onTranscriptionComplete: (callback: (text: string) => void) =>
+      _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, callback),
+    onError: (callback: (error: string) => void) => _typedOn(CHANNELS.VOICE_INPUT_ERROR, callback),
+    onStatus: (callback: (status: "idle" | "connecting" | "recording" | "error") => void) =>
+      _typedOn(CHANNELS.VOICE_INPUT_STATUS, callback),
+    checkMicPermission: () => _typedInvoke(CHANNELS.VOICE_INPUT_CHECK_MIC_PERMISSION),
+    requestMicPermission: () => _typedInvoke(CHANNELS.VOICE_INPUT_REQUEST_MIC_PERMISSION),
+    openMicSettings: () => _typedInvoke(CHANNELS.VOICE_INPUT_OPEN_MIC_SETTINGS),
+    validateApiKey: (apiKey: string) => _typedInvoke(CHANNELS.VOICE_INPUT_VALIDATE_API_KEY, apiKey),
+  },
+
+  mcpServer: {
+    getStatus: () => _typedInvoke(CHANNELS.MCP_SERVER_GET_STATUS),
+    setEnabled: (enabled: boolean) => _typedInvoke(CHANNELS.MCP_SERVER_SET_ENABLED, enabled),
+    setPort: (port: number | null) => _typedInvoke(CHANNELS.MCP_SERVER_SET_PORT, port),
+    setApiKey: (apiKey: string) => _typedInvoke(CHANNELS.MCP_SERVER_SET_API_KEY, apiKey),
+    generateApiKey: () => _typedInvoke(CHANNELS.MCP_SERVER_GENERATE_API_KEY),
+    getConfigSnippet: () => _typedInvoke(CHANNELS.MCP_SERVER_GET_CONFIG_SNIPPET),
+  },
+
+  mcpBridge: {
+    onGetManifestRequest: (callback: (requestId: string) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: { requestId: string }) =>
+        callback(payload.requestId);
+      ipcRenderer.on("mcp:get-manifest-request", handler);
+      return () => ipcRenderer.removeListener("mcp:get-manifest-request", handler);
+    },
+
+    sendGetManifestResponse: (requestId: string, manifest: unknown) => {
+      ipcRenderer.send("mcp:get-manifest-response", { requestId, manifest });
+    },
+
+    onDispatchActionRequest: (
+      callback: (payload: {
+        requestId: string;
+        actionId: string;
+        args?: unknown;
+        confirmed?: boolean;
+      }) => void
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        payload: { requestId: string; actionId: string; args?: unknown; confirmed?: boolean }
+      ) => callback(payload);
+      ipcRenderer.on("mcp:dispatch-action-request", handler);
+      return () => ipcRenderer.removeListener("mcp:dispatch-action-request", handler);
+    },
+
+    sendDispatchActionResponse: (payload: { requestId: string; result: unknown }) => {
+      ipcRenderer.send("mcp:dispatch-action-response", payload);
+    },
   },
 };
 

@@ -44,6 +44,7 @@ export function buildPanelProps({
     restartError: terminal.restartError,
     reconnectError: terminal.reconnectError,
     spawnError: terminal.spawnError,
+    detectedProcessId: terminal.detectedProcessId,
 
     // Browser-specific
     initialUrl: terminal.browserUrl || "http://localhost:3000",

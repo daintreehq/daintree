@@ -3,6 +3,7 @@ import type { GitHubIssue } from "@shared/types/github";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { WorktreeDeleteDialog } from "../WorktreeDeleteDialog";
 import { IssuePickerDialog } from "../IssuePickerDialog";
+import { ReviewHub } from "../ReviewHub/ReviewHub";
 import type { ConfirmDialogState } from "./hooks/useWorktreeActions";
 
 export interface WorktreeDialogsProps {
@@ -15,6 +16,8 @@ export interface WorktreeDialogsProps {
   onCloseIssuePicker: () => void;
   onAttachIssue: (issue: GitHubIssue) => void;
   onDetachIssue: () => void;
+  showReviewHub: boolean;
+  onCloseReviewHub: () => void;
 }
 
 export function WorktreeDialogs({
@@ -27,6 +30,8 @@ export function WorktreeDialogs({
   onCloseIssuePicker,
   onAttachIssue,
   onDetachIssue,
+  showReviewHub,
+  onCloseReviewHub,
 }: WorktreeDialogsProps) {
   return (
     <>
@@ -52,6 +57,8 @@ export function WorktreeDialogs({
         onAttach={onAttachIssue}
         onDetach={onDetachIssue}
       />
+
+      <ReviewHub isOpen={showReviewHub} worktreePath={worktree.path} onClose={onCloseReviewHub} />
     </>
   );
 }

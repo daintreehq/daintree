@@ -2,15 +2,24 @@ import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
+import {
+  getDevServerConfig,
+  getDevServerOrigins,
+  getDevServerWebSocketOrigins,
+} from "./shared/config/devServer";
+
+const devServerConfig = getDevServerConfig();
+const devServerOrigins = getDevServerOrigins();
+const devServerWebSocketOrigins = getDevServerWebSocketOrigins();
 
 // CSP definitions for development and production
 const DEV_CSP = [
-  "default-src 'self' http://localhost:5173 ws://localhost:5173",
-  "script-src 'self' http://localhost:5173 'unsafe-eval'",
-  "style-src 'self' http://localhost:5173 'unsafe-inline'",
+  `default-src 'self' ${devServerOrigins.join(" ")} ${devServerWebSocketOrigins.join(" ")}`,
+  `script-src 'self' ${devServerOrigins.join(" ")} 'unsafe-eval'`,
+  `style-src 'self' ${devServerOrigins.join(" ")} 'unsafe-inline'`,
   "font-src 'self' data:",
-  "connect-src 'self' http://localhost:5173 ws://localhost:5173",
-  "img-src 'self' http://localhost:5173 https://avatars.githubusercontent.com data:",
+  `connect-src 'self' ${devServerOrigins.join(" ")} ${devServerWebSocketOrigins.join(" ")}`,
+  `img-src 'self' ${devServerOrigins.join(" ")} https://avatars.githubusercontent.com data:`,
   "frame-src 'self' https://www.youtube.com http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*",
 ].join("; ");
 
@@ -84,12 +93,13 @@ function getVendorChunk(id: string): string | undefined {
 }
 
 export default defineConfig({
+  envPrefix: ["VITE_", "CANOPY_"],
   plugins: [react(), tailwindcss(), cspTransformPlugin()],
   base: "./",
   build: {
     outDir: "dist",
     emptyOutDir: true,
-    sourcemap: true,
+    sourcemap: false,
     rollupOptions: {
       output: {
         manualChunks(id) {
@@ -105,7 +115,8 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5173,
+    host: devServerConfig.host,
+    port: devServerConfig.port,
     strictPort: true,
   },
 });

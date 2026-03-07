@@ -304,16 +304,16 @@ export function GitHubResourceList({
 
   const renderError = () => (
     <div className="p-4 m-3 rounded-[var(--radius-md)] bg-[color-mix(in_oklab,var(--color-status-error)_10%,transparent)] border border-[color-mix(in_oklab,var(--color-status-error)_20%,transparent)]">
-      <div className="flex items-center gap-2 text-[var(--color-status-error)]">
+      <div className="flex items-center gap-2 text-status-error">
         <AlertCircle className="h-4 w-4" />
         <span className="text-sm font-medium">Error</span>
       </div>
-      <p className="text-sm text-[var(--color-status-error)] mt-1">{error}</p>
+      <p className="text-sm text-status-error mt-1">{error}</p>
       <Button
         variant="ghost"
         size="sm"
         onClick={handleRetry}
-        className="mt-2 text-[var(--color-status-error)] hover:brightness-110"
+        className="mt-2 text-status-error hover:brightness-110"
       >
         <RefreshCw />
         Retry
@@ -355,7 +355,7 @@ export function GitHubResourceList({
             aria-label={`Search ${type === "issue" ? "issues" : "pull requests"}`}
             className={cn(
               "w-full h-8 pl-8 pr-3 rounded-[var(--radius-md)] text-sm",
-              "bg-white/[0.03] border border-[var(--border-overlay)]",
+              "bg-overlay-soft border border-[var(--border-overlay)]",
               "text-canopy-text placeholder:text-muted-foreground",
               "focus:outline-none focus:ring-1 focus:ring-canopy-accent focus:border-canopy-accent",
               "transition-colors"
@@ -364,7 +364,7 @@ export function GitHubResourceList({
         </div>
 
         <div
-          className="flex p-0.5 bg-white/[0.03] border border-[var(--border-divider)] rounded-[var(--radius-md)]"
+          className="flex p-0.5 bg-overlay-soft border border-[var(--border-divider)] rounded-[var(--radius-md)]"
           role="group"
           aria-label="Filter by state"
         >
@@ -415,13 +415,13 @@ export function GitHubResourceList({
             {hasMore && (
               <div className="p-3 space-y-2">
                 {loadMoreError && (
-                  <div className="p-2 rounded-[var(--radius-md)] bg-red-500/10 border border-red-500/20">
-                    <p className="text-xs text-red-400">{loadMoreError}</p>
+                  <div className="p-2 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
+                    <p className="text-xs text-status-error">{loadMoreError}</p>
                     <Button
                       variant="ghost"
                       size="sm"
                       onClick={handleLoadMore}
-                      className="mt-1 text-red-400 hover:text-red-300 h-6 text-xs"
+                      className="mt-1 text-status-error hover:text-status-error/70 h-6 text-xs"
                     >
                       Retry
                     </Button>

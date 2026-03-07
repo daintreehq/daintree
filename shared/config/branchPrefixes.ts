@@ -1,3 +1,5 @@
+import { BRANCH_TYPE_COLOR_CLASSES } from "../theme/index.js";
+
 export interface BranchTypeColors {
   bg: string;
   border: string;
@@ -13,10 +15,10 @@ export interface BranchType {
 }
 
 const COLORS = {
-  teal: { bg: "bg-teal-500/10", border: "border-teal-500/30", text: "text-teal-400" },
-  red: { bg: "bg-red-500/10", border: "border-red-500/30", text: "text-red-400" },
-  gray: { bg: "bg-canopy-border/20", border: "border-canopy-border", text: "text-canopy-text/60" },
-  amber: { bg: "bg-amber-500/10", border: "border-amber-500/30", text: "text-amber-400" },
+  teal: BRANCH_TYPE_COLOR_CLASSES.feature,
+  red: BRANCH_TYPE_COLOR_CLASSES.bugfix,
+  gray: BRANCH_TYPE_COLOR_CLASSES.neutral,
+  amber: BRANCH_TYPE_COLOR_CLASSES.warm,
 } as const;
 
 export const DEFAULT_BRANCH_TYPE: BranchType = {

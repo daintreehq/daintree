@@ -52,6 +52,8 @@ export { usePerformanceModeStore } from "./performanceModeStore";
 
 export { useTerminalFontStore } from "./terminalFontStore";
 
+export { useTerminalColorSchemeStore } from "./terminalColorSchemeStore";
+
 export { useTerminalInputStore } from "./terminalInputStore";
 
 export { useSidecarStore } from "./sidecarStore";
@@ -60,7 +62,14 @@ export { useUIStore } from "./uiStore";
 
 export { useGitHubConfigStore, cleanupGitHubConfigStore } from "./githubConfigStore";
 
-export { useAgentSettingsStore, cleanupAgentSettingsStore } from "./agentSettingsStore";
+export {
+  useAgentSettingsStore,
+  cleanupAgentSettingsStore,
+  getSelectedAgents,
+  migrateAgentSelection,
+} from "./agentSettingsStore";
+
+export { useCliAvailabilityStore, cleanupCliAvailabilityStore } from "./cliAvailabilityStore";
 
 export { usePulseStore } from "./pulseStore";
 
@@ -74,6 +83,3 @@ export { useTwoPaneSplitStore } from "./twoPaneSplitStore";
 export type { TwoPaneSplitConfig } from "./twoPaneSplitStore";
 
 export { useAppAgentStore, cleanupAppAgentStore } from "./appAgentStore";
-
-export { useAssistantChatStore } from "./assistantChatStore";
-export type { ConversationState } from "./assistantChatStore";

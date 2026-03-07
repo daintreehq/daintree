@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { getAgentConfig } from "@/config/agents";
@@ -13,16 +14,13 @@ type AgentType = "claude" | "gemini" | "codex" | "opencode";
 interface AgentButtonProps {
   type: AgentType;
   availability?: boolean;
-  isEnabled: boolean;
   onOpenSettings: () => void;
 }
 
-export function AgentButton({ type, availability, isEnabled, onOpenSettings }: AgentButtonProps) {
+export function AgentButton({ type, availability, onOpenSettings }: AgentButtonProps) {
   const { showMenu } = useNativeContextMenu();
   const { worktrees } = useWorktrees();
   const displayCombo = useKeybindingDisplay(`agent.${type}`);
-
-  if (!isEnabled) return null;
 
   const config = getAgentConfig(type);
   if (!config) return null;
@@ -114,26 +112,34 @@ export function AgentButton({ type, availability, isEnabled, onOpenSettings }: A
   };
 
   return (
-    <Button
-      variant="ghost"
-      size="icon"
-      onClick={handleClick}
-      onContextMenu={handleContextMenu}
-      disabled={isLoading}
-      className={cn(
-        "text-canopy-text hover:bg-white/[0.06] transition-colors",
-        isAvailable && "hover:text-canopy-accent focus-visible:text-canopy-accent",
-        !isAvailable && !isLoading && "opacity-60"
-      )}
-      title={tooltip}
-      aria-label={ariaLabel}
-    >
-      <div className="relative">
-        <config.icon brandColor={getBrandColorHex(type)} />
-        {!isAvailable && !isLoading && (
-          <div className="absolute -top-1 -right-1 w-2 h-2 bg-[var(--color-status-warning)] rounded-full ring-2 ring-canopy-sidebar" />
-        )}
-      </div>
-    </Button>
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={handleClick}
+              onContextMenu={handleContextMenu}
+              disabled={isLoading}
+              className={cn(
+                "text-canopy-text hover:bg-white/[0.06] transition-colors",
+                isAvailable && "hover:text-canopy-accent focus-visible:text-canopy-accent",
+                !isAvailable && !isLoading && "opacity-60"
+              )}
+              aria-label={ariaLabel}
+            >
+              <div className="relative">
+                <config.icon brandColor={getBrandColorHex(type)} />
+                {!isAvailable && !isLoading && (
+                  <div className="absolute -top-1 -right-1 w-2 h-2 bg-status-warning rounded-full ring-2 ring-canopy-sidebar" />
+                )}
+              </div>
+            </Button>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{tooltip}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }

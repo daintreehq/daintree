@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useMemo } from "react";
-import { X, Maximize2, FilterX } from "lucide-react";
+import { X, Maximize2, FilterX, Shield } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useShallow } from "zustand/react/shallow";
 import { WorktreeCard } from "./WorktreeCard";
@@ -18,6 +18,7 @@ import {
   type GroupedSection,
 } from "@/lib/worktreeFilters";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 export interface WorktreeOverviewModalProps {
   isOpen: boolean;
@@ -316,20 +317,20 @@ export function WorktreeOverviewModal({
                 aria-label="Agent activity statistics"
               >
                 {aggregateStats.workingCount > 0 && (
-                  <span className="flex items-center gap-1 text-xs text-emerald-400">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 motion-safe:animate-pulse motion-reduce:bg-emerald-500" />
+                  <span className="flex items-center gap-1 text-xs text-[var(--color-state-working)]">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-state-working)] motion-safe:animate-pulse" />
                     {aggregateStats.workingCount} working
                   </span>
                 )}
                 {aggregateStats.waitingCount > 0 && (
-                  <span className="flex items-center gap-1 text-xs text-amber-400">
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                  <span className="flex items-center gap-1 text-xs text-status-warning">
+                    <span className="w-1.5 h-1.5 rounded-full bg-status-warning" />
                     {aggregateStats.waitingCount} waiting
                   </span>
                 )}
                 {aggregateStats.failedCount > 0 && (
-                  <span className="flex items-center gap-1 text-xs text-red-400">
-                    <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
+                  <span className="flex items-center gap-1 text-xs text-status-error">
+                    <span className="w-1.5 h-1.5 rounded-full bg-status-error" />
                     {aggregateStats.failedCount} failed
                   </span>
                 )}
@@ -339,38 +340,70 @@ export function WorktreeOverviewModal({
           <div className="flex items-center gap-2">
             {/* Hide main worktree toggle - show if there are non-main worktrees OR if filter is active (to allow recovery) */}
             {(hasNonMainWorktrees || hideMainWorktree) && !hasOnlyMainWorktree && (
-              <label
-                className="flex items-center gap-1.5 text-xs text-canopy-text/60 cursor-pointer hover:text-canopy-text/80 transition-colors"
-                title={hideMainWorktree ? "Show main worktree" : "Hide main worktree"}
-              >
-                <input
-                  type="checkbox"
-                  checked={hideMainWorktree}
-                  onChange={(e) => setHideMainWorktree(e.target.checked)}
-                  className="w-3 h-3 rounded border-canopy-border text-canopy-accent focus:ring-canopy-accent focus:ring-offset-0 bg-canopy-bg cursor-pointer"
-                />
-                <span>Hide main</span>
-              </label>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={!hideMainWorktree}
+                      aria-label={hideMainWorktree ? "Show main worktree" : "Hide main worktree"}
+                      onClick={() => setHideMainWorktree(!hideMainWorktree)}
+                      className={cn(
+                        "flex items-center gap-1.5 px-2 py-1 rounded-full text-xs transition-colors",
+                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent",
+                        hideMainWorktree
+                          ? "bg-white/[0.06] text-canopy-text/40 hover:text-canopy-text/60"
+                          : "bg-white/[0.10] text-canopy-text/70 hover:text-canopy-text/90"
+                      )}
+                    >
+                      <Shield
+                        className={cn(
+                          "w-3 h-3 transition-colors",
+                          hideMainWorktree ? "text-canopy-text/30" : "text-canopy-text/50"
+                        )}
+                      />
+                      <span
+                        className={cn(
+                          "transition-all",
+                          hideMainWorktree && "line-through decoration-canopy-text/30"
+                        )}
+                      >
+                        main
+                      </span>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {hideMainWorktree ? "Show main worktree" : "Hide main worktree"}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             )}
             {/* Filter Popover */}
             <WorktreeFilterPopover />
             {/* Clear Filters Button - only shown when filters are active */}
             {hasActiveFilters() && (
-              <button
-                onClick={clearAllFilters}
-                className={cn(
-                  "flex items-center gap-1.5 px-2 py-1.5 rounded text-xs",
-                  "text-canopy-text/60 hover:text-canopy-text",
-                  "hover:bg-white/[0.06]",
-                  "transition-colors",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
-                )}
-                aria-label="Clear all filters"
-                title="Clear all filters"
-              >
-                <FilterX className="w-3.5 h-3.5" />
-                <span>Clear</span>
-              </button>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={clearAllFilters}
+                      className={cn(
+                        "flex items-center gap-1.5 px-2 py-1.5 rounded text-xs",
+                        "text-canopy-text/60 hover:text-canopy-text",
+                        "hover:bg-white/[0.06]",
+                        "transition-colors",
+                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
+                      )}
+                      aria-label="Clear all filters"
+                    >
+                      <FilterX className="w-3.5 h-3.5" />
+                      <span>Clear</span>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Clear all filters</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             )}
             {/* Close Button */}
             <button
@@ -440,7 +473,8 @@ export function WorktreeOverviewModal({
                           "bg-canopy-sidebar/50",
                           "transition-all duration-200",
                           "hover:border-canopy-accent/50 hover:shadow-lg hover:shadow-canopy-accent/5",
-                          worktree.id === activeWorktreeId && "border-canopy-accent/70 shadow-md"
+                          worktree.id === activeWorktreeId &&
+                            "border-[var(--color-state-active)]/70 shadow-md"
                         )}
                       >
                         <WorktreeCard
@@ -486,7 +520,8 @@ export function WorktreeOverviewModal({
                     "bg-canopy-sidebar/50",
                     "transition-all duration-200",
                     "hover:border-canopy-accent/50 hover:shadow-lg hover:shadow-canopy-accent/5",
-                    worktree.id === activeWorktreeId && "border-canopy-accent/70 shadow-md"
+                    worktree.id === activeWorktreeId &&
+                      "border-[var(--color-state-active)]/70 shadow-md"
                   )}
                 >
                   <WorktreeCard

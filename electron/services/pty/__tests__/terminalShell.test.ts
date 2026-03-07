@@ -1,13 +1,61 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { getDefaultShell, getDefaultShellArgs, buildNonInteractiveEnv } from "../terminalShell.js";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { execFileSync } from "child_process";
+import {
+  getDefaultShell,
+  getDefaultShellArgs,
+  buildNonInteractiveEnv,
+  findWindowsShell,
+} from "../terminalShell.js";
+
+vi.mock("child_process", () => ({
+  execFileSync: vi.fn(),
+}));
 
 describe("terminalShell", () => {
   const originalPlatform = process.platform;
   const originalEnv = { ...process.env };
+  const mockedExecFileSync = vi.mocked(execFileSync);
 
   afterEach(() => {
     Object.defineProperty(process, "platform", { value: originalPlatform });
     process.env = { ...originalEnv };
+    vi.resetAllMocks();
+  });
+
+  describe("findWindowsShell", () => {
+    it("returns pwsh.exe when found on PATH", () => {
+      mockedExecFileSync.mockReturnValue(Buffer.from(""));
+      expect(findWindowsShell()).toBe("pwsh.exe");
+      expect(mockedExecFileSync).toHaveBeenCalledWith("where", ["pwsh.exe"], {
+        stdio: "ignore",
+        timeout: 3000,
+      });
+    });
+
+    it("returns powershell.exe when pwsh.exe not found", () => {
+      mockedExecFileSync
+        .mockImplementationOnce(() => {
+          throw new Error("not found");
+        })
+        .mockReturnValueOnce(Buffer.from(""));
+      expect(findWindowsShell()).toBe("powershell.exe");
+    });
+
+    it("returns COMSPEC when neither pwsh nor powershell found", () => {
+      mockedExecFileSync.mockImplementation(() => {
+        throw new Error("not found");
+      });
+      process.env.COMSPEC = "C:\\Windows\\System32\\cmd.exe";
+      expect(findWindowsShell()).toBe("C:\\Windows\\System32\\cmd.exe");
+    });
+
+    it("returns cmd.exe when neither pwsh nor powershell found and COMSPEC unset", () => {
+      mockedExecFileSync.mockImplementation(() => {
+        throw new Error("not found");
+      });
+      delete process.env.COMSPEC;
+      expect(findWindowsShell()).toBe("cmd.exe");
+    });
   });
 
   describe("getDefaultShell", () => {
@@ -17,16 +65,29 @@ describe("terminalShell", () => {
       expect(getDefaultShell()).toBe("/usr/local/bin/fish");
     });
 
-    it("should return COMSPEC on windows", () => {
+    it("should prefer pwsh.exe over powershell.exe on windows", () => {
       Object.defineProperty(process, "platform", { value: "win32" });
-      process.env.COMSPEC = "C:\\Windows\\System32\\cmd.exe";
-      expect(getDefaultShell()).toBe("C:\\Windows\\System32\\cmd.exe");
+      mockedExecFileSync.mockReturnValue(Buffer.from(""));
+      expect(getDefaultShell()).toBe("pwsh.exe");
     });
 
-    it("should default to powershell.exe if COMSPEC not set on windows", () => {
+    it("should fall back to powershell.exe when pwsh.exe not found on windows", () => {
       Object.defineProperty(process, "platform", { value: "win32" });
-      delete process.env.COMSPEC;
+      mockedExecFileSync
+        .mockImplementationOnce(() => {
+          throw new Error("not found");
+        })
+        .mockReturnValueOnce(Buffer.from(""));
       expect(getDefaultShell()).toBe("powershell.exe");
+    });
+
+    it("should fall back to COMSPEC when no PowerShell found on windows", () => {
+      Object.defineProperty(process, "platform", { value: "win32" });
+      mockedExecFileSync.mockImplementation(() => {
+        throw new Error("not found");
+      });
+      process.env.COMSPEC = "C:\\Windows\\System32\\cmd.exe";
+      expect(getDefaultShell()).toBe("C:\\Windows\\System32\\cmd.exe");
     });
   });
 
@@ -52,6 +113,7 @@ describe("terminalShell", () => {
 
     it("should return empty array on windows", () => {
       Object.defineProperty(process, "platform", { value: "win32" });
+      expect(getDefaultShellArgs("pwsh.exe")).toEqual([]);
       expect(getDefaultShellArgs("powershell.exe")).toEqual([]);
       expect(getDefaultShellArgs("cmd.exe")).toEqual([]);
     });

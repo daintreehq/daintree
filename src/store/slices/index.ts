@@ -27,3 +27,7 @@ export {
   type TerminalBulkActionsSlice,
   type BulkRestartValidation,
 } from "./terminalBulkActionsSlice";
+
+export { createTerminalMruSlice, type TerminalMruSlice } from "./terminalMruSlice";
+
+export { createWatchedPanelsSlice, type WatchedPanelsSlice } from "./watchedPanelsSlice";

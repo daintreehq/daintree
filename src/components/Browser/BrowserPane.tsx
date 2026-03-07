@@ -1,9 +1,10 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { AlertTriangle, ExternalLink, Home } from "lucide-react";
+import { AlertTriangle, ExternalLink } from "lucide-react";
 import { useTerminalStore } from "@/store";
 import type { BrowserHistory } from "@shared/types/domain";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { BrowserToolbar } from "./BrowserToolbar";
+import { ConsolePanel } from "./ConsolePanel";
 import { normalizeBrowserUrl, extractHostPort, isValidBrowserUrl } from "./browserUtils";
 import {
   goBackBrowserHistory,
@@ -14,6 +15,7 @@ import {
 import { actionService } from "@/services/ActionService";
 import { useIsDragging } from "@/components/DragDrop";
 import { cn } from "@/lib/utils";
+import { useConsoleCaptureStore } from "@/store/consoleCaptureStore";
 
 export interface BrowserPaneProps extends BasePanelProps {
   initialUrl: string;
@@ -51,6 +53,11 @@ export function BrowserPane({
   const setBrowserHistory = useTerminalStore((state) => state.setBrowserHistory);
   const setBrowserZoom = useTerminalStore((state) => state.setBrowserZoom);
   const isDragging = useIsDragging();
+  const addConsoleMessage = useConsoleCaptureStore((state) => state.addMessage);
+  const clearConsoleMessages = useConsoleCaptureStore((state) => state.clearMessages);
+  const removePane = useConsoleCaptureStore((state) => state.removePane);
+
+  const [isConsoleOpen, setIsConsoleOpen] = useState(false);
 
   // Initialize history from persisted state or initialUrl
   const [history, setHistory] = useState<BrowserHistory>(() => {
@@ -108,6 +115,11 @@ export function BrowserPane({
   useEffect(() => {
     setBrowserZoom(id, zoomFactor);
   }, [id, zoomFactor, setBrowserZoom]);
+
+  // Clean up console messages when pane unmounts
+  useEffect(() => {
+    return () => removePane(id);
+  }, [id, removePane]);
 
   // Set up webview event listeners - reattach whenever webview element changes
   useEffect(() => {
@@ -181,6 +193,10 @@ export function BrowserPane({
       }
     };
 
+    const handleConsoleMessage = (event: Electron.ConsoleMessageEvent) => {
+      addConsoleMessage(id, event.level, event.message, event.line, event.sourceId);
+    };
+
     try {
       const existingUrl = webview.getURL();
       if (existingUrl && existingUrl !== "about:blank" && !webview.isLoading()) {
@@ -201,6 +217,7 @@ export function BrowserPane({
     webview.addEventListener("did-fail-load", handleDidFailLoad);
     webview.addEventListener("did-navigate", handleDidNavigate);
     webview.addEventListener("did-navigate-in-page", handleDidNavigateInPage);
+    webview.addEventListener("console-message", handleConsoleMessage);
 
     return () => {
       webview.removeEventListener("dom-ready", handleDomReady);
@@ -209,8 +226,9 @@ export function BrowserPane({
       webview.removeEventListener("did-fail-load", handleDidFailLoad);
       webview.removeEventListener("did-navigate", handleDidNavigate);
       webview.removeEventListener("did-navigate-in-page", handleDidNavigateInPage);
+      webview.removeEventListener("console-message", handleConsoleMessage);
     };
-  }, [hasValidUrl, loadError, zoomFactor]);
+  }, [hasValidUrl, loadError, zoomFactor, id, addConsoleMessage]);
 
   const handleNavigate = useCallback(
     (url: string) => {
@@ -278,6 +296,40 @@ export function BrowserPane({
     }
   }, [isWebviewReady]);
 
+  const handleCaptureScreenshot = useCallback(async () => {
+    const webview = webviewRef.current;
+    // Check webviewRef directly to avoid stale closure over isWebviewReady state
+    if (!webview) return;
+    try {
+      const url = webview.getURL();
+      if (!url || url === "about:blank") return;
+      const image = await webview.capturePage();
+      const pngData = new Uint8Array(image.toPNG());
+      const blob = new Blob([pngData], { type: "image/png" });
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    } catch (err) {
+      console.error("[BrowserPane] Screenshot capture failed:", err);
+    }
+  }, []);
+
+  const handleToggleDevTools = useCallback(() => {
+    const webview = webviewRef.current;
+    if (!webview || !isWebviewReady) return;
+    if (webview.isDevToolsOpened()) {
+      webview.closeDevTools();
+    } else {
+      webview.openDevTools();
+    }
+  }, [isWebviewReady]);
+
+  const handleToggleConsole = useCallback(() => {
+    setIsConsoleOpen((prev) => !prev);
+  }, []);
+
+  const handleClearConsole = useCallback(() => {
+    clearConsoleMessages(id);
+  }, [id, clearConsoleMessages]);
+
   // Cleanup timeout on unmount
   useEffect(() => {
     return () => {
@@ -339,6 +391,42 @@ export function BrowserPane({
       }
     };
 
+    const handleCaptureScreenshotEvent = (e: Event) => {
+      if (!(e instanceof CustomEvent)) return;
+      const detail = e.detail as unknown;
+      if (!detail || typeof (detail as { id?: unknown }).id !== "string") return;
+      if ((detail as { id: string }).id === id) {
+        void handleCaptureScreenshot();
+      }
+    };
+
+    const handleToggleConsoleEvent = (e: Event) => {
+      if (!(e instanceof CustomEvent)) return;
+      const detail = e.detail as unknown;
+      if (!detail || typeof (detail as { id?: unknown }).id !== "string") return;
+      if ((detail as { id: string }).id === id) {
+        handleToggleConsole();
+      }
+    };
+
+    const handleClearConsoleEvent = (e: Event) => {
+      if (!(e instanceof CustomEvent)) return;
+      const detail = e.detail as unknown;
+      if (!detail || typeof (detail as { id?: unknown }).id !== "string") return;
+      if ((detail as { id: string }).id === id) {
+        handleClearConsole();
+      }
+    };
+
+    const handleToggleDevToolsEvent = (e: Event) => {
+      if (!(e instanceof CustomEvent)) return;
+      const detail = e.detail as unknown;
+      if (!detail || typeof (detail as { id?: unknown }).id !== "string") return;
+      if ((detail as { id: string }).id === id) {
+        handleToggleDevTools();
+      }
+    };
+
     const controller = new AbortController();
     window.addEventListener("canopy:reload-browser", handleReloadEvent, {
       signal: controller.signal,
@@ -353,8 +441,30 @@ export function BrowserPane({
     window.addEventListener("canopy:browser-set-zoom", handleSetZoomEvent, {
       signal: controller.signal,
     });
+    window.addEventListener("canopy:browser-capture-screenshot", handleCaptureScreenshotEvent, {
+      signal: controller.signal,
+    });
+    window.addEventListener("canopy:browser-toggle-console", handleToggleConsoleEvent, {
+      signal: controller.signal,
+    });
+    window.addEventListener("canopy:browser-clear-console", handleClearConsoleEvent, {
+      signal: controller.signal,
+    });
+    window.addEventListener("canopy:browser-toggle-devtools", handleToggleDevToolsEvent, {
+      signal: controller.signal,
+    });
     return () => controller.abort();
-  }, [id, handleReload, handleNavigate, handleBack, handleForward]);
+  }, [
+    id,
+    handleReload,
+    handleNavigate,
+    handleBack,
+    handleForward,
+    handleCaptureScreenshot,
+    handleToggleConsole,
+    handleClearConsole,
+    handleToggleDevTools,
+  ]);
 
   const handleOpenExternal = useCallback(() => {
     if (!hasValidUrl) return;
@@ -375,6 +485,8 @@ export function BrowserPane({
       isLoading={isLoading}
       urlMightBeStale={false}
       zoomFactor={zoomFactor}
+      isConsoleOpen={isConsoleOpen}
+      isWebviewReady={isWebviewReady}
       onNavigate={(url) =>
         void actionService.dispatch("browser.navigate", { terminalId: id, url }, { source: "user" })
       }
@@ -392,6 +504,23 @@ export function BrowserPane({
         void actionService.dispatch(
           "browser.setZoomLevel",
           { terminalId: id, zoomFactor: factor },
+          { source: "user" }
+        )
+      }
+      onCaptureScreenshot={() =>
+        void actionService.dispatch(
+          "browser.captureScreenshot",
+          { terminalId: id },
+          { source: "user" }
+        )
+      }
+      onToggleConsole={() =>
+        void actionService.dispatch("browser.toggleConsole", { terminalId: id }, { source: "user" })
+      }
+      onToggleDevTools={() =>
+        void actionService.dispatch(
+          "browser.toggleDevTools",
+          { terminalId: id },
           { source: "user" }
         )
       }
@@ -421,15 +550,14 @@ export function BrowserPane({
       onTabRename={onTabRename}
       onAddTab={onAddTab}
     >
-      <div className="relative flex-1 min-h-0 bg-white">
+      <div
+        className={cn("relative flex-1 min-h-0 flex flex-col bg-white", isConsoleOpen && "min-h-0")}
+      >
         {!hasValidUrl ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
             <div className="flex flex-col items-center text-center max-w-md">
-              <div className="w-16 h-16 rounded-2xl bg-blue-500/10 flex items-center justify-center mb-6">
-                <Home className="w-8 h-8 text-blue-400" />
-              </div>
-              <h3 className="text-lg font-medium mb-2">Localhost Browser</h3>
-              <p className="text-sm text-canopy-text/60 mb-6 leading-relaxed">
+              <h3 className="text-sm font-medium text-canopy-text/70 mb-1">Localhost Browser</h3>
+              <p className="text-xs text-canopy-text/50 mb-4 leading-relaxed">
                 Preview your local development server. Enter a localhost URL in the address bar
                 above to get started.
               </p>
@@ -439,7 +567,7 @@ export function BrowserPane({
                     key={example}
                     type="button"
                     onClick={() => handleNavigate(`http://${example}`)}
-                    className="px-3 py-1.5 text-xs font-mono bg-white/5 hover:bg-white/10 border border-white/10 rounded-md transition-colors"
+                    className="px-3 py-1.5 text-xs font-mono text-canopy-text/50 bg-white/5 hover:bg-white/10 border border-white/10 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
                   >
                     {example}
                   </button>
@@ -449,35 +577,40 @@ export function BrowserPane({
           </div>
         ) : loadError ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
-            <AlertTriangle className="w-12 h-12 text-amber-400 mb-4" />
-            <h3 className="text-lg font-medium mb-2">Unable to Display Page</h3>
-            <p className="text-sm text-canopy-text/60 text-center mb-4 max-w-md">{loadError}</p>
+            <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
+            <h3 className="text-sm font-medium text-canopy-text/70 mb-1">Unable to Display Page</h3>
+            <p className="text-xs text-canopy-text/50 text-center mb-3 max-w-md">{loadError}</p>
             <button
               type="button"
               onClick={handleOpenExternal}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 rounded-lg border border-blue-500/30 transition-colors"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
             >
-              <ExternalLink className="w-4 h-4" />
-              Open in External Browser
+              <ExternalLink className="h-3.5 w-3.5 text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors" />
+              <span className="text-xs text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors">
+                Open in External Browser
+              </span>
             </button>
           </div>
         ) : (
           <>
-            {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
-            {isLoading && (
-              <div className="absolute inset-0 flex items-center justify-center bg-canopy-bg z-10">
-                <div className="w-8 h-8 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
-              </div>
-            )}
-            <webview
-              ref={webviewRef}
-              src={currentUrl}
-              partition="persist:browser"
-              className={cn(
-                "w-full h-full border-0",
-                isDragging && "invisible pointer-events-none"
+            <div className="relative flex-1 min-h-0">
+              {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
+              {isLoading && (
+                <div className="absolute inset-0 flex items-center justify-center bg-canopy-bg z-10">
+                  <div className="w-8 h-8 border-2 border-status-info border-t-transparent rounded-full animate-spin" />
+                </div>
               )}
-            />
+              <webview
+                ref={webviewRef}
+                src={currentUrl}
+                partition="persist:browser"
+                className={cn(
+                  "w-full h-full border-0",
+                  isDragging && "invisible pointer-events-none"
+                )}
+              />
+            </div>
+            {isConsoleOpen && <ConsolePanel paneId={id} height={200} />}
           </>
         )}
       </div>

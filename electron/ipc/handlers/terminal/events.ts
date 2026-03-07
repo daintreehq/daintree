@@ -9,6 +9,9 @@ import type { HandlerDependencies } from "../../types.js";
 
 export function registerTerminalEventHandlers(deps: HandlerDependencies): () => void {
   const { mainWindow, ptyClient } = deps;
+  if (!ptyClient) {
+    return () => {};
+  }
   const handlers: Array<() => void> = [];
 
   // PTY data/exit/error events

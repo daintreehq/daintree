@@ -3,8 +3,15 @@
  */
 import { describe, it, expect, vi } from "vitest";
 import { EditorState } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
-import { computeAutoSize, createAutoSize } from "../inputEditorExtensions";
+import { EditorView, runScopeHandlers } from "@codemirror/view";
+import {
+  computeAutoSize,
+  createAutoSize,
+  createCustomKeymap,
+  fileDropChipField,
+  addFileDropChip,
+  createFilePasteHandler,
+} from "../inputEditorExtensions";
 
 describe("computeAutoSize", () => {
   it("snaps height to line height increments with epsilon tolerance", () => {
@@ -343,6 +350,467 @@ describe("createAutoSize integration", () => {
 
     // Single character with 21px height and epsilon: (21-2)/20 = 0.95 → 1 line = 20px
     expect(view.dom.style.height).toBe("20px");
+
+    view.destroy();
+  });
+
+  it("uses view.defaultLineHeight when no lineHeightPx is configured", () => {
+    // Simulates the chip-decorated line bug: when createAutoSize() is called without an
+    // explicit lineHeightPx (as in production), it should use view.defaultLineHeight (20px)
+    // rather than any DOM-measured value. If a chip made a .cm-line appear 28px tall, the
+    // old DOM-measurement approach would have snapped to the wrong height.
+    const parent = document.createElement("div");
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "",
+        // No lineHeightPx — production call site. defaultLineHeight (mocked to 20) should govern.
+        extensions: [createAutoSize({ maxHeightPx: 160 })],
+      }),
+    });
+
+    // Simulate 4 visual lines at 20px each
+    Object.defineProperty(view, "contentHeight", { get: () => 80, configurable: true });
+    Object.defineProperty(view, "defaultLineHeight", { get: () => 20, configurable: true });
+
+    const originalRequestMeasure = view.requestMeasure.bind(view);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.spyOn(view, "requestMeasure").mockImplementation((measure: any) => {
+      if (measure?.read && measure?.write) {
+        const measured = measure.read();
+        measure.write(measured);
+      } else {
+        originalRequestMeasure(measure);
+      }
+    });
+
+    view.dispatch({ changes: { from: 0, insert: "wrapped content" } });
+
+    // With defaultLineHeight=20: (80-2)/20 = 3.9 → ceil=4 → 80px (correct)
+    expect(view.dom.style.height).toBe("80px");
+
+    view.destroy();
+  });
+
+  it("overflowY write is idempotent — same value does not re-write style", () => {
+    // Verifies that writing the same overflowY value repeatedly does not trigger
+    // unnecessary DOM mutations (which would cause a geometry-changed re-entry loop).
+    const parent = document.createElement("div");
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "",
+        extensions: [createAutoSize({ lineHeightPx: 20, maxHeightPx: 160 })],
+      }),
+    });
+
+    Object.defineProperty(view, "contentHeight", { get: () => 40, configurable: true });
+
+    const originalRequestMeasure = view.requestMeasure.bind(view);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.spyOn(view, "requestMeasure").mockImplementation((measure: any) => {
+      if (measure?.read && measure?.write) {
+        const measured = measure.read();
+        measure.write(measured);
+      } else {
+        originalRequestMeasure(measure);
+      }
+    });
+
+    const scrollDOM = view.scrollDOM;
+    // Track how many times overflowY is actually written to the DOM
+    let overflowWriteCount = 0;
+    const originalStyleSetter = Object.getOwnPropertyDescriptor(
+      CSSStyleDeclaration.prototype,
+      "overflowY"
+    );
+    if (originalStyleSetter?.set) {
+      vi.spyOn(scrollDOM.style, "overflowY", "set").mockImplementation(function (
+        this: CSSStyleDeclaration,
+        val: string
+      ) {
+        overflowWriteCount++;
+        originalStyleSetter.set!.call(this, val);
+      });
+    }
+
+    // First dispatch — should write overflowY once ("hidden")
+    view.dispatch({ changes: { from: 0, insert: "a" } });
+    // Confirm the spy captured the first write (validates spy is active)
+    expect(overflowWriteCount).toBe(1);
+
+    // Second dispatch with same contentHeight — overflowY value unchanged, should NOT re-write
+    view.dispatch({ changes: { from: 1, insert: "b" } });
+    expect(overflowWriteCount).toBe(1);
+
+    view.destroy();
+  });
+
+  it("near-wrap-boundary: adding exactly one newline snaps height up by one line only", () => {
+    // Regression test for the core bug: tests the production code path (no explicit lineHeightPx)
+    // where view.defaultLineHeight governs the snap increment. With the old DOM-measurement
+    // approach a chip-decorated line could inflate the increment, causing a multi-line jump.
+    const parent = document.createElement("div");
+    let currentContentHeight = 60; // 3 visual lines at 20px each
+
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "",
+        // No lineHeightPx — matches the production call site in HybridInputBar.tsx
+        extensions: [createAutoSize({ maxHeightPx: 160 })],
+      }),
+    });
+
+    Object.defineProperty(view, "contentHeight", {
+      get: () => currentContentHeight,
+      configurable: true,
+    });
+    // Stub defaultLineHeight to 20px — this is what the production code path uses when no
+    // lineHeightPx is explicitly configured. With the old DOM-measurement approach, a chip
+    // decoration could make this 28px, causing the snap to wrongly jump to 100px instead of 80px.
+    Object.defineProperty(view, "defaultLineHeight", { get: () => 20, configurable: true });
+
+    const originalRequestMeasure = view.requestMeasure.bind(view);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.spyOn(view, "requestMeasure").mockImplementation((measure: any) => {
+      if (measure?.read && measure?.write) {
+        const measured = measure.read();
+        measure.write(measured);
+      } else {
+        originalRequestMeasure(measure);
+      }
+    });
+
+    // Establish baseline: 3 visual lines = 60px (simulates wrapped text before newline)
+    view.dispatch({ changes: { from: 0, insert: "line1\nline2" } });
+    expect(view.dom.style.height).toBe("60px");
+
+    // User presses Shift+Enter: content grows to 4 visual lines (80px)
+    currentContentHeight = 80;
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "\n" } });
+
+    // Should snap to exactly 80px (4 lines × 20px), not 100px or 120px
+    // Old behavior with chip-inflated lineHeight=28: (80-2)/28=2.79 → ceil=3 → 84px (wrong)
+    expect(view.dom.style.height).toBe("80px");
+
+    view.destroy();
+  });
+});
+
+describe("createCustomKeymap", () => {
+  function makeView(onEnter: () => boolean) {
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    return new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "hello",
+        extensions: [
+          createCustomKeymap({
+            onEnter,
+            onEscape: () => false,
+            onArrowUp: () => false,
+            onArrowDown: () => false,
+            onArrowLeft: () => false,
+            onArrowRight: () => false,
+            onTab: () => false,
+            onCtrlC: () => false,
+          }),
+        ],
+      }),
+    });
+  }
+
+  it("Enter calls onEnter and does not insert newline", () => {
+    const onEnter = vi.fn(() => true);
+    const view = makeView(onEnter);
+
+    runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+
+    expect(onEnter).toHaveBeenCalledOnce();
+    expect(view.state.doc.toString()).toBe("hello");
+    view.destroy();
+  });
+
+  it("Shift+Enter inserts newline without calling onEnter", () => {
+    const onEnter = vi.fn(() => true);
+    const view = makeView(onEnter);
+
+    runScopeHandlers(
+      view,
+      new KeyboardEvent("keydown", { key: "Enter", shiftKey: true }),
+      "editor"
+    );
+
+    expect(onEnter).not.toHaveBeenCalled();
+    expect(view.state.doc.toString()).toContain("\n");
+    view.destroy();
+  });
+
+  it("Alt+Enter inserts newline without calling onEnter", () => {
+    const onEnter = vi.fn(() => true);
+    const view = makeView(onEnter);
+
+    runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter", altKey: true }), "editor");
+
+    expect(onEnter).not.toHaveBeenCalled();
+    expect(view.state.doc.toString()).toContain("\n");
+    view.destroy();
+  });
+});
+
+describe("fileDropChipField", () => {
+  function makeEditorWithFileChip() {
+    const parent = document.createElement("div");
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "",
+        extensions: [fileDropChipField],
+      }),
+    });
+    return view;
+  }
+
+  it("adds a file chip entry via addFileDropChip effect", () => {
+    const view = makeEditorWithFileChip();
+
+    view.dispatch({
+      changes: { from: 0, insert: "@/Users/test/file.ts " },
+      effects: addFileDropChip.of({
+        from: 0,
+        to: 20,
+        filePath: "/Users/test/file.ts",
+        fileName: "file.ts",
+      }),
+    });
+
+    const entries = view.state.field(fileDropChipField);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].filePath).toBe("/Users/test/file.ts");
+    expect(entries[0].fileName).toBe("file.ts");
+    expect(entries[0].from).toBe(0);
+    expect(entries[0].to).toBe(20);
+
+    view.destroy();
+  });
+
+  it("maps chip positions through document changes before the chip", () => {
+    const view = makeEditorWithFileChip();
+
+    view.dispatch({
+      changes: { from: 0, insert: "@/Users/test/file.ts " },
+      effects: addFileDropChip.of({
+        from: 0,
+        to: 20,
+        filePath: "/Users/test/file.ts",
+        fileName: "file.ts",
+      }),
+    });
+
+    // Insert text before the chip
+    view.dispatch({
+      changes: { from: 0, insert: "prefix " },
+    });
+
+    const entries = view.state.field(fileDropChipField);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].from).toBe(7); // shifted by "prefix " (7 chars)
+    expect(entries[0].to).toBe(27);
+
+    view.destroy();
+  });
+
+  it("discards chip when its range is edited", () => {
+    const view = makeEditorWithFileChip();
+
+    view.dispatch({
+      changes: { from: 0, insert: "@/Users/test/file.ts " },
+      effects: addFileDropChip.of({
+        from: 0,
+        to: 20,
+        filePath: "/Users/test/file.ts",
+        fileName: "file.ts",
+      }),
+    });
+
+    // Edit within the chip range
+    view.dispatch({
+      changes: { from: 5, to: 10, insert: "X" },
+    });
+
+    const entries = view.state.field(fileDropChipField);
+    expect(entries).toHaveLength(0);
+
+    view.destroy();
+  });
+
+  it("supports multiple file chip entries", () => {
+    const view = makeEditorWithFileChip();
+
+    const text = "@/Users/test/a.ts @/Users/test/b.ts ";
+    view.dispatch({
+      changes: { from: 0, insert: text },
+      effects: [
+        addFileDropChip.of({
+          from: 0,
+          to: 17,
+          filePath: "/Users/test/a.ts",
+          fileName: "a.ts",
+        }),
+        addFileDropChip.of({
+          from: 18,
+          to: 35,
+          filePath: "/Users/test/b.ts",
+          fileName: "b.ts",
+        }),
+      ],
+    });
+
+    const entries = view.state.field(fileDropChipField);
+    expect(entries).toHaveLength(2);
+    expect(entries[0].fileName).toBe("a.ts");
+    expect(entries[1].fileName).toBe("b.ts");
+
+    view.destroy();
+  });
+
+  it("removes file chips when the entire document is cleared", () => {
+    const view = makeEditorWithFileChip();
+
+    view.dispatch({
+      changes: { from: 0, insert: "@/Users/test/file.ts " },
+      effects: addFileDropChip.of({
+        from: 0,
+        to: 20,
+        filePath: "/Users/test/file.ts",
+        fileName: "file.ts",
+      }),
+    });
+
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: "" },
+    });
+
+    expect(view.state.doc.length).toBe(0);
+    expect(view.state.field(fileDropChipField)).toHaveLength(0);
+
+    view.destroy();
+  });
+
+  it("preserves raw @path text in document for agent consumption", () => {
+    const view = makeEditorWithFileChip();
+
+    view.dispatch({
+      changes: { from: 0, insert: "@/Users/test/file.ts " },
+      effects: addFileDropChip.of({
+        from: 0,
+        to: 20,
+        filePath: "/Users/test/file.ts",
+        fileName: "file.ts",
+      }),
+    });
+
+    expect(view.state.doc.toString()).toBe("@/Users/test/file.ts ");
+
+    view.destroy();
+  });
+});
+
+describe("createFilePasteHandler", () => {
+  function makeMockClipboardData(items: { kind: string; type: string; file: File | null }[]) {
+    const mockItems = items.map((item) => ({
+      kind: item.kind,
+      type: item.type,
+      getAsFile: () => item.file,
+    }));
+    return {
+      clipboardData: {
+        items: mockItems,
+        getData: () => "",
+        types: [] as string[],
+      },
+    };
+  }
+
+  function makePasteEvent(clipboardData: unknown): ClipboardEvent {
+    const event = new Event("paste", { bubbles: true, cancelable: true }) as ClipboardEvent;
+    Object.defineProperty(event, "clipboardData", { value: clipboardData });
+    return event;
+  }
+
+  it("calls onFilePaste for non-image file items with a path", () => {
+    const onFilePaste = vi.fn();
+    const parent = document.createElement("div");
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "",
+        extensions: [createFilePasteHandler(onFilePaste)],
+      }),
+    });
+
+    const file = new File(["content"], "test.pdf", { type: "application/pdf" });
+    Object.defineProperty(file, "path", { value: "/Users/test/test.pdf" });
+
+    const mockData = makeMockClipboardData([{ kind: "file", type: "application/pdf", file }]);
+    const pasteEvent = makePasteEvent(mockData.clipboardData);
+
+    view.contentDOM.dispatchEvent(pasteEvent);
+
+    expect(onFilePaste).toHaveBeenCalledOnce();
+    expect(onFilePaste).toHaveBeenCalledWith(view, [
+      { path: "/Users/test/test.pdf", name: "test.pdf" },
+    ]);
+
+    view.destroy();
+  });
+
+  it("does not call onFilePaste for image file items", () => {
+    const onFilePaste = vi.fn();
+    const parent = document.createElement("div");
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "",
+        extensions: [createFilePasteHandler(onFilePaste)],
+      }),
+    });
+
+    const file = new File(["imagedata"], "screenshot.png", { type: "image/png" });
+    Object.defineProperty(file, "path", { value: "/Users/test/screenshot.png" });
+
+    const mockData = makeMockClipboardData([{ kind: "file", type: "image/png", file }]);
+    const pasteEvent = makePasteEvent(mockData.clipboardData);
+
+    view.contentDOM.dispatchEvent(pasteEvent);
+
+    expect(onFilePaste).not.toHaveBeenCalled();
+
+    view.destroy();
+  });
+
+  it("does not call onFilePaste for files without a path", () => {
+    const onFilePaste = vi.fn();
+    const parent = document.createElement("div");
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "",
+        extensions: [createFilePasteHandler(onFilePaste)],
+      }),
+    });
+
+    const file = new File(["content"], "test.txt", { type: "text/plain" });
+    // No .path property set (non-Electron file)
+
+    const mockData = makeMockClipboardData([{ kind: "file", type: "text/plain", file }]);
+    const pasteEvent = makePasteEvent(mockData.clipboardData);
+
+    view.contentDOM.dispatchEvent(pasteEvent);
+
+    expect(onFilePaste).not.toHaveBeenCalled();
 
     view.destroy();
   });

@@ -1,9 +1,10 @@
-import { useCallback, useMemo, useEffect } from "react";
+import { useCallback, useMemo, useEffect, useRef } from "react";
 import { useTerminalStore, type TerminalInstance } from "@/store";
 import { GridPanel } from "./GridPanel";
 import type { TabGroup } from "@/types";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
+import { focusPanelInput } from "./terminalFocusRegistry";
 
 export interface GridTabGroupProps {
   group: TabGroup;
@@ -69,6 +70,7 @@ export function GridTabGroup({
       title: p.title,
       type: p.type,
       agentId: p.agentId,
+      detectedProcessId: p.detectedProcessId,
       kind: p.kind ?? "terminal",
       agentState: p.agentState,
       isActive: p.id === activeTabId,
@@ -77,6 +79,28 @@ export function GridTabGroup({
 
   // Check if this group is currently focused
   const isGroupFocused = panels.some((p) => p.id === focusedId);
+
+  // Restore focus to the hybrid input bar when switching tabs within a focused group.
+  // The existing TerminalPane focus effect uses double-rAF which races with
+  // HybridInputBar's CodeMirror editor reinitialization on terminalId change.
+  const prevActiveTabIdRef = useRef(activeTabId);
+  const panelIdsRef = useRef<Set<string>>(new Set(panels.map((p) => p.id)));
+  useEffect(() => {
+    panelIdsRef.current = new Set(panels.map((p) => p.id));
+  }, [panels]);
+
+  useEffect(() => {
+    if (prevActiveTabIdRef.current === activeTabId) return;
+    prevActiveTabIdRef.current = activeTabId;
+    if (!activeTabId || !isGroupFocused) return;
+    const rafId = requestAnimationFrame(() => {
+      const currentFocusedId = useTerminalStore.getState().focusedId;
+      if (!currentFocusedId || !panelIdsRef.current.has(currentFocusedId)) return;
+      focusPanelInput(activeTabId);
+    });
+    return () => cancelAnimationFrame(rafId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTabId]);
 
   // Handle tab click - switch to that tab, only focus if group already focused
   const handleTabClick = useCallback(

@@ -3,6 +3,7 @@ import fs from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
 import { app } from "electron";
+import { resilientRename, resilientWriteFile, resilientUnlink } from "../../utils/fs.js";
 import type { WorkflowRun } from "../../../shared/types/workflowRun.js";
 import {
   WorkflowDefinitionSchema,
@@ -127,7 +128,7 @@ export class WorkflowPersistence {
         try {
           const timestamp = Date.now();
           const quarantinePath = `${filePath}.corrupted.${timestamp}`;
-          await fs.rename(filePath, quarantinePath);
+          await resilientRename(filePath, quarantinePath);
           console.warn(
             `[WorkflowPersistence] Corrupted workflow runs file moved to ${quarantinePath}`
           );
@@ -215,8 +216,8 @@ export class WorkflowPersistence {
       if (ensureDir) {
         await fs.mkdir(stateDir, { recursive: true });
       }
-      await fs.writeFile(tempFilePath, JSON.stringify(state, null, 2), "utf-8");
-      await fs.rename(tempFilePath, filePath);
+      await resilientWriteFile(tempFilePath, JSON.stringify(state, null, 2), "utf-8");
+      await resilientRename(tempFilePath, filePath);
     };
 
     const savePromise = (async () => {
@@ -299,7 +300,7 @@ export class WorkflowPersistence {
     const filePath = this.getWorkflowRunsFilePath(projectId);
     if (filePath && existsSync(filePath)) {
       try {
-        await fs.unlink(filePath);
+        await resilientUnlink(filePath);
         console.log(`[WorkflowPersistence] Cleared workflow runs for project ${projectId}`);
       } catch (error) {
         console.error(

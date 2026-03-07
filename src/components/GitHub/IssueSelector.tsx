@@ -6,6 +6,7 @@ import type { GitHubIssue } from "@shared/types/github";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Avatar } from "@/components/ui/Avatar";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 function useDebounce<T>(value: T, delay: number): T {
   const [debouncedValue, setDebouncedValue] = useState(value);
@@ -86,7 +87,7 @@ export function IssueSelector({
         >
           {selectedIssue ? (
             <span className="flex items-center gap-2 truncate">
-              <CircleDot className="w-3 h-3 text-green-400 shrink-0" />
+              <CircleDot className="w-3 h-3 text-github-open shrink-0" />
               <span className="truncate">
                 #{selectedIssue.number} {selectedIssue.title}
               </span>
@@ -96,21 +97,27 @@ export function IssueSelector({
           )}
           <div className="flex items-center gap-1 shrink-0">
             {selectedIssue && !disabled && (
-              <span
-                role="button"
-                tabIndex={0}
-                onClick={handleClear}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    handleClear(e as unknown as React.MouseEvent);
-                  }
-                }}
-                className="p-0.5 hover:bg-canopy-border rounded cursor-pointer"
-                title="Clear selection"
-              >
-                <X className="h-3.5 w-3.5 text-muted-foreground hover:text-canopy-text" />
-              </span>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      onClick={handleClear}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          handleClear(e as unknown as React.MouseEvent);
+                        }
+                      }}
+                      className="p-0.5 hover:bg-canopy-border rounded cursor-pointer"
+                    >
+                      <X className="h-3.5 w-3.5 text-muted-foreground hover:text-canopy-text" />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Clear selection</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             )}
             <ChevronsUpDown className="h-4 w-4 opacity-50" />
           </div>
@@ -152,7 +159,7 @@ export function IssueSelector({
                   selectedIssue?.number === issue.number && "bg-canopy-border"
                 )}
               >
-                <CircleDot className="w-3 h-3 text-green-400 shrink-0" />
+                <CircleDot className="w-3 h-3 text-github-open shrink-0" />
                 <span className="truncate flex-1">
                   #{issue.number} {issue.title}
                 </span>

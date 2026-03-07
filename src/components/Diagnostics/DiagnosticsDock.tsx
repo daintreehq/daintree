@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState, useEffect, memo } from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import {
   useDiagnosticsStore,
   type DiagnosticsTab,
@@ -36,7 +37,7 @@ const TabButton = memo(function TabButton({
       onClick={onClick}
       className={cn(
         "px-3 py-1.5 text-sm font-medium transition-colors relative rounded",
-        "hover:text-canopy-text hover:bg-white/[0.03]",
+        "hover:text-canopy-text hover:bg-overlay-soft",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent focus-visible:ring-offset-2 focus-visible:ring-offset-canopy-sidebar",
         isActive ? "text-canopy-text" : "text-canopy-text/65"
       )}
@@ -46,7 +47,7 @@ const TabButton = memo(function TabButton({
     >
       {label}
       {badge !== undefined && badge > 0 && (
-        <span className="ml-1.5 px-1.5 py-0.5 text-xs bg-[var(--color-status-error)]/15 text-[var(--color-status-error)] rounded-full">
+        <span className="ml-1.5 px-1.5 py-0.5 text-xs bg-status-error/15 text-status-error rounded-full">
           {badge}
         </span>
       )}
@@ -180,7 +181,7 @@ export function DiagnosticsDock({ onRetry, className }: DiagnosticsDockProps) {
       <div
         className={cn(
           "group h-2 cursor-ns-resize transition-colors flex items-center justify-center",
-          "hover:bg-white/[0.03] focus-visible:outline-none focus-visible:bg-white/[0.04] focus-visible:ring-1 focus-visible:ring-canopy-accent/50",
+          "hover:bg-overlay-soft focus-visible:outline-none focus-visible:bg-overlay-medium focus-visible:ring-1 focus-visible:ring-canopy-accent/50",
           isResizing && "bg-canopy-accent/20"
         )}
         onMouseDown={handleResizeStart}
@@ -222,14 +223,20 @@ export function DiagnosticsDock({ onRetry, className }: DiagnosticsDockProps) {
           {activeTab === "logs" && <LogsActions />}
           {activeTab === "events" && <EventsActions />}
 
-          <button
-            onClick={closeDock}
-            className="p-1.5 hover:bg-white/[0.06] rounded-[var(--radius-md)] transition-colors text-canopy-text/60 hover:text-canopy-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-            title="Close diagnostics dock"
-            aria-label="Close diagnostics dock"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={closeDock}
+                  className="p-1.5 hover:bg-white/[0.06] rounded-[var(--radius-md)] transition-colors text-canopy-text/60 hover:text-canopy-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                  aria-label="Close diagnostics dock"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Close diagnostics dock</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
       </div>
 

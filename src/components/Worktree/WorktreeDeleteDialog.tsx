@@ -122,10 +122,11 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       size="md"
       variant="destructive"
       dismissible={!isDeleting}
+      data-testid="delete-worktree-dialog"
     >
       <AppDialog.Body>
-        <div className="flex items-center gap-3 mb-4 text-[var(--color-status-error)]">
-          <div className="p-2 bg-[var(--color-status-error)]/10 rounded-full">
+        <div className="flex items-center gap-3 mb-4 text-status-error">
+          <div className="p-2 bg-status-error/10 rounded-full">
             <Trash2 className="w-6 h-6" />
           </div>
           <AppDialog.Title>Delete Worktree?</AppDialog.Title>
@@ -145,7 +146,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
           </div>
 
           {hasChanges && !force && (
-            <div className="flex items-start gap-2 p-3 bg-amber-500/10 border border-amber-500/20 rounded text-amber-500 text-xs">
+            <div className="flex items-start gap-2 p-3 bg-status-warning/10 border border-status-warning/20 rounded text-status-warning text-xs">
               <AlertTriangle className="w-4 h-4 shrink-0" />
               <p>This worktree has uncommitted changes. Standard deletion will fail.</p>
             </div>
@@ -155,7 +156,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
             <div
               role="alert"
               aria-live="assertive"
-              className="p-3 bg-red-500/10 border border-red-500/20 rounded text-[var(--color-status-error)] text-xs"
+              className="p-3 bg-status-error/10 border border-status-error/20 rounded text-status-error text-xs"
             >
               {error}
             </div>
@@ -169,7 +170,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                 setForce(e.target.checked);
                 setError(null);
               }}
-              className="rounded border-canopy-border bg-canopy-bg text-[var(--color-status-error)] focus:ring-[var(--color-status-error)]"
+              className="rounded border-canopy-border bg-canopy-bg text-status-error focus:ring-status-error"
             />
             <span className="text-sm text-canopy-text">
               Force delete (lose uncommitted changes)
@@ -199,7 +200,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                     disarm();
                   }
                 }}
-                className="mt-0.5 rounded border-canopy-border bg-canopy-bg text-[var(--color-status-error)] focus:ring-[var(--color-status-error)]"
+                className="mt-0.5 rounded border-canopy-border bg-canopy-bg text-status-error focus:ring-status-error"
               />
               <span className="text-sm text-canopy-text">
                 <span className="flex items-center gap-1.5">
@@ -230,7 +231,8 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
           variant="destructive"
           onClick={handleDelete}
           disabled={isDeleting}
-          className={isArmed ? "animate-pulse ring-2 ring-[var(--color-status-error)]" : ""}
+          className={isArmed ? "animate-pulse ring-2 ring-status-error" : ""}
+          data-testid="delete-worktree-confirm"
         >
           {getDeleteButtonText()}
         </Button>

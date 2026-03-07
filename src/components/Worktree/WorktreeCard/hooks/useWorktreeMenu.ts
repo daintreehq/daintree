@@ -19,6 +19,8 @@ export function useWorktreeMenu({
   onEndAll,
   onShowDeleteDialog,
   onShowIssuePicker,
+  onShowReviewHub,
+  onShowCompareDiff,
 }: {
   worktree: WorktreeState;
   recipes: TerminalRecipe[];
@@ -40,6 +42,8 @@ export function useWorktreeMenu({
   onEndAll: () => void;
   onShowDeleteDialog: () => void;
   onShowIssuePicker?: () => void;
+  onShowReviewHub?: () => void;
+  onShowCompareDiff?: () => void;
 }): {
   contextMenuTemplate: MenuItemOption[];
   handleContextMenu: (event: React.MouseEvent) => Promise<void>;
@@ -49,18 +53,21 @@ export function useWorktreeMenu({
   const focusedTerminalId = useTerminalStore((state) => state.focusedId);
 
   const contextMenuTemplate = useMemo((): MenuItemOption[] => {
-    const template: MenuItemOption[] = [
-      { id: "label:launch", label: "Launch", enabled: false },
+    const launchSubmenu: MenuItemOption[] = [
       ...launchAgents.map((agent) => ({
         id: `launch:${agent.id}`,
         label: agent.label,
         enabled: Boolean(onLaunchAgent && agent.isEnabled),
       })),
+      ...(launchAgents.length > 0 ? [{ type: "separator" as const }] : []),
+      ...(launchAgents.length === 0
+        ? [{ id: "launch:configure-agents", label: "Configure agents..." }]
+        : []),
       { id: "launch:terminal", label: "Open Terminal", enabled: Boolean(onLaunchAgent) },
       { id: "launch:browser", label: "Open Browser", enabled: Boolean(onLaunchAgent) },
-      { type: "separator" },
+    ];
 
-      { id: "label:sessions", label: "Sessions", enabled: false },
+    const sessionsSubmenu: MenuItemOption[] = [
       {
         id: "sessions:minimize-all",
         label: `Minimize All (${counts.grid})`,
@@ -71,6 +78,7 @@ export function useWorktreeMenu({
         label: `Maximize All (${counts.dock})`,
         enabled: counts.dock > 0,
       },
+      { type: "separator" },
       {
         id: "sessions:restart-all",
         label: `${isRestartValidating ? "Checking..." : "Restart All"} (${counts.active})`,
@@ -82,7 +90,6 @@ export function useWorktreeMenu({
         enabled: counts.active > 0,
       },
       { type: "separator" },
-
       {
         id: "sessions:close-completed",
         label: `Close Completed (${counts.completed})`,
@@ -94,7 +101,6 @@ export function useWorktreeMenu({
         enabled: counts.failed > 0,
       },
       { type: "separator" },
-
       {
         id: "sessions:close-all",
         label: `Close All (Trash) (${counts.active})`,
@@ -105,13 +111,25 @@ export function useWorktreeMenu({
         label: `End All (Kill) (${counts.all})`,
         enabled: counts.all > 0,
       },
+    ];
+
+    const template: MenuItemOption[] = [
+      { id: "submenu:launch", label: "Launch", submenu: launchSubmenu },
+      { id: "submenu:sessions", label: "Sessions", submenu: sessionsSubmenu },
       { type: "separator" },
 
-      { id: "label:worktree", label: "Worktree", enabled: false },
       {
         id: "worktree:attach-issue",
         label: worktree.issueNumber ? "Change Issue..." : "Attach to Issue...",
         enabled: Boolean(onShowIssuePicker),
+      },
+      {
+        id: "worktree:review-hub",
+        label: "Review & Commit",
+      },
+      {
+        id: "worktree:compare-diff",
+        label: "Compare Worktrees…",
       },
       {
         id: "worktree:copy-context",
@@ -161,7 +179,6 @@ export function useWorktreeMenu({
     const hasRecipeSection = recipes.length > 0 || (onSaveLayout && counts.active > 0);
     if (hasRecipeSection) {
       template.push({ type: "separator" });
-      template.push({ id: "label:recipes", label: "Recipes", enabled: false });
 
       if (recipes.length > 0) {
         template.push({
@@ -203,16 +220,27 @@ export function useWorktreeMenu({
     onLaunchAgent,
     onSaveLayout,
     onShowIssuePicker,
+    onShowCompareDiff,
     recipes,
     runningRecipeId,
     worktree.issueNumber,
     worktree.prNumber,
+    worktree.prUrl,
   ]);
 
   const handleContextMenu = useCallback(
     async (event: React.MouseEvent) => {
       const actionId = await showMenu(event, contextMenuTemplate);
       if (!actionId) return;
+
+      if (actionId === "launch:configure-agents") {
+        void actionService.dispatch(
+          "app.settings.openTab",
+          { tab: "agents" },
+          { source: "context-menu" }
+        );
+        return;
+      }
 
       if (actionId.startsWith("launch:")) {
         const agentId = actionId.slice("launch:".length);
@@ -352,6 +380,12 @@ export function useWorktreeMenu({
         case "worktree:attach-issue":
           onShowIssuePicker?.();
           break;
+        case "worktree:review-hub":
+          onShowReviewHub?.();
+          break;
+        case "worktree:compare-diff":
+          onShowCompareDiff?.();
+          break;
         case "worktree:delete":
           onShowDeleteDialog();
           break;
@@ -364,6 +398,8 @@ export function useWorktreeMenu({
       onRestartAll,
       onShowDeleteDialog,
       onShowIssuePicker,
+      onShowReviewHub,
+      onShowCompareDiff,
       showMenu,
       worktree.id,
     ]

@@ -66,7 +66,9 @@ vi.mock("../slices", () => ({
   createTerminalRegistrySlice: vi.fn(() => () => ({})),
   createTerminalFocusSlice: vi.fn(() => () => ({})),
   createTerminalCommandQueueSlice: vi.fn(() => () => ({})),
+  createTerminalMruSlice: vi.fn(() => () => ({})),
   createTerminalBulkActionsSlice: vi.fn(() => () => ({})),
+  createWatchedPanelsSlice: vi.fn(() => () => ({})),
 }));
 
 const { useProjectStore } = await import("../projectStore");
@@ -95,6 +97,30 @@ describe("projectStore addProject", () => {
     expect(useProjectStore.getState().gitInitDirectoryPath).toBe("/tmp/not-a-repo");
     expect(useProjectStore.getState().isLoading).toBe(false);
     expect(useProjectStore.getState().error).toBeNull();
+  });
+
+  it("uses the dialog-resolved absolute path for git init even when error lacks path", async () => {
+    projectClientMock.openDialog.mockResolvedValueOnce("/Users/test/empty-folder");
+    projectClientMock.add.mockRejectedValueOnce(
+      new Error("Not a git repository (or any of the parent directories): .git")
+    );
+
+    await useProjectStore.getState().addProject();
+
+    expect(addNotificationMock).not.toHaveBeenCalled();
+    expect(useProjectStore.getState().gitInitDialogOpen).toBe(true);
+    expect(useProjectStore.getState().gitInitDirectoryPath).toBe("/Users/test/empty-folder");
+    expect(useProjectStore.getState().isLoading).toBe(false);
+    expect(useProjectStore.getState().error).toBeNull();
+  });
+
+  it("does not open git init dialog when resolved path is not absolute", async () => {
+    projectClientMock.add.mockRejectedValueOnce(new Error("Not a git repository: relative/path"));
+
+    await useProjectStore.getState().addProjectByPath("relative/path");
+
+    expect(useProjectStore.getState().gitInitDialogOpen).toBe(false);
+    expect(addNotificationMock).toHaveBeenCalledWith(expect.objectContaining({ type: "error" }));
   });
 
   it("does not notify when the dialog is cancelled", async () => {

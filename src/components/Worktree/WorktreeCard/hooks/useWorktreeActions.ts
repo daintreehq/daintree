@@ -101,7 +101,12 @@ export function useWorktreeActions({
 
       setRunningRecipeId(recipeId);
       try {
-        await runRecipe(recipeId, worktree.path, worktree.id);
+        await runRecipe(recipeId, worktree.path, worktree.id, {
+          issueNumber: worktree.issueNumber,
+          prNumber: worktree.prNumber,
+          worktreePath: worktree.path,
+          branchName: worktree.branch,
+        });
       } catch (error) {
         console.error("Failed to run recipe:", error);
       } finally {

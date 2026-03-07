@@ -1,12 +1,25 @@
 import { existsSync } from "fs";
+import { execFileSync } from "child_process";
 
 export interface ShellArgsOptions {
   nonInteractive?: boolean;
 }
 
+export function findWindowsShell(): string {
+  for (const shell of ["pwsh.exe", "powershell.exe"]) {
+    try {
+      execFileSync("where", [shell], { stdio: "ignore", timeout: 3000 });
+      return shell;
+    } catch {
+      // not on PATH or timed out, try next
+    }
+  }
+  return process.env.COMSPEC || "cmd.exe";
+}
+
 export function getDefaultShell(): string {
   if (process.platform === "win32") {
-    return process.env.COMSPEC || "powershell.exe";
+    return findWindowsShell();
   }
 
   if (process.env.SHELL) {
@@ -50,6 +63,7 @@ export function getDefaultShellArgs(shell: string, _options?: ShellArgsOptions):
  * See: https://github.com/google-gemini/gemini-cli/issues/1563
  */
 export const AGENT_ENV_EXCLUSIONS: Record<string, string[]> = {
+  claude: ["CLAUDECODE"],
   gemini: ["CI", "NONINTERACTIVE"],
 };
 

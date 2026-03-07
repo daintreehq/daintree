@@ -1,5 +1,6 @@
-import { existsSync, readFileSync, renameSync, writeFileSync, mkdirSync } from "fs";
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "fs";
+import { mkdir, writeFile, unlink } from "node:fs/promises";
+import { resilientRename, resilientRenameSync } from "../../utils/fs.js";
 import path from "node:path";
 import type { Terminal as HeadlessTerminalType } from "@xterm/headless";
 
@@ -67,8 +68,17 @@ export function persistSessionSnapshotSync(terminalId: string, state: string): v
   mkdirSync(dir, { recursive: true });
 
   const tmpPath = `${sessionPath}.tmp`;
-  writeFileSync(tmpPath, state, "utf8");
-  renameSync(tmpPath, sessionPath);
+  try {
+    writeFileSync(tmpPath, state, "utf8");
+    resilientRenameSync(tmpPath, sessionPath);
+  } catch (error) {
+    try {
+      unlinkSync(tmpPath);
+    } catch {
+      /* best-effort cleanup */
+    }
+    throw error;
+  }
 }
 
 export async function persistSessionSnapshotAsync(
@@ -83,6 +93,13 @@ export async function persistSessionSnapshotAsync(
   await mkdir(dir, { recursive: true });
 
   const tmpPath = `${sessionPath}.tmp`;
-  await writeFile(tmpPath, state, "utf8");
-  await rename(tmpPath, sessionPath);
+  try {
+    await writeFile(tmpPath, state, "utf8");
+    await resilientRename(tmpPath, sessionPath);
+  } catch (error) {
+    unlink(tmpPath).catch(() => {
+      /* best-effort cleanup */
+    });
+    throw error;
+  }
 }

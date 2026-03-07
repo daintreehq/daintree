@@ -91,9 +91,9 @@ const IssueBadge = memo(function IssueBadge({
                 : `Open issue #${issueNumber} on GitHub`
             }
           >
-            <CircleDot className="w-3 h-3 text-emerald-400 shrink-0" aria-hidden="true" />
+            <CircleDot className="w-3 h-3 text-github-open shrink-0" aria-hidden="true" />
             <span className="truncate text-canopy-text/90 flex-1 min-w-0">
-              {issueTitle || <span className="text-emerald-400 font-mono">#{issueNumber}</span>}
+              {issueTitle || <span className="text-github-open font-mono">#{issueNumber}</span>}
             </span>
           </button>
         </TooltipTrigger>
@@ -145,10 +145,10 @@ const PRBadge = memo(function PRBadge({
 
   const prStateColor =
     prState === "merged"
-      ? "text-violet-400"
+      ? "text-github-merged"
       : prState === "closed"
-        ? "text-red-400"
-        : "text-sky-400";
+        ? "text-github-closed"
+        : "text-github-open";
 
   const prStateLabel = prState === "merged" ? "merged" : prState === "closed" ? "closed" : "open";
 
@@ -216,6 +216,7 @@ export interface WorktreeHeaderProps {
     recipes: TerminalRecipe[];
     runningRecipeId: string | null;
     isRestartValidating: boolean;
+    hasFocusedTerminal: boolean;
     counts: {
       grid: number;
       dock: number;
@@ -224,11 +225,15 @@ export interface WorktreeHeaderProps {
       failed: number;
       all: number;
     };
-    onCopyContext: () => void;
+    onCopyContextFull: () => void;
+    onCopyContextModified: () => void;
+    onInjectContext: () => void;
     onOpenEditor: () => void;
     onRevealInFinder: () => void;
-    onOpenIssue?: () => void;
-    onOpenPR?: () => void;
+    onOpenIssueSidecar?: () => void;
+    onOpenIssueExternal?: () => void;
+    onOpenPRSidecar?: () => void;
+    onOpenPRExternal?: () => void;
     onRunRecipe: (recipeId: string) => void;
     onSaveLayout?: () => void;
     onTogglePin?: () => void;
@@ -236,11 +241,14 @@ export interface WorktreeHeaderProps {
     onMinimizeAll: () => void;
     onMaximizeAll: () => void;
     onRestartAll: () => void;
+    onResetRenderers: () => void;
     onCloseCompleted: () => void;
     onCloseFailed: () => void;
     onCloseAll: () => void;
     onEndAll: () => void;
     onAttachIssue?: () => void;
+    onOpenReviewHub?: () => void;
+    onCompareDiff?: () => void;
     onDeleteWorktree?: () => void;
   };
 }
@@ -283,7 +291,7 @@ export function WorktreeHeader({
           )}
           <BranchLabel label={branchLabel} isActive={isActive} isMainWorktree={isMainWorktree} />
           {worktree.isDetached && (
-            <span className="text-amber-500 text-xs font-medium shrink-0">(detached)</span>
+            <span className="text-status-warning text-xs font-medium shrink-0">(detached)</span>
           )}
         </div>
 
@@ -291,7 +299,7 @@ export function WorktreeHeader({
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className="flex items-center gap-0.5 text-[var(--color-status-error)] text-xs font-mono shrink-0">
+                <span className="flex items-center gap-0.5 text-status-error text-xs font-mono shrink-0">
                   <AlertCircle className="w-3 h-3" />
                   <span>{worktreeErrorCount}</span>
                 </span>
@@ -312,7 +320,7 @@ export function WorktreeHeader({
           )}
         >
           <TooltipProvider>
-            <Tooltip open={copy.treeCopied} delayDuration={0}>
+            <Tooltip open={copy.treeCopied || undefined} delayDuration={copy.treeCopied ? 0 : 300}>
               <TooltipTrigger asChild>
                 <button
                   onClick={copy.onCopyTreeClick}
@@ -320,12 +328,18 @@ export function WorktreeHeader({
                   className={cn(
                     "p-1 rounded transition-colors",
                     copy.treeCopied
-                      ? "text-green-400 bg-green-400/10"
+                      ? "text-status-success bg-status-success/10"
                       : "text-canopy-text/40 hover:text-canopy-text hover:bg-white/5",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
                     copy.isCopyingTree && "cursor-wait opacity-70"
                   )}
-                  aria-label={copy.treeCopied ? "Context Copied" : "Copy Context"}
+                  aria-label={
+                    copy.isCopyingTree
+                      ? "Copying…"
+                      : copy.treeCopied
+                        ? "Context Copied"
+                        : "Copy Context"
+                  }
                 >
                   {copy.isCopyingTree ? (
                     <Loader2 className="w-3.5 h-3.5 animate-spin motion-reduce:animate-none text-canopy-text" />
@@ -337,23 +351,37 @@ export function WorktreeHeader({
                 </button>
               </TooltipTrigger>
               <TooltipContent side="top" className="font-medium">
-                <span role="status" aria-live="polite">
-                  {copy.copyFeedback}
-                </span>
+                {copy.isCopyingTree ? (
+                  "Copying…"
+                ) : copy.treeCopied ? (
+                  <span role="status" aria-live="polite">
+                    {copy.copyFeedback}
+                  </span>
+                ) : (
+                  "Copy Context"
+                )}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
 
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                onClick={(e) => e.stopPropagation()}
-                className="p-1 text-canopy-text/60 hover:text-white hover:bg-white/5 rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-                aria-label="More actions"
-              >
-                <MoreHorizontal className="w-3.5 h-3.5" />
-              </button>
-            </DropdownMenuTrigger>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      onClick={(e) => e.stopPropagation()}
+                      className="p-1 text-canopy-text/60 hover:text-white hover:bg-white/5 rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                      aria-label="More actions"
+                      data-testid="worktree-actions-menu"
+                    >
+                      <MoreHorizontal className="w-3.5 h-3.5" />
+                    </button>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="top">More actions</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
             <DropdownMenuContent
               align="end"
               side="bottom"
@@ -370,20 +398,28 @@ export function WorktreeHeader({
                 runningRecipeId={menu.runningRecipeId}
                 isRestartValidating={menu.isRestartValidating}
                 isPinned={isPinned}
+                hasFocusedTerminal={menu.hasFocusedTerminal}
                 counts={menu.counts}
                 onLaunchAgent={menu.onLaunchAgent ? handleLaunchAgent : undefined}
-                onCopyContext={menu.onCopyContext}
+                onCopyContextFull={menu.onCopyContextFull}
+                onCopyContextModified={menu.onCopyContextModified}
+                onInjectContext={menu.onInjectContext}
                 onOpenEditor={menu.onOpenEditor}
                 onRevealInFinder={menu.onRevealInFinder}
-                onOpenIssue={menu.onOpenIssue}
-                onOpenPR={menu.onOpenPR}
+                onOpenIssueSidecar={menu.onOpenIssueSidecar}
+                onOpenIssueExternal={menu.onOpenIssueExternal}
+                onOpenPRSidecar={menu.onOpenPRSidecar}
+                onOpenPRExternal={menu.onOpenPRExternal}
                 onAttachIssue={menu.onAttachIssue}
+                onOpenReviewHub={menu.onOpenReviewHub}
+                onCompareDiff={menu.onCompareDiff}
                 onRunRecipe={menu.onRunRecipe}
                 onSaveLayout={menu.onSaveLayout}
                 onTogglePin={menu.onTogglePin}
                 onMinimizeAll={menu.onMinimizeAll}
                 onMaximizeAll={menu.onMaximizeAll}
                 onRestartAll={menu.onRestartAll}
+                onResetRenderers={menu.onResetRenderers}
                 onCloseCompleted={menu.onCloseCompleted}
                 onCloseFailed={menu.onCloseFailed}
                 onCloseAll={menu.onCloseAll}

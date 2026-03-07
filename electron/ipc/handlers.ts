@@ -1,11 +1,3 @@
-import { BrowserWindow } from "electron";
-import type { CliAvailabilityService } from "../services/CliAvailabilityService.js";
-import type { AgentVersionService } from "../services/AgentVersionService.js";
-import type { AgentUpdateHandler } from "../services/AgentUpdateHandler.js";
-import type { EventBuffer } from "../services/EventBuffer.js";
-import type { SidecarManager } from "../services/SidecarManager.js";
-import type { PtyClient } from "../services/PtyClient.js";
-import type { WorkspaceClient } from "../services/WorkspaceClient.js";
 import type { HandlerDependencies } from "./types.js";
 import { registerWorktreeHandlers } from "./handlers/worktree.js";
 import { registerTerminalHandlers } from "./handlers/terminal.js";
@@ -29,8 +21,13 @@ import { registerNotesHandlers } from "./handlers/notes.js";
 import { registerDevPreviewHandlers } from "./handlers/devPreview.js";
 import { registerCommandHandlers } from "./handlers/commands.js";
 import { registerAppAgentHandlers } from "./handlers/appAgent.js";
-import { registerAssistantHandlers } from "./handlers/assistant.js";
 import { registerAgentCapabilitiesHandlers } from "./handlers/agentCapabilities.js";
+import { registerCliHandlers } from "./handlers/cli.js";
+import { registerClipboardHandlers } from "./handlers/clipboard.js";
+import { registerGitWriteHandlers } from "./handlers/git-write.js";
+import { registerTelemetryHandlers } from "./handlers/telemetry.js";
+import { registerVoiceInputHandlers } from "./handlers/voiceInput.js";
+import { registerMcpServerHandlers } from "./handlers/mcpServer.js";
 import { events } from "../services/events.js";
 import { typedHandle, typedSend, sendToRenderer } from "./utils.js";
 
@@ -48,27 +45,10 @@ function runCleanups(cleanupFunctions: CleanupFn[]): void {
   }
 }
 
-export function registerIpcHandlers(
-  mainWindow: BrowserWindow,
-  ptyClient: PtyClient,
-  worktreeService?: WorkspaceClient,
-  eventBuffer?: EventBuffer,
-  cliAvailabilityService?: CliAvailabilityService,
-  agentVersionService?: AgentVersionService,
-  agentUpdateHandler?: AgentUpdateHandler,
-  sidecarManager?: SidecarManager
-): () => void {
-  const deps: HandlerDependencies = {
-    mainWindow,
-    ptyClient,
-    worktreeService,
-    eventBuffer,
-    cliAvailabilityService,
-    agentVersionService,
-    agentUpdateHandler,
-    sidecarManager,
-    events,
-  };
+export function registerIpcHandlers(deps: HandlerDependencies): () => void {
+  if (!deps.events) {
+    deps.events = events;
+  }
 
   const cleanupFunctions: CleanupFn[] = [];
 
@@ -99,8 +79,13 @@ export function registerIpcHandlers(
     register(() => registerDevPreviewHandlers(deps));
     register(() => registerCommandHandlers());
     register(() => registerAppAgentHandlers(deps));
-    register(() => registerAssistantHandlers(mainWindow));
     register(() => registerAgentCapabilitiesHandlers());
+    register(() => registerCliHandlers());
+    register(() => registerClipboardHandlers());
+    register(() => registerGitWriteHandlers(deps));
+    register(() => registerTelemetryHandlers());
+    register(() => registerVoiceInputHandlers(deps));
+    register(() => registerMcpServerHandlers());
   } catch (error) {
     runCleanups(cleanupFunctions);
     throw error;

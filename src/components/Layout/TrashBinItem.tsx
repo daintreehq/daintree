@@ -5,6 +5,7 @@ import { useTerminalStore, type TerminalInstance } from "@/store";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { TrashedTerminal } from "@/store/slices";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface TrashBinItemProps {
   terminal: TerminalInstance;
@@ -61,6 +62,7 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
           type={terminal.type}
           kind={terminal.kind}
           agentId={terminal.agentId}
+          detectedProcessId={terminal.detectedProcessId}
           className="w-3 h-3"
         />
       </div>
@@ -71,7 +73,9 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
           {worktreeName ? (
             <span className="text-canopy-text/50 ml-1 font-normal">({worktreeName})</span>
           ) : isOrphan ? (
-            <span className="text-amber-500/70 ml-1 font-normal text-[11px]">(deleted tree)</span>
+            <span className="text-status-warning/70 ml-1 font-normal text-[11px]">
+              (deleted tree)
+            </span>
           ) : null}
         </div>
         <div className="text-[11px] text-canopy-text/40" aria-live="polite">
@@ -80,37 +84,51 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
       </div>
 
       <div className="flex gap-1">
-        <Button
-          variant="ghost-success"
-          size="icon-sm"
-          onClick={handleRestore}
-          disabled={!canRestore}
-          aria-label={
-            isOrphan
-              ? canRestore
-                ? `Adopt ${terminalName} to current worktree`
-                : "No active worktree to restore to"
-              : `Restore ${terminalName}`
-          }
-          title={
-            isOrphan
-              ? canRestore
-                ? "Adopt to current worktree"
-                : "No active worktree - select a worktree first"
-              : `Restore ${terminalName}`
-          }
-        >
-          <RotateCcw aria-hidden="true" />
-        </Button>
-        <Button
-          variant="ghost-danger"
-          size="icon-sm"
-          onClick={handleKill}
-          aria-label={`Remove ${terminalName} permanently`}
-          title={`Remove ${terminalName} permanently`}
-        >
-          <X aria-hidden="true" />
-        </Button>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex">
+                <Button
+                  variant="ghost-success"
+                  size="icon-sm"
+                  onClick={handleRestore}
+                  disabled={!canRestore}
+                  aria-label={
+                    isOrphan
+                      ? canRestore
+                        ? `Adopt ${terminalName} to current worktree`
+                        : "No active worktree to restore to"
+                      : `Restore ${terminalName}`
+                  }
+                >
+                  <RotateCcw aria-hidden="true" />
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {isOrphan
+                ? canRestore
+                  ? "Adopt to current worktree"
+                  : "No active worktree - select a worktree first"
+                : `Restore ${terminalName}`}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost-danger"
+                size="icon-sm"
+                onClick={handleKill}
+                aria-label={`Remove ${terminalName} permanently`}
+              >
+                <X aria-hidden="true" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{`Remove ${terminalName} permanently`}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </div>
     </div>
   );

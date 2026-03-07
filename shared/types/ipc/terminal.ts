@@ -84,6 +84,8 @@ export interface TerminalState {
   devServerTerminalId?: string;
   /** Whether the dev-preview console drawer is open */
   devPreviewConsoleOpen?: boolean;
+  /** Behavior when terminal exits */
+  exitBehavior?: import("../domain.js").PanelExitBehavior;
 }
 
 /** Terminal data payload for IPC */

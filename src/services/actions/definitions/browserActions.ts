@@ -154,4 +154,80 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
       );
     },
   }));
+
+  actions.set("browser.captureScreenshot", () => ({
+    id: "browser.captureScreenshot",
+    title: "Capture Browser Screenshot",
+    description: "Capture a screenshot of the browser viewport and copy to clipboard",
+    category: "browser",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
+    run: async (args: unknown) => {
+      const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
+      const targetId = terminalId ?? useTerminalStore.getState().focusedId;
+      if (!targetId) return;
+      window.dispatchEvent(
+        new CustomEvent("canopy:browser-capture-screenshot", { detail: { id: targetId } })
+      );
+    },
+  }));
+
+  actions.set("browser.toggleConsole", () => ({
+    id: "browser.toggleConsole",
+    title: "Toggle Browser Console",
+    description: "Show or hide the browser console panel",
+    category: "browser",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
+    run: async (args: unknown) => {
+      const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
+      const targetId = terminalId ?? useTerminalStore.getState().focusedId;
+      if (!targetId) return;
+      window.dispatchEvent(
+        new CustomEvent("canopy:browser-toggle-console", { detail: { id: targetId } })
+      );
+    },
+  }));
+
+  actions.set("browser.clearConsole", () => ({
+    id: "browser.clearConsole",
+    title: "Clear Browser Console",
+    description: "Clear all captured console messages for the browser panel",
+    category: "browser",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
+    run: async (args: unknown) => {
+      const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
+      const targetId = terminalId ?? useTerminalStore.getState().focusedId;
+      if (!targetId) return;
+      window.dispatchEvent(
+        new CustomEvent("canopy:browser-clear-console", { detail: { id: targetId } })
+      );
+    },
+  }));
+
+  actions.set("browser.toggleDevTools", () => ({
+    id: "browser.toggleDevTools",
+    title: "Toggle Browser DevTools",
+    description: "Open or close the browser panel's DevTools",
+    category: "browser",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
+    run: async (args: unknown) => {
+      const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
+      const targetId = terminalId ?? useTerminalStore.getState().focusedId;
+      if (!targetId) return;
+      window.dispatchEvent(
+        new CustomEvent("canopy:browser-toggle-devtools", { detail: { id: targetId } })
+      );
+    },
+  }));
 }

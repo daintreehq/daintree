@@ -45,6 +45,8 @@ export type ActionId =
   | "worktreeConfig.get"
   | "worktreeConfig.setPattern"
   | "files.search"
+  | "file.view"
+  | "file.openInEditor"
   | "slashCommands.list"
   | "artifact.saveToFile"
   | "artifact.applyPatch"
@@ -57,6 +59,13 @@ export type ActionId =
   | "git.getProjectPulse"
   | "git.getFileDiff"
   | "git.listCommits"
+  | "git.stageFile"
+  | "git.unstageFile"
+  | "git.stageAll"
+  | "git.unstageAll"
+  | "git.commit"
+  | "git.push"
+  | "git.getStagingStatus"
   | "preferences.showProjectPulse.set"
   | "preferences.showDeveloperTools.set"
   | "window.toggleFullscreen"
@@ -162,6 +171,7 @@ export type ActionId =
   | "terminal.kill"
   | "terminal.moveToWorktree"
   | "terminal.convertType"
+  | "terminal.watch"
   | "terminal.viewInfo"
   | "browser.reload"
   | "browser.navigate"
@@ -170,6 +180,10 @@ export type ActionId =
   | "browser.openExternal"
   | "browser.copyUrl"
   | "browser.setZoomLevel"
+  | "browser.captureScreenshot"
+  | "browser.toggleConsole"
+  | "browser.clearConsole"
+  | "browser.toggleDevTools"
   | "nav.toggleFocusMode"
   | "nav.quickSwitcher"
   | "find.inFocusedPanel"
@@ -193,7 +207,6 @@ export type ActionId =
   | "sidecar.openTabExternal"
   | "sidecar.closeOthers"
   | "sidecar.closeToRight"
-  | "sidecar.setLayoutMode"
   | "sidecar.resetWidth"
   | "sidecar.width.set"
   | "sidecar.setDefaultNewTab"
@@ -202,8 +215,8 @@ export type ActionId =
   | "sidecar.links.update"
   | "sidecar.links.toggle"
   | "sidecar.links.reorder"
-  | "sidecar.links.rescan"
   | "sidecar.tabs.reorder"
+  | "sidecar.listTabs"
   | "ui.sidebar.resetWidth"
   | "terminal.info.open"
   | "terminal.info.get"
@@ -214,9 +227,12 @@ export type ActionId =
   | "terminal.openWorktreePR"
   | "notes.openPalette"
   | "notes.create"
+  | "notes.list"
+  | "notes.read"
   | "notes.delete"
   | "notes.reveal"
-  | "devServer.start";
+  | "devServer.start"
+  | "worktree.compareDiff";
 
 export interface ActionContext {
   projectId?: string;
@@ -267,6 +283,7 @@ export interface ActionManifestEntry {
   outputSchema?: Record<string, unknown>;
   enabled: boolean;
   disabledReason?: string;
+  requiresArgs: boolean;
 }
 
 export interface ActionDispatchSuccess<Result = unknown> {

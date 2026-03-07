@@ -417,6 +417,27 @@ describe("WorkspaceService.loadProject performance behavior", () => {
 
     expect(mockSimpleGit.raw).toHaveBeenCalledTimes(2);
   });
+
+  it("uses the worktree folder name for detached worktrees", async () => {
+    const mapped = service["mapRawWorktrees"]([
+      {
+        path: "/repo/canopy-bisect/cross-worktree-diff-2026-03-06",
+        branch: "",
+        head: "a4b85920ee91c51a265eb7ceb98a23381d4ba08f",
+        isDetached: true,
+        isMainWorktree: false,
+        bare: false,
+      },
+    ]);
+
+    expect(mapped).toEqual([
+      expect.objectContaining({
+        name: "cross-worktree-diff-2026-03-06",
+        head: "a4b85920ee91c51a265eb7ceb98a23381d4ba08f",
+        isDetached: true,
+      }),
+    ]);
+  });
 });
 
 describe("WorkspaceService git watcher refresh behavior", () => {

@@ -30,7 +30,7 @@ function FilterSection({ title, children, defaultOpen = false }: FilterSectionPr
         onClick={() => setIsOpen(!isOpen)}
         aria-expanded={isOpen}
         aria-controls={contentId}
-        className="flex items-center justify-between w-full px-3 py-2 text-xs font-medium text-canopy-text/70 hover:bg-white/[0.03]"
+        className="flex items-center justify-between w-full px-3 py-2 text-xs font-medium text-canopy-text/70 hover:bg-overlay-soft"
       >
         {title}
         <ChevronDown
@@ -62,7 +62,7 @@ function FilterChip({ label, isActive, onClick }: FilterChipProps) {
         "inline-flex items-center px-2 py-0.5 text-[11px] rounded-full border transition-colors",
         isActive
           ? "bg-canopy-accent/20 border-canopy-accent/40 text-canopy-accent"
-          : "bg-canopy-bg border-canopy-border text-canopy-text/60 hover:bg-white/[0.04] hover:text-canopy-text/80"
+          : "bg-canopy-bg border-canopy-border text-canopy-text/60 hover:bg-overlay-medium hover:text-canopy-text/80"
       )}
     >
       {label}
@@ -199,11 +199,11 @@ export function WorktreeFilterPopover() {
             "transition-colors",
             hasActiveFilters() && "text-canopy-accent"
           )}
-          title="Filter and sort worktrees"
+          aria-label="Filter and sort worktrees"
         >
           <Filter className="w-3.5 h-3.5" />
           {showBadge && (
-            <span className="absolute -top-0.5 -right-0.5 flex items-center justify-center min-w-[14px] h-[14px] px-1 text-[9px] font-medium bg-canopy-accent text-white rounded-full">
+            <span className="absolute -top-0.5 -right-0.5 flex items-center justify-center min-w-[14px] h-[14px] px-1 text-[9px] font-medium bg-canopy-accent text-canopy-bg rounded-full">
               {filterCount}
             </span>
           )}
@@ -267,7 +267,7 @@ export function WorktreeFilterPopover() {
                     "flex items-center gap-2 px-2 py-1 text-xs rounded",
                     orderBy === option.value
                       ? "bg-canopy-accent/10 text-canopy-accent"
-                      : "text-canopy-text/70 hover:bg-white/[0.04]"
+                      : "text-canopy-text/70 hover:bg-overlay-medium"
                   )}
                 >
                   <div

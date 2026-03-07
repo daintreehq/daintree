@@ -8,6 +8,15 @@ interface ChildProcess {
   command?: string;
 }
 
+interface DetectedProcessCandidate {
+  agentType?: TerminalType;
+  processIconId?: string;
+  processName: string;
+  processCommand?: string;
+  priority: number;
+  order: number;
+}
+
 const AGENT_CLI_NAMES: Record<string, TerminalType> = {
   claude: "claude",
   gemini: "gemini",
@@ -15,9 +24,55 @@ const AGENT_CLI_NAMES: Record<string, TerminalType> = {
   opencode: "opencode",
 };
 
+const PROCESS_ICON_MAP: Record<string, string> = {
+  // AI agents
+  claude: "claude",
+  gemini: "gemini",
+  codex: "codex",
+  opencode: "opencode",
+  // Package managers
+  npm: "npm",
+  npx: "npm",
+  yarn: "yarn",
+  pnpm: "pnpm",
+  bun: "bun",
+  composer: "composer",
+  // Language runtimes
+  python: "python",
+  python3: "python",
+  node: "node",
+  deno: "deno",
+  ruby: "ruby",
+  rails: "ruby",
+  bundle: "ruby",
+  go: "go",
+  cargo: "rust",
+  rustc: "rust",
+  php: "php",
+  kotlin: "kotlin",
+  kotlinc: "kotlin",
+  swift: "swift",
+  swiftc: "swift",
+  elixir: "elixir",
+  mix: "elixir",
+  iex: "elixir",
+  // Build tools
+  gradle: "gradle",
+  gradlew: "gradle",
+  webpack: "webpack",
+  vite: "vite",
+  // Infrastructure
+  docker: "docker",
+  terraform: "terraform",
+  tofu: "terraform",
+};
+
+const PACKAGE_MANAGER_ICON_IDS = new Set(["npm", "yarn", "pnpm", "bun", "composer"]);
+
 export interface DetectionResult {
   detected: boolean;
   agentType?: TerminalType;
+  processIconId?: string;
   processName?: string;
   isBusy?: boolean;
   currentCommand?: string;
@@ -31,6 +86,7 @@ export class ProcessDetector {
   private ptyPid: number;
   private callback: DetectionCallback;
   private lastDetected: TerminalType | null = null;
+  private lastProcessIconId: string | null = null;
   private lastBusyState: boolean | null = null;
   private lastCurrentCommand: string | undefined;
   private cache: ProcessTreeCache;
@@ -80,18 +136,23 @@ export class ProcessDetector {
     try {
       const result = this.detectAgent();
 
+      const nextAgent = result.agentType ?? null;
       const agentChanged =
-        (result.detected && result.agentType !== this.lastDetected) ||
+        (result.detected && nextAgent !== this.lastDetected) ||
         (!result.detected && this.lastDetected !== null);
+
+      const processIconChanged = (result.processIconId ?? null) !== this.lastProcessIconId;
 
       const busyChanged = result.isBusy !== undefined && result.isBusy !== this.lastBusyState;
 
       const commandChanged = result.currentCommand !== this.lastCurrentCommand;
 
       if (result.detected) {
-        this.lastDetected = result.agentType!;
-      } else if (this.lastDetected !== null) {
+        this.lastDetected = result.agentType ?? null;
+        this.lastProcessIconId = result.processIconId ?? null;
+      } else {
         this.lastDetected = null;
+        this.lastProcessIconId = null;
       }
 
       if (result.isBusy !== undefined) {
@@ -100,7 +161,7 @@ export class ProcessDetector {
 
       this.lastCurrentCommand = result.currentCommand;
 
-      if (agentChanged || busyChanged || commandChanged) {
+      if (agentChanged || processIconChanged || busyChanged || commandChanged) {
         this.callback(result, this.spawnedAt);
       }
     } catch (_error) {
@@ -127,43 +188,46 @@ export class ProcessDetector {
       command: p.command,
     }));
 
-    const primaryProcess = processes[0];
-    const currentCommand = primaryProcess?.command;
+    let bestMatch: DetectedProcessCandidate | null = null;
+    let order = 0;
 
     for (const proc of processes) {
-      const normalizedName = this.normalizeProcessName(proc.name);
-      const agentType = AGENT_CLI_NAMES[normalizedName.toLowerCase()];
-
-      if (agentType) {
-        return {
-          detected: true,
-          agentType,
-          processName: normalizedName,
-          isBusy,
-          currentCommand,
-        };
+      const candidate = this.buildDetectedCandidate(proc.name, proc.command, order++);
+      if (candidate) {
+        bestMatch = this.selectPreferredCandidate(bestMatch, candidate);
       }
     }
 
-    // On Windows, also check grandchildren for agent processes
+    // On Windows, check grandchildren as well (common when child is a shell wrapper).
     if (process.platform === "win32") {
       for (const child of children.slice(0, 10)) {
         const grandchildren = this.cache.getChildren(child.pid);
         for (const grandchild of grandchildren) {
-          const normalizedName = this.normalizeProcessName(grandchild.comm);
-          const agentType = AGENT_CLI_NAMES[normalizedName.toLowerCase()];
-          if (agentType) {
-            return {
-              detected: true,
-              agentType,
-              processName: normalizedName,
-              isBusy,
-              currentCommand: grandchild.command || grandchild.comm,
-            };
+          const candidate = this.buildDetectedCandidate(
+            grandchild.comm,
+            grandchild.command || grandchild.comm,
+            order++
+          );
+          if (candidate) {
+            bestMatch = this.selectPreferredCandidate(bestMatch, candidate);
           }
         }
       }
     }
+
+    if (bestMatch) {
+      return {
+        detected: true,
+        agentType: bestMatch.agentType,
+        processIconId: bestMatch.processIconId,
+        processName: bestMatch.processName,
+        isBusy,
+        currentCommand: bestMatch.processCommand || processes[0]?.command,
+      };
+    }
+
+    const primaryProcess = processes[0];
+    const currentCommand = primaryProcess?.command;
 
     return { detected: false, isBusy, currentCommand };
   }
@@ -175,5 +239,60 @@ export class ProcessDetector {
   private normalizeProcessName(name: string): string {
     const basename = name.split(/[\\/]/).pop() || name;
     return basename.replace(/\.exe$/i, "");
+  }
+
+  private buildDetectedCandidate(
+    processName: string,
+    processCommand: string | undefined,
+    order: number
+  ): DetectedProcessCandidate | null {
+    const normalizedName = this.normalizeProcessName(processName);
+    const lowerName = normalizedName.toLowerCase();
+    const agentType = AGENT_CLI_NAMES[lowerName];
+    const processIconId = PROCESS_ICON_MAP[lowerName];
+
+    if (!agentType && !processIconId) {
+      return null;
+    }
+
+    return {
+      agentType,
+      processIconId,
+      processName: normalizedName,
+      processCommand,
+      priority: this.getDetectionPriority(agentType, processIconId),
+      order,
+    };
+  }
+
+  private selectPreferredCandidate(
+    current: DetectedProcessCandidate | null,
+    candidate: DetectedProcessCandidate
+  ): DetectedProcessCandidate {
+    if (!current) {
+      return candidate;
+    }
+
+    if (candidate.priority < current.priority) {
+      return candidate;
+    }
+
+    if (candidate.priority === current.priority && candidate.order < current.order) {
+      return candidate;
+    }
+
+    return current;
+  }
+
+  private getDetectionPriority(agentType?: TerminalType, processIconId?: string): number {
+    if (agentType) {
+      return 0;
+    }
+
+    if (processIconId && PACKAGE_MANAGER_ICON_IDS.has(processIconId)) {
+      return 1;
+    }
+
+    return 2;
   }
 }

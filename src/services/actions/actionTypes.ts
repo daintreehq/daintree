@@ -15,7 +15,6 @@ export interface ActionCallbacks {
   onToggleWorktreeOverview: () => void;
   onOpenWorktreeOverview: () => void;
   onCloseWorktreeOverview: () => void;
-  onOpenNewTerminalPalette: () => void;
   onOpenPanelPalette: () => void;
   onOpenProjectSwitcherPalette: () => void;
   onOpenActionPalette: () => void;

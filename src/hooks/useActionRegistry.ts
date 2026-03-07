@@ -4,6 +4,9 @@ import {
   createActionDefinitions,
   type ActionCallbacks,
 } from "@/services/actions/actionDefinitions";
+import type { ActionContext } from "@shared/types/actions";
+import { useTerminalStore } from "@/store/terminalStore";
+import { useProjectStore } from "@/store/projectStore";
 
 export type { ActionCallbacks };
 
@@ -36,7 +39,6 @@ export function useActionRegistry(options: ActionCallbacks): void {
       onToggleWorktreeOverview: () => callbacksRef.current.onToggleWorktreeOverview(),
       onOpenWorktreeOverview: () => callbacksRef.current.onOpenWorktreeOverview(),
       onCloseWorktreeOverview: () => callbacksRef.current.onCloseWorktreeOverview(),
-      onOpenNewTerminalPalette: () => callbacksRef.current.onOpenNewTerminalPalette(),
       onOpenPanelPalette: () => callbacksRef.current.onOpenPanelPalette(),
       onOpenProjectSwitcherPalette: () => callbacksRef.current.onOpenProjectSwitcherPalette(),
       onOpenShortcuts: () => callbacksRef.current.onOpenShortcuts(),
@@ -55,6 +57,26 @@ export function useActionRegistry(options: ActionCallbacks): void {
       const action = createAction();
       actionService.register(action);
     }
+
+    actionService.setContextProvider((): ActionContext => {
+      const project = useProjectStore.getState().currentProject;
+      const terminalState = useTerminalStore.getState();
+      const focusedId = terminalState.focusedId;
+      const focusedTerminal = focusedId
+        ? terminalState.terminals.find((t) => t.id === focusedId)
+        : null;
+
+      return {
+        projectId: project?.id,
+        projectName: project?.name,
+        projectPath: project?.path,
+        activeWorktreeId: callbacksRef.current.getActiveWorktreeId() ?? undefined,
+        focusedTerminalId: focusedId ?? undefined,
+        focusedTerminalKind: focusedTerminal?.kind,
+        focusedTerminalType: focusedTerminal?.type,
+        focusedTerminalTitle: focusedTerminal?.title,
+      };
+    });
 
     registeredRef.current = true;
   }, []);

@@ -43,10 +43,24 @@ describe("urlUtils", () => {
       expect(urls).toContain("http://localhost:5173/");
     });
 
-    it("extracts URL wrapped in OSC 8 hyperlink", () => {
+    it("extracts URL wrapped in OSC 8 hyperlink (BEL terminator)", () => {
       const output = `  ➜  Local:   \x1b]8;;http://localhost:5173/\x07http://localhost:5173/\x1b]8;;\x07`;
       const urls = extractLocalhostUrls(output);
       expect(urls).toContain("http://localhost:5173/");
+    });
+
+    it("extracts URL wrapped in OSC 8 hyperlink (ST terminator — xterm 6 style)", () => {
+      const output = `  ➜  Local:   \x1b]8;;http://localhost:5173/\x1b\\http://localhost:5173/\x1b]8;;\x1b\\`;
+      const urls = extractLocalhostUrls(output);
+      expect(urls).toContain("http://localhost:5173/");
+    });
+
+    it("does not capture BEL control character as part of URL path", () => {
+      // OSC hyperlink wrapping the URL — the BEL (\x07) must not be included in the URL
+      const output = `\x1b]8;;http://localhost:5173/\x07http://localhost:5173/\x1b]8;;\x07`;
+      const urls = extractLocalhostUrls(output);
+      expect(urls).toEqual(["http://localhost:5173/"]);
+      expect(urls[0]).not.toContain("%07");
     });
 
     it("normalizes 0.0.0.0 to localhost", () => {
@@ -101,8 +115,26 @@ describe("urlUtils", () => {
       expect(stripAnsiAndOscCodes("\x1b[32mgreen\x1b[0m")).toBe("green");
     });
 
-    it("strips OSC 8 hyperlinks", () => {
+    it("strips OSC 8 hyperlinks with BEL terminator", () => {
       expect(stripAnsiAndOscCodes("\x1b]8;;http://example.com\x07text\x1b]8;;\x07")).toBe("text");
+    });
+
+    it("strips OSC 8 hyperlinks with ST terminator (xterm 6 style)", () => {
+      expect(stripAnsiAndOscCodes("\x1b]8;;http://example.com\x1b\\text\x1b]8;;\x1b\\")).toBe(
+        "text"
+      );
+    });
+
+    it("strips other OSC sequences with BEL terminator", () => {
+      expect(stripAnsiAndOscCodes("\x1b]0;window title\x07plain")).toBe("plain");
+    });
+
+    it("strips other OSC sequences with ST terminator", () => {
+      expect(stripAnsiAndOscCodes("\x1b]2;window title\x1b\\plain")).toBe("plain");
+    });
+
+    it("strips CSI cursor movement sequences", () => {
+      expect(stripAnsiAndOscCodes("\x1b[2J\x1b[H output")).toBe(" output");
     });
 
     it("returns plain text unchanged", () => {

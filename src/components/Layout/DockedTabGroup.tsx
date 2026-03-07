@@ -33,6 +33,7 @@ import { useDockPanelPortal } from "./DockPanelOffscreenContainer";
 import { SortableTabButton } from "@/components/Panel/SortableTabButton";
 import type { TabGroup } from "@/types";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface DockedTabGroupProps {
   group: TabGroup;
@@ -43,6 +44,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const activeDockTerminalId = useTerminalStore((s) => s.activeDockTerminalId);
   const openDockTerminal = useTerminalStore((s) => s.openDockTerminal);
   const closeDockTerminal = useTerminalStore((s) => s.closeDockTerminal);
+  const moveTerminalToGrid = useTerminalStore((s) => s.moveTerminalToGrid);
   const backendStatus = useTerminalStore((s) => s.backendStatus);
   const setActiveTab = useTerminalStore((s) => s.setActiveTab);
   const setFocused = useTerminalStore((s) => s.setFocused);
@@ -344,7 +346,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const isWaiting = activePanel.agentState === "waiting";
   const isActive = isWorking || isRunning || isWaiting;
   const commandText = activePanel.activityHeadline || activePanel.lastCommand;
-  const brandColor = getBrandColorHex(activePanel.type);
+  const brandColor = getBrandColorHex(activePanel.agentId ?? activePanel.type);
   const agentState = activePanel.agentState;
   const displayTitle = getBaseTitle(activePanel.title);
   const showStateIcon = agentState && agentState !== "idle" && agentState !== "completed";
@@ -357,12 +359,12 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
           <button
             className={cn(
               "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition-all duration-150 max-w-[280px]",
-              "bg-white/[0.02] border-divider text-canopy-text/70",
-              "hover:text-canopy-text hover:bg-white/[0.04]",
+              "bg-[var(--dock-item-bg)] border-[var(--dock-item-border)] text-canopy-text/70",
+              "hover:text-canopy-text hover:bg-[var(--dock-item-bg-hover)]",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
               "cursor-grab active:cursor-grabbing",
               isOpen &&
-                "bg-white/[0.08] text-canopy-text border-canopy-accent/40 ring-1 ring-inset ring-canopy-accent/30"
+                "bg-[var(--dock-item-bg-active)] text-canopy-text border-[var(--dock-item-border-active)] ring-1 ring-inset ring-canopy-accent/30"
             )}
             onClick={(e) => {
               e.preventDefault();
@@ -373,8 +375,13 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                 openDockTerminal(activeTabId);
               }
             }}
-            title={`${activePanel.title} (${panels.length} tabs) - Click to preview, drag to reorder`}
-            aria-label={`${activePanel.title} (${panels.length} tabs) - Click to preview, drag to reorder`}
+            onDoubleClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              moveTerminalToGrid(activePanel.id);
+              closeDockTerminal();
+            }}
+            aria-label={`${activePanel.title} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
           >
             <div
               className={cn(
@@ -385,6 +392,8 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
               <TerminalIcon
                 type={activePanel.type}
                 kind={activePanel.kind}
+                agentId={activePanel.agentId}
+                detectedProcessId={activePanel.detectedProcessId}
                 className="w-3.5 h-3.5"
                 brandColor={brandColor}
               />
@@ -398,31 +407,39 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
 
             {isActive && commandText && (
               <>
-                <div className="h-3 w-px bg-white/10 shrink-0" aria-hidden="true" />
-                <span
-                  className="truncate flex-1 min-w-0 text-[11px] text-canopy-text/50 font-mono"
-                  title={commandText}
-                >
-                  {commandText}
-                </span>
+                <div className="h-3 w-px bg-border-subtle shrink-0" aria-hidden="true" />
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="truncate flex-1 min-w-0 text-[11px] text-canopy-text/50 font-mono">
+                        {commandText}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">{commandText}</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               </>
             )}
 
             {showStateIcon && StateIcon && (
-              <div
-                className={cn("flex items-center shrink-0", STATE_COLORS[agentState])}
-                title={`Agent ${agentState}`}
-              >
-                <StateIcon
-                  className={cn(
-                    "w-3.5 h-3.5",
-                    agentState === "working" && "animate-spin",
-                    agentState === "waiting" && "animate-breathe",
-                    "motion-reduce:animate-none"
-                  )}
-                  aria-hidden="true"
-                />
-              </div>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className={cn("flex items-center shrink-0", STATE_COLORS[agentState])}>
+                      <StateIcon
+                        className={cn(
+                          "w-3.5 h-3.5",
+                          agentState === "working" && "animate-spin",
+                          agentState === "waiting" && "animate-breathe",
+                          "motion-reduce:animate-none"
+                        )}
+                        aria-hidden="true"
+                      />
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">{`Agent ${agentState}`}</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             )}
           </button>
         </PopoverTrigger>
@@ -473,6 +490,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                   title={getBaseTitle(panel.title)}
                   type={panel.type}
                   agentId={panel.agentId}
+                  detectedProcessId={panel.detectedProcessId}
                   kind={panel.kind ?? "terminal"}
                   agentState={panel.agentState}
                   isActive={panel.id === activeTabId}
@@ -481,19 +499,25 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                   onRename={(newTitle) => handleTabRename(panel.id, newTitle)}
                 />
               ))}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleAddTab();
-                }}
-                onPointerDown={(e) => e.stopPropagation()}
-                className="shrink-0 p-1.5 hover:bg-canopy-text/10 text-canopy-text/40 hover:text-canopy-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
-                title="Duplicate panel as new tab"
-                aria-label="Duplicate panel as new tab"
-                type="button"
-              >
-                <Plus className="w-3 h-3" aria-hidden="true" />
-              </button>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleAddTab();
+                      }}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      className="shrink-0 p-1.5 hover:bg-canopy-text/10 text-canopy-text/40 hover:text-canopy-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
+                      aria-label="Duplicate panel as new tab"
+                      type="button"
+                    >
+                      <Plus className="w-3 h-3" aria-hidden="true" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Duplicate panel as new tab</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </div>
           </SortableContext>
         </DndContext>

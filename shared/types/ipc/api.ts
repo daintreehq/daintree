@@ -8,6 +8,7 @@ import type {
   TerminalRecipe,
   TerminalSnapshot,
   TabGroup,
+  StagingStatus,
 } from "../domain.js";
 import type { AgentSettings, AgentSettingsEntry } from "../agentSettings.js";
 
@@ -47,11 +48,13 @@ import type {
 } from "./copyTree.js";
 import type {
   SystemWakePayload,
+  SystemOpenInEditorPayload,
   CliAvailability,
   AgentVersionInfo,
   AgentUpdateSettings,
   StartAgentUpdatePayload,
   StartAgentUpdateResult,
+  SystemHealthCheckResult,
 } from "./system.js";
 import type { AppState, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
@@ -73,9 +76,22 @@ import type { TerminalConfig } from "./config.js";
 import type { HibernationConfig } from "./hibernation.js";
 import type { SystemSleepMetrics } from "./systemSleep.js";
 import type { KeyAction } from "../keymap.js";
+
+export interface KeybindingImportResult {
+  ok: boolean;
+  overrides: Record<string, string[]>;
+  applied: number;
+  skipped: number;
+  errors: string[];
+}
 import type { TerminalStatusPayload, PtyHostActivityTier, SpawnResult } from "../pty-host.js";
 import type { ShowContextMenuPayload } from "../menu.js";
-import type { FileSearchPayload, FileSearchResult } from "./files.js";
+import type {
+  FileSearchPayload,
+  FileSearchResult,
+  FileReadPayload,
+  FileReadResult,
+} from "./files.js";
 import type { SlashCommand, SlashCommandListRequest } from "../slashCommands.js";
 import type {
   DevPreviewEnsureRequest,
@@ -93,9 +109,17 @@ import type {
   BuilderStep,
 } from "../commands.js";
 import type { AppAgentConfig } from "../appAgent.js";
-import type { ActionManifestEntry, ActionContext } from "../actions.js";
-import type { AssistantMessage, AssistantChunkPayload } from "../assistant.js";
+import type { ActionContext } from "../actions.js";
 import type { AgentRegistry, AgentMetadata } from "./agentCapabilities.js";
+import type { AppThemeConfig } from "../appTheme.js";
+
+export interface NotificationSettings {
+  completedEnabled: boolean;
+  waitingEnabled: boolean;
+  failedEnabled: boolean;
+  soundEnabled: boolean;
+  soundFile: string;
+}
 
 // ElectronAPI Type (exposed via preload)
 
@@ -186,6 +210,7 @@ export interface ElectronAPI {
   };
   files: {
     search(payload: FileSearchPayload): Promise<FileSearchResult>;
+    read(payload: FileReadPayload): Promise<FileReadResult>;
   };
   slashCommands: {
     list(payload: SlashCommandListRequest): Promise<SlashCommand[]>;
@@ -213,12 +238,19 @@ export interface ElectronAPI {
     ): Promise<import("./copyTree.js").CopyTreeTestConfigResult>;
     onProgress(callback: (progress: CopyTreeProgress) => void): () => void;
   };
+  editor: {
+    getConfig(projectId?: string): Promise<import("../editor.js").EditorGetConfigResult>;
+    setConfig(payload: import("../editor.js").EditorSetConfigPayload): Promise<void>;
+    discover(): Promise<import("../editor.js").DiscoveredEditor[]>;
+  };
   system: {
     openExternal(url: string): Promise<void>;
     openPath(path: string): Promise<void>;
+    openInEditor(payload: SystemOpenInEditorPayload & { projectId?: string }): Promise<void>;
     checkCommand(command: string): Promise<boolean>;
     checkDirectory(path: string): Promise<boolean>;
     getHomeDir(): Promise<string>;
+    getTmpDir(): Promise<string>;
     getCliAvailability(): Promise<CliAvailability>;
     refreshCliAvailability(): Promise<CliAvailability>;
     getAgentVersions(): Promise<AgentVersionInfo[]>;
@@ -226,6 +258,7 @@ export interface ElectronAPI {
     getAgentUpdateSettings(): Promise<AgentUpdateSettings>;
     setAgentUpdateSettings(settings: AgentUpdateSettings): Promise<void>;
     startAgentUpdate(payload: StartAgentUpdatePayload): Promise<StartAgentUpdateResult>;
+    healthCheck(): Promise<SystemHealthCheckResult>;
     onWake(callback: (data: SystemWakePayload) => void): () => void;
   };
   app: {
@@ -295,6 +328,7 @@ export interface ElectronAPI {
      */
     reopen(projectId: string): Promise<Project>;
     getStats(projectId: string): Promise<ProjectStats>;
+    createFolder(parentPath: string, folderName: string): Promise<string>;
     initGit(directoryPath: string): Promise<void>;
     /** Initialize git repository with progress events */
     initGitGuided(options: GitInitOptions): Promise<GitInitResult>;
@@ -359,6 +393,18 @@ export interface ElectronAPI {
       focusMode: boolean,
       focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean }
     ): Promise<void>;
+    readClaudeMd(projectId: string): Promise<string | null>;
+    writeClaudeMd(projectId: string, content: string): Promise<void>;
+    /**
+     * Enable in-repo settings mode: writes current identity and settings to .canopy/,
+     * then sets project.inRepoSettings = true.
+     */
+    enableInRepoSettings(projectId: string): Promise<Project>;
+    /**
+     * Disable in-repo settings mode: clears project.inRepoSettings flag.
+     * Does NOT delete .canopy/ files.
+     */
+    disableInRepoSettings(projectId: string): Promise<Project>;
   };
   agentSettings: {
     get(): Promise<AgentSettings>;
@@ -526,6 +572,20 @@ export interface ElectronAPI {
       skip?: number;
       limit?: number;
     }): Promise<import("../github.js").GitCommitListResponse>;
+    stageFile(cwd: string, filePath: string): Promise<void>;
+    unstageFile(cwd: string, filePath: string): Promise<void>;
+    stageAll(cwd: string): Promise<void>;
+    unstageAll(cwd: string): Promise<void>;
+    commit(cwd: string, message: string): Promise<{ hash: string; summary: string }>;
+    push(cwd: string, setUpstream?: boolean): Promise<{ success: boolean; error?: string }>;
+    getStagingStatus(cwd: string): Promise<StagingStatus>;
+    compareWorktrees(
+      cwd: string,
+      branch1: string,
+      branch2: string,
+      filePath?: string
+    ): Promise<import("./git.js").CrossWorktreeDiffResult | string>;
+    getUsername(cwd: string): Promise<string | null>;
   };
   terminalConfig: {
     get(): Promise<TerminalConfig>;
@@ -535,6 +595,20 @@ export interface ElectronAPI {
     setFontFamily(fontFamily: string): Promise<void>;
     setHybridInputEnabled(enabled: boolean): Promise<void>;
     setHybridInputAutoFocus(enabled: boolean): Promise<void>;
+    setColorScheme(schemeId: string): Promise<void>;
+    setCustomSchemes(schemesJson: string): Promise<void>;
+    importColorScheme(): Promise<
+      | {
+          ok: true;
+          scheme: {
+            id: string;
+            name: string;
+            type: "dark" | "light";
+            colors: Record<string, string>;
+          };
+        }
+      | { ok: false; errors: string[] }
+    >;
   };
   sidecar: {
     create(payload: import("../sidecar.js").SidecarCreatePayload): Promise<void>;
@@ -577,6 +651,10 @@ export interface ElectronAPI {
     removeOverride(actionId: KeyAction): Promise<void>;
     /** Reset all overrides to defaults */
     resetAll(): Promise<void>;
+    /** Export current overrides to a file via save dialog; returns false if cancelled */
+    exportProfile(): Promise<boolean>;
+    /** Import overrides from a file via open dialog; returns import result */
+    importProfile(): Promise<KeybindingImportResult>;
   };
   worktreeConfig: {
     /** Get worktree path pattern configuration */
@@ -607,6 +685,26 @@ export interface ElectronAPI {
   notification: {
     /** Update window title and dock badge based on terminal attention state */
     updateBadge(state: { waitingCount: number; failedCount: number }): void;
+    /** Get notification settings */
+    getSettings(): Promise<NotificationSettings>;
+    /** Update notification settings (partial update) */
+    setSettings(settings: Partial<NotificationSettings>): Promise<void>;
+    /** Play a sound file by name for preview */
+    playSound(soundFile: string): Promise<void>;
+    /** Show a high-priority watch notification unconditionally (no focus suppression) */
+    showWatchNotification(payload: {
+      title: string;
+      body: string;
+      panelId: string;
+      panelTitle: string;
+      worktreeId?: string;
+    }): void;
+    /** Subscribe to watch notification click → navigate events from main process */
+    onWatchNavigate(
+      callback: (context: { panelId: string; panelTitle: string; worktreeId?: string }) => void
+    ): () => void;
+    /** Sync the renderer's watched panel set to main so AgentNotificationService can gate on it */
+    syncWatchedPanels(panelIds: string[]): void;
   };
   update: {
     onUpdateAvailable(callback: (info: { version: string }) => void): () => void;
@@ -670,25 +768,6 @@ export interface ElectronAPI {
     /** Send confirmation response back to main process */
     sendConfirmationResponse(payload: { requestId: string; approved: boolean }): void;
   };
-  assistant: {
-    /** Send a message to the assistant and receive streaming response with optional tool calling */
-    sendMessage(payload: {
-      sessionId: string;
-      messages: AssistantMessage[];
-      actions?: ActionManifestEntry[];
-      context?: ActionContext;
-    }): Promise<void>;
-    /** Cancel an active streaming session */
-    cancel(sessionId: string): Promise<void>;
-    /** Clear session and remove all listeners associated with it */
-    clearSession(sessionId: string): Promise<void>;
-    /** Check if API key is configured (uses appAgentConfig) */
-    hasApiKey(): Promise<boolean>;
-    /** Acknowledge a pending event by ID */
-    acknowledgeEvent(sessionId: string, eventId: string): Promise<boolean>;
-    /** Subscribe to streaming chunks from the assistant */
-    onChunk(callback: (data: AssistantChunkPayload) => void): () => void;
-  };
   agentCapabilities: {
     /** Get effective registry (built-in + user overrides) */
     getRegistry(): Promise<AgentRegistry>;
@@ -699,4 +778,119 @@ export interface ElectronAPI {
     /** Check if agent is enabled/available */
     isAgentEnabled(agentId: string): Promise<boolean>;
   };
+  clipboard: {
+    saveImage(): Promise<
+      { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string }
+    >;
+  };
+  appTheme: {
+    get(): Promise<AppThemeConfig>;
+    setColorScheme(schemeId: string): Promise<void>;
+    setCustomSchemes(schemesJson: string): Promise<void>;
+    importTheme(): Promise<
+      | {
+          ok: true;
+          scheme: {
+            id: string;
+            name: string;
+            type: "dark" | "light";
+            colors: Record<string, string>;
+          };
+        }
+      | { ok: false; errors: string[] }
+    >;
+  };
+  telemetry: {
+    get(): Promise<{ enabled: boolean; hasSeenPrompt: boolean }>;
+    setEnabled(enabled: boolean): Promise<void>;
+    markPromptShown(): Promise<void>;
+  };
+  voiceInput: {
+    getSettings(): Promise<VoiceInputSettings>;
+    setSettings(settings: Partial<VoiceInputSettings>): Promise<void>;
+    start(): Promise<{ ok: true } | { ok: false; error: string }>;
+    stop(): Promise<void>;
+    sendAudioChunk(chunk: ArrayBuffer): void;
+    onTranscriptionDelta(callback: (delta: string) => void): () => void;
+    onTranscriptionComplete(callback: (text: string) => void): () => void;
+    onError(callback: (error: string) => void): () => void;
+    onStatus(callback: (status: VoiceInputStatus) => void): () => void;
+    checkMicPermission(): Promise<MicPermissionStatus>;
+    requestMicPermission(): Promise<boolean>;
+    openMicSettings(): Promise<void>;
+    validateApiKey(apiKey: string): Promise<{ valid: boolean; error?: string }>;
+  };
+  mcpServer: {
+    /** Get current MCP server status and configuration */
+    getStatus(): Promise<{
+      enabled: boolean;
+      port: number | null;
+      configuredPort: number | null;
+      apiKey: string;
+    }>;
+    /** Enable or disable the MCP server */
+    setEnabled(enabled: boolean): Promise<{
+      enabled: boolean;
+      port: number | null;
+      configuredPort: number | null;
+      apiKey: string;
+    }>;
+    /** Set a fixed port (null = auto-assign ephemeral port) */
+    setPort(port: number | null): Promise<{
+      enabled: boolean;
+      port: number | null;
+      configuredPort: number | null;
+      apiKey: string;
+    }>;
+    /** Set the API key for bearer token authentication (empty string = no auth) */
+    setApiKey(apiKey: string): Promise<{
+      enabled: boolean;
+      port: number | null;
+      configuredPort: number | null;
+      apiKey: string;
+    }>;
+    /** Generate a random API key and persist it */
+    generateApiKey(): Promise<string>;
+    /** Get the JSON config snippet to paste into an MCP client config */
+    getConfigSnippet(): Promise<string>;
+  };
+  mcpBridge: {
+    /** Listen for manifest requests from main process */
+    onGetManifestRequest(callback: (requestId: string) => void): () => void;
+    /** Send action manifest to main process */
+    sendGetManifestResponse(
+      requestId: string,
+      manifest: import("../actions.js").ActionManifestEntry[]
+    ): void;
+    /** Listen for action dispatch requests from main process */
+    onDispatchActionRequest(
+      callback: (payload: {
+        requestId: string;
+        actionId: string;
+        args?: unknown;
+        confirmed?: boolean;
+      }) => void
+    ): () => void;
+    /** Send action dispatch result to main process */
+    sendDispatchActionResponse(payload: {
+      requestId: string;
+      result: import("../actions.js").ActionDispatchResult;
+    }): void;
+  };
 }
+
+export type MicPermissionStatus =
+  | "granted"
+  | "denied"
+  | "not-determined"
+  | "restricted"
+  | "unknown";
+
+export interface VoiceInputSettings {
+  enabled: boolean;
+  apiKey: string;
+  language: string;
+  customDictionary: string[];
+}
+
+export type VoiceInputStatus = "idle" | "connecting" | "recording" | "error";

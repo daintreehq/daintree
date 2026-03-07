@@ -234,9 +234,10 @@ describe("WorkflowPersistence", () => {
     it("uses temp file for atomic write", async () => {
       const runs = [createTestRun()];
 
-      // Spy on fs operations
-      const writeSpy = vi.spyOn(fs, "writeFile");
-      const renameSpy = vi.spyOn(fs, "rename");
+      // Spy on resilient fs wrappers (code uses these instead of raw fs)
+      const fsUtils = await import("../../utils/fs.js");
+      const writeSpy = vi.spyOn(fsUtils, "resilientWriteFile");
+      const renameSpy = vi.spyOn(fsUtils, "resilientRename");
 
       await persistence.save(testProjectId, runs);
 

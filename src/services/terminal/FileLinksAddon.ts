@@ -57,7 +57,16 @@ export class FileLinksAddon implements ILinkProvider {
         end: { x: startIndex + fullMatch.length, y: bufferLineNumber },
       };
 
-      links.push(new FileLink(range, fullMatch, resolved.absolutePath));
+      links.push(
+        new FileLink(
+          range,
+          fullMatch,
+          resolved.absolutePath,
+          resolved.line,
+          resolved.col,
+          this._getCwd()
+        )
+      );
     }
 
     callback(links.length > 0 ? links : undefined);
@@ -111,19 +120,48 @@ class FileLink implements ILink {
   constructor(
     public range: IBufferRange,
     public text: string,
-    private _absolutePath: string
+    private _absolutePath: string,
+    private _line?: number,
+    private _col?: number,
+    private _rootPath?: string
   ) {}
 
-  activate(_event: MouseEvent, _text: string): void {
-    actionService
-      .dispatch("system.openPath", { path: this._absolutePath }, { source: "user" })
-      .then((result) => {
-        if (result.ok) return;
-        return systemClient.openPath(this._absolutePath);
-      })
-      .catch((error) => {
-        console.error("[FileLinksAddon] Failed to open file:", this._absolutePath, error);
-      });
+  activate(event: MouseEvent, _text: string): void {
+    const isModified = event.metaKey || event.ctrlKey;
+
+    if (isModified) {
+      actionService
+        .dispatch(
+          "file.openInEditor",
+          { path: this._absolutePath, line: this._line, col: this._col },
+          { source: "user" }
+        )
+        .then((result) => {
+          if (result.ok) return;
+          return systemClient.openInEditor({
+            path: this._absolutePath,
+            line: this._line,
+            col: this._col,
+          });
+        })
+        .catch((error) => {
+          console.error("[FileLinksAddon] Failed to open in editor:", this._absolutePath, error);
+        });
+    } else {
+      actionService
+        .dispatch(
+          "file.view",
+          { path: this._absolutePath, rootPath: this._rootPath, line: this._line, col: this._col },
+          { source: "user" }
+        )
+        .then((result) => {
+          if (result.ok) return;
+          return systemClient.openPath(this._absolutePath);
+        })
+        .catch((error) => {
+          console.error("[FileLinksAddon] Failed to view file:", this._absolutePath, error);
+        });
+    }
   }
 
   hover?(_event: MouseEvent, _text: string): void {}

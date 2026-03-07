@@ -5,17 +5,20 @@ import {
   dialog,
   powerMonitor,
   MessageChannelMain,
+  MessagePortMain,
   protocol,
   net,
   session,
 } from "electron";
 import path from "path";
+import { existsSync } from "fs";
 import { fileURLToPath, pathToFileURL } from "url";
 import os from "os";
 import { randomBytes } from "crypto";
 import fixPath from "fix-path";
 import { isTrustedRendererUrl } from "../shared/utils/trustedRenderer.js";
 import { isLocalhostUrl } from "../shared/utils/urlUtils.js";
+import { getDevServerUrl } from "../shared/config/devServer.js";
 import { PERF_MARKS } from "../shared/perf/marks.js";
 import type { IpcMainInvokeEvent } from "electron";
 import {
@@ -26,7 +29,82 @@ import {
 
 fixPath();
 
+// Enable native Wayland support on Linux (Electron < 38)
+// Electron 38+ auto-detects via XDG_SESSION_TYPE; this flag is ignored.
+if (process.platform === "linux") {
+  app.commandLine.appendSwitch("ozone-platform-hint", "auto");
+  if (process.env.XDG_SESSION_TYPE === "wayland") {
+    app.commandLine.appendSwitch("enable-features", "WaylandWindowDecorations");
+    app.commandLine.appendSwitch("enable-wayland-ime");
+  }
+}
+
+if (process.platform === "win32") {
+  const extraPaths = [
+    path.join(os.homedir(), "AppData", "Local", "Programs", "Git", "cmd"),
+    "C:\\Program Files\\Git\\cmd",
+    path.join(os.homedir(), ".local", "bin"),
+  ];
+  const current = process.env.PATH || "";
+  const existingEntries = current.split(path.delimiter).map((e) => e.toLowerCase());
+  const missing = extraPaths.filter(
+    (p) => !existingEntries.includes(p.toLowerCase()) && existsSync(p)
+  );
+  if (missing.length) {
+    process.env.PATH = [...missing, current].join(path.delimiter);
+  }
+}
+
+const isSmokeTest = process.argv.includes("--smoke-test");
+const smokeTestStart = isSmokeTest ? Date.now() : 0;
+if (isSmokeTest) {
+  console.log("[SMOKE] Smoke test mode enabled");
+  console.log("[SMOKE] Platform:", process.platform, process.arch);
+  console.log("[SMOKE] Electron:", process.versions.electron);
+  console.log("[SMOKE] Node:", process.versions.node);
+  console.log("[SMOKE] Chrome:", process.versions.chrome);
+
+  // Fail fast on renderer or child process crashes
+  app.on("render-process-gone", (_event, _wc, details) => {
+    if (details.reason !== "clean-exit") {
+      console.error(
+        `[SMOKE] FAILED — renderer process gone: reason=${details.reason}, exitCode=${details.exitCode}`
+      );
+      app.exit(1);
+    }
+  });
+  app.on("child-process-gone", (_event, details) => {
+    if (details.reason !== "clean-exit") {
+      console.error(
+        `[SMOKE] FAILED — child process gone: type=${details.type}, reason=${details.reason}, exitCode=${details.exitCode}`
+      );
+      if (details.type === "GPU" || details.type === "Utility") {
+        app.exit(1);
+      }
+    }
+  });
+
+  // Verify native module (node-pty) loads and bindings work
+  try {
+    const pty = await import("node-pty");
+    const testProc = pty.spawn(process.platform === "win32" ? "cmd.exe" : "echo", ["smoke"], {
+      cols: 80,
+      rows: 24,
+    });
+    testProc.kill();
+    console.log("[SMOKE] CHECK: node-pty native module — OK");
+  } catch (err) {
+    console.error("[SMOKE] FAILED — node-pty native module:", (err as Error).message);
+    app.exit(1);
+  }
+}
+
 app.enableSandbox();
+
+// Prevent macOS keychain prompt ("canopy-app Safe Storage").
+// Chromium encrypts cookies/network state via the OS keychain by default.
+// We don't rely on Chromium cookie encryption — all secrets are in electron-store.
+app.commandLine.appendSwitch("use-mock-keychain");
 
 // Wrap ipcMain.handle globally to enforce sender validation on ALL IPC handlers
 // This must run before any handlers are registered
@@ -94,7 +172,57 @@ function enforceIpcSenderValidation() {
     } as typeof ipcMain.handleOnce;
   }
 
-  console.log("[MAIN] IPC sender validation enforced globally");
+  // Extend validation to ipcMain.on (fire-and-forget channels like terminal:input).
+  // Unlike handle channels which can throw, on channels silently drop untrusted messages.
+  // We maintain a listener map so removeListener/off can find wrapped versions.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- IPC listeners have heterogeneous signatures
+  type IpcOnListener = (...args: any[]) => void;
+  const onListenerMap = new Map<string, Map<IpcOnListener, IpcOnListener>>();
+
+  const originalOn = ipcMain.on.bind(ipcMain);
+  ipcMain.on = function (channel: string, listener: IpcOnListener) {
+    const wrapped = (event: Electron.IpcMainEvent, ...args: unknown[]) => {
+      const senderUrl = event.senderFrame?.url;
+      if (!senderUrl || !isTrustedRendererUrl(senderUrl)) {
+        console.warn(
+          `[IPC] Rejected ipcMain.on message from untrusted origin: channel=${channel}, url=${senderUrl || "unknown"}`
+        );
+        return;
+      }
+      return listener(event, ...args);
+    };
+
+    if (!onListenerMap.has(channel)) onListenerMap.set(channel, new Map());
+    onListenerMap.get(channel)!.set(listener, wrapped);
+
+    return originalOn(channel, wrapped);
+  } as typeof ipcMain.on;
+
+  const originalRemoveListener = ipcMain.removeListener.bind(ipcMain);
+  ipcMain.removeListener = function (channel: string, listener: IpcOnListener) {
+    const channelMap = onListenerMap.get(channel);
+    const wrapped = channelMap?.get(listener);
+    if (wrapped) {
+      channelMap!.delete(listener);
+      if (channelMap!.size === 0) onListenerMap.delete(channel);
+      return originalRemoveListener(channel, wrapped as IpcOnListener);
+    }
+    return originalRemoveListener(channel, listener);
+  } as typeof ipcMain.removeListener;
+
+  ipcMain.off = ipcMain.removeListener;
+
+  const originalRemoveAllListeners = ipcMain.removeAllListeners.bind(ipcMain);
+  ipcMain.removeAllListeners = function (channel?: string) {
+    if (channel !== undefined) {
+      onListenerMap.delete(channel);
+    } else {
+      onListenerMap.clear();
+    }
+    return originalRemoveAllListeners(channel);
+  } as typeof ipcMain.removeAllListeners;
+
+  console.log("[MAIN] IPC sender validation enforced globally (handle + on)");
 }
 
 // CRITICAL: Run this before any IPC handlers are registered
@@ -118,6 +246,7 @@ protocol.registerSchemesAsPrivileged([
 app.commandLine.appendSwitch("js-flags", "--max-old-space-size=4096");
 
 import { registerIpcHandlers, sendToRenderer } from "./ipc/handlers.js";
+import type { HandlerDependencies } from "./ipc/types.js";
 import { registerErrorHandlers } from "./ipc/errorHandlers.js";
 import { PtyClient, disposePtyClient } from "./services/PtyClient.js";
 import {
@@ -131,7 +260,6 @@ import { AgentUpdateHandler } from "./services/AgentUpdateHandler.js";
 import { SidecarManager } from "./services/SidecarManager.js";
 import { createWindowWithState } from "./windowState.js";
 import { setLoggerWindow, initializeLogger } from "./utils/logger.js";
-import { initializeAssistantLogger } from "./utils/assistantLogger.js";
 import { openExternalUrl } from "./utils/openExternal.js";
 import {
   classifyPartition,
@@ -141,7 +269,7 @@ import {
 } from "./utils/webviewCsp.js";
 import { EventBuffer } from "./services/EventBuffer.js";
 import { CHANNELS } from "./ipc/channels.js";
-import { createApplicationMenu } from "./menu.js";
+import { createApplicationMenu, handleDirectoryOpen } from "./menu.js";
 import { resolveAppUrlToDistPath, getMimeType, buildHeaders } from "./utils/appProtocol.js";
 import { projectStore } from "./services/ProjectStore.js";
 import { taskQueueService } from "./services/TaskQueueService.js";
@@ -156,6 +284,7 @@ import {
   getSystemSleepService,
 } from "./services/SystemSleepService.js";
 import { notificationService } from "./services/NotificationService.js";
+import { agentNotificationService } from "./services/AgentNotificationService.js";
 import { registerCommands } from "./services/commands/index.js";
 import {
   initializeTaskOrchestrator,
@@ -169,16 +298,21 @@ import { initializeAgentRouter, disposeAgentRouter } from "./services/AgentRoute
 import { initializeWorkflowEngine, disposeWorkflowEngine } from "./services/WorkflowEngine.js";
 import { workflowLoader } from "./services/WorkflowLoader.js";
 import { autoUpdaterService } from "./services/AutoUpdaterService.js";
+import { SMOKE_BOOT_TIMEOUT_MS, runSmokeFunctionalChecks } from "./services/smokeTest.js";
+import { initializeTelemetry } from "./services/TelemetryService.js";
+import { mcpServerService } from "./services/McpServerService.js";
 
 // Initialize logger early with userData path
 initializeLogger(app.getPath("userData"));
-initializeAssistantLogger();
 
 // Register commands early so they're available when IPC handlers start
 registerCommands();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Telemetry must be initialized before error handlers so Sentry captures uncaught errors
+void initializeTelemetry();
 
 process.on("uncaughtException", (error) => {
   console.error("[FATAL] Uncaught Exception:", error);
@@ -199,6 +333,11 @@ let cleanupIpcHandlers: (() => void) | null = null;
 let cleanupErrorHandlers: (() => void) | null = null;
 let eventBuffer: EventBuffer | null = null;
 let eventBufferUnsubscribe: (() => void) | null = null;
+// Retain strong references to MessagePorts to prevent V8 GC from collecting them,
+// which can cause ACCESS_VIOLATION crashes on Windows (the C++ backing objects get freed
+// while the utility process still references them).
+let activeRendererPort: MessagePortMain | null = null;
+let activePtyHostPort: MessagePortMain | null = null;
 let stopEventLoopLagMonitor: (() => void) | null = null;
 let stopProcessMemoryMonitor: (() => void) | null = null;
 
@@ -207,17 +346,45 @@ const DEFAULT_TERMINAL_ID = "default";
 let isQuitting = false;
 let resumeTimeout: NodeJS.Timeout | null = null;
 
-const gotTheLock = app.requestSingleInstanceLock();
+/** Path passed via CLI that hasn't been opened yet (app may still be initializing) */
+let pendingCliPath: string | null = null;
+
+function extractCliPath(argv: string[]): string | null {
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--cli-path" && argv[i + 1]) {
+      return argv[i + 1];
+    }
+    if (argv[i].startsWith("--cli-path=")) {
+      return argv[i].slice("--cli-path=".length);
+    }
+  }
+  return null;
+}
+
+const gotTheLock = isSmokeTest || app.requestSingleInstanceLock();
 
 if (!gotTheLock) {
   console.log("[MAIN] Another instance is already running. Quitting...");
   app.quit();
 } else {
-  app.on("second-instance", (_event, _commandLine, _workingDirectory) => {
+  app.on("second-instance", (_event, commandLine, _workingDirectory) => {
     console.log("[MAIN] Second instance detected, focusing main window");
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
+    }
+    const cliPath = extractCliPath(commandLine);
+    if (cliPath) {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        console.log("[MAIN] Opening CLI path from second instance:", cliPath);
+        handleDirectoryOpen(cliPath, mainWindow, cliAvailabilityService ?? undefined).catch((err) =>
+          console.error("[MAIN] Failed to open CLI path:", err)
+        );
+      } else {
+        // Window not ready yet — queue for when createWindow() completes
+        pendingCliPath = cliPath;
+        console.log("[MAIN] Queuing CLI path for when window is ready:", cliPath);
+      }
     }
   });
 
@@ -245,7 +412,7 @@ if (!gotTheLock) {
   });
 
   app.on("before-quit", (event) => {
-    if (isQuitting || !mainWindow) {
+    if (isQuitting || !mainWindow || isSmokeTest) {
       return;
     }
 
@@ -262,6 +429,7 @@ if (!gotTheLock) {
 
     Promise.all([
       workspaceClient ? workspaceClient.dispose() : Promise.resolve(),
+      mcpServerService.stop(),
       new Promise<void>((resolve) => {
         // Dispose orchestrator and routing before ptyClient to prevent event handlers from firing
         disposeTaskOrchestrator();
@@ -441,6 +609,10 @@ async function initializeDeferredServices(
   eventBuf.start();
   console.log("[MAIN] EventBuffer started");
 
+  mcpServerService.start(window).catch((err) => {
+    console.error("[MAIN] MCP server failed to start:", err);
+  });
+
   const elapsed = Date.now() - startTime;
   console.log(`[MAIN] All deferred services initialized in ${elapsed}ms`);
 }
@@ -453,25 +625,32 @@ async function createWindow(): Promise<void> {
     return;
   }
 
+  let smokeTestTimer: ReturnType<typeof setTimeout> | undefined;
+  let smokeRendererUnresponsive = false;
+  if (isSmokeTest) {
+    console.log("[SMOKE] Starting %ds startup safety timeout", SMOKE_BOOT_TIMEOUT_MS / 1000);
+    smokeTestTimer = setTimeout(() => {
+      console.error("[SMOKE] FAILED — app did not finish loading within startup timeout");
+      app.exit(1);
+    }, SMOKE_BOOT_TIMEOUT_MS);
+    smokeTestTimer.unref();
+  }
+
   // Lock down permissions on untrusted sessions to prevent OS permission prompts
   // Deny all for untrusted content (browser, dev-preview, sidecar)
-  // Allow minimal permissions for trusted app renderer (clipboard only)
+  // Allow minimal permissions for trusted app renderer (clipboard read/write only)
   function lockdownUntrustedPermissions(ses: Electron.Session): void {
     ses.setPermissionRequestHandler((_wc, _perm, callback) => callback(false));
     ses.setPermissionCheckHandler(() => false);
   }
 
   function lockdownTrustedPermissions(ses: Electron.Session): void {
+    const trustedPermissions = new Set(["clipboard-sanitized-write", "clipboard-read"]);
     ses.setPermissionRequestHandler((_wc, permission, callback) => {
-      // Allow only clipboard-write for trusted app renderer
-      if (permission === "clipboard-sanitized-write") {
-        callback(true);
-      } else {
-        callback(false);
-      }
+      callback(trustedPermissions.has(permission));
     });
     ses.setPermissionCheckHandler((_wc, permission) => {
-      return permission === "clipboard-sanitized-write";
+      return trustedPermissions.has(permission);
     });
   }
 
@@ -559,22 +738,49 @@ async function createWindow(): Promise<void> {
       webviewTag: true,
       navigateOnDragDrop: false,
     },
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 12, y: 18 },
-    backgroundColor: "#18181b",
+    ...(process.platform === "darwin"
+      ? {
+          titleBarStyle: "hiddenInset" as const,
+          trafficLightPosition: { x: 12, y: 18 },
+        }
+      : {
+          titleBarStyle: "hidden" as const,
+          ...(process.platform === "win32" && {
+            titleBarOverlay: {
+              color: "#19191a",
+              symbolColor: "#a1a1aa",
+              height: 36,
+            },
+          }),
+        }),
+    backgroundColor: "#19191a",
   });
   markPerformance(PERF_MARKS.MAIN_WINDOW_CREATED);
 
-  console.log("[MAIN] Window created, loading content immediately (Paint First)...");
-
-  // LOAD RENDERER IMMEDIATELY
-  if (process.env.NODE_ENV === "development") {
-    console.log("[MAIN] Loading Vite dev server at http://localhost:5173");
-    mainWindow.loadURL("http://localhost:5173");
-  } else {
-    console.log("[MAIN] Loading production build via app:// protocol");
-    mainWindow.loadURL("app://canopy/index.html");
+  if (isSmokeTest) {
+    mainWindow.on("unresponsive", () => {
+      smokeRendererUnresponsive = true;
+      console.error("[SMOKE] FAILED — main window became unresponsive");
+    });
   }
+
+  let rendererLoadRequested = false;
+  const loadRenderer = (reason: string): void => {
+    if (!mainWindow || mainWindow.isDestroyed() || rendererLoadRequested) return;
+    rendererLoadRequested = true;
+    console.log(`[MAIN] Loading renderer (${reason})...`);
+    if (process.env.NODE_ENV === "development") {
+      const devServerUrl = getDevServerUrl();
+      console.log(`[MAIN] Loading Vite dev server at ${devServerUrl}`);
+      mainWindow.loadURL(devServerUrl);
+    } else {
+      console.log("[MAIN] Loading production build via app:// protocol");
+      mainWindow.loadURL("app://canopy/index.html");
+    }
+  };
+
+  // Renderer load is deferred until after IPC handlers are registered to prevent
+  // race conditions where the renderer makes IPC calls before handlers exist.
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     console.log("[MAIN] setWindowOpenHandler triggered with URL:", url);
@@ -726,9 +932,12 @@ async function createWindow(): Promise<void> {
 
   // Initialize Notification Service
   notificationService.initialize(mainWindow);
+  agentNotificationService.initialize();
   console.log("[MAIN] NotificationService initialized");
 
-  // Initialize Service Instances (Start processes in background)
+  // Initialize Service Instances
+  // On Windows, stagger utility process forks to reduce resource contention
+  // that can cause ACCESS_VIOLATION (0xC0000005) crashes on CI runners.
   console.log("[MAIN] Starting critical services...");
 
   ptyClient = new PtyClient({
@@ -780,49 +989,92 @@ async function createWindow(): Promise<void> {
     }
   });
 
+  // Initialize synchronous services before handler registration
+  eventBuffer = new EventBuffer(1000);
+  sidecarManager = new SidecarManager(mainWindow);
+
+  // Register IPC handlers BEFORE loading the renderer so that no IPC calls
+  // arrive before handlers exist. The deps object is mutable — workspaceClient
+  // is assigned after pty-host is ready, and handlers access it lazily.
+  console.log("[MAIN] Registering IPC handlers...");
+  const handlerDeps: HandlerDependencies = {
+    mainWindow,
+    ptyClient,
+    eventBuffer,
+    sidecarManager,
+    cliAvailabilityService,
+    agentVersionService,
+    agentUpdateHandler,
+  };
+  cleanupIpcHandlers = registerIpcHandlers(handlerDeps);
+
+  // Wait for pty-host to be ready before forking workspace-host.
+  // Staggering prevents two utility processes from simultaneously loading
+  // native modules (node-pty, simple-git) which can crash on Windows CI.
+  console.log("[MAIN] Waiting for Pty Host to be ready before starting Workspace Host...");
+  try {
+    await ptyClient.waitForReady();
+    console.log("[MAIN] Pty Host ready, starting Workspace Host...");
+  } catch (error) {
+    console.error("[MAIN] Pty Host failed to start:", error);
+  }
+
   workspaceClient = getWorkspaceClient({
     maxRestartAttempts: 3,
     healthCheckIntervalMs: 60000,
     showCrashDialog: true,
   });
 
-  // Initialize Placeholder Services
-  eventBuffer = new EventBuffer(1000);
-  sidecarManager = new SidecarManager(mainWindow);
+  // Assign late-init workspaceClient to deps so handlers see it
+  handlerDeps.worktreeService = workspaceClient;
 
-  // Register Handlers IMMEDIATELY (so IPC doesn't fail if UI is fast)
-  console.log("[MAIN] Registering IPC handlers...");
-  cleanupIpcHandlers = registerIpcHandlers(
-    mainWindow,
-    ptyClient,
-    workspaceClient,
-    eventBuffer,
-    cliAvailabilityService,
-    agentVersionService,
-    agentUpdateHandler,
-    sidecarManager
-  );
+  // Now safe to load renderer — all handlers registered and all services ready
+  loadRenderer("after-services-ready");
+
   cleanupErrorHandlers = registerErrorHandlers(mainWindow, workspaceClient, ptyClient);
 
+  console.log("[MAIN] All critical services ready");
+
   function createAndDistributePorts(): void {
+    // Close previous ports before creating new ones
+    if (activeRendererPort) {
+      try {
+        activeRendererPort.close();
+      } catch {
+        // ignore
+      }
+    }
+    if (activePtyHostPort) {
+      try {
+        activePtyHostPort.close();
+      } catch {
+        // ignore
+      }
+    }
+
     const { port1, port2 } = new MessageChannelMain();
     const handshakeToken = randomBytes(32).toString("hex");
 
+    // Retain strong references to prevent V8 GC from freeing the C++ backing
+    // objects while utility processes still hold references — this can cause
+    // ACCESS_VIOLATION (0xC0000005) crashes on Windows.
+    activeRendererPort = port1;
+    activePtyHostPort = port2;
+
     if (ptyClient) {
       ptyClient.connectMessagePort(port2);
-      // console.log("[MAIN] MessagePort sent to Pty Host");
     }
 
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.postMessage("terminal-port-token", { token: handshakeToken });
       mainWindow.webContents.postMessage("terminal-port", { token: handshakeToken }, [port1]);
-      // console.log("[MAIN] MessagePort sent to renderer");
     }
   }
 
   // Handle reloads
   mainWindow.webContents.on("did-finish-load", () => {
     console.log("[MAIN] Renderer loaded, ensuring MessagePort connection...");
+    if (isSmokeTest) console.log("[SMOKE] CHECK: Renderer did-finish-load — OK");
     markPerformance(PERF_MARKS.RENDERER_READY);
     createAndDistributePorts();
   });
@@ -831,12 +1083,13 @@ async function createWindow(): Promise<void> {
     console.error(`[MAIN] Workspace Host crashed with code ${code}`);
   });
 
-  // WAIT for services to be ready (Parallel)
-  console.log("[MAIN] Waiting for services to initialize...");
+  // WAIT for remaining services (pty-host already awaited above during staggered startup)
+  console.log("[MAIN] Waiting for remaining services to initialize...");
   let ptyReady = false;
   let workspaceReady = false;
 
   try {
+    // pty-host was already awaited before workspace-host fork; re-check resolves instantly
     const results = await Promise.allSettled([
       ptyClient.waitForReady(),
       workspaceClient.waitForReady(),
@@ -903,7 +1156,7 @@ async function createWindow(): Promise<void> {
     console.log("[MAIN] Spawning default terminal...");
     try {
       ptyClient.spawn(DEFAULT_TERMINAL_ID, {
-        cwd: process.env.HOME || os.homedir(),
+        cwd: os.homedir(),
         cols: 80,
         rows: 30,
         projectId: currentProjectId ?? undefined,
@@ -1022,10 +1275,66 @@ async function createWindow(): Promise<void> {
   // Initialize auto-updater (checks for updates on startup and periodically)
   autoUpdaterService.initialize(mainWindow);
 
+  if (isSmokeTest) {
+    if (smokeTestTimer) clearTimeout(smokeTestTimer);
+    const bootMs = Date.now() - smokeTestStart;
+    console.log("[SMOKE] CHECK: Window created — OK");
+    console.log("[SMOKE] CHECK: PTY service — %s", ptyReady ? "OK" : "FAILED");
+    console.log("[SMOKE] CHECK: Workspace service — %s", workspaceReady ? "OK" : "FAILED");
+    console.log("[SMOKE] CHECK: Auto-updater module — OK");
+    console.log("[SMOKE] GPU feature status:", JSON.stringify(app.getGPUFeatureStatus()));
+    console.log("[SMOKE] Boot completed in %dms", bootMs);
+
+    if (!ptyReady || !workspaceReady) {
+      console.error("[SMOKE] FAILED — one or more services did not start");
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
+      workspaceClient.dispose();
+      ptyClient.dispose();
+      app.exit(1);
+      return;
+    }
+
+    // ptyClient is guaranteed non-null here since ptyReady is true,
+    // but TypeScript can't narrow through the boolean check.
+    const smokeClient = ptyClient!;
+    const allPassed = await runSmokeFunctionalChecks(
+      mainWindow,
+      smokeClient,
+      () => smokeRendererUnresponsive
+    );
+
+    // Destroy window first to stop renderer IPC calls, then dispose clients
+    // to suppress host-exit handlers, then exit.
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
+    try {
+      workspaceClient.dispose();
+    } catch {
+      // Ignore cleanup errors in smoke mode.
+    }
+    try {
+      ptyClient.dispose();
+    } catch {
+      // Ignore cleanup errors in smoke mode.
+    }
+    app.exit(allPassed ? 0 : 1);
+    return;
+  }
+
   // Initialize Deferred Services
   initializeDeferredServices(mainWindow, cliAvailabilityService!, eventBuffer!).catch((error) => {
     console.error("[MAIN] Deferred services initialization failed:", error);
   });
+
+  // Handle path provided via CLI on first launch (e.g. `canopy /path/to/repo`)
+  const firstLaunchCliPath = extractCliPath(process.argv);
+  const cliPath = firstLaunchCliPath ?? pendingCliPath;
+  if (cliPath) {
+    pendingCliPath = null;
+    console.log("[MAIN] Opening CLI path from launch args:", cliPath);
+    handleDirectoryOpen(cliPath, mainWindow, cliAvailabilityService ?? undefined).catch((err) =>
+      console.error("[MAIN] Failed to open CLI path:", err)
+    );
+  }
 
   if (process.env.CANOPY_PERF_CAPTURE === "1" && !stopEventLoopLagMonitor) {
     stopEventLoopLagMonitor = startEventLoopLagMonitor();
@@ -1074,6 +1383,7 @@ async function createWindow(): Promise<void> {
 
     getSystemSleepService().dispose();
     notificationService.dispose();
+    agentNotificationService.dispose();
     autoUpdaterService.dispose();
 
     setLoggerWindow(null);

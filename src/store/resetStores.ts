@@ -9,8 +9,6 @@ import { useErrorStore } from "./errorStore";
 import { useNotificationStore } from "./notificationStore";
 import { cleanupNotesStore } from "./notesStore";
 import { useRecipeStore } from "./recipeStore";
-import { useAssistantChatStore } from "./assistantChatStore";
-
 interface ProjectSwitchResetOptions {
   preserveTerminalIds?: Set<string>;
 }
@@ -37,6 +35,4 @@ export async function resetAllStoresForProjectSwitch(
   useErrorStore.getState().reset();
   useNotificationStore.getState().reset();
   cleanupNotesStore();
-  // Reset assistant chat conversations on project switch
-  useAssistantChatStore.getState().reset();
 }

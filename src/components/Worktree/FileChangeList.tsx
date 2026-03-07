@@ -3,6 +3,7 @@ import type { FileChangeDetail, GitStatus } from "../../types";
 import { cn } from "../../lib/utils";
 import { FileDiffModal } from "./FileDiffModal";
 import { Folder } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 function isAbsolutePath(filePath: string): boolean {
   return (
@@ -28,13 +29,14 @@ function getBasename(filePath: string): string {
 }
 
 const STATUS_CONFIG: Record<GitStatus, { label: string; color: string }> = {
-  modified: { label: "M", color: "text-[var(--color-status-warning)]" },
-  added: { label: "A", color: "text-[var(--color-status-success)]" },
-  deleted: { label: "D", color: "text-[var(--color-status-error)]" },
-  untracked: { label: "?", color: "text-[var(--color-status-success)]" },
-  renamed: { label: "R", color: "text-[var(--color-status-info)]" },
-  copied: { label: "C", color: "text-[var(--color-status-info)]" },
+  modified: { label: "M", color: "text-status-warning" },
+  added: { label: "A", color: "text-status-success" },
+  deleted: { label: "D", color: "text-status-error" },
+  untracked: { label: "?", color: "text-status-success" },
+  renamed: { label: "R", color: "text-status-info" },
+  copied: { label: "C", color: "text-status-info" },
   ignored: { label: "I", color: "text-canopy-text/40" },
+  conflicted: { label: "!", color: "text-status-error" },
 };
 
 const STATUS_PRIORITY: Record<GitStatus, number> = {
@@ -45,6 +47,7 @@ const STATUS_PRIORITY: Record<GitStatus, number> = {
   copied: 4,
   untracked: 5,
   ignored: 6,
+  conflicted: 7,
 };
 
 interface FileChangeListProps {
@@ -179,34 +182,39 @@ export function FileChangeList({
     const displayDir = formatDirForDisplay(dir);
 
     return (
-      <div
-        key={`${change.path}-${change.status}`}
-        className="group flex items-center text-xs font-mono hover:bg-white/5 rounded px-1.5 py-0.5 -mx-1.5 cursor-pointer transition-colors"
-        onClick={() => handleFileClick(change)}
-        title={change.relativePath}
-      >
-        <span className={cn("w-4 font-bold shrink-0", config.color)}>{config.label}</span>
+      <TooltipProvider key={`${change.path}-${change.status}`}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div
+              className="group flex items-center text-xs font-mono hover:bg-white/5 rounded px-1.5 py-0.5 -mx-1.5 cursor-pointer transition-colors"
+              onClick={() => handleFileClick(change)}
+            >
+              <span className={cn("w-4 font-bold shrink-0", config.color)}>{config.label}</span>
 
-        <div className="flex-1 min-w-0 flex items-center mr-2">
-          {showDir && displayDir && (
-            <span className="truncate min-w-0 text-canopy-text/60 opacity-60 group-hover:opacity-80">
-              {displayDir}/
-            </span>
-          )}
-          <span className="text-canopy-text group-hover:text-white font-medium truncate min-w-0">
-            {base}
-          </span>
-        </div>
+              <div className="flex-1 min-w-0 flex items-center mr-2">
+                {showDir && displayDir && (
+                  <span className="truncate min-w-0 text-canopy-text/60 opacity-60 group-hover:opacity-80">
+                    {displayDir}/
+                  </span>
+                )}
+                <span className="text-canopy-text group-hover:text-white font-medium truncate min-w-0">
+                  {base}
+                </span>
+              </div>
 
-        <div className="flex items-center gap-2 shrink-0 text-[11px]">
-          {(change.insertions ?? 0) > 0 && (
-            <span className="text-[var(--color-status-success)]/80">+{change.insertions}</span>
-          )}
-          {(change.deletions ?? 0) > 0 && (
-            <span className="text-[var(--color-status-error)]/80">-{change.deletions}</span>
-          )}
-        </div>
-      </div>
+              <div className="flex items-center gap-2 shrink-0 text-[11px]">
+                {(change.insertions ?? 0) > 0 && (
+                  <span className="text-status-success/80">+{change.insertions}</span>
+                )}
+                {(change.deletions ?? 0) > 0 && (
+                  <span className="text-status-error/80">-{change.deletions}</span>
+                )}
+              </div>
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{change.relativePath}</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     );
   };
 

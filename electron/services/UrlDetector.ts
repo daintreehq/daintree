@@ -9,7 +9,7 @@ export interface ScanResult {
 
 export class UrlDetector {
   scanOutput(data: string, buffer: string): ScanResult {
-    const newBuffer = (buffer + data).slice(-4096);
+    const newBuffer = (buffer + data).slice(-8192);
 
     let urls = extractLocalhostUrls(data);
     if (urls.length === 0) {

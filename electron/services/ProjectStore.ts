@@ -15,6 +15,7 @@ import { existsSync } from "fs";
 import { app } from "electron";
 import { GitService } from "./GitService.js";
 import { isCanopyError } from "../utils/errorTypes.js";
+import { resilientRename, resilientWriteFile, resilientUnlink } from "../utils/fs.js";
 import { sanitizeSvg } from "../../shared/utils/svgSanitizer.js";
 import { TerminalSnapshotSchema, filterValidTerminalEntries } from "../schemas/ipc.js";
 import { logError } from "../utils/logger.js";
@@ -25,6 +26,12 @@ const SETTINGS_FILENAME = "settings.json";
 const RECIPES_FILENAME = "recipes.json";
 const WORKFLOWS_FILENAME = "workflows.json";
 const PROJECT_STATE_CACHE_TTL_MS = 60_000;
+const CANOPY_PROJECT_JSON = ".canopy/project.json";
+const CANOPY_SETTINGS_JSON = ".canopy/settings.json";
+const MAX_PROJECT_NAME_LENGTH = 100;
+export const DEFAULT_PROJECT_EMOJI = "🌲";
+// UTF-8 BOM that editors may prepend to JSON files
+const UTF8_BOM = "\uFEFF";
 
 interface ProjectStateCacheEntry {
   expiresAt: number;
@@ -42,6 +49,60 @@ export class ProjectStore {
   async initialize(): Promise<void> {
     if (!existsSync(this.projectsConfigDir)) {
       await fs.mkdir(this.projectsConfigDir, { recursive: true });
+    }
+  }
+
+  /**
+   * Read portable project identity from .canopy/project.json in the repository root.
+   *
+   * Expected schema:
+   * {
+   *   "version": 1,
+   *   "name": "My Project",    // optional, string, max 100 chars
+   *   "emoji": "🚀",           // optional, string
+   *   "color": "#ff6600"       // optional, string
+   * }
+   *
+   * Returns an empty object if the file is absent, unreadable, or malformed.
+   */
+  async readInRepoProjectIdentity(
+    projectPath: string
+  ): Promise<{ name?: string; emoji?: string; color?: string; found: boolean }> {
+    const filePath = path.join(projectPath, CANOPY_PROJECT_JSON);
+    try {
+      let content = await fs.readFile(filePath, "utf-8");
+      if (content.startsWith(UTF8_BOM)) {
+        content = content.slice(1);
+      }
+      const parsed = JSON.parse(content);
+
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        return { found: false };
+      }
+
+      if (!Number.isFinite(parsed.version) || !Number.isInteger(parsed.version)) {
+        return { found: false };
+      }
+
+      const result: { name?: string; emoji?: string; color?: string; found: boolean } = {
+        found: true,
+      };
+
+      if (typeof parsed.name === "string" && parsed.name.trim().length > 0) {
+        result.name = parsed.name.trim().slice(0, MAX_PROJECT_NAME_LENGTH);
+      }
+
+      if (typeof parsed.emoji === "string" && parsed.emoji.trim().length > 0) {
+        result.emoji = parsed.emoji.trim();
+      }
+
+      if (typeof parsed.color === "string" && parsed.color.trim().length > 0) {
+        result.color = parsed.color.trim();
+      }
+
+      return result;
+    } catch {
+      return { found: false };
     }
   }
 
@@ -109,13 +170,17 @@ export class ProjectStore {
       return this.updateProject(existing.id, { lastOpened: Date.now() });
     }
 
+    const inRepo = await this.readInRepoProjectIdentity(normalizedPath);
+
     const project: Project = {
       id: this.generateProjectId(normalizedPath),
       path: normalizedPath,
-      name: path.basename(normalizedPath),
-      emoji: "🌲",
+      name: inRepo.name ?? path.basename(normalizedPath),
+      emoji: inRepo.emoji ?? DEFAULT_PROJECT_EMOJI,
       lastOpened: Date.now(),
       status: "closed",
+      ...(inRepo.color ? { color: inRepo.color } : {}),
+      ...(inRepo.found ? { canopyConfigPresent: true } : {}),
     };
 
     const projects = this.getAllProjects();
@@ -170,6 +235,9 @@ export class ProjectStore {
     if (updates.color !== undefined) safeUpdates.color = updates.color;
     if (updates.lastOpened !== undefined) safeUpdates.lastOpened = updates.lastOpened;
     if (updates.status !== undefined) safeUpdates.status = updates.status;
+    if (updates.canopyConfigPresent !== undefined)
+      safeUpdates.canopyConfigPresent = updates.canopyConfigPresent;
+    if (updates.inRepoSettings !== undefined) safeUpdates.inRepoSettings = updates.inRepoSettings;
 
     const updated = { ...projects[index], ...safeUpdates };
     projects[index] = updated;
@@ -391,8 +459,8 @@ export class ProjectStore {
       if (ensureDir) {
         await fs.mkdir(stateDir, { recursive: true });
       }
-      await fs.writeFile(tempFilePath, JSON.stringify(validatedState, null, 2), "utf-8");
-      await fs.rename(tempFilePath, stateFilePath);
+      await resilientWriteFile(tempFilePath, JSON.stringify(validatedState, null, 2), "utf-8");
+      await resilientRename(tempFilePath, stateFilePath);
     };
 
     try {
@@ -474,7 +542,7 @@ export class ProjectStore {
       console.error(`[ProjectStore] Failed to load state for project ${projectId}:`, error);
       try {
         const quarantinePath = `${stateFilePath}.corrupted`;
-        await fs.rename(stateFilePath, quarantinePath);
+        await resilientRename(stateFilePath, quarantinePath);
         console.warn(`[ProjectStore] Corrupted state file moved to ${quarantinePath}`);
       } catch {
         // Ignore
@@ -615,6 +683,20 @@ export class ProjectStore {
           sanitizedCommandOverrides && sanitizedCommandOverrides.length > 0
             ? sanitizedCommandOverrides
             : undefined,
+        preferredEditor:
+          parsed.preferredEditor &&
+          typeof parsed.preferredEditor === "object" &&
+          typeof (parsed.preferredEditor as Record<string, unknown>).id === "string"
+            ? (parsed.preferredEditor as import("../../shared/types/editor.js").EditorConfig)
+            : undefined,
+        branchPrefixMode:
+          parsed.branchPrefixMode === "none" ||
+          parsed.branchPrefixMode === "username" ||
+          parsed.branchPrefixMode === "custom"
+            ? parsed.branchPrefixMode
+            : undefined,
+        branchPrefixCustom:
+          typeof parsed.branchPrefixCustom === "string" ? parsed.branchPrefixCustom : undefined,
       };
 
       return settings;
@@ -622,7 +704,7 @@ export class ProjectStore {
       console.error(`[ProjectStore] Failed to load settings for ${projectId}:`, error);
       try {
         const quarantinePath = `${filePath}.corrupted`;
-        await fs.rename(filePath, quarantinePath);
+        await resilientRename(filePath, quarantinePath);
         console.warn(`[ProjectStore] Corrupted settings file moved to ${quarantinePath}`);
       } catch {
         // Ignore
@@ -772,8 +854,8 @@ export class ProjectStore {
       if (ensureDir) {
         await fs.mkdir(stateDir, { recursive: true });
       }
-      await fs.writeFile(tempFilePath, JSON.stringify(sanitizedSettings, null, 2), "utf-8");
-      await fs.rename(tempFilePath, filePath);
+      await resilientWriteFile(tempFilePath, JSON.stringify(sanitizedSettings, null, 2), "utf-8");
+      await resilientRename(tempFilePath, filePath);
     };
 
     try {
@@ -829,7 +911,7 @@ export class ProjectStore {
       console.error(`[ProjectStore] Failed to load recipes for ${projectId}:`, error);
       try {
         const quarantinePath = `${filePath}.corrupted`;
-        await fs.rename(filePath, quarantinePath);
+        await resilientRename(filePath, quarantinePath);
         console.warn(`[ProjectStore] Corrupted recipes file moved to ${quarantinePath}`);
       } catch {
         // Ignore
@@ -857,8 +939,8 @@ export class ProjectStore {
       if (ensureDir) {
         await fs.mkdir(stateDir, { recursive: true });
       }
-      await fs.writeFile(tempFilePath, JSON.stringify(recipes, null, 2), "utf-8");
-      await fs.rename(tempFilePath, filePath);
+      await resilientWriteFile(tempFilePath, JSON.stringify(recipes, null, 2), "utf-8");
+      await resilientRename(tempFilePath, filePath);
     };
 
     try {
@@ -949,7 +1031,7 @@ export class ProjectStore {
       console.error(`[ProjectStore] Failed to load workflows for ${projectId}:`, error);
       try {
         const quarantinePath = `${filePath}.corrupted`;
-        await fs.rename(filePath, quarantinePath);
+        await resilientRename(filePath, quarantinePath);
         console.warn(`[ProjectStore] Corrupted workflows file moved to ${quarantinePath}`);
       } catch {
         // Ignore
@@ -986,8 +1068,8 @@ export class ProjectStore {
       if (ensureDir) {
         await fs.mkdir(stateDir, { recursive: true });
       }
-      await fs.writeFile(tempFilePath, JSON.stringify(workflows, null, 2), "utf-8");
-      await fs.rename(tempFilePath, filePath);
+      await resilientWriteFile(tempFilePath, JSON.stringify(workflows, null, 2), "utf-8");
+      await resilientRename(tempFilePath, filePath);
     };
 
     try {
@@ -1088,7 +1170,7 @@ export class ProjectStore {
     }
 
     try {
-      await fs.unlink(stateFilePath);
+      await resilientUnlink(stateFilePath);
       this.invalidateProjectStateCache(projectId);
       if (process.env.CANOPY_VERBOSE) {
         console.log(`[ProjectStore] Cleared state for project ${projectId}`);
@@ -1096,6 +1178,136 @@ export class ProjectStore {
     } catch (error) {
       console.error(`[ProjectStore] Failed to clear state for ${projectId}:`, error);
       throw error;
+    }
+  }
+  /**
+   * Reject writes if .canopy/ is a symlink (could redirect writes outside the repository).
+   */
+  private async assertCanopyDirNotSymlink(projectPath: string): Promise<void> {
+    const canopyDir = path.join(projectPath, ".canopy");
+    try {
+      const stat = await fs.lstat(canopyDir);
+      if (stat.isSymbolicLink()) {
+        throw new Error(
+          `.canopy/ in ${projectPath} is a symbolic link — refusing to write to prevent path traversal`
+        );
+      }
+    } catch (error) {
+      // ENOENT means .canopy/ doesn't exist yet — that's fine, we'll create it
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
+      throw error;
+    }
+  }
+
+  /**
+   * Atomically write project identity to `.canopy/project.json` in the repository root.
+   * Creates the `.canopy/` directory if absent.
+   */
+  async writeInRepoProjectIdentity(
+    projectPath: string,
+    data: { name?: string; emoji?: string; color?: string }
+  ): Promise<void> {
+    await this.assertCanopyDirNotSymlink(projectPath);
+    const canopyDir = path.join(projectPath, ".canopy");
+    const filePath = path.join(projectPath, CANOPY_PROJECT_JSON);
+
+    const payload: { version: 1; name?: string; emoji?: string; color?: string } = { version: 1 };
+    if (data.name !== undefined) payload.name = data.name;
+    if (data.emoji !== undefined) payload.emoji = data.emoji;
+    if (data.color !== undefined) payload.color = data.color;
+
+    const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const tempFilePath = `${filePath}.${uniqueSuffix}.tmp`;
+
+    const attemptWrite = async (ensureDir: boolean): Promise<void> => {
+      if (ensureDir) {
+        await fs.mkdir(canopyDir, { recursive: true });
+      }
+      await resilientWriteFile(tempFilePath, JSON.stringify(payload, null, 2), "utf-8");
+      await resilientRename(tempFilePath, filePath);
+    };
+
+    try {
+      await attemptWrite(false);
+    } catch (error) {
+      const isEnoent = error instanceof Error && "code" in error && error.code === "ENOENT";
+      if (!isEnoent) {
+        console.error(
+          `[ProjectStore] Failed to write .canopy/project.json for ${projectPath}:`,
+          error
+        );
+        this.cleanupTempFile(tempFilePath);
+        throw error;
+      }
+      try {
+        await attemptWrite(true);
+      } catch (retryError) {
+        console.error(
+          `[ProjectStore] Failed to write .canopy/project.json for ${projectPath}:`,
+          retryError
+        );
+        this.cleanupTempFile(tempFilePath);
+        throw retryError;
+      }
+    }
+  }
+
+  /**
+   * Atomically write shareable project settings to `.canopy/settings.json`.
+   * Machine-local fields (secrets, dismissed flags, auto-detected values) are omitted.
+   * Creates the `.canopy/` directory if absent.
+   */
+  async writeInRepoSettings(projectPath: string, settings: ProjectSettings): Promise<void> {
+    await this.assertCanopyDirNotSymlink(projectPath);
+    const canopyDir = path.join(projectPath, ".canopy");
+    const filePath = path.join(projectPath, CANOPY_SETTINGS_JSON);
+
+    const payload: {
+      version: 1;
+      runCommands?: import("../types/index.js").RunCommand[];
+      devServerCommand?: string;
+      copyTreeSettings?: import("../types/index.js").CopyTreeSettings;
+      excludedPaths?: string[];
+    } = { version: 1 };
+
+    if (settings.runCommands?.length) payload.runCommands = settings.runCommands;
+    if (settings.devServerCommand) payload.devServerCommand = settings.devServerCommand;
+    if (settings.copyTreeSettings) payload.copyTreeSettings = settings.copyTreeSettings;
+    if (settings.excludedPaths?.length) payload.excludedPaths = settings.excludedPaths;
+
+    const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const tempFilePath = `${filePath}.${uniqueSuffix}.tmp`;
+
+    const attemptWrite = async (ensureDir: boolean): Promise<void> => {
+      if (ensureDir) {
+        await fs.mkdir(canopyDir, { recursive: true });
+      }
+      await resilientWriteFile(tempFilePath, JSON.stringify(payload, null, 2), "utf-8");
+      await resilientRename(tempFilePath, filePath);
+    };
+
+    try {
+      await attemptWrite(false);
+    } catch (error) {
+      const isEnoent = error instanceof Error && "code" in error && error.code === "ENOENT";
+      if (!isEnoent) {
+        console.error(
+          `[ProjectStore] Failed to write .canopy/settings.json for ${projectPath}:`,
+          error
+        );
+        this.cleanupTempFile(tempFilePath);
+        throw error;
+      }
+      try {
+        await attemptWrite(true);
+      } catch (retryError) {
+        console.error(
+          `[ProjectStore] Failed to write .canopy/settings.json for ${projectPath}:`,
+          retryError
+        );
+        this.cleanupTempFile(tempFilePath);
+        throw retryError;
+      }
     }
   }
 }

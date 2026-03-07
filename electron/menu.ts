@@ -5,6 +5,7 @@ import { getWorkspaceClient } from "./services/WorkspaceClient.js";
 import { CHANNELS } from "./ipc/channels.js";
 import { getEffectiveRegistry } from "../shared/config/agentRegistry.js";
 import type { CliAvailabilityService } from "./services/CliAvailabilityService.js";
+import * as CliInstallService from "./services/CliInstallService.js";
 
 app.setAboutPanelOptions({
   applicationName: "Canopy",
@@ -180,20 +181,41 @@ export function createApplicationMenu(
             ]
           : [{ type: "separator" as const }]),
         {
-          label: "Terminal Palette...",
+          label: "Quick Switcher...",
           accelerator: "CommandOrControl+P",
-          click: () => sendAction("open-agent-palette"),
+          click: () => sendAction("open-quick-switcher"),
         },
         {
-          label: "Panel Palette...",
+          label: "Command Palette...",
           accelerator: "CommandOrControl+Shift+P",
-          click: () => sendAction("open-panel-palette"),
+          click: () => sendAction("open-action-palette"),
         },
         { type: "separator" },
         {
-          label: "Canopy Assistant...",
-          accelerator: "CommandOrControl+Shift+K",
-          click: () => sendAction("open-assistant"),
+          label: "Install Canopy Command Line Tool",
+          enabled: process.platform === "darwin" || process.platform === "linux",
+          click: async () => {
+            try {
+              const status = await CliInstallService.install();
+              await dialog.showMessageBox({
+                type: "info",
+                title: "CLI Installed",
+                message: "Canopy CLI installed successfully.",
+                detail: `The \`canopy\` command is now available at:\n${status.path}\n\nRun \`canopy .\` in any terminal to open that directory in Canopy.`,
+                buttons: ["OK"],
+              });
+              createApplicationMenu(mainWindow, cliAvailabilityService);
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              await dialog.showMessageBox({
+                type: "error",
+                title: "CLI Installation Failed",
+                message: "Failed to install the Canopy CLI.",
+                detail: message,
+                buttons: ["OK"],
+              });
+            }
+          },
         },
       ],
     },
@@ -263,7 +285,7 @@ function buildRecentProjectsMenu(
   return menuItems;
 }
 
-async function handleDirectoryOpen(
+export async function handleDirectoryOpen(
   directoryPath: string,
   mainWindow: BrowserWindow,
   cliAvailabilityService?: CliAvailabilityService

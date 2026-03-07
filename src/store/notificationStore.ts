@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { ReactNode } from "react";
+import { useNotificationHistoryStore } from "./slices/notificationHistorySlice";
 
 const uuidv4 = () => crypto.randomUUID();
 
@@ -41,6 +42,15 @@ export const useNotificationStore = create<NotificationStore>((set) => ({
     set((state) => ({
       notifications: [...state.notifications, newNotification],
     }));
+
+    const message = typeof notification.message === "string" ? notification.message : undefined;
+    if (message) {
+      useNotificationHistoryStore.getState().addEntry({
+        type: notification.type,
+        title: notification.title,
+        message,
+      });
+    }
 
     return id;
   },

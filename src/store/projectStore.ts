@@ -28,6 +28,7 @@ import {
   prepareProjectSwitchRendererCache,
   cancelPreparedProjectSwitchRendererCache,
 } from "@/services/projectSwitchRendererCache";
+import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 
 interface ProjectState {
   projects: Project[];
@@ -38,11 +39,15 @@ interface ProjectState {
   error: string | null;
   gitInitDialogOpen: boolean;
   gitInitDirectoryPath: string | null;
+  onboardingWizardOpen: boolean;
+  onboardingProjectId: string | null;
+  createFolderDialogOpen: boolean;
 
   loadProjects: () => Promise<void>;
   getCurrentProject: () => Promise<void>;
   addProject: () => Promise<void>;
   addProjectByPath: (path: string) => Promise<void>;
+  createProjectFolder: (parentPath: string, folderName: string) => Promise<void>;
   switchProject: (projectId: string) => Promise<void>;
   updateProject: (id: string, updates: Partial<Project>) => Promise<void>;
   removeProject: (id: string) => Promise<void>;
@@ -50,11 +55,16 @@ interface ProjectState {
     projectId: string,
     options?: { killTerminals?: boolean }
   ) => Promise<ProjectCloseResult>;
+  closeActiveProject: (projectId: string) => Promise<ProjectCloseResult>;
   reopenProject: (projectId: string) => Promise<void>;
   finishProjectSwitch: () => void;
   openGitInitDialog: (directoryPath: string) => void;
   closeGitInitDialog: () => void;
   handleGitInitSuccess: () => Promise<void>;
+  closeOnboardingWizard: () => void;
+  openOnboardingWizard: (projectId: string) => void;
+  openCreateFolderDialog: () => void;
+  closeCreateFolderDialog: () => void;
 }
 
 const memoryStorage: StateStorage = (() => {
@@ -156,6 +166,9 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   switchingToProjectName: null,
   gitInitDialogOpen: false,
   gitInitDirectoryPath: null,
+  onboardingWizardOpen: false,
+  onboardingProjectId: null,
+  createFolderDialogOpen: false,
   error: null,
 
   addProjectByPath: async (path) => {
@@ -168,10 +181,16 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         return;
       }
 
+      const existingProjectIds = new Set(get().projects.map((p) => p.id));
       const newProject = await projectClient.add(resolvedPath);
+      const isNewProject = !existingProjectIds.has(newProject.id);
 
       await get().loadProjects();
       await get().switchProject(newProject.id);
+
+      if (isNewProject) {
+        set({ onboardingWizardOpen: true, onboardingProjectId: newProject.id });
+      }
     } catch (error) {
       logErrorWithContext(error, {
         operation: "add_project",
@@ -181,10 +200,12 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       const errorMessage = error instanceof Error ? error.message : String(error);
 
       if (errorMessage.includes("Not a git repository")) {
-        const resolvedPath = path.trim() || errorMessage.match(/Not a git repository: (.+)/)?.[1];
-        if (resolvedPath) {
+        const gitInitPath =
+          resolvedPath || path.trim() || errorMessage.match(/Not a git repository: (.+)/)?.[1];
+        const isAbsolutePath = (p: string) => p.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(p);
+        if (gitInitPath && isAbsolutePath(gitInitPath)) {
           set({ isLoading: false });
-          get().openGitInitDialog(resolvedPath);
+          get().openGitInitDialog(gitInitPath);
           return;
         }
       }
@@ -273,7 +294,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         // Get current terminals from store and save to per-project state
         const currentTerminals = useTerminalStore.getState().terminals;
         const terminalsToSave: TerminalSnapshot[] = currentTerminals
-          .filter((t) => t.location !== "trash")
+          .filter((t) => t.location !== "trash" && !isSmokeTestTerminalId(t.id))
           .map(terminalToSnapshot);
 
         const terminalSizes: Record<string, { cols: number; rows: number }> = {};
@@ -453,6 +474,9 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       if (get().currentProject?.id === id) {
         set({ currentProject: null });
       }
+      if (get().onboardingProjectId === id) {
+        set({ onboardingWizardOpen: false, onboardingProjectId: null });
+      }
       set({ isLoading: false });
     } catch (error) {
       logErrorWithContext(error, {
@@ -496,6 +520,60 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     }
   },
 
+  closeActiveProject: async (projectId) => {
+    const currentProjectId = get().currentProject?.id;
+    if (projectId !== currentProjectId) {
+      throw new Error("Project is not currently active");
+    }
+
+    let ipcSucceeded = false;
+
+    try {
+      const result = await projectClient.close(projectId, { killTerminals: true });
+
+      if (!result.success) {
+        throw new Error(result.error || "Failed to close project");
+      }
+
+      ipcSucceeded = true;
+
+      // Re-validate: if the active project changed during the async IPC call, bail out
+      // to avoid resetting state for the wrong project.
+      if (get().currentProject?.id !== projectId) {
+        console.warn(
+          `[ProjectStore] Active project changed during close of ${projectId}, skipping state reset`
+        );
+        await get().loadProjects();
+        return result;
+      }
+
+      console.log(
+        `[ProjectStore] Closed active project ${projectId}, transitioning to no-project state`
+      );
+
+      await resetAllStoresForProjectSwitch({ preserveTerminalIds: new Set() });
+      set({ currentProject: null });
+      await get().loadProjects();
+
+      return result;
+    } catch (error) {
+      logErrorWithContext(error, {
+        operation: "close_active_project",
+        component: "projectStore",
+        details: { projectId },
+      });
+
+      // If IPC succeeded but the renderer reset threw, ensure we still clear the stale active
+      // project so the app doesn't stay in a half-closed state.
+      if (ipcSucceeded && get().currentProject?.id === projectId) {
+        set({ currentProject: null });
+        void get().loadProjects();
+      }
+
+      throw error;
+    }
+  },
+
   reopenProject: async (projectId) => {
     const targetProject = get().projects.find((p) => p.id === projectId);
     const currentProject = get().currentProject;
@@ -526,7 +604,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         // Get current terminals from store and save to per-project state
         const currentTerminals = useTerminalStore.getState().terminals;
         const terminalsToSave: TerminalSnapshot[] = currentTerminals
-          .filter((t) => t.location !== "trash")
+          .filter((t) => t.location !== "trash" && !isSmokeTestTerminalId(t.id))
           .map(terminalToSnapshot);
 
         const terminalSizes: Record<string, { cols: number; rows: number }> = {};
@@ -679,6 +757,27 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     if (directoryPath) {
       await get().addProjectByPath(directoryPath);
     }
+  },
+
+  closeOnboardingWizard: () => {
+    set({ onboardingWizardOpen: false, onboardingProjectId: null });
+  },
+
+  openOnboardingWizard: (projectId) => {
+    set({ onboardingWizardOpen: true, onboardingProjectId: projectId });
+  },
+
+  openCreateFolderDialog: () => {
+    set({ createFolderDialogOpen: true });
+  },
+
+  closeCreateFolderDialog: () => {
+    set({ createFolderDialogOpen: false });
+  },
+
+  createProjectFolder: async (parentPath, folderName) => {
+    const newFolderPath = await projectClient.createFolder(parentPath, folderName);
+    await get().addProjectByPath(newFolderPath);
   },
 });
 

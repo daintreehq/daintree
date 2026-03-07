@@ -1,11 +1,14 @@
 import { ipcMain, dialog, shell } from "electron";
 import path from "path";
 import os from "os";
+import fs from "fs/promises";
 import { CHANNELS } from "../channels.js";
 import { openExternalUrl } from "../../utils/openExternal.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { runCommandDetector } from "../../services/RunCommandDetector.js";
 import { ProjectSwitchService } from "../../services/ProjectSwitchService.js";
+import { sendToRenderer } from "../utils.js";
+import { randomUUID } from "crypto";
 import type { HandlerDependencies } from "../types.js";
 import type { Project, ProjectSettings, TerminalRecipe, TabGroup } from "../../types/index.js";
 import type {
@@ -16,6 +19,7 @@ import type {
 import {
   SystemOpenExternalPayloadSchema,
   SystemOpenPathPayloadSchema,
+  SystemOpenInEditorPayloadSchema,
   TerminalSnapshotSchema,
   filterValidTerminalEntries,
   sanitizeTabGroups,
@@ -23,21 +27,12 @@ import {
 import type { TerminalSnapshot } from "../../types/index.js";
 
 export function registerProjectHandlers(deps: HandlerDependencies): () => void {
-  const {
-    mainWindow,
-    worktreeService,
-    cliAvailabilityService,
-    agentVersionService,
-    agentUpdateHandler,
-  } = deps;
+  const { mainWindow, cliAvailabilityService, agentVersionService, agentUpdateHandler } = deps;
   const handlers: Array<() => void> = [];
 
-  const projectSwitchService = new ProjectSwitchService({
-    mainWindow: deps.mainWindow,
-    ptyClient: deps.ptyClient,
-    worktreeService: deps.worktreeService,
-    eventBuffer: deps.eventBuffer,
-  });
+  // Pass deps directly so ProjectSwitchService sees late-init services
+  // (worktreeService, eventBuffer) when they become available.
+  const projectSwitchService = new ProjectSwitchService(deps);
 
   const handleSystemOpenExternal = async (
     _event: Electron.IpcMainInvokeEvent,
@@ -89,6 +84,112 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
   };
   ipcMain.handle(CHANNELS.SYSTEM_OPEN_PATH, handleSystemOpenPath);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_OPEN_PATH));
+
+  const handleSystemOpenInEditor = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: unknown
+  ) => {
+    const parseResult = SystemOpenInEditorPayloadSchema.safeParse(payload);
+    if (!parseResult.success) {
+      throw new Error(`Invalid payload: ${parseResult.error.message}`);
+    }
+
+    const { path: targetPath, line, col, projectId } = parseResult.data;
+
+    let editorConfig = null;
+    if (projectId) {
+      try {
+        const settings = await projectStore.getProjectSettings(projectId);
+        editorConfig = settings.preferredEditor ?? null;
+      } catch {
+        // ignore — fall through to EditorService defaults
+      }
+    }
+
+    const { openFile } = await import("../../services/EditorService.js");
+    await openFile(targetPath, line, col, editorConfig);
+  };
+  ipcMain.handle(CHANNELS.SYSTEM_OPEN_IN_EDITOR, handleSystemOpenInEditor);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_OPEN_IN_EDITOR));
+
+  const handleEditorGetConfig = async (_event: Electron.IpcMainInvokeEvent, projectId: unknown) => {
+    const { discover } = await import("../../services/EditorService.js");
+    const discoveredEditors = discover();
+
+    let preferredEditor = null;
+    if (typeof projectId === "string" && projectId) {
+      try {
+        const settings = await projectStore.getProjectSettings(projectId);
+        preferredEditor = settings.preferredEditor ?? null;
+      } catch {
+        // return null preference on error
+      }
+    }
+
+    return { preferredEditor, discoveredEditors };
+  };
+  ipcMain.handle(CHANNELS.EDITOR_GET_CONFIG, handleEditorGetConfig);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.EDITOR_GET_CONFIG));
+
+  const handleEditorSetConfig = async (_event: Electron.IpcMainInvokeEvent, payload: unknown) => {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid payload");
+    }
+    const { editor, projectId } = payload as { editor: unknown; projectId?: unknown };
+
+    if (!editor || typeof editor !== "object") {
+      throw new Error("Invalid editor config");
+    }
+    const editorObj = editor as Record<string, unknown>;
+    const validIds = [
+      "vscode",
+      "vscode-insiders",
+      "cursor",
+      "windsurf",
+      "zed",
+      "neovim",
+      "webstorm",
+      "sublime",
+      "custom",
+    ];
+    if (typeof editorObj.id !== "string" || !validIds.includes(editorObj.id)) {
+      throw new Error(`Invalid editor id: ${String(editorObj.id)}`);
+    }
+    if (editorObj.customCommand !== undefined) {
+      if (typeof editorObj.customCommand !== "string" || editorObj.customCommand.length > 512) {
+        throw new Error("Invalid customCommand");
+      }
+    }
+    if (editorObj.customTemplate !== undefined) {
+      if (typeof editorObj.customTemplate !== "string" || editorObj.customTemplate.length > 512) {
+        throw new Error("Invalid customTemplate");
+      }
+    }
+    const editorConfig = {
+      id: editorObj.id as import("../../../shared/types/editor.js").KnownEditorId,
+      customCommand:
+        typeof editorObj.customCommand === "string" ? editorObj.customCommand : undefined,
+      customTemplate:
+        typeof editorObj.customTemplate === "string" ? editorObj.customTemplate : undefined,
+    };
+
+    const pid = typeof projectId === "string" ? projectId : null;
+    if (!pid) {
+      throw new Error("projectId is required");
+    }
+
+    const settings = await projectStore.getProjectSettings(pid);
+    await projectStore.saveProjectSettings(pid, { ...settings, preferredEditor: editorConfig });
+  };
+  ipcMain.handle(CHANNELS.EDITOR_SET_CONFIG, handleEditorSetConfig);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.EDITOR_SET_CONFIG));
+
+  const handleEditorDiscover = async () => {
+    const { discover } = await import("../../services/EditorService.js");
+    return discover();
+  };
+  ipcMain.handle(CHANNELS.EDITOR_DISCOVER, handleEditorDiscover);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.EDITOR_DISCOVER));
 
   const handleSystemCheckCommand = async (
     _event: Electron.IpcMainInvokeEvent,
@@ -145,6 +246,12 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
   };
   ipcMain.handle(CHANNELS.SYSTEM_GET_HOME_DIR, handleSystemGetHomeDir);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_GET_HOME_DIR));
+
+  const handleSystemGetTmpDir = async () => {
+    return os.tmpdir();
+  };
+  ipcMain.handle(CHANNELS.SYSTEM_GET_TMP_DIR, handleSystemGetTmpDir);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_GET_TMP_DIR));
 
   const handleSystemGetCliAvailability = async () => {
     if (!cliAvailabilityService) {
@@ -251,6 +358,13 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
   ipcMain.handle(CHANNELS.SYSTEM_START_AGENT_UPDATE, handleSystemStartAgentUpdate);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_START_AGENT_UPDATE));
 
+  const handleSystemHealthCheck = async () => {
+    const { runSystemHealthCheck } = await import("../../services/SystemHealthCheck.js");
+    return await runSystemHealthCheck();
+  };
+  ipcMain.handle(CHANNELS.SYSTEM_HEALTH_CHECK, handleSystemHealthCheck);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_HEALTH_CHECK));
+
   const handleProjectGetAll = async () => {
     return projectStore.getAllProjects();
   };
@@ -260,9 +374,9 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
   const handleProjectGetCurrent = async () => {
     const currentProject = projectStore.getCurrentProject();
 
-    if (currentProject && worktreeService) {
+    if (currentProject && deps.worktreeService) {
       try {
-        await worktreeService.loadProject(currentProject.path);
+        await deps.worktreeService.loadProject(currentProject.path);
       } catch (err) {
         console.error("Failed to load worktrees for current project:", err);
       }
@@ -305,7 +419,27 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
     if (typeof updates !== "object" || updates === null) {
       throw new Error("Invalid updates object");
     }
-    return projectStore.updateProject(projectId, updates);
+    // Strip control-plane fields — use project:enable/disable-in-repo-settings instead
+    const { inRepoSettings: _inRepo, ...safeUpdates } = updates;
+    const updated = projectStore.updateProject(projectId, safeUpdates);
+    if (
+      updated.inRepoSettings &&
+      (updates.name !== undefined || updates.emoji !== undefined || updates.color !== undefined)
+    ) {
+      projectStore
+        .writeInRepoProjectIdentity(updated.path, {
+          name: updated.name,
+          emoji: updated.emoji,
+          color: updated.color,
+        })
+        .catch((err) => {
+          console.warn(
+            `[IPC] project:update: failed to sync .canopy/project.json for ${projectId}:`,
+            err
+          );
+        });
+    }
+    return updated;
   };
   ipcMain.handle(CHANNELS.PROJECT_UPDATE, handleProjectUpdate);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_UPDATE));
@@ -361,7 +495,11 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
     if (!settings || typeof settings !== "object") {
       throw new Error("Invalid settings object");
     }
-    return projectStore.saveProjectSettings(projectId, settings);
+    await projectStore.saveProjectSettings(projectId, settings);
+    const project = projectStore.getProjectById(projectId);
+    if (project?.inRepoSettings) {
+      await projectStore.writeInRepoSettings(project.path, settings);
+    }
   };
   ipcMain.handle(CHANNELS.PROJECT_SAVE_SETTINGS, handleProjectSaveSettings);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_SAVE_SETTINGS));
@@ -415,19 +553,20 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
     }
 
     try {
-      const ptyStats = await deps.ptyClient.getProjectStats(projectId);
+      const ptyStats = await deps.ptyClient!.getProjectStats(projectId);
 
       if (killTerminals) {
         // Kill terminals when explicitly requested (freeing resources completely)
-        const terminalsKilled = await deps.ptyClient.killByProject(projectId);
+        const terminalsKilled = await deps.ptyClient!.killByProject(projectId);
 
         // Clear persisted state
         await projectStore.clearProjectState(projectId);
 
-        // Set status to 'closed' (no running processes) unless this is the active project
-        if (projectId !== storeActiveProjectId) {
-          projectStore.updateProjectStatus(projectId, "closed");
+        // Set status to 'closed' and clear current project ref if this was the active project
+        if (projectId === storeActiveProjectId) {
+          projectStore.clearCurrentProject();
         }
+        projectStore.updateProjectStatus(projectId, "closed");
 
         console.log(
           `[IPC] project:close: Killed ${terminalsKilled} process(es) ` +
@@ -478,6 +617,19 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
       throw new Error(`Project not found: ${projectId}`);
     }
 
+    // Idempotent: if already active, emit switch event and return current state
+    if (project.status === "active") {
+      console.log(
+        `[IPC] project:reopen: Project ${projectId} already active, emitting switch event`
+      );
+      const switchId = randomUUID();
+      sendToRenderer(mainWindow, CHANNELS.PROJECT_ON_SWITCH, {
+        project,
+        switchId,
+      });
+      return project;
+    }
+
     // Reopen is only meaningful for background projects
     if (project.status !== "background") {
       throw new Error(
@@ -496,7 +648,7 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
       throw new Error("Invalid project ID");
     }
 
-    const ptyStats = await deps.ptyClient.getProjectStats(projectId);
+    const ptyStats = await deps.ptyClient!.getProjectStats(projectId);
 
     // Estimate memory (rough approximation)
     const MEMORY_PER_TERMINAL_MB = 50;
@@ -513,6 +665,77 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
   };
   ipcMain.handle(CHANNELS.PROJECT_GET_STATS, handleProjectGetStats);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_GET_STATS));
+
+  const handleProjectCreateFolder = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: { parentPath: string; folderName: string }
+  ): Promise<string> => {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid payload");
+    }
+    const { parentPath, folderName } = payload;
+    if (typeof parentPath !== "string" || !parentPath.trim()) {
+      throw new Error("Invalid parent path");
+    }
+    if (typeof folderName !== "string" || !folderName.trim()) {
+      throw new Error("Folder name is required");
+    }
+    if (!path.isAbsolute(parentPath)) {
+      throw new Error("Parent path must be absolute");
+    }
+
+    const trimmed = folderName.trim();
+
+    // Reject path separators and dot segments to prevent path traversal
+    if (trimmed.includes("/") || trimmed.includes("\\") || trimmed === ".." || trimmed === ".") {
+      throw new Error("Folder name must not contain path separators or dot segments");
+    }
+
+    const fs = await import("fs");
+
+    // Verify parentPath exists and is a directory before attempting mkdir
+    try {
+      const parentStat = await fs.promises.stat(parentPath);
+      if (!parentStat.isDirectory()) {
+        throw new Error("Parent path is not a directory");
+      }
+    } catch (err: unknown) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") {
+        throw new Error("Parent directory does not exist");
+      }
+      throw err;
+    }
+
+    const fullPath = path.join(parentPath, trimmed);
+
+    // Verify the resolved path is still inside parentPath (containment check)
+    const normalizedParent = path.resolve(parentPath);
+    const normalizedFull = path.resolve(fullPath);
+    if (!normalizedFull.startsWith(normalizedParent + path.sep)) {
+      throw new Error("Folder name resolves outside of the parent directory");
+    }
+
+    // Use recursive: false so EEXIST is thrown if folder already exists
+    try {
+      await fs.promises.mkdir(fullPath, { recursive: false });
+    } catch (err: unknown) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "EEXIST") {
+        throw new Error(`Folder "${trimmed}" already exists in this location`);
+      }
+      if (code === "EACCES" || code === "EPERM") {
+        throw new Error("Permission denied: cannot create folder in this location");
+      }
+      if (code === "ENOSPC") {
+        throw new Error("Not enough disk space to create the folder");
+      }
+      throw err;
+    }
+    return fullPath;
+  };
+  ipcMain.handle(CHANNELS.PROJECT_CREATE_FOLDER, handleProjectCreateFolder);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_CREATE_FOLDER));
 
   const handleProjectInitGit = async (
     _event: Electron.IpcMainInvokeEvent,
@@ -1115,6 +1338,133 @@ Thumbs.db
   };
   ipcMain.handle(CHANNELS.PROJECT_SET_FOCUS_MODE, handleProjectSetFocusMode);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_SET_FOCUS_MODE));
+
+  const resolveClaudeMdPath = async (projectId: string): Promise<string> => {
+    if (typeof projectId !== "string" || !projectId) {
+      throw new Error("Invalid project ID");
+    }
+    const project = projectStore.getAllProjects().find((p) => p.id === projectId);
+    if (!project) {
+      throw new Error("Project not found");
+    }
+    const claudeMdPath = path.join(project.path, "CLAUDE.md");
+    // Check for symlink — reject to prevent writing outside project root
+    try {
+      const stat = await fs.lstat(claudeMdPath);
+      if (stat.isSymbolicLink()) {
+        throw new Error("CLAUDE.md is a symlink; operation not allowed");
+      }
+    } catch (error: unknown) {
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+      ) {
+        // File doesn't exist yet — that's fine, containment check is on the parent dir
+        const parentReal = await fs.realpath(project.path);
+        const expectedParent = path.normalize(parentReal);
+        if (
+          !path.normalize(claudeMdPath).startsWith(expectedParent + path.sep) &&
+          path.normalize(claudeMdPath) !== expectedParent
+        ) {
+          throw new Error("Resolved path is outside project root");
+        }
+        return claudeMdPath;
+      }
+      throw error;
+    }
+    // For existing non-symlink file: verify it's within the project root
+    const resolvedPath = path.normalize(await fs.realpath(project.path));
+    if (!path.normalize(claudeMdPath).startsWith(resolvedPath + path.sep)) {
+      throw new Error("Resolved path is outside project root");
+    }
+    return claudeMdPath;
+  };
+
+  const handleProjectReadClaudeMd = async (
+    _event: Electron.IpcMainInvokeEvent,
+    projectId: string
+  ): Promise<string | null> => {
+    const claudeMdPath = await resolveClaudeMdPath(projectId);
+    try {
+      return await fs.readFile(claudeMdPath, "utf-8");
+    } catch (error: unknown) {
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+      ) {
+        return null;
+      }
+      throw error;
+    }
+  };
+  ipcMain.handle(CHANNELS.PROJECT_READ_CLAUDE_MD, handleProjectReadClaudeMd);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_READ_CLAUDE_MD));
+
+  const handleProjectWriteClaudeMd = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: { projectId: string; content: string }
+  ): Promise<void> => {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid payload");
+    }
+    const { projectId, content } = payload;
+    if (typeof content !== "string") {
+      throw new Error("Invalid content");
+    }
+    if (content.length > 1_000_000) {
+      throw new Error("Content exceeds 1 MB limit");
+    }
+    const claudeMdPath = await resolveClaudeMdPath(projectId);
+    await fs.writeFile(claudeMdPath, content, "utf-8");
+  };
+  ipcMain.handle(CHANNELS.PROJECT_WRITE_CLAUDE_MD, handleProjectWriteClaudeMd);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_WRITE_CLAUDE_MD));
+
+  const handleProjectEnableInRepoSettings = async (
+    _event: Electron.IpcMainInvokeEvent,
+    projectId: string
+  ): Promise<Project> => {
+    if (typeof projectId !== "string" || !projectId) {
+      throw new Error("Invalid project ID");
+    }
+    const project = projectStore.getProjectById(projectId);
+    if (!project) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+    const settings = await projectStore.getProjectSettings(projectId);
+    await projectStore.writeInRepoProjectIdentity(project.path, {
+      name: project.name,
+      emoji: project.emoji,
+      color: project.color,
+    });
+    await projectStore.writeInRepoSettings(project.path, settings);
+    return projectStore.updateProject(projectId, {
+      inRepoSettings: true,
+      canopyConfigPresent: true,
+    });
+  };
+  ipcMain.handle(CHANNELS.PROJECT_ENABLE_IN_REPO_SETTINGS, handleProjectEnableInRepoSettings);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_ENABLE_IN_REPO_SETTINGS));
+
+  const handleProjectDisableInRepoSettings = async (
+    _event: Electron.IpcMainInvokeEvent,
+    projectId: string
+  ): Promise<Project> => {
+    if (typeof projectId !== "string" || !projectId) {
+      throw new Error("Invalid project ID");
+    }
+    const project = projectStore.getProjectById(projectId);
+    if (!project) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+    return projectStore.updateProject(projectId, { inRepoSettings: false });
+  };
+  ipcMain.handle(CHANNELS.PROJECT_DISABLE_IN_REPO_SETTINGS, handleProjectDisableInRepoSettings);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_DISABLE_IN_REPO_SETTINGS));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

@@ -27,6 +27,7 @@ import {
   CookingPot,
   Lock,
   ShieldAlert,
+  GitBranch,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -57,6 +58,7 @@ import {
   type ProjectSettingsSnapshot,
 } from "./projectSettingsDirty";
 import { isSensitiveEnvKey } from "@shared/utils/envVars";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 interface ProjectSettingsDialogProps {
   projectId: string;
@@ -114,6 +116,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   const [copyTreeSettings, setCopyTreeSettings] = useState<CopyTreeSettings>({});
   const [testConfigResult, setTestConfigResult] = useState<CopyTreeTestConfigResult | null>(null);
   const [isTestingConfig, setIsTestingConfig] = useState(false);
+  const [branchPrefixMode, setBranchPrefixMode] = useState<"none" | "username" | "custom">("none");
+  const [branchPrefixCustom, setBranchPrefixCustom] = useState<string>("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const initialSnapshotRef = useRef<ProjectSettingsSnapshot | null>(null);
   const [showUnsavedChangesDialog, setShowUnsavedChangesDialog] = useState(false);
@@ -151,7 +155,9 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       runCommands,
       defaultWorktreeRecipeId,
       commandOverrides,
-      copyTreeSettings
+      copyTreeSettings,
+      branchPrefixMode,
+      branchPrefixCustom
     );
   }, [
     name,
@@ -164,6 +170,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
     defaultWorktreeRecipeId,
     commandOverrides,
     copyTreeSettings,
+    branchPrefixMode,
+    branchPrefixCustom,
     currentProject,
   ]);
 
@@ -252,6 +260,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       const initialDevServerCommand = settings.devServerCommand || "";
       const initialCommandOverrides = settings.commandOverrides || [];
       const initialCopyTreeSettings = settings.copyTreeSettings || {};
+      const initialBranchPrefixMode = settings.branchPrefixMode ?? "none";
+      const initialBranchPrefixCustom = settings.branchPrefixCustom ?? "";
 
       setName(currentProject.name);
       setEmoji(currentProject.emoji || "🌲");
@@ -263,6 +273,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       setDevServerCommand(initialDevServerCommand);
       setCommandOverrides(initialCommandOverrides);
       setCopyTreeSettings(initialCopyTreeSettings);
+      setBranchPrefixMode(initialBranchPrefixMode);
+      setBranchPrefixCustom(initialBranchPrefixCustom);
 
       initialSnapshotRef.current = createProjectSettingsSnapshot(
         currentProject.name,
@@ -274,7 +286,9 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         initialRunCommands,
         initialDefaultWorktreeRecipeId,
         initialCommandOverrides,
-        initialCopyTreeSettings
+        initialCopyTreeSettings,
+        initialBranchPrefixMode,
+        initialBranchPrefixCustom
       );
 
       setIsInitialized(true);
@@ -292,6 +306,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       setTestConfigResult(null);
       setIsTestingConfig(false);
       setSaveError(null);
+      setBranchPrefixMode("none");
+      setBranchPrefixCustom("");
       hasLoadedRecipes.current = false;
       setActiveTab("general");
       initialSnapshotRef.current = null;
@@ -427,6 +443,10 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       }
       const hasCopyTreeSettings = Object.keys(sanitizedCopyTreeSettings).length > 0;
 
+      const sanitizedBranchPrefixCustom = branchPrefixCustom.trim();
+      const effectivePrefixMode =
+        branchPrefixMode === "custom" && !sanitizedBranchPrefixCustom ? "none" : branchPrefixMode;
+
       await saveSettings({
         ...settings,
         runCommands: sanitizedRunCommands,
@@ -437,6 +457,9 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         devServerCommand: devServerCommand.trim() || undefined,
         commandOverrides: commandOverrides.length > 0 ? commandOverrides : undefined,
         copyTreeSettings: hasCopyTreeSettings ? sanitizedCopyTreeSettings : undefined,
+        branchPrefixMode: effectivePrefixMode !== "none" ? effectivePrefixMode : undefined,
+        branchPrefixCustom:
+          effectivePrefixMode === "custom" ? sanitizedBranchPrefixCustom : undefined,
         insecureEnvironmentVariables: undefined,
         unresolvedSecureEnvironmentVariables: undefined,
       });
@@ -463,7 +486,9 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         sanitizedRunCommandsWithIds,
         defaultWorktreeRecipeId,
         commandOverrides.length > 0 ? commandOverrides : [],
-        hasCopyTreeSettings ? sanitizedCopyTreeSettings : {}
+        hasCopyTreeSettings ? sanitizedCopyTreeSettings : {},
+        branchPrefixMode,
+        sanitizedBranchPrefixCustom
       );
 
       requestClose({ bypassDirty: true });
@@ -697,7 +722,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
               )}
               {error && (
                 <div
-                  className="text-sm text-[var(--color-status-error)] bg-red-900/20 border border-red-900/30 rounded p-3 mb-4"
+                  className="text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3 mb-4"
                   role="alert"
                 >
                   Failed to load settings: {error}
@@ -705,7 +730,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
               )}
               {saveError && (
                 <div
-                  className="text-sm text-[var(--color-status-error)] bg-red-900/20 border border-red-900/30 rounded p-3 mb-4"
+                  className="text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3 mb-4"
                   role="alert"
                 >
                   {saveError}
@@ -876,7 +901,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                       )}
 
                       {iconError && (
-                        <div className="mt-2 text-xs text-[var(--color-status-error)] bg-red-900/20 border border-red-900/30 rounded p-2">
+                        <div className="mt-2 text-xs text-status-error bg-status-error/10 border border-status-error/20 rounded p-2">
                           {iconError}
                         </div>
                       )}
@@ -927,10 +952,10 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                                   setExcludedPaths((prev) => prev.filter((_, i) => i !== index));
                                   setTestConfigResult(null);
                                 }}
-                                className="p-1 rounded hover:bg-red-900/30 transition-colors"
+                                className="p-1 rounded hover:bg-status-error/15 transition-colors"
                                 aria-label="Delete excluded path"
                               >
-                                <Trash2 className="h-4 w-4 text-[var(--color-status-error)]" />
+                                <Trash2 className="h-4 w-4 text-status-error" />
                               </button>
                             </div>
                           ))
@@ -1103,10 +1128,10 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                                     }));
                                     setTestConfigResult(null);
                                   }}
-                                  className="p-1 rounded hover:bg-red-900/30 transition-colors"
+                                  className="p-1 rounded hover:bg-status-error/15 transition-colors"
                                   aria-label="Delete pattern"
                                 >
-                                  <Trash2 className="h-4 w-4 text-[var(--color-status-error)]" />
+                                  <Trash2 className="h-4 w-4 text-status-error" />
                                 </button>
                               </div>
                             ))}
@@ -1167,10 +1192,10 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                                     }));
                                     setTestConfigResult(null);
                                   }}
-                                  className="p-1 rounded hover:bg-red-900/30 transition-colors"
+                                  className="p-1 rounded hover:bg-status-error/15 transition-colors"
                                   aria-label="Delete pattern"
                                 >
-                                  <Trash2 className="h-4 w-4 text-[var(--color-status-error)]" />
+                                  <Trash2 className="h-4 w-4 text-status-error" />
                                 </button>
                               </div>
                             ))}
@@ -1226,21 +1251,21 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                               className={cn(
                                 "mt-4 p-4 rounded-[var(--radius-md)] border",
                                 testConfigResult.error
-                                  ? "bg-red-900/10 border-red-900/30"
+                                  ? "bg-status-error/5 border-status-error/15"
                                   : "bg-canopy-bg border-canopy-border"
                               )}
                             >
                               {testConfigResult.error ? (
                                 <div className="flex items-start gap-2">
-                                  <AlertTriangle className="h-4 w-4 text-[var(--color-status-error)] mt-0.5 shrink-0" />
-                                  <p className="text-sm text-[var(--color-status-error)]">
+                                  <AlertTriangle className="h-4 w-4 text-status-error mt-0.5 shrink-0" />
+                                  <p className="text-sm text-status-error">
                                     {testConfigResult.error}
                                   </p>
                                 </div>
                               ) : (
                                 <div className="space-y-3">
                                   <div className="flex items-center gap-2">
-                                    <Check className="h-4 w-4 text-[var(--color-status-success)]" />
+                                    <Check className="h-4 w-4 text-status-success" />
                                     <span className="text-sm font-medium text-canopy-text">
                                       {testConfigResult.includedFiles} files would be included
                                     </span>
@@ -1289,20 +1314,20 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
 
                       {settings?.insecureEnvironmentVariables &&
                         settings.insecureEnvironmentVariables.length > 0 && (
-                          <div className="mb-4 p-3 bg-yellow-900/20 border border-yellow-600/30 rounded-[var(--radius-md)] flex items-start gap-2">
-                            <ShieldAlert className="h-4 w-4 text-yellow-500 mt-0.5 flex-shrink-0" />
+                          <div className="mb-4 p-3 bg-status-warning/10 border border-status-warning/20 rounded-[var(--radius-md)] flex items-start gap-2">
+                            <ShieldAlert className="h-4 w-4 text-status-warning mt-0.5 flex-shrink-0" />
                             <div className="flex-1 text-xs">
-                              <p className="text-yellow-200 font-semibold mb-1">
+                              <p className="text-status-warning font-semibold mb-1">
                                 Insecure sensitive variables detected
                               </p>
-                              <p className="text-yellow-300/80 mb-2">
+                              <p className="text-status-warning/80 mb-2">
                                 The following variables contain sensitive keywords but are stored in
                                 plaintext:{" "}
                                 <span className="font-mono">
                                   {settings.insecureEnvironmentVariables.join(", ")}
                                 </span>
                               </p>
-                              <p className="text-yellow-300/80">
+                              <p className="text-status-warning/80">
                                 Click Save to automatically move them to secure storage.
                               </p>
                             </div>
@@ -1330,13 +1355,13 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                               >
                                 {isSecured && (
                                   <Lock
-                                    className="h-3.5 w-3.5 text-green-500/60 flex-shrink-0"
+                                    className="h-3.5 w-3.5 text-status-success/60 flex-shrink-0"
                                     aria-label="Stored securely"
                                   />
                                 )}
                                 {isInsecure && (
                                   <ShieldAlert
-                                    className="h-3.5 w-3.5 text-yellow-500/60 flex-shrink-0"
+                                    className="h-3.5 w-3.5 text-status-warning/60 flex-shrink-0"
                                     aria-label="Stored in plaintext"
                                   />
                                 )}
@@ -1416,10 +1441,10 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                                       return next;
                                     });
                                   }}
-                                  className="p-1 rounded hover:bg-red-900/30 transition-colors"
+                                  className="p-1 rounded hover:bg-status-error/15 transition-colors"
                                   aria-label="Delete environment variable"
                                 >
-                                  <Trash2 className="h-4 w-4 text-[var(--color-status-error)]" />
+                                  <Trash2 className="h-4 w-4 text-status-error" />
                                 </button>
                               </div>
                             );
@@ -1553,10 +1578,10 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                                     onClick={() => {
                                       setRunCommands((prev) => prev.filter((_, i) => i !== index));
                                     }}
-                                    className="p-1 rounded hover:bg-red-900/30 transition-colors"
+                                    className="p-1 rounded hover:bg-status-error/15 transition-colors"
                                     aria-label="Delete run command"
                                   >
-                                    <Trash2 className="h-4 w-4 text-[var(--color-status-error)]" />
+                                    <Trash2 className="h-4 w-4 text-status-error" />
                                   </button>
                                 </div>
                               </div>
@@ -1652,10 +1677,10 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                                 )}
 
                                 {recipeNotFound && (
-                                  <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-yellow-500/10 border border-yellow-500/20">
-                                    <AlertTriangle className="h-4 w-4 text-yellow-500 mt-0.5 shrink-0" />
+                                  <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
+                                    <AlertTriangle className="h-4 w-4 text-status-warning mt-0.5 shrink-0" />
                                     <div>
-                                      <p className="text-sm text-yellow-500">
+                                      <p className="text-sm text-status-warning">
                                         Selected recipe no longer exists
                                       </p>
                                       <p className="text-xs text-canopy-text/60 mt-1">
@@ -1670,6 +1695,84 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                           </div>
                         );
                       })()}
+                    </div>
+
+                    <div className="pt-2">
+                      <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+                        <GitBranch className="h-4 w-4" />
+                        Branch Prefix
+                      </h3>
+                      <p className="text-xs text-canopy-text/60 mb-4">
+                        Automatically prefix new branch names when creating worktrees.
+                      </p>
+
+                      <div className="space-y-2">
+                        {(
+                          [
+                            { value: "none", label: "None", description: "No prefix added" },
+                            {
+                              value: "username",
+                              label: "Username",
+                              description: "Prefix with your git user.name (e.g. alice/)",
+                            },
+                            {
+                              value: "custom",
+                              label: "Custom",
+                              description: "Use a custom prefix string",
+                            },
+                          ] as const
+                        ).map(({ value, label, description }) => (
+                          <label
+                            key={value}
+                            className="flex items-start gap-3 p-2.5 rounded-[var(--radius-md)] border border-canopy-border cursor-pointer hover:bg-canopy-border/30 transition-colors"
+                          >
+                            <input
+                              type="radio"
+                              name="branchPrefixMode"
+                              value={value}
+                              checked={branchPrefixMode === value}
+                              onChange={() => setBranchPrefixMode(value)}
+                              className="mt-0.5 accent-canopy-accent"
+                            />
+                            <div>
+                              <span className="text-sm font-medium text-canopy-text">{label}</span>
+                              <p className="text-xs text-canopy-text/50">{description}</p>
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+
+                      {branchPrefixMode === "custom" && (
+                        <div className="mt-3">
+                          <input
+                            type="text"
+                            value={branchPrefixCustom}
+                            onChange={(e) => setBranchPrefixCustom(e.target.value)}
+                            placeholder="e.g. feature/ or myteam/"
+                            className="w-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-sm text-canopy-text font-mono focus:outline-none focus:ring-2 focus:ring-canopy-accent"
+                          />
+                        </div>
+                      )}
+
+                      {branchPrefixMode !== "none" && (
+                        <div className="mt-3 p-3 rounded-[var(--radius-md)] bg-canopy-bg/50 border border-canopy-border">
+                          <span className="block text-xs font-medium text-canopy-text/70 mb-1">
+                            Preview:
+                          </span>
+                          <code className="text-xs text-canopy-accent">
+                            {branchPrefixMode === "username"
+                              ? "alice/fix-bug"
+                              : branchPrefixCustom.trim()
+                                ? `${branchPrefixCustom.trim()}fix-bug`
+                                : "fix-bug"}
+                          </code>
+                          {branchPrefixMode === "username" && (
+                            <p className="text-xs text-canopy-text/40 mt-1">
+                              Username is read from git config user.name at worktree creation time.
+                            </p>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -1706,12 +1809,18 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                                   <div className="flex items-start gap-3">
                                     <div className="flex-1 min-w-0">
                                       <div className="flex items-center gap-2">
-                                        <span
-                                          className="text-sm font-medium text-foreground truncate"
-                                          title={recipe.name}
-                                        >
-                                          {recipe.name}
-                                        </span>
+                                        <TooltipProvider>
+                                          <Tooltip>
+                                            <TooltipTrigger asChild>
+                                              <span className="text-sm font-medium text-foreground truncate">
+                                                {recipe.name}
+                                              </span>
+                                            </TooltipTrigger>
+                                            <TooltipContent side="bottom">
+                                              {recipe.name}
+                                            </TooltipContent>
+                                          </Tooltip>
+                                        </TooltipProvider>
                                         <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
                                           {getRecipeScope(recipe)}
                                         </span>
@@ -1720,7 +1829,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                                           {recipe.terminals.length !== 1 ? "s" : ""}
                                         </span>
                                         {recipe.showInEmptyState && (
-                                          <span className="text-[11px] text-[var(--color-status-info)] bg-[var(--color-status-info)]/10 px-1.5 py-0.5 rounded font-medium shrink-0">
+                                          <span className="text-[11px] text-status-info bg-status-info/10 px-1.5 py-0.5 rounded font-medium shrink-0">
                                             Empty State
                                           </span>
                                         )}
@@ -1736,44 +1845,66 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                                       </div>
                                     </div>
                                     <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        onClick={() => handleEditRecipe(recipe)}
-                                        className="h-7 px-2"
-                                        title="Edit recipe"
-                                        aria-label={`Edit recipe ${recipe.name}`}
-                                      >
-                                        <Edit3 />
-                                      </Button>
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        onClick={() => handleExportRecipe(recipe.id)}
-                                        className="h-7 px-2"
-                                        title={exported ? "Exported" : "Export recipe to clipboard"}
-                                        aria-label={
-                                          exported
-                                            ? `Recipe ${recipe.name} exported to clipboard`
-                                            : `Export recipe ${recipe.name} to clipboard`
-                                        }
-                                      >
-                                        {exported ? (
-                                          <Check className="text-[var(--color-status-success)]" />
-                                        ) : (
-                                          <Download />
-                                        )}
-                                      </Button>
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        onClick={() => setRecipeToDelete(recipe.id)}
-                                        className="h-7 px-2"
-                                        title="Delete recipe"
-                                        aria-label={`Delete recipe ${recipe.name}`}
-                                      >
-                                        <Trash2 className="text-[var(--color-status-error)]" />
-                                      </Button>
+                                      <TooltipProvider>
+                                        <Tooltip>
+                                          <TooltipTrigger asChild>
+                                            <Button
+                                              variant="ghost"
+                                              size="sm"
+                                              onClick={() => handleEditRecipe(recipe)}
+                                              className="h-7 px-2"
+                                              aria-label={`Edit recipe ${recipe.name}`}
+                                            >
+                                              <Edit3 />
+                                            </Button>
+                                          </TooltipTrigger>
+                                          <TooltipContent side="bottom">Edit recipe</TooltipContent>
+                                        </Tooltip>
+                                      </TooltipProvider>
+                                      <TooltipProvider>
+                                        <Tooltip>
+                                          <TooltipTrigger asChild>
+                                            <Button
+                                              variant="ghost"
+                                              size="sm"
+                                              onClick={() => handleExportRecipe(recipe.id)}
+                                              className="h-7 px-2"
+                                              aria-label={
+                                                exported
+                                                  ? `Recipe ${recipe.name} exported to clipboard`
+                                                  : `Export recipe ${recipe.name} to clipboard`
+                                              }
+                                            >
+                                              {exported ? (
+                                                <Check className="text-status-success" />
+                                              ) : (
+                                                <Download />
+                                              )}
+                                            </Button>
+                                          </TooltipTrigger>
+                                          <TooltipContent side="bottom">
+                                            {exported ? "Exported" : "Export recipe to clipboard"}
+                                          </TooltipContent>
+                                        </Tooltip>
+                                      </TooltipProvider>
+                                      <TooltipProvider>
+                                        <Tooltip>
+                                          <TooltipTrigger asChild>
+                                            <Button
+                                              variant="ghost"
+                                              size="sm"
+                                              onClick={() => setRecipeToDelete(recipe.id)}
+                                              className="h-7 px-2"
+                                              aria-label={`Delete recipe ${recipe.name}`}
+                                            >
+                                              <Trash2 className="text-status-error" />
+                                            </Button>
+                                          </TooltipTrigger>
+                                          <TooltipContent side="bottom">
+                                            Delete recipe
+                                          </TooltipContent>
+                                        </Tooltip>
+                                      </TooltipProvider>
                                     </div>
                                   </div>
                                 </div>
@@ -1783,7 +1914,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                         )}
                         {exportError && (
                           <div
-                            className="text-sm text-[var(--color-status-error)] bg-red-900/20 border border-red-900/30 rounded p-3"
+                            className="text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3"
                             role="alert"
                           >
                             {exportError}
@@ -1880,7 +2011,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
             spellCheck={false}
           />
           {importError && (
-            <div className="mt-3 text-sm text-[var(--color-status-error)] bg-red-900/20 border border-red-900/30 rounded p-3">
+            <div className="mt-3 text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3">
               {importError}
             </div>
           )}
@@ -1937,8 +2068,8 @@ function NavButton({ active, onClick, icon, children }: NavButtonProps) {
         "relative text-left px-3 py-2 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
         active
-          ? "bg-white/[0.03] text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
-          : "text-canopy-text/60 hover:bg-white/[0.03] hover:text-canopy-text"
+          ? "bg-overlay-soft text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+          : "text-canopy-text/60 hover:bg-overlay-soft hover:text-canopy-text"
       )}
     >
       {icon}

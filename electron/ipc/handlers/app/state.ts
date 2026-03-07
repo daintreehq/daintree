@@ -365,6 +365,25 @@ export function registerAppStateHandlers(): () => void {
         }
       }
 
+      if ("mruList" in partialState && Array.isArray(partialState.mruList)) {
+        // Sanitize: dense array, string items with valid prefix, per-item length cap, dedupe
+        const MRU_ID_PATTERN = /^(terminal|worktree):[a-zA-Z0-9_-]{1,128}$/;
+        const seen = new Set<string>();
+        const sanitized: string[] = [];
+        for (const id of partialState.mruList) {
+          if (
+            typeof id === "string" &&
+            MRU_ID_PATTERN.test(id) &&
+            !seen.has(id) &&
+            sanitized.length < 50
+          ) {
+            seen.add(id);
+            sanitized.push(id);
+          }
+        }
+        updates.mruList = sanitized;
+      }
+
       store.set("appState", { ...currentState, ...updates });
 
       // Note: We intentionally do NOT save per-project terminal state.

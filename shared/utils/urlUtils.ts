@@ -2,8 +2,11 @@
 const ALLOWED_HOSTS = ["localhost", "127.0.0.1", "::1"];
 const ALLOWED_PROTOCOLS = ["http:", "https:"];
 const LOCALHOST_HINTS = ["localhost", "127.0.0.1", "0.0.0.0", "::1"] as const;
+// Exclude C0 controls (\x00-\x1f), DEL (\x7f), and C1 controls (\x80-\x9f) from the URL
+// path character class, preventing BEL/ESC/8-bit OSC escape bytes from being captured
+// as part of the URL when terminals use OSC 8 hyperlinks.
 const LOCALHOST_URL_REGEX =
-  /https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|::1)(:\d+)?([^\s"'<>)]*)?/gi;
+  /https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|::1)(:\d+)?([^\s"'<>)\x00-\x1f\x7f\x80-\x9f]*)?/gi;
 
 export interface NormalizeResult {
   url?: string;
@@ -57,10 +60,24 @@ export function isLocalhostUrl(url: string): boolean {
 }
 
 export function stripAnsiAndOscCodes(text: string): string {
-  return text
-    .replace(/\x1b\[\d+m/g, "")
-    .replace(/\x1b\[[0-9;]*[A-Za-z]/g, "")
-    .replace(/\x1b\]8;;[^\x07]*\x07([^\x1b]*)\x1b\]8;;\x07/g, "$1");
+  return (
+    text
+      // OSC 8 hyperlinks — preserve the visible link text (BEL terminator).
+      // Exclude \x1b from the params so this pattern cannot span across an
+      // adjacent ST-terminated sequence and over-strip surrounding content.
+      .replace(/\x1b\]8;;[^\x07\x1b]*\x07([^\x1b]*)\x1b\]8;;\x07/g, "$1")
+      // OSC 8 hyperlinks — preserve the visible link text (ST terminator: ESC \)
+      .replace(/\x1b\]8;;[^\x1b]*\x1b\\([^\x1b]*)\x1b\]8;;\x1b\\/g, "$1")
+      // Other OSC sequences with BEL terminator (e.g. window title, colour palette)
+      .replace(/\x1b\][^\x07\x1b]*\x07/g, "")
+      // Other OSC sequences with ST terminator
+      .replace(/\x1b\][^\x1b]*\x1b\\/g, "")
+      // C1 OSC sequences (8-bit form: 0x9D … terminated by 0x9C ST or BEL)
+      .replace(/\x9d[^\x9c\x07]*[\x9c\x07]/g, "")
+      // CSI sequences: parameter bytes (0x30-0x3F), optional intermediate bytes
+      // (0x20-0x2F), and a final byte (0x40-0x7E covers A-Z, a-z, @, ~, etc.).
+      .replace(/\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]/g, "")
+  );
 }
 
 function hasLocalhostHint(text: string): boolean {

@@ -242,7 +242,7 @@ describe("ConsoleDrawer", () => {
         name: "Hard restart dev preview (may interrupt installation)",
       });
       expect(restartButton.getAttribute("disabled")).toBeNull();
-      expect(restartButton.getAttribute("title")).toBe(
+      expect(restartButton.getAttribute("aria-label")).toBe(
         "Hard restart dev preview (may interrupt installation)"
       );
     });

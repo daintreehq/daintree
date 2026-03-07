@@ -12,7 +12,8 @@ function cloneTerminal(t: RecipeTerminal): RecipeTerminal {
 
 function normalizeExitBehavior(t: RecipeTerminal): "" | "keep" | "trash" | "remove" {
   const value = t.exitBehavior ?? "";
-  if (!value) return "";
+  // "restart" is QuickRun-only and not exposed in recipe UI — treat as default
+  if (!value || value === "restart") return "";
   const defaultBehavior = t.type === "terminal" || t.type === "dev-preview" ? "trash" : "keep";
   return value === defaultBehavior ? "" : value;
 }
@@ -252,7 +253,7 @@ export function RecipeEditor({
             />
             <span className="text-sm font-medium text-canopy-text">Show in Empty State</span>
           </label>
-          <p id="show-in-empty-state-help" className="text-xs text-canopy-muted mt-1 ml-6">
+          <p id="show-in-empty-state-help" className="text-xs text-text-muted mt-1 ml-6">
             Display this recipe as a primary launcher when the worktree has no active terminals
           </p>
         </div>
@@ -388,7 +389,7 @@ export function RecipeEditor({
                       </select>
                       <p
                         id={`terminal-exit-behavior-help-${index}`}
-                        className="text-xs text-canopy-muted mt-1"
+                        className="text-xs text-text-muted mt-1"
                       >
                         Failures always preserve terminal for debugging
                       </p>
@@ -418,9 +419,13 @@ export function RecipeEditor({
                       />
                       <p
                         id={`terminal-initial-prompt-help-${index}`}
-                        className="text-xs text-canopy-muted mt-1"
+                        className="text-xs text-text-muted mt-1"
                       >
-                        This prompt will be sent to the agent when it starts
+                        This prompt will be sent to the agent when it starts. Variables:{" "}
+                        <code className="text-canopy-text/70">{"{{issue_number}}"}</code>,{" "}
+                        <code className="text-canopy-text/70">{"{{pr_number}}"}</code>,{" "}
+                        <code className="text-canopy-text/70">{"{{worktree_path}}"}</code>,{" "}
+                        <code className="text-canopy-text/70">{"{{branch_name}}"}</code>
                       </p>
                     </div>
                     <div className="mt-2">
@@ -449,7 +454,7 @@ export function RecipeEditor({
                       </select>
                       <p
                         id={`terminal-agent-exit-behavior-help-${index}`}
-                        className="text-xs text-canopy-muted mt-1"
+                        className="text-xs text-text-muted mt-1"
                       >
                         Failures always preserve terminal for debugging
                       </p>
@@ -477,7 +482,7 @@ export function RecipeEditor({
                       />
                       <p
                         id={`terminal-dev-command-help-${index}`}
-                        className="text-xs text-canopy-muted mt-1"
+                        className="text-xs text-text-muted mt-1"
                       >
                         Leave empty to use project default or auto-detect from package.json
                       </p>
@@ -508,7 +513,7 @@ export function RecipeEditor({
                       </select>
                       <p
                         id={`terminal-dev-exit-behavior-help-${index}`}
-                        className="text-xs text-canopy-muted mt-1"
+                        className="text-xs text-text-muted mt-1"
                       >
                         Failures always preserve terminal for debugging
                       </p>
@@ -521,7 +526,7 @@ export function RecipeEditor({
         </div>
 
         {error && (
-          <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-[var(--radius-md)] text-[var(--color-status-error)] text-sm">
+          <div className="mb-4 p-3 bg-status-error/10 border border-status-error/30 rounded-[var(--radius-md)] text-status-error text-sm">
             {error}
           </div>
         )}

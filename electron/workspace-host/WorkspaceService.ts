@@ -1,5 +1,5 @@
 import PQueue from "p-queue";
-import { mkdir, writeFile, stat } from "fs/promises";
+import { mkdir, writeFile, stat, readFile } from "fs/promises";
 import {
   join as pathJoin,
   dirname,
@@ -158,8 +158,8 @@ export class WorkspaceService {
       let name: string;
       if (wt.isMainWorktree) {
         name = wt.path.split(/[/\\]/).pop() || "Main";
-      } else if (wt.isDetached && wt.head) {
-        name = wt.head.substring(0, 7);
+      } else if (wt.isDetached) {
+        name = wt.path.split(/[/\\]/).pop() || wt.head?.substring(0, 7) || "Detached";
       } else if (wt.branch) {
         name = wt.branch;
       } else {
@@ -614,9 +614,12 @@ export class WorkspaceService {
     // Suppress self-triggered watcher events.  git status touches .git/index
     // (and index.lock), which fires the watcher and creates an infinite loop
     // if we don't ignore events shortly after our own operations complete.
+    // Still set the pending flag so a real change arriving during the cooldown
+    // window is picked up on the next poll or flush, rather than being lost.
     if (!monitor.isUpdating) {
       const msSinceLastStatus = Date.now() - monitor.lastGitStatusCompletedAt;
       if (msSinceLastStatus < GIT_WATCH_SELF_TRIGGER_COOLDOWN_MS) {
+        monitor.gitWatchRefreshPending = true;
         return;
       }
     }
@@ -780,13 +783,37 @@ export class WorkspaceService {
         return;
       }
 
+      // Detect branch changes by reading HEAD directly — this is much faster
+      // than waiting for discoverAndSyncWorktrees to re-list worktrees via git.
+      const currentBranch = await this.readCurrentBranch(monitor.path);
+      const branchChanged = currentBranch !== undefined && currentBranch !== monitor.branch;
+      if (branchChanged) {
+        monitor.branch = currentBranch;
+        // Preserve any pending refresh queued while the update was in flight,
+        // since stopMonitorWatcher (called by updateMonitorWatcher) clears it.
+        const hadPendingRefresh = monitor.gitWatchRefreshPending;
+        this.updateMonitorWatcher(monitor);
+        if (hadPendingRefresh) {
+          monitor.gitWatchRefreshPending = true;
+        }
+        // Mirror syncMonitors: re-extract issue number from the new branch name.
+        const syncIssueNumber = extractIssueNumberSync(currentBranch, monitor.name);
+        if (syncIssueNumber) {
+          monitor.issueNumber = syncIssueNumber;
+        } else {
+          monitor.issueNumber = undefined;
+          void this.extractIssueNumberAsync(monitor, currentBranch, monitor.name);
+        }
+        monitor.issueTitle = undefined;
+      }
+
       const noteData = await monitor.noteReader.read();
       const currentHash = this.calculateStateHash(newChanges);
       const stateChanged = currentHash !== monitor.previousStateHash;
       const noteChanged =
         noteData?.content !== monitor.aiNote || noteData?.timestamp !== monitor.aiNoteTimestamp;
 
-      if (!stateChanged && !noteChanged && !forceRefresh) {
+      if (!stateChanged && !noteChanged && !branchChanged && !forceRefresh) {
         return;
       }
 
@@ -898,6 +925,23 @@ export class WorkspaceService {
       return "🌱 Ready to get started";
     } catch {
       return "🌱 Ready to get started";
+    }
+  }
+
+  private async readCurrentBranch(worktreePath: string): Promise<string | undefined> {
+    const gitDir = getGitDir(worktreePath, { cache: true, logErrors: false });
+    if (!gitDir) return undefined;
+
+    try {
+      const headContent = await readFile(pathJoin(gitDir, "HEAD"), "utf-8");
+      const trimmed = headContent.trim();
+      const prefix = "ref: refs/heads/";
+      if (trimmed.startsWith(prefix)) {
+        return trimmed.slice(prefix.length);
+      }
+      return undefined; // detached HEAD
+    } catch {
+      return undefined;
     }
   }
 
@@ -1194,10 +1238,6 @@ export class WorkspaceService {
         throw new Error("Cannot delete the main worktree");
       }
 
-      if (monitor.isCurrent) {
-        throw new Error("Cannot delete the currently active worktree");
-      }
-
       if (!force && (monitor.worktreeChanges?.changedFileCount ?? 0) > 0) {
         throw new Error("Worktree has uncommitted changes. Use force delete to proceed.");
       }
@@ -1206,6 +1246,20 @@ export class WorkspaceService {
 
       if (deleteBranch && !monitor.branch) {
         throw new Error("Cannot delete branch: worktree has no associated branch (detached HEAD)");
+      }
+
+      if (monitor.isCurrent) {
+        let mainWorktreeId: string | undefined;
+        for (const [id, m] of this.monitors) {
+          if (m.isMainWorktree) {
+            mainWorktreeId = id;
+            break;
+          }
+        }
+        if (!mainWorktreeId) {
+          throw new Error("Cannot delete active worktree: no main worktree found to switch to");
+        }
+        this.setActiveWorktree(`${requestId}-auto-switch`, mainWorktreeId);
       }
 
       if (this.git) {
@@ -1273,7 +1327,11 @@ export class WorkspaceService {
       const branches: BranchInfo[] = [];
 
       for (const [branchName, branchDetail] of Object.entries(summary.branches)) {
-        if (branchName.includes("HEAD ->") || branchName.endsWith("/HEAD")) {
+        if (
+          branchName.includes("HEAD ->") ||
+          branchName.endsWith("/HEAD") ||
+          branchName.startsWith("(")
+        ) {
           continue;
         }
 

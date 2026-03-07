@@ -167,7 +167,15 @@ export function WorktreeCard({
     allTerminalCount,
   });
 
-  const handleOpenIssue = useCallback(() => {
+  const handleOpenIssueSidecar = useCallback(() => {
+    void actionService.dispatch(
+      "worktree.openIssueInSidecar",
+      { worktreeId: worktree.id },
+      { source: "user" }
+    );
+  }, [worktree.id]);
+
+  const handleOpenIssueExternal = useCallback(() => {
     void actionService.dispatch(
       "worktree.openIssue",
       { worktreeId: worktree.id },
@@ -175,11 +183,46 @@ export function WorktreeCard({
     );
   }, [worktree.id]);
 
-  const handleOpenPR = useCallback(() => {
+  const handleOpenPRSidecar = useCallback(() => {
+    void actionService.dispatch(
+      "worktree.openPRInSidecar",
+      { worktreeId: worktree.id },
+      { source: "user" }
+    );
+  }, [worktree.id]);
+
+  const handleOpenPRExternal = useCallback(() => {
     void actionService.dispatch("worktree.openPR", { worktreeId: worktree.id }, { source: "user" });
   }, [worktree.id]);
 
+  const handleInjectContext = useCallback(() => {
+    void actionService.dispatch("worktree.inject", { worktreeId: worktree.id }, { source: "user" });
+  }, [worktree.id]);
+
+  const handleResetRenderers = useCallback(() => {
+    void actionService.dispatch(
+      "worktree.sessions.resetRenderers",
+      { worktreeId: worktree.id },
+      { source: "user" }
+    );
+  }, [worktree.id]);
+
+  const handleCopyContextFull = useCallback(() => {
+    void handleCopyTree();
+  }, [handleCopyTree]);
+
+  const handleCopyContextModified = useCallback(() => {
+    void actionService.dispatch(
+      "worktree.copyTree",
+      { worktreeId: worktree.id, modified: true },
+      { source: "user" }
+    );
+  }, [worktree.id]);
+
+  const hasFocusedTerminal = useTerminalStore((state) => state.focusedId !== null);
+
   const [showIssuePicker, setShowIssuePicker] = useState(false);
+  const [showReviewHub, setShowReviewHub] = useState(false);
 
   const handleAttachIssue = useCallback(
     async (issue: GitHubIssue) => {
@@ -278,20 +321,24 @@ export function WorktreeCard({
   }, [agentSettings]);
 
   const launchAgents = useMemo(() => {
-    return agentIds.map((agentId) => {
-      const config = getAgentConfig(agentId);
-      const entry = getAgentSettingsEntry(agentSettings, agentId);
-      const settingsEnabled = entry.enabled ?? true;
-      const available = agentAvailability?.[agentId] ?? false;
+    return agentIds
+      .filter((agentId) => {
+        const entry = getAgentSettingsEntry(agentSettings, agentId);
+        // selected === false = explicitly deselected; undefined = pre-migration, treat as visible
+        return entry.selected !== false;
+      })
+      .map((agentId) => {
+        const config = getAgentConfig(agentId);
+        const available = agentAvailability?.[agentId] ?? false;
 
-      return {
-        id: agentId,
-        name: config?.name ?? agentId,
-        icon: config?.icon,
-        shortcut: config?.shortcut ?? null,
-        isEnabled: settingsEnabled && available,
-      };
-    });
+        return {
+          id: agentId,
+          name: config?.name ?? agentId,
+          icon: config?.icon,
+          shortcut: config?.shortcut ?? null,
+          isEnabled: available,
+        };
+      });
   }, [agentAvailability, agentIds, agentSettings]);
 
   const launchAgentsForContextMenu = useMemo(
@@ -332,6 +379,9 @@ export function WorktreeCard({
     onEndAll: handleEndAll,
     onShowDeleteDialog: () => setShowDeleteDialog(true),
     onShowIssuePicker: () => setShowIssuePicker(true),
+    onShowReviewHub: () => setShowReviewHub(true),
+    onShowCompareDiff: () =>
+      useWorktreeSelectionStore.getState().openCrossWorktreeDiff(worktree.id),
   });
 
   const cardContent = (
@@ -342,18 +392,18 @@ export function WorktreeCard({
         variant === "sidebar" && "border-b border-divider",
         variant === "grid" && "rounded-lg border border-divider bg-canopy-sidebar/50",
         isActive
-          ? "bg-white/[0.03] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]"
-          : "hover:bg-white/[0.02]",
+          ? "bg-overlay-soft shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]"
+          : "hover:bg-overlay-subtle",
         variant === "sidebar" && !isActive && "bg-transparent",
         isActive &&
           !isSingleWorktree &&
           variant === "sidebar" &&
-          "before:absolute before:right-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-l before:bg-canopy-accent before:content-[''] before:z-10 motion-safe:before:animate-in motion-safe:before:fade-in motion-safe:before:duration-200",
-        variant === "grid" && isActive && "border-canopy-accent/70 shadow-md",
+          "before:absolute before:right-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-l before:bg-[var(--color-state-active)] before:content-[''] before:z-10 motion-safe:before:animate-in motion-safe:before:fade-in motion-safe:before:duration-200",
+        variant === "grid" && isActive && "border-[var(--color-state-active)]/70 shadow-md",
         variant === "grid" &&
           !isActive &&
           "hover:border-canopy-accent/50 hover:shadow-lg hover:shadow-canopy-accent/5",
-        isFocused && !isActive && "bg-white/[0.02]",
+        isFocused && !isActive && "bg-overlay-subtle",
         (isIdleCard || isStaleCard) &&
           !isActive &&
           !isFocused &&
@@ -374,6 +424,7 @@ export function WorktreeCard({
       }}
       tabIndex={0}
       role="button"
+      data-worktree-branch={branchLabel}
       aria-label={`Worktree: ${branchLabel}${isActive ? " (selected)" : ""}${worktree.isCurrent ? " (current)" : ""}, Status: ${spineState}${worktreeErrors.length > 0 ? `, ${worktreeErrors.length} error${worktreeErrors.length !== 1 ? "s" : ""}` : ""}${hasChanges ? ", has uncommitted changes" : ""}`}
     >
       {isOver && !isActive && (
@@ -387,7 +438,7 @@ export function WorktreeCard({
       {isComplete && (
         <div
           className={cn(
-            "absolute w-3 h-3 bg-[var(--color-status-success)]/60 pointer-events-none z-10",
+            "absolute w-3 h-3 bg-status-success/20 pointer-events-none z-10",
             variant === "sidebar" ? "top-0 left-[1px]" : "top-0 left-0 rounded-tl-lg"
           )}
           style={{ clipPath: "polygon(0 0, 100% 0, 0 100%)" }}
@@ -410,14 +461,15 @@ export function WorktreeCard({
             onCopyTreeClick: handleCopyTreeClick,
           }}
           badges={{
-            onOpenIssue: worktree.issueNumber ? handleOpenIssue : undefined,
-            onOpenPR: worktree.prNumber ? handleOpenPR : undefined,
+            onOpenIssue: worktree.issueNumber ? handleOpenIssueExternal : undefined,
+            onOpenPR: worktree.prNumber ? handleOpenPRExternal : undefined,
           }}
           menu={{
             launchAgents,
             recipes,
             runningRecipeId,
             isRestartValidating,
+            hasFocusedTerminal,
             counts: {
               grid: gridCount,
               dock: dockCount,
@@ -426,12 +478,19 @@ export function WorktreeCard({
               failed: failedCount,
               all: allTerminalCount,
             },
-            onCopyContext: () => void handleCopyTree(),
+            onCopyContextFull: handleCopyContextFull,
+            onCopyContextModified: handleCopyContextModified,
+            onInjectContext: handleInjectContext,
             onOpenEditor,
             onRevealInFinder: handlePathClick,
-            onOpenIssue: worktree.issueNumber ? handleOpenIssue : undefined,
-            onOpenPR: worktree.prNumber ? handleOpenPR : undefined,
+            onOpenIssueSidecar: worktree.issueNumber ? handleOpenIssueSidecar : undefined,
+            onOpenIssueExternal: worktree.issueNumber ? handleOpenIssueExternal : undefined,
+            onOpenPRSidecar: worktree.prUrl ? handleOpenPRSidecar : undefined,
+            onOpenPRExternal: worktree.prUrl ? handleOpenPRExternal : undefined,
             onAttachIssue: () => setShowIssuePicker(true),
+            onOpenReviewHub: () => setShowReviewHub(true),
+            onCompareDiff: () =>
+              useWorktreeSelectionStore.getState().openCrossWorktreeDiff(worktree.id),
             onRunRecipe: (recipeId) => void handleRunRecipe(recipeId),
             onSaveLayout,
             onTogglePin: handleTogglePin,
@@ -439,6 +498,7 @@ export function WorktreeCard({
             onMinimizeAll: handleMinimizeAll,
             onMaximizeAll: handleMaximizeAll,
             onRestartAll: () => void handleRestartAll(),
+            onResetRenderers: handleResetRenderers,
             onCloseCompleted: handleCloseCompleted,
             onCloseFailed: handleCloseFailed,
             onCloseAll: handleCloseAll,
@@ -461,6 +521,7 @@ export function WorktreeCard({
           onPathClick={handlePathClick}
           onDismissError={dismissError}
           onRetryError={handleErrorRetry}
+          onOpenReviewHub={() => setShowReviewHub(true)}
         />
 
         <WorktreeTerminalSection
@@ -482,6 +543,8 @@ export function WorktreeCard({
           onCloseIssuePicker={() => setShowIssuePicker(false)}
           onAttachIssue={(issue) => void handleAttachIssue(issue)}
           onDetachIssue={() => void handleDetachIssue()}
+          showReviewHub={showReviewHub}
+          onCloseReviewHub={() => setShowReviewHub(false)}
         />
       </div>
     </div>

@@ -10,11 +10,11 @@ interface PulseHeatmapProps {
 }
 
 const HEAT_COLORS = [
-  "bg-[var(--color-surface-highlight)]",
-  "bg-emerald-700/50",
-  "bg-emerald-600/60",
-  "bg-emerald-500/70",
-  "bg-emerald-400/80",
+  "bg-surface-highlight",
+  "bg-[color-mix(in_oklab,var(--color-state-working)_20%,transparent)]",
+  "bg-[color-mix(in_oklab,var(--color-state-working)_40%,transparent)]",
+  "bg-[color-mix(in_oklab,var(--color-state-working)_60%,transparent)]",
+  "bg-[color-mix(in_oklab,var(--color-state-working)_80%,transparent)]",
 ] as const;
 
 const BEFORE_PROJECT_COLOR = "bg-canopy-bg";
@@ -93,7 +93,7 @@ export function PulseHeatmap({ cells, rangeDays, compact = false }: PulseHeatmap
                         colorClass,
                         "rounded-full shrink-0 transition-[transform,background-color] duration-150 border-0 p-0 cursor-default",
                         cell.isToday && "ring-1 ring-canopy-accent/40",
-                        cell.isMostRecentActive && !cell.isToday && "ring-1 ring-emerald-400/40"
+                        cell.isMostRecentActive && !cell.isToday && "ring-1 ring-canopy-accent/40"
                       )}
                       aria-label={`${formatted}: ${tooltipText}`}
                       tabIndex={0}

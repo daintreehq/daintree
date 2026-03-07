@@ -17,6 +17,8 @@ export type {
   GitStatus,
   FileChangeDetail,
   WorktreeChanges,
+  StagingFileEntry,
+  StagingStatus,
   // Worktree types
   WorktreeMood,
   Worktree,
@@ -120,6 +122,8 @@ export type {
   AgentUpdateSettings,
   StartAgentUpdatePayload,
   StartAgentUpdateResult,
+  PrerequisiteCheckResult,
+  SystemHealthCheckResult,
   // PR detection IPC types
   PRDetectedPayload,
   PRClearedPayload,
@@ -161,6 +165,9 @@ export type {
   Artifact,
   // Agent state change
   AgentStateChangePayload,
+  // Agent detection
+  AgentDetectedPayload,
+  AgentExitedPayload,
   // Artifact types
   ArtifactDetectedPayload,
   SaveArtifactOptions,
@@ -172,8 +179,15 @@ export type {
   // File search types
   FileSearchPayload,
   FileSearchResult,
+  FileReadPayload,
+  FileReadResult,
+  FileReadErrorCode,
   // Electron API
   ElectronAPI,
+  NotificationSettings,
+  VoiceInputSettings,
+  VoiceInputStatus,
+  MicPermissionStatus,
   BranchInfo,
   CreateWorktreeOptions,
   // Adaptive backoff
@@ -223,6 +237,7 @@ export type {
   AgentSettingsEntry,
   AgentSettings,
   GenerateAgentCommandOptions,
+  GenerateAgentFlagsOptions,
 } from "./agentSettings.js";
 
 // Agent settings helpers
@@ -294,6 +309,7 @@ export type {
 
 export {
   LINK_TEMPLATES,
+  DEFAULT_SYSTEM_LINKS,
   DEFAULT_SIDECAR_TABS,
   SIDECAR_MIN_WIDTH,
   SIDECAR_MAX_WIDTH,
@@ -379,24 +395,6 @@ export {
   DEFAULT_APP_AGENT_CONFIG,
 } from "./appAgent.js";
 
-// Assistant types - AI assistant panel
-export type {
-  AssistantMessageRole,
-  AssistantMessage,
-  ToolCall,
-  ToolResult,
-  StreamChunkType,
-  StreamChunk,
-  SendMessageRequest,
-  AssistantChunkPayload,
-} from "./assistant.js";
-
-export { AssistantMessageSchema, StreamChunkSchema, ASSISTANT_MODELS } from "./assistant.js";
-
-// Listener types - assistant event subscription management
-export type { Listener, ListenerFilter, RegisterListenerOptions } from "./listener.js";
-export { ListenerSchema, ListenerFilterSchema, RegisterListenerOptionsSchema } from "./listener.js";
-
 // Agent Capabilities types - query agent registry and metadata
 export type { AgentRegistry, AgentMetadata } from "./ipc/agentCapabilities.js";
 
@@ -441,3 +439,15 @@ export type {
   EvaluatedCondition,
   WorkflowRun,
 } from "./workflowRun.js";
+
+// Editor integration types - external editor configuration and discovery
+export type {
+  KnownEditorId,
+  EditorConfig,
+  DiscoveredEditor,
+  EditorSetConfigPayload,
+  EditorGetConfigResult,
+} from "./editor.js";
+
+// App theme types - app-wide color scheme system
+export type { AppColorSchemeTokens, AppColorScheme, AppThemeConfig } from "./appTheme.js";

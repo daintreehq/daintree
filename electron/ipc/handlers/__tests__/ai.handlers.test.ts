@@ -197,7 +197,7 @@ describe("ai handler payload validation", () => {
         misc: true,
         agents: expect.objectContaining({
           claude: expect.objectContaining({
-            enabled: true,
+            dangerousEnabled: false,
           }),
         }),
       })
@@ -207,7 +207,7 @@ describe("ai handler payload validation", () => {
         misc: true,
         agents: expect.objectContaining({
           claude: expect.objectContaining({
-            enabled: true,
+            dangerousEnabled: false,
           }),
         }),
       })
@@ -268,7 +268,7 @@ describe("ai handler payload validation", () => {
       expect.objectContaining({
         agents: expect.objectContaining({
           claude: expect.objectContaining({
-            enabled: true,
+            dangerousEnabled: false,
           }),
         }),
       })

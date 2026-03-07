@@ -53,6 +53,7 @@ export const CHANNELS = {
   TERMINAL_SEND_KEY: "terminal:send-key",
 
   FILES_SEARCH: "files:search",
+  FILES_READ: "files:read",
 
   AGENT_STATE_CHANGED: "agent:state-changed",
   AGENT_DETECTED: "agent:detected",
@@ -73,11 +74,17 @@ export const CHANNELS = {
   COPYTREE_GET_FILE_TREE: "copytree:get-file-tree",
   COPYTREE_TEST_CONFIG: "copytree:test-config",
 
+  EDITOR_GET_CONFIG: "editor:get-config",
+  EDITOR_SET_CONFIG: "editor:set-config",
+  EDITOR_DISCOVER: "editor:discover",
+
   SYSTEM_OPEN_EXTERNAL: "system:open-external",
   SYSTEM_OPEN_PATH: "system:open-path",
+  SYSTEM_OPEN_IN_EDITOR: "system:open-in-editor",
   SYSTEM_CHECK_COMMAND: "system:check-command",
   SYSTEM_CHECK_DIRECTORY: "system:check-directory",
   SYSTEM_GET_HOME_DIR: "system:get-home-dir",
+  SYSTEM_GET_TMP_DIR: "system:get-tmp-dir",
   SYSTEM_GET_CLI_AVAILABILITY: "system:get-cli-availability",
   SYSTEM_REFRESH_CLI_AVAILABILITY: "system:refresh-cli-availability",
   SYSTEM_WAKE: "system:wake",
@@ -86,6 +93,7 @@ export const CHANNELS = {
   SYSTEM_GET_AGENT_UPDATE_SETTINGS: "system:get-agent-update-settings",
   SYSTEM_SET_AGENT_UPDATE_SETTINGS: "system:set-agent-update-settings",
   SYSTEM_START_AGENT_UPDATE: "system:start-agent-update",
+  SYSTEM_HEALTH_CHECK: "system:health-check",
 
   PR_DETECTED: "pr:detected",
   PR_CLEARED: "pr:cleared",
@@ -157,6 +165,7 @@ export const CHANNELS = {
   PROJECT_CLOSE: "project:close",
   PROJECT_REOPEN: "project:reopen",
   PROJECT_GET_STATS: "project:get-stats",
+  PROJECT_CREATE_FOLDER: "project:create-folder",
   PROJECT_INIT_GIT: "project:init-git",
   PROJECT_INIT_GIT_GUIDED: "project:init-git-guided",
   PROJECT_INIT_GIT_PROGRESS: "project:init-git-progress",
@@ -173,6 +182,10 @@ export const CHANNELS = {
   PROJECT_SET_TAB_GROUPS: "project:set-tab-groups",
   PROJECT_GET_FOCUS_MODE: "project:get-focus-mode",
   PROJECT_SET_FOCUS_MODE: "project:set-focus-mode",
+  PROJECT_READ_CLAUDE_MD: "project:read-claude-md",
+  PROJECT_WRITE_CLAUDE_MD: "project:write-claude-md",
+  PROJECT_ENABLE_IN_REPO_SETTINGS: "project:enable-in-repo-settings",
+  PROJECT_DISABLE_IN_REPO_SETTINGS: "project:disable-in-repo-settings",
 
   AGENT_SETTINGS_GET: "agent-settings:get",
   AGENT_SETTINGS_SET: "agent-settings:set",
@@ -192,10 +205,22 @@ export const CHANNELS = {
   TERMINAL_CONFIG_SET_FONT_FAMILY: "terminal-config:set-font-family",
   TERMINAL_CONFIG_SET_HYBRID_INPUT_ENABLED: "terminal-config:set-hybrid-input-enabled",
   TERMINAL_CONFIG_SET_HYBRID_INPUT_AUTO_FOCUS: "terminal-config:set-hybrid-input-auto-focus",
+  TERMINAL_CONFIG_SET_COLOR_SCHEME: "terminal-config:set-color-scheme",
+  TERMINAL_CONFIG_SET_CUSTOM_SCHEMES: "terminal-config:set-custom-schemes",
+  TERMINAL_CONFIG_IMPORT_COLOR_SCHEME: "terminal-config:import-color-scheme",
 
   GIT_GET_FILE_DIFF: "git:get-file-diff",
   GIT_GET_PROJECT_PULSE: "git:get-project-pulse",
   GIT_LIST_COMMITS: "git:list-commits",
+  GIT_STAGE_FILE: "git:stage-file",
+  GIT_UNSTAGE_FILE: "git:unstage-file",
+  GIT_STAGE_ALL: "git:stage-all",
+  GIT_UNSTAGE_ALL: "git:unstage-all",
+  GIT_COMMIT: "git:commit",
+  GIT_PUSH: "git:push",
+  GIT_GET_STAGING_STATUS: "git:get-staging-status",
+  GIT_COMPARE_WORKTREES: "git:compare-worktrees",
+  GIT_GET_USERNAME: "git:get-username",
 
   SIDECAR_CREATE: "sidecar:create",
   SIDECAR_SHOW: "sidecar:show",
@@ -224,6 +249,8 @@ export const CHANNELS = {
   KEYBINDING_SET_OVERRIDE: "keybinding:set-override",
   KEYBINDING_REMOVE_OVERRIDE: "keybinding:remove-override",
   KEYBINDING_RESET_ALL: "keybinding:reset-all",
+  KEYBINDING_EXPORT_PROFILE: "keybinding:export-profile",
+  KEYBINDING_IMPORT_PROFILE: "keybinding:import-profile",
 
   WORKTREE_CONFIG_GET: "worktree-config:get",
   WORKTREE_CONFIG_SET_PATTERN: "worktree-config:set-pattern",
@@ -239,6 +266,12 @@ export const CHANNELS = {
   WINDOW_CLOSE: "window:close",
 
   NOTIFICATION_UPDATE: "notification:update",
+  NOTIFICATION_SETTINGS_GET: "notification:settings-get",
+  NOTIFICATION_SETTINGS_SET: "notification:settings-set",
+  NOTIFICATION_PLAY_SOUND: "notification:play-sound",
+  NOTIFICATION_SHOW_WATCH: "notification:show-watch",
+  NOTIFICATION_WATCH_NAVIGATE: "notification:watch-navigate",
+  NOTIFICATION_SYNC_WATCHED: "notification:sync-watched",
 
   // Auto-update channels
   UPDATE_AVAILABLE: "update:available",
@@ -282,19 +315,49 @@ export const CHANNELS = {
   APP_AGENT_CONFIRMATION_REQUEST: "app-agent:confirmation-request",
   APP_AGENT_CONFIRMATION_RESPONSE: "app-agent:confirmation-response",
 
-  // Assistant channels
-  ASSISTANT_SEND_MESSAGE: "assistant:send-message",
-  ASSISTANT_CANCEL: "assistant:cancel",
-  ASSISTANT_CHUNK: "assistant:chunk",
-  ASSISTANT_HAS_API_KEY: "assistant:has-api-key",
-  ASSISTANT_CLEAR_SESSION: "assistant:clear-session",
-  ASSISTANT_ACKNOWLEDGE_EVENT: "assistant:acknowledge-event",
-
   // Agent Capabilities channels
   AGENT_CAPABILITIES_GET_REGISTRY: "agent-capabilities:get-registry",
   AGENT_CAPABILITIES_GET_AGENT_IDS: "agent-capabilities:get-agent-ids",
   AGENT_CAPABILITIES_GET_AGENT_METADATA: "agent-capabilities:get-agent-metadata",
   AGENT_CAPABILITIES_IS_AGENT_ENABLED: "agent-capabilities:is-agent-enabled",
+
+  // Canopy CLI install channels
+  CLI_INSTALL: "cli:install",
+  CLI_GET_STATUS: "cli:get-status",
+
+  CLIPBOARD_SAVE_IMAGE: "clipboard:save-image",
+
+  APP_THEME_GET: "app-theme:get",
+  APP_THEME_SET_COLOR_SCHEME: "app-theme:set-color-scheme",
+  APP_THEME_SET_CUSTOM_SCHEMES: "app-theme:set-custom-schemes",
+  APP_THEME_IMPORT: "app-theme:import",
+
+  TELEMETRY_GET: "telemetry:get",
+  TELEMETRY_SET_ENABLED: "telemetry:set-enabled",
+  TELEMETRY_MARK_PROMPT_SHOWN: "telemetry:mark-prompt-shown",
+
+  // MCP Server channels
+  MCP_SERVER_GET_STATUS: "mcp-server:get-status",
+  MCP_SERVER_SET_ENABLED: "mcp-server:set-enabled",
+  MCP_SERVER_SET_PORT: "mcp-server:set-port",
+  MCP_SERVER_SET_API_KEY: "mcp-server:set-api-key",
+  MCP_SERVER_GENERATE_API_KEY: "mcp-server:generate-api-key",
+  MCP_SERVER_GET_CONFIG_SNIPPET: "mcp-server:get-config-snippet",
+
+  // Voice Input channels
+  VOICE_INPUT_GET_SETTINGS: "voice-input:get-settings",
+  VOICE_INPUT_SET_SETTINGS: "voice-input:set-settings",
+  VOICE_INPUT_START: "voice-input:start",
+  VOICE_INPUT_STOP: "voice-input:stop",
+  VOICE_INPUT_AUDIO_CHUNK: "voice-input:audio-chunk",
+  VOICE_INPUT_TRANSCRIPTION_DELTA: "voice-input:transcription-delta",
+  VOICE_INPUT_TRANSCRIPTION_COMPLETE: "voice-input:transcription-complete",
+  VOICE_INPUT_ERROR: "voice-input:error",
+  VOICE_INPUT_STATUS: "voice-input:status",
+  VOICE_INPUT_CHECK_MIC_PERMISSION: "voice-input:check-mic-permission",
+  VOICE_INPUT_REQUEST_MIC_PERMISSION: "voice-input:request-mic-permission",
+  VOICE_INPUT_OPEN_MIC_SETTINGS: "voice-input:open-mic-settings",
+  VOICE_INPUT_VALIDATE_API_KEY: "voice-input:validate-api-key",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

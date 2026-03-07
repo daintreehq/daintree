@@ -1,10 +1,10 @@
-const PRODUCTION_ORIGINS = ["app://canopy"] as const;
+import { getDevServerOrigins } from "../config/devServer.js";
 
-const DEV_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"] as const;
+const PRODUCTION_ORIGINS = ["app://canopy"] as const;
 
 function getTrustedRendererOrigins(): readonly string[] {
   const isDev = process.env.NODE_ENV === "development";
-  return isDev ? [...PRODUCTION_ORIGINS, ...DEV_ORIGINS] : PRODUCTION_ORIGINS;
+  return isDev ? [...PRODUCTION_ORIGINS, ...getDevServerOrigins()] : PRODUCTION_ORIGINS;
 }
 
 function getRendererOrigin(urlString: string): string | null {

@@ -1,4 +1,5 @@
-import { appClient, terminalClient, worktreeClient, projectClient } from "@/clients";
+import { appClient, terminalClient, worktreeClient, projectClient, systemClient } from "@/clients";
+import { suppressMruRecording } from "@/store/worktreeStore";
 import { terminalConfigClient } from "@/clients/terminalConfigClient";
 import {
   useLayoutConfigStore,
@@ -16,19 +17,28 @@ import type {
 } from "@/types";
 import { keybindingService } from "@/services/KeybindingService";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
-import { generateAgentFlags } from "@shared/types";
+import { generateAgentCommand } from "@shared/types";
 import { normalizeScrollbackLines } from "@shared/config/scrollback";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { isTerminalWarmInProjectSwitchCache } from "@/services/projectSwitchRendererCache";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import { logDebug, logInfo, logWarn, logError } from "@/utils/logger";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
+import { isCanopyEnvEnabled } from "@/utils/env";
 
 const RECONNECT_TIMEOUT_MS = 10000;
 const RESTORE_CONCURRENCY = 8;
 const DEFERRED_RESTORE_IDLE_TIMEOUT_MS = 1200;
 const DEFERRED_RESTORE_FALLBACK_DELAY_MS = 32;
+const CLIPBOARD_DIR_NAME = "canopy-clipboard";
+const VERBOSE_HYDRATION_LOGGING = isCanopyEnvEnabled("CANOPY_VERBOSE");
+
+function logHydrationInfo(message: string, context?: Record<string, unknown>): void {
+  if (!VERBOSE_HYDRATION_LOGGING) return;
+  logInfo(message, context);
+}
 
 let hydrationBootstrapPromise: Promise<void> | null = null;
 
@@ -199,6 +209,7 @@ export interface HydrationOptions {
     devServerError?: { type: string; message: string } | null;
     devServerTerminalId?: string | null;
     devPreviewConsoleOpen?: boolean;
+    exitBehavior?: import("@shared/types/domain").PanelExitBehavior;
   }) => Promise<string>;
   setActiveWorktree: (id: string | null) => void;
   loadRecipes: (projectId: string) => Promise<void>;
@@ -209,6 +220,7 @@ export interface HydrationOptions {
   ) => void;
   setReconnectError?: (id: string, error: TerminalReconnectError) => void;
   hydrateTabGroups?: (tabGroups: TabGroup[], options?: { skipPersist?: boolean }) => void;
+  hydrateMru?: (list: string[]) => void;
 }
 
 export async function hydrateAppState(
@@ -233,17 +245,18 @@ export async function hydrateAppState(
     return isCurrent();
   };
 
+  suppressMruRecording(true);
   try {
     await ensureHydrationBootstrap();
     if (!checkCurrent()) return;
 
     // Batch fetch initial state
-    const {
-      appState,
-      terminalConfig,
-      project: currentProject,
-      agentSettings,
-    } = await appClient.hydrate();
+    const [hydrateResult, tmpDir] = await Promise.all([
+      appClient.hydrate(),
+      systemClient.getTmpDir().catch(() => ""),
+    ]);
+    const { appState, terminalConfig, project: currentProject, agentSettings } = hydrateResult;
+    const clipboardDirectory = tmpDir ? `${tmpDir}/${CLIPBOARD_DIR_NAME}` : undefined;
     if (!checkCurrent()) return;
 
     // Hydrate terminal config (scrollback, performance mode) BEFORE restoring terminals
@@ -253,7 +266,9 @@ export async function hydrateAppState(
         const normalizedScrollback = normalizeScrollbackLines(scrollbackLines);
 
         if (normalizedScrollback !== scrollbackLines) {
-          logInfo(`Normalizing scrollback from ${scrollbackLines} to ${normalizedScrollback}`);
+          logHydrationInfo(
+            `Normalizing scrollback from ${scrollbackLines} to ${normalizedScrollback}`
+          );
           terminalConfigClient.setScrollback(normalizedScrollback).catch((err) => {
             logWarn("Failed to persist scrollback normalization", { error: err });
           });
@@ -326,15 +341,11 @@ export async function hydrateAppState(
         const backendTerminals = await terminalClient.getForProject(currentProjectId);
         if (!checkCurrent()) return;
 
-        logInfo(
+        logHydrationInfo(
           `Found ${backendTerminals.length} running terminals for project ${currentProjectId}`
         );
 
-        if (
-          typeof process !== "undefined" &&
-          typeof process.env !== "undefined" &&
-          process.env.CANOPY_VERBOSE === "1"
-        ) {
+        if (isCanopyEnvEnabled("CANOPY_VERBOSE")) {
           logDebug(`Project: ${currentProjectId.slice(0, 8)}`);
           logDebug("Backend terminals", {
             terminals: backendTerminals.map((t) => ({
@@ -360,15 +371,20 @@ export async function hydrateAppState(
           markRendererPerformance(PERF_MARKS.HYDRATE_RESTORE_PANELS_START, {
             panelCount: panelRestoreCount,
           });
-          logInfo(`Restoring ${appState.terminals.length} saved panel(s)`);
+          logHydrationInfo(`Restoring ${appState.terminals.length} saved panel(s)`);
 
           for (const saved of appState.terminals) {
+            if (isSmokeTestTerminalId(saved.id)) {
+              logHydrationInfo(`Skipping smoke test terminal snapshot: ${saved.id}`);
+              continue;
+            }
+
             try {
               const backendTerminal = backendTerminalMap.get(saved.id);
 
               if (backendTerminal) {
                 // PTY terminal - reconnect to existing backend process
-                logInfo(`Reconnecting to terminal: ${saved.id}`);
+                logHydrationInfo(`Reconnecting to terminal: ${saved.id}`);
 
                 const cwd = backendTerminal.cwd || projectRoot || "";
                 const currentAgentState = backendTerminal.agentState;
@@ -401,7 +417,7 @@ export async function hydrateAppState(
 
                 const location = (saved.location === "dock" ? "dock" : "grid") as "grid" | "dock";
 
-                logInfo(`[HYDRATION] Adding terminal from backend:`, {
+                logHydrationInfo(`[HYDRATION] Adding terminal from backend:`, {
                   id: backendTerminal.id,
                   kind: backendTerminal.kind ?? (agentId ? "agent" : "terminal"),
                   agentId,
@@ -428,6 +444,7 @@ export async function hydrateAppState(
                   browserHistory: isDevPreview ? saved.browserHistory : undefined,
                   browserZoom: isDevPreview ? saved.browserZoom : undefined,
                   devPreviewConsoleOpen: isDevPreview ? saved.devPreviewConsoleOpen : undefined,
+                  exitBehavior: saved.exitBehavior,
                 });
 
                 // Initialize frontend tier state from backend to ensure proper wake behavior
@@ -500,7 +517,7 @@ export async function hydrateAppState(
 
                 // Skip assistant panels (they're now global, not panel-based)
                 if (kind === "assistant") {
-                  console.log(`[StateHydration] Skipping legacy assistant panel: ${saved.id}`);
+                  logHydrationInfo(`Skipping legacy assistant panel: ${saved.id}`);
                   continue;
                 }
 
@@ -519,7 +536,7 @@ export async function hydrateAppState(
 
                   try {
                     // Always log reconnect attempts to help diagnose project switch issues
-                    logInfo(`Trying reconnect fallback for ${saved.id} (kind: ${kind})`);
+                    logHydrationInfo(`Trying reconnect fallback for ${saved.id} (kind: ${kind})`);
 
                     // Race reconnect against timeout to prevent indefinite waiting
                     const reconnectPromise = terminalClient.reconnect(saved.id);
@@ -533,11 +550,11 @@ export async function hydrateAppState(
                     reconnectedTerminal = await Promise.race([reconnectPromise, timeoutPromise]);
 
                     if (reconnectedTerminal?.exists && reconnectedTerminal.hasPty) {
-                      logInfo(
+                      logHydrationInfo(
                         `Reconnect fallback succeeded for ${saved.id} - terminal exists in backend but was missed by getForProject`
                       );
                     } else {
-                      logInfo(
+                      logHydrationInfo(
                         `Reconnect fallback: terminal ${saved.id} not found (exists=${reconnectedTerminal?.exists}, hasPty=${reconnectedTerminal?.hasPty})`
                       );
                     }
@@ -613,6 +630,7 @@ export async function hydrateAppState(
                       browserHistory: isDevPreview ? saved.browserHistory : undefined,
                       browserZoom: isDevPreview ? saved.browserZoom : undefined,
                       devPreviewConsoleOpen: isDevPreview ? saved.devPreviewConsoleOpen : undefined,
+                      exitBehavior: saved.exitBehavior,
                     });
 
                     // Initialize frontend tier state from backend
@@ -691,12 +709,12 @@ export async function hydrateAppState(
                     if (agentId && agentSettings) {
                       const agentConfig = getAgentConfig(agentId);
                       const baseCommand = agentConfig?.command || agentId;
-                      const flags = generateAgentFlags(
+                      command = generateAgentCommand(
+                        baseCommand,
                         agentSettings.agents?.[agentId] ?? {},
-                        agentId
+                        agentId,
+                        { clipboardDirectory }
                       );
-                      command =
-                        flags.length > 0 ? `${baseCommand} ${flags.join(" ")}` : baseCommand;
                     }
 
                     // Preserve the original kind (dev-preview, terminal, etc.) unless it's an agent
@@ -705,11 +723,11 @@ export async function hydrateAppState(
 
                     // Silently spawn a fresh session for all terminal types
                     // No error messages - just start fresh
-                    logInfo(
+                    logHydrationInfo(
                       `Respawning PTY panel: ${saved.id} (${isAgentPanel ? "agent" : "terminal"})`
                     );
 
-                    logInfo(`[HYDRATION-RESPAWN] Adding terminal:`, {
+                    logHydrationInfo(`[HYDRATION-RESPAWN] Adding terminal:`, {
                       id: saved.id,
                       kind: respawnKind,
                       agentId,
@@ -729,7 +747,7 @@ export async function hydrateAppState(
                       location,
                       // Don't reuse ID on timeout - could kill a slow-to-respond live session
                       requestedId: reconnectTimedOut ? undefined : saved.id,
-                      command: isAgentPanel ? command : undefined,
+                      command: isAgentPanel ? command : saved.command?.trim() || undefined,
                       // Execute command at spawn for all agents (grid and dock)
                       // Docked agents just run in background - same behavior, different location
                       isInputLocked: saved.isInputLocked,
@@ -738,6 +756,7 @@ export async function hydrateAppState(
                       browserHistory: isDevPreview ? saved.browserHistory : undefined,
                       browserZoom: isDevPreview ? saved.browserZoom : undefined,
                       devPreviewConsoleOpen: isDevPreview ? saved.devPreviewConsoleOpen : undefined,
+                      exitBehavior: isAgentPanel ? undefined : saved.exitBehavior,
                     });
 
                     // Restore terminal dimensions if available
@@ -760,7 +779,7 @@ export async function hydrateAppState(
                     }
                   }
                 } else {
-                  logInfo(`Recreating ${kind} panel: ${saved.id}`);
+                  logHydrationInfo(`Recreating ${kind} panel: ${saved.id}`);
 
                   const devCommandCandidate =
                     kind === "dev-preview" ? saved.devCommand?.trim() : undefined;
@@ -786,6 +805,7 @@ export async function hydrateAppState(
                     devCommand,
                     devPreviewConsoleOpen:
                       kind === "dev-preview" ? saved.devPreviewConsoleOpen : undefined,
+                    exitBehavior: saved.exitBehavior,
                   });
                 }
               }
@@ -798,13 +818,13 @@ export async function hydrateAppState(
         // Restore any orphaned backend terminals not in saved state (append at end)
         const orphanedTerminals = Array.from(backendTerminalMap.values());
         if (orphanedTerminals.length > 0) {
-          logInfo(
+          logHydrationInfo(
             `${orphanedTerminals.length} orphaned terminal(s) not in saved order, appending at end`
           );
 
           for (const terminal of orphanedTerminals) {
             try {
-              logInfo(`Reconnecting to orphaned terminal: ${terminal.id}`);
+              logHydrationInfo(`Reconnecting to orphaned terminal: ${terminal.id}`);
 
               const cwd = terminal.cwd || projectRoot || "";
               const currentAgentState = terminal.agentState;
@@ -947,9 +967,9 @@ export async function hydrateAppState(
           } else {
             // Always call hydrateTabGroups, even with empty array, to clear stale groups
             if (tabGroups.length > 0) {
-              logInfo(`Restoring ${tabGroups.length} tab group(s)`);
+              logHydrationInfo(`Restoring ${tabGroups.length} tab group(s)`);
             } else {
-              logInfo("Clearing stale tab groups (no groups for project)");
+              logHydrationInfo("Clearing stale tab groups (no groups for project)");
             }
             tabGroupRestoreCount = tabGroups.length;
             options.hydrateTabGroups(tabGroups);
@@ -1005,7 +1025,7 @@ export async function hydrateAppState(
           return a.name.localeCompare(b.name);
         });
         const fallbackWorktree = sortedWorktrees[0];
-        logInfo(
+        logHydrationInfo(
           `Active worktree ${savedActiveId ?? "(none)"} not found, falling back to: ${fallbackWorktree.name}`
         );
         setActiveWorktree(fallbackWorktree.id);
@@ -1041,10 +1061,16 @@ export async function hydrateAppState(
     if (options.setFocusMode && appState.focusMode !== undefined) {
       options.setFocusMode(appState.focusMode, appState.focusPanelState);
     }
+
+    // Restore MRU list
+    if (options.hydrateMru && Array.isArray(appState.mruList)) {
+      options.hydrateMru(appState.mruList);
+    }
   } catch (error) {
     logError("Failed to hydrate app state", error);
     throw error;
   } finally {
+    suppressMruRecording(false);
     markRendererPerformance(PERF_MARKS.HYDRATE_COMPLETE, {
       switchId: _switchId ?? null,
       durationMs: Date.now() - hydrationStartedAt,

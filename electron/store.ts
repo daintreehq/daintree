@@ -9,6 +9,7 @@ import type {
 } from "../shared/types/index.js";
 import type { IssueAssociation } from "../shared/types/ipc/worktree.js";
 import { DEFAULT_AGENT_SETTINGS, DEFAULT_APP_AGENT_CONFIG } from "../shared/types/index.js";
+import type { AppThemeConfig } from "../shared/types/appTheme.js";
 
 export interface StoreSchema {
   _schemaVersion: number;
@@ -83,6 +84,7 @@ export interface StoreSchema {
       lastUsedAt?: number;
     }>;
     panelGridConfig?: PanelGridConfig;
+    mruList?: string[];
   };
   projects: {
     list: Project[];
@@ -95,6 +97,13 @@ export interface StoreSchema {
     pathPattern: string;
   };
   agentSettings: AgentSettings;
+  notificationSettings: {
+    completedEnabled: boolean;
+    waitingEnabled: boolean;
+    failedEnabled: boolean;
+    soundEnabled: boolean;
+    soundFile: string;
+  };
   userAgentRegistry: UserAgentRegistry;
   agentUpdateSettings: AgentUpdateSettings;
   keybindingOverrides: {
@@ -103,6 +112,22 @@ export interface StoreSchema {
   projectEnv: Record<string, string>;
   appAgentConfig: AppAgentConfig;
   worktreeIssueMap: Record<string, IssueAssociation>;
+  appTheme: AppThemeConfig;
+  telemetry: {
+    enabled: boolean;
+    hasSeenPrompt: boolean;
+  };
+  voiceInput: {
+    enabled: boolean;
+    apiKey: string;
+    language: string;
+    customDictionary: string[];
+  };
+  mcpServer: {
+    enabled: boolean;
+    port: number | null;
+    apiKey: string;
+  };
 }
 
 const storeOptions = {
@@ -142,6 +167,13 @@ const storeOptions = {
       pathPattern: "{parent-dir}/{base-folder}-worktrees/{branch-slug}",
     },
     agentSettings: DEFAULT_AGENT_SETTINGS,
+    notificationSettings: {
+      completedEnabled: false,
+      waitingEnabled: false,
+      failedEnabled: false,
+      soundEnabled: false,
+      soundFile: "chime.wav",
+    },
     userAgentRegistry: {},
     agentUpdateSettings: {
       autoCheck: true,
@@ -154,6 +186,24 @@ const storeOptions = {
     projectEnv: {},
     appAgentConfig: DEFAULT_APP_AGENT_CONFIG,
     worktreeIssueMap: {},
+    appTheme: {
+      colorSchemeId: "canopy",
+    },
+    telemetry: {
+      enabled: false,
+      hasSeenPrompt: false,
+    },
+    voiceInput: {
+      enabled: false,
+      apiKey: "",
+      language: "en",
+      customDictionary: [],
+    },
+    mcpServer: {
+      enabled: false,
+      port: 45454,
+      apiKey: "",
+    },
   },
   cwd: process.env.CANOPY_USER_DATA,
 };

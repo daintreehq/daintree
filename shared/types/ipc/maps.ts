@@ -7,11 +7,13 @@ import type {
   TerminalRecipe,
   TerminalSnapshot,
   TabGroup,
+  StagingStatus,
 } from "../domain.js";
 import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitInit.js";
 import type { AgentSettings } from "../agentSettings.js";
 import type { UserAgentRegistry, UserAgentConfig } from "../userAgentRegistry.js";
 import type { KeyAction } from "../keymap.js";
+import type { KeybindingImportResult, MicPermissionStatus } from "./api.js";
 
 import type {
   WorktreeSetActivePayload,
@@ -59,12 +61,15 @@ import type {
 import type {
   SystemOpenExternalPayload,
   SystemOpenPathPayload,
+  SystemOpenInEditorPayload,
   SystemWakePayload,
   CliAvailability,
   AgentVersionInfo,
   AgentUpdateSettings,
   StartAgentUpdatePayload,
   StartAgentUpdateResult,
+  CliInstallStatus,
+  SystemHealthCheckResult,
 } from "./system.js";
 import type { AppState, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
@@ -81,11 +86,20 @@ import type {
   IssueDetectedPayload,
   IssueNotFoundPayload,
 } from "./github.js";
-import type { GitGetFileDiffPayload } from "./git.js";
+import type {
+  GitGetFileDiffPayload,
+  GitCompareWorktreesPayload,
+  CrossWorktreeDiffResult,
+} from "./git.js";
 import type { TerminalConfig } from "./config.js";
 import type { SystemSleepMetrics } from "./systemSleep.js";
 import type { ShowContextMenuPayload } from "../menu.js";
-import type { FileSearchPayload, FileSearchResult } from "./files.js";
+import type {
+  FileSearchPayload,
+  FileSearchResult,
+  FileReadPayload,
+  FileReadResult,
+} from "./files.js";
 import type { SlashCommand, SlashCommandListRequest } from "../slashCommands.js";
 import type {
   DevPreviewEnsureRequest,
@@ -104,6 +118,7 @@ import type {
 import type { SpawnResult, TerminalStatusPayload } from "../pty-host.js";
 import type { HibernationConfig } from "./hibernation.js";
 import type { AgentRegistry, AgentMetadata } from "./agentCapabilities.js";
+import type { AppThemeConfig } from "../appTheme.js";
 
 // IPC Contract Maps
 
@@ -249,6 +264,10 @@ export interface IpcInvokeMap {
     args: [payload: FileSearchPayload];
     result: FileSearchResult;
   };
+  "files:read": {
+    args: [payload: FileReadPayload];
+    result: FileReadResult;
+  };
 
   // Slash command discovery
   "slash-commands:list": {
@@ -302,6 +321,20 @@ export interface IpcInvokeMap {
     result: CopyTreeTestConfigResult;
   };
 
+  // Editor channels
+  "editor:get-config": {
+    args: [projectId?: string];
+    result: import("../editor.js").EditorGetConfigResult;
+  };
+  "editor:set-config": {
+    args: [payload: import("../editor.js").EditorSetConfigPayload];
+    result: void;
+  };
+  "editor:discover": {
+    args: [];
+    result: import("../editor.js").DiscoveredEditor[];
+  };
+
   // System channels
   "system:open-external": {
     args: [payload: SystemOpenExternalPayload];
@@ -309,6 +342,10 @@ export interface IpcInvokeMap {
   };
   "system:open-path": {
     args: [payload: SystemOpenPathPayload];
+    result: void;
+  };
+  "system:open-in-editor": {
+    args: [payload: SystemOpenInEditorPayload];
     result: void;
   };
   "system:check-command": {
@@ -320,6 +357,10 @@ export interface IpcInvokeMap {
     result: boolean;
   };
   "system:get-home-dir": {
+    args: [];
+    result: string;
+  };
+  "system:get-tmp-dir": {
     args: [];
     result: string;
   };
@@ -350,6 +391,10 @@ export interface IpcInvokeMap {
   "system:start-agent-update": {
     args: [StartAgentUpdatePayload];
     result: StartAgentUpdateResult;
+  };
+  "system:health-check": {
+    args: [];
+    result: SystemHealthCheckResult;
   };
 
   // App state channels
@@ -534,6 +579,10 @@ export interface IpcInvokeMap {
     args: [projectId: string];
     result: ProjectStats;
   };
+  "project:create-folder": {
+    args: [payload: { parentPath: string; folderName: string }];
+    result: string;
+  };
   "project:init-git": {
     args: [directoryPath: string];
     result: void;
@@ -610,6 +659,22 @@ export interface IpcInvokeMap {
       },
     ];
     result: void;
+  };
+  "project:read-claude-md": {
+    args: [projectId: string];
+    result: string | null;
+  };
+  "project:write-claude-md": {
+    args: [payload: { projectId: string; content: string }];
+    result: void;
+  };
+  "project:enable-in-repo-settings": {
+    args: [projectId: string];
+    result: Project;
+  };
+  "project:disable-in-repo-settings": {
+    args: [projectId: string];
+    result: Project;
   };
 
   // GitHub channels
@@ -748,6 +813,28 @@ export interface IpcInvokeMap {
     args: [enabled: boolean];
     result: void;
   };
+  "terminal-config:set-color-scheme": {
+    args: [schemeId: string];
+    result: void;
+  };
+  "terminal-config:set-custom-schemes": {
+    args: [schemesJson: string];
+    result: void;
+  };
+  "terminal-config:import-color-scheme": {
+    args: [];
+    result:
+      | {
+          ok: true;
+          scheme: {
+            id: string;
+            name: string;
+            type: "dark" | "light";
+            colors: Record<string, string>;
+          };
+        }
+      | { ok: false; errors: string[] };
+  };
 
   // Git channels
   "git:get-file-diff": {
@@ -769,6 +856,42 @@ export interface IpcInvokeMap {
   "git:list-commits": {
     args: [options: GitCommitListOptions];
     result: GitCommitListResponse;
+  };
+  "git:stage-file": {
+    args: [payload: { cwd: string; filePath: string }];
+    result: void;
+  };
+  "git:unstage-file": {
+    args: [payload: { cwd: string; filePath: string }];
+    result: void;
+  };
+  "git:stage-all": {
+    args: [cwd: string];
+    result: void;
+  };
+  "git:unstage-all": {
+    args: [cwd: string];
+    result: void;
+  };
+  "git:commit": {
+    args: [payload: { cwd: string; message: string }];
+    result: { hash: string; summary: string };
+  };
+  "git:push": {
+    args: [payload: { cwd: string; setUpstream?: boolean }];
+    result: { success: boolean; error?: string };
+  };
+  "git:get-staging-status": {
+    args: [cwd: string];
+    result: StagingStatus;
+  };
+  "git:compare-worktrees": {
+    args: [payload: GitCompareWorktreesPayload];
+    result: CrossWorktreeDiffResult | string;
+  };
+  "git:get-username": {
+    args: [cwd: string];
+    result: string | null;
   };
 
   // Sidecar channels
@@ -853,6 +976,14 @@ export interface IpcInvokeMap {
   "keybinding:reset-all": {
     args: [];
     result: void;
+  };
+  "keybinding:export-profile": {
+    args: [];
+    result: boolean;
+  };
+  "keybinding:import-profile": {
+    args: [];
+    result: KeybindingImportResult;
   };
 
   // Worktree Config channels
@@ -1005,6 +1136,177 @@ export interface IpcInvokeMap {
     args: [agentId: string];
     result: boolean;
   };
+
+  // Canopy CLI install channels
+  "cli:install": {
+    args: [];
+    result: CliInstallStatus;
+  };
+  "cli:get-status": {
+    args: [];
+    result: CliInstallStatus;
+  };
+
+  // Clipboard channels
+  "clipboard:save-image": {
+    args: [];
+    result: { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string };
+  };
+
+  // Notification settings channels
+  "notification:settings-get": {
+    args: [];
+    result: {
+      completedEnabled: boolean;
+      waitingEnabled: boolean;
+      failedEnabled: boolean;
+      soundEnabled: boolean;
+      soundFile: string;
+    };
+  };
+  "notification:settings-set": {
+    args: [
+      Partial<{
+        completedEnabled: boolean;
+        waitingEnabled: boolean;
+        failedEnabled: boolean;
+        soundEnabled: boolean;
+        soundFile: string;
+      }>,
+    ];
+    result: void;
+  };
+  "notification:play-sound": {
+    args: [string];
+    result: void;
+  };
+
+  // App theme channels
+  "app-theme:get": {
+    args: [];
+    result: AppThemeConfig;
+  };
+  "app-theme:set-color-scheme": {
+    args: [schemeId: string];
+    result: void;
+  };
+  "app-theme:set-custom-schemes": {
+    args: [schemesJson: string];
+    result: void;
+  };
+  "app-theme:import": {
+    args: [];
+    result:
+      | {
+          ok: true;
+          scheme: {
+            id: string;
+            name: string;
+            type: "dark" | "light";
+            colors: Record<string, string>;
+          };
+        }
+      | { ok: false; errors: string[] };
+  };
+  "telemetry:get": {
+    args: [];
+    result: { enabled: boolean; hasSeenPrompt: boolean };
+  };
+  "telemetry:set-enabled": {
+    args: [enabled: boolean];
+    result: void;
+  };
+  "telemetry:mark-prompt-shown": {
+    args: [];
+    result: void;
+  };
+
+  // Voice input
+  "voice-input:get-settings": {
+    args: [];
+    result: { enabled: boolean; apiKey: string; language: string; customDictionary: string[] };
+  };
+  "voice-input:set-settings": {
+    args: [
+      patch: Partial<{
+        enabled: boolean;
+        apiKey: string;
+        language: string;
+        customDictionary: string[];
+      }>,
+    ];
+    result: void;
+  };
+  "voice-input:start": {
+    args: [];
+    result: { ok: true } | { ok: false; error: string };
+  };
+  "voice-input:stop": {
+    args: [];
+    result: void;
+  };
+  "voice-input:check-mic-permission": {
+    args: [];
+    result: MicPermissionStatus;
+  };
+  "voice-input:request-mic-permission": {
+    args: [];
+    result: boolean;
+  };
+  "voice-input:open-mic-settings": {
+    args: [];
+    result: void;
+  };
+  "voice-input:validate-api-key": {
+    args: [apiKey: string];
+    result: { valid: boolean; error?: string };
+  };
+
+  // MCP Server channels
+  "mcp-server:get-status": {
+    args: [];
+    result: {
+      enabled: boolean;
+      port: number | null;
+      configuredPort: number | null;
+      apiKey: string;
+    };
+  };
+  "mcp-server:set-enabled": {
+    args: [enabled: boolean];
+    result: {
+      enabled: boolean;
+      port: number | null;
+      configuredPort: number | null;
+      apiKey: string;
+    };
+  };
+  "mcp-server:set-port": {
+    args: [port: number | null];
+    result: {
+      enabled: boolean;
+      port: number | null;
+      configuredPort: number | null;
+      apiKey: string;
+    };
+  };
+  "mcp-server:set-api-key": {
+    args: [apiKey: string];
+    result: {
+      enabled: boolean;
+      port: number | null;
+      configuredPort: number | null;
+      apiKey: string;
+    };
+  };
+  "mcp-server:generate-api-key": {
+    args: [];
+    result: string;
+  };
+  "mcp-server:get-config-snippet": {
+    args: [];
+    result: string;
+  };
 }
 
 /**
@@ -1090,6 +1392,7 @@ export interface IpcEventMap {
 
   // Notification events
   "notification:update": { waitingCount: number; failedCount: number };
+  "notification:watch-navigate": { panelId: string; panelTitle: string; worktreeId?: string };
 
   // Auto-update events
   "update:available": { version: string };
@@ -1106,6 +1409,12 @@ export interface IpcEventMap {
     title: string;
     action: "created" | "updated" | "deleted";
   };
+
+  // Voice input events
+  "voice-input:transcription-delta": string;
+  "voice-input:transcription-complete": string;
+  "voice-input:error": string;
+  "voice-input:status": "idle" | "connecting" | "recording" | "error";
 }
 
 export type IpcInvokeArgs<K extends keyof IpcInvokeMap> = IpcInvokeMap[K]["args"];

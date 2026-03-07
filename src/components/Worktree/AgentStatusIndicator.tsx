@@ -1,5 +1,6 @@
 import { cn } from "../../lib/utils";
 import type { AgentState } from "@/types";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 interface AgentStatusIndicatorProps {
   state: AgentState | null | undefined;
@@ -28,8 +29,8 @@ const STATE_CONFIG: Record<
   },
   running: {
     icon: "▶",
-    color: "text-[var(--color-status-info)]",
-    borderColor: "border-[var(--color-status-info)]",
+    color: "text-status-info",
+    borderColor: "border-status-info",
     pulse: false,
     label: "running",
     tooltip: "Process is running",
@@ -37,7 +38,7 @@ const STATE_CONFIG: Record<
   waiting: {
     icon: "?",
     color: "text-canopy-bg",
-    bgColor: "bg-[var(--color-state-waiting)]",
+    bgColor: "bg-state-waiting",
     glow: "shadow-[0_0_8px_rgba(251,191,36,0.4)]",
     pulse: false,
     label: "waiting",
@@ -45,15 +46,15 @@ const STATE_CONFIG: Record<
   },
   completed: {
     icon: "✓",
-    color: "text-[var(--color-status-success)]",
+    color: "text-status-success",
     pulse: false,
     label: "completed",
     tooltip: "Agent finished this task",
   },
   failed: {
     icon: "✗",
-    color: "text-[var(--color-status-error)]",
-    borderColor: "border-[var(--color-status-error)]",
+    color: "text-status-error",
+    borderColor: "border-status-error",
     pulse: false,
     label: "failed",
     tooltip: "Agent ran into an issue",
@@ -71,23 +72,29 @@ export function AgentStatusIndicator({ state, className }: AgentStatusIndicatorP
   }
 
   return (
-    <span
-      className={cn(
-        "inline-flex items-center justify-center w-5 h-5 text-xs font-bold rounded-full",
-        config.color,
-        config.bgColor,
-        config.borderColor && "border",
-        config.borderColor,
-        config.glow,
-        config.pulse && "animate-agent-pulse",
-        className
-      )}
-      role="status"
-      aria-label={`Agent status: ${config.label}`}
-      title={config.tooltip}
-    >
-      {config.icon}
-    </span>
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            className={cn(
+              "inline-flex items-center justify-center w-5 h-5 text-xs font-bold rounded-full",
+              config.color,
+              config.bgColor,
+              config.borderColor && "border",
+              config.borderColor,
+              config.glow,
+              config.pulse && "animate-agent-pulse",
+              className
+            )}
+            role="status"
+            aria-label={`Agent status: ${config.label}`}
+          >
+            {config.icon}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{config.tooltip}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }
 

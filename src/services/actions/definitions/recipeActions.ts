@@ -60,7 +60,12 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
         throw new Error("No worktree or project path available to run recipe");
       }
 
-      await useRecipeStore.getState().runRecipe(recipeId, worktreePath, targetWorktreeId);
+      await useRecipeStore.getState().runRecipe(recipeId, worktreePath, targetWorktreeId, {
+        issueNumber: worktree?.issueNumber,
+        prNumber: worktree?.prNumber,
+        worktreePath,
+        branchName: worktree?.branch,
+      });
     },
   }));
 

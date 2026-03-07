@@ -1,9 +1,10 @@
 import { create, type StateCreator } from "zustand";
 import type { TerminalRecipe, RecipeTerminal, RecipeTerminalType } from "@/types";
 import { useTerminalStore, type TerminalInstance } from "./terminalStore";
-import { projectClient, agentSettingsClient } from "@/clients";
+import { projectClient, agentSettingsClient, systemClient } from "@/clients";
 import { getAgentConfig } from "@/config/agents";
 import { generateAgentCommand } from "@shared/types";
+import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
 
 function isAgentRecipeType(type: RecipeTerminalType): boolean {
   return type !== "terminal" && type !== "dev-preview";
@@ -65,7 +66,12 @@ interface RecipeState {
   getRecipesForWorktree: (worktreeId: string | undefined) => TerminalRecipe[];
   getRecipeById: (id: string) => TerminalRecipe | undefined;
 
-  runRecipe: (recipeId: string, worktreePath: string, worktreeId?: string) => Promise<void>;
+  runRecipe: (
+    recipeId: string,
+    worktreePath: string,
+    worktreeId?: string,
+    context?: RecipeContext
+  ) => Promise<void>;
 
   exportRecipe: (id: string) => string | null;
   importRecipe: (projectId: string, json: string) => Promise<void>;
@@ -211,7 +217,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     return get().recipes.find((r) => r.id === id);
   },
 
-  runRecipe: async (recipeId, worktreePath, worktreeId) => {
+  runRecipe: async (recipeId, worktreePath, worktreeId, context) => {
     const recipe = get().getRecipeById(recipeId);
     if (!recipe) {
       throw new Error(`Recipe ${recipeId} not found`);
@@ -227,12 +233,18 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     // Pre-fetch agent settings once for all agent terminals
     let agentSettings: Awaited<ReturnType<typeof agentSettingsClient.get>> | null = null;
+    let clipboardDirectory: string | undefined;
     const hasAgent = recipe.terminals.some(
       (t) => t.type !== "terminal" && t.type !== "dev-preview"
     );
     if (hasAgent) {
       try {
-        agentSettings = await agentSettingsClient.get();
+        const [settings, tmpDir] = await Promise.all([
+          agentSettingsClient.get(),
+          systemClient.getTmpDir().catch(() => ""),
+        ]);
+        agentSettings = settings;
+        clipboardDirectory = tmpDir ? `${tmpDir}/canopy-clipboard` : undefined;
       } catch (error) {
         console.warn("Failed to fetch agent settings for recipe:", error);
       }
@@ -261,10 +273,18 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         if (isAgent) {
           const agentConfig = getAgentConfig(terminal.type);
           const baseCommand = agentConfig?.command || terminal.type;
-          const initialPrompt = terminal.initialPrompt?.trim();
+          const rawPrompt = terminal.initialPrompt?.trim();
+          const resolvedContext: RecipeContext = {
+            ...context,
+            worktreePath,
+          };
+          const initialPrompt = rawPrompt
+            ? replaceRecipeVariables(rawPrompt, resolvedContext)
+            : undefined;
           const entry = agentSettings?.agents?.[terminal.type] ?? {};
           command = generateAgentCommand(baseCommand, entry, terminal.type, {
             initialPrompt,
+            clipboardDirectory,
           });
         }
 

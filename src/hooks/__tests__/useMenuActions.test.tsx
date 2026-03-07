@@ -56,6 +56,64 @@ describe("useMenuActions", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
+  it("dispatches nav.quickSwitcher when open-quick-switcher action is received", async () => {
+    let handler: ((action: string) => Promise<void>) | undefined;
+    Object.defineProperty(window, "electron", {
+      value: {
+        app: {
+          onMenuAction: (cb: (action: string) => Promise<void>) => {
+            handler = cb;
+            return () => {};
+          },
+        },
+      },
+      configurable: true,
+      writable: true,
+    });
+
+    renderHook(() =>
+      useMenuActions({
+        onOpenSettings: vi.fn(),
+        onToggleSidebar: vi.fn(),
+        onOpenAgentPalette: vi.fn(),
+        onLaunchAgent: vi.fn(),
+        defaultCwd: "/tmp",
+      })
+    );
+
+    await handler?.("open-quick-switcher");
+    expect(dispatchMock).toHaveBeenCalledWith("nav.quickSwitcher", undefined, { source: "menu" });
+  });
+
+  it("dispatches action.palette.open when open-action-palette action is received", async () => {
+    let handler: ((action: string) => Promise<void>) | undefined;
+    Object.defineProperty(window, "electron", {
+      value: {
+        app: {
+          onMenuAction: (cb: (action: string) => Promise<void>) => {
+            handler = cb;
+            return () => {};
+          },
+        },
+      },
+      configurable: true,
+      writable: true,
+    });
+
+    renderHook(() =>
+      useMenuActions({
+        onOpenSettings: vi.fn(),
+        onToggleSidebar: vi.fn(),
+        onOpenAgentPalette: vi.fn(),
+        onLaunchAgent: vi.fn(),
+        defaultCwd: "/tmp",
+      })
+    );
+
+    await handler?.("open-action-palette");
+    expect(dispatchMock).toHaveBeenCalledWith("action.palette.open", undefined, { source: "menu" });
+  });
+
   it("does not leak unhandled rejection when action dispatch throws", async () => {
     let handler: ((action: string) => Promise<void>) | undefined;
     Object.defineProperty(window, "electron", {

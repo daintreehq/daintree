@@ -12,14 +12,14 @@ macOS builds are signed with a Developer ID Application certificate. The signing
 
 ### Secrets
 
-| Secret | Description |
-|--------|-------------|
-| `MAC_CERTS` | Base64-encoded .p12 signing certificate |
-| `MAC_CERTS_PASSWORD` | Password for the .p12 certificate |
-| `APPLE_API_KEY` | App Store Connect API key (.p8 file content) |
-| `APPLE_API_KEY_ID` | 10-character Key ID from App Store Connect (`3NFG76895G`) |
-| `APPLE_API_ISSUER` | Issuer UUID from App Store Connect |
-| `APPLE_TEAM_ID` | Apple Team ID (`D9674SJ8J4`) |
+| Secret               | Description                                               |
+| -------------------- | --------------------------------------------------------- |
+| `MAC_CERTS`          | Base64-encoded .p12 signing certificate                   |
+| `MAC_CERTS_PASSWORD` | Password for the .p12 certificate                         |
+| `APPLE_API_KEY`      | App Store Connect API key (.p8 file content)              |
+| `APPLE_API_KEY_ID`   | 10-character Key ID from App Store Connect (`3NFG76895G`) |
+| `APPLE_API_ISSUER`   | Issuer UUID from App Store Connect                        |
+| `APPLE_TEAM_ID`      | Apple Team ID (`D9674SJ8J4`)                              |
 
 ### How signing works in CI
 
@@ -31,11 +31,13 @@ macOS builds are signed with a Developer ID Application certificate. The signing
 ### Local signing keys
 
 Local copies of signing keys are stored in the `keys/` directory (gitignored):
+
 - `keys/AuthKey_3NFG76895G.p8` — App Store Connect API key
 
 The `.env` file (also gitignored) stores credentials for local builds. See `.env` for the current values.
 
 To check notarization status locally:
+
 ```bash
 xcrun notarytool history \
   --key keys/AuthKey_3NFG76895G.p8 \
@@ -45,16 +47,7 @@ xcrun notarytool history \
 
 ## macOS Notarization
 
-**Status: Disabled (re-enable for ~0.5.0 release)**
-
-Notarization is currently disabled (`mac.notarize: false` in `package.json`) due to prolonged Apple Notarization Service outages in February 2026. All infrastructure is in place — just flip the flag.
-
-### To re-enable notarization
-
-1. In `package.json`, change `"notarize": false` to `"notarize": true` under `build.mac`
-2. Verify secrets are still valid: run `xcrun notarytool history --key <path> --key-id 3NFG76895G --issuer <issuer>` locally
-3. Test with a manual workflow dispatch (without `skip_notarization`) before tagging a release
-4. Normal notarization takes 5-15 minutes; if it hangs beyond 30 minutes, Apple's service may be degraded
+Notarization is enabled. All CI builds are signed and submitted to Apple's notarization service automatically.
 
 ### Key technical details
 
@@ -76,21 +69,38 @@ The workflow sets `DEBUG=electron-builder,electron-notarize*,electron-osx-sign*`
 ## R2 Publishing
 
 Artifacts are uploaded to Cloudflare R2 via AWS CLI:
+
 - Binaries (dmg, zip, exe, AppImage, deb, blockmap) → `s3://<bucket>/releases/` with immutable caching
-- Metadata (latest*.yml) → `s3://<bucket>/releases/` with no-cache headers
+- Metadata (latest\*.yml) → `s3://<bucket>/releases/` with no-cache headers
 
 ### R2 Secrets
 
-| Secret | Description |
-|--------|-------------|
-| `R2_ACCESS_KEY_ID` | R2 access key |
-| `R2_SECRET_ACCESS_KEY` | R2 secret key |
-| `R2_ENDPOINT` | R2 endpoint URL |
-| `R2_BUCKET` | Bucket name (`canopy-updates`) |
+| Secret                 | Description                    |
+| ---------------------- | ------------------------------ |
+| `R2_ACCESS_KEY_ID`     | R2 access key                  |
+| `R2_SECRET_ACCESS_KEY` | R2 secret key                  |
+| `R2_ENDPOINT`          | R2 endpoint URL                |
+| `R2_BUCKET`            | Bucket name (`canopy-updates`) |
 
 ## Entitlements
 
 The hardened runtime entitlements are in `build/entitlements.mac.plist`:
+
 - `com.apple.security.cs.allow-jit` — required for Electron with hardened runtime
 - `com.apple.security.cs.allow-unsigned-executable-memory` — may not be needed for Electron 40+, review when re-enabling notarization
 - `com.apple.security.cs.disable-library-validation` — allows loading node-pty native module
+
+## Local Development Builds
+
+To build locally without Developer ID signing or notarization (e.g. for testing), first compile the app then package it with signing disabled. On macOS (Unix shell only):
+
+```bash
+npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --publish never -c.mac.notarize=false -c.mac.forceCodeSigning=false
+```
+
+Notes:
+
+- `npm run build` is required first — electron-builder packages whatever is in `dist/` and `dist-electron/`, so skipping it produces a stale or broken bundle.
+- `CSC_IDENTITY_AUTO_DISCOVERY=false` suppresses auto-discovery of local Developer ID certificates. If `CSC_LINK`, `CSC_NAME`, or `APPLE_*` variables are exported in your shell, unset them as well.
+- The `CSC_IDENTITY_AUTO_DISCOVERY=false` inline syntax is POSIX-only (bash/zsh). On Windows use `set CSC_IDENTITY_AUTO_DISCOVERY=false` (cmd) or `$env:CSC_IDENTITY_AUTO_DISCOVERY='false'` (PowerShell) before the build command.
+- On macOS, universal and arm64 builds still apply ad-hoc signing even with these flags — the resulting app will not be Gatekeeper-trusted, but it will launch on the machine it was built on.

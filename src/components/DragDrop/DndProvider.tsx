@@ -515,26 +515,44 @@ export function DndProvider({ children }: DndProviderProps) {
           // Group-aware drag: move the entire tab group
           if (sourceLocation === targetContainer) {
             // Same container: reorder groups
-            // The sourceIndex from DragData is the group index (set by ContentGrid/ContentDock)
-            // targetIndex needs to be computed as the group index at drop location
-            const fromGroupIndex = activeData.sourceIndex;
-
-            // Find which group we're dropping over
             const tabGroupsAtLocation = useTerminalStore
               .getState()
               .getTabGroups(targetContainer, activeWorktreeId ?? undefined);
 
-            // Find target group index by looking at which group contains the overId terminal
-            let toGroupIndex = tabGroupsAtLocation.length - 1;
-            for (let i = 0; i < tabGroupsAtLocation.length; i++) {
-              if (tabGroupsAtLocation[i].panelIds.includes(overId)) {
-                toGroupIndex = i;
-                break;
-              }
+            // Derive fromGroupIndex from live tabGroups by finding the group containing
+            // the dragged terminal. activeData.sourceIndex is the panel index among all
+            // individual panels, not the group index, so it cannot be used here.
+            // Prefer groupId match (explicit groups); fall back to panel membership.
+            let fromGroupIndex = tabGroupsAtLocation.findIndex((g) => g.id === activeData.groupId);
+            if (fromGroupIndex === -1) {
+              fromGroupIndex = tabGroupsAtLocation.findIndex((g) =>
+                g.panelIds.includes(activeData.terminal.id)
+              );
             }
 
-            if (fromGroupIndex !== toGroupIndex) {
-              reorderTabGroups(fromGroupIndex, toGroupIndex, targetContainer, activeWorktreeId);
+            if (fromGroupIndex !== -1) {
+              // Find target group index: match by group ID or panel membership, then
+              // fall back to sortable.index when overId is a synthetic placeholder.
+              let toGroupIndex = -1;
+              for (let i = 0; i < tabGroupsAtLocation.length; i++) {
+                if (
+                  tabGroupsAtLocation[i].id === overId ||
+                  tabGroupsAtLocation[i].panelIds.includes(overId)
+                ) {
+                  toGroupIndex = i;
+                  break;
+                }
+              }
+              if (toGroupIndex === -1) {
+                toGroupIndex =
+                  overData?.sortable?.index !== undefined
+                    ? Math.min(Math.max(0, overData.sortable.index), tabGroupsAtLocation.length - 1)
+                    : tabGroupsAtLocation.length - 1;
+              }
+
+              if (fromGroupIndex !== toGroupIndex) {
+                reorderTabGroups(fromGroupIndex, toGroupIndex, targetContainer, activeWorktreeId);
+              }
             }
           } else {
             // Cross-container: move entire group to new location
@@ -553,13 +571,26 @@ export function DndProvider({ children }: DndProviderProps) {
               );
 
               if (movedGroupIndex !== -1) {
-                // Find target group index by looking at which group contains the overId terminal
-                let toGroupIndex = tabGroupsAtLocation.length - 1;
+                // Find target group index: match by group ID or panel membership, then
+                // fall back to sortable.index when overId is a synthetic placeholder.
+                let toGroupIndex = -1;
                 for (let i = 0; i < tabGroupsAtLocation.length; i++) {
-                  if (tabGroupsAtLocation[i].panelIds.includes(overId)) {
+                  if (
+                    tabGroupsAtLocation[i].id === overId ||
+                    tabGroupsAtLocation[i].panelIds.includes(overId)
+                  ) {
                     toGroupIndex = i;
                     break;
                   }
+                }
+                if (toGroupIndex === -1) {
+                  toGroupIndex =
+                    overData?.sortable?.index !== undefined
+                      ? Math.min(
+                          Math.max(0, overData.sortable.index),
+                          tabGroupsAtLocation.length - 1
+                        )
+                      : tabGroupsAtLocation.length - 1;
                 }
 
                 // If we're not already at the target position, reorder

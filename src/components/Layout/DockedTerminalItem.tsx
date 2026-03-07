@@ -18,6 +18,7 @@ import { STATE_ICONS, STATE_COLORS } from "@/components/Worktree/terminalStateCo
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useDockPanelPortal } from "./DockPanelOffscreenContainer";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface DockedTerminalItemProps {
   terminal: TerminalInstance;
@@ -27,6 +28,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   const activeDockTerminalId = useTerminalStore((s) => s.activeDockTerminalId);
   const openDockTerminal = useTerminalStore((s) => s.openDockTerminal);
   const closeDockTerminal = useTerminalStore((s) => s.closeDockTerminal);
+  const moveTerminalToGrid = useTerminalStore((s) => s.moveTerminalToGrid);
   const backendStatus = useTerminalStore((s) => s.backendStatus);
   const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
   const hybridInputAutoFocus = useTerminalInputStore((s) => s.hybridInputAutoFocus);
@@ -177,7 +179,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   const isWaiting = terminal.agentState === "waiting";
   const isActive = isWorking || isRunning || isWaiting;
   const commandText = terminal.activityHeadline || terminal.lastCommand;
-  const brandColor = getBrandColorHex(terminal.type);
+  const brandColor = getBrandColorHex(terminal.agentId ?? terminal.type);
   const agentState = terminal.agentState;
   // Use shortened title without command summary for dock items
   const displayTitle = getBaseTitle(terminal.title);
@@ -192,12 +194,12 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
           <button
             className={cn(
               "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition-all duration-150 max-w-[280px]",
-              "bg-white/[0.02] border-divider text-canopy-text/70",
-              "hover:text-canopy-text hover:bg-white/[0.04]",
+              "bg-[var(--dock-item-bg)] border-[var(--dock-item-border)] text-canopy-text/70",
+              "hover:text-canopy-text hover:bg-[var(--dock-item-bg-hover)]",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
               "cursor-grab active:cursor-grabbing",
               isOpen &&
-                "bg-white/[0.08] text-canopy-text border-canopy-accent/40 ring-1 ring-inset ring-canopy-accent/30"
+                "bg-[var(--dock-item-bg-active)] text-canopy-text border-[var(--dock-item-border-active)] ring-1 ring-inset ring-canopy-accent/30"
             )}
             onClick={(e) => {
               // Explicitly toggle popover state on click
@@ -211,8 +213,13 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                 openDockTerminal(terminal.id);
               }
             }}
-            title={`${terminal.title} - Click to preview, drag to reorder`}
-            aria-label={`${terminal.title} - Click to preview, drag to reorder`}
+            onDoubleClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              moveTerminalToGrid(terminal.id);
+              closeDockTerminal();
+            }}
+            aria-label={`${terminal.title} - Click to preview, double-click to move to grid, drag to reorder`}
           >
             <div
               className={cn(
@@ -223,6 +230,8 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
               <TerminalIcon
                 type={terminal.type}
                 kind={terminal.kind}
+                agentId={terminal.agentId}
+                detectedProcessId={terminal.detectedProcessId}
                 className="w-3.5 h-3.5"
                 brandColor={brandColor}
               />
@@ -233,32 +242,40 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
 
             {isActive && commandText && (
               <>
-                <div className="h-3 w-px bg-white/10 shrink-0" aria-hidden="true" />
-                <span
-                  className="truncate flex-1 min-w-0 text-[11px] text-canopy-text/50 font-mono"
-                  title={commandText}
-                >
-                  {commandText}
-                </span>
+                <div className="h-3 w-px bg-border-subtle shrink-0" aria-hidden="true" />
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="truncate flex-1 min-w-0 text-[11px] text-canopy-text/50 font-mono">
+                        {commandText}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">{commandText}</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               </>
             )}
 
             {/* State icon (compact spacing from title) */}
             {showStateIcon && StateIcon && (
-              <div
-                className={cn("flex items-center shrink-0", STATE_COLORS[agentState])}
-                title={`Agent ${agentState}`}
-              >
-                <StateIcon
-                  className={cn(
-                    "w-3.5 h-3.5",
-                    agentState === "working" && "animate-spin",
-                    agentState === "waiting" && "animate-breathe",
-                    "motion-reduce:animate-none"
-                  )}
-                  aria-hidden="true"
-                />
-              </div>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className={cn("flex items-center shrink-0", STATE_COLORS[agentState])}>
+                      <StateIcon
+                        className={cn(
+                          "w-3.5 h-3.5",
+                          agentState === "working" && "animate-spin",
+                          agentState === "waiting" && "animate-breathe",
+                          "motion-reduce:animate-none"
+                        )}
+                        aria-hidden="true"
+                      />
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">{`Agent ${agentState}`}</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             )}
           </button>
         </PopoverTrigger>

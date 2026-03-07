@@ -20,6 +20,12 @@ interface CacheEntry {
 const CACHE_TTL_MS = 60_000;
 const MAX_CACHE_SIZE = 100;
 const MAX_COMMITS_FOR_HEATMAP = 20_000;
+const VERBOSE_PROJECT_PULSE_LOGGING = process.env.CANOPY_VERBOSE === "1";
+
+function logProjectPulseDebug(message: string, context?: Record<string, unknown>): void {
+  if (!VERBOSE_PROJECT_PULSE_LOGGING) return;
+  logDebug(message, context);
+}
 
 function pad2(value: number): string {
   return value.toString().padStart(2, "0");
@@ -72,7 +78,10 @@ export class ProjectPulseService {
       key.startsWith(`${worktreeId}:`)
     );
     keysToDelete.forEach((key) => this.cache.delete(key));
-    logDebug("ProjectPulse cache invalidated", { worktreeId, keysDeleted: keysToDelete.length });
+    logProjectPulseDebug("ProjectPulse cache invalidated", {
+      worktreeId,
+      keysDeleted: keysToDelete.length,
+    });
   }
 
   async getPulse(options: GetProjectPulseOptions): Promise<ProjectPulse> {
@@ -80,7 +89,7 @@ export class ProjectPulseService {
     const cached = this.cache.get(cacheKey);
 
     if (!options.forceRefresh && cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
-      logDebug("ProjectPulse cache hit", { cacheKey });
+      logProjectPulseDebug("ProjectPulse cache hit", { cacheKey });
       return cached.pulse;
     }
 
@@ -147,12 +156,16 @@ export class ProjectPulseService {
       headSha = (await git.raw(["rev-parse", "--verify", "HEAD"])).trim() || undefined;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      if (
-        errorMessage.includes("fatal: ambiguous argument 'HEAD'") ||
-        errorMessage.includes("unknown revision") ||
-        errorMessage.includes("needed a single revision")
-      ) {
-        logDebug("Repository has no commits, returning empty pulse", { worktreeId });
+      const noCommitsPatterns = [
+        "fatal: ambiguous argument 'HEAD'",
+        "unknown revision",
+        "needed a single revision",
+        "does not have any commits yet",
+        "not a valid object name",
+        "bad default revision 'HEAD'",
+      ];
+      if (noCommitsPatterns.some((p) => errorMessage.toLowerCase().includes(p.toLowerCase()))) {
+        logProjectPulseDebug("Repository has no commits, returning empty pulse", { worktreeId });
         return {
           pulse: this.createEmptyPulse(options),
           headSha: undefined,
@@ -243,7 +256,7 @@ export class ProjectPulseService {
       deltaToMain: deltaToMain ?? undefined,
     };
 
-    logDebug("ProjectPulse computed", {
+    logProjectPulseDebug("ProjectPulse computed", {
       worktreeId,
       commitsInRange,
       activeDays,
@@ -506,7 +519,7 @@ export class ProjectPulseService {
     // Detect if we hit the commit limit (may truncate streak for high-volume repos)
     const hitCommitLimit = lines.length === MAX_COMMITS_FOR_STREAK;
     if (hitCommitLimit) {
-      logDebug("Full streak calculation hit commit limit", {
+      logProjectPulseDebug("Full streak calculation hit commit limit", {
         commitCount: MAX_COMMITS_FOR_STREAK,
         note: "Streak may be undercounted for high-volume repositories",
       });

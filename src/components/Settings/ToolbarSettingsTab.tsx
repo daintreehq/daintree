@@ -25,33 +25,39 @@ import {
   Copy,
   Settings,
   AlertCircle,
-  Bot,
+  PackagePlus,
+  Bell,
 } from "lucide-react";
+import { ClaudeIcon, GeminiIcon, CodexIcon, OpenCodeIcon } from "@/components/icons";
 import { useToolbarPreferencesStore } from "@/store";
 import type { ToolbarButtonId } from "@/../../shared/types/domain";
-import { CanopyIcon } from "@/components/icons";
 
 type ButtonMetadata = { label: string; icon: React.ReactNode; description: string };
 
 const BUTTON_METADATA: Partial<Record<ToolbarButtonId, ButtonMetadata>> = {
+  "agent-setup": {
+    label: "Agent Setup",
+    icon: <PackagePlus className="h-4 w-4" />,
+    description: "Shown only when no agents are enabled in Agent Settings",
+  },
   claude: {
     label: "Claude Agent",
-    icon: <Bot className="h-4 w-4" />,
+    icon: <ClaudeIcon className="h-4 w-4" />,
     description: "Launch Claude AI agent",
   },
   gemini: {
     label: "Gemini Agent",
-    icon: <Bot className="h-4 w-4" />,
+    icon: <GeminiIcon className="h-4 w-4" />,
     description: "Launch Gemini AI agent",
   },
   codex: {
     label: "Codex Agent",
-    icon: <Bot className="h-4 w-4" />,
+    icon: <CodexIcon className="h-4 w-4" />,
     description: "Launch Codex AI agent",
   },
   opencode: {
     label: "OpenCode Agent",
-    icon: <Bot className="h-4 w-4" />,
+    icon: <OpenCodeIcon className="h-4 w-4" />,
     description: "Launch OpenCode AI agent",
   },
   terminal: {
@@ -74,6 +80,11 @@ const BUTTON_METADATA: Partial<Record<ToolbarButtonId, ButtonMetadata>> = {
     icon: <AlertTriangle className="h-4 w-4" />,
     description: "GitHub issues, PRs, and commits",
   },
+  "notification-center": {
+    label: "Notifications",
+    icon: <Bell className="h-4 w-4" />,
+    description: "Notification history dropdown",
+  },
   notes: {
     label: "Notes",
     icon: <StickyNote className="h-4 w-4" />,
@@ -93,11 +104,6 @@ const BUTTON_METADATA: Partial<Record<ToolbarButtonId, ButtonMetadata>> = {
     label: "Problems",
     icon: <AlertCircle className="h-4 w-4" />,
     description: "Show problems panel",
-  },
-  assistant: {
-    label: "Assistant",
-    icon: <CanopyIcon size={16} />,
-    description: "Open Canopy Assistant",
   },
 };
 

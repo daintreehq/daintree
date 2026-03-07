@@ -634,6 +634,26 @@ describe("DevPreviewSessionService", () => {
     expect(callCount).toBeGreaterThanOrEqual(3);
   });
 
+  it("logs a warning (not silently swallows) when replayRecentOutput fails", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    ptyClient.replayHistoryAsync.mockRejectedValueOnce(new Error("replay unavailable"));
+
+    await service.ensure(baseRequest);
+    const second = await service.ensure(baseRequest);
+
+    expect(second.terminalId).toBeTruthy();
+    expect(
+      warnSpy.mock.calls.some(
+        (args) =>
+          typeof args[0] === "string" &&
+          args[0].includes("[DevPreviewSessionService] replayRecentOutput failed")
+      )
+    ).toBe(true);
+
+    warnSpy.mockRestore();
+  });
+
   it("continues stop-by-panel cleanup when one session stop fails", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 

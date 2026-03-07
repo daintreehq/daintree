@@ -208,8 +208,8 @@ export function CommandPicker({
               className={cn(
                 "relative w-full flex flex-col gap-0.5 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border",
                 isSelected
-                  ? "bg-white/[0.03] border-overlay text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
-                  : "border-transparent text-canopy-text/70 hover:bg-white/[0.02] hover:text-canopy-text",
+                  ? "bg-overlay-soft border-overlay text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+                  : "border-transparent text-canopy-text/70 hover:bg-overlay-subtle hover:text-canopy-text",
                 !cmd.enabled && "opacity-50 cursor-not-allowed"
               )}
               onClick={() => cmd.enabled && onSelect(cmd)}

@@ -7,6 +7,8 @@ const projectStoreMock = vi.hoisted(() => ({
   setCurrentProject: vi.fn<(id: string) => Promise<void>>(),
   getProjectState: vi.fn<(id: string) => Promise<Record<string, unknown>>>(),
   saveProjectState: vi.fn<(id: string, state: Record<string, unknown>) => Promise<void>>(),
+  readInRepoProjectIdentity: vi.fn<(p: string) => Promise<{ found: boolean }>>(),
+  updateProject: vi.fn<(id: string, updates: Record<string, unknown>) => Record<string, unknown>>(),
 }));
 
 const logBufferMock = vi.hoisted(() => ({
@@ -15,10 +17,6 @@ const logBufferMock = vi.hoisted(() => ({
 
 const taskQueueServiceMock = vi.hoisted(() => ({
   onProjectSwitch: vi.fn(async () => undefined),
-}));
-
-const assistantServiceMock = vi.hoisted(() => ({
-  clearAllSessions: vi.fn(() => undefined),
 }));
 
 const sendToRendererMock = vi.hoisted(() => vi.fn());
@@ -33,6 +31,7 @@ const storeMock = vi.hoisted(() => ({
 
 vi.mock("../ProjectStore.js", () => ({
   projectStore: projectStoreMock,
+  DEFAULT_PROJECT_EMOJI: "🌲",
 }));
 
 vi.mock("../LogBuffer.js", () => ({
@@ -41,10 +40,6 @@ vi.mock("../LogBuffer.js", () => ({
 
 vi.mock("../TaskQueueService.js", () => ({
   taskQueueService: taskQueueServiceMock,
-}));
-
-vi.mock("../AssistantService.js", () => ({
-  assistantService: assistantServiceMock,
 }));
 
 vi.mock("../../ipc/utils.js", () => ({
@@ -83,10 +78,13 @@ describe("ProjectSwitchService", () => {
       terminals: [],
     });
     projectStoreMock.saveProjectState.mockResolvedValue(undefined);
+    projectStoreMock.readInRepoProjectIdentity.mockResolvedValue({ found: false });
+    projectStoreMock.updateProject.mockImplementation(
+      (id: string, updates: Record<string, unknown>) => ({ id, ...updates })
+    );
 
     logBufferMock.onProjectSwitch.mockImplementation(() => undefined);
     taskQueueServiceMock.onProjectSwitch.mockResolvedValue(undefined);
-    assistantServiceMock.clearAllSessions.mockImplementation(() => undefined);
   });
 
   function createService(overrides?: {

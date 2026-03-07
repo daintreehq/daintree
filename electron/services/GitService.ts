@@ -5,6 +5,7 @@ import { readFile, stat } from "fs/promises";
 import { logDebug, logError, logWarn } from "../utils/logger.js";
 import type { GitStatus, WorktreeChanges } from "../../shared/types/index.js";
 import { WorktreeRemovedError, GitError } from "../utils/errorTypes.js";
+import type { CrossWorktreeDiffResult, CrossWorktreeFile } from "../../shared/types/ipc/git.js";
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -270,6 +271,82 @@ ${lines.map((l) => "+" + l).join("\n")}`;
         error: (error as Error).message,
       });
       throw new Error(`Failed to generate diff: ${(error as Error).message}`);
+    }
+  }
+
+  async compareWorktrees(
+    branch1: string,
+    branch2: string,
+    filePath?: string
+  ): Promise<CrossWorktreeDiffResult | string> {
+    const range = `${branch1}..${branch2}`;
+
+    if (filePath) {
+      // Return the unified diff for a specific file
+      try {
+        const diff = await this.git.raw(["diff", "--no-color", range, "--", filePath]);
+
+        if (!diff.trim()) {
+          return "NO_CHANGES";
+        }
+
+        if (diff.includes("Binary files")) {
+          return "BINARY_FILE";
+        }
+
+        if (diff.length > 1024 * 1024) {
+          return "FILE_TOO_LARGE";
+        }
+
+        return diff;
+      } catch (error) {
+        logError("Failed to get cross-worktree file diff", {
+          branch1,
+          branch2,
+          filePath,
+          error: (error as Error).message,
+        });
+        throw new Error(`Failed to get cross-worktree file diff: ${(error as Error).message}`);
+      }
+    }
+
+    // Return the list of changed files
+    try {
+      const output = await this.git.raw(["diff", "--name-status", range]);
+      const files: CrossWorktreeFile[] = [];
+
+      for (const line of output.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+
+        const parts = trimmed.split(/\t/);
+        if (parts.length < 2) continue;
+
+        const statusRaw = parts[0];
+        const status = statusRaw[0] as CrossWorktreeFile["status"];
+
+        if (status === "R" || status === "C") {
+          // Renamed/copied: parts[1] = old path, parts[2] = new path
+          files.push({
+            status,
+            path: parts[2] ?? parts[1],
+            oldPath: parts[1],
+          });
+        } else {
+          files.push({ status, path: parts[1] });
+        }
+      }
+
+      logDebug("Compared worktrees", { branch1, branch2, fileCount: files.length });
+
+      return { branch1, branch2, files };
+    } catch (error) {
+      logError("Failed to compare worktrees", {
+        branch1,
+        branch2,
+        error: (error as Error).message,
+      });
+      throw new Error(`Failed to compare worktrees: ${(error as Error).message}`);
     }
   }
 

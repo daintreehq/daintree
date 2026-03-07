@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { commandsClient } from "@/clients/commandsClient";
 import type { CommandManifestEntry, CommandOverride } from "@shared/types/commands";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { extractTemplateVariables, validatePromptTemplate } from "@shared/utils/promptTemplate";
 
 interface CommandOverridesTabProps {
@@ -291,7 +292,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
               className={cn(
                 "px-3 py-1.5 text-xs font-medium rounded transition-colors capitalize",
                 filterMode === mode
-                  ? "bg-canopy-accent text-white"
+                  ? "bg-canopy-accent text-canopy-bg"
                   : "bg-canopy-sidebar text-canopy-text/70 hover:bg-canopy-border"
               )}
             >
@@ -375,28 +376,50 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
 
                 <div className="flex items-center gap-1 shrink-0">
                   {hasOverride(command.id) && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => resetToDefaults(command.id)}
-                      className="h-7 px-2"
-                      title="Reset to defaults"
-                    >
-                      <RotateCcw />
-                    </Button>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => resetToDefaults(command.id)}
+                            className="h-7 px-2"
+                            aria-label="Reset to defaults"
+                          >
+                            <RotateCcw />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">Reset to defaults</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                   )}
-                  <button
-                    onClick={() => toggleDisabled(command.id)}
-                    className={cn(
-                      "p-1.5 rounded transition-colors",
-                      isDisabled
-                        ? "text-red-500 hover:bg-red-900/30"
-                        : "text-green-500 hover:bg-green-900/30"
-                    )}
-                    title={isDisabled ? "Command disabled for this project" : "Command enabled"}
-                  >
-                    {isDisabled ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
-                  </button>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          onClick={() => toggleDisabled(command.id)}
+                          className={cn(
+                            "p-1.5 rounded transition-colors",
+                            isDisabled
+                              ? "text-status-error hover:bg-status-error/10"
+                              : "text-status-success hover:bg-status-success/10"
+                          )}
+                          aria-label={
+                            isDisabled ? "Command disabled for this project" : "Command enabled"
+                          }
+                        >
+                          {isDisabled ? (
+                            <PowerOff className="h-4 w-4" />
+                          ) : (
+                            <Power className="h-4 w-4" />
+                          )}
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">
+                        {isDisabled ? "Command disabled for this project" : "Command enabled"}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 </div>
               </div>
 
@@ -411,7 +434,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                           className={cn(
                             "px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
                             currentMode === "defaults"
-                              ? "bg-canopy-accent text-white"
+                              ? "bg-canopy-accent text-canopy-bg"
                               : "bg-canopy-sidebar text-canopy-text/70 hover:bg-canopy-border"
                           )}
                         >
@@ -423,7 +446,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                         className={cn(
                           "px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
                           currentMode === "prompt"
-                            ? "bg-canopy-accent text-white"
+                            ? "bg-canopy-accent text-canopy-bg"
                             : "bg-canopy-sidebar text-canopy-text/70 hover:bg-canopy-border"
                         )}
                       >
@@ -451,7 +474,9 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                                   className="text-xs font-medium text-canopy-text/80"
                                 >
                                   {arg.name}
-                                  {arg.required && <span className="text-red-500 ml-1">*</span>}
+                                  {arg.required && (
+                                    <span className="text-status-error ml-1">*</span>
+                                  )}
                                 </label>
                                 {hasDefaultValue && (
                                   <span className="text-[10px] text-canopy-accent bg-canopy-accent/10 px-1.5 py-0.5 rounded">
@@ -537,21 +562,28 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
             <p className="text-xs font-medium text-canopy-text/70 mb-1.5">Available variables:</p>
             <div className="flex flex-wrap gap-1.5">
               {args.map((arg) => (
-                <button
-                  key={arg.name}
-                  onClick={() => onChange(value + `{${arg.name}}`)}
-                  className={cn(
-                    "text-[11px] px-2 py-0.5 rounded font-mono transition-colors",
-                    usedVariables.includes(arg.name)
-                      ? "bg-canopy-accent/20 text-canopy-accent border border-canopy-accent/30"
-                      : "bg-canopy-sidebar text-canopy-text/70 hover:bg-canopy-border border border-canopy-border"
-                  )}
-                  title={arg.description || `Insert {${arg.name}}`}
-                >
-                  {"{"}
-                  {arg.name}
-                  {"}"}
-                </button>
+                <TooltipProvider key={arg.name}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        onClick={() => onChange(value + `{${arg.name}}`)}
+                        className={cn(
+                          "text-[11px] px-2 py-0.5 rounded font-mono transition-colors",
+                          usedVariables.includes(arg.name)
+                            ? "bg-canopy-accent/20 text-canopy-accent border border-canopy-accent/30"
+                            : "bg-canopy-sidebar text-canopy-text/70 hover:bg-canopy-border border border-canopy-border"
+                        )}
+                      >
+                        {"{"}
+                        {arg.name}
+                        {"}"}
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {arg.description || `Insert {${arg.name}}`}
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               ))}
             </div>
           </div>
@@ -569,7 +601,7 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
           className={cn(
             "w-full bg-canopy-sidebar border rounded px-2 py-1.5 text-sm text-canopy-text font-mono focus:outline-none focus:ring-1 min-h-[120px] resize-y",
             validation && !validation.valid
-              ? "border-red-500/50 focus:border-red-500 focus:ring-red-500/30"
+              ? "border-status-error/50 focus:border-status-error focus:ring-status-error/30"
               : "border-canopy-border focus:border-canopy-accent focus:ring-canopy-accent/30"
           )}
           placeholder={`Example: Work on issue {issueNumber}...\n\nUse {variableName} to include argument values.`}
@@ -577,7 +609,7 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
       </div>
 
       {validation && !validation.valid && (
-        <div className="flex items-start gap-2 text-red-400 bg-red-900/20 rounded-md px-3 py-2">
+        <div className="flex items-start gap-2 text-status-error bg-status-error/10 rounded-md px-3 py-2">
           <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
           <p className="text-xs">{validation.error}</p>
         </div>

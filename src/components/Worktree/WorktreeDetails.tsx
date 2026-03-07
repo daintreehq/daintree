@@ -9,6 +9,7 @@ import { cn } from "../../lib/utils";
 import { GitCommit, Copy, Check, ExternalLink } from "lucide-react";
 import { parseNoteWithLinks, formatPath, type TextSegment } from "../../utils/textParsing";
 import { actionService } from "@/services/ActionService";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 export interface WorktreeDetailsProps {
   worktree: WorktreeState;
@@ -142,8 +143,8 @@ export function WorktreeDetails({
 
           {/* Block 2: Narrative (AI note, summary, or commit message) */}
           {effectiveNote && (
-            <div className="p-3 rounded-[var(--radius-lg)] bg-yellow-500/5 border border-yellow-500/20">
-              <div className="text-xs text-yellow-200/90 whitespace-pre-wrap font-mono">
+            <div className="p-3 rounded-[var(--radius-lg)] bg-status-warning/5 border border-status-warning/20">
+              <div className="text-xs text-status-warning/90 whitespace-pre-wrap font-mono">
                 {parsedNoteSegments.map((segment, index) =>
                   segment.type === "link" ? (
                     <a
@@ -151,7 +152,7 @@ export function WorktreeDetails({
                       href={segment.content}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-[var(--color-status-info)] underline hover:brightness-110 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
+                      className="text-status-info underline hover:brightness-110 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
                       onClick={(e) => handleLinkClick(e, segment.content)}
                     >
                       {segment.content}
@@ -164,12 +165,12 @@ export function WorktreeDetails({
             </div>
           )}
           {!effectiveNote && effectiveSummary && (
-            <div className="text-xs text-canopy-text/70 whitespace-pre-wrap leading-relaxed p-2 bg-white/[0.02] rounded">
+            <div className="text-xs text-canopy-text/70 whitespace-pre-wrap leading-relaxed p-2 bg-overlay-subtle rounded">
               {effectiveSummary}
             </div>
           )}
           {!effectiveNote && !effectiveSummary && showLastCommit && rawLastCommitMsg && (
-            <div className="text-xs text-canopy-text/60 italic flex gap-2 p-2 bg-white/[0.02] rounded">
+            <div className="text-xs text-canopy-text/60 italic flex gap-2 p-2 bg-overlay-subtle rounded">
               <GitCommit className="w-3.5 h-3.5 mt-0.5 shrink-0 opacity-60" />
               <div className="whitespace-pre-wrap leading-relaxed min-w-0">{rawLastCommitMsg}</div>
             </div>
@@ -200,36 +201,50 @@ export function WorktreeDetails({
       {/* System path footer */}
       <div className="pt-3 border-t border-white/5">
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onPathClick();
-            }}
-            className={cn(
-              "text-xs text-canopy-text/40 hover:text-canopy-text/60 text-left font-mono truncate flex-1 min-w-0 flex items-center gap-1.5 rounded",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
-              isFocused && "text-canopy-text/60"
-            )}
-            title={`Open folder: ${worktree.path}`}
-          >
-            <ExternalLink className="w-3 h-3 shrink-0 opacity-60" />
-            <span className="truncate">{displayPath}</span>
-          </button>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onPathClick();
+                  }}
+                  className={cn(
+                    "text-xs text-canopy-text/40 hover:text-canopy-text/60 text-left font-mono truncate flex-1 min-w-0 flex items-center gap-1.5 rounded",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
+                    isFocused && "text-canopy-text/60"
+                  )}
+                >
+                  <ExternalLink className="w-3 h-3 shrink-0 opacity-60" />
+                  <span className="truncate">{displayPath}</span>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{`Open folder: ${worktree.path}`}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
 
-          <button
-            type="button"
-            onClick={handleCopyPath}
-            className="shrink-0 p-1 text-canopy-text/40 hover:text-canopy-text/60 hover:bg-white/5 rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-            title={pathCopied ? "Copied!" : "Copy full path"}
-            aria-label={pathCopied ? "Path copied to clipboard" : "Copy path to clipboard"}
-          >
-            {pathCopied ? (
-              <Check className="w-3 h-3 text-green-400" />
-            ) : (
-              <Copy className="w-3 h-3" />
-            )}
-          </button>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={handleCopyPath}
+                  className="shrink-0 p-1 text-canopy-text/40 hover:text-canopy-text/60 hover:bg-white/5 rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                  aria-label={pathCopied ? "Path copied to clipboard" : "Copy path to clipboard"}
+                >
+                  {pathCopied ? (
+                    <Check className="w-3 h-3 text-status-success" />
+                  ) : (
+                    <Copy className="w-3 h-3" />
+                  )}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {pathCopied ? "Copied!" : "Copy full path"}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
           <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
             {pathCopied ? "Path copied to clipboard" : ""}
           </div>

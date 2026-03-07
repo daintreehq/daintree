@@ -152,7 +152,7 @@ export function GitHubSettingsTab() {
   if (loadError || !githubConfig) {
     return (
       <div className="flex flex-col items-center justify-center h-32 gap-3">
-        <div className="text-[var(--color-status-error)] text-sm">
+        <div className="text-status-error text-sm">
           {loadError || "Failed to load GitHub settings"}
         </div>
         <button
@@ -174,7 +174,7 @@ export function GitHubSettingsTab() {
             Personal Access Token
           </h4>
           {githubConfig?.hasToken && (
-            <span className="text-xs text-[var(--color-status-success)] flex items-center gap-1">
+            <span className="text-xs text-status-success flex items-center gap-1">
               <Check className="w-3 h-3" />
               GitHub connected
             </span>
@@ -221,7 +221,7 @@ export function GitHubSettingsTab() {
               onClick={handleClearToken}
               variant="outline"
               size="sm"
-              className="text-[var(--color-status-error)] border-canopy-border hover:bg-red-900/20 hover:text-red-300 hover:border-red-900/30"
+              className="text-status-error border-canopy-border hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
             >
               Clear
             </Button>
@@ -229,25 +229,25 @@ export function GitHubSettingsTab() {
         </div>
 
         {validationResult === "success" && (
-          <p className="text-xs text-[var(--color-status-success)] flex items-center gap-1">
+          <p className="text-xs text-status-success flex items-center gap-1">
             <Check className="w-3 h-3" />
             Token validated and saved successfully
           </p>
         )}
         {validationResult === "test-success" && (
-          <p className="text-xs text-[var(--color-status-success)] flex items-center gap-1">
+          <p className="text-xs text-status-success flex items-center gap-1">
             <Check className="w-3 h-3" />
             Token is valid! Click Save to store it.
           </p>
         )}
         {validationResult === "error" && (
-          <p className="text-xs text-[var(--color-status-error)] flex items-center gap-1">
+          <p className="text-xs text-status-error flex items-center gap-1">
             <AlertCircle className="w-3 h-3" />
             {errorMessage || "Invalid token. Please check and try again."}
           </p>
         )}
         {validationResult === "test-error" && (
-          <p className="text-xs text-[var(--color-status-error)] flex items-center gap-1">
+          <p className="text-xs text-status-error flex items-center gap-1">
             <AlertCircle className="w-3 h-3" />
             {errorMessage || "Token test failed. Please check your token."}
           </p>

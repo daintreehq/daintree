@@ -17,18 +17,16 @@ const buttonVariants = cva(
           "border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground active:scale-[0.98]",
         secondary:
           "bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80 active:scale-[0.98]",
-        ghost: "hover:bg-white/[0.06] hover:text-accent-foreground active:scale-[0.98]",
+        ghost: "hover:bg-overlay-strong hover:text-accent-foreground active:scale-[0.98]",
         link: "text-primary underline-offset-4 hover:underline",
         subtle:
-          "bg-canopy-bg text-canopy-text/60 hover:bg-white/[0.06] hover:text-canopy-text active:scale-[0.98]",
-        pill: "rounded-full bg-canopy-bg/50 border border-canopy-border text-canopy-text/60 hover:bg-white/[0.06] hover:text-canopy-text/80 active:scale-[0.98]",
+          "bg-canopy-bg text-canopy-text/60 hover:bg-overlay-strong hover:text-canopy-text active:scale-[0.98]",
+        pill: "rounded-full bg-canopy-bg/50 border border-canopy-border text-canopy-text/60 hover:bg-overlay-strong hover:text-canopy-text/80 active:scale-[0.98]",
         "ghost-danger":
-          "text-[var(--color-status-error)] hover:bg-[var(--color-status-error)]/10 active:scale-[0.98] focus-visible:ring-[var(--color-status-error)]",
-        "ghost-success":
-          "text-[var(--color-status-success)] hover:bg-[var(--color-status-success)]/10 active:scale-[0.98]",
-        "ghost-info":
-          "text-[var(--color-status-info)] hover:bg-[var(--color-status-info)]/10 active:scale-[0.98]",
-        info: "bg-[var(--color-status-info)] text-white hover:brightness-110 active:scale-[0.98]",
+          "text-status-error hover:bg-status-error/10 active:scale-[0.98] focus-visible:ring-status-error",
+        "ghost-success": "text-status-success hover:bg-status-success/10 active:scale-[0.98]",
+        "ghost-info": "text-status-info hover:bg-status-info/10 active:scale-[0.98]",
+        info: "bg-status-info text-canopy-bg hover:brightness-110 active:scale-[0.98]",
       },
       size: {
         default: "h-9 px-4 py-2 gap-2 text-sm [&_svg]:size-4",

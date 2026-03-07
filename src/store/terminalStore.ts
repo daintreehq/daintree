@@ -9,11 +9,15 @@ import {
   createTerminalFocusSlice,
   createTerminalCommandQueueSlice,
   createTerminalBulkActionsSlice,
+  createTerminalMruSlice,
+  createWatchedPanelsSlice,
   flushTerminalPersistence,
   type TerminalRegistrySlice,
   type TerminalFocusSlice,
   type TerminalCommandQueueSlice,
   type TerminalBulkActionsSlice,
+  type TerminalMruSlice,
+  type WatchedPanelsSlice,
   type AddTerminalOptions,
   type QueuedCommand,
   isAgentReady,
@@ -35,6 +39,7 @@ import { logInfo, logWarn, logError } from "@/utils/logger";
 
 export type { TerminalInstance, AddTerminalOptions, QueuedCommand, CrashType };
 export { isAgentReady };
+export type { TerminalMruSlice, WatchedPanelsSlice };
 
 const PROJECT_SWITCH_RESIZE_SUPPRESSION_MS = 10_000;
 
@@ -77,7 +82,9 @@ export interface PanelGridState
     TerminalRegistrySlice,
     TerminalFocusSlice,
     TerminalCommandQueueSlice,
-    TerminalBulkActionsSlice {
+    TerminalBulkActionsSlice,
+    TerminalMruSlice,
+    WatchedPanelsSlice {
   backendStatus: BackendStatus;
   lastCrashType: CrashType | null;
   setBackendStatus: (status: BackendStatus) => void;
@@ -103,6 +110,9 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
         useTerminalInputStore.getState().clearDraftInput(id, projectId);
       });
 
+      // Auto-clear watch if panel is removed while watched
+      get().unwatchPanel(id);
+
       // Clean up stale tab group mappings
       const validPanelIds = new Set(remainingTerminals.map((t) => t.id));
       get().cleanupStaleTabs(validPanelIds);
@@ -122,6 +132,8 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
 
   const focusSlice = createTerminalFocusSlice(getTerminals)(set, get, api);
   const commandQueueSlice = createTerminalCommandQueueSlice(getTerminal)(set, get, api);
+  const mruSlice = createTerminalMruSlice(set, get, api);
+  const watchedPanelsSlice = createWatchedPanelsSlice()(set, get, api);
   const bulkActionsSlice = createTerminalBulkActionsSlice(
     getTerminals,
     (id) => get().removeTerminal(id),
@@ -138,6 +150,8 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
     ...focusSlice,
     ...commandQueueSlice,
     ...bulkActionsSlice,
+    ...mruSlice,
+    ...watchedPanelsSlice,
 
     backendStatus: "connected" as BackendStatus,
     lastCrashType: null as CrashType | null,
@@ -183,6 +197,9 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
     trashTerminal: (id: string) => {
       const state = get();
       registrySlice.trashTerminal(id);
+
+      // Clear watch when panel is trashed (onTerminalRemoved only fires on full removal)
+      get().unwatchPanel(id);
 
       const updates: Partial<PanelGridState> = {};
 
@@ -361,6 +378,31 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       });
     },
 
+    // Override focusNext/focusPrevious to sync activeTabByGroup when landing on a docked tab group panel
+    focusNext: () => {
+      focusSlice.focusNext();
+      const focusedId = get().focusedId;
+      if (focusedId) {
+        const terminal = get().terminals.find((t) => t.id === focusedId);
+        if (terminal?.location === "dock") {
+          const group = get().getPanelGroup(focusedId);
+          if (group) get().setActiveTab(group.id, focusedId);
+        }
+      }
+    },
+
+    focusPrevious: () => {
+      focusSlice.focusPrevious();
+      const focusedId = get().focusedId;
+      if (focusedId) {
+        const terminal = get().terminals.find((t) => t.id === focusedId);
+        if (terminal?.location === "dock") {
+          const group = get().getPanelGroup(focusedId);
+          if (group) get().setActiveTab(group.id, focusedId);
+        }
+      }
+    },
+
     // Override hydrateTabGroups to also seed activeTabByGroup from persisted TabGroup.activeTabId
     // This ensures the active tab state is restored after restart
     hydrateTabGroups: (tabGroups, options) => {
@@ -416,6 +458,7 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
         commandQueue: [],
         backendStatus: "connected",
         lastCrashType: null,
+        mruList: [],
       });
     },
 
@@ -457,12 +500,15 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
         commandQueue: [],
         backendStatus: "connected",
         lastCrashType: null,
+        mruList: [],
       });
     },
   };
 });
 
 let agentStateUnsubscribe: (() => void) | null = null;
+let agentDetectedUnsubscribe: (() => void) | null = null;
+let agentExitedUnsubscribe: (() => void) | null = null;
 let activityUnsubscribe: (() => void) | null = null;
 let trashedUnsubscribe: (() => void) | null = null;
 let restoredUnsubscribe: (() => void) | null = null;
@@ -485,6 +531,14 @@ export function cleanupTerminalStoreListeners() {
   if (agentStateUnsubscribe) {
     agentStateUnsubscribe();
     agentStateUnsubscribe = null;
+  }
+  if (agentDetectedUnsubscribe) {
+    agentDetectedUnsubscribe();
+    agentDetectedUnsubscribe = null;
+  }
+  if (agentExitedUnsubscribe) {
+    agentExitedUnsubscribe();
+    agentExitedUnsubscribe = null;
   }
   if (activityUnsubscribe) {
     activityUnsubscribe();
@@ -578,6 +632,36 @@ export function setupTerminalStoreListeners() {
     }
   );
 
+  agentDetectedUnsubscribe = terminalRegistryController.onAgentDetected((data) => {
+    const { terminalId, processIconId } = data;
+    if (!terminalId || !processIconId) return;
+
+    useTerminalStore.setState((state) => {
+      const terminal = state.terminals.find((t) => t.id === terminalId);
+      if (!terminal || terminal.detectedProcessId === processIconId) return state;
+      return {
+        terminals: state.terminals.map((t) =>
+          t.id === terminalId ? { ...t, detectedProcessId: processIconId } : t
+        ),
+      };
+    });
+  });
+
+  agentExitedUnsubscribe = terminalRegistryController.onAgentExited((data) => {
+    const { terminalId } = data;
+    if (!terminalId) return;
+
+    useTerminalStore.setState((state) => {
+      const terminal = state.terminals.find((t) => t.id === terminalId);
+      if (!terminal || !terminal.detectedProcessId) return state;
+      return {
+        terminals: state.terminals.map((t) =>
+          t.id === terminalId ? { ...t, detectedProcessId: undefined } : t
+        ),
+      };
+    });
+  });
+
   activityUnsubscribe = terminalRegistryController.onActivity((data: TerminalActivityPayload) => {
     const { terminalId, headline, status, type, timestamp, lastCommand } = data;
     useTerminalStore
@@ -655,8 +739,10 @@ export function setupTerminalStoreListeners() {
       return;
     }
 
-    if (terminal.exitBehavior === "keep") {
-      // Explicit keep - preserve terminal regardless of type
+    if (terminal.exitBehavior === "keep" || terminal.exitBehavior === "restart") {
+      // "keep": preserve terminal for review
+      // "restart": preserve terminal; TerminalPane triggers the restart via its exit effect
+      // Note: non-zero exits are already preserved above, so this only matters for exit code 0
       return;
     }
 

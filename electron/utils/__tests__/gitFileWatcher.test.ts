@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { readFileSync, watch, type FSWatcher } from "fs";
+import { join as pathJoin } from "path";
 import { getGitDir } from "../gitUtils.js";
 import { GitFileWatcher } from "../gitFileWatcher.js";
 
@@ -28,7 +29,7 @@ describe("GitFileWatcher", () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
 
-    vi.mocked(getGitDir).mockReturnValue("/repo/.git");
+    vi.mocked(getGitDir).mockReturnValue(pathJoin("/repo", ".git"));
     vi.mocked(readFileSync).mockImplementation(() => {
       throw new Error("commondir missing");
     });
@@ -40,6 +41,7 @@ describe("GitFileWatcher", () => {
   });
 
   it("watches correct directories and de-duplicates shared paths", () => {
+    const gitDir = pathJoin("/repo", ".git");
     const gitWatcher = new GitFileWatcher({
       worktreePath: "/repo",
       branch: "main",
@@ -50,21 +52,18 @@ describe("GitFileWatcher", () => {
     expect(gitWatcher.start()).toBe(true);
 
     const watchedPaths = vi.mocked(watch).mock.calls.map(([path]) => path);
-    expect(watchedPaths).toContain("/repo/.git");
-    expect(watchedPaths).toContain("/repo/.git/refs/heads");
-    expect(watchedPaths).toContain("/repo/.git/logs");
-    expect(watchedPaths.filter((path) => path === "/repo/.git")).toHaveLength(1);
+    expect(watchedPaths).toContain(gitDir);
+    expect(watchedPaths).toContain(pathJoin(gitDir, "refs", "heads"));
+    expect(watchedPaths).toContain(pathJoin(gitDir, "logs"));
+    expect(watchedPaths.filter((path) => path === gitDir)).toHaveLength(1);
 
-    // Index is NOT watched — git status itself modifies the index,
-    // which would create an infinite feedback loop with the watcher.
-    expect(watchedPaths).not.toContain("/repo/.git/index");
-
-    // File-level watchers became stale after git rename-based updates.
-    expect(watchedPaths).not.toContain("/repo/.git/HEAD");
-    expect(watchedPaths).not.toContain("/repo/.git/refs/heads/main");
+    expect(watchedPaths).not.toContain(pathJoin(gitDir, "index"));
+    expect(watchedPaths).not.toContain(pathJoin(gitDir, "HEAD"));
+    expect(watchedPaths).not.toContain(pathJoin(gitDir, "refs", "heads", "main"));
   });
 
   it("does not trigger on index changes (avoids git-status feedback loop)", async () => {
+    const gitDir = pathJoin("/repo", ".git");
     const onChange = vi.fn();
     const gitWatcher = new GitFileWatcher({
       worktreePath: "/repo",
@@ -75,7 +74,7 @@ describe("GitFileWatcher", () => {
 
     expect(gitWatcher.start()).toBe(true);
 
-    const dotGitCall = vi.mocked(watch).mock.calls.find(([path]) => path === "/repo/.git") as
+    const dotGitCall = vi.mocked(watch).mock.calls.find(([path]) => path === gitDir) as
       | [unknown, unknown, unknown]
       | undefined;
     expect(dotGitCall).toBeDefined();
@@ -97,6 +96,7 @@ describe("GitFileWatcher", () => {
   });
 
   it("filters unrelated directory events and debounces matching events", async () => {
+    const gitDir = pathJoin("/repo", ".git");
     const onChange = vi.fn();
     const gitWatcher = new GitFileWatcher({
       worktreePath: "/repo",
@@ -107,7 +107,7 @@ describe("GitFileWatcher", () => {
 
     expect(gitWatcher.start()).toBe(true);
 
-    const dotGitCall = vi.mocked(watch).mock.calls.find(([path]) => path === "/repo/.git") as
+    const dotGitCall = vi.mocked(watch).mock.calls.find(([path]) => path === gitDir) as
       | [unknown, unknown, unknown]
       | undefined;
     expect(dotGitCall).toBeDefined();
@@ -136,6 +136,7 @@ describe("GitFileWatcher", () => {
   });
 
   it("detects commits via reflog changes", async () => {
+    const gitDir = pathJoin("/repo", ".git");
     const onChange = vi.fn();
     const gitWatcher = new GitFileWatcher({
       worktreePath: "/repo",
@@ -146,7 +147,9 @@ describe("GitFileWatcher", () => {
 
     expect(gitWatcher.start()).toBe(true);
 
-    const logsCall = vi.mocked(watch).mock.calls.find(([path]) => path === "/repo/.git/logs") as
+    const logsCall = vi
+      .mocked(watch)
+      .mock.calls.find(([path]) => path === pathJoin(gitDir, "logs")) as
       | [unknown, unknown, unknown]
       | undefined;
     expect(logsCall).toBeDefined();
@@ -162,6 +165,7 @@ describe("GitFileWatcher", () => {
   });
 
   it("detects commits via branch ref changes", async () => {
+    const gitDir = pathJoin("/repo", ".git");
     const onChange = vi.fn();
     const gitWatcher = new GitFileWatcher({
       worktreePath: "/repo",
@@ -174,7 +178,7 @@ describe("GitFileWatcher", () => {
 
     const refsCall = vi
       .mocked(watch)
-      .mock.calls.find(([path]) => path === "/repo/.git/refs/heads") as
+      .mock.calls.find(([path]) => path === pathJoin(gitDir, "refs", "heads")) as
       | [unknown, unknown, unknown]
       | undefined;
     expect(refsCall).toBeDefined();

@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { Info } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import type { TerminalInfoPayload } from "@/types/electron";
 import { actionService } from "@/services/ActionService";
 
@@ -66,15 +67,25 @@ interface InfoRowProps {
 
 function InfoRow({ label, value, mono = false }: InfoRowProps) {
   const displayValue = value ?? "N/A";
+  const valueElement = (
+    <span className={`text-canopy-text text-right select-text ${mono ? "font-mono text-xs" : ""}`}>
+      {displayValue}
+    </span>
+  );
+
   return (
     <div className="flex justify-between items-start gap-4 text-sm">
       <span className="text-canopy-text/70 shrink-0 select-none">{label}:</span>
-      <span
-        className={`text-canopy-text text-right select-text ${mono ? "font-mono text-xs" : ""}`}
-        title={typeof displayValue === "string" ? displayValue : undefined}
-      >
-        {displayValue}
-      </span>
+      {typeof displayValue === "string" ? (
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>{valueElement}</TooltipTrigger>
+            <TooltipContent side="bottom">{displayValue}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      ) : (
+        valueElement
+      )}
     </div>
   );
 }
@@ -192,7 +203,7 @@ Performance & Diagnostics:
 
         {error && (
           <div
-            className="bg-red-500/10 border border-red-500/30 rounded-[var(--radius-lg)] p-4 text-red-400 select-text"
+            className="bg-status-error/10 border border-status-error/30 rounded-[var(--radius-lg)] p-4 text-status-error select-text"
             role="alert"
           >
             <p className="font-semibold mb-1">Failed to load terminal information</p>

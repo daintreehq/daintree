@@ -5,13 +5,13 @@ import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortabl
 import { useDroppable } from "@dnd-kit/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useTerminalStore, useProjectStore, useWorktreeSelectionStore } from "@/store";
 import { DockedTerminalItem } from "./DockedTerminalItem";
 import { DockedTabGroup } from "./DockedTabGroup";
 import { TrashContainer } from "./TrashContainer";
 import { WaitingContainer } from "./WaitingContainer";
 import { FailedContainer } from "./FailedContainer";
-import { AssistantDockButton } from "@/components/Dock/AssistantDockButton";
 import {
   SortableDockItem,
   SortableDockPlaceholder,
@@ -139,6 +139,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
 
   return (
     <div
+      id="dock-container"
       onContextMenu={handleContextMenu}
       className={cn(
         "bg-[var(--dock-bg)]/95 backdrop-blur-sm",
@@ -153,19 +154,25 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
         {/* Left Scroll Chevron - Overlay */}
         {canScrollLeft && (
           <div className="absolute left-0 top-1/2 -translate-y-1/2 z-10 pointer-events-none bg-gradient-to-r from-[var(--dock-bg)] via-[var(--dock-bg)]/90 to-transparent pr-4">
-            <button
-              type="button"
-              onClick={scrollLeft}
-              className={cn(
-                "pointer-events-auto p-1.5 text-canopy-text/60 hover:text-canopy-text",
-                "rounded-[var(--radius-md)] transition-colors",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-              )}
-              aria-label="Scroll left"
-              title="Scroll left"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={scrollLeft}
+                    className={cn(
+                      "pointer-events-auto p-1.5 text-canopy-text/60 hover:text-canopy-text",
+                      "rounded-[var(--radius-md)] transition-colors",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                    )}
+                    aria-label="Scroll left"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Scroll left</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
         )}
 
@@ -175,7 +182,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
           className={cn(
             "flex items-center gap-[var(--dock-gap)] overflow-x-auto flex-1 min-h-[var(--dock-item-height)] no-scrollbar scroll-smooth px-1",
             isOver &&
-              "bg-white/[0.03] ring-2 ring-canopy-accent/30 ring-inset rounded-[var(--radius-md)]"
+              "bg-overlay-soft ring-2 ring-canopy-accent/30 ring-inset rounded-[var(--radius-md)]"
           )}
         >
           <SortableContext
@@ -223,19 +230,25 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
         {/* Right Scroll Chevron - Overlay */}
         {canScrollRight && (
           <div className="absolute right-0 top-1/2 -translate-y-1/2 z-10 pointer-events-none bg-gradient-to-l from-[var(--dock-bg)] via-[var(--dock-bg)]/90 to-transparent pl-4">
-            <button
-              type="button"
-              onClick={scrollRight}
-              className={cn(
-                "pointer-events-auto p-1.5 text-canopy-text/60 hover:text-canopy-text",
-                "rounded-[var(--radius-md)] transition-colors",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-              )}
-              aria-label="Scroll right"
-              title="Scroll right"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </button>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={scrollRight}
+                    className={cn(
+                      "pointer-events-auto p-1.5 text-canopy-text/60 hover:text-canopy-text",
+                      "rounded-[var(--radius-md)] transition-colors",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                    )}
+                    aria-label="Scroll right"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Scroll right</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
         )}
       </div>
@@ -243,12 +256,11 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
       {/* Separator between terminals and action containers */}
       {tabGroups.length > 0 && <div className="w-px h-5 bg-[var(--dock-border)] mx-1 shrink-0" />}
 
-      {/* Action containers: Waiting + Failed + Trash + Assistant */}
+      {/* Action containers: Waiting + Failed + Trash */}
       <div className="shrink-0 pl-1 flex items-center gap-2">
         <WaitingContainer compact={isCompact} />
         <FailedContainer compact={isCompact} />
         <TrashContainer trashedTerminals={trashedItems} compact={isCompact} />
-        <AssistantDockButton />
       </div>
     </div>
   );

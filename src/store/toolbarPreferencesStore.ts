@@ -23,6 +23,7 @@ function getSafeStorage(): StateStorage {
 }
 
 const DEFAULT_LEFT_BUTTONS: ToolbarButtonId[] = [
+  "agent-setup",
   "claude",
   "gemini",
   "codex",
@@ -34,6 +35,7 @@ const DEFAULT_LEFT_BUTTONS: ToolbarButtonId[] = [
 
 const DEFAULT_RIGHT_BUTTONS: ToolbarButtonId[] = [
   "github-stats",
+  "notification-center",
   "notes",
   "copy-tree",
   "settings",

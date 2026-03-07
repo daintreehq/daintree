@@ -96,6 +96,8 @@ export function DevPreviewPane({
   const [isWebviewReady, setIsWebviewReady] = useState(false);
   const [consoleTerminalId, setConsoleTerminalId] = useState<string | null>(terminalId);
   const loadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const failLoadRetryRef = useRef<NodeJS.Timeout | null>(null);
+  const failLoadRetryCountRef = useRef<number>(0);
   const isConsoleOpen = terminal?.devPreviewConsoleOpen ?? false;
   const [isAutoDetecting, setIsAutoDetecting] = useState(false);
   const { saveSettings } = useProjectSettings();
@@ -112,6 +114,11 @@ export function DevPreviewPane({
     webviewRef.current = node;
     if (node) {
       lastSetUrlRef.current = "";
+      failLoadRetryCountRef.current = 0;
+      if (failLoadRetryRef.current) {
+        clearTimeout(failLoadRetryRef.current);
+        failLoadRetryRef.current = null;
+      }
     }
     setWebviewElement(node);
   }, []);
@@ -274,18 +281,63 @@ export function DevPreviewPane({
         clearTimeout(loadTimeoutRef.current);
         loadTimeoutRef.current = null;
       }
+      failLoadRetryCountRef.current = 0;
+      if (failLoadRetryRef.current) {
+        clearTimeout(failLoadRetryRef.current);
+        failLoadRetryRef.current = null;
+      }
     };
 
-    const handleDidFailLoad = () => {
+    const handleDidFailLoad = (e: Electron.DidFailLoadEvent) => {
       setIsLoading(false);
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
         loadTimeoutRef.current = null;
       }
+
+      // Retry on connection-refused errors: the readiness check may have passed
+      // a moment before the server was fully reachable from the webview.
+      const ERR_CONNECTION_REFUSED = -102;
+      const ERR_CONNECTION_RESET = -101;
+      if (
+        e.isMainFrame &&
+        (e.errorCode === ERR_CONNECTION_REFUSED || e.errorCode === ERR_CONNECTION_RESET)
+      ) {
+        const MAX_RETRIES = 5;
+        const retryCount = failLoadRetryCountRef.current;
+        if (retryCount < MAX_RETRIES) {
+          failLoadRetryCountRef.current += 1;
+          // Capture URL at fail-time so the retry loads the same page even if
+          // the webview navigates elsewhere during the backoff window.
+          const urlToRetry = e.validatedURL || "";
+          const delayMs = Math.min(500 * 2 ** retryCount, 8000);
+          // Clear any in-flight retry so only one is pending at a time.
+          if (failLoadRetryRef.current) {
+            clearTimeout(failLoadRetryRef.current);
+          }
+          failLoadRetryRef.current = setTimeout(() => {
+            failLoadRetryRef.current = null;
+            try {
+              if (urlToRetry && urlToRetry !== "about:blank") {
+                webview.loadURL(urlToRetry).catch(() => {});
+              }
+            } catch {
+              // Webview detached
+            }
+          }, delayMs);
+        }
+      }
     };
 
     const handleDidNavigate = (e: Electron.DidNavigateEvent) => {
       const navigatedUrl = e.url;
+      // A confirmed new main-frame navigation means we're past any previous failure;
+      // reset the retry budget so stale exhaustion doesn't block future attempts.
+      failLoadRetryCountRef.current = 0;
+      if (failLoadRetryRef.current) {
+        clearTimeout(failLoadRetryRef.current);
+        failLoadRetryRef.current = null;
+      }
       if (navigatedUrl !== lastSetUrlRef.current) {
         setHistory((prev) => pushBrowserHistory(prev, navigatedUrl));
         lastSetUrlRef.current = navigatedUrl;
@@ -304,7 +356,7 @@ export function DevPreviewPane({
     webview.addEventListener("did-start-loading", handleDidStartLoading);
     webview.addEventListener("did-stop-loading", handleDidStopLoading);
     webview.addEventListener("did-finish-load", handleDidFinishLoad);
-    webview.addEventListener("did-fail-load", handleDidFailLoad);
+    webview.addEventListener("did-fail-load", handleDidFailLoad as unknown as EventListener);
     webview.addEventListener("did-navigate", handleDidNavigate as unknown as EventListener);
     webview.addEventListener(
       "did-navigate-in-page",
@@ -315,12 +367,16 @@ export function DevPreviewPane({
       webview.removeEventListener("did-start-loading", handleDidStartLoading);
       webview.removeEventListener("did-stop-loading", handleDidStopLoading);
       webview.removeEventListener("did-finish-load", handleDidFinishLoad);
-      webview.removeEventListener("did-fail-load", handleDidFailLoad);
+      webview.removeEventListener("did-fail-load", handleDidFailLoad as unknown as EventListener);
       webview.removeEventListener("did-navigate", handleDidNavigate as unknown as EventListener);
       webview.removeEventListener(
         "did-navigate-in-page",
         handleDidNavigateInPage as unknown as EventListener
       );
+      if (failLoadRetryRef.current) {
+        clearTimeout(failLoadRetryRef.current);
+        failLoadRetryRef.current = null;
+      }
     };
   }, [webviewElement]);
 
@@ -379,6 +435,9 @@ export function DevPreviewPane({
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
       }
+      if (failLoadRetryRef.current) {
+        clearTimeout(failLoadRetryRef.current);
+      }
     };
   }, []);
 
@@ -418,7 +477,7 @@ export function DevPreviewPane({
         <div className="relative flex-1 min-h-0 bg-white">
           {isRestarting || status === "starting" || status === "installing" ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg">
-              <div className="w-12 h-12 border-2 border-blue-400 border-t-transparent rounded-full animate-spin mb-4" />
+              <div className="w-12 h-12 border-2 border-status-info border-t-transparent rounded-full animate-spin mb-4" />
               <p className="text-sm text-canopy-text/60">
                 {isRestarting ? "Restarting" : status === "installing" ? "Installing" : "Starting"}
                 ...
@@ -426,28 +485,32 @@ export function DevPreviewPane({
             </div>
           ) : status === "error" && error ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
-              <AlertTriangle className="w-12 h-12 text-amber-400 mb-4" />
-              <h3 className="text-lg font-medium mb-2">Dev Server Error</h3>
-              <p className="text-sm text-canopy-text/60 text-center mb-4 max-w-md">
+              <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
+              <h3 className="text-sm font-medium text-canopy-text/70 mb-1">Dev Server Error</h3>
+              <p className="text-xs text-canopy-text/50 text-center mb-3 max-w-md">
                 {error.message}
               </p>
-              <div className="flex gap-3">
+              <div className="flex items-center gap-1">
                 <button
                   type="button"
                   onClick={handleRetry}
-                  className="flex items-center gap-2 px-4 py-2 bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 rounded-lg border border-blue-500/30 transition-colors"
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
                 >
-                  <RotateCw className="w-4 h-4" />
-                  Retry
+                  <RotateCw className="h-3.5 w-3.5 text-canopy-accent/70 group-hover:text-canopy-accent transition-colors" />
+                  <span className="text-xs text-canopy-accent/70 group-hover:text-canopy-accent transition-colors">
+                    Retry
+                  </span>
                 </button>
                 {currentUrl && (
                   <button
                     type="button"
                     onClick={handleOpenExternal}
-                    className="flex items-center gap-2 px-4 py-2 bg-gray-500/20 hover:bg-gray-500/30 text-gray-400 rounded-lg border border-gray-500/30 transition-colors"
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
                   >
-                    <ExternalLink className="w-4 h-4" />
-                    Open External
+                    <ExternalLink className="h-3.5 w-3.5 text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors" />
+                    <span className="text-xs text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors">
+                      Open External
+                    </span>
                   </button>
                 )}
               </div>
@@ -456,41 +519,49 @@ export function DevPreviewPane({
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
               {isUnconfigured ? (
                 <div className="flex flex-col items-center text-center max-w-md">
-                  <h3 className="text-lg font-medium mb-2">Configure Dev Server</h3>
-                  <p className="text-sm text-canopy-text/60 mb-6 leading-relaxed">
+                  <h3 className="text-sm font-medium text-canopy-text/70 mb-1">
+                    Configure Dev Server
+                  </h3>
+                  <p className="text-xs text-canopy-text/50 mb-4 leading-relaxed">
                     No dev server command is configured for this project.
                     {allDetectedRunners && findDevServerCandidate(allDetectedRunners)
                       ? " We found a script in your package.json that looks like a dev server."
                       : " Configure one to preview your application."}
                   </p>
-                  <div className="flex flex-col gap-3 w-full">
+                  <div className="flex flex-col items-center gap-2">
                     {allDetectedRunners && findDevServerCandidate(allDetectedRunners) && (
                       <button
                         type="button"
                         onClick={handleAutoDetect}
                         disabled={isAutoDetecting || isSettingsLoading}
-                        className="flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 rounded-lg border border-blue-500/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
                       >
-                        <Wand2 className="w-4 h-4" />
-                        {isAutoDetecting
-                          ? "Detecting..."
-                          : `Use \`${findDevServerCandidate(allDetectedRunners)?.command}\``}
+                        <Wand2 className="h-3.5 w-3.5 text-canopy-accent/70 group-hover:text-canopy-accent transition-colors" />
+                        <span className="text-xs text-canopy-accent/70 group-hover:text-canopy-accent transition-colors">
+                          {isAutoDetecting
+                            ? "Detecting..."
+                            : `Use \`${findDevServerCandidate(allDetectedRunners)?.command}\``}
+                        </span>
                       </button>
                     )}
                     <button
                       type="button"
                       onClick={handleOpenSettings}
-                      className="flex items-center justify-center gap-2 px-4 py-2.5 bg-gray-500/20 hover:bg-gray-500/30 text-gray-400 rounded-lg border border-gray-500/30 transition-colors"
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
                     >
-                      <Settings className="w-4 h-4" />
-                      Open Project Settings
+                      <Settings className="h-3.5 w-3.5 text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors" />
+                      <span className="text-xs text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors">
+                        Open Project Settings
+                      </span>
                     </button>
                   </div>
                 </div>
               ) : (
                 <div className="flex flex-col items-center text-center max-w-md">
-                  <h3 className="text-lg font-medium mb-2">Waiting for Dev Server</h3>
-                  <p className="text-sm text-canopy-text/60 mb-6 leading-relaxed">
+                  <h3 className="text-sm font-medium text-canopy-text/70 mb-1">
+                    Waiting for Dev Server
+                  </h3>
+                  <p className="text-xs text-canopy-text/50 mb-4 leading-relaxed">
                     The development server will appear here once it starts and a URL is detected.
                   </p>
                 </div>

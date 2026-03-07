@@ -1,9 +1,10 @@
 import { app, BrowserWindow, ipcMain } from "electron";
-import { autoUpdater } from "electron-updater";
+import electronUpdater from "electron-updater";
 import type { UpdateInfo, ProgressInfo } from "electron-updater";
 import { CHANNELS } from "../ipc/channels.js";
 
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
+const { autoUpdater } = electronUpdater;
 
 class AutoUpdaterService {
   private checkInterval: NodeJS.Timeout | null = null;

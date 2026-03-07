@@ -1,8 +1,14 @@
-import { BrowserWindow, app } from "electron";
+import { BrowserWindow, app, Notification } from "electron";
 
 export interface NotificationState {
   waitingCount: number;
   failedCount: number;
+}
+
+export interface WatchNotificationContext {
+  worktreeId?: string;
+  panelId: string;
+  panelTitle: string;
 }
 
 const DEBOUNCE_MS = 300;
@@ -15,6 +21,7 @@ class NotificationService {
   private windowFocused = true;
   private focusHandler: (() => void) | null = null;
   private blurHandler: (() => void) | null = null;
+  private activeNotifications = new Set<Notification>();
 
   private detachWindowListeners(): void {
     if (!this.mainWindow || !this.focusHandler || !this.blurHandler) {
@@ -34,16 +41,18 @@ class NotificationService {
 
     this.focusHandler = () => {
       this.windowFocused = true;
+      this.currentState = { waitingCount: 0, failedCount: 0 };
+
+      if (this.debounceTimer) {
+        clearTimeout(this.debounceTimer);
+        this.debounceTimer = null;
+      }
+
       this.clearNotifications();
     };
 
     this.blurHandler = () => {
       this.windowFocused = false;
-      // Immediately apply notifications when window loses focus if there are any
-      const { waitingCount, failedCount } = this.currentState;
-      if (waitingCount > 0 || failedCount > 0) {
-        this.applyNotifications();
-      }
     };
 
     window.on("focus", this.focusHandler);
@@ -106,6 +115,54 @@ class NotificationService {
     return this.windowFocused;
   }
 
+  showNativeNotification(title: string, body: string): void {
+    if (!Notification.isSupported()) return;
+
+    const notification = new Notification({ title, body, silent: true });
+    this.activeNotifications.add(notification);
+
+    const cleanup = () => {
+      this.activeNotifications.delete(notification);
+    };
+    notification.on("close", cleanup);
+    notification.on("failed" as "close", cleanup);
+
+    notification.show();
+  }
+
+  showWatchNotification(
+    title: string,
+    body: string,
+    context: WatchNotificationContext,
+    navigateChannel: string,
+    silent = false
+  ): void {
+    if (!Notification.isSupported()) return;
+
+    const notification = new Notification({ title, body, silent });
+    this.activeNotifications.add(notification);
+
+    const cleanup = () => {
+      this.activeNotifications.delete(notification);
+    };
+    notification.on("close", cleanup);
+    notification.on("failed" as "close", cleanup);
+
+    notification.on("click", () => {
+      cleanup();
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        if (this.mainWindow.isMinimized()) {
+          this.mainWindow.restore();
+        }
+        this.mainWindow.show();
+        this.mainWindow.focus();
+        this.mainWindow.webContents.send(navigateChannel, context);
+      }
+    });
+
+    notification.show();
+  }
+
   dispose(): void {
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
@@ -113,9 +170,8 @@ class NotificationService {
     }
 
     this.detachWindowListeners();
-
-    // Clear notifications before disposing
     this.clearNotifications();
+    this.activeNotifications.clear();
 
     this.focusHandler = null;
     this.blurHandler = null;

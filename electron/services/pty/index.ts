@@ -3,6 +3,12 @@ export { AgentStateService } from "./AgentStateService.js";
 export { TerminalRegistry } from "./TerminalRegistry.js";
 export { TerminalProcess } from "./TerminalProcess.js";
 export {
+  filterEnvironment,
+  injectCanopyMetadata,
+  isSensitiveVar,
+  type CanopyTerminalMetadata,
+} from "./EnvironmentFilter.js";
+export {
   AgentPatternDetector,
   createPatternDetector,
   stripAnsi,

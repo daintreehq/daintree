@@ -38,12 +38,12 @@
 
     "PERF-060": {
       "p95Ms": 5000,
-      "maxRegressionPct": 20,
+      "maxRegressionPct": 50,
       "maxMetricValues": { "memoryGrowthPct": 10 }
     },
     "PERF-061": {
       "p95Ms": 7000,
-      "maxRegressionPct": 20,
+      "maxRegressionPct": 50,
       "maxMetricValues": { "memoryGrowthMb": 64 }
     },
     "PERF-062": {

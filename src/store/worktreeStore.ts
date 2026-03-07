@@ -12,12 +12,18 @@ interface CreateDialogState {
   initialIssue: GitHubIssue | null;
 }
 
+interface CrossDiffDialogState {
+  isOpen: boolean;
+  initialWorktreeId: string | null;
+}
+
 interface WorktreeSelectionState {
   activeWorktreeId: string | null;
   focusedWorktreeId: string | null;
   expandedWorktrees: Set<string>;
   expandedTerminals: Set<string>;
   createDialog: CreateDialogState;
+  crossDiffDialog: CrossDiffDialogState;
   _policyGeneration: number;
   lastFocusedTerminalByWorktree: Map<string, string>;
 
@@ -31,6 +37,8 @@ interface WorktreeSelectionState {
   setTerminalsExpanded: (id: string, expanded: boolean) => void;
   openCreateDialog: (initialIssue?: GitHubIssue | null) => void;
   closeCreateDialog: () => void;
+  openCrossWorktreeDiff: (initialWorktreeId?: string | null) => void;
+  closeCrossWorktreeDiff: () => void;
   trackTerminalFocus: (worktreeId: string, terminalId: string) => void;
   clearWorktreeFocusTracking: (worktreeId: string) => void;
   reset: () => void;
@@ -44,6 +52,53 @@ let terminalStoreModulePromise: Promise<TerminalStoreModule> | null = null;
 let lastPersistedActiveWorktreeId: string | null | undefined;
 let pendingPersistActiveWorktreeId: string | null | undefined;
 let persistRequestVersion = 0;
+
+let lastPersistedMruList: string[] | undefined;
+let pendingPersistMruList: string[] | undefined;
+let mruPersistVersion = 0;
+let mruRecordingSuppressed = false;
+
+/** Call before app/project hydration to prevent hydration focus events from corrupting MRU. */
+export function suppressMruRecording(suppress: boolean): void {
+  mruRecordingSuppressed = suppress;
+}
+
+function mruListsEqual(a: string[] | undefined, b: string[]): boolean {
+  if (!a || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function persistMruList(list: string[]): void {
+  if (mruListsEqual(pendingPersistMruList ?? lastPersistedMruList, list)) {
+    return;
+  }
+
+  pendingPersistMruList = list;
+  const requestVersion = ++mruPersistVersion;
+
+  void loadClientsModule()
+    .then(({ appClient }) => appClient.setState({ mruList: list }))
+    .then(() => {
+      if (requestVersion === mruPersistVersion) {
+        lastPersistedMruList = list;
+        pendingPersistMruList = undefined;
+      }
+    })
+    .catch((error) => {
+      if (requestVersion === mruPersistVersion) {
+        pendingPersistMruList = undefined;
+      }
+      logErrorWithContext(error, {
+        operation: "persist_mru_list",
+        component: "worktreeStore",
+        errorType: "filesystem",
+        details: { listLength: list.length },
+      });
+    });
+}
 
 function loadClientsModule(): Promise<ClientsModule> {
   if (!clientsModulePromise) {
@@ -142,6 +197,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
   expandedWorktrees: new Set<string>(),
   expandedTerminals: new Set<string>(),
   createDialog: { isOpen: false, initialIssue: null },
+  crossDiffDialog: { isOpen: false, initialWorktreeId: null },
   _policyGeneration: 0,
   lastFocusedTerminalByWorktree: new Map<string, string>(),
 
@@ -201,6 +257,16 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     });
 
     persistActiveWorktree(id);
+
+    // Record worktree MRU on explicit selection (suppressed during hydration)
+    if (!mruRecordingSuppressed) {
+      void loadTerminalStoreModule()
+        .then(({ useTerminalStore }) => {
+          useTerminalStore.getState().recordMru(`worktree:${id}`);
+          persistMruList(useTerminalStore.getState().mruList);
+        })
+        .catch(() => {});
+    }
 
     applyWorktreeTerminalPolicy(get, set, id, generation, () => {
       markRendererPerformance(PERF_MARKS.WORKTREE_SWITCH_END, {
@@ -293,6 +359,12 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
 
   closeCreateDialog: () => set({ createDialog: { isOpen: false, initialIssue: null } }),
 
+  openCrossWorktreeDiff: (initialWorktreeId = null) =>
+    set({ crossDiffDialog: { isOpen: true, initialWorktreeId } }),
+
+  closeCrossWorktreeDiff: () =>
+    set({ crossDiffDialog: { isOpen: false, initialWorktreeId: null } }),
+
   trackTerminalFocus: (worktreeId, terminalId) =>
     set((state) => {
       const next = new Map(state.lastFocusedTerminalByWorktree);
@@ -314,6 +386,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       expandedWorktrees: new Set<string>(),
       expandedTerminals: new Set<string>(),
       createDialog: { isOpen: false, initialIssue: null },
+      crossDiffDialog: { isOpen: false, initialWorktreeId: null },
       lastFocusedTerminalByWorktree: new Map<string, string>(),
     }),
 });
@@ -348,6 +421,12 @@ export function setupWorktreeFocusTracking() {
         const terminal = state.terminals.find((t) => t.id === focusedId);
         if (terminal?.worktreeId) {
           useWorktreeSelectionStore.getState().trackTerminalFocus(terminal.worktreeId, focusedId);
+        }
+
+        // Record terminal MRU on focus change (suppressed during hydration)
+        if (!mruRecordingSuppressed) {
+          state.recordMru(`terminal:${focusedId}`);
+          persistMruList(useTerminalStore.getState().mruList);
         }
       });
     })

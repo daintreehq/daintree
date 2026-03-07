@@ -1,10 +1,89 @@
 import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { FileText, Trash2, Bug, AlertTriangle } from "lucide-react";
+import {
+  FileText,
+  Trash2,
+  Bug,
+  AlertTriangle,
+  Shield,
+  ShieldCheck,
+  CircleCheck,
+  CircleX,
+  RotateCw,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
-import { appClient } from "@/clients";
-import type { AppState } from "@shared/types";
+import { appClient, systemClient } from "@/clients";
+import type { AppState, SystemHealthCheckResult } from "@shared/types";
 import { actionService } from "@/services/ActionService";
+
+function SystemHealthSection() {
+  const [result, setResult] = useState<SystemHealthCheckResult | null>(null);
+  const [isChecking, setIsChecking] = useState(false);
+  const [checkError, setCheckError] = useState<string | null>(null);
+
+  const runCheck = useCallback(async () => {
+    setIsChecking(true);
+    setCheckError(null);
+    try {
+      const data = await systemClient.healthCheck();
+      setResult(data);
+    } catch (err) {
+      setCheckError(err instanceof Error ? err.message : "Health check failed");
+    } finally {
+      setIsChecking(false);
+    }
+  }, []);
+
+  return (
+    <div>
+      <h4 className="text-sm font-medium text-canopy-text mb-1 flex items-center gap-2">
+        <ShieldCheck className="w-4 h-4" />
+        System Health Check
+      </h4>
+      <p className="text-xs text-canopy-text/60 mb-3">
+        Verify that required tools (Git, Node.js, npm) are installed and available.
+      </p>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => void runCheck()}
+        disabled={isChecking}
+        className="text-canopy-text border-canopy-border hover:bg-canopy-border hover:text-canopy-text mb-3"
+      >
+        <RotateCw className={cn("w-4 h-4", isChecking && "animate-spin")} />
+        {isChecking ? "Checking…" : result ? "Re-run Check" : "Run Health Check"}
+      </Button>
+      {checkError && <p className="text-xs text-status-error mb-3">{checkError}</p>}
+      {result && (
+        <div className="space-y-1.5">
+          {result.prerequisites.map((check) => {
+            const labels: Record<string, string> = { git: "Git", node: "Node.js", npm: "npm" };
+            const label = labels[check.tool] ?? check.tool;
+            return (
+              <div
+                key={check.tool}
+                className="flex items-center gap-2.5 px-3 py-2 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg/30"
+              >
+                {check.available ? (
+                  <CircleCheck className="w-3.5 h-3.5 text-status-success shrink-0" />
+                ) : (
+                  <CircleX className="w-3.5 h-3.5 text-status-error shrink-0" />
+                )}
+                <span className="text-sm text-canopy-text">{label}</span>
+                {check.version && (
+                  <span className="text-xs text-canopy-text/40">v{check.version}</span>
+                )}
+                {!check.available && (
+                  <span className="ml-auto text-xs text-status-error">Not found</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function TroubleshootingTab() {
   const [developerMode, setDeveloperMode] = useState(false);
@@ -12,8 +91,16 @@ export function TroubleshootingTab() {
   const [focusEventsTab, setFocusEventsTab] = useState(false);
   const [verboseLogging, setVerboseLogging] = useState(false);
   const [verboseLoggingPending, setVerboseLoggingPending] = useState(false);
+  const [telemetryEnabled, setTelemetryEnabled] = useState(false);
+  const [telemetryPending, setTelemetryPending] = useState(false);
 
   useEffect(() => {
+    if (window.electron?.telemetry) {
+      window.electron.telemetry.get().then(({ enabled }) => {
+        setTelemetryEnabled(enabled);
+      });
+    }
+
     appClient.getState().then((appState) => {
       if (appState?.developerMode) {
         setDeveloperMode(appState.developerMode.enabled);
@@ -33,6 +120,21 @@ export function TroubleshootingTab() {
         console.error("Failed to get verbose logging state:", error);
       });
   }, []);
+
+  const handleToggleTelemetry = useCallback(async () => {
+    if (telemetryPending || !window.electron?.telemetry) return;
+    const newState = !telemetryEnabled;
+    setTelemetryPending(true);
+    setTelemetryEnabled(newState);
+    try {
+      await window.electron.telemetry.setEnabled(newState);
+    } catch (err) {
+      console.error("Failed to set telemetry:", err);
+      setTelemetryEnabled(!newState);
+    } finally {
+      setTelemetryPending(false);
+    }
+  }, [telemetryEnabled, telemetryPending]);
 
   const saveDeveloperModeSettings = useCallback(
     async (settings: NonNullable<AppState["developerMode"]>) => {
@@ -158,6 +260,10 @@ export function TroubleshootingTab() {
   return (
     <div className="space-y-6">
       <div className="space-y-4">
+        <SystemHealthSection />
+      </div>
+
+      <div className="space-y-4">
         <div>
           <h4 className="text-sm font-medium text-canopy-text mb-1">Application Logs</h4>
           <p className="text-xs text-canopy-text/60 mb-3">
@@ -179,11 +285,57 @@ export function TroubleshootingTab() {
               variant="outline"
               size="sm"
               onClick={handleClearLogs}
-              className="text-[var(--color-status-error)] border-canopy-border hover:bg-red-900/20 hover:text-red-300 hover:border-red-900/30"
+              className="text-status-error border-canopy-border hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
             >
               <Trash2 />
               Clear Logs
             </Button>
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        <div>
+          <h4 className="text-sm font-medium text-canopy-text mb-1 flex items-center gap-2">
+            <Shield className="w-4 h-4" />
+            Crash Reporting
+          </h4>
+          <p className="text-xs text-canopy-text/60 mb-3">
+            Automatically send crash reports and error details to help improve Canopy. No personal
+            data, file contents, or credentials are collected.
+          </p>
+          <div className="p-3 border border-canopy-border rounded-[var(--radius-md)]">
+            <label
+              className="flex items-center gap-3 cursor-pointer"
+              onClick={handleToggleTelemetry}
+            >
+              <button
+                type="button"
+                role="switch"
+                aria-checked={telemetryEnabled}
+                aria-label="Enable crash reporting"
+                disabled={telemetryPending}
+                className={cn(
+                  "relative w-11 h-6 rounded-full transition-colors shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
+                  telemetryEnabled ? "bg-canopy-accent" : "bg-canopy-border",
+                  telemetryPending && "opacity-50 cursor-wait"
+                )}
+              >
+                <span
+                  className={cn(
+                    "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform",
+                    telemetryEnabled && "translate-x-5"
+                  )}
+                />
+              </button>
+              <div className="flex-1">
+                <span className="text-sm text-canopy-text font-medium">Enable Crash Reporting</span>
+                <p className="text-xs text-canopy-text/60">
+                  Collects: error messages, stack traces, app version, OS. Changes apply on next app
+                  restart.
+                </p>
+              </div>
+            </label>
           </div>
         </div>
       </div>
@@ -276,7 +428,7 @@ export function TroubleshootingTab() {
                 disabled={verboseLoggingPending}
                 className={cn(
                   "relative w-11 h-6 rounded-full transition-colors shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
-                  verboseLogging ? "bg-amber-500" : "bg-canopy-border",
+                  verboseLogging ? "bg-status-warning" : "bg-canopy-border",
                   verboseLoggingPending && "opacity-50 cursor-wait"
                 )}
               >
@@ -302,7 +454,7 @@ export function TroubleshootingTab() {
               </div>
             </label>
             {verboseLogging && (
-              <div className="mt-2 flex items-start gap-2 text-xs text-amber-400/90">
+              <div className="mt-2 flex items-start gap-2 text-xs text-status-warning/90">
                 <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                 <span>Verbose logging may impact performance and increase log file size.</span>
               </div>

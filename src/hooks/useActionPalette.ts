@@ -2,6 +2,7 @@ import { useState, useCallback, useMemo } from "react";
 import type { IFuseOptions } from "fuse.js";
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
+import { useNotificationStore } from "@/store/notificationStore";
 import type { ActionManifestEntry } from "@shared/types/actions";
 import { useSearchablePalette } from "./useSearchablePalette";
 
@@ -71,7 +72,7 @@ export function useActionPalette(): UseActionPaletteReturn {
     if (!isOpen) return [];
     const entries = actionService.list();
     return entries
-      .filter((e) => e.kind === "command")
+      .filter((e) => e.kind === "command" && !e.requiresArgs)
       .map(toActionPaletteItem)
       .sort((a, b) => {
         if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
@@ -118,11 +119,30 @@ export function useActionPalette(): UseActionPaletteReturn {
     (item: ActionPaletteItem) => {
       if (!item.enabled) return;
       close();
-      void actionService.dispatch(
-        item.id as Parameters<typeof actionService.dispatch>[0],
-        undefined,
-        { source: "user" }
-      );
+      void actionService
+        .dispatch(
+          item.id as Parameters<typeof actionService.dispatch>[0],
+          {},
+          {
+            source: "user",
+          }
+        )
+        .then((result) => {
+          if (!result.ok) {
+            useNotificationStore.getState().addNotification({
+              type: "error",
+              title: "Action Failed",
+              message: result.error.message,
+            });
+          }
+        })
+        .catch(() => {
+          useNotificationStore.getState().addNotification({
+            type: "error",
+            title: "Action Failed",
+            message: "An unexpected error occurred.",
+          });
+        });
     },
     [close]
   );

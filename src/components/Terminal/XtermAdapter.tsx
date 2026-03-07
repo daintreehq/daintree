@@ -244,6 +244,9 @@ function XtermAdapterComponent({
         }
 
         // Let the OS handle meta combinations (e.g., Cmd+C/V).
+        // Paste (Cmd+V) is handled by Electron's native Edit > Paste menu role,
+        // which dispatches a paste event that xterm.js processes natively
+        // (including bracketed paste mode wrapping).
         // Keep Alt/Option available for word navigation/editing inside the TUI.
         if (event.metaKey) {
           return false;

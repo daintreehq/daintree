@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { User } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 interface AvatarProps {
   src: string;
@@ -18,7 +19,7 @@ export function Avatar({ src, alt, title, className }: AvatarProps) {
     setError(false);
   }, [src]);
 
-  return (
+  const avatarContent = (
     <div
       className={cn("relative", className)}
       role={error ? "img" : undefined}
@@ -42,7 +43,6 @@ export function Avatar({ src, alt, title, className }: AvatarProps) {
         <img
           src={src}
           alt={alt}
-          title={title}
           onLoad={() => setLoaded(true)}
           onError={() => setError(true)}
           className="rounded-full transition-opacity duration-200 w-full h-full"
@@ -51,4 +51,17 @@ export function Avatar({ src, alt, title, className }: AvatarProps) {
       )}
     </div>
   );
+
+  if (title) {
+    return (
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>{avatarContent}</TooltipTrigger>
+          <TooltipContent side="bottom">{title}</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
+  }
+
+  return avatarContent;
 }

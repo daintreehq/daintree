@@ -1,5 +1,13 @@
-import { EditorView, Decoration, hoverTooltip, keymap, placeholder } from "@codemirror/view";
-import { StateField, Prec, Extension, Compartment } from "@codemirror/state";
+import {
+  EditorView,
+  Decoration,
+  WidgetType,
+  hoverTooltip,
+  keymap,
+  placeholder,
+} from "@codemirror/view";
+import type { Extension } from "@codemirror/state";
+import { StateField, StateEffect, Prec, Compartment } from "@codemirror/state";
 import { insertNewline } from "@codemirror/commands";
 import type { SlashCommand } from "@shared/types";
 import { getLeadingSlashCommand, getAllAtFileTokens, type AtFileToken } from "./hybridInputParsing";
@@ -20,19 +28,22 @@ export const inputTheme = EditorView.theme({
     fontSize: "12px",
     lineHeight: "20px",
     padding: "0 4px 0 0",
-    caretColor: "var(--color-canopy-accent)",
+    caretColor: "var(--theme-accent-primary)",
   },
   "&.cm-focused .cm-cursor": {
-    borderLeft: "2px solid var(--color-canopy-accent)",
+    borderLeft: "2px solid var(--theme-accent-primary)",
+  },
+  "& .cm-selectionBackground": {
+    backgroundColor: "color-mix(in oklab, var(--theme-accent-primary) 18%, transparent)",
   },
   "&.cm-focused .cm-selectionBackground": {
-    backgroundColor: "rgba(96, 211, 224, 0.22)",
+    backgroundColor: "color-mix(in oklab, var(--theme-accent-primary) 32%, transparent)",
   },
   ".cm-dropCursor": {
-    borderLeftColor: "var(--color-canopy-accent)",
+    borderLeftColor: "var(--theme-accent-primary)",
   },
   ".cm-placeholder": {
-    color: "rgba(255,255,255,0.25)",
+    color: "color-mix(in oklab, var(--theme-text-primary) 25%, transparent)",
   },
   ".cm-scroller": {
     overflow: "hidden",
@@ -42,18 +53,18 @@ export const inputTheme = EditorView.theme({
   },
   ".cm-slash-command-chip": {
     fontWeight: 600,
-    color: "var(--color-canopy-accent)",
+    color: "var(--theme-accent-primary)",
     textDecoration: "underline dotted 1px",
     textUnderlineOffset: "2px",
   },
   ".cm-slash-command-chip-invalid": {
-    color: "rgb(248, 113, 113)",
+    color: "var(--theme-terminal-red)",
     textDecoration: "underline wavy 1px",
     textUnderlineOffset: "2px",
   },
   ".cm-file-chip": {
     fontWeight: 600,
-    color: "rgb(96, 211, 224)",
+    color: "var(--theme-syntax-chip)",
     textDecoration: "underline dotted 1px",
     textUnderlineOffset: "2px",
   },
@@ -66,6 +77,44 @@ export const inputTheme = EditorView.theme({
     background: "transparent",
     border: "none",
     boxShadow: "none",
+  },
+  ".cm-image-chip": {
+    display: "inline-flex",
+    alignItems: "center",
+    height: "20px",
+    verticalAlign: "bottom",
+    whiteSpace: "nowrap",
+    gap: "4px",
+    padding: "0 5px",
+    color: "var(--theme-accent-primary)",
+    fontWeight: 600,
+    background: "color-mix(in oklab, var(--theme-syntax-chip) 10%, transparent)",
+    borderRadius: "3px",
+  },
+  ".cm-image-chip img": {
+    height: "16px",
+    width: "16px",
+    objectFit: "cover",
+    borderRadius: "2px",
+    flexShrink: "0",
+  },
+  ".cm-file-drop-chip": {
+    display: "inline-flex",
+    alignItems: "center",
+    height: "20px",
+    verticalAlign: "bottom",
+    whiteSpace: "nowrap",
+    gap: "4px",
+    padding: "0 5px",
+    color: "var(--theme-accent-primary)",
+    fontWeight: 600,
+    background: "color-mix(in oklab, var(--theme-syntax-chip) 10%, transparent)",
+    borderRadius: "3px",
+  },
+  ".cm-file-drop-chip svg": {
+    height: "14px",
+    width: "14px",
+    flexShrink: "0",
   },
 });
 
@@ -110,7 +159,7 @@ function createTooltipContent(command: SlashCommand): HTMLElement {
 
   // Simple one-line description
   const description = document.createElement("p");
-  description.className = "text-[11px] text-canopy-text/80 leading-snug";
+  description.className = "text-[11px] text-text-primary/80 leading-snug";
   description.textContent = command.description ?? command.label ?? "";
   container.appendChild(description);
 
@@ -133,8 +182,9 @@ export function createSlashTooltip(commandMap: Map<string, SlashCommand>) {
         const dom = document.createElement("div");
         dom.className = "px-2 py-1 text-xs";
         dom.style.cssText = `
-          background: rgba(24, 24, 27, 0.95);
+          background: color-mix(in oklab, var(--theme-surface-canvas) 95%, transparent);
           border-radius: 4px;
+          border: 1px solid var(--theme-border-subtle);
           box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
         `;
 
@@ -253,24 +303,11 @@ export function computeAutoSize(
   return { next, shouldScroll: snapped > maxHeightPx };
 }
 
-function measureLineHeight(view: EditorView, fallback: number): number {
-  try {
-    const lineElement = view.dom.querySelector(".cm-line");
-    if (lineElement) {
-      const height = lineElement.getBoundingClientRect().height;
-      if (height > 0) return height;
-    }
-  } catch {
-    // Fall through to fallback
-  }
-  return fallback;
-}
-
 export function createAutoSize(config: AutoSizeConfig = {}) {
-  const configLineHeightPx = config.lineHeightPx ?? LINE_HEIGHT_PX;
+  const configLineHeightPx = config.lineHeightPx; // undefined = not explicitly set
   const maxHeightPx = config.maxHeightPx ?? MAX_TEXTAREA_HEIGHT_PX;
   let lastHeight = 0;
-  let cachedLineHeight: number | null = null;
+  let lastOverflowY = "";
 
   return EditorView.updateListener.of((update) => {
     if (!update.docChanged && !update.viewportChanged && !update.geometryChanged) return;
@@ -280,24 +317,33 @@ export function createAutoSize(config: AutoSizeConfig = {}) {
     // Use requestMeasure to ensure we read contentHeight after CodeMirror's layout pass
     view.requestMeasure({
       read() {
-        // Measure actual line height from DOM (cache for performance)
-        if (cachedLineHeight === null || update.geometryChanged) {
-          cachedLineHeight = measureLineHeight(view, configLineHeightPx);
-        }
-
+        // Use view.defaultLineHeight as the authoritative line height from CodeMirror's font
+        // metrics. It is unaffected by inline chip decorations (which would skew a DOM-measured
+        // .cm-line height and cause the snap increment to be wrong on lines without chips).
+        // An explicit configLineHeightPx takes priority (used in tests and custom configurations).
+        const lineHeight =
+          configLineHeightPx != null && configLineHeightPx > 0
+            ? configLineHeightPx
+            : view.defaultLineHeight > 0
+              ? view.defaultLineHeight
+              : LINE_HEIGHT_PX;
         const isEmpty = view.state.doc.length === 0;
-
-        // Read phase: measure contentHeight after layout is complete
-        return computeAutoSize(view.contentHeight, cachedLineHeight, maxHeightPx, isEmpty);
+        return computeAutoSize(view.contentHeight, lineHeight, maxHeightPx, isEmpty);
       },
       write(measured) {
-        // Write phase: apply DOM updates
         if (measured.next !== lastHeight) {
           lastHeight = measured.next;
           view.dom.style.height = `${measured.next}px`;
         }
 
-        view.scrollDOM.style.overflowY = measured.shouldScroll ? "auto" : "hidden";
+        // Guard overflowY writes to avoid triggering unnecessary geometry updates that
+        // can cause a secondary measure cycle (and visible height oscillation) when
+        // the overflow value hasn't actually changed.
+        const newOverflowY = measured.shouldScroll ? "auto" : "hidden";
+        if (newOverflowY !== lastOverflowY) {
+          lastOverflowY = newOverflowY;
+          view.scrollDOM.style.overflowY = newOverflowY;
+        }
       },
     });
   });
@@ -325,6 +371,10 @@ export function createCustomKeymap(config: CustomKeymapConfig): Extension {
       },
       {
         key: "Shift-Enter",
+        run: insertNewline,
+      },
+      {
+        key: "Alt-Enter",
         run: insertNewline,
       },
       {
@@ -393,4 +443,327 @@ export function createSlashChipCompartment() {
 
 export function createSlashTooltipCompartment() {
   return new Compartment();
+}
+
+// --- Image chip (replace widget showing thumbnail + filename for pasted image paths) ---
+
+interface ImageChipEntry {
+  from: number;
+  to: number;
+  filePath: string;
+  thumbnailUrl: string;
+}
+
+function formatChipLabel(filePath: string): string {
+  const match = filePath.match(/clipboard-(\d+)-/);
+  if (match) {
+    const date = new Date(Number(match[1]));
+    if (!isNaN(date.getTime())) {
+      const hh = String(date.getHours()).padStart(2, "0");
+      const mm = String(date.getMinutes()).padStart(2, "0");
+      return `Screenshot ${hh}:${mm}`;
+    }
+  }
+  return "Screenshot";
+}
+
+class ImageChipWidget extends WidgetType {
+  constructor(
+    readonly filePath: string,
+    readonly thumbnailUrl: string
+  ) {
+    super();
+  }
+
+  eq(other: ImageChipWidget) {
+    return this.filePath === other.filePath;
+  }
+
+  toDOM() {
+    const span = document.createElement("span");
+    span.className = "cm-image-chip";
+    span.setAttribute("role", "img");
+    span.setAttribute("aria-label", `Image: ${this.filePath}`);
+
+    const img = document.createElement("img");
+    img.src = this.thumbnailUrl;
+    img.alt = "";
+    img.setAttribute("aria-hidden", "true");
+    span.appendChild(img);
+
+    const label = document.createElement("span");
+    label.setAttribute("aria-hidden", "true");
+    label.textContent = formatChipLabel(this.filePath);
+    span.appendChild(label);
+
+    return span;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
+
+export const addImageChip = StateEffect.define<ImageChipEntry>();
+
+export const imageChipField = StateField.define<ImageChipEntry[]>({
+  create() {
+    return [];
+  },
+  update(entries, tr) {
+    if (tr.docChanged) {
+      const surviving: ImageChipEntry[] = [];
+      for (const e of entries) {
+        let edited = false;
+        tr.changes.iterChangedRanges((fromA, toA) => {
+          if (fromA < e.to && toA > e.from) edited = true;
+        });
+        if (edited) continue;
+        const from = tr.changes.mapPos(e.from, 1);
+        const to = tr.changes.mapPos(e.to, -1);
+        if (from < to) surviving.push({ ...e, from, to });
+      }
+      entries = surviving;
+    }
+    for (const effect of tr.effects) {
+      if (effect.is(addImageChip)) {
+        entries = [...entries, effect.value];
+      }
+    }
+    return entries;
+  },
+  provide: (f) => [
+    EditorView.decorations.from(f, (entries) => {
+      if (entries.length === 0) return Decoration.none;
+      const ranges = entries.map((e) =>
+        Decoration.replace({ widget: new ImageChipWidget(e.filePath, e.thumbnailUrl) }).range(
+          e.from,
+          e.to
+        )
+      );
+      return Decoration.set(ranges, true);
+    }),
+    EditorView.atomicRanges.of((view) => {
+      const entries = view.state.field(f, false);
+      if (!entries || entries.length === 0) return Decoration.none;
+      const ranges = entries.map((e) => Decoration.mark({}).range(e.from, e.to));
+      return Decoration.set(ranges, true);
+    }),
+  ],
+});
+
+export function createImageChipTooltip() {
+  return hoverTooltip((view, pos) => {
+    const entries = view.state.field(imageChipField, false);
+    if (!entries || entries.length === 0) return null;
+
+    const entry = entries.find((e) => pos >= e.from && pos <= e.to);
+    if (!entry) return null;
+
+    return {
+      pos: entry.from,
+      end: entry.to,
+      above: true,
+      create() {
+        const dom = document.createElement("div");
+        dom.className = "px-2 py-2";
+        dom.style.cssText = `
+          background: rgba(24, 24, 27, 0.95);
+          border-radius: 6px;
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+        `;
+
+        const img = document.createElement("img");
+        img.src = entry.thumbnailUrl;
+        img.alt = "Screenshot preview";
+        img.style.cssText =
+          "max-width: 200px; max-height: 200px; border-radius: 4px; display: block;";
+        dom.appendChild(img);
+
+        const pathEl = document.createElement("p");
+        pathEl.style.cssText =
+          "font-size: 10px; color: rgba(255,255,255,0.45); margin-top: 4px; word-break: break-all; max-width: 200px;";
+        pathEl.textContent = entry.filePath;
+        dom.appendChild(pathEl);
+
+        return { dom };
+      },
+    };
+  });
+}
+
+export function createImagePasteHandler(onImagePaste: (view: EditorView) => void): Extension {
+  return EditorView.domEventHandlers({
+    paste(event, view) {
+      const items = event.clipboardData?.items;
+      if (!items) return false;
+      for (const item of items) {
+        if (item.type.startsWith("image/")) {
+          event.preventDefault();
+          onImagePaste(view);
+          return true;
+        }
+      }
+      return false;
+    },
+  });
+}
+
+// --- File drop chip (replace widget showing file icon + filename for pasted file paths) ---
+
+interface FileDropChipEntry {
+  from: number;
+  to: number;
+  filePath: string;
+  fileName: string;
+}
+
+const FILE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg>`;
+
+class FileDropChipWidget extends WidgetType {
+  constructor(
+    readonly filePath: string,
+    readonly fileName: string
+  ) {
+    super();
+  }
+
+  eq(other: FileDropChipWidget) {
+    return this.filePath === other.filePath;
+  }
+
+  toDOM() {
+    const span = document.createElement("span");
+    span.className = "cm-file-drop-chip";
+    span.setAttribute("role", "img");
+    span.setAttribute("aria-label", `File: ${this.filePath}`);
+
+    const icon = document.createElement("span");
+    icon.innerHTML = FILE_ICON_SVG;
+    icon.style.display = "inline-flex";
+    icon.style.alignItems = "center";
+    span.appendChild(icon);
+
+    const label = document.createElement("span");
+    label.setAttribute("aria-hidden", "true");
+    label.textContent = this.fileName;
+    span.appendChild(label);
+
+    return span;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
+
+export const addFileDropChip = StateEffect.define<FileDropChipEntry>();
+
+export const fileDropChipField = StateField.define<FileDropChipEntry[]>({
+  create() {
+    return [];
+  },
+  update(entries, tr) {
+    if (tr.docChanged) {
+      const surviving: FileDropChipEntry[] = [];
+      for (const e of entries) {
+        let edited = false;
+        tr.changes.iterChangedRanges((fromA, toA) => {
+          if (fromA < e.to && toA > e.from) edited = true;
+        });
+        if (edited) continue;
+        const from = tr.changes.mapPos(e.from, 1);
+        const to = tr.changes.mapPos(e.to, -1);
+        if (from < to) surviving.push({ ...e, from, to });
+      }
+      entries = surviving;
+    }
+    for (const effect of tr.effects) {
+      if (effect.is(addFileDropChip)) {
+        entries = [...entries, effect.value];
+      }
+    }
+    return entries;
+  },
+  provide: (f) => [
+    EditorView.decorations.from(f, (entries) => {
+      if (entries.length === 0) return Decoration.none;
+      const ranges = entries.map((e) =>
+        Decoration.replace({ widget: new FileDropChipWidget(e.filePath, e.fileName) }).range(
+          e.from,
+          e.to
+        )
+      );
+      return Decoration.set(ranges, true);
+    }),
+    EditorView.atomicRanges.of((view) => {
+      const entries = view.state.field(f, false);
+      if (!entries || entries.length === 0) return Decoration.none;
+      const ranges = entries.map((e) => Decoration.mark({}).range(e.from, e.to));
+      return Decoration.set(ranges, true);
+    }),
+  ],
+});
+
+export function createFileDropChipTooltip() {
+  return hoverTooltip((view, pos) => {
+    const entries = view.state.field(fileDropChipField, false);
+    if (!entries || entries.length === 0) return null;
+
+    const entry = entries.find((e) => pos >= e.from && pos <= e.to);
+    if (!entry) return null;
+
+    return {
+      pos: entry.from,
+      end: entry.to,
+      above: true,
+      create() {
+        const dom = document.createElement("div");
+        dom.className = "px-2 py-1 text-xs";
+        dom.style.cssText = `
+          background: rgba(24, 24, 27, 0.95);
+          border-radius: 4px;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        `;
+
+        const pathEl = document.createElement("p");
+        pathEl.style.cssText =
+          "font-size: 10px; color: rgba(255,255,255,0.7); word-break: break-all; max-width: 300px; font-family: var(--font-mono, monospace);";
+        pathEl.textContent = entry.filePath;
+        dom.appendChild(pathEl);
+
+        return { dom };
+      },
+    };
+  });
+}
+
+export function createFilePasteHandler(
+  onFilePaste: (view: EditorView, files: { path: string; name: string }[]) => void
+): Extension {
+  return EditorView.domEventHandlers({
+    paste(event, view) {
+      const items = event.clipboardData?.items;
+      if (!items) return false;
+
+      const files: { path: string; name: string }[] = [];
+      for (const item of items) {
+        if (item.kind === "file" && !item.type.startsWith("image/")) {
+          const file = item.getAsFile();
+          const filePath = (file as unknown as { path?: string })?.path;
+          if (file && filePath) {
+            const name =
+              file.name.trim() || filePath.split(/[/\\]/).filter(Boolean).pop() || filePath;
+            files.push({ path: filePath, name });
+          }
+        }
+      }
+
+      if (files.length === 0) return false;
+
+      event.preventDefault();
+      onFilePaste(view, files);
+      return true;
+    },
+  });
 }

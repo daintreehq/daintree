@@ -1,5 +1,6 @@
 import type { PanelKind, BuiltInPanelKind } from "../types/domain.js";
 import { getAgentConfig } from "./agentRegistry.js";
+import { PANEL_KIND_BRAND_COLORS } from "../theme/index.js";
 
 /**
  * Configuration for a panel kind.
@@ -12,7 +13,7 @@ export interface PanelKindConfig {
   name: string;
   /** Icon identifier (for TerminalIcon/PanelIcon component) */
   iconId: string;
-  /** Brand/accent color (hex) */
+  /** Brand/accent color */
   color: string;
   /** Whether this panel kind uses a PTY process */
   hasPty: boolean;
@@ -42,7 +43,7 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     id: "terminal",
     name: "Terminal",
     iconId: "terminal",
-    color: "#6b7280", // gray-500
+    color: PANEL_KIND_BRAND_COLORS.terminal,
     hasPty: true,
     canRestart: true,
     canConvert: true,
@@ -53,7 +54,7 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     id: "agent",
     name: "Agent",
     iconId: "agent",
-    color: "#CC785C", // Default agent color, overridden by agentId lookup
+    color: PANEL_KIND_BRAND_COLORS.agent,
     hasPty: true,
     canRestart: true,
     canConvert: true,
@@ -64,7 +65,7 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     id: "browser",
     name: "Browser",
     iconId: "globe",
-    color: "#3b82f6", // blue-500
+    color: PANEL_KIND_BRAND_COLORS.browser,
     hasPty: false,
     canRestart: false,
     canConvert: false,
@@ -75,7 +76,7 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     id: "notes",
     name: "Notes",
     iconId: "sticky-note",
-    color: "#f59e0b", // amber-500
+    color: PANEL_KIND_BRAND_COLORS.notes,
     hasPty: false,
     canRestart: false,
     canConvert: false,
@@ -86,7 +87,7 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     id: "dev-preview",
     name: "Dev Preview",
     iconId: "monitor",
-    color: "#8b5cf6", // purple-500
+    color: PANEL_KIND_BRAND_COLORS["dev-preview"],
     hasPty: false, // Dev-preview panels manage their own ephemeral PTYs via useDevServer hook
     canRestart: false, // Restart is handled internally by the dev-preview component
     canConvert: false,
@@ -179,7 +180,7 @@ export function getPanelKindColor(kind: PanelKind, agentId?: string): string {
   if (config) return config.color;
 
   // Fallback for unknown kinds
-  return "#6b7280"; // gray-500
+  return PANEL_KIND_BRAND_COLORS.terminal;
 }
 
 /**

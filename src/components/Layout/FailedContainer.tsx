@@ -4,15 +4,13 @@ import { StatusContainer, type StatusContainerConfig } from "./StatusContainer";
 
 const failedConfig: StatusContainerConfig = {
   icon: XCircle,
-  iconColor: "text-red-400",
-  badgeColor: "bg-red-400",
-  badgeTextColor: "text-red-950",
+  iconColor: "text-status-error",
+  badgeColor: "bg-status-error",
+  badgeTextColor: "text-canopy-bg",
   headerLabel: "Failed Sessions",
-  buttonTitle: "View failed agent sessions",
   buttonLabel: "Failed",
   statusAriaLabel: "Failed",
   contentAriaLabel: "Failed terminals",
-  keybindingAction: "agent.focusNextFailed",
   contentId: "failed-container-popover",
   useTerminals: useFailedTerminals,
 };

@@ -14,6 +14,7 @@ import {
 } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
 import { useRecipeStore } from "@/store/recipeStore";
+import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { GridPanel } from "./GridPanel";
 import { GridTabGroup } from "./GridTabGroup";
 import { GridNotificationBar } from "./GridNotificationBar";
@@ -44,7 +45,10 @@ import { PROJECT_EXPLANATION_PROMPT, getDefaultAgentId } from "@/lib/projectExpl
 import { buildWhatsNextPrompt } from "@/lib/whatsNextPrompt";
 import { cliAvailabilityClient } from "@/clients";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
+import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import { getMaximizedGroupFocusTarget } from "./contentGridFocus";
 
 export interface ContentGridProps {
   className?: string;
@@ -114,7 +118,15 @@ function EmptyState({
   const handleRunRecipe = async (recipeId: string) => {
     if (!defaultCwd) return;
     try {
-      await runRecipe(recipeId, defaultCwd, activeWorktreeId ?? undefined);
+      const worktreeData = activeWorktreeId
+        ? useWorktreeDataStore.getState().worktrees.get(activeWorktreeId)
+        : null;
+      await runRecipe(recipeId, defaultCwd, activeWorktreeId ?? undefined, {
+        issueNumber: worktreeData?.issueNumber,
+        prNumber: worktreeData?.prNumber,
+        worktreePath: defaultCwd,
+        branchName: worktreeData?.branch,
+      });
     } catch (error) {
       console.error("Failed to run recipe:", error);
     }
@@ -122,13 +134,29 @@ function EmptyState({
 
   const defaultSelection = useToolbarPreferencesStore((state) => state.launcher.defaultSelection);
   const defaultAgent = useToolbarPreferencesStore((state) => state.launcher.defaultAgent);
+  const emptyStateAgentSettings = useAgentSettingsStore((state) => state.settings);
+
+  // undefined = no filter (settings not loaded or pre-migration); Set = loaded, filter to non-hidden
+  const selectedAgentIds = useMemo((): Set<string> | undefined => {
+    if (!emptyStateAgentSettings?.agents) return undefined;
+    return new Set(
+      Object.entries(emptyStateAgentSettings.agents)
+        .filter(([, entry]) => entry.selected !== false)
+        .map(([id]) => id)
+    );
+  }, [emptyStateAgentSettings]);
 
   const handleExplainProject = async () => {
     if (!defaultCwd) return;
 
     try {
       const availability = agentAvailability ?? (await cliAvailabilityClient.get());
-      const agentId = getDefaultAgentId(defaultAgent, defaultSelection, availability);
+      const agentId = getDefaultAgentId(
+        defaultAgent,
+        defaultSelection,
+        availability,
+        selectedAgentIds
+      );
 
       if (!agentId) {
         console.error("No available agent to explain project");
@@ -159,7 +187,12 @@ function EmptyState({
     setIsLaunchingWhatsNext(true);
     try {
       const availability = agentAvailability ?? (await cliAvailabilityClient.get());
-      const agentId = getDefaultAgentId(defaultAgent, defaultSelection, availability);
+      const agentId = getDefaultAgentId(
+        defaultAgent,
+        defaultSelection,
+        availability,
+        selectedAgentIds
+      );
 
       if (!agentId) {
         console.error("No available agent for What's Next workflow");
@@ -233,7 +266,7 @@ function EmptyState({
 
         {!hasActiveWorktree && (
           <div
-            className="flex items-center gap-2 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded px-3 py-2 mb-6 max-w-md text-center"
+            className="flex items-center gap-2 text-xs text-status-warning bg-status-warning/10 border border-status-warning/20 rounded px-3 py-2 mb-6 max-w-md text-center"
             role="status"
             aria-live="polite"
           >
@@ -278,7 +311,7 @@ function EmptyState({
                         </>
                       )}
                     </div>
-                    <p className="text-xs text-canopy-muted leading-relaxed">
+                    <p className="text-xs text-text-muted leading-relaxed">
                       {getRecipeTerminalSummary(recipe.terminals)}
                     </p>
                   </button>
@@ -384,6 +417,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
     clearPreMaximizeLayout,
     validateMaximizeTarget,
     getTerminal,
+    getActiveTabId,
     setFocused,
   } = useTerminalStore(
     useShallow((state) => ({
@@ -395,6 +429,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
       clearPreMaximizeLayout: state.clearPreMaximizeLayout,
       validateMaximizeTarget: state.validateMaximizeTarget,
       getTerminal: state.getTerminal,
+      getActiveTabId: state.getActiveTabId,
       setFocused: state.setFocused,
     }))
   );
@@ -402,6 +437,17 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const showProjectPulse = usePreferencesStore((state) => state.showProjectPulse);
   const currentProject = useProjectStore((state) => state.currentProject);
+  const gridAgentSettings = useAgentSettingsStore((state) => state.settings);
+
+  // undefined = no filter (settings not loaded or pre-migration); Set = loaded, filter to non-hidden
+  const gridSelectedAgentIds = useMemo((): Set<string> | undefined => {
+    if (!gridAgentSettings?.agents) return undefined;
+    return new Set(
+      Object.entries(gridAgentSettings.agents)
+        .filter(([, entry]) => entry.selected !== false)
+        .map(([id]) => id)
+    );
+  }, [gridAgentSettings]);
   const isProjectSwitching = useProjectStore((state) => state.isSwitching);
   const { projectIconSvg } = useProjectBranding(currentProject?.id);
   const { worktreeMap } = useWorktrees();
@@ -522,6 +568,14 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
   // Use tab groups count for grid layout (each group takes one cell)
   const gridItemCount = tabGroups.length + (showPlaceholder ? 1 : 0);
 
+  const combinedGridRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      setNodeRef(node);
+      gridContainerRef.current = node;
+    },
+    [setNodeRef]
+  );
+
   // Attach ResizeObserver to track container dimensions
   useEffect(() => {
     const container = gridContainerRef.current;
@@ -592,14 +646,23 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
         return agentAvailability[agentId] === true;
       };
 
+      // When gridSelectedAgentIds is undefined (settings not loaded), show all registry agents.
+      // When it's a Set, show only agents not explicitly deselected.
+      const agentMenuItems: MenuItemOption[] = getEffectiveAgentIds()
+        .filter((id) => !gridSelectedAgentIds || gridSelectedAgentIds.has(id))
+        .map((id) => {
+          const config = getEffectiveAgentConfig(id);
+          return {
+            id: `new:${id}`,
+            label: `New ${config?.name ?? id}`,
+            enabled: canLaunch(id as "claude" | "gemini" | "codex" | "opencode" | "terminal"),
+          };
+        });
+
       const template: MenuItemOption[] = [
         { id: "new:terminal", label: "New Terminal" },
         { id: "new:browser", label: "New Browser" },
-        { type: "separator" },
-        { id: "new:claude", label: "New Claude", enabled: canLaunch("claude") },
-        { id: "new:gemini", label: "New Gemini", enabled: canLaunch("gemini") },
-        { id: "new:codex", label: "New Codex", enabled: canLaunch("codex") },
-        { id: "new:opencode", label: "New OpenCode", enabled: canLaunch("opencode") },
+        ...(agentMenuItems.length > 0 ? [{ type: "separator" as const }, ...agentMenuItems] : []),
         { type: "separator" },
         {
           id: "layout",
@@ -669,7 +732,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
         );
       }
     },
-    [agentAvailability, defaultCwd, layoutConfig, showMenu]
+    [agentAvailability, defaultCwd, gridSelectedAgentIds, layoutConfig, showMenu]
   );
 
   // Terminal IDs for SortableContext
@@ -764,39 +827,61 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
     }
   }, [maximizedId, maximizeTarget, validateMaximizeTarget, getPanelGroup, getTerminal, terminals]);
 
+  const maximizedGroup =
+    maximizedId && maximizeTarget?.type === "group"
+      ? tabGroups.find((group) => group.id === maximizeTarget.id)
+      : undefined;
+  const maximizedGroupPanels = useMemo(
+    () => (maximizedGroup ? getTabGroupPanels(maximizedGroup.id, "grid") : []),
+    [getTabGroupPanels, maximizedGroup]
+  );
+  const maximizedGroupFocusTarget = useMemo(
+    () =>
+      maximizedGroup
+        ? getMaximizedGroupFocusTarget({
+            focusedId,
+            groupId: maximizedGroup.id,
+            groupPanels: maximizedGroupPanels,
+            getActiveTabId,
+          })
+        : null,
+    [focusedId, getActiveTabId, maximizedGroup, maximizedGroupPanels]
+  );
+
+  useEffect(() => {
+    if (
+      maximizedGroupFocusTarget &&
+      maximizedGroupPanels.length > 0 &&
+      maximizedGroupFocusTarget !== focusedId
+    ) {
+      setFocused(maximizedGroupFocusTarget);
+    }
+  }, [focusedId, maximizedGroupFocusTarget, maximizedGroupPanels.length, setFocused]);
+
   // Maximized terminal or group takes full screen
   if (maximizedId && maximizeTarget) {
     if (maximizeTarget.type === "group") {
       // Find the group and render it maximized with tab bar
-      const group = tabGroups.find((g) => g.id === maximizeTarget.id);
-      if (group) {
-        const groupPanels = getTabGroupPanels(group.id, "grid");
-        if (groupPanels.length > 0) {
-          // Ensure focus is set on a panel in the maximized group
-          if (!focusedId || !groupPanels.some((p) => p.id === focusedId)) {
-            const activeTabId = useTerminalStore.getState().getActiveTabId(group.id);
-            const panelToFocus = groupPanels.find((p) => p.id === activeTabId) || groupPanels[0];
-            if (panelToFocus) {
-              setFocused(panelToFocus.id);
-            }
-          }
+      const group = maximizedGroup;
+      const groupPanels = maximizedGroupPanels;
+      if (group && groupPanels.length > 0) {
+        const effectiveFocusedId = maximizedGroupFocusTarget ?? focusedId;
 
-          return (
-            <div className={cn("h-full flex flex-col bg-canopy-bg", className)}>
-              <GridNotificationBar className="mx-1 mt-1 shrink-0" />
-              <div className="relative min-h-0 flex-1">
-                <GridTabGroup
-                  group={group}
-                  panels={groupPanels}
-                  focusedId={focusedId}
-                  gridPanelCount={1}
-                  gridCols={1}
-                  isMaximized={true}
-                />
-              </div>
+        return (
+          <div className={cn("h-full flex flex-col bg-canopy-bg", className)}>
+            <GridNotificationBar className="mx-1 mt-1 shrink-0" />
+            <div className="relative min-h-0 flex-1">
+              <GridTabGroup
+                group={group}
+                panels={groupPanels}
+                focusedId={effectiveFocusedId}
+                gridPanelCount={1}
+                gridCols={1}
+                isMaximized={true}
+              />
             </div>
-          );
-        }
+          </div>
+        );
       }
       return null;
     } else {
@@ -835,10 +920,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
           <GridNotificationBar className="mx-1 mt-1 shrink-0" />
           <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
           <div
-            ref={(node) => {
-              setNodeRef(node);
-              gridContainerRef.current = node;
-            }}
+            ref={combinedGridRef}
             onContextMenu={handleGridContextMenu}
             className={cn(
               "relative flex-1 min-h-0",
@@ -867,10 +949,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
       <div className="relative flex-1 min-h-0">
         <SortableContext id="grid-container" items={terminalIds} strategy={rectSortingStrategy}>
           <div
-            ref={(node) => {
-              setNodeRef(node);
-              gridContainerRef.current = node;
-            }}
+            ref={combinedGridRef}
             onContextMenu={handleGridContextMenu}
             className={cn(
               "h-full bg-noise p-1",

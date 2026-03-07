@@ -2,6 +2,7 @@ import { cn } from "@/lib/utils";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import type { TerminalType, TerminalKind } from "@/types";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 export interface TerminalListItemProps {
   id: string;
@@ -9,6 +10,7 @@ export interface TerminalListItemProps {
   type?: TerminalType;
   kind?: TerminalKind;
   agentId?: string;
+  detectedProcessId?: string;
   worktreeName?: string;
   /** Working directory - always present since palette only shows PTY panels */
   cwd: string;
@@ -31,6 +33,7 @@ export function TerminalListItem({
   type,
   kind,
   agentId,
+  detectedProcessId,
   worktreeName,
   cwd,
   isSelected,
@@ -48,8 +51,8 @@ export function TerminalListItem({
         "transition-colors",
         "border",
         isSelected
-          ? "bg-white/[0.03] border-overlay text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
-          : "border-transparent text-canopy-text/70 hover:bg-white/[0.02] hover:text-canopy-text"
+          ? "bg-overlay-soft border-overlay text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+          : "border-transparent text-canopy-text/70 hover:bg-overlay-subtle hover:text-canopy-text"
       )}
       onClick={onClick}
       aria-selected={isSelected}
@@ -61,6 +64,7 @@ export function TerminalListItem({
           type={type}
           kind={kind}
           agentId={agentId}
+          detectedProcessId={detectedProcessId}
           brandColor={getBrandColorHex(agentId ?? type)}
         />
       </span>
@@ -76,9 +80,14 @@ export function TerminalListItem({
           )}
         </div>
 
-        <div className="text-xs text-canopy-text/50 truncate" title={cwd}>
-          {truncatePath(cwd)}
-        </div>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="text-xs text-canopy-text/50 truncate">{truncatePath(cwd)}</div>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{cwd}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </div>
 
       <span className="shrink-0 text-xs text-canopy-text/40 capitalize">{type}</span>

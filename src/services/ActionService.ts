@@ -174,6 +174,10 @@ export class ActionService {
         : undefined,
       enabled,
       disabledReason,
+      requiresArgs: definition.argsSchema
+        ? !definition.argsSchema.safeParse(undefined).success &&
+          !definition.argsSchema.safeParse({}).success
+        : false,
     };
   }
 

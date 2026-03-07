@@ -15,7 +15,6 @@ async function createRegistry() {
     onToggleWorktreeOverview: () => {},
     onOpenWorktreeOverview: () => {},
     onCloseWorktreeOverview: () => {},
-    onOpenNewTerminalPalette: () => {},
     onOpenPanelPalette: () => {},
     onOpenProjectSwitcherPalette: () => {},
     onOpenShortcuts: () => {},

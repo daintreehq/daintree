@@ -12,13 +12,13 @@ interface LogFiltersProps {
 
 const LOG_LEVELS: { level: LogLevel; label: string; color: string }[] = [
   { level: "debug", label: "Debug", color: "text-canopy-text/60 hover:bg-canopy-border" },
-  { level: "info", label: "Info", color: "text-[var(--color-status-info)] hover:bg-blue-900/30" },
+  { level: "info", label: "Info", color: "text-status-info hover:bg-status-info/15" },
   {
     level: "warn",
     label: "Warn",
-    color: "text-[var(--color-status-warning)] hover:bg-yellow-900/30",
+    color: "text-status-warning hover:bg-status-warning/15",
   },
-  { level: "error", label: "Error", color: "text-[var(--color-status-error)] hover:bg-red-900/30" },
+  { level: "error", label: "Error", color: "text-status-error hover:bg-status-error/15" },
 ];
 
 export function LogFilters({
@@ -97,7 +97,7 @@ export function LogFilters({
             "w-full px-2 py-1 text-xs rounded",
             "bg-canopy-bg border border-canopy-border",
             "text-canopy-text placeholder-canopy-text/40",
-            "focus:outline-none focus:border-blue-500"
+            "focus:outline-none focus:border-status-info"
           )}
         />
         {searchValue && (
@@ -159,7 +159,7 @@ export function LogFilters({
                     onClick={() => handleSourceToggle(source)}
                     className={cn(
                       "w-full justify-start rounded-none",
-                      isActive ? "text-[var(--color-status-info)] bg-blue-900/20" : "text-canopy-text"
+                      isActive ? "text-status-info bg-status-info/10" : "text-canopy-text"
                     )}
                   >
                     {isActive && "* "}

@@ -29,6 +29,7 @@ import {
 import { CommandPickerButton, CommandPickerHost } from "@/components/Commands";
 import { useCommandStore } from "@/store/commandStore";
 import { useProjectStore } from "@/store/projectStore";
+import { VoiceInputButton } from "./VoiceInputButton";
 import type { CommandContext, CommandResult } from "@shared/types/commands";
 import { isEnterLikeLineBreakInputEvent } from "./hybridInputEvents";
 import {
@@ -41,6 +42,14 @@ import {
   createFileChipTooltip,
   createCustomKeymap,
   createAutoSize,
+  createImagePasteHandler,
+  imageChipField,
+  addImageChip,
+  createImageChipTooltip,
+  fileDropChipField,
+  addFileDropChip,
+  createFileDropChipTooltip,
+  createFilePasteHandler,
 } from "./inputEditorExtensions";
 
 export interface HybridInputBarHandle {
@@ -125,26 +134,28 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const chipCompartmentRef = useRef(new Compartment());
     const tooltipCompartmentRef = useRef(new Compartment());
     const fileChipTooltipCompartmentRef = useRef(new Compartment());
+    const imageChipTooltipCompartmentRef = useRef(new Compartment());
+    const fileDropChipTooltipCompartmentRef = useRef(new Compartment());
     const isApplyingExternalValueRef = useRef(false);
-    const lastEnterKeydownShiftRef = useRef(false);
+    const lastEnterKeydownNewlineRef = useRef(false);
     const handledEnterRef = useRef(false);
     const inputShellRef = useRef<HTMLDivElement | null>(null);
     const menuRef = useRef<HTMLDivElement | null>(null);
     const rootRef = useRef<HTMLDivElement | null>(null);
-    const barContentRef = useRef<HTMLDivElement | null>(null);
     const lastEmittedValueRef = useRef<string>(value);
     const [atContext, setAtContext] = useState<AtFileContext | null>(null);
     const [slashContext, setSlashContext] = useState<SlashCommandContext | null>(null);
     const [selectedIndex, setSelectedIndex] = useState(0);
     const lastQueryRef = useRef<string>("");
     const [menuLeftPx, setMenuLeftPx] = useState<number>(0);
-    const [collapsedHeightPx, setCollapsedHeightPx] = useState<number | null>(null);
     const [initializationState, setInitializationState] = useState<"initializing" | "initialized">(
       "initializing"
     );
     const latestRef = useRef<LatestState | null>(null);
 
     const openPicker = useCommandStore((s) => s.openPicker);
+    const [voiceEnabled, setVoiceEnabled] = useState(false);
+    const pendingTranscriptRef = useRef<string>("");
 
     const commandContext = useMemo(
       (): CommandContext => ({
@@ -156,6 +167,61 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     );
 
     const isAgentTerminal = agentId !== undefined;
+
+    const imagePasteExtension = useMemo(
+      () =>
+        createImagePasteHandler(async (view) => {
+          try {
+            const result = await window.electron.clipboard.saveImage();
+            if (!result.ok) return;
+            const cursor = view.state.selection.main.head;
+            const { filePath, thumbnailDataUrl } = result;
+            view.dispatch({
+              changes: { from: cursor, insert: filePath + " " },
+              effects: addImageChip.of({
+                from: cursor,
+                to: cursor + filePath.length,
+                filePath,
+                thumbnailUrl: thumbnailDataUrl,
+              }),
+              selection: { anchor: cursor + filePath.length + 1 },
+            });
+          } catch {
+            // Editor may have been destroyed before IPC returned
+          }
+        }),
+      []
+    );
+
+    const filePasteExtension = useMemo(
+      () =>
+        createFilePasteHandler((view, files) => {
+          const cursor = view.state.selection.main.head;
+          const effects: ReturnType<typeof addFileDropChip.of>[] = [];
+
+          let insertText = "";
+          for (const file of files) {
+            const token = formatAtFileToken(file.path);
+            const from = cursor + insertText.length;
+            insertText += token + " ";
+            effects.push(
+              addFileDropChip.of({
+                from,
+                to: from + token.length,
+                filePath: file.path,
+                fileName: file.name,
+              })
+            );
+          }
+
+          view.dispatch({
+            changes: { from: cursor, insert: insertText },
+            effects,
+            selection: { anchor: cursor + insertText.length },
+          });
+        }),
+      []
+    );
 
     useEffect(() => {
       setInitializationState("initializing");
@@ -175,6 +241,21 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       };
     }, []);
 
+    useEffect(() => {
+      const load = () => {
+        window.electron?.voiceInput
+          ?.getSettings()
+          .then((s) => {
+            setVoiceEnabled(s.enabled);
+          })
+          .catch(() => {});
+      };
+      load();
+      // Re-check when the window regains focus so Settings changes are reflected immediately.
+      window.addEventListener("focus", load);
+      return () => window.removeEventListener("focus", load);
+    }, []);
+
     const isInitializing = isAgentTerminal && initializationState === "initializing";
 
     useEffect(() => {
@@ -185,7 +266,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       setSlashContext(null);
       setSelectedIndex(0);
       lastQueryRef.current = "";
-      lastEnterKeydownShiftRef.current = false;
+      lastEnterKeydownNewlineRef.current = false;
       handledEnterRef.current = false;
       submitAfterCompositionRef.current = false;
 
@@ -266,21 +347,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       clearDraftInput,
       navigateHistory,
     };
-
-    useLayoutEffect(() => {
-      if (collapsedHeightPx !== null) return;
-      const el = barContentRef.current;
-      if (!el) return;
-      if (value.length > 0) return;
-
-      const rafId = requestAnimationFrame(() => {
-        const rawHeight = el.getBoundingClientRect().height;
-        // Round instead of ceil to avoid zoom-induced fractional inflation
-        const next = Math.round(rawHeight);
-        if (next > 0) setCollapsedHeightPx(next);
-      });
-      return () => cancelAnimationFrame(rafId);
-    }, [collapsedHeightPx, value]);
 
     useLayoutEffect(() => {
       if (!isAutocompleteOpen) return;
@@ -428,6 +494,29 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       [applyEditorValue]
     );
 
+    const handleVoiceTranscriptionDelta = useCallback((delta: string) => {
+      pendingTranscriptRef.current += delta;
+    }, []);
+
+    const handleVoiceTranscriptionComplete = useCallback((text: string) => {
+      pendingTranscriptRef.current = "";
+      const view = editorViewRef.current;
+      if (!view) return;
+
+      const current = view.state.doc.toString();
+      const separator = current && !current.endsWith(" ") ? " " : "";
+      const insert = separator + text;
+      const from = view.state.doc.length;
+
+      isApplyingExternalValueRef.current = true;
+      view.dispatch({
+        changes: { from, insert },
+        selection: { anchor: from + insert.length },
+        scrollIntoView: true,
+      });
+      view.focus();
+    }, []);
+
     const sendFromEditor = useCallback(() => {
       const view = editorViewRef.current;
       const latest = latestRef.current;
@@ -454,7 +543,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const view = editorViewRef.current;
       if (!view) return;
       requestAnimationFrame(() => {
-        if (!editorViewRef.current) return;
+        if (editorViewRef.current !== view) return;
         view.dispatch({
           selection: EditorSelection.cursor(view.state.doc.length),
           scrollIntoView: true,
@@ -689,7 +778,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               return true;
             }
 
-            if (lastEnterKeydownShiftRef.current) {
+            if (lastEnterKeydownNewlineRef.current) {
               return false;
             }
 
@@ -719,7 +808,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           compositionstart: () => {
             isComposingRef.current = true;
             submitAfterCompositionRef.current = false;
-            lastEnterKeydownShiftRef.current = false;
+            lastEnterKeydownNewlineRef.current = false;
             return false;
           },
           compositionend: () => {
@@ -737,11 +826,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               event.code === "NumpadEnter";
 
             if (isEnter) {
-              lastEnterKeydownShiftRef.current = event.shiftKey;
+              lastEnterKeydownNewlineRef.current = event.shiftKey || event.altKey;
             }
 
             if (event.isComposing) {
-              if (isEnter && !event.shiftKey) {
+              if (isEnter && !event.shiftKey && !event.altKey) {
                 submitAfterCompositionRef.current = true;
               }
               return false;
@@ -756,7 +845,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
             setAtContext(null);
             setSlashContext(null);
-            lastEnterKeydownShiftRef.current = false;
+            lastEnterKeydownNewlineRef.current = false;
             handledEnterRef.current = false;
             submitAfterCompositionRef.current = false;
 
@@ -965,9 +1054,17 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           tooltipCompartmentRef.current.of(!disabled ? createSlashTooltip(commandMap) : []),
           createFileChipField(),
           fileChipTooltipCompartmentRef.current.of(!disabled ? createFileChipTooltip() : []),
+          imageChipField,
+          imageChipTooltipCompartmentRef.current.of(!disabled ? createImageChipTooltip() : []),
+          fileDropChipField,
+          fileDropChipTooltipCompartmentRef.current.of(
+            !disabled ? createFileDropChipTooltip() : []
+          ),
           keymapCompartmentRef.current.of(keymapExtension),
           editorUpdateListener,
           domEventHandlers,
+          imagePasteExtension,
+          filePasteExtension,
         ],
       });
 
@@ -1038,6 +1135,28 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const view = editorViewRef.current;
       if (!view) return;
 
+      view.dispatch({
+        effects: imageChipTooltipCompartmentRef.current.reconfigure(
+          !disabled ? createImageChipTooltip() : []
+        ),
+      });
+    }, [disabled]);
+
+    useEffect(() => {
+      const view = editorViewRef.current;
+      if (!view) return;
+
+      view.dispatch({
+        effects: fileDropChipTooltipCompartmentRef.current.reconfigure(
+          !disabled ? createFileDropChipTooltip() : []
+        ),
+      });
+    }, [disabled]);
+
+    useEffect(() => {
+      const view = editorViewRef.current;
+      if (!view) return;
+
       const current = view.state.doc.toString();
       if (value === current) return;
 
@@ -1048,14 +1167,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     }, [value]);
 
     const barContent = (
-      <div ref={barContentRef} className="group cursor-text bg-canopy-bg px-4 pb-3 pt-3">
+      <div className="group cursor-text bg-canopy-bg px-4 pb-3 pt-3">
         <div className="flex items-end gap-2">
           <div
             ref={inputShellRef}
             className={cn(
               "relative",
-              "flex w-full items-center gap-1.5 rounded-sm border border-white/[0.06] bg-white/[0.03] py-1 shadow-[0_6px_12px_rgba(0,0,0,0.18)] transition-colors",
-              "group-hover:border-white/[0.08] group-hover:bg-white/[0.04]",
+              "flex w-full items-center gap-1.5 rounded-sm border border-white/[0.06] bg-overlay-soft py-1 shadow-[0_6px_12px_rgba(0,0,0,0.18)] transition-colors",
+              "group-hover:border-white/[0.08] group-hover:bg-overlay-medium",
               "focus-within:border-white/[0.12] focus-within:ring-1 focus-within:ring-white/[0.06] focus-within:bg-white/[0.05]",
               disabled && "opacity-60"
             )}
@@ -1084,15 +1203,20 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               />
             </div>
 
-            <div className="pr-1.5">
+            <div className="flex items-center gap-0.5 pr-1.5">
+              {voiceEnabled && (
+                <VoiceInputButton
+                  onTranscriptionDelta={handleVoiceTranscriptionDelta}
+                  onTranscriptionComplete={handleVoiceTranscriptionComplete}
+                  disabled={disabled}
+                />
+              )}
               <CommandPickerButton onClick={openPicker} disabled={disabled} />
             </div>
           </div>
         </div>
       </div>
     );
-
-    const isOverlayMode = collapsedHeightPx !== null;
 
     return (
       <>
@@ -1117,10 +1241,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             focusEditor();
           }}
         >
-          {isOverlayMode && <div aria-hidden="true" style={{ height: `${collapsedHeightPx}px` }} />}
-          <div className={cn(isOverlayMode && "absolute inset-x-0 bottom-0 z-10")}>
-            {barContent}
-          </div>
+          {barContent}
         </div>
         <CommandPickerHost context={commandContext} onCommandExecuted={handleCommandExecuted} />
       </>

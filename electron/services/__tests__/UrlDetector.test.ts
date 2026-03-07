@@ -31,11 +31,25 @@ describe("UrlDetector", () => {
         expect(result.url).toBe("http://localhost:3000/");
       });
 
-      it("handles URLs with OSC hyperlinks via ANSI stripping", () => {
+      it("handles URLs with OSC 8 hyperlinks (BEL terminator)", () => {
         const withOsc =
           "Server at \x1b]8;;http://localhost:3000\x07http://localhost:3000\x1b]8;;\x07";
         const result = detector.scanOutput(withOsc, "");
         expect(result.url).toBe("http://localhost:3000/");
+      });
+
+      it("handles URLs with OSC 8 hyperlinks (ST terminator — xterm 6 style)", () => {
+        const withOsc =
+          "Server at \x1b]8;;http://localhost:3000\x1b\\http://localhost:3000\x1b]8;;\x1b\\";
+        const result = detector.scanOutput(withOsc, "");
+        expect(result.url).toBe("http://localhost:3000/");
+      });
+
+      it("does not capture BEL control character as part of detected URL", () => {
+        const withOsc = "\x1b]8;;http://localhost:5173/\x07http://localhost:5173/\x1b]8;;\x07";
+        const result = detector.scanOutput(withOsc, "");
+        expect(result.url).toBe("http://localhost:5173/");
+        expect(result.url).not.toContain("%07");
       });
 
       it("detects URLs split across chunks using buffer", () => {
@@ -54,10 +68,10 @@ describe("UrlDetector", () => {
         expect(result.url).toBe("http://127.0.0.1:3000/");
       });
 
-      it("maintains 4096 character buffer for split URL detection", () => {
-        const longPrefix = "x".repeat(4000);
+      it("maintains 8192 character buffer for split URL detection", () => {
+        const longPrefix = "x".repeat(8000);
         const result1 = detector.scanOutput(longPrefix + "http://local", "");
-        expect(result1.buffer.length).toBeLessThanOrEqual(4096);
+        expect(result1.buffer.length).toBeLessThanOrEqual(8192);
 
         const result2 = detector.scanOutput("host:3000", result1.buffer);
         expect(result2.url).toBe("http://localhost:3000/");
@@ -216,17 +230,17 @@ describe("UrlDetector", () => {
         expect(result2.buffer).toBe("line 1\nline 2\n");
       });
 
-      it("maintains buffer size limit of 4096 characters", () => {
-        const longData = "x".repeat(5000);
+      it("maintains buffer size limit of 8192 characters", () => {
+        const longData = "x".repeat(9000);
         const result = detector.scanOutput(longData, "");
-        expect(result.buffer).toHaveLength(4096);
-        expect(result.buffer).toBe(longData.slice(-4096));
+        expect(result.buffer).toHaveLength(8192);
+        expect(result.buffer).toBe(longData.slice(-8192));
       });
 
       it("trims old data when buffer exceeds limit", () => {
-        const result1 = detector.scanOutput("a".repeat(3000), "");
-        const result2 = detector.scanOutput("b".repeat(2000), result1.buffer);
-        expect(result2.buffer).toHaveLength(4096);
+        const result1 = detector.scanOutput("a".repeat(5000), "");
+        const result2 = detector.scanOutput("b".repeat(5000), result1.buffer);
+        expect(result2.buffer).toHaveLength(8192);
         expect(result2.buffer.startsWith("a")).toBe(true);
         expect(result2.buffer.endsWith("b")).toBe(true);
       });

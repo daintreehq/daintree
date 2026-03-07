@@ -3,6 +3,7 @@ import fs from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
 import { app } from "electron";
+import { resilientRename, resilientWriteFile, resilientUnlink } from "../../utils/fs.js";
 import type { TaskRecord } from "../../../shared/types/task.js";
 
 const TASKS_FILENAME = "tasks.json";
@@ -120,7 +121,7 @@ export class TaskPersistence {
         try {
           const timestamp = Date.now();
           const quarantinePath = `${filePath}.corrupted.${timestamp}`;
-          await fs.rename(filePath, quarantinePath);
+          await resilientRename(filePath, quarantinePath);
           console.warn(`[TaskPersistence] Corrupted tasks file moved to ${quarantinePath}`);
         } catch (quarantineError) {
           console.error(
@@ -209,8 +210,8 @@ export class TaskPersistence {
       if (ensureDir) {
         await fs.mkdir(stateDir, { recursive: true });
       }
-      await fs.writeFile(tempFilePath, JSON.stringify(state, null, 2), "utf-8");
-      await fs.rename(tempFilePath, filePath);
+      await resilientWriteFile(tempFilePath, JSON.stringify(state, null, 2), "utf-8");
+      await resilientRename(tempFilePath, filePath);
     };
 
     // Track this save as in-flight
@@ -295,7 +296,7 @@ export class TaskPersistence {
     const filePath = this.getTasksFilePath(projectId);
     if (filePath && existsSync(filePath)) {
       try {
-        await fs.unlink(filePath);
+        await resilientUnlink(filePath);
         console.log(`[TaskPersistence] Cleared tasks for project ${projectId}`);
       } catch (error) {
         console.error(`[TaskPersistence] Failed to clear tasks for ${projectId}:`, error);

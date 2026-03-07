@@ -71,6 +71,7 @@ import {
   buildNonInteractiveEnv,
   AGENT_ENV_EXCLUSIONS,
 } from "./terminalShell.js";
+import { filterEnvironment, injectCanopyMetadata } from "./EnvironmentFilter.js";
 
 type CursorBuffer = {
   cursorY?: number;
@@ -98,6 +99,7 @@ export class TerminalProcess {
   private submitQueue: string[] = [];
   private submitInFlight = false;
   private headlineGenerator = new ActivityHeadlineGenerator();
+  private lastDetectedProcessIconId: string | undefined;
 
   private lastWriteErrorLogTime = 0;
   private suppressedWriteErrorCount = 0;
@@ -243,7 +245,26 @@ export class TerminalProcess {
       : undefined;
 
     const baseEnv = process.env as Record<string, string | undefined>;
-    const mergedEnv = { ...baseEnv, ...options.env };
+
+    // Filter sensitive credentials from the inherited process environment only.
+    // options.env contains intentional overrides (e.g. project settings env vars
+    // resolved from secure storage) and is merged in after filtering so those
+    // intentional values are not inadvertently stripped.
+    const filteredBaseEnv = filterEnvironment(baseEnv);
+    const intentionalEnv = options.env
+      ? (Object.fromEntries(
+          Object.entries(options.env).filter(([, v]) => v !== undefined)
+        ) as Record<string, string>)
+      : {};
+    const mergedEnv = injectCanopyMetadata(
+      { ...filteredBaseEnv, ...intentionalEnv },
+      {
+        paneId: id,
+        cwd: options.cwd,
+        projectId: options.projectId,
+        worktreeId: options.worktreeId,
+      }
+    );
 
     // For agent terminals, use non-interactive environment to suppress prompts
     // (oh-my-zsh updates, Homebrew notifications, etc.)
@@ -257,13 +278,11 @@ export class TerminalProcess {
       normalizedAgentId ? (AGENT_ENV_EXCLUSIONS[normalizedAgentId] ?? []) : []
     );
     const filteredAgentEnv = Object.fromEntries(
-      Object.entries(agentEnv).filter(([key]) => !exclusions.has(key))
-    );
-    const env = this.isAgentTerminal
+      Object.entries(agentEnv).filter(([key]) => !exclusions.has(key) && !key.startsWith("CANOPY_"))
+    ) as Record<string, string>;
+    const env: Record<string, string> = this.isAgentTerminal
       ? { ...buildNonInteractiveEnv(mergedEnv, shell, agentId), ...filteredAgentEnv }
-      : (Object.fromEntries(
-          Object.entries(mergedEnv).filter(([_, value]) => value !== undefined)
-        ) as Record<string, string>);
+      : mergedEnv;
 
     const canUsePool =
       deps.ptyPool &&
@@ -1229,19 +1248,47 @@ export class TerminalProcess {
           terminal.title = agentNames[result.agentType];
         }
 
+        this.lastDetectedProcessIconId = result.processIconId;
         events.emit("agent:detected", {
           terminalId: this.id,
           agentType: result.agentType,
+          processIconId: result.processIconId,
           processName: result.processName || result.agentType,
           timestamp: Date.now(),
         });
       }
-    } else if (!result.detected && terminal.detectedAgentType) {
+    } else if (result.detected && !result.agentType && result.processIconId) {
+      // Non-agent process detected (npm, python, docker, etc.)
+      // If we're transitioning directly from an agent, clear agent state first
+      if (terminal.detectedAgentType) {
+        const previousType = terminal.detectedAgentType;
+        terminal.detectedAgentType = undefined;
+        terminal.type = "terminal";
+        terminal.title = "Terminal";
+        events.emit("agent:exited", {
+          terminalId: this.id,
+          agentType: previousType,
+          timestamp: Date.now(),
+        });
+      }
+      if (this.lastDetectedProcessIconId !== result.processIconId) {
+        this.lastDetectedProcessIconId = result.processIconId;
+        events.emit("agent:detected", {
+          terminalId: this.id,
+          processIconId: result.processIconId,
+          processName: result.processName || result.processIconId,
+          timestamp: Date.now(),
+        });
+      }
+    } else if (!result.detected && (terminal.detectedAgentType || this.lastDetectedProcessIconId)) {
       const previousType = terminal.detectedAgentType;
-      terminal.detectedAgentType = undefined;
-      terminal.type = "terminal";
-      terminal.title = "Terminal";
+      if (previousType) {
+        terminal.detectedAgentType = undefined;
+        terminal.type = "terminal";
+        terminal.title = "Terminal";
+      }
 
+      this.lastDetectedProcessIconId = undefined;
       events.emit("agent:exited", {
         terminalId: this.id,
         agentType: previousType,

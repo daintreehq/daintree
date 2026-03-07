@@ -98,7 +98,7 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
       className={cn(
         "flex items-center justify-between gap-4 px-4 py-3 rounded-[var(--radius-lg)]",
         "bg-[color-mix(in_oklab,var(--color-status-warning)_12%,transparent)]",
-        "border border-[var(--color-status-warning)]/30",
+        "border border-status-warning/30",
         "transition-all duration-200",
         isVisible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-2",
         className
@@ -107,11 +107,9 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
       aria-live="assertive"
     >
       <div className="flex items-center gap-3">
-        <AlertTriangle className="h-5 w-5 text-[var(--color-status-warning)] shrink-0" />
+        <AlertTriangle className="h-5 w-5 text-status-warning shrink-0" />
         <div>
-          <p className="text-sm font-medium text-[var(--color-status-warning)]">
-            {activeCount} terminals open
-          </p>
+          <p className="text-sm font-medium text-status-warning">{activeCount} terminals open</p>
           <p className="text-xs text-canopy-text/70 mt-0.5">
             Consider closing idle terminals to keep the board light.
             {completedCount > 0 && (
@@ -136,9 +134,9 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
         onClick={handleDismiss}
         className={cn(
           "rounded-[var(--radius-sm)] p-1",
-          "text-[var(--color-status-warning)]/60 transition-colors",
-          "hover:text-[var(--color-status-warning)] hover:bg-[var(--color-status-warning)]/10",
-          "focus:outline-none focus:ring-1 focus:ring-[var(--color-status-warning)]/50"
+          "text-status-warning/60 transition-colors",
+          "hover:text-status-warning hover:bg-status-warning/10",
+          "focus:outline-none focus:ring-1 focus:ring-status-warning/50"
         )}
         aria-label="Dismiss warning"
       >

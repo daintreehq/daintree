@@ -1,287 +1,185 @@
-# Canopy Command Center
+# Canopy
 
-**The AI-Native Mini IDE for Agent Orchestration**
+**A habitat for your AI coding agents.**
 
-Canopy is a feature-rich, Electron-based command center designed to streamline the workflow of developing with AI coding agents. It bridges the gap between your terminal, git worktrees, and AI CLI tools like Claude Code, Gemini, Codex, and OpenCode.
+Canopy is a desktop environment where multiple AI agents work side by side — isolated, observable, and under your control. Instead of juggling terminal windows and manually wiring context between tools, Canopy gives your agents a stable place to run while you focus on reviewing their work.
 
-Instead of juggling multiple terminal windows and manually copying context, Canopy provides a unified dashboard to monitor worktrees, orchestrate agents, and inject codebase context with a single click.
+It works with any CLI agent — [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Codex](https://github.com/openai/codex), [OpenCode](https://github.com/opencode-ai/opencode) — and stays out of the way.
 
-## Key Features
+---
+
+## Why Canopy
+
+Running AI agents in parallel is becoming the standard workflow. But the tooling around it hasn't caught up. You end up with a dozen terminal tabs, no visibility into what each agent is doing, and no clean way to review or merge the results.
+
+Canopy solves this by providing:
+
+- **Automatic isolation** — Each task gets its own git worktree. Agents never collide.
+- **Visibility at a glance** — See what every agent is doing, which ones need input, and what's changed across all branches.
+- **Review-first workflows** — The bottleneck isn't generation speed, it's reviewing what agents produce. Canopy is built around making that fast.
+- **Zero lock-in** — Your machine, your keys, your choice of agents. Canopy is agent-agnostic by design.
+
+---
+
+## Features
 
 ### Worktree Dashboard
 
-- **Visual Monitoring**: View all git worktrees at a glance with real-time status updates
-- **Smart Summaries**: AI-powered summaries of file changes in every branch
-- **GitHub Integration**: Auto-detects associated Pull Requests and Issues based on branch names
-- **Dev Server Control**: Auto-detects `package.json` scripts and manages dev server lifecycles per worktree
-- **Mood Indicators**: Visual prioritization with stable, active, stale, and error states
+View all git worktrees in a single dashboard with real-time status. Canopy auto-detects associated Pull Requests and Issues from branch names, shows commit-based summaries of changes, and manages dev server lifecycles per worktree.
 
 ### Agent Orchestration
 
-- **Smart Terminals**: Integrated panel grid capable of running standard shells or AI agents
-- **Lifecycle Tracking**: Automatically detects agent states (`idle`, `working`, `waiting`, `completed`, `failed`) via output heuristics
-- **Waiting For You**: A dedicated notification strip that alerts you when an agent needs human input
-- **Activity Monitoring**: Semantic analysis of terminal output with human-readable status headlines
+Run multiple agents in a panel grid. Canopy tracks agent state automatically — `idle`, `working`, `waiting`, `completed`, `failed` — via output analysis. A notification strip alerts you the moment any agent needs human input, so you can walk away and come back when there's something to review.
 
 ### Context Injection
 
-- **One-Click Context**: Integrated with [CopyTree](https://github.com/gregpriday/copytree) for intelligent context generation
-- **Smart Selection**: Pick specific files or folders to inject into the active agent's terminal
-- **Format Optimization**: Automatically selects the best format (XML, Markdown) based on the running agent
+Inject codebase context into any agent's terminal with a single click. Built on [CopyTree](https://github.com/gregpriday/copytree), Canopy generates structured context in a format optimized for AI consumption. Select specific files or folders, and the context flows directly into the active session.
 
-### Multi-Panel Terminal Environment
+### Multi-Panel Environment
 
-- **Drag-and-Drop Layout**: Reorderable panel grid with dnd-kit integration
-- **Resizable Panels**: Dock and trash system for terminal organization
-- **Performance Modes**: Optimized rendering for handling dozens of terminals
-- **Hybrid Input Bar**: Command submission without typing directly in terminal
-- **State Persistence**: Hibernation service saves/restores terminal state on quit
+Drag-and-drop panel grid with dock and trash. Panels can be terminals, agent sessions, browser previews, or notes. The layout persists across sessions, and inactive projects auto-hibernate to keep things responsive.
 
 ### GitHub Integration
 
-- **PR/Issue Detection**: Automatic linking from branch names
-- **Repository Stats**: Commit lists and statistics
-- **Secure Authentication**: Token-based auth with encrypted storage
+Automatic PR and issue detection from branch names. Repository statistics, commit history, and secure token-based authentication — all built in.
 
-## Prerequisites
-
-- **Node.js**: v20+ recommended
-- **Git**: v2.30+
-- **AI Agents (Optional)**: For the best experience, install the CLIs for the agents you intend to use:
-
-```bash
-# Claude Code
-npm install -g @anthropic-ai/claude-code
-
-# Codex CLI
-npm install -g @openai/codex
-
-# OpenCode CLI
-npm install -g opencode-ai@latest
-```
+---
 
 ## Getting Started
 
-### Installation
+### Prerequisites
 
-1. **Clone the repository:**
+- **Node.js** v22+
+- **Git** v2.30+
 
-   ```bash
-   git clone https://github.com/gregpriday/canopy-electron.git
-   cd canopy-electron
-   ```
+### Install
 
-2. **Install dependencies:**
+```bash
+git clone https://github.com/gregpriday/canopy-electron.git
+cd canopy-electron
+npm install
+```
 
-   > **Note:** This project includes native modules (`node-pty`) that must be built against the Electron runtime. Both `npm install` and `npm ci` work correctly - the `postinstall` script handles the rebuild automatically.
+> The `postinstall` script rebuilds native modules (`node-pty`) for Electron automatically. If you see PTY errors, run `npm run rebuild`.
 
-   ```bash
-   npm install  # or npm ci for CI environments
-   ```
-
-3. **Rebuild Native Modules (if needed):**
-
-   The post-install script should handle this, but if you see errors regarding `node-pty`, run:
-
-   ```bash
-   npm run rebuild
-   ```
-
-### Running the App
-
-Start the development environment (runs Vite renderer and Electron main process concurrently):
+### Run
 
 ```bash
 npm run dev
 ```
 
-## Configuration
+This starts both the Vite renderer and Electron main process.
 
-Canopy works out of the box for local terminal management, but AI features require configuration via the **Settings** icon (bottom left sidebar).
+### Configure
 
-1. **GitHub Token**: Required for fetching PR statuses and issue details without hitting rate limits
-2. **Agent Settings**: Configure default models and flags for Claude, Gemini, Codex, and OpenCode
+Canopy works immediately for terminal management. For AI features, open **Settings** (bottom-left sidebar):
+
+1. **GitHub Token** — Enables PR/issue detection without rate limits
+2. **Agent Settings** — Configure default models and flags for each agent CLI
+
+### Install Agent CLIs
+
+Canopy works with any agent you have installed:
+
+```bash
+npm install -g @anthropic-ai/claude-code    # Claude Code
+npm install -g @openai/codex                # Codex CLI
+npm install -g opencode-ai@latest           # OpenCode
+```
+
+---
 
 ## Architecture
 
-Canopy uses a modern Electron architecture with a three-tier model:
+Canopy uses a three-process Electron architecture:
 
 ```
-Main Process (electron/)          Renderer (src/)
-    ├── Services                      ├── Components (React 19)
-    ├── IPC Handlers                  ├── Zustand Stores
-    ├── PTY Management                ├── Hooks & Clients
-    └── UtilityProcesses              └── UI Logic
-         ├── PTY Host
-         └── Workspace Host
+Main Process (electron/)            Renderer (src/)
+├── PTY Management                  ├── React 19 + TypeScript
+├── Git Operations                  ├── Zustand State Management
+├── IPC Handlers                    ├── xterm.js Terminal Grid
+└── Utility Processes               └── Action System
+     ├── PTY Host (SharedRingBuffer)
+     └── Workspace Host (Worktree Monitor)
 ```
 
-### Process Architecture
+- **Main Process** — Native operations (PTY, filesystem, git) exposed through a typed IPC bridge with 36 namespaces.
+- **Renderer** — React 19 UI with Vite HMR. Zustand stores with atomic selectors for performance across many simultaneous panels.
+- **Utility Processes** — Isolated PTY Host with lock-free SharedRingBuffer flow control, and Workspace Host for continuous worktree monitoring.
 
-- **Main Process (`/electron`)**: Handles native operations (PTY management, file system, git) via TypeScript services. Exposes functionality through a secure IPC bridge.
-- **Renderer Process (`/src`)**: React 19 UI with Vite HMR. Uses Zustand for state management with atomic selectors for performance.
-- **Utility Processes**: Isolated PTY Host (SharedRingBuffer flow control) and Workspace Host (git worktree monitoring).
+### Tech Stack
 
-### Actions System
+| Layer       | Technology                            |
+| ----------- | ------------------------------------- |
+| Runtime     | Electron 40                           |
+| UI          | React 19, TypeScript, Tailwind CSS v4 |
+| Build       | Vite 6                                |
+| State       | Zustand v5                            |
+| Terminal    | @xterm/xterm 6.0, node-pty 1.0        |
+| Git         | simple-git 3.30                       |
+| Drag & Drop | dnd-kit                               |
+| Validation  | Zod                                   |
 
-The central orchestration layer for all UI operations:
+---
 
-- **ActionService** (`src/services/ActionService.ts`): Registry and dispatcher singleton
-- **17 Domain Files**: Terminal, agent, panel, worktree, project, GitHub, git, navigation, app, preferences, browser, system, logs, recipes
-- **Typed API**: `dispatch(actionId, args?, options?)` with Zod validation
-- **Safety Levels**: `ActionDanger` ("safe" | "confirm" | "restricted")
-- **Source Tracking**: `ActionSource` ("user" | "keybinding" | "menu" | "agent" | "context-menu")
-
-### Panel System
-
-Extensible discriminated union architecture:
-
-```typescript
-PanelInstance = PtyPanelData | BrowserPanelData;
-BuiltInPanelKind = "terminal" | "agent" | "browser";
-```
-
-- **Panel Registry**: Extensible configuration in `shared/config/panelKindRegistry.ts`
-- **PTY Detection**: `panelKindHasPty(kind)` for process management
-
-### IPC Bridge (`window.electron`)
-
-Namespaced API for renderer → main communication:
-
-| Namespace  | Methods                                                      |
-| ---------- | ------------------------------------------------------------ |
-| `worktree` | getAll, refresh, setActive, create, delete, onUpdate         |
-| `terminal` | spawn, write, resize, kill, trash, restore, onData, onExit   |
-| `app`      | getState, setState, hydrate, onMenuAction, quit              |
-| `copyTree` | generate, injectToTerminal, isAvailable, cancel, onProgress  |
-| `github`   | openIssues, openPRs, listIssues, listPullRequests, getConfig |
-| `project`  | getAll, getCurrent, add, remove, update, switch, onSwitch    |
-| `system`   | openExternal, openPath, checkCommand, checkDirectory         |
-| `logs`     | getAll, getSources, clear, openFile, onEntry                 |
-| `events`   | emit (action tracking)                                       |
-
-### Key Technologies
-
-| Component          | Technology                                   |
-| ------------------ | -------------------------------------------- |
-| Runtime            | Electron 33                                  |
-| UI Framework       | React 19 + TypeScript                        |
-| Build              | Vite 6                                       |
-| State Management   | Zustand (atomic selectors)                   |
-| Terminal Emulation | xterm.js v5.5 + addons                       |
-| PTY                | node-pty v1.0 (native module)                |
-| Git                | simple-git v3.30                             |
-| Styling            | Tailwind CSS v4                              |
-| Drag & Drop        | dnd-kit (sortable)                           |
-| Validation         | Zod + zod-to-json-schema                     |
-| AI Integration     | Agent CLIs (Claude, Gemini, Codex, OpenCode) |
-
-## Directory Structure
-
-```
-canopy-electron/
-├── electron/                    # Main process
-│   ├── main.ts                  # Entry point
-│   ├── preload.cts              # IPC bridge (contextBridge)
-│   ├── menu.ts                  # Application menu
-│   ├── pty-host.ts              # PTY UtilityProcess
-│   ├── workspace-host.ts        # Workspace UtilityProcess
-│   ├── ipc/
-│   │   ├── channels.ts          # Channel constants
-│   │   ├── handlers.ts          # Handler registration
-│   │   └── handlers/            # Domain-specific handlers
-│   └── services/                # Backend services
-│       ├── pty/                 # Terminal subsystem
-│       ├── workspace-host/      # Worktree monitoring
-│       └── github/              # GitHub integration
-│
-├── src/                         # Renderer (React)
-│   ├── components/
-│   │   ├── Layout/              # App shell (AppLayout, Sidebar, Toolbar)
-│   │   ├── Terminal/            # xterm.js grid
-│   │   ├── Worktree/            # Dashboard cards
-│   │   ├── Panel/               # Panel system
-│   │   ├── Sidecar/             # Browser/artifact viewer
-│   │   ├── DragDrop/            # dnd-kit integration
-│   │   └── Settings/            # Configuration UI
-│   ├── store/                   # Zustand stores
-│   │   ├── terminalStore.ts     # Panel state management
-│   │   ├── worktreeStore.ts     # Worktree state
-│   │   └── slices/              # Store slices
-│   ├── hooks/                   # React hooks
-│   ├── clients/                 # IPC wrappers
-│   └── services/
-│       ├── ActionService.ts     # Action dispatcher
-│       └── actions/definitions/ # 17 action definition files
-│
-├── shared/                      # Shared types & config
-│   ├── types/
-│   │   ├── actions.ts           # Action system types
-│   │   ├── domain.ts            # Panel, Worktree, Agent types
-│   │   └── keymap.ts            # Keybinding types
-│   └── config/
-│       ├── panelKindRegistry.ts # Panel configuration
-│       └── agentRegistry.ts     # Agent configuration
-│
-├── docs/                        # Documentation
-│   ├── architecture.md
-│   ├── development.md
-│   └── feature-curation.md
-│
-└── build/                       # Build assets
-```
-
-## Development Commands
+## Development
 
 ```bash
-# Start development (Electron + Vite concurrently)
-npm run dev
-
-# Run all checks (typecheck + lint + format) - use before committing
-npm run check
-
-# Auto-fix formatting and lint issues
-npm run fix
-
-# Run tests
-npm run test
-
-# Watch mode for tests
-npm run test:watch
-
-# Rebuild native modules (node-pty)
-npm run rebuild
+npm run dev          # Start Electron + Vite
+npm run check        # Typecheck + lint + format
+npm run fix          # Auto-fix lint and formatting
+npm run test         # Run tests
+npm run test:watch   # Watch mode
+npm run rebuild      # Rebuild native modules
 ```
 
-## Build & Distribute
+### Build & Package
 
 ```bash
-# Full production build
-npm run build
-
-# Package for distribution (auto-detects platform)
-npm run package
-
-# Platform-specific packaging
-npm run package:mac
-npm run package:win
+npm run build        # Production build
+npm run package      # Package for current platform
+npm run package:mac  # macOS
+npm run package:win  # Windows
 npm run package:linux
 ```
 
-## Notable Implementation Details
+---
 
-- **SharedArrayBuffer Flow Control**: PTY host uses SharedRingBuffer for low-latency backpressure
-- **Terminal State Persistence**: Hibernation service saves/restores terminal state on quit
-- **Multi-Project Support**: Services filter by projectId; stores reset on project switch
-- **Artifact Detection**: Automatic detection and inline viewing of AI-generated code changes
-- **Dev Server Auto-Detection**: Scans package.json for scripts and manages lifecycles
+## Project Structure
+
+```
+canopy-electron/
+├── electron/                # Main process
+│   ├── main.ts              # Entry point
+│   ├── preload.cts          # IPC bridge (contextBridge)
+│   ├── ipc/handlers/        # Domain-specific IPC handlers
+│   └── services/            # PTY, workspace, GitHub services
+│
+├── src/                     # Renderer (React)
+│   ├── components/          # UI components
+│   ├── store/               # Zustand stores and slices
+│   ├── services/actions/    # Action system (20 definition files)
+│   ├── hooks/               # React hooks
+│   └── clients/             # IPC client wrappers
+│
+├── shared/                  # Types and config (main + renderer)
+│   ├── types/               # Domain, action, keymap types
+│   └── config/              # Panel and agent registries
+│
+└── docs/                    # Architecture and development docs
+```
+
+---
 
 ## Documentation
 
-- [Architecture](docs/architecture.md) - System design, IPC patterns, project structure
-- [Development Guide](docs/development.md) - Setup, commands, debugging
-- [Feature Curation](docs/feature-curation.md) - Feature evaluation criteria
+- [Architecture](docs/architecture/) — System design, IPC patterns, terminal lifecycle
+- [Development Guide](docs/development.md) — Setup, debugging, contribution workflow
+- [E2E Testing](docs/e2e-testing.md) — Playwright testing setup and patterns
+- [Feature Curation](docs/feature-curation.md) — How we evaluate new features
+
+---
 
 ## License
 
-MIT License
+MIT

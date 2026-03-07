@@ -121,11 +121,11 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
 
   const getStepIcon = (event: GitInitProgressEvent) => {
     if (event.status === "start") {
-      return <Loader2 className="h-4 w-4 animate-spin text-blue-500" />;
+      return <Loader2 className="h-4 w-4 animate-spin text-status-info" />;
     } else if (event.status === "success") {
-      return <Check className="h-4 w-4 text-green-500" />;
+      return <Check className="h-4 w-4 text-status-success" />;
     } else if (event.status === "error") {
-      return <AlertCircle className="h-4 w-4 text-red-500" />;
+      return <AlertCircle className="h-4 w-4 text-status-error" />;
     }
     return null;
   };
@@ -159,15 +159,15 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
                 <div
                   className={
                     event.status === "error"
-                      ? "text-red-500"
+                      ? "text-status-error"
                       : event.status === "success"
-                        ? "text-green-600"
+                        ? "text-status-success"
                         : "text-foreground"
                   }
                 >
                   {event.message}
                 </div>
-                {event.error && <div className="text-xs text-red-500 mt-1">{event.error}</div>}
+                {event.error && <div className="text-xs text-status-error mt-1">{event.error}</div>}
               </div>
             </div>
           ))}

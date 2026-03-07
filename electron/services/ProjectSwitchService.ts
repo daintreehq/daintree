@@ -1,12 +1,9 @@
-import type { BrowserWindow } from "electron";
-import type { PtyClient } from "./PtyClient.js";
-import type { WorkspaceClient } from "./WorkspaceClient.js";
-import type { EventBuffer } from "./EventBuffer.js";
+import path from "path";
 import type { Project } from "../types/index.js";
-import { projectStore } from "./ProjectStore.js";
+import type { HandlerDependencies } from "../ipc/types.js";
+import { projectStore, DEFAULT_PROJECT_EMOJI } from "./ProjectStore.js";
 import { logBuffer } from "./LogBuffer.js";
 import { taskQueueService } from "./TaskQueueService.js";
-import { assistantService } from "./AssistantService.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { sendToRenderer } from "../ipc/utils.js";
 import { randomUUID } from "crypto";
@@ -14,18 +11,11 @@ import { store } from "../store.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { markPerformance } from "../utils/performance.js";
 
-export interface ProjectSwitchDependencies {
-  mainWindow: BrowserWindow;
-  ptyClient: PtyClient;
-  worktreeService?: WorkspaceClient;
-  eventBuffer?: EventBuffer;
-}
-
 export class ProjectSwitchService {
-  private deps: ProjectSwitchDependencies;
+  private deps: HandlerDependencies;
   private switchChain: Promise<void> = Promise.resolve();
 
-  constructor(deps: ProjectSwitchDependencies) {
+  constructor(deps: HandlerDependencies) {
     this.deps = deps;
   }
 
@@ -77,6 +67,10 @@ export class ProjectSwitchService {
 
       await projectStore.setCurrentProject(projectId);
 
+      // Apply portable project identity from .canopy/project.json if the user
+      // hasn't customised the project name/emoji (still has defaults).
+      await this.applyInRepoIdentity(project);
+
       const updatedProject = projectStore.getProjectById(projectId);
       if (!updatedProject) {
         throw new Error(`Project not found after update: ${projectId}`);
@@ -96,9 +90,9 @@ export class ProjectSwitchService {
       console.error("[ProjectSwitch] Project switch failed, rolling back:", error);
       try {
         if (previousProjectId) {
-          this.deps.ptyClient.onProjectSwitch(previousProjectId);
+          this.deps.ptyClient!.onProjectSwitch(previousProjectId);
         } else {
-          this.deps.ptyClient.setActiveProject(null);
+          this.deps.ptyClient!.setActiveProject(null);
         }
       } catch (rollbackError) {
         console.error("[ProjectSwitch] Rollback failed:", rollbackError);
@@ -163,24 +157,17 @@ export class ProjectSwitchService {
 
     const safeCall = (fn: () => unknown): Promise<unknown> => Promise.resolve().then(fn);
     const cleanupResults = await Promise.allSettled([
-      safeCall(() => this.deps.ptyClient.onProjectSwitch(projectId)),
+      safeCall(() => this.deps.ptyClient!.onProjectSwitch(projectId)),
       safeCall(() => logBuffer.onProjectSwitch()),
       this.deps.eventBuffer?.onProjectSwitch
         ? safeCall(() => this.deps.eventBuffer!.onProjectSwitch())
         : Promise.resolve(),
       safeCall(() => taskQueueService.onProjectSwitch(projectId)),
-      safeCall(() => assistantService.clearAllSessions()),
     ]);
 
     cleanupResults.forEach((result, index) => {
       if (result.status === "rejected") {
-        const serviceNames = [
-          "PtyClient",
-          "LogBuffer",
-          "EventBuffer",
-          "TaskQueueService",
-          "AssistantService",
-        ];
+        const serviceNames = ["PtyClient", "LogBuffer", "EventBuffer", "TaskQueueService"];
         console.error(`[ProjectSwitch] ${serviceNames[index]} cleanup failed:`, result.reason);
       }
     });
@@ -197,6 +184,42 @@ export class ProjectSwitchService {
       console.log("[ProjectSwitch] Worktrees loaded successfully");
     } catch (err) {
       console.error("Failed to load worktrees for project:", err);
+    }
+  }
+
+  /**
+   * Apply portable project identity from .canopy/project.json during switch.
+   * Only applies values when the project still has default name/emoji (user hasn't customised).
+   */
+  private async applyInRepoIdentity(project: Project): Promise<void> {
+    try {
+      const inRepo = await projectStore.readInRepoProjectIdentity(project.path);
+      const updates: Partial<Project> = {};
+
+      if (inRepo.found && !project.canopyConfigPresent) {
+        updates.canopyConfigPresent = true;
+      } else if (!inRepo.found && project.canopyConfigPresent) {
+        updates.canopyConfigPresent = false;
+      }
+
+      const defaultName = path.basename(project.path);
+      const defaultEmoji = DEFAULT_PROJECT_EMOJI;
+
+      if (inRepo.name && project.name === defaultName) {
+        updates.name = inRepo.name;
+      }
+      if (inRepo.emoji && project.emoji === defaultEmoji) {
+        updates.emoji = inRepo.emoji;
+      }
+      if (inRepo.color && !project.color) {
+        updates.color = inRepo.color;
+      }
+
+      if (Object.keys(updates).length > 0) {
+        projectStore.updateProject(project.id, updates);
+      }
+    } catch (error) {
+      console.error("[ProjectSwitch] Failed to apply in-repo identity:", error);
     }
   }
 

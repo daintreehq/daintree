@@ -8,6 +8,8 @@ import {
 } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { KeybindingProfileActions } from "./KeybindingProfileActions";
 
 interface ShortcutBinding extends KeybindingConfig {
   effectiveCombo: string;
@@ -166,7 +168,7 @@ function KeyRecorder({ onCapture, onCancel, excludeActionId }: KeyRecorderProps)
       </div>
 
       {conflicts.length > 0 && (
-        <div className="flex items-start gap-2 text-amber-400 text-sm">
+        <div className="flex items-start gap-2 text-status-warning text-sm">
           <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
           <span>
             Conflicts with: {conflicts.map((c) => c.description || c.actionId).join(", ")}
@@ -190,7 +192,7 @@ function KeyRecorder({ onCapture, onCancel, excludeActionId }: KeyRecorderProps)
         {capturedCombo && (
           <button
             onClick={handleSave}
-            className="px-3 py-1.5 text-sm bg-canopy-accent text-white rounded hover:bg-canopy-accent/90 transition-colors"
+            className="px-3 py-1.5 text-sm bg-canopy-accent text-canopy-bg rounded hover:bg-canopy-accent/90 transition-colors"
           >
             Save
           </button>
@@ -256,13 +258,20 @@ function ShortcutRow({ binding, isEditing, onEdit, onSave, onCancel, onReset }: 
           Edit
         </button>
         {binding.isOverridden && (
-          <button
-            onClick={onReset}
-            className="p-0.5 text-canopy-text/60 hover:text-canopy-text opacity-0 group-hover:opacity-100 transition-opacity"
-            title="Reset to default"
-          >
-            <RotateCcw className="w-3 h-3" />
-          </button>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={onReset}
+                  className="p-0.5 text-canopy-text/60 hover:text-canopy-text opacity-0 group-hover:opacity-100 transition-opacity"
+                  aria-label="Reset to default"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Reset to default</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         )}
       </div>
     </div>
@@ -393,6 +402,7 @@ export function KeyboardShortcutsTab() {
             className="w-full pl-9 pr-3 py-2 bg-canopy-bg border border-canopy-border rounded text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:border-canopy-accent"
           />
         </div>
+        <KeybindingProfileActions onImportComplete={loadBindings} />
         <button
           onClick={handleOpenResetDialog}
           disabled={isResetting}

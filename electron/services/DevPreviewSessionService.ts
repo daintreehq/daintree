@@ -480,8 +480,11 @@ export class DevPreviewSessionService {
   private async replayRecentOutput(terminalId: string): Promise<void> {
     try {
       await this.ptyClient.replayHistoryAsync(terminalId, REPLAY_HISTORY_MAX_LINES);
-    } catch {
-      // Best-effort only - missing replay support should not block ensure.
+    } catch (err) {
+      console.warn("[DevPreviewSessionService] replayRecentOutput failed for terminal:", {
+        terminalId,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 

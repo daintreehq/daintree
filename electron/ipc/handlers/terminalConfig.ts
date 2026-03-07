@@ -1,6 +1,7 @@
-import { ipcMain } from "electron";
+import { ipcMain, dialog, BrowserWindow } from "electron";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
+import { parseColorSchemeFile } from "../../utils/colorSchemeImporter.js";
 
 function getTerminalConfigObject(): Record<string, unknown> {
   const config = store.get("terminalConfig");
@@ -122,6 +123,60 @@ export function registerTerminalConfigHandlers(): () => void {
     handleTerminalConfigSetHybridInputAutoFocus
   );
   handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_HYBRID_INPUT_AUTO_FOCUS));
+
+  const handleTerminalConfigSetColorScheme = async (
+    _event: Electron.IpcMainInvokeEvent,
+    schemeId: string
+  ) => {
+    if (typeof schemeId !== "string" || !schemeId.trim()) {
+      console.warn("Invalid terminal colorScheme:", schemeId);
+      return;
+    }
+    const currentConfig = getTerminalConfigObject();
+    store.set("terminalConfig", { ...currentConfig, colorSchemeId: schemeId.trim() });
+  };
+  ipcMain.handle(CHANNELS.TERMINAL_CONFIG_SET_COLOR_SCHEME, handleTerminalConfigSetColorScheme);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_COLOR_SCHEME));
+
+  const handleTerminalConfigSetCustomSchemes = async (
+    _event: Electron.IpcMainInvokeEvent,
+    schemesJson: string
+  ) => {
+    if (typeof schemesJson !== "string") {
+      console.warn("Invalid custom schemes:", schemesJson);
+      return;
+    }
+    const currentConfig = getTerminalConfigObject();
+    store.set("terminalConfig", { ...currentConfig, customSchemes: schemesJson });
+  };
+  ipcMain.handle(CHANNELS.TERMINAL_CONFIG_SET_CUSTOM_SCHEMES, handleTerminalConfigSetCustomSchemes);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_CUSTOM_SCHEMES));
+
+  const handleTerminalConfigImportColorScheme = async (event: Electron.IpcMainInvokeEvent) => {
+    const win = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow();
+    const dialogOptions = {
+      title: "Import Color Scheme",
+      filters: [
+        { name: "Color Schemes", extensions: ["itermcolors", "json"] },
+        { name: "All Files", extensions: ["*"] },
+      ],
+      properties: ["openFile" as const],
+    };
+    const result = win
+      ? await dialog.showOpenDialog(win, dialogOptions)
+      : await dialog.showOpenDialog(dialogOptions);
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return { ok: false, errors: ["Import cancelled"] };
+    }
+
+    return parseColorSchemeFile(result.filePaths[0]);
+  };
+  ipcMain.handle(
+    CHANNELS.TERMINAL_CONFIG_IMPORT_COLOR_SCHEME,
+    handleTerminalConfigImportColorScheme
+  );
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_IMPORT_COLOR_SCHEME));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

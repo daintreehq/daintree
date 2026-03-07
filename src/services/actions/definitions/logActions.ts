@@ -119,35 +119,95 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
   actions.set("eventInspector.getEvents", () => ({
     id: "eventInspector.getEvents",
     title: "Get Events",
-    description: "Get captured events from the event inspector",
+    description: "Get captured events from the event inspector. Use limit/offset for pagination.",
     category: "diagnostics",
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    run: async () => {
-      return await eventInspectorClient.getEvents();
+    argsSchema: z
+      .object({
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(500)
+          .default(50)
+          .describe("Max events to return (default: 50, max: 500)"),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .default(0)
+          .describe("Number of events to skip (default: 0)"),
+      })
+      .optional(),
+    run: async (args: unknown) => {
+      const { limit = 50, offset = 0 } =
+        (args as { limit?: number; offset?: number } | undefined) ?? {};
+      const allEvents = await eventInspectorClient.getEvents();
+      const events = Array.isArray(allEvents) ? allEvents : [];
+      const total = events.length;
+      const sliced = events.slice(offset, offset + limit);
+      return { events: sliced, total, limit, offset, hasMore: offset + limit < total };
     },
   }));
 
   actions.set("eventInspector.getFiltered", () => ({
     id: "eventInspector.getFiltered",
     title: "Get Filtered Events",
-    description: "Get filtered events from the event inspector",
+    description:
+      "Get filtered events from the event inspector. Events must be subscribed to first via eventInspector_subscribe.",
     category: "diagnostics",
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ filters: z.any() }),
+    argsSchema: z.object({
+      category: z
+        .enum(["system", "agent", "task", "server", "file", "ui", "watcher", "artifact"])
+        .optional()
+        .describe("Filter by event category"),
+      categories: z
+        .array(z.enum(["system", "agent", "task", "server", "file", "ui", "watcher", "artifact"]))
+        .optional()
+        .describe("Filter by multiple categories"),
+      types: z.array(z.string()).optional().describe("Filter by event type strings"),
+      worktreeId: z.string().optional().describe("Filter by worktree ID"),
+      terminalId: z.string().optional().describe("Filter by terminal ID"),
+      search: z.string().optional().describe("Search text in event data"),
+      after: z.number().optional().describe("Only events after this timestamp (ms)"),
+      before: z.number().optional().describe("Only events before this timestamp (ms)"),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(500)
+        .optional()
+        .describe("Max events to return (default: 50, max: 500)"),
+      offset: z.number().int().min(0).optional().describe("Number of events to skip (default: 0)"),
+    }),
     run: async (args: unknown) => {
-      const { filters } = args as { filters: unknown };
-      return await eventInspectorClient.getFiltered(filters as any);
+      const { limit, offset, ...filters } = args as Record<string, unknown>;
+      const allEvents = await eventInspectorClient.getFiltered(filters as any);
+      const events = Array.isArray(allEvents) ? allEvents : [];
+      const effectiveLimit = typeof limit === "number" ? Math.min(Math.max(limit, 1), 500) : 50;
+      const effectiveOffset = typeof offset === "number" ? Math.max(offset, 0) : 0;
+      const total = events.length;
+      const sliced = events.slice(effectiveOffset, effectiveOffset + effectiveLimit);
+      return {
+        events: sliced,
+        total,
+        limit: effectiveLimit,
+        offset: effectiveOffset,
+        hasMore: effectiveOffset + effectiveLimit < total,
+      };
     },
   }));
 
   actions.set("eventInspector.subscribe", () => ({
     id: "eventInspector.subscribe",
     title: "Subscribe to Events",
-    description: "Start streaming events into the event inspector",
+    description:
+      "Start capturing events into the event inspector. Must be called before getEvents or getFiltered will return results.",
     category: "diagnostics",
     kind: "command",
     danger: "safe",

@@ -4,15 +4,13 @@ import { StatusContainer, type StatusContainerConfig } from "./StatusContainer";
 
 const waitingConfig: StatusContainerConfig = {
   icon: AlertCircle,
-  iconColor: "text-amber-400",
-  badgeColor: "bg-amber-400",
-  badgeTextColor: "text-amber-950",
+  iconColor: "text-status-warning",
+  badgeColor: "bg-status-warning",
+  badgeTextColor: "text-canopy-bg",
   headerLabel: "Waiting For Input",
-  buttonTitle: "View agents waiting for input",
   buttonLabel: "Waiting",
   statusAriaLabel: "Waiting for input",
   contentAriaLabel: "Waiting terminals",
-  keybindingAction: "agent.focusNextWaiting",
   contentId: "waiting-container-popover",
   useTerminals: useWaitingTerminals,
 };

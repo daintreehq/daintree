@@ -2,6 +2,7 @@ import { useMemo, useCallback, useState, useRef, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { useErrorStore, type AppError, type RetryAction } from "@/store";
 import { Copy, Check } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 const ERROR_TYPE_LABELS: Record<string, string> = {
   git: "Git",
@@ -13,12 +14,12 @@ const ERROR_TYPE_LABELS: Record<string, string> = {
 };
 
 const ERROR_TYPE_COLORS: Record<string, string> = {
-  git: "text-orange-400",
-  process: "text-[var(--color-status-warning)]",
-  filesystem: "text-[var(--color-status-info)]",
-  network: "text-purple-400",
-  config: "text-amber-400",
-  unknown: "text-[var(--color-status-error)]",
+  git: "text-status-warning",
+  process: "text-status-warning",
+  filesystem: "text-status-info",
+  network: "text-status-info",
+  config: "text-status-warning",
+  unknown: "text-status-error",
 };
 
 function formatTimestamp(timestamp: number): string {
@@ -41,7 +42,7 @@ interface ErrorRowProps {
 
 function ErrorRow({ error, isExpanded, onToggleExpand, onDismiss, onRetry }: ErrorRowProps) {
   const typeLabel = ERROR_TYPE_LABELS[error.type] || "Error";
-  const typeColor = ERROR_TYPE_COLORS[error.type] || "text-[var(--color-status-error)]";
+  const typeColor = ERROR_TYPE_COLORS[error.type] || "text-status-error";
   const canRetry = error.isTransient && error.retryAction && onRetry;
   const [copied, setCopied] = useState(false);
   const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -126,7 +127,7 @@ function ErrorRow({ error, isExpanded, onToggleExpand, onDismiss, onRetry }: Err
                   e.stopPropagation();
                   onRetry();
                 }}
-                className="px-2 py-0.5 text-xs text-green-300 hover:text-green-200 border border-green-600 hover:bg-green-800/50 rounded"
+                className="px-2 py-0.5 text-xs text-status-success hover:text-status-success/70 border border-status-success/50 hover:bg-status-success/10 rounded"
               >
                 Retry
               </button>
@@ -151,19 +152,29 @@ function ErrorRow({ error, isExpanded, onToggleExpand, onDismiss, onRetry }: Err
               <pre className="text-xs text-canopy-text/60 whitespace-pre-wrap break-all font-mono max-h-40 overflow-y-auto flex-1">
                 {error.details}
               </pre>
-              <button
-                type="button"
-                onClick={handleCopyDetails}
-                className="shrink-0 p-1.5 text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-border/50 rounded transition-colors"
-                title={copied ? "Copied!" : "Copy error details"}
-                aria-label={copied ? "Copied to clipboard" : "Copy error details to clipboard"}
-              >
-                {copied ? (
-                  <Check className="w-4 h-4 text-green-400" />
-                ) : (
-                  <Copy className="w-4 h-4" />
-                )}
-              </button>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={handleCopyDetails}
+                      className="shrink-0 p-1.5 text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-border/50 rounded transition-colors"
+                      aria-label={
+                        copied ? "Copied to clipboard" : "Copy error details to clipboard"
+                      }
+                    >
+                      {copied ? (
+                        <Check className="w-4 h-4 text-status-success" />
+                      ) : (
+                        <Copy className="w-4 h-4" />
+                      )}
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {copied ? "Copied!" : "Copy error details"}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </div>
             {error.context && Object.keys(error.context).length > 0 && (
               <div className="mt-2 text-xs text-canopy-text/60">

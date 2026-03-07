@@ -80,9 +80,8 @@ export function useMenuActions(options: UseMenuActionsOptions): void {
           "new-worktree": "worktree.createDialog.open",
           "open-settings": "app.settings",
           "toggle-sidebar": "nav.toggleSidebar",
-          "open-agent-palette": "terminal.palette",
-          "open-panel-palette": "panel.palette",
-          "open-assistant": "assistant.open",
+          "open-quick-switcher": "nav.quickSwitcher",
+          "open-action-palette": "action.palette.open",
         };
 
         const actionId = menuToActionMap[action];

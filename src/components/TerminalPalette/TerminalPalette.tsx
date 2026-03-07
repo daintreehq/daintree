@@ -49,6 +49,7 @@ export function TerminalPalette({
           type={terminal.type}
           kind={terminal.kind}
           agentId={terminal.agentId}
+          detectedProcessId={terminal.detectedProcessId}
           worktreeName={terminal.worktreeName}
           cwd={terminal.cwd}
           isSelected={isSelected}

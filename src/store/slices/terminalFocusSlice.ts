@@ -260,42 +260,40 @@ export const createTerminalFocusSlice =
 
       focusNext: () => {
         const terminals = getTerminals();
-        // Only navigate through grid terminals (not docked ones)
         const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
-        const gridTerminals = terminals.filter(
-          (t) =>
-            (t.location === "grid" || !t.location) &&
-            (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
-        );
-        if (gridTerminals.length === 0) return;
+        const worktreeMatch = (t: TerminalInstance) =>
+          (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined);
 
-        set((state) => {
-          const currentIndex = state.focusedId
-            ? gridTerminals.findIndex((t) => t.id === state.focusedId)
-            : -1;
-          const nextIndex = (currentIndex + 1) % gridTerminals.length;
-          return { focusedId: gridTerminals[nextIndex].id };
-        });
+        const gridTerminals = terminals.filter(
+          (t) => (t.location === "grid" || !t.location) && worktreeMatch(t)
+        );
+        const dockTerminals = terminals.filter((t) => t.location === "dock" && worktreeMatch(t));
+        const cycleList = [...gridTerminals, ...dockTerminals];
+        if (cycleList.length === 0) return;
+
+        const { focusedId, activateTerminal } = get();
+        const currentIndex = focusedId ? cycleList.findIndex((t) => t.id === focusedId) : -1;
+        const nextIndex = (currentIndex + 1) % cycleList.length;
+        activateTerminal(cycleList[nextIndex].id);
       },
 
       focusPrevious: () => {
         const terminals = getTerminals();
-        // Only navigate through grid terminals (not docked ones)
         const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
-        const gridTerminals = terminals.filter(
-          (t) =>
-            (t.location === "grid" || !t.location) &&
-            (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
-        );
-        if (gridTerminals.length === 0) return;
+        const worktreeMatch = (t: TerminalInstance) =>
+          (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined);
 
-        set((state) => {
-          const currentIndex = state.focusedId
-            ? gridTerminals.findIndex((t) => t.id === state.focusedId)
-            : 0;
-          const prevIndex = currentIndex <= 0 ? gridTerminals.length - 1 : currentIndex - 1;
-          return { focusedId: gridTerminals[prevIndex].id };
-        });
+        const gridTerminals = terminals.filter(
+          (t) => (t.location === "grid" || !t.location) && worktreeMatch(t)
+        );
+        const dockTerminals = terminals.filter((t) => t.location === "dock" && worktreeMatch(t));
+        const cycleList = [...gridTerminals, ...dockTerminals];
+        if (cycleList.length === 0) return;
+
+        const { focusedId, activateTerminal } = get();
+        const currentIndex = focusedId ? cycleList.findIndex((t) => t.id === focusedId) : 0;
+        const prevIndex = currentIndex <= 0 ? cycleList.length - 1 : currentIndex - 1;
+        activateTerminal(cycleList[prevIndex].id);
       },
 
       focusDirection: (direction, findNearest) => {

@@ -1,4 +1,5 @@
 import type { Project, ProjectStats } from "@shared/types";
+import { isCanopyEnvEnabled } from "@/utils/env";
 
 export interface GroupedProjects {
   active: Project[];
@@ -11,10 +12,7 @@ export function groupProjects(
   currentProjectId: string | null,
   projectStats: Map<string, ProjectStats>
 ): GroupedProjects {
-  const isVerbose =
-    typeof process !== "undefined" &&
-    typeof process.env !== "undefined" &&
-    Boolean(process.env.CANOPY_VERBOSE);
+  const isVerbose = isCanopyEnvEnabled("CANOPY_VERBOSE");
 
   const groups: GroupedProjects = {
     active: [],

@@ -1,0 +1,168 @@
+name: E2E Core Tests
+
+on:
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Platform to test on"
+        type: choice
+        default: "all"
+        options:
+          - all
+          - macos
+          - linux
+          - windows
+  workflow_call:
+    inputs:
+      platform:
+        description: "Platform to test on"
+        type: string
+        default: "all"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-core-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  # Determine which platforms to run on
+  matrix-setup:
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - id: set
+        run: |
+          PLATFORM="${{ inputs.platform || 'all' }}"
+
+          # PRs run on Linux, macOS, and Windows
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo 'matrix={"include":[{"os":"macos-14","name":"macOS"},{"os":"ubuntu-22.04","name":"Linux"},{"os":"windows-latest","name":"Windows"}]}' >> "$GITHUB_OUTPUT"
+          elif [ "$PLATFORM" = "macos" ]; then
+            echo 'matrix={"include":[{"os":"macos-14","name":"macOS"}]}' >> "$GITHUB_OUTPUT"
+          elif [ "$PLATFORM" = "linux" ]; then
+            echo 'matrix={"include":[{"os":"ubuntu-22.04","name":"Linux"}]}' >> "$GITHUB_OUTPUT"
+          elif [ "$PLATFORM" = "windows" ]; then
+            echo 'matrix={"include":[{"os":"windows-latest","name":"Windows"}]}' >> "$GITHUB_OUTPUT"
+          else
+            echo 'matrix={"include":[{"os":"macos-14","name":"macOS"},{"os":"ubuntu-22.04","name":"Linux"},{"os":"windows-latest","name":"Windows"}]}' >> "$GITHUB_OUTPUT"
+          fi
+
+  e2e-core:
+    needs: matrix-setup
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix-setup.outputs.matrix) }}
+
+    runs-on: ${{ matrix.os }}
+    name: Core (${{ matrix.name }})
+    timeout-minutes: 40
+
+    steps:
+      - name: Harden Windows for Electron E2E
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Disable real-time monitoring entirely (exclusions alone are insufficient)
+          Set-MpPreference -DisableRealtimeMonitoring $true
+
+          # Disable Windows Search indexer to prevent file handle contention
+          Stop-Service -Name "WSearch" -Force -ErrorAction SilentlyContinue
+          Set-Service -Name "WSearch" -StartupType Disabled -ErrorAction SilentlyContinue
+
+          # Disable Superfetch/SysMain which can lock files during prefetch
+          Stop-Service -Name "SysMain" -Force -ErrorAction SilentlyContinue
+          Set-Service -Name "SysMain" -StartupType Disabled -ErrorAction SilentlyContinue
+
+          # Disable diagnostics tracking that scans new executables
+          Stop-Service -Name "DiagTrack" -Force -ErrorAction SilentlyContinue
+          Set-Service -Name "DiagTrack" -StartupType Disabled -ErrorAction SilentlyContinue
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgbm1 \
+            libgtk-3-0 \
+            libnss3 \
+            libasound2 \
+            libxss1 \
+            libxtst6 \
+            libatk1.0-0 \
+            libatk-bridge2.0-0 \
+            libcups2 \
+            libdrm2 \
+            libnotify4 \
+            xvfb
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build app
+        run: npm run build
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Configure Claude Code (macOS/Linux)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p ~/.claude
+          echo '{"hasCompletedOnboarding": true}' > ~/.claude.json
+
+      - name: Configure Claude Code (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.claude" | Out-Null
+          '{"hasCompletedOnboarding": true}' | Set-Content "$env:USERPROFILE\.claude.json"
+
+      - name: Run core e2e tests (macOS)
+        if: runner.os == 'macOS'
+        run: npm run test:e2e:core
+
+      - name: Run core e2e tests (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum npm run test:e2e:core
+
+      - name: Verify native modules (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          node -e "try { require('node-pty'); console.log('node-pty: OK') } catch(e) { console.error('node-pty FAILED:', e.message); process.exit(1) }"
+
+      - name: Run core e2e tests (Windows)
+        if: runner.os == 'Windows'
+        env:
+          ELECTRON_ENABLE_LOGGING: "1"
+        run: npm run test:e2e:core
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-core-results-${{ matrix.name }}-${{ github.sha }}
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore

@@ -71,6 +71,7 @@ export function NewWorktreeDialog({
   const [prefixPickerOpen, setPrefixPickerOpen] = useState(false);
   const [prefixSelectedIndex, setPrefixSelectedIndex] = useState(0);
   const branchInputTouchedRef = useRef(false);
+  const [gitUsername, setGitUsername] = useState<string | null>(null);
 
   const assignWorktreeToSelf = usePreferencesStore((s) => s.assignWorktreeToSelf);
   const setAssignWorktreeToSelf = usePreferencesStore((s) => s.setAssignWorktreeToSelf);
@@ -120,6 +121,24 @@ export function NewWorktreeDialog({
         .then((settings) => {
           if (currentProject?.id === requestedProjectId) {
             setProjectSettings(settings);
+            if (settings.branchPrefixMode === "username") {
+              window.electron.git
+                .getUsername(currentProject.path)
+                .then((username) => {
+                  if (!username) {
+                    setGitUsername(null);
+                    return;
+                  }
+                  // Slugify: lowercase, replace spaces and invalid branch chars with hyphens, collapse/trim
+                  const slug = username
+                    .toLowerCase()
+                    .replace(/[^a-z0-9-]/g, "-")
+                    .replace(/-+/g, "-")
+                    .replace(/^-|-$/g, "");
+                  setGitUsername(slug || null);
+                })
+                .catch(() => setGitUsername(null));
+            }
           }
         })
         .catch((err) => console.error("Failed to load project settings:", err));
@@ -193,6 +212,15 @@ export function NewWorktreeDialog({
   );
 
   const parsedBranch = useMemo(() => parseBranchInput(branchInput), [branchInput]);
+
+  const configuredBranchPrefix = useMemo(() => {
+    if (!projectSettings) return "";
+    const mode = projectSettings.branchPrefixMode ?? "none";
+    if (mode === "none") return "";
+    if (mode === "username") return gitUsername ? `${gitUsername}/` : "";
+    if (mode === "custom") return projectSettings.branchPrefixCustom?.trim() ?? "";
+    return "";
+  }, [projectSettings, gitUsername]);
 
   const prefixSuggestions = useMemo(() => {
     // Only show suggestions if typing at the beginning (no slash yet or cursor at prefix)
@@ -350,6 +378,7 @@ export function NewWorktreeDialog({
     setBranchInput("");
     setWorktreePath("");
     setProjectSettings(null);
+    setGitUsername(null);
     recipeSelectionTouchedRef.current = false;
     branchInputTouchedRef.current = false;
     setPrefixPickerOpen(false);
@@ -367,7 +396,7 @@ export function NewWorktreeDialog({
         const mainBranch =
           branchList.find((b) => b.name === "main") || branchList.find((b) => b.name === "master");
 
-        const initialBranch = mainBranch?.name || currentBranch?.name || branchList[0]?.name || "";
+        const initialBranch = currentBranch?.name || mainBranch?.name || branchList[0]?.name || "";
         setBaseBranch(initialBranch);
 
         // Auto-set fromRemote based on the initial branch type
@@ -398,6 +427,15 @@ export function NewWorktreeDialog({
   }, [isOpen, loading]);
 
   useEffect(() => {
+    if (!configuredBranchPrefix) return;
+    if (branchInputTouchedRef.current) return;
+    if (selectedIssue) return;
+    if (branchInput === "" || branchInput === configuredBranchPrefix) {
+      setBranchInput(configuredBranchPrefix);
+    }
+  }, [configuredBranchPrefix, selectedIssue, branchInput]);
+
+  useEffect(() => {
     if (selectedIssue && !branchInputTouchedRef.current) {
       const slug = generateBranchSlug(selectedIssue.title, 30);
       const suggestedSlug = slug
@@ -405,11 +443,12 @@ export function NewWorktreeDialog({
         : `issue-${selectedIssue.number}`;
 
       const detectedPrefix = detectPrefixFromIssue(selectedIssue);
-      const prefix = detectedPrefix || "feature";
+      const typePrefix = detectedPrefix || "feature";
+      const baseName = `${typePrefix}/${suggestedSlug}`;
 
-      setBranchInput(`${prefix}/${suggestedSlug}`);
+      setBranchInput(configuredBranchPrefix ? `${configuredBranchPrefix}${baseName}` : baseName);
     }
-  }, [selectedIssue]);
+  }, [selectedIssue, configuredBranchPrefix]);
 
   // Auto-resolve branch name and path conflicts (debounced)
   useEffect(() => {
@@ -607,7 +646,11 @@ export function NewWorktreeDialog({
       if (selectedRecipe) {
         try {
           const worktreeId = result.result as string | undefined;
-          await runRecipe(selectedRecipe.id, worktreePath.trim(), worktreeId);
+          await runRecipe(selectedRecipe.id, worktreePath.trim(), worktreeId, {
+            issueNumber: selectedIssue?.number,
+            worktreePath: worktreePath.trim(),
+            branchName: fullBranchName,
+          });
         } catch (recipeErr) {
           const message = recipeErr instanceof Error ? recipeErr.message : "Failed to run recipe";
           addNotification({
@@ -633,7 +676,13 @@ export function NewWorktreeDialog({
   };
 
   return (
-    <AppDialog isOpen={isOpen} onClose={onClose} size="md" dismissible={!creating}>
+    <AppDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      size="md"
+      dismissible={!creating}
+      data-testid="new-worktree-dialog"
+    >
       <AppDialog.Header>
         <AppDialog.Title icon={<GitBranch className="w-5 h-5 text-canopy-accent" />}>
           Create New Worktree
@@ -842,6 +891,7 @@ export function NewWorktreeDialog({
                         ref={newBranchInputRef}
                         id="new-branch"
                         type="text"
+                        data-testid="branch-name-input"
                         value={branchInput}
                         onChange={(e) => {
                           setBranchInput(e.target.value);
@@ -913,7 +963,7 @@ export function NewWorktreeDialog({
                 {branchWasAutoResolved && (
                   <p
                     id="branch-resolved-hint"
-                    className="text-xs text-green-500 flex items-center gap-1.5 mt-1"
+                    className="text-xs text-status-success flex items-center gap-1.5 mt-1"
                     role="status"
                     aria-live="polite"
                   >
@@ -951,6 +1001,7 @@ export function NewWorktreeDialog({
                 <div className="flex gap-2 items-center">
                   <input
                     id="worktree-path"
+                    data-testid="worktree-path-input"
                     type="text"
                     value={worktreePath}
                     onChange={(e) => setWorktreePath(e.target.value)}
@@ -987,7 +1038,7 @@ export function NewWorktreeDialog({
                 </div>
                 {pathWasAutoResolved && (
                   <p
-                    className="text-xs text-green-500 flex items-center gap-1.5 mt-1"
+                    className="text-xs text-status-success flex items-center gap-1.5 mt-1"
                     role="status"
                     aria-live="polite"
                   >
@@ -1155,9 +1206,9 @@ export function NewWorktreeDialog({
               )}
 
               {error && (
-                <div className="flex items-start gap-2 p-3 bg-red-500/10 border border-red-500/20 rounded-[var(--radius-md)]">
-                  <AlertCircle className="w-4 h-4 text-[var(--color-status-error)] mt-0.5 flex-shrink-0" />
-                  <p className="text-sm text-[var(--color-status-error)]">{error}</p>
+                <div className="flex items-start gap-2 p-3 bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)]">
+                  <AlertCircle className="w-4 h-4 text-status-error mt-0.5 flex-shrink-0" />
+                  <p className="text-sm text-status-error">{error}</p>
                 </div>
               )}
             </div>
@@ -1169,7 +1220,12 @@ export function NewWorktreeDialog({
         <Button variant="ghost" onClick={onClose} disabled={creating}>
           Cancel
         </Button>
-        <Button onClick={handleCreate} disabled={creating || loading} className="min-w-[100px]">
+        <Button
+          onClick={handleCreate}
+          disabled={creating || loading}
+          className="min-w-[100px]"
+          data-testid="create-worktree-button"
+        >
           {creating ? (
             <>
               <Loader2 className="animate-spin" />

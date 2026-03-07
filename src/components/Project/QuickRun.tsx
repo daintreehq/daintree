@@ -9,6 +9,7 @@ import {
   ChevronDown,
   Pin,
   PinOff,
+  RefreshCw,
 } from "lucide-react";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useTerminalStore } from "@/store/terminalStore";
@@ -16,6 +17,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { cn } from "@/lib/utils";
 import { detectTerminalTypeFromCommand } from "@/utils/terminalType";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import type { RunCommand } from "@/types";
 
 interface QuickRunProps {
@@ -49,6 +51,7 @@ type SuggestionItem =
     };
 
 const HISTORY_KEY_PREFIX = "canopy_cmd_history_";
+const AUTO_RESTART_KEY_PREFIX = "canopy_quickrun_autorestart_";
 const MAX_HISTORY = 10;
 
 /**
@@ -75,6 +78,21 @@ export function QuickRun({ projectId }: QuickRunProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [input, setInput] = useState("");
   const [runAsDocked, setRunAsDocked] = useState(false);
+  const [autoRestart, setAutoRestart] = useState(() => {
+    try {
+      return localStorage.getItem(`${AUTO_RESTART_KEY_PREFIX}${projectId}`) === "true";
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      setAutoRestart(localStorage.getItem(`${AUTO_RESTART_KEY_PREFIX}${projectId}`) === "true");
+    } catch {
+      setAutoRestart(false);
+    }
+  }, [projectId]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [focusedSuggestionIndex, setFocusedSuggestionIndex] = useState(-1);
@@ -233,6 +251,18 @@ export function QuickRun({ projectId }: QuickRunProps) {
     );
   }, [input, allDetectedRunners, history, settings]);
 
+  const handleToggleAutoRestart = () => {
+    setAutoRestart((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(`${AUTO_RESTART_KEY_PREFIX}${projectId}`, String(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+
   const handleRun = async (cmd: string) => {
     if (!cmd.trim()) return;
 
@@ -255,6 +285,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
         command: cmd,
         location: runAsDocked ? "dock" : "grid",
         worktreeId: activeWorktreeId || undefined,
+        exitBehavior: autoRestart ? "restart" : undefined,
       });
     } catch (error) {
       console.error("Failed to spawn terminal:", error);
@@ -328,7 +359,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
               )}
             >
               {/* Prompt Symbol */}
-              <div className="pl-3 pr-2 select-none text-green-500 font-mono font-bold">$</div>
+              <div className="pl-3 pr-2 select-none text-status-success font-mono font-bold">$</div>
 
               {/* Input */}
               <input
@@ -346,7 +377,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                 placeholder="Execute command..."
                 aria-label="Command input"
                 className={cn(
-                  "flex-1 bg-transparent py-2.5 text-xs text-canopy-text font-mono placeholder:text-white/20",
+                  "flex-1 bg-transparent py-2.5 text-xs text-canopy-text font-mono placeholder:text-white/35",
                   "focus:outline-none min-w-0"
                 )}
                 autoComplete="off"
@@ -354,48 +385,86 @@ export function QuickRun({ projectId }: QuickRunProps) {
 
               {/* Right Side Controls */}
               <div className="flex items-center pr-1.5 gap-1">
+                {/* Auto-Restart Toggle */}
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        onClick={handleToggleAutoRestart}
+                        className={cn(
+                          "p-1.5 rounded-[var(--radius-sm)] transition-all",
+                          autoRestart
+                            ? "bg-canopy-accent/20 text-canopy-accent"
+                            : "text-white/40 hover:text-white/60 hover:bg-white/10"
+                        )}
+                        aria-label={autoRestart ? "Disable auto-restart" : "Enable auto-restart"}
+                        aria-pressed={autoRestart}
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {autoRestart ? "Auto-restart: On" : "Auto-restart: Off"}
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+
                 {/* Location Toggle */}
-                <button
-                  onClick={() => setRunAsDocked(!runAsDocked)}
-                  className={cn(
-                    "p-1.5 rounded-[var(--radius-sm)] transition-all",
-                    runAsDocked
-                      ? "bg-canopy-accent/20 text-canopy-accent"
-                      : "text-white/30 hover:text-white/60 hover:bg-white/10"
-                  )}
-                  title={
-                    runAsDocked
-                      ? "Output: Dock (Background Task)"
-                      : "Output: Grid (Interactive Terminal)"
-                  }
-                  aria-label={
-                    runAsDocked
-                      ? "Send output to Dock (background task)"
-                      : "Send output to Grid (interactive terminal)"
-                  }
-                >
-                  {runAsDocked ? (
-                    <PanelBottom className="h-3.5 w-3.5" />
-                  ) : (
-                    <LayoutGrid className="h-3.5 w-3.5" />
-                  )}
-                </button>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        onClick={() => setRunAsDocked(!runAsDocked)}
+                        className={cn(
+                          "p-1.5 rounded-[var(--radius-sm)] transition-all",
+                          runAsDocked
+                            ? "bg-canopy-accent/20 text-canopy-accent"
+                            : "text-white/40 hover:text-white/60 hover:bg-white/10"
+                        )}
+                        aria-label={
+                          runAsDocked
+                            ? "Send output to Dock (background task)"
+                            : "Send output to Grid (interactive terminal)"
+                        }
+                      >
+                        {runAsDocked ? (
+                          <PanelBottom className="h-3.5 w-3.5" />
+                        ) : (
+                          <LayoutGrid className="h-3.5 w-3.5" />
+                        )}
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {runAsDocked
+                        ? "Output: Dock (Background Task)"
+                        : "Output: Grid (Interactive Terminal)"}
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
 
                 {/* Enter Button */}
-                <button
-                  onClick={() => handleRun(input)}
-                  disabled={!input.trim()}
-                  className={cn(
-                    "p-1.5 rounded-[var(--radius-sm)] transition-all",
-                    input.trim()
-                      ? "text-white hover:bg-white/10"
-                      : "text-white/10 cursor-not-allowed"
-                  )}
-                  title="Run Command (Enter)"
-                  aria-label="Run command"
-                >
-                  <CornerDownLeft className="h-3.5 w-3.5" />
-                </button>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex">
+                        <button
+                          onClick={() => handleRun(input)}
+                          disabled={!input.trim()}
+                          className={cn(
+                            "p-1.5 rounded-[var(--radius-sm)] transition-all",
+                            input.trim()
+                              ? "text-white hover:bg-white/10"
+                              : "text-white/20 cursor-not-allowed"
+                          )}
+                          aria-label="Run command"
+                        >
+                          <CornerDownLeft className="h-3.5 w-3.5" />
+                        </button>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Run Command (Enter)</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               </div>
 
               {/* Autocomplete Menu */}
@@ -461,7 +530,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                               className="opacity-0 group-hover:opacity-100 p-1 hover:bg-white/10 rounded transition-opacity ml-2 shrink-0"
                               aria-label="Unpin this command"
                             >
-                              <PinOff className="h-3 w-3 text-canopy-text/40 hover:text-red-400" />
+                              <PinOff className="h-3 w-3 text-canopy-text/40 hover:text-status-error" />
                             </button>
                           ) : (
                             <button

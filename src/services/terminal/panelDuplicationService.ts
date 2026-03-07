@@ -3,7 +3,7 @@ import type { AddTerminalOptions } from "@/store/slices/terminalRegistry/types";
 import type { TabGroupLocation } from "@/types";
 import { generateAgentCommand } from "@shared/types";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
-import { agentSettingsClient } from "@/clients";
+import { agentSettingsClient, systemClient } from "@/clients";
 
 /**
  * Generate the startup command for a panel being duplicated.
@@ -15,10 +15,15 @@ async function resolveCommandForPanel(panel: TerminalInstance): Promise<string |
     const agentConfig = getAgentConfig(panel.agentId);
     if (agentConfig) {
       try {
-        const agentSettings = await agentSettingsClient.get();
+        const [agentSettings, tmpDir] = await Promise.all([
+          agentSettingsClient.get(),
+          systemClient.getTmpDir().catch(() => ""),
+        ]);
         const entry = agentSettings?.agents?.[panel.agentId] ?? {};
+        const clipboardDirectory = tmpDir ? `${tmpDir}/canopy-clipboard` : undefined;
         return generateAgentCommand(agentConfig.command, entry, panel.agentId, {
           interactive: true,
+          clipboardDirectory,
         });
       } catch (error) {
         console.warn(

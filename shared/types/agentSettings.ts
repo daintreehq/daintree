@@ -69,7 +69,13 @@ export const DEFAULT_ROUTING_CONFIG: AgentRoutingConfig = {
 };
 
 export interface AgentSettingsEntry {
+  /**
+   * @deprecated Use `selected` instead. Kept for migration compatibility only.
+   * Will be removed in a future release.
+   */
   enabled?: boolean;
+  /** Enable this agent — when false the agent is hidden everywhere and treated as not installed */
+  selected?: boolean;
   customFlags?: string;
   /** Additional args appended when dangerous mode is enabled */
   dangerousArgs?: string;
@@ -77,6 +83,8 @@ export interface AgentSettingsEntry {
   dangerousEnabled?: boolean;
   /** Use inline rendering instead of fullscreen alt-screen TUI */
   inlineMode?: boolean;
+  /** When true, inject --include-directories for the clipboard temp directory (Gemini only) */
+  shareClipboardDirectory?: boolean;
   [key: string]: unknown;
 }
 
@@ -95,7 +103,6 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
     Object.keys(AGENT_REGISTRY).map((id) => [
       id,
       {
-        enabled: true,
         customFlags: "",
         dangerousArgs: DEFAULT_DANGEROUS_ARGS[id] ?? "",
         dangerousEnabled: false,
@@ -113,7 +120,16 @@ export function getAgentSettingsEntry(
   return settings.agents[agentId] ?? {};
 }
 
-export function generateAgentFlags(entry: AgentSettingsEntry, agentId?: string): string[] {
+export interface GenerateAgentFlagsOptions {
+  /** Absolute path to the clipboard temp directory (e.g. /tmp/canopy-clipboard) */
+  clipboardDirectory?: string;
+}
+
+export function generateAgentFlags(
+  entry: AgentSettingsEntry,
+  agentId?: string,
+  options?: GenerateAgentFlagsOptions
+): string[] {
   const flags: string[] = [];
   if (entry.dangerousEnabled) {
     // Use entry.dangerousArgs if set, otherwise fall back to default for this agent
@@ -129,6 +145,23 @@ export function generateAgentFlags(entry: AgentSettingsEntry, agentId?: string):
       flags.push(...trimmed.split(/\s+/));
     }
   }
+
+  // Inject --include-directories for Gemini clipboard image access
+  if (
+    agentId === "gemini" &&
+    entry.shareClipboardDirectory !== false &&
+    options?.clipboardDirectory
+  ) {
+    const dir = options.clipboardDirectory;
+    // Deduplicate: skip if user already added this exact directory in custom flags
+    const alreadyIncluded = flags.some(
+      (f, i) => f === "--include-directories" && flags[i + 1] === dir
+    );
+    if (!alreadyIncluded) {
+      flags.push("--include-directories", dir);
+    }
+  }
+
   return flags;
 }
 
@@ -137,6 +170,8 @@ export interface GenerateAgentCommandOptions {
   initialPrompt?: string;
   /** If true, agent runs in interactive mode (default). If false, runs one-shot/print mode. */
   interactive?: boolean;
+  /** Absolute path to the clipboard temp directory for --include-directories injection */
+  clipboardDirectory?: string;
 }
 
 /**
@@ -163,7 +198,9 @@ export function generateAgentCommand(
   agentId?: string,
   options?: GenerateAgentCommandOptions
 ): string {
-  const flags = generateAgentFlags(entry, agentId);
+  const flags = generateAgentFlags(entry, agentId, {
+    clipboardDirectory: options?.clipboardDirectory,
+  });
   const parts: string[] = [baseCommand];
 
   // Add default args from agent registry (before user flags)

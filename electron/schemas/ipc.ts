@@ -322,12 +322,24 @@ export const CopyTreeGetFileTreePayloadSchema = z.object({
   dirPath: z.string().optional(),
 });
 
+export const FileReadPayloadSchema = z.object({
+  path: z.string().min(1).max(4096),
+  rootPath: z.string().min(1).max(4096),
+});
+
 export const SystemOpenExternalPayloadSchema = z.object({
   url: z.string().url(),
 });
 
 export const SystemOpenPathPayloadSchema = z.object({
   path: z.string().min(1).max(4096),
+});
+
+export const SystemOpenInEditorPayloadSchema = z.object({
+  path: z.string().min(1).max(4096),
+  line: z.number().int().positive().optional(),
+  col: z.number().int().positive().optional(),
+  projectId: z.string().optional(),
 });
 
 const MAX_REPLAY_LINES = 100000;
@@ -520,8 +532,10 @@ export type CopyTreeInjectPayload = z.infer<typeof CopyTreeInjectPayloadSchema>;
 export type CopyTreeCancelPayload = z.infer<typeof CopyTreeCancelPayloadSchema>;
 export type CopyTreeProgress = z.infer<typeof CopyTreeProgressSchema>;
 export type CopyTreeGetFileTreePayload = z.infer<typeof CopyTreeGetFileTreePayloadSchema>;
+export type FileReadPayload = z.infer<typeof FileReadPayloadSchema>;
 export type SystemOpenExternalPayload = z.infer<typeof SystemOpenExternalPayloadSchema>;
 export type SystemOpenPathPayload = z.infer<typeof SystemOpenPathPayloadSchema>;
+export type SystemOpenInEditorPayload = z.infer<typeof SystemOpenInEditorPayloadSchema>;
 export type TerminalReplayHistoryPayload = z.infer<typeof TerminalReplayHistoryPayloadSchema>;
 export type DevPreviewStartPayload = z.infer<typeof DevPreviewStartPayloadSchema>;
 export type WorktreeSetActivePayload = z.infer<typeof WorktreeSetActivePayloadSchema>;

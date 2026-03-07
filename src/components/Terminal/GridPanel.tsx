@@ -153,7 +153,7 @@ export function GridPanel({
         onAddTab={onAddTab}
         onTabReorder={onTabReorder}
       >
-        <div className="flex flex-1 items-center justify-center bg-canopy-bg-secondary text-canopy-text-muted">
+        <div className="flex flex-1 items-center justify-center bg-surface-panel text-text-muted">
           <div className="text-center">
             <p className="text-sm font-medium">Unknown Panel Type</p>
             <p className="text-xs mt-1 text-canopy-text/50">Kind: {kind}</p>

@@ -4,17 +4,8 @@ import { cn } from "@/lib/utils";
 import type { EventRecord, EventCategory } from "@/store/eventStore";
 import { Circle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-
-const CATEGORY_STYLES: Record<EventCategory, { label: string; color: string }> = {
-  system: { label: "SYS", color: "bg-blue-500/20 text-blue-400 border-blue-500/30" },
-  agent: { label: "AGT", color: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30" },
-  task: { label: "TSK", color: "bg-green-500/20 text-green-400 border-green-500/30" },
-  server: { label: "SRV", color: "bg-orange-500/20 text-orange-400 border-orange-500/30" },
-  file: { label: "FIL", color: "bg-pink-500/20 text-pink-400 border-pink-500/30" },
-  ui: { label: "UI", color: "bg-indigo-500/20 text-indigo-400 border-indigo-500/30" },
-  watcher: { label: "WCH", color: "bg-cyan-500/20 text-cyan-400 border-cyan-500/30" },
-  artifact: { label: "ART", color: "bg-rose-500/20 text-rose-400 border-rose-500/30" },
-};
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { EVENT_CATEGORY_STYLES } from "@/config/categoryColors";
 
 interface EventTimelineProps {
   events: EventRecord[];
@@ -64,12 +55,13 @@ export function EventTimeline({
   };
 
   const getCategoryStyle = (category: EventCategory) => {
-    return (
-      CATEGORY_STYLES[category] || {
+    const style = EVENT_CATEGORY_STYLES[category];
+    if (!style)
+      return {
         label: "???",
         color: "bg-canopy-border/20 text-canopy-text/60 border-canopy-border/30",
-      }
-    );
+      };
+    return { label: style.shortLabel, color: style.color };
   };
 
   const getPayloadSummary = (event: EventRecord): string => {
@@ -120,15 +112,21 @@ export function EventTimeline({
         )}
       >
         <div className="flex items-start gap-2">
-          <span
-            className={cn(
-              "flex-shrink-0 inline-flex items-center justify-center w-8 px-1 py-0.5 rounded text-[11px] font-medium border",
-              categoryStyle.color
-            )}
-            title={event.category}
-          >
-            {categoryStyle.label}
-          </span>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  className={cn(
+                    "flex-shrink-0 inline-flex items-center justify-center w-8 px-1 py-0.5 rounded text-[11px] font-medium border",
+                    categoryStyle.color
+                  )}
+                >
+                  {categoryStyle.label}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{event.category}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
           <div className="flex-1 min-w-0 space-y-1">
             <div className="flex items-center gap-2">
               <span className="font-mono text-xs text-muted-foreground">

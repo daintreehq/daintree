@@ -1,256 +1,200 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
 import path from "path";
 import Module from "module";
 
-const mockFlipFuses = vi.fn();
 const mockExistsSync = vi.fn();
+const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
-const originalRequire = Module.prototype.require;
+afterAll(() => {
+  consoleSpy.mockRestore();
+});
+
+function createContext(platform: string, appOutDir: string, appName = "Canopy") {
+  return {
+    appOutDir,
+    electronPlatformName: platform,
+    packager: { appInfo: { productFilename: appName } },
+  };
+}
 
 describe("afterPack", () => {
   let afterPack: (context: any) => Promise<void>;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockFlipFuses.mockResolvedValue(undefined);
+    consoleSpy.mockImplementation(() => {});
+
+    const originalRequire = Module.prototype.require;
 
     Module.prototype.require = function (id: string) {
-      if (id === "@electron/fuses") {
-        return {
-          flipFuses: mockFlipFuses,
-          FuseVersion: { V1: "V1" },
-          FuseV1Options: {
-            RunAsNode: "RunAsNode",
-            EnableCookieEncryption: "EnableCookieEncryption",
-            EnableNodeOptionsEnvironmentVariable: "EnableNodeOptionsEnvironmentVariable",
-            EnableNodeCliInspectArguments: "EnableNodeCliInspectArguments",
-            EnableEmbeddedAsarIntegrityValidation: "EnableEmbeddedAsarIntegrityValidation",
-            OnlyLoadAppFromAsar: "OnlyLoadAppFromAsar",
-            LoadBrowserProcessSpecificV8Snapshot: "LoadBrowserProcessSpecificV8Snapshot",
-            GrantFileProtocolExtraPrivileges: "GrantFileProtocolExtraPrivileges",
-          },
-        };
-      }
       if (id === "fs") {
-        return {
-          existsSync: mockExistsSync,
-        };
+        return { existsSync: mockExistsSync };
       }
       return originalRequire.apply(this, [id]);
     };
 
-    delete require.cache[require.resolve("./afterPack.cjs")];
-    const module = require("./afterPack.cjs");
-    afterPack = module.default;
-
-    Module.prototype.require = originalRequire;
+    try {
+      delete require.cache[require.resolve("./afterPack.cjs")];
+      const module = require("./afterPack.cjs");
+      afterPack = module.default;
+    } finally {
+      Module.prototype.require = originalRequire;
+    }
   });
 
   describe("macOS", () => {
-    it("should validate node-pty and flip fuses successfully", async () => {
+    const unpackedBase = "/build/mac/Canopy.app/Contents/Resources/app.asar.unpacked";
+
+    it("should succeed when node-pty and native binary exist", async () => {
       mockExistsSync.mockReturnValue(true);
 
-      const context = {
-        appOutDir: "/build/mac",
-        electronPlatformName: "darwin",
-        packager: {
-          appInfo: {
-            productFilename: "Canopy",
-          },
-          executableName: "canopy-app",
-        },
-      };
+      await afterPack(createContext("darwin", "/build/mac"));
 
-      await afterPack(context);
-
-      const expectedNodePtyPath = path.join(
-        "/build/mac/Canopy.app/Contents/Resources/app.asar.unpacked",
-        "node_modules/node-pty"
+      expect(mockExistsSync).toHaveBeenCalledWith(path.join(unpackedBase, "node_modules/node-pty"));
+      expect(mockExistsSync).toHaveBeenCalledWith(
+        path.join(unpackedBase, "node_modules/node-pty/build/Release/pty.node")
       );
-      expect(mockExistsSync).toHaveBeenCalledWith(expectedNodePtyPath);
-
-      const expectedBinaryPath = path.join(
-        "/build/mac/Canopy.app/Contents/Resources/app.asar.unpacked",
-        "node_modules/node-pty/build/Release/pty.node"
-      );
-      expect(mockExistsSync).toHaveBeenCalledWith(expectedBinaryPath);
-
-      const expectedElectronPath = "/build/mac/Canopy.app/Contents/MacOS/Canopy";
-      expect(mockFlipFuses).toHaveBeenCalledWith(expectedElectronPath, {
-        version: "V1",
-        strictlyRequireAllFuses: true,
-        resetAdHocDarwinSignature: true,
-        RunAsNode: false,
-        EnableCookieEncryption: true,
-        EnableNodeOptionsEnvironmentVariable: false,
-        EnableNodeCliInspectArguments: false,
-        EnableEmbeddedAsarIntegrityValidation: true,
-        OnlyLoadAppFromAsar: true,
-        LoadBrowserProcessSpecificV8Snapshot: true,
-        GrantFileProtocolExtraPrivileges: false,
-      });
     });
 
-    it("should throw error when node-pty is missing", async () => {
+    it("should use productFilename in path construction", async () => {
+      mockExistsSync.mockReturnValue(true);
+
+      await afterPack(createContext("darwin", "/build/mac", "MyApp"));
+
+      expect(mockExistsSync).toHaveBeenCalledWith(
+        path.join(
+          "/build/mac/MyApp.app/Contents/Resources/app.asar.unpacked",
+          "node_modules/node-pty"
+        )
+      );
+    });
+
+    it("should log signing message on macOS", async () => {
+      mockExistsSync.mockReturnValue(true);
+
+      await afterPack(createContext("darwin", "/build/mac"));
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        "[afterPack] Native modules will be signed during code signing phase"
+      );
+    });
+
+    it("should throw when node-pty directory is missing", async () => {
       mockExistsSync.mockReturnValue(false);
 
-      const context = {
-        appOutDir: "/build/mac",
-        electronPlatformName: "darwin",
-        packager: {
-          appInfo: {
-            productFilename: "Canopy",
-          },
-          executableName: "canopy-app",
-        },
-      };
-
-      await expect(afterPack(context)).rejects.toThrow(/node-pty not found/);
-      expect(mockFlipFuses).not.toHaveBeenCalled();
+      await expect(afterPack(createContext("darwin", "/build/mac"))).rejects.toThrow(
+        /node-pty not found/
+      );
     });
 
-    it("should throw error when node-pty native binary is missing", async () => {
+    it("should throw when pty.node binary is missing", async () => {
       mockExistsSync.mockReturnValueOnce(true).mockReturnValueOnce(false);
 
-      const context = {
-        appOutDir: "/build/mac",
-        electronPlatformName: "darwin",
-        packager: {
-          appInfo: {
-            productFilename: "Canopy",
-          },
-          executableName: "canopy-app",
-        },
-      };
-
-      await expect(afterPack(context)).rejects.toThrow(/native binary not found/);
-      expect(mockFlipFuses).not.toHaveBeenCalled();
+      await expect(afterPack(createContext("darwin", "/build/mac"))).rejects.toThrow(
+        /native binary not found/
+      );
     });
   });
 
   describe("Windows", () => {
-    it("should validate node-pty and flip fuses successfully", async () => {
+    const unpackedBase = "/build/win/resources/app.asar.unpacked";
+
+    it("should succeed with Windows resource path", async () => {
       mockExistsSync.mockReturnValue(true);
 
-      const context = {
-        appOutDir: "/build/win",
-        electronPlatformName: "win32",
-        packager: {
-          appInfo: {
-            productFilename: "Canopy",
-          },
-          executableName: "canopy-app",
-        },
-      };
+      await afterPack(createContext("win32", "/build/win"));
 
-      await afterPack(context);
+      expect(mockExistsSync).toHaveBeenCalledWith(path.join(unpackedBase, "node_modules/node-pty"));
+      // Windows uses ConPTY binaries, not pty.node
+      expect(mockExistsSync).toHaveBeenCalledWith(
+        path.join(unpackedBase, "node_modules/node-pty/build/Release/conpty.node")
+      );
+    });
 
-      const expectedElectronPath = "/build/win/Canopy.exe";
-      expect(mockFlipFuses).toHaveBeenCalledWith(
-        expectedElectronPath,
-        expect.objectContaining({
-          version: "V1",
-          strictlyRequireAllFuses: true,
-          resetAdHocDarwinSignature: false,
-        })
+    it("should not log signing message on Windows", async () => {
+      mockExistsSync.mockReturnValue(true);
+
+      await afterPack(createContext("win32", "/build/win"));
+
+      expect(consoleSpy).not.toHaveBeenCalledWith(
+        "[afterPack] Native modules will be signed during code signing phase"
+      );
+    });
+
+    it("should throw when node-pty directory is missing", async () => {
+      mockExistsSync.mockReturnValue(false);
+
+      await expect(afterPack(createContext("win32", "/build/win"))).rejects.toThrow(
+        /node-pty not found/
+      );
+    });
+
+    it("should throw when Windows binary is missing", async () => {
+      mockExistsSync.mockReturnValueOnce(true).mockReturnValueOnce(false);
+
+      await expect(afterPack(createContext("win32", "/build/win"))).rejects.toThrow(
+        /Windows node-pty binary not found/
       );
     });
   });
 
   describe("Linux", () => {
-    it("should validate node-pty and flip fuses successfully", async () => {
+    const unpackedBase = "/build/linux/resources/app.asar.unpacked";
+
+    it("should succeed with Linux resource path", async () => {
       mockExistsSync.mockReturnValue(true);
 
-      const context = {
-        appOutDir: "/build/linux",
-        electronPlatformName: "linux",
-        packager: {
-          appInfo: {
-            productFilename: "Canopy",
-          },
-          executableName: "canopy-app",
-        },
-      };
+      await afterPack(createContext("linux", "/build/linux"));
 
-      await afterPack(context);
+      expect(mockExistsSync).toHaveBeenCalledWith(path.join(unpackedBase, "node_modules/node-pty"));
+      expect(mockExistsSync).toHaveBeenCalledWith(
+        path.join(unpackedBase, "node_modules/node-pty/build/Release/pty.node")
+      );
+    });
 
-      const expectedElectronPath = "/build/linux/canopy-app";
-      expect(mockFlipFuses).toHaveBeenCalledWith(
-        expectedElectronPath,
-        expect.objectContaining({
-          version: "V1",
-          strictlyRequireAllFuses: true,
-          resetAdHocDarwinSignature: false,
-        })
+    it("should not log signing message on Linux", async () => {
+      mockExistsSync.mockReturnValue(true);
+
+      await afterPack(createContext("linux", "/build/linux"));
+
+      expect(consoleSpy).not.toHaveBeenCalledWith(
+        "[afterPack] Native modules will be signed during code signing phase"
+      );
+    });
+
+    it("should throw when node-pty directory is missing", async () => {
+      mockExistsSync.mockReturnValue(false);
+
+      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
+        /node-pty not found/
+      );
+    });
+
+    it("should throw when pty.node binary is missing", async () => {
+      mockExistsSync.mockReturnValueOnce(true).mockReturnValueOnce(false);
+
+      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
+        /native binary not found/
       );
     });
   });
 
-  describe("Fuse configuration", () => {
-    it("should configure all security fuses correctly", async () => {
+  describe("logging", () => {
+    it("should log platform and output directory", async () => {
       mockExistsSync.mockReturnValue(true);
 
-      const context = {
-        appOutDir: "/build/mac",
-        electronPlatformName: "darwin",
-        packager: {
-          appInfo: {
-            productFilename: "Canopy",
-          },
-          executableName: "canopy-app",
-        },
-      };
+      await afterPack(createContext("darwin", "/build/mac"));
 
-      await afterPack(context);
-
-      const fuseConfig = mockFlipFuses.mock.calls[0][1];
-
-      expect(fuseConfig.RunAsNode).toBe(false);
-      expect(fuseConfig.EnableCookieEncryption).toBe(true);
-      expect(fuseConfig.EnableNodeOptionsEnvironmentVariable).toBe(false);
-      expect(fuseConfig.EnableNodeCliInspectArguments).toBe(false);
-      expect(fuseConfig.EnableEmbeddedAsarIntegrityValidation).toBe(true);
-      expect(fuseConfig.OnlyLoadAppFromAsar).toBe(true);
-      expect(fuseConfig.LoadBrowserProcessSpecificV8Snapshot).toBe(true);
-      expect(fuseConfig.GrantFileProtocolExtraPrivileges).toBe(false);
+      expect(consoleSpy).toHaveBeenCalledWith("[afterPack] Platform: darwin");
+      expect(consoleSpy).toHaveBeenCalledWith("[afterPack] Output directory: /build/mac");
     });
-  });
 
-  describe("Error handling", () => {
-    it("should throw error for unsupported platforms", async () => {
+    it("should log completion on success", async () => {
       mockExistsSync.mockReturnValue(true);
 
-      const context = {
-        appOutDir: "/build/freebsd",
-        electronPlatformName: "freebsd",
-        packager: {
-          appInfo: {
-            productFilename: "Canopy",
-          },
-          executableName: "canopy-app",
-        },
-      };
+      await afterPack(createContext("darwin", "/build/mac"));
 
-      await expect(afterPack(context)).rejects.toThrow(/Unsupported platform: freebsd/);
-      expect(mockFlipFuses).not.toHaveBeenCalled();
-    });
-
-    it("should throw error when Electron binary is missing", async () => {
-      mockExistsSync.mockReturnValueOnce(true).mockReturnValueOnce(true).mockReturnValueOnce(false);
-
-      const context = {
-        appOutDir: "/build/mac",
-        electronPlatformName: "darwin",
-        packager: {
-          appInfo: {
-            productFilename: "Canopy",
-          },
-          executableName: "canopy-app",
-        },
-      };
-
-      await expect(afterPack(context)).rejects.toThrow(/Electron binary not found/);
-      expect(mockFlipFuses).not.toHaveBeenCalled();
+      expect(consoleSpy).toHaveBeenCalledWith("[afterPack] Complete - native modules validated");
     });
   });
 });

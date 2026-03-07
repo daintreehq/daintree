@@ -1,4 +1,5 @@
 import type { PerfMarkName } from "@shared/perf/marks";
+import { isCanopyEnvEnabled } from "./env";
 
 type PerfRecord = {
   mark: PerfMarkName | string;
@@ -16,11 +17,7 @@ declare global {
 const RENDERER_T0 = typeof performance !== "undefined" ? performance.now() : Date.now();
 
 export function isRendererPerfCaptureEnabled(): boolean {
-  return (
-    typeof process !== "undefined" &&
-    typeof process.env !== "undefined" &&
-    process.env.CANOPY_PERF_CAPTURE === "1"
-  );
+  return isCanopyEnvEnabled("CANOPY_PERF_CAPTURE");
 }
 
 export function markRendererPerformance(

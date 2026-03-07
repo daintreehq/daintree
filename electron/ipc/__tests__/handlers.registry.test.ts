@@ -23,8 +23,13 @@ const registerMocks = vi.hoisted(() => ({
   registerDevPreviewHandlers: vi.fn(),
   registerCommandHandlers: vi.fn(),
   registerAppAgentHandlers: vi.fn(),
-  registerAssistantHandlers: vi.fn(),
   registerAgentCapabilitiesHandlers: vi.fn(),
+  registerCliHandlers: vi.fn(),
+  registerClipboardHandlers: vi.fn(),
+  registerGitWriteHandlers: vi.fn(),
+  registerTelemetryHandlers: vi.fn(),
+  registerVoiceInputHandlers: vi.fn(),
+  registerMcpServerHandlers: vi.fn(),
 }));
 
 vi.mock("../handlers/worktree.js", () => ({
@@ -93,11 +98,26 @@ vi.mock("../handlers/commands.js", () => ({
 vi.mock("../handlers/appAgent.js", () => ({
   registerAppAgentHandlers: registerMocks.registerAppAgentHandlers,
 }));
-vi.mock("../handlers/assistant.js", () => ({
-  registerAssistantHandlers: registerMocks.registerAssistantHandlers,
-}));
 vi.mock("../handlers/agentCapabilities.js", () => ({
   registerAgentCapabilitiesHandlers: registerMocks.registerAgentCapabilitiesHandlers,
+}));
+vi.mock("../handlers/cli.js", () => ({
+  registerCliHandlers: registerMocks.registerCliHandlers,
+}));
+vi.mock("../handlers/clipboard.js", () => ({
+  registerClipboardHandlers: registerMocks.registerClipboardHandlers,
+}));
+vi.mock("../handlers/git-write.js", () => ({
+  registerGitWriteHandlers: registerMocks.registerGitWriteHandlers,
+}));
+vi.mock("../handlers/telemetry.js", () => ({
+  registerTelemetryHandlers: registerMocks.registerTelemetryHandlers,
+}));
+vi.mock("../handlers/voiceInput.js", () => ({
+  registerVoiceInputHandlers: registerMocks.registerVoiceInputHandlers,
+}));
+vi.mock("../handlers/mcpServer.js", () => ({
+  registerMcpServerHandlers: registerMocks.registerMcpServerHandlers,
 }));
 vi.mock("../../services/events.js", () => ({
   events: { emit: vi.fn(), on: vi.fn(), off: vi.fn() },
@@ -133,7 +153,7 @@ describe("registerIpcHandlers", () => {
   }
 
   it("registers every handler module exactly once", () => {
-    registerIpcHandlers({} as never, {} as never);
+    registerIpcHandlers({} as never);
 
     for (const register of allRegisterMocks) {
       expect(register).toHaveBeenCalledTimes(1);
@@ -146,9 +166,7 @@ describe("registerIpcHandlers", () => {
       throw new Error("github registration failed");
     });
 
-    expect(() => registerIpcHandlers({} as never, {} as never)).toThrow(
-      "github registration failed"
-    );
+    expect(() => registerIpcHandlers({} as never)).toThrow("github registration failed");
 
     expect(cleanups.length).toBeGreaterThan(0);
     for (const cleanup of cleanups) {
@@ -158,7 +176,7 @@ describe("registerIpcHandlers", () => {
 
   it("attempts every cleanup even if one throws", () => {
     const cleanups = registerWithTrackedCleanups();
-    const cleanupAll = registerIpcHandlers({} as never, {} as never);
+    const cleanupAll = registerIpcHandlers({} as never);
 
     cleanups[0].mockImplementation(() => {
       throw new Error("cleanup failed");

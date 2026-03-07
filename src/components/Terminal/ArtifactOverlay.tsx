@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { useArtifacts } from "@/hooks/useArtifacts";
 import type { Artifact } from "@shared/types";
 
@@ -11,12 +12,12 @@ interface ArtifactOverlayProps {
 }
 
 const ARTIFACT_TYPE_COLORS: Record<string, string> = {
-  code: "border-[var(--color-status-info)] bg-[color-mix(in_oklab,var(--color-status-info)_10%,transparent)] text-[var(--color-status-info)]",
+  code: "border-status-info bg-[color-mix(in_oklab,var(--color-status-info)_10%,transparent)] text-status-info",
   patch:
-    "border-[var(--color-status-success)] bg-[color-mix(in_oklab,var(--color-status-success)_10%,transparent)] text-[var(--color-status-success)]",
-  file: "border-[var(--color-state-working)] bg-[color-mix(in_oklab,var(--color-state-working)_10%,transparent)] text-[var(--color-state-working)]",
+    "border-status-success bg-[color-mix(in_oklab,var(--color-status-success)_10%,transparent)] text-status-success",
+  file: "border-state-working bg-[color-mix(in_oklab,var(--color-state-working)_10%,transparent)] text-state-working",
   summary:
-    "border-[var(--color-status-warning)] bg-[color-mix(in_oklab,var(--color-status-warning)_10%,transparent)] text-[var(--color-status-warning)]",
+    "border-status-warning bg-[color-mix(in_oklab,var(--color-status-warning)_10%,transparent)] text-status-warning",
   other: "border-canopy-border bg-canopy-sidebar/10 text-canopy-text/60",
 };
 
@@ -141,7 +142,7 @@ function ArtifactItem({
               disabled={isProcessing}
               className={cn(
                 "px-3 py-1 text-xs rounded transition-colors",
-                "bg-[var(--color-status-info)] hover:brightness-110 text-white",
+                "border border-status-info/30 text-status-info hover:bg-status-info/10",
                 "disabled:opacity-50 disabled:cursor-not-allowed"
               )}
             >
@@ -159,18 +160,28 @@ function ArtifactItem({
               Save to File
             </button>
             {artifact.type === "patch" && (
-              <button
-                onClick={handleApplyPatch}
-                disabled={isProcessing || !canApplyPatch}
-                className={cn(
-                  "px-3 py-1 text-xs rounded transition-colors",
-                  "bg-[var(--color-status-success)] hover:brightness-110 text-white",
-                  "disabled:opacity-50 disabled:cursor-not-allowed"
-                )}
-                title={!canApplyPatch ? "No worktree context available" : "Apply patch to worktree"}
-              >
-                Apply Patch
-              </button>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex">
+                      <button
+                        onClick={handleApplyPatch}
+                        disabled={isProcessing || !canApplyPatch}
+                        className={cn(
+                          "px-3 py-1 text-xs rounded transition-colors",
+                          "bg-status-success hover:brightness-110 text-canopy-bg",
+                          "disabled:opacity-50 disabled:cursor-not-allowed"
+                        )}
+                      >
+                        Apply Patch
+                      </button>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {!canApplyPatch ? "No worktree context available" : "Apply patch to worktree"}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             )}
             {feedback && (
               <span
@@ -178,9 +189,7 @@ function ArtifactItem({
                 aria-live="polite"
                 className={cn(
                   "ml-auto text-xs animate-pulse",
-                  feedback.tone === "success"
-                    ? "text-[var(--color-status-success)]"
-                    : "text-[var(--color-status-error)]"
+                  feedback.tone === "success" ? "text-status-success" : "text-status-error"
                 )}
               >
                 {feedback.text}
@@ -317,7 +326,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
           onClick={() => setIsExpanded(true)}
           className={cn(
             "px-3 py-2 rounded-[var(--radius-md)] shadow-lg",
-            "bg-[var(--color-status-info)] hover:brightness-110 text-white",
+            "border border-status-info/30 text-status-info hover:bg-status-info/10",
             "text-sm font-medium transition-all",
             "flex items-center gap-2"
           )}
@@ -337,7 +346,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
           <div className="bg-canopy-bg border-b border-canopy-border">
             <div className="flex items-center justify-between px-4 py-3">
               <div className="flex items-center gap-2">
-                <span className="font-mono text-[var(--color-status-info)]">{"{ }"}</span>
+                <span className="font-mono text-status-info">{"{ }"}</span>
                 <span className="text-sm font-medium text-canopy-text">
                   {artifacts.length} Artifact{artifacts.length !== 1 ? "s" : ""}
                 </span>
@@ -374,28 +383,38 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                       disabled={isBulkActionRunning || !canCopyAll}
                       className={cn(
                         "px-3 py-1 text-xs rounded transition-colors",
-                        "bg-[var(--color-status-info)] hover:brightness-110 text-white",
+                        "border border-status-info/30 text-status-info hover:bg-status-info/10",
                         "disabled:opacity-50 disabled:cursor-not-allowed"
                       )}
                     >
                       Copy All
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => setIncludeAllTypes((v) => !v)}
-                      disabled={isBulkActionRunning}
-                      className={cn(
-                        "px-2 py-1 text-xs rounded transition-colors",
-                        includeAllTypes
-                          ? "bg-canopy-border text-white"
-                          : "bg-canopy-sidebar text-canopy-text/60",
-                        "hover:brightness-110",
-                        "disabled:opacity-50 disabled:cursor-not-allowed"
-                      )}
-                      title={includeAllTypes ? "Copying all types" : "Copying code only"}
-                    >
-                      {includeAllTypes ? "All" : "Code"}
-                    </button>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="inline-flex">
+                            <button
+                              type="button"
+                              onClick={() => setIncludeAllTypes((v) => !v)}
+                              disabled={isBulkActionRunning}
+                              className={cn(
+                                "px-2 py-1 text-xs rounded transition-colors",
+                                includeAllTypes
+                                  ? "bg-canopy-border text-white"
+                                  : "bg-canopy-sidebar text-canopy-text/60",
+                                "hover:brightness-110",
+                                "disabled:opacity-50 disabled:cursor-not-allowed"
+                              )}
+                            >
+                              {includeAllTypes ? "All" : "Code"}
+                            </button>
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">
+                          {includeAllTypes ? "Copying all types" : "Copying code only"}
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                   </div>
                 )}
                 {showSaveAll && (
@@ -413,19 +432,29 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                   </button>
                 )}
                 {showApplyAll && (
-                  <button
-                    type="button"
-                    onClick={handleApplyAllPatches}
-                    disabled={isBulkActionRunning || !canApplyAll}
-                    className={cn(
-                      "px-3 py-1 text-xs rounded transition-colors",
-                      "bg-[var(--color-status-success)] hover:brightness-110 text-white",
-                      "disabled:opacity-50 disabled:cursor-not-allowed"
-                    )}
-                    title={!canApplyAll ? "No worktree context available" : "Apply all patches"}
-                  >
-                    Apply All Patches
-                  </button>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="inline-flex">
+                          <button
+                            type="button"
+                            onClick={handleApplyAllPatches}
+                            disabled={isBulkActionRunning || !canApplyAll}
+                            className={cn(
+                              "px-3 py-1 text-xs rounded transition-colors",
+                              "bg-status-success hover:brightness-110 text-canopy-bg",
+                              "disabled:opacity-50 disabled:cursor-not-allowed"
+                            )}
+                          >
+                            Apply All Patches
+                          </button>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">
+                        {!canApplyAll ? "No worktree context available" : "Apply all patches"}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 )}
                 {bulkProgress && (
                   <span className="text-xs text-canopy-text/60 ml-auto">
@@ -442,9 +471,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                     aria-live="polite"
                     className={cn(
                       "text-xs ml-auto animate-pulse",
-                      bulkResult.tone === "success"
-                        ? "text-[var(--color-status-success)]"
-                        : "text-[var(--color-status-error)]"
+                      bulkResult.tone === "success" ? "text-status-success" : "text-status-error"
                     )}
                   >
                     {bulkResult.text}

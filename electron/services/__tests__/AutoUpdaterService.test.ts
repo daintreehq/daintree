@@ -31,6 +31,7 @@ vi.mock("electron", () => ({
 }));
 
 vi.mock("electron-updater", () => ({
+  default: { autoUpdater: autoUpdaterMock },
   autoUpdater: autoUpdaterMock,
 }));
 

@@ -35,6 +35,7 @@ import { getAgentConfig } from "@/config/agents";
 import { terminalClient } from "@/clients";
 import { HybridInputBar, type HybridInputBarHandle } from "./HybridInputBar";
 import { getTerminalFocusTarget } from "./terminalFocus";
+import { registerPanelFocusHandler } from "./terminalFocusRegistry";
 import { getCanopyCommand, isEscapedCommand, unescapeCommand } from "./canopySlashCommands";
 
 export type { TerminalType };
@@ -71,6 +72,7 @@ export interface TerminalPaneProps {
   reconnectError?: TerminalReconnectError;
   spawnError?: SpawnError;
   gridPanelCount?: number;
+  detectedProcessId?: string;
   // Tab support
   tabs?: import("@/components/Panel/TabButton").TabInfo[];
   onTabClick?: (tabId: string) => void;
@@ -105,6 +107,7 @@ function TerminalPaneComponent({
   reconnectError,
   spawnError,
   gridPanelCount,
+  detectedProcessId,
   tabs,
   onTabClick,
   onTabClose,
@@ -119,6 +122,10 @@ function TerminalPaneComponent({
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isUpdateCwdOpen, setIsUpdateCwdOpen] = useState(false);
   const [showGeminiBanner, setShowGeminiBanner] = useState(false);
+  const [isAutoRestarting, setIsAutoRestarting] = useState(false);
+  const autoRestartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoRestartAttemptRef = useRef(0);
+  const processStartTimeRef = useRef<number>(0);
 
   if (isFocused && !prevFocusedRef.current) {
     justFocusedUntilRef.current = performance.now() + 250;
@@ -128,9 +135,21 @@ function TerminalPaneComponent({
     prevFocusedRef.current = isFocused;
   }, [isFocused]);
 
+  // Cancel pending auto-restart timer on unmount
+  useEffect(() => {
+    return () => {
+      if (autoRestartTimerRef.current !== null) {
+        clearTimeout(autoRestartTimerRef.current);
+        autoRestartTimerRef.current = null;
+      }
+    };
+  }, []);
+
   useEffect(() => {
     setDismissedRestartPrompt(false);
     inputTrackerRef.current?.reset();
+    // Track process start time on each restart for backoff stability window
+    processStartTimeRef.current = Date.now();
   }, [restartKey]);
 
   useEffect(() => {
@@ -185,11 +204,14 @@ function TerminalPaneComponent({
         isInputLocked: terminal?.isInputLocked ?? false,
         stateChangeTrigger: terminal?.stateChangeTrigger,
         isRestarting: terminal?.isRestarting ?? false,
+        exitBehavior: terminal?.exitBehavior,
+        isTrashedOrRemoved: terminal?.location === "trash" || terminal === undefined,
       };
     })
   );
 
-  const { isInputLocked, stateChangeTrigger, isRestarting } = terminalState;
+  const { isInputLocked, stateChangeTrigger, isRestarting, exitBehavior, isTrashedOrRemoved } =
+    terminalState;
 
   const isBackendDisconnected = backendStatus === "disconnected";
   const isBackendRecovering = backendStatus === "recovering";
@@ -226,6 +248,63 @@ function TerminalPaneComponent({
     removeError,
     restartKey,
   });
+
+  // Cancel auto-restart if terminal is intentionally trashed/removed
+  useEffect(() => {
+    if (isTrashedOrRemoved && autoRestartTimerRef.current !== null) {
+      clearTimeout(autoRestartTimerRef.current);
+      autoRestartTimerRef.current = null;
+      setIsAutoRestarting(false);
+    }
+  }, [isTrashedOrRemoved]);
+
+  // Auto-restart logic: when exitBehavior === "restart" and terminal exits (any code except 130)
+  useEffect(() => {
+    if (!isExited) return;
+    if (exitBehavior !== "restart") return;
+    if (exitCode === 130) return;
+    if (isTrashedOrRemoved) return;
+    if (isRestarting) return;
+
+    if (autoRestartTimerRef.current !== null) {
+      clearTimeout(autoRestartTimerRef.current);
+      autoRestartTimerRef.current = null;
+    }
+
+    // Reset backoff if process ran stably for > 10s
+    const runDuration =
+      processStartTimeRef.current > 0 ? Date.now() - processStartTimeRef.current : 0;
+    if (runDuration > 10_000) {
+      autoRestartAttemptRef.current = 0;
+    }
+
+    const attempt = autoRestartAttemptRef.current;
+    // Exponential backoff: 250ms, 500ms, 1s, 2s, 4s, capped at 5s
+    const delay = Math.min(250 * Math.pow(2, attempt), 5_000);
+    autoRestartAttemptRef.current = attempt + 1;
+
+    setIsAutoRestarting(true);
+
+    autoRestartTimerRef.current = setTimeout(() => {
+      autoRestartTimerRef.current = null;
+      const currentTerminal = useTerminalStore.getState().terminals.find((t) => t.id === id);
+      if (!currentTerminal || currentTerminal.location === "trash") {
+        setIsAutoRestarting(false);
+        return;
+      }
+      restartTerminal(id);
+      setIsAutoRestarting(false);
+    }, delay);
+
+    return () => {
+      if (autoRestartTimerRef.current !== null) {
+        clearTimeout(autoRestartTimerRef.current);
+        autoRestartTimerRef.current = null;
+        setIsAutoRestarting(false);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isExited, exitBehavior, exitCode, isTrashedOrRemoved]);
 
   // Track drag state in a ref to avoid useEffect cleanup timing issues.
   // If isDragging is in the dependency array, cleanup runs on drag START
@@ -465,6 +544,29 @@ function TerminalPaneComponent({
     isInputLocked,
   ]);
 
+  useEffect(() => {
+    if (!showHybridInputBar) return;
+    return registerPanelFocusHandler(id, () => {
+      const focusTarget = getTerminalFocusTarget({
+        isAgentTerminal,
+        isInputDisabled: isBackendDisconnected || isBackendRecovering || isInputLocked,
+        hybridInputEnabled,
+        hybridInputAutoFocus,
+      });
+      if (focusTarget !== "hybridInput") return;
+      inputBarRef.current?.focusWithCursorAtEnd();
+    });
+  }, [
+    id,
+    showHybridInputBar,
+    isAgentTerminal,
+    isBackendDisconnected,
+    isBackendRecovering,
+    isInputLocked,
+    hybridInputEnabled,
+    hybridInputAutoFocus,
+  ]);
+
   // Sync agent state to terminal service for scroll management
   useEffect(() => {
     terminalInstanceService.setAgentState(id, agentState ?? "idle");
@@ -502,6 +604,7 @@ function TerminalPaneComponent({
       agentState={agentState}
       activity={activity}
       lastCommand={lastCommand}
+      detectedProcessId={detectedProcessId}
       queueCount={queueCount}
       flowStatus={flowStatus}
       isPinged={isPinged}
@@ -517,7 +620,7 @@ function TerminalPaneComponent({
         isPinged &&
           allowPing &&
           (wasJustSelected ? "animate-terminal-ping-select" : "animate-terminal-ping"),
-        agentState === "failed" && "ring-1 ring-inset ring-[var(--color-status-error)]/25"
+        agentState === "failed" && "ring-1 ring-inset ring-status-error/25"
       )}
       onClick={handleClick}
       onKeyDown={handleKeyDown}
@@ -589,13 +692,21 @@ function TerminalPaneComponent({
         exitCode !== 130 &&
         !dismissedRestartPrompt &&
         !restartError &&
-        !isRestarting && (
+        !isRestarting &&
+        exitBehavior !== "restart" && (
           <TerminalRestartBanner
             exitCode={exitCode}
             onRestart={handleRestart}
             onDismiss={() => setDismissedRestartPrompt(true)}
           />
         )}
+
+      {isAutoRestarting && (
+        <div className="flex items-center gap-2 px-3 py-1.5 text-xs text-canopy-text/60 bg-canopy-accent/5 border-b border-canopy-border shrink-0">
+          <Loader2 className="h-3 w-3 animate-spin text-canopy-accent" />
+          <span>Auto-restarting…</span>
+        </div>
+      )}
 
       {showGeminiBanner && (
         <GeminiAlternateBufferBanner terminalId={id} onDismiss={() => setShowGeminiBanner(false)} />
@@ -643,12 +754,12 @@ function TerminalPaneComponent({
             >
               {isBackendRecovering ? (
                 <div className="flex flex-col items-center gap-3">
-                  <Loader2 className="w-8 h-8 animate-spin motion-reduce:animate-none text-amber-400" />
+                  <Loader2 className="w-8 h-8 animate-spin motion-reduce:animate-none text-status-warning" />
                   <span className="text-white font-medium">Reconnecting...</span>
                 </div>
               ) : (
                 <div className="flex flex-col items-center gap-4 p-6 bg-canopy-sidebar border border-canopy-border rounded-xl shadow-2xl max-w-md text-center">
-                  <div className="flex items-center gap-3 text-red-400">
+                  <div className="flex items-center gap-3 text-status-error">
                     <AlertTriangle className="w-6 h-6" />
                     <h3 className="font-semibold text-lg">
                       {lastCrashType === "OUT_OF_MEMORY"
@@ -695,7 +806,7 @@ function TerminalPaneComponent({
                     onClick={() =>
                       void actionService.dispatch("ui.refresh", undefined, { source: "user" })
                     }
-                    className="px-4 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-lg border border-red-500/30 transition-colors"
+                    className="px-4 py-2 bg-status-error/20 hover:bg-status-error/30 text-status-error rounded-lg border border-status-error/30 transition-colors"
                   >
                     Restart Application
                   </button>

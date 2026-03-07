@@ -23,7 +23,7 @@ export function useFirstRunToasts(isStateLoaded: boolean) {
       markFirstRunToastSeen();
 
       const shortcuts = [
-        { id: "terminal.palette", label: "switch terminals" },
+        { id: "nav.quickSwitcher", label: "switch terminals" },
         { id: "terminal.new", label: "new terminal" },
         { id: "worktree.openPalette", label: "worktrees" },
       ];

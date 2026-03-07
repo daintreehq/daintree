@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { GitBranch, AlertCircle, Check, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import {
   validatePathPattern,
   previewPathPattern,
@@ -158,28 +159,35 @@ export function WorktreeSettingsTab() {
               className={cn(
                 "flex-1 px-3 py-2 bg-canopy-bg border rounded-[var(--radius-md)] text-canopy-text font-mono text-sm",
                 "focus:outline-none focus:ring-2 focus:ring-canopy-accent",
-                !validation.valid ? "border-red-500/50" : "border-canopy-border"
+                !validation.valid ? "border-status-error/50" : "border-canopy-border"
               )}
               placeholder="{parent-dir}/{base-folder}-worktrees/{branch-slug}"
             />
-            <button
-              onClick={handleReset}
-              className="px-3 py-2 border border-canopy-border rounded-[var(--radius-md)] text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-border/50 transition-colors"
-              title="Reset to default"
-            >
-              <RotateCcw className="w-4 h-4" />
-            </button>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={handleReset}
+                    className="px-3 py-2 border border-canopy-border rounded-[var(--radius-md)] text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-border/50 transition-colors"
+                    aria-label="Reset to default"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Reset to default</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
 
           {!validation.valid && validation.error && (
-            <div className="flex items-start gap-2 text-xs text-red-400">
+            <div className="flex items-start gap-2 text-xs text-status-error">
               <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />
               <span>{validation.error}</span>
             </div>
           )}
 
           {error && (
-            <div className="flex items-start gap-2 text-xs text-red-400">
+            <div className="flex items-start gap-2 text-xs text-status-error">
               <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />
               <span>{error}</span>
             </div>
@@ -214,19 +222,24 @@ export function WorktreeSettingsTab() {
           <span className="block text-xs font-medium text-canopy-text/70">Presets:</span>
           <div className="flex flex-wrap gap-2">
             {PATTERN_PRESETS.map((preset) => (
-              <button
-                key={preset.label}
-                onClick={() => handlePresetClick(preset.pattern)}
-                className={cn(
-                  "px-3 py-1.5 text-xs rounded-[var(--radius-md)] border transition-colors",
-                  pattern === preset.pattern
-                    ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
-                    : "border-canopy-border text-canopy-text/70 hover:bg-canopy-border/50"
-                )}
-                title={preset.description}
-              >
-                {preset.label}
-              </button>
+              <TooltipProvider key={preset.label}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={() => handlePresetClick(preset.pattern)}
+                      className={cn(
+                        "px-3 py-1.5 text-xs rounded-[var(--radius-md)] border transition-colors",
+                        pattern === preset.pattern
+                          ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
+                          : "border-canopy-border text-canopy-text/70 hover:bg-canopy-border/50"
+                      )}
+                    >
+                      {preset.label}
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">{preset.description}</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             ))}
           </div>
         </div>
@@ -255,7 +268,7 @@ export function WorktreeSettingsTab() {
       <div className="flex items-center justify-between pt-4 border-t border-canopy-border">
         <div className="flex items-center gap-2">
           {savedMessage && (
-            <span className="flex items-center gap-1 text-xs text-green-400">
+            <span className="flex items-center gap-1 text-xs text-status-success">
               <Check className="w-3 h-3" />
               Saved
             </span>
@@ -267,7 +280,7 @@ export function WorktreeSettingsTab() {
           className={cn(
             "px-4 py-2 text-sm font-medium rounded-[var(--radius-md)] transition-colors",
             hasChanges && validation.valid
-              ? "bg-canopy-accent text-white hover:bg-canopy-accent/90"
+              ? "bg-canopy-accent text-canopy-bg hover:bg-canopy-accent/90"
               : "bg-canopy-border text-canopy-text/50 cursor-not-allowed"
           )}
         >

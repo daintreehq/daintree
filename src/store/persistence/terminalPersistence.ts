@@ -3,6 +3,7 @@ import { projectClient } from "@/clients";
 import { debounce } from "@/utils/debounce";
 import { isRendererPerfCaptureEnabled, markRendererPerformance } from "@/utils/performance";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 
 type ProjectClientType = typeof projectClient;
 
@@ -36,6 +37,7 @@ export function terminalToSnapshot(t: TerminalInstance): TerminalSnapshot {
       ...(t.devPreviewConsoleOpen !== undefined && {
         devPreviewConsoleOpen: t.devPreviewConsoleOpen,
       }),
+      ...(t.exitBehavior !== undefined && { exitBehavior: t.exitBehavior }),
     };
   }
 
@@ -46,6 +48,7 @@ export function terminalToSnapshot(t: TerminalInstance): TerminalSnapshot {
       agentId: t.agentId,
       cwd: t.cwd,
       command: t.command?.trim() || undefined,
+      ...(t.exitBehavior !== undefined && { exitBehavior: t.exitBehavior }),
     };
   } else if (t.kind === "notes") {
     return {
@@ -69,7 +72,7 @@ export function terminalToSnapshot(t: TerminalInstance): TerminalSnapshot {
 const DEFAULT_OPTIONS: Required<Omit<TerminalPersistenceOptions, "getProjectId">> &
   Pick<TerminalPersistenceOptions, "getProjectId"> = {
   debounceMs: 500,
-  filter: (t) => t.location !== "trash" && t.kind !== "assistant",
+  filter: (t) => t.location !== "trash" && t.kind !== "assistant" && !isSmokeTestTerminalId(t.id),
   transform: terminalToSnapshot,
   getProjectId: undefined,
 };

@@ -29,7 +29,7 @@ export function GridFullOverlay({ maxTerminals, show }: GridFullOverlayProps) {
           isVisible ? "opacity-100 translate-y-0 scale-100" : "opacity-0 translate-y-1 scale-[0.98]"
         )}
       >
-        <Ban className="h-8 w-8 text-amber-400" />
+        <Ban className="h-8 w-8 text-status-warning" />
         <div>
           <p className="text-sm font-medium text-canopy-text">Grid is full</p>
           <p className="text-xs text-canopy-text/60 mt-1">

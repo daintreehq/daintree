@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: perf-${{ github.ref }}-${{ github.event_name }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -22,22 +22,22 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
-      - name: Checkout
+      - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
-      - name: Install
+      - name: Install dependencies
         run: npm ci
 
-      - name: Run Perf Smoke
+      - name: Run perf smoke
         run: npm run perf:smoke
 
-      - name: Upload Perf Artifacts
+      - name: Upload perf artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -49,22 +49,22 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
-      - name: Checkout
+      - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
-      - name: Install
+      - name: Install dependencies
         run: npm ci
 
-      - name: Run Perf CI Matrix
+      - name: Run perf CI matrix
         run: npm run perf:ci
 
-      - name: Upload Perf Artifacts
+      - name: Upload perf artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -76,25 +76,25 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 90
     steps:
-      - name: Checkout
+      - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
-      - name: Install
+      - name: Install dependencies
         run: npm ci
 
-      - name: Run Nightly Matrix
+      - name: Run nightly matrix
         run: npm run perf:nightly
 
-      - name: Run Soak Matrix
+      - name: Run soak matrix
         run: npm run perf:soak
 
-      - name: Upload Perf Artifacts
+      - name: Upload perf artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:

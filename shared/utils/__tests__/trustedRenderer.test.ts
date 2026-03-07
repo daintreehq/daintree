@@ -1,7 +1,24 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { isTrustedRendererUrl, getTrustedOrigins } from "../trustedRenderer.js";
 
 describe("trustedRenderer", () => {
+  const originalNodeEnv = process.env.NODE_ENV;
+  const originalDevServerUrl = process.env.CANOPY_DEV_SERVER_URL;
+
+  beforeEach(() => {
+    process.env.NODE_ENV = "development";
+    delete process.env.CANOPY_DEV_SERVER_URL;
+  });
+
+  afterEach(() => {
+    process.env.NODE_ENV = originalNodeEnv;
+    if (originalDevServerUrl === undefined) {
+      delete process.env.CANOPY_DEV_SERVER_URL;
+    } else {
+      process.env.CANOPY_DEV_SERVER_URL = originalDevServerUrl;
+    }
+  });
+
   describe("isTrustedRendererUrl", () => {
     it("should allow production app:// origin", () => {
       expect(isTrustedRendererUrl("app://canopy")).toBe(true);
@@ -67,6 +84,14 @@ describe("trustedRenderer", () => {
       expect(isTrustedRendererUrl("HTTP://localhost:5173")).toBe(true);
       expect(isTrustedRendererUrl("http://LOCALHOST:5173")).toBe(true);
       expect(isTrustedRendererUrl("APP://canopy")).toBe(true);
+    });
+
+    it("should allow an env-configured dev origin", () => {
+      process.env.CANOPY_DEV_SERVER_URL = "http://127.0.0.1:6123";
+
+      expect(isTrustedRendererUrl("http://127.0.0.1:6123")).toBe(true);
+      expect(isTrustedRendererUrl("http://localhost:6123")).toBe(true);
+      expect(isTrustedRendererUrl("http://localhost:5173")).toBe(false);
     });
   });
 

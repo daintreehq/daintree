@@ -109,7 +109,7 @@ export function WorktreeTerminalSection({
             onClick={onToggle}
             aria-expanded={true}
             aria-controls={terminalsPanelId}
-            className="w-full px-3 py-1.5 flex items-center justify-between text-left border-b border-white/5 transition-colors bg-white/[0.03] hover:bg-white/[0.05] focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px] rounded-t-[var(--radius-lg)]"
+            className="w-full px-3 py-1.5 flex items-center justify-between text-left border-b border-white/5 transition-colors bg-overlay-soft hover:bg-white/[0.05] focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px] rounded-t-[var(--radius-lg)]"
             id={`${terminalsId}-button`}
           >
             <span className="flex items-center gap-1.5 text-[11px] text-canopy-text/50 font-medium">
@@ -151,6 +151,7 @@ export function WorktreeTerminalSection({
                             type={term.type}
                             kind={term.kind}
                             agentId={term.agentId}
+                            detectedProcessId={term.detectedProcessId}
                             className="w-3 h-3"
                           />
                         </div>
@@ -161,12 +162,16 @@ export function WorktreeTerminalSection({
                           {term.type === "terminal" &&
                             term.agentState === "running" &&
                             term.lastCommand && (
-                              <span
-                                className="text-[11px] font-mono text-canopy-text/50 truncate"
-                                title={term.lastCommand}
-                              >
-                                {term.lastCommand}
-                              </span>
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <span className="text-[11px] font-mono text-canopy-text/50 truncate">
+                                      {term.lastCommand}
+                                    </span>
+                                  </TooltipTrigger>
+                                  <TooltipContent side="bottom">{term.lastCommand}</TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
                             )}
                         </div>
                       </button>
@@ -174,49 +179,49 @@ export function WorktreeTerminalSection({
                       <div className="flex items-center gap-2.5 shrink-0">
                         {term.agentState === "working" && (
                           <Loader2
-                            className="w-3 h-3 animate-spin motion-reduce:animate-none text-[var(--color-state-working)]"
+                            className="w-3 h-3 animate-spin motion-reduce:animate-none text-state-working"
                             aria-label="Working"
                           />
                         )}
 
                         {term.agentState === "running" && (
-                          <Play
-                            className="w-3 h-3 text-[var(--color-status-info)]"
-                            aria-label="Running"
-                          />
+                          <Play className="w-3 h-3 text-status-info" aria-label="Running" />
                         )}
 
                         {term.agentState === "waiting" && (
                           <AlertCircle
-                            className="w-3 h-3 text-amber-400"
+                            className="w-3 h-3 text-status-warning"
                             aria-label="Waiting for input"
                           />
                         )}
 
                         {term.agentState === "failed" && (
-                          <XCircle
-                            className="w-3 h-3 text-[var(--color-status-error)]"
-                            aria-label="Failed"
-                          />
+                          <XCircle className="w-3 h-3 text-status-error" aria-label="Failed" />
                         )}
 
                         {term.agentState === "completed" && (
                           <CheckCircle2
-                            className="w-3 h-3 text-[var(--color-status-success)]"
+                            className="w-3 h-3 text-status-success"
                             aria-label="Completed"
                           />
                         )}
 
-                        <div
-                          className="text-muted-foreground/40 group-hover:text-muted-foreground/60 transition-colors"
-                          title={term.location === "dock" ? "Docked" : "On Grid"}
-                        >
-                          {term.location === "dock" ? (
-                            <PanelBottom className="w-3 h-3" />
-                          ) : (
-                            <LayoutGrid className="w-3 h-3" />
-                          )}
-                        </div>
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <div className="text-muted-foreground/40 group-hover:text-muted-foreground/60 transition-colors">
+                                {term.location === "dock" ? (
+                                  <PanelBottom className="w-3 h-3" />
+                                ) : (
+                                  <LayoutGrid className="w-3 h-3" />
+                                )}
+                              </div>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom">
+                              {term.location === "dock" ? "Docked" : "On Grid"}
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
 
                         <button
                           type="button"

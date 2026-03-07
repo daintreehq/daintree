@@ -418,4 +418,68 @@ describe("ProjectPulseService", () => {
     expect(pulse.commitsInRange).toBe(0);
     expect(pulse.branch).toBeUndefined();
   });
+
+  it.each([
+    ["does not have any commits yet", "your current branch 'main' does not have any commits yet"],
+    ["not a valid object name", "fatal: not a valid object name: 'HEAD'"],
+    ["bad default revision", "fatal: bad default revision 'HEAD'"],
+    ["ambiguous argument (original)", "fatal: ambiguous argument 'HEAD': unknown revision"],
+    ["unknown revision", "unknown revision or path not in the working tree"],
+    ["needed a single revision", "fatal: needed a single revision"],
+  ])("returns empty pulse for no-commits error variant: %s", async (_label, errorMessage) => {
+    const raw = vi.fn(async (args: string[]) => {
+      const cmd = args[0];
+      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD")
+        throw new Error(errorMessage);
+      return "";
+    });
+
+    vi.doMock("simple-git", () => ({
+      simpleGit: () => createGitStub(raw),
+    }));
+
+    const { ProjectPulseService } = await import("../ProjectPulseService.js");
+    const svc = new ProjectPulseService();
+
+    const pulse = await svc.getPulse({
+      worktreePath: "/repo",
+      worktreeId: "wt-empty",
+      mainBranch: "main",
+      rangeDays: 60 as const,
+      includeDelta: false,
+      includeRecentCommits: false,
+    });
+
+    expect(pulse.heatmap).toHaveLength(60);
+    expect(pulse.commitsInRange).toBe(0);
+    expect(pulse.activeDays).toBe(0);
+    expect(pulse.currentStreakDays).toBe(0);
+  });
+
+  it("throws for unrecognized rev-parse errors", async () => {
+    const raw = vi.fn(async (args: string[]) => {
+      const cmd = args[0];
+      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD")
+        throw new Error("fatal: some completely unknown error");
+      return "";
+    });
+
+    vi.doMock("simple-git", () => ({
+      simpleGit: () => createGitStub(raw),
+    }));
+
+    const { ProjectPulseService } = await import("../ProjectPulseService.js");
+    const svc = new ProjectPulseService();
+
+    await expect(
+      svc.getPulse({
+        worktreePath: "/repo",
+        worktreeId: "wt-err",
+        mainBranch: "main",
+        rangeDays: 60 as const,
+        includeDelta: false,
+        includeRecentCommits: false,
+      })
+    ).rejects.toThrow("Failed to read git HEAD");
+  });
 });

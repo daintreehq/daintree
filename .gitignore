@@ -48,10 +48,8 @@ keys/
 
 # Environment
 .env
-.env.local
-.env.*.local
-.env.development
-.env.production
+.env.*
+!.env.example
 
 # Cache
 .cache/
@@ -63,6 +61,8 @@ github-stats-cache.json
 # Testing
 coverage/
 .nyc_output/
+test-results/
+playwright-report/
 
 # Temp files
 tmp/

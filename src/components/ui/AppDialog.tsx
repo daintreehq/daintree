@@ -32,6 +32,7 @@ export interface AppDialogProps {
   className?: string;
   maxHeight?: string;
   zIndex?: DialogZIndex;
+  "data-testid"?: string;
 }
 
 export type { DialogSize, DialogVariant, DialogZIndex };
@@ -57,6 +58,7 @@ export function AppDialog({
   className,
   maxHeight = "max-h-[80vh]",
   zIndex = "modal",
+  "data-testid": dataTestId,
 }: AppDialogProps) {
   const previousActiveElement = useRef<HTMLElement | null>(null);
   const backdropPointerRef = useRef<number | null>(null);
@@ -158,7 +160,7 @@ export function AppDialog({
     <AppDialogContext.Provider value={{ onClose: handleClose, titleId, descriptionId, variant }}>
       <div
         className={cn(
-          "fixed inset-0 flex items-center justify-center bg-black/50 backdrop-blur-md backdrop-saturate-[1.25]",
+          "fixed inset-0 flex items-center justify-center bg-scrim-medium backdrop-blur-md backdrop-saturate-[1.25]",
           zIndex === "nested" ? "z-[var(--z-nested-dialog)]" : "z-[var(--z-modal)]",
           "transition-opacity duration-150",
           "motion-reduce:transition-none motion-reduce:duration-0",
@@ -172,10 +174,11 @@ export function AppDialog({
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
+        data-testid={dataTestId}
       >
         <div
           className={cn(
-            "bg-canopy-sidebar border border-[var(--border-overlay)] border-t-white/[0.08] rounded-[var(--radius-xl)] shadow-modal mx-4 flex flex-col",
+            "bg-canopy-sidebar border border-[var(--border-overlay)] border-t-overlay-strong rounded-[var(--radius-xl)] shadow-modal mx-4 flex flex-col",
             maxHeight,
             sizeClasses[size],
             "w-full",
@@ -205,7 +208,7 @@ AppDialog.Header = function AppDialogHeader({ children, className }: AppDialogHe
   return (
     <div
       className={cn(
-        "px-6 py-4 border-b border-canopy-border bg-canopy-sidebar/50 flex items-center justify-between shrink-0",
+        "px-6 py-4 border-b border-canopy-border bg-overlay-soft flex items-center justify-between shrink-0",
         className
       )}
     >
@@ -244,7 +247,7 @@ AppDialog.CloseButton = function AppDialogCloseButton({ className }: AppDialogCl
       type="button"
       onClick={context?.onClose}
       className={cn(
-        "text-canopy-text/60 hover:text-canopy-text transition-colors p-1 rounded",
+        "text-canopy-text/60 hover:text-canopy-text hover:bg-overlay-strong transition-colors p-1 rounded",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
         className
       )}
@@ -261,7 +264,7 @@ interface AppDialogBodyProps {
 }
 
 AppDialog.Body = function AppDialogBody({ children, className }: AppDialogBodyProps) {
-  return <div className={cn("flex-1 overflow-y-auto p-6", className)}>{children}</div>;
+  return <div className={cn("flex-1 overflow-y-auto min-h-0 p-6", className)}>{children}</div>;
 };
 
 interface AppDialogBodyScrollProps {

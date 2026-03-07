@@ -19,16 +19,15 @@ import {
   usePanelPalette,
   useProjectSwitcherPalette,
   useTerminalConfig,
+  useAppThemeConfig,
   useGlobalKeybindings,
   useContextInjection,
   useProjectSettings,
-  useLinkDiscovery,
   useGridNavigation,
   useWindowNotifications,
+  useWatchedPanelNotifications,
   useWorktreeActions,
   useMenuActions,
-  useAppAgentDispatcher,
-  useAssistantStreamProcessor,
 } from "./hooks";
 import { useActionRegistry } from "./hooks/useActionRegistry";
 import { useUpdateListener } from "./hooks/useUpdateListener";
@@ -36,10 +35,8 @@ import { useActionPalette } from "./hooks/useActionPalette";
 import { useQuickSwitcher } from "./hooks/useQuickSwitcher";
 import { useWorktreePalette } from "./hooks/useWorktreePalette";
 import { useDoubleShift } from "./hooks/useDoubleShift";
-import { useAssistantContextSync } from "./hooks/useAssistantContextSync";
-import { actionService } from "./services/ActionService";
+import { useMcpBridge } from "./hooks/useMcpBridge";
 import { createTooltipWithShortcut } from "./lib/platform";
-import { getAssistantContext } from "./components/Assistant/assistantContext";
 import {
   useAppHydration,
   useProjectSwitchRehydration,
@@ -59,11 +56,21 @@ import {
   WorktreeFilterPopover,
   WorktreeOverviewModal,
 } from "./components/Worktree";
+import { CrossWorktreeDiff } from "./components/Worktree/CrossWorktreeDiff";
 import { NewWorktreeDialog } from "./components/Worktree/NewWorktreeDialog";
 import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
+import { FileViewerModalHost } from "./components/FileViewer/FileViewerModalHost";
 import { TerminalPalette, NewTerminalPalette } from "./components/TerminalPalette";
 import { PanelPalette } from "./components/PanelPalette/PanelPalette";
-import { GitInitDialog } from "./components/Project";
+import { MORE_AGENTS_PANEL_ID } from "./hooks/usePanelPalette";
+import { GitInitDialog, ProjectOnboardingWizard, WelcomeScreen } from "./components/Project";
+import {
+  AgentSetupWizard,
+  AgentSelectionStep,
+  shouldShowAgentSetupWizard,
+  shouldShowAgentSelection,
+} from "./components/Setup";
+import { CreateProjectFolderDialog } from "./components/Project/CreateProjectFolderDialog";
 import { ProjectSwitcherPalette } from "./components/Project/ProjectSwitcherPalette";
 import { ActionPalette } from "./components/ActionPalette";
 import { QuickSwitcher } from "./components/QuickSwitcher";
@@ -74,9 +81,9 @@ import { SettingsDialog, type SettingsTab } from "./components/Settings";
 import { ShortcutReferenceDialog } from "./components/KeyboardShortcuts";
 import { Toaster } from "./components/ui/toaster";
 import { UpdateNotification } from "./components/UpdateNotification";
+import { TelemetryConsent } from "./components/Onboarding/TelemetryConsent";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { DndProvider } from "./components/DragDrop";
-import { AssistantActionConfirmationHost } from "./components/Assistant/AssistantActionConfirmationHost";
 import {
   useTerminalStore,
   useWorktreeSelectionStore,
@@ -84,7 +91,9 @@ import {
   useErrorStore,
   useDiagnosticsStore,
   useFocusStore,
+  useAgentSettingsStore,
   cleanupWorktreeDataStore,
+  useToolbarPreferencesStore,
   type RetryAction,
 } from "./store";
 import { useShallow } from "zustand/react/shallow";
@@ -106,6 +115,7 @@ import {
 import type { WorktreeState, PanelKind } from "./types";
 import { startRendererMemoryMonitor } from "./utils/performance";
 import { startLongTaskMonitor } from "./utils/longTaskMonitor";
+import { actionService } from "./services/ActionService";
 import { useRenderProfiler } from "./utils/renderProfiler";
 
 interface SidebarContentProps {
@@ -560,14 +570,23 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 }
 
 function App() {
-  const { focusedId, addTerminal, setReconnectError, hydrateTabGroups } = useTerminalStore(
+  const { crossDiffDialog, closeCrossWorktreeDiff } = useWorktreeSelectionStore(
     useShallow((state) => ({
-      focusedId: state.focusedId,
-      addTerminal: state.addTerminal,
-      setReconnectError: state.setReconnectError,
-      hydrateTabGroups: state.hydrateTabGroups,
+      crossDiffDialog: state.crossDiffDialog,
+      closeCrossWorktreeDiff: state.closeCrossWorktreeDiff,
     }))
   );
+
+  const { focusedId, addTerminal, setReconnectError, hydrateTabGroups, hydrateMru } =
+    useTerminalStore(
+      useShallow((state) => ({
+        focusedId: state.focusedId,
+        addTerminal: state.addTerminal,
+        setReconnectError: state.setReconnectError,
+        hydrateTabGroups: state.hydrateTabGroups,
+        hydrateMru: state.hydrateMru,
+      }))
+    );
 
   useEffect(() => {
     const handleBeforeUnload = () => {
@@ -581,14 +600,37 @@ function App() {
       cleanupWorktreeDataStore();
     };
   }, []);
-  const { launchAgent, availability, agentSettings, refreshSettings } = useAgentLauncher();
+  const { launchAgent, availability, agentSettings, refreshSettings, isCheckingAvailability } =
+    useAgentLauncher();
+  const [isAgentSetupOpen, setIsAgentSetupOpen] = useState(false);
+  const agentSetupCheckedRef = useRef(false);
+
+  // Agent selection step state for first-run onboarding
+  const [agentSelectionOpen, setAgentSelectionOpen] = useState(false);
+  const [onboardingSetupOpen, setOnboardingSetupOpen] = useState(false);
+  const [onboardingSetupAgentIds, setOnboardingSetupAgentIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (agentSetupCheckedRef.current || isCheckingAvailability) return;
+    agentSetupCheckedRef.current = true;
+    if (shouldShowAgentSetupWizard(availability)) {
+      setIsAgentSetupOpen(true);
+    }
+  }, [isCheckingAvailability, availability]);
+
+  useEffect(() => {
+    const handleOpenWizard = () => setIsAgentSetupOpen(true);
+    window.addEventListener("canopy:open-agent-setup-wizard", handleOpenWizard);
+    return () => window.removeEventListener("canopy:open-agent-setup-wizard", handleOpenWizard);
+  }, []);
+
   const loadRecipes = useRecipeStore((state) => state.loadRecipes);
   useTerminalConfig();
+  useAppThemeConfig();
   useWindowNotifications();
+  useWatchedPanelNotifications();
   useUpdateListener();
-  useAppAgentDispatcher(); // Enable Assistant tool calling via action dispatch
-  useAssistantStreamProcessor(); // Process Assistant chunks even when pane is closed
-
+  useMcpBridge();
   const [homeDir, setHomeDir] = useState<string | undefined>(undefined);
   useEffect(() => {
     systemClient.getHomeDir().then(setHomeDir).catch(console.error);
@@ -610,6 +652,54 @@ function App() {
   const gitInitDirectoryPath = useProjectStore((state) => state.gitInitDirectoryPath);
   const closeGitInitDialog = useProjectStore((state) => state.closeGitInitDialog);
   const handleGitInitSuccess = useProjectStore((state) => state.handleGitInitSuccess);
+  const onboardingWizardOpen = useProjectStore((state) => state.onboardingWizardOpen);
+  const onboardingProjectId = useProjectStore((state) => state.onboardingProjectId);
+  const closeOnboardingWizard = useProjectStore((state) => state.closeOnboardingWizard);
+
+  const agentSettingsInitialized = useAgentSettingsStore((state) => state.isInitialized);
+
+  // Intercept onboarding to show agent selection on first run.
+  // Depends on agentSettingsInitialized so it re-evaluates once settings load.
+  useEffect(() => {
+    if (!onboardingWizardOpen || !onboardingProjectId) return;
+    if (shouldShowAgentSelection()) {
+      setAgentSelectionOpen(true);
+    }
+  }, [onboardingWizardOpen, onboardingProjectId, agentSettingsInitialized]);
+
+  // Reset local flow state whenever onboarding closes to avoid stale state on next project.
+  useEffect(() => {
+    if (!onboardingWizardOpen && !onboardingProjectId) {
+      setAgentSelectionOpen(false);
+      setOnboardingSetupOpen(false);
+      setOnboardingSetupAgentIds([]);
+    }
+  }, [onboardingWizardOpen, onboardingProjectId]);
+
+  const handleAgentSelectionContinue = useCallback(
+    (uninstalledIds: string[]) => {
+      setAgentSelectionOpen(false);
+      void refreshSettings();
+      if (uninstalledIds.length > 0) {
+        setOnboardingSetupAgentIds(uninstalledIds);
+        setOnboardingSetupOpen(true);
+      }
+    },
+    [refreshSettings]
+  );
+
+  const handleAgentSelectionSkip = useCallback(() => {
+    setAgentSelectionOpen(false);
+  }, []);
+
+  const handleOnboardingSetupClose = useCallback(() => {
+    setOnboardingSetupOpen(false);
+    setOnboardingSetupAgentIds([]);
+  }, []);
+
+  const createFolderDialogOpen = useProjectStore((state) => state.createFolderDialogOpen);
+  const closeCreateFolderDialog = useProjectStore((state) => state.closeCreateFolderDialog);
+  const openCreateFolderDialog = useProjectStore((state) => state.openCreateFolderDialog);
   const { setActiveWorktree, selectWorktree, activeWorktreeId, focusedWorktreeId } =
     useWorktreeSelectionStore(
       useShallow((state) => ({
@@ -705,6 +795,7 @@ function App() {
       setFocusMode,
       setReconnectError,
       hydrateTabGroups,
+      hydrateMru,
     }),
     [
       addTerminal,
@@ -714,6 +805,7 @@ function App() {
       setFocusMode,
       setReconnectError,
       hydrateTabGroups,
+      hydrateMru,
     ]
   );
 
@@ -734,6 +826,23 @@ function App() {
     setIsSettingsOpen(true);
   }, []);
 
+  const handleWizardFinish = useCallback(() => {
+    const defaultAgent = useToolbarPreferencesStore.getState().launcher.defaultAgent;
+    const selected = agentSettings?.agents
+      ? Object.entries(agentSettings.agents)
+          .filter(([, entry]) => entry.selected === true)
+          .map(([id]) => id)
+      : [];
+    const primaryAgent = defaultAgent ?? selected[0];
+
+    if (primaryAgent && availability[primaryAgent]) {
+      launchAgent(primaryAgent, {
+        worktreeId: activeWorktreeId ?? undefined,
+        prompt: "Hi! I'm ready to help with this project. What would you like to know?",
+      }).catch(() => {});
+    }
+  }, [launchAgent, activeWorktreeId, availability, agentSettings]);
+
   const handleOpenAgentSettings = useCallback(() => {
     setSettingsTab("agents");
     setIsSettingsOpen(true);
@@ -746,7 +855,6 @@ function App() {
       "terminal",
       "terminalAppearance",
       "worktree",
-      "assistant",
       "agents",
       "github",
       "sidecar",
@@ -819,12 +927,6 @@ function App() {
   const electronAvailable = isElectronAvailable();
   const { inject } = useContextInjection();
 
-  useEffect(() => {
-    actionService.setContextProvider(() => getAssistantContext());
-
-    return () => actionService.setContextProvider(null);
-  }, []);
-
   const handleToggleSidebar = useCallback(() => {
     window.dispatchEvent(new CustomEvent("canopy:toggle-focus-mode"));
   }, []);
@@ -841,7 +943,6 @@ function App() {
     onToggleWorktreeOverview: toggleWorktreeOverview,
     onOpenWorktreeOverview: openWorktreeOverview,
     onCloseWorktreeOverview: closeWorktreeOverview,
-    onOpenNewTerminalPalette: newTerminalPalette.open,
     onOpenPanelPalette: panelPalette.open,
     onOpenProjectSwitcherPalette: projectSwitcherPalette.open,
     onOpenShortcuts: () => setIsShortcutsOpen(true),
@@ -855,9 +956,6 @@ function App() {
     getFocusedId: () => focusedId,
     getGridNavigation: () => ({ findNearest, findByIndex, findDockByIndex, getCurrentLocation }),
   });
-
-  // Must be after useActionRegistry so actions are registered before discovery runs
-  useLinkDiscovery();
 
   useMenuActions({
     onOpenSettings: handleSettings,
@@ -877,7 +975,6 @@ function App() {
   useTerminalStoreBootstrap();
   useSemanticWorkerLifecycle();
   useSystemWakeHandler();
-  useAssistantContextSync();
   useDevServerDiscovery();
 
   if (!isElectronAvailable()) {
@@ -891,12 +988,7 @@ function App() {
   }
 
   if (!isStateLoaded) {
-    return (
-      <>
-        <div className="h-screen w-screen bg-canopy-bg" />
-        <AssistantActionConfirmationHost />
-      </>
-    );
+    return <div className="h-screen w-screen bg-canopy-bg" />;
   }
 
   return (
@@ -920,12 +1012,16 @@ function App() {
             projectSwitcherPalette={projectSwitcherPalette}
           >
             <Profiler id="content-grid" onRender={onContentGridRender}>
-              <ContentGrid
-                key={currentProject?.id ?? "no-project"}
-                className="h-full w-full"
-                agentAvailability={availability}
-                defaultCwd={defaultTerminalCwd}
-              />
+              {currentProject === null ? (
+                <WelcomeScreen />
+              ) : (
+                <ContentGrid
+                  key={currentProject.id}
+                  className="h-full w-full"
+                  agentAvailability={availability}
+                  defaultCwd={defaultTerminalCwd}
+                />
+              )}
             </Profiler>
           </AppLayout>
         </Profiler>
@@ -989,6 +1085,7 @@ function App() {
         onSelectNext={panelPalette.selectNext}
         onSelect={(kind) => {
           panelPalette.handleSelect(kind);
+          if (kind.id === MORE_AGENTS_PANEL_ID) return;
           if (kind.id.startsWith("agent:")) {
             const agentId = kind.id.slice("agent:".length);
             if (agentId) {
@@ -1005,7 +1102,7 @@ function App() {
         }}
         onConfirm={() => {
           const selected = panelPalette.confirmSelection();
-          if (selected) {
+          if (selected && selected.id !== MORE_AGENTS_PANEL_ID) {
             if (selected.id.startsWith("agent:")) {
               const agentId = selected.id.slice("agent:".length);
               if (agentId) {
@@ -1034,8 +1131,16 @@ function App() {
         onSelect={projectSwitcherPalette.selectProject}
         onClose={projectSwitcherPalette.close}
         onAddProject={projectSwitcherPalette.addProject}
+        onCreateFolder={() => {
+          projectSwitcherPalette.close();
+          openCreateFolderDialog();
+        }}
         onStopProject={(projectId) => projectSwitcherPalette.stopProject(projectId)}
         onCloseProject={(projectId) => projectSwitcherPalette.removeProject(projectId)}
+        onOpenProjectSettings={() => {
+          projectSwitcherPalette.close();
+          void actionService.dispatch("project.settings.open", undefined, { source: "user" });
+        }}
         removeConfirmProject={projectSwitcherPalette.removeConfirmProject}
         onRemoveConfirmClose={() => projectSwitcherPalette.setRemoveConfirmProject(null)}
         onConfirmRemove={projectSwitcherPalette.confirmRemoveProject}
@@ -1087,6 +1192,12 @@ function App() {
         homeDir={homeDir}
       />
 
+      <CrossWorktreeDiff
+        isOpen={crossDiffDialog.isOpen}
+        onClose={closeCrossWorktreeDiff}
+        initialWorktreeId={crossDiffDialog.initialWorktreeId}
+      />
+
       <SettingsDialog
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
@@ -1097,6 +1208,7 @@ function App() {
       <ShortcutReferenceDialog isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
 
       <TerminalInfoDialogHost />
+      <FileViewerModalHost />
 
       {gitInitDirectoryPath && (
         <GitInitDialog
@@ -1107,12 +1219,48 @@ function App() {
         />
       )}
 
-      <PanelTransitionOverlay />
+      {onboardingProjectId && (
+        <AgentSelectionStep
+          isOpen={agentSelectionOpen}
+          onContinue={handleAgentSelectionContinue}
+          onSkip={handleAgentSelectionSkip}
+        />
+      )}
 
-      <AssistantActionConfirmationHost />
+      {onboardingProjectId && (
+        <ProjectOnboardingWizard
+          isOpen={onboardingWizardOpen && !agentSelectionOpen && !onboardingSetupOpen}
+          projectId={onboardingProjectId}
+          onClose={closeOnboardingWizard}
+          onFinish={handleWizardFinish}
+        />
+      )}
+
+      {onboardingSetupOpen && (
+        <AgentSetupWizard
+          isOpen={onboardingSetupOpen}
+          onClose={handleOnboardingSetupClose}
+          initialAvailability={availability}
+          agentIds={onboardingSetupAgentIds}
+        />
+      )}
+
+      <AgentSetupWizard
+        isOpen={isAgentSetupOpen && !onboardingWizardOpen}
+        onClose={() => setIsAgentSetupOpen(false)}
+        initialAvailability={availability}
+      />
+
+      <CreateProjectFolderDialog
+        isOpen={createFolderDialogOpen}
+        onClose={closeCreateFolderDialog}
+      />
+
+      <PanelTransitionOverlay />
 
       <Toaster />
       <UpdateNotification />
+      <TelemetryConsent />
     </ErrorBoundary>
   );
 }

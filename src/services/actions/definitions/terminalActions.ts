@@ -209,16 +209,26 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
   actions.set("terminal.close", () => ({
     id: "terminal.close",
     title: "Close Terminal",
-    description: "Close the focused terminal (move to trash)",
+    description:
+      "Close a terminal (move to trash). Targets the specified terminal, or the focused terminal if omitted.",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    run: async () => {
+    argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
+    run: async (args: unknown) => {
+      const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
       const state = useTerminalStore.getState();
-      const targetId = state.focusedId ?? state.terminals.find((t) => t.location !== "trash")?.id;
+      const targetId =
+        terminalId ?? state.focusedId ?? state.terminals.find((t) => t.location !== "trash")?.id;
       if (targetId) {
         state.trashTerminal(targetId);
+        const remaining = useTerminalStore
+          .getState()
+          .terminals.filter((t) => t.location !== "trash");
+        if (remaining.length === 0) {
+          await appClient.quit();
+        }
       }
     },
   }));
@@ -352,16 +362,27 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
   actions.set("terminal.rename", () => ({
     id: "terminal.rename",
     title: "Rename Terminal",
-    description: "Rename the terminal tab",
+    description:
+      "Rename the terminal tab. If name is provided, renames programmatically. Otherwise opens the rename dialog.",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ terminalId: z.string().optional() }),
+    argsSchema: z.object({
+      terminalId: z.string().optional(),
+      name: z
+        .string()
+        .optional()
+        .describe("New name for the terminal. If omitted, opens the rename dialog."),
+    }),
     run: async (args: unknown) => {
-      const { terminalId } = args as { terminalId?: string };
+      const { terminalId, name } = args as { terminalId?: string; name?: string };
       const targetId = terminalId ?? useTerminalStore.getState().focusedId;
-      if (targetId) {
+      if (!targetId) return;
+
+      if (name !== undefined) {
+        useTerminalStore.getState().updateTitle(targetId, name);
+      } else {
         window.dispatchEvent(
           new CustomEvent("canopy:rename-terminal", { detail: { id: targetId } })
         );
@@ -469,39 +490,6 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
         state.moveTerminalToGrid(targetId);
-      }
-    },
-  }));
-
-  actions.set("terminal.minimize", () => ({
-    id: "terminal.minimize",
-    title: "Minimize Terminal",
-    description: "Minimize terminal to dock",
-    category: "terminal",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      const state = useTerminalStore.getState();
-      if (state.focusedId) {
-        state.moveTerminalToDock(state.focusedId);
-      }
-    },
-  }));
-
-  actions.set("terminal.restore", () => ({
-    id: "terminal.restore",
-    title: "Restore Terminal",
-    description: "Restore terminal from dock to grid",
-    category: "terminal",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      const state = useTerminalStore.getState();
-      const dockTerminals = state.terminals.filter((t) => t.location === "dock");
-      if (dockTerminals.length > 0) {
-        state.moveTerminalToGrid(dockTerminals[0].id);
       }
     },
   }));
@@ -683,7 +671,7 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
   actions.set("terminal.focusNext", () => ({
     id: "terminal.focusNext",
     title: "Focus Next Terminal",
-    description: "Focus the next terminal in the grid",
+    description: "Focus the next terminal (cycles through grid then dock)",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -696,7 +684,7 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
   actions.set("terminal.focusPrevious", () => ({
     id: "terminal.focusPrevious",
     title: "Focus Previous Terminal",
-    description: "Focus the previous terminal in the grid",
+    description: "Focus the previous terminal (cycles through grid then dock)",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -857,29 +845,33 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
     },
   }));
 
-  actions.set("terminal.minimizeAll", () => ({
-    id: "terminal.minimizeAll",
-    title: "Minimize All Terminals",
-    description: "Move all terminals to dock",
+  actions.set("terminal.focusDock", () => ({
+    id: "terminal.focusDock",
+    title: "Focus Dock",
+    description: "Focus the active dock terminal (or first dock terminal in the active worktree)",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      useTerminalStore.getState().bulkMoveToDock();
-    },
-  }));
+      const state = useTerminalStore.getState();
+      const activeWorktreeId = callbacks.getActiveWorktreeId();
+      const dockTerminals = state.terminals.filter(
+        (t) =>
+          t.location === "dock" && (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+      );
+      if (dockTerminals.length === 0) return;
 
-  actions.set("terminal.restoreAll", () => ({
-    id: "terminal.restoreAll",
-    title: "Restore All Terminals",
-    description: "Move all terminals from dock to grid",
-    category: "terminal",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      useTerminalStore.getState().bulkMoveToGrid();
+      const targetId =
+        (state.activeDockTerminalId &&
+          dockTerminals.some((t) => t.id === state.activeDockTerminalId) &&
+          state.activeDockTerminalId) ||
+        dockTerminals[0]!.id;
+      const group = state.getPanelGroup(targetId);
+      if (group) {
+        state.setActiveTab(group.id, targetId);
+      }
+      state.openDockTerminal(targetId);
     },
   }));
 
@@ -905,6 +897,7 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
           state.setMaximizedId(null);
         }
         state.moveTerminalToDock(focusedId);
+        state.openDockTerminal(focusedId);
       }
     },
   }));
@@ -930,32 +923,6 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
       } else {
         state.bulkMoveToDock();
       }
-    },
-  }));
-
-  actions.set("terminal.palette", () => ({
-    id: "terminal.palette",
-    title: "Open Terminal Palette",
-    description: "Open the terminal/agent palette",
-    category: "terminal",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      callbacks.onOpenAgentPalette();
-    },
-  }));
-
-  actions.set("terminal.spawnPalette", () => ({
-    id: "terminal.spawnPalette",
-    title: "Open New Terminal Palette",
-    description: "Open palette to spawn a new terminal",
-    category: "terminal",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      callbacks.onOpenNewTerminalPalette();
     },
   }));
 
@@ -1222,6 +1189,41 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
     scope: "renderer",
     run: async () => {
       navigateTab("previous");
+    },
+  }));
+
+  actions.set("terminal.watch", () => ({
+    id: "terminal.watch",
+    title: "Watch This Terminal",
+    description:
+      "Toggle a one-shot watch on the focused terminal — fires a high-priority notification when the agent completes or waits for input",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    isEnabled: (ctx) => !!ctx.focusedTerminalId,
+    run: async (_args, ctx) => {
+      const state = useTerminalStore.getState();
+      const targetId = ctx.focusedTerminalId ?? state.focusedId;
+      if (!targetId) return;
+
+      if (state.watchedPanels.has(targetId)) {
+        state.unwatchPanel(targetId);
+      } else {
+        const terminal = state.terminals.find((t) => t.id === targetId);
+        // Fire immediately if agent is already in a terminal attention state
+        if (terminal?.agentState === "completed" || terminal?.agentState === "waiting") {
+          const { fireWatchNotification } = await import("@/lib/watchNotification");
+          fireWatchNotification(
+            targetId,
+            terminal.title ?? targetId,
+            terminal.agentState,
+            terminal.worktreeId ?? undefined
+          );
+        } else {
+          state.watchPanel(targetId);
+        }
+      }
     },
   }));
 }

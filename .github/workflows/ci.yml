@@ -1,0 +1,129 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  check:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-22.04, windows-latest]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+
+      - name: Install dependencies (Windows)
+        if: matrix.os == 'windows-latest'
+        run: npm ci
+        env:
+          npm_config_msvs_version: "2022"
+
+      - name: Install dependencies
+        if: matrix.os != 'windows-latest'
+        run: npm ci
+
+      - name: Check (typecheck + lint + format)
+        run: npm run check
+
+      - name: Test
+        run: npm run test
+
+  build:
+    needs: check
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-22.04, windows-latest]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+
+      - name: Install dependencies (Windows)
+        if: matrix.os == 'windows-latest'
+        run: npm ci
+        env:
+          npm_config_msvs_version: "2022"
+
+      - name: Install dependencies
+        if: matrix.os != 'windows-latest'
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Smoke test (Linux)
+        if: matrix.os == 'ubuntu-22.04'
+        run: xvfb-run --auto-servernum npm run test:smoke
+        env:
+          NODE_ENV: production
+          ELECTRON_ENABLE_LOGGING: "1"
+          SMOKE_RUNS: "1"
+          SMOKE_TIMEOUT_MS: "210000"
+        timeout-minutes: 6
+
+      - name: Smoke test (macOS)
+        if: matrix.os == 'macos-14'
+        run: npm run test:smoke
+        env:
+          NODE_ENV: production
+          ELECTRON_ENABLE_LOGGING: "1"
+          SMOKE_RUNS: "1"
+          SMOKE_TIMEOUT_MS: "210000"
+        timeout-minutes: 6
+
+      - name: Smoke test (Windows)
+        if: matrix.os == 'windows-latest'
+        run: npm run test:smoke
+        env:
+          NODE_ENV: production
+          ELECTRON_ENABLE_LOGGING: "1"
+          ELECTRON_ENABLE_STACK_DUMPING: "1"
+          SMOKE_RUNS: "3"
+          SMOKE_TIMEOUT_MS: "210000"
+        timeout-minutes: 12

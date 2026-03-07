@@ -40,7 +40,13 @@ function getUserFriendlyError(technicalError: string): string | null {
   if (technicalError.includes("does not exist")) {
     return "The worktree path no longer exists";
   }
-  if (technicalError.includes("HEAD") || technicalError.includes("Repository has no commits")) {
+  const noCommitsSignals = [
+    "HEAD",
+    "Repository has no commits",
+    "does not have any commits yet",
+    "no commits yet",
+  ];
+  if (noCommitsSignals.some((s) => technicalError.toLowerCase().includes(s.toLowerCase()))) {
     return null;
   }
   return "Unable to load activity data";
