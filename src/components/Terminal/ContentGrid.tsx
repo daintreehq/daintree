@@ -788,9 +788,9 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
     !maximizedId &&
     !showPlaceholder;
 
-  // Memoize the two-pane terminal pair to prevent a new array reference on every render.
-  // Without this, TwoPaneSplitLayout's cleanup effect (which uses `terminals` as a dep)
-  // would fire on every ContentGrid re-render, not just on true mount/unmount.
+  // Memoize the two-pane terminal pair to produce a stable array reference across renders.
+  // This prevents TwoPaneSplitLayout from receiving a new prop reference on every ContentGrid
+  // re-render, which avoids unnecessary child effect churn and reconciliation work.
   const twoPaneTerminals = useMemo((): [TerminalInstance, TerminalInstance] | null => {
     if (!useTwoPaneSplitMode) return null;
     const panels = tabGroups
