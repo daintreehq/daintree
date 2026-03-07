@@ -361,6 +361,12 @@ export const CHANNELS = {
   VOICE_INPUT_REQUEST_MIC_PERMISSION: "voice-input:request-mic-permission",
   VOICE_INPUT_OPEN_MIC_SETTINGS: "voice-input:open-mic-settings",
   VOICE_INPUT_VALIDATE_API_KEY: "voice-input:validate-api-key",
+
+  // Crash Recovery channels
+  CRASH_RECOVERY_GET_PENDING: "crash-recovery:get-pending",
+  CRASH_RECOVERY_RESOLVE: "crash-recovery:resolve",
+  CRASH_RECOVERY_GET_CONFIG: "crash-recovery:get-config",
+  CRASH_RECOVERY_SET_CONFIG: "crash-recovery:set-config",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

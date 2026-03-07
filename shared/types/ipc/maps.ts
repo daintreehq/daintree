@@ -1255,6 +1255,24 @@ export interface IpcInvokeMap {
     result: { valid: boolean; error?: string };
   };
 
+  // Crash Recovery channels
+  "crash-recovery:get-pending": {
+    args: [];
+    result: import("./crashRecovery.js").PendingCrash | null;
+  };
+  "crash-recovery:resolve": {
+    args: [action: import("./crashRecovery.js").CrashRecoveryAction];
+    result: void;
+  };
+  "crash-recovery:get-config": {
+    args: [];
+    result: import("./crashRecovery.js").CrashRecoveryConfig;
+  };
+  "crash-recovery:set-config": {
+    args: [config: Partial<import("./crashRecovery.js").CrashRecoveryConfig>];
+    result: import("./crashRecovery.js").CrashRecoveryConfig;
+  };
+
   // MCP Server channels
   "mcp-server:get-status": {
     args: [];

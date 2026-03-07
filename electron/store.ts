@@ -132,6 +132,9 @@ export interface StoreSchema {
     port: number | null;
     apiKey: string;
   };
+  crashRecovery: {
+    autoRestoreOnCrash: boolean;
+  };
 }
 
 const storeOptions = {
@@ -211,6 +214,9 @@ const storeOptions = {
       enabled: false,
       port: 45454,
       apiKey: "",
+    },
+    crashRecovery: {
+      autoRestoreOnCrash: false,
     },
   },
   cwd: process.env.CANOPY_USER_DATA,

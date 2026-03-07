@@ -38,6 +38,8 @@ import { useWorktreePalette } from "./hooks/useWorktreePalette";
 import { useDoubleShift } from "./hooks/useDoubleShift";
 import { useMcpBridge } from "./hooks/useMcpBridge";
 import { createTooltipWithShortcut } from "./lib/platform";
+import { useCrashRecoveryGate } from "./hooks/app/useCrashRecoveryGate";
+import { CrashRecoveryDialog } from "./components/Recovery/CrashRecoveryDialog";
 import {
   useAppHydration,
   useProjectSwitchRehydration,
@@ -830,8 +832,17 @@ function App() {
     ]
   );
 
+  // Crash recovery gate — must resolve before hydration runs
+  const {
+    state: crashState,
+    resolve: resolveCrash,
+    updateConfig: updateCrashConfig,
+  } = useCrashRecoveryGate();
+
+  const crashResolved = crashState.status !== "loading" && crashState.status !== "pending";
+
   // App lifecycle hooks
-  const { isStateLoaded } = useAppHydration(hydrationCallbacks);
+  const { isStateLoaded } = useAppHydration(hydrationCallbacks, crashResolved);
   useProjectSwitchRehydration(hydrationCallbacks);
   useFirstRunToasts(isStateLoaded);
 
@@ -1012,7 +1023,20 @@ function App() {
     );
   }
 
-  if (!isStateLoaded) {
+  if (crashState.status === "pending") {
+    return (
+      <div className="h-screen w-screen bg-canopy-bg">
+        <CrashRecoveryDialog
+          crash={crashState.crash}
+          config={crashState.config}
+          onResolve={resolveCrash}
+          onUpdateConfig={updateCrashConfig}
+        />
+      </div>
+    );
+  }
+
+  if (!crashResolved || !isStateLoaded) {
     return <div className="h-screen w-screen bg-canopy-bg" />;
   }
 

@@ -886,6 +886,14 @@ export interface ElectronAPI {
       result: import("../actions.js").ActionDispatchResult;
     }): void;
   };
+  crashRecovery: {
+    getPending(): Promise<import("./crashRecovery.js").PendingCrash | null>;
+    resolve(action: import("./crashRecovery.js").CrashRecoveryAction): Promise<void>;
+    getConfig(): Promise<import("./crashRecovery.js").CrashRecoveryConfig>;
+    setConfig(
+      config: Partial<import("./crashRecovery.js").CrashRecoveryConfig>
+    ): Promise<import("./crashRecovery.js").CrashRecoveryConfig>;
+  };
 }
 
 export type MicPermissionStatus =

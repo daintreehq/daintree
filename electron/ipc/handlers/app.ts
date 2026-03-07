@@ -15,6 +15,7 @@ import { registerLogsHandlers } from "./logs.js";
 import { registerEventInspectorHandlers } from "./eventInspector.js";
 import { registerTerminalConfigHandlers } from "./terminalConfig.js";
 import { registerAppThemeHandlers } from "./appTheme.js";
+import { registerCrashRecoveryHandlers } from "./app/crashRecovery.js";
 
 export function registerAppHandlers(deps: HandlerDependencies): () => void {
   const cleanups = [
@@ -23,6 +24,7 @@ export function registerAppHandlers(deps: HandlerDependencies): () => void {
     registerEventInspectorHandlers(deps),
     registerTerminalConfigHandlers(),
     registerAppThemeHandlers(),
+    registerCrashRecoveryHandlers(),
   ];
 
   return () => cleanups.forEach((cleanup) => cleanup());

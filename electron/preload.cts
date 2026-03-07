@@ -515,6 +515,12 @@ const CHANNELS = {
   MCP_SERVER_SET_API_KEY: "mcp-server:set-api-key",
   MCP_SERVER_GENERATE_API_KEY: "mcp-server:generate-api-key",
   MCP_SERVER_GET_CONFIG_SNIPPET: "mcp-server:get-config-snippet",
+
+  // Crash Recovery channels
+  CRASH_RECOVERY_GET_PENDING: "crash-recovery:get-pending",
+  CRASH_RECOVERY_RESOLVE: "crash-recovery:resolve",
+  CRASH_RECOVERY_GET_CONFIG: "crash-recovery:get-config",
+  CRASH_RECOVERY_SET_CONFIG: "crash-recovery:set-config",
 } as const;
 
 const api: ElectronAPI = {
@@ -1676,6 +1682,14 @@ const api: ElectronAPI = {
     sendDispatchActionResponse: (payload: { requestId: string; result: unknown }) => {
       ipcRenderer.send("mcp:dispatch-action-response", payload);
     },
+  },
+
+  crashRecovery: {
+    getPending: () => _typedInvoke(CHANNELS.CRASH_RECOVERY_GET_PENDING),
+    resolve: (action: "restore" | "fresh") => _typedInvoke(CHANNELS.CRASH_RECOVERY_RESOLVE, action),
+    getConfig: () => _typedInvoke(CHANNELS.CRASH_RECOVERY_GET_CONFIG),
+    setConfig: (config: { autoRestoreOnCrash?: boolean }) =>
+      _typedInvoke(CHANNELS.CRASH_RECOVERY_SET_CONFIG, config),
   },
 };
 
