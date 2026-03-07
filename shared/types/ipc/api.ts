@@ -890,7 +890,7 @@ export type MicPermissionStatus =
 
 export type VoiceTranscriptionModel = "gpt-4o-mini-transcribe" | "gpt-4o-transcribe";
 
-export type VoiceCorrectionModel = "gpt-5-nano" | "gpt-4o-mini" | "gpt-4o";
+export type VoiceCorrectionModel = "gpt-5-nano";
 
 export interface VoiceInputSettings {
   enabled: boolean;
