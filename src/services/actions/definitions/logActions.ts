@@ -176,9 +176,30 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
       search: z.string().optional().describe("Search text in event data"),
       after: z.number().optional().describe("Only events after this timestamp (ms)"),
       before: z.number().optional().describe("Only events before this timestamp (ms)"),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(500)
+        .optional()
+        .describe("Max events to return (default: 50, max: 500)"),
+      offset: z.number().int().min(0).optional().describe("Number of events to skip (default: 0)"),
     }),
     run: async (args: unknown) => {
-      return await eventInspectorClient.getFiltered(args as any);
+      const { limit, offset, ...filters } = args as Record<string, unknown>;
+      const allEvents = await eventInspectorClient.getFiltered(filters as any);
+      const events = Array.isArray(allEvents) ? allEvents : [];
+      const effectiveLimit = typeof limit === "number" ? Math.min(Math.max(limit, 1), 500) : 50;
+      const effectiveOffset = typeof offset === "number" ? Math.max(offset, 0) : 0;
+      const total = events.length;
+      const sliced = events.slice(effectiveOffset, effectiveOffset + effectiveLimit);
+      return {
+        events: sliced,
+        total,
+        limit: effectiveLimit,
+        offset: effectiveOffset,
+        hasMore: effectiveOffset + effectiveLimit < total,
+      };
     },
   }));
 

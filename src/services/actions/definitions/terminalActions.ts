@@ -209,14 +209,18 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
   actions.set("terminal.close", () => ({
     id: "terminal.close",
     title: "Close Terminal",
-    description: "Close the focused terminal (move to trash)",
+    description:
+      "Close a terminal (move to trash). Targets the specified terminal, or the focused terminal if omitted.",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    run: async () => {
+    argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
+    run: async (args: unknown) => {
+      const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
       const state = useTerminalStore.getState();
-      const targetId = state.focusedId ?? state.terminals.find((t) => t.location !== "trash")?.id;
+      const targetId =
+        terminalId ?? state.focusedId ?? state.terminals.find((t) => t.location !== "trash")?.id;
       if (targetId) {
         state.trashTerminal(targetId);
         const remaining = useTerminalStore
