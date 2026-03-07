@@ -306,5 +306,45 @@ describe("WorkflowPersistence", () => {
       expect(loaded[0].scheduledNodes).toBeInstanceOf(Set);
       expect(loaded[0].scheduledNodes.size).toBe(0);
     });
+
+    it("preserves NodeState with only required status field (all optional fields absent)", async () => {
+      const run = createTestRun({
+        nodeStates: {
+          "node-minimal": { status: "queued" },
+          "node-with-task": { status: "running", taskId: "task-abc" },
+        },
+      });
+
+      await persistence.save(testProjectId, [run]);
+      const loaded = await persistence.load(testProjectId);
+
+      expect(loaded[0].nodeStates["node-minimal"].status).toBe("queued");
+      expect(loaded[0].nodeStates["node-minimal"].taskId).toBeUndefined();
+      expect(loaded[0].nodeStates["node-minimal"].startedAt).toBeUndefined();
+      expect(loaded[0].nodeStates["node-with-task"].taskId).toBe("task-abc");
+    });
+
+    it("last-write wins when multiple saves are queued for same project", async () => {
+      const slowPersistence = new WorkflowPersistence(db, 5000);
+
+      vi.useFakeTimers();
+      try {
+        const first = [createTestRun({ workflowId: "first" })];
+        const second = [createTestRun({ workflowId: "second" })];
+
+        const p1 = slowPersistence.save(testProjectId, first);
+        const p2 = slowPersistence.save(testProjectId, second);
+
+        vi.advanceTimersByTime(6000);
+
+        await Promise.all([p1, p2]);
+
+        const loaded = await slowPersistence.load(testProjectId);
+        expect(loaded).toHaveLength(1);
+        expect(loaded[0].workflowId).toBe("second");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });

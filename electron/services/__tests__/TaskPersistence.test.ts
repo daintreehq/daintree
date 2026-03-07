@@ -269,4 +269,29 @@ describe("TaskPersistence", () => {
       expect(loaded[0].runId).toBe("run-456");
     });
   });
+
+  describe("debounce coalescing", () => {
+    it("last-write wins when multiple saves are queued for same project", async () => {
+      const slowPersistence = new TaskPersistence(db, 5000);
+
+      vi.useFakeTimers();
+      try {
+        const first = [createTestTask({ title: "First" })];
+        const second = [createTestTask({ title: "Second" })];
+
+        const p1 = slowPersistence.save(testProjectId, first);
+        const p2 = slowPersistence.save(testProjectId, second);
+
+        vi.advanceTimersByTime(6000);
+
+        await Promise.all([p1, p2]);
+
+        const loaded = await slowPersistence.load(testProjectId);
+        expect(loaded).toHaveLength(1);
+        expect(loaded[0].title).toBe("Second");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });
