@@ -123,7 +123,7 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
       sessionFilters: new Set<SessionFilter>(),
       activityFilters: new Set<ActivityFilter>(),
       alwaysShowActive: true,
-      hideMainWorktree: true,
+      hideMainWorktree: false,
       pinnedWorktrees: [],
 
       setQuery: (query) => set({ query }),
@@ -211,7 +211,7 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
           githubFilters: new Set(),
           sessionFilters: new Set(),
           activityFilters: new Set(),
-          hideMainWorktree: true,
+          hideMainWorktree: false,
         }),
 
       getActiveFilterCount: () => {
@@ -269,7 +269,7 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
           sessionFilters: new Set(p?.sessionFilters ?? []),
           activityFilters: new Set(p?.activityFilters ?? []),
           alwaysShowActive: p?.alwaysShowActive ?? true,
-          hideMainWorktree: p?.hideMainWorktree ?? true,
+          hideMainWorktree: p?.hideMainWorktree ?? false,
           pinnedWorktrees: p?.pinnedWorktrees ?? [],
         };
       },
