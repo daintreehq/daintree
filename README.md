@@ -4,7 +4,7 @@
 
 Canopy is a desktop environment where multiple AI agents work side by side — isolated, observable, and under your control. Instead of juggling terminal windows and manually wiring context between tools, Canopy gives your agents a stable place to run while you focus on reviewing their work.
 
-It works with any CLI agent — [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Codex](https://github.com/openai/codex), [OpenCode](https://github.com/opencode-ai/opencode) — and stays out of the way.
+It works with any CLI agent — [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Codex](https://github.com/openai/codex), [OpenCode](https://github.com/anomalyco/opencode) — and stays out of the way.
 
 ---
 
@@ -55,8 +55,8 @@ Automatic PR and issue detection from branch names. Repository statistics, commi
 ### Install
 
 ```bash
-git clone https://github.com/gregpriday/canopy-electron.git
-cd canopy-electron
+git clone https://github.com/canopyide/canopy.git
+cd canopy
 npm install
 ```
 
@@ -83,6 +83,7 @@ Canopy works with any agent you have installed:
 
 ```bash
 npm install -g @anthropic-ai/claude-code    # Claude Code
+npm install -g @google/gemini-cli           # Gemini CLI
 npm install -g @openai/codex                # Codex CLI
 npm install -g opencode-ai@latest           # OpenCode
 ```
@@ -103,7 +104,7 @@ Main Process (electron/)            Renderer (src/)
      └── Workspace Host (Worktree Monitor)
 ```
 
-- **Main Process** — Native operations (PTY, filesystem, git) exposed through a typed IPC bridge with 36 namespaces.
+- **Main Process** — Native operations (PTY, filesystem, git) exposed through a typed IPC bridge with 41 namespaces.
 - **Renderer** — React 19 UI with Vite HMR. Zustand stores with atomic selectors for performance across many simultaneous panels.
 - **Utility Processes** — Isolated PTY Host with lock-free SharedRingBuffer flow control, and Workspace Host for continuous worktree monitoring.
 
@@ -115,8 +116,8 @@ Main Process (electron/)            Renderer (src/)
 | UI          | React 19, TypeScript, Tailwind CSS v4 |
 | Build       | Vite 6                                |
 | State       | Zustand v5                            |
-| Terminal    | @xterm/xterm 6.0, node-pty 1.0        |
-| Git         | simple-git 3.30                       |
+| Terminal    | @xterm/xterm 6.0, node-pty 1.1        |
+| Git         | simple-git 3.32                       |
 | Drag & Drop | dnd-kit                               |
 | Validation  | Zod                                   |
 
@@ -158,7 +159,7 @@ canopy-electron/
 ├── src/                     # Renderer (React)
 │   ├── components/          # UI components
 │   ├── store/               # Zustand stores and slices
-│   ├── services/actions/    # Action system (20 definition files)
+│   ├── services/actions/    # Action system (21 definition files)
 │   ├── hooks/               # React hooks
 │   └── clients/             # IPC client wrappers
 │
@@ -182,4 +183,4 @@ canopy-electron/
 
 ## License
 
-MIT
+[MIT](LICENSE)
