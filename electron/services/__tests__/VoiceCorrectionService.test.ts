@@ -206,7 +206,7 @@ describe("VoiceCorrectionService", () => {
     expect(body.messages[0].role).toBe("developer");
     expect(body.temperature).toBeUndefined();
     expect(body.reasoning_effort).toBe("low");
-    expect(body.max_completion_tokens).toBe(512);
+    expect(body.max_completion_tokens).toBe(1024);
     expect(body.max_tokens).toBeUndefined();
   });
 

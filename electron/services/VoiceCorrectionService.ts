@@ -11,8 +11,8 @@ const P = "[VoiceCorrection]";
 const CORRECTION_TIMEOUT_MS = 5000;
 const MAX_HISTORY = 3;
 // gpt-5-nano is a reasoning model that uses internal reasoning tokens before
-// producing visible output. 512 gives headroom for reasoning + one sentence output.
-const MAX_COMPLETION_TOKENS = 512;
+// producing visible output. 1024 gives headroom for reasoning + output.
+const MAX_COMPLETION_TOKENS = 1024;
 
 export interface VoiceCorrectionSettings {
   model: string;
