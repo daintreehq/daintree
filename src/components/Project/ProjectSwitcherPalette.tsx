@@ -187,14 +187,8 @@ interface ProjectListContentProps {
   query: string;
   onSelect: (project: SearchableProject) => void;
   listRef: React.RefObject<HTMLDivElement | null>;
-  onAddProject?: () => void;
-  onCreateFolder?: () => void;
-  onOpenProjectSettings?: () => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
-  showAddProject?: boolean;
-  showCreateFolder?: boolean;
-  showProjectSettings?: boolean;
 }
 
 function ProjectListContent({
@@ -203,20 +197,9 @@ function ProjectListContent({
   query,
   onSelect,
   listRef,
-  onAddProject,
-  onCreateFolder,
-  onOpenProjectSettings,
   onStopProject,
   onCloseProject,
-  showAddProject = false,
-  showCreateFolder = false,
-  showProjectSettings = false,
 }: ProjectListContentProps) {
-  const showSettings = showProjectSettings && onOpenProjectSettings;
-  const showAdd = showAddProject && onAddProject;
-  const showCreate = showCreateFolder && onCreateFolder;
-  const showActions = showSettings || showAdd || showCreate;
-
   const isSearching = query.trim().length > 0;
 
   const sections = useMemo(() => {
@@ -248,23 +231,7 @@ function ProjectListContent({
         {results.length === 0 ? (
           <div className="p-2">
             <div className="px-3 py-8 text-center text-canopy-text/50 text-sm">
-              {query.trim() ? (
-                <>
-                  <div>{`No projects match "${query}"`}</div>
-                  {onAddProject && (
-                    <button
-                      type="button"
-                      onClick={() => onAddProject()}
-                      className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] bg-white/[0.04] text-canopy-text/70 hover:text-canopy-text hover:bg-white/[0.06] transition-colors cursor-pointer text-sm"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      Add Project...
-                    </button>
-                  )}
-                </>
-              ) : (
-                "No projects available"
-              )}
+              {query.trim() ? <div>{`No projects match "${query}"`}</div> : "No projects available"}
             </div>
           </div>
         ) : sections ? (
@@ -278,7 +245,7 @@ function ProjectListContent({
                   className={cn(
                     "px-2 py-1.5",
                     sectionIdx === 0 && "pt-2",
-                    isLast && !showActions && "pb-2",
+                    isLast && "pb-2",
                     isActiveSection && "bg-overlay-subtle"
                   )}
                 >
@@ -304,54 +271,6 @@ function ProjectListContent({
           </div>
         )}
       </div>
-      {showActions && (
-        <>
-          <div className="h-[3px] bg-white/[0.08]" />
-          <div className="px-2 pt-1 pb-2">
-            {showSettings && (
-              <button
-                type="button"
-                onClick={() => onOpenProjectSettings?.()}
-                className="w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors hover:bg-overlay-subtle"
-              >
-                <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] bg-white/[0.04] text-muted-foreground">
-                  <Settings2 className="h-4 w-4" />
-                </div>
-                <span className="font-medium text-sm text-muted-foreground">
-                  Project Settings...
-                </span>
-              </button>
-            )}
-            {showAdd && (
-              <button
-                type="button"
-                onClick={() => onAddProject?.()}
-                className="w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors hover:bg-overlay-subtle"
-                data-testid="project-add-button"
-              >
-                <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
-                  <Plus className="h-4 w-4" />
-                </div>
-                <span className="font-medium text-sm text-muted-foreground">Add Project...</span>
-              </button>
-            )}
-            {showCreate && (
-              <button
-                type="button"
-                onClick={() => onCreateFolder?.()}
-                className="w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors hover:bg-overlay-subtle"
-              >
-                <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
-                  <FolderPlus className="h-4 w-4" />
-                </div>
-                <span className="font-medium text-sm text-muted-foreground">
-                  Create New Folder...
-                </span>
-              </button>
-            )}
-          </div>
-        </>
-      )}
     </>
   );
 }
@@ -522,16 +441,59 @@ function ProjectPaletteInner({
           query={query}
           onSelect={onSelect}
           listRef={listRef}
-          onAddProject={onAddProject}
-          onCreateFolder={onCreateFolder}
-          onOpenProjectSettings={onOpenProjectSettings}
           onStopProject={onStopProject}
           onCloseProject={onCloseProject}
-          showAddProject
-          showCreateFolder
-          showProjectSettings={!!onOpenProjectSettings}
         />
       </AppPaletteDialog.Body>
+
+      {(onOpenProjectSettings || onAddProject || onCreateFolder) && (
+        <>
+          <div className="h-[3px] bg-white/[0.08]" />
+          <div className="px-2 pt-1 pb-2">
+            {onOpenProjectSettings && (
+              <button
+                type="button"
+                onClick={() => onOpenProjectSettings()}
+                className="w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors hover:bg-overlay-subtle"
+              >
+                <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] bg-white/[0.04] text-muted-foreground">
+                  <Settings2 className="h-4 w-4" />
+                </div>
+                <span className="font-medium text-sm text-muted-foreground">
+                  Project Settings...
+                </span>
+              </button>
+            )}
+            {onAddProject && (
+              <button
+                type="button"
+                onClick={() => onAddProject()}
+                className="w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors hover:bg-overlay-subtle"
+                data-testid="project-add-button"
+              >
+                <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
+                  <Plus className="h-4 w-4" />
+                </div>
+                <span className="font-medium text-sm text-muted-foreground">Add Project...</span>
+              </button>
+            )}
+            {onCreateFolder && (
+              <button
+                type="button"
+                onClick={() => onCreateFolder()}
+                className="w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors hover:bg-overlay-subtle"
+              >
+                <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
+                  <FolderPlus className="h-4 w-4" />
+                </div>
+                <span className="font-medium text-sm text-muted-foreground">
+                  Create New Folder...
+                </span>
+              </button>
+            )}
+          </div>
+        </>
+      )}
 
       <AppPaletteDialog.Footer>{PROJECT_FOOTER}</AppPaletteDialog.Footer>
     </>
