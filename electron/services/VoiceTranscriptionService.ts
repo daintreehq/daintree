@@ -16,6 +16,7 @@ export class VoiceTranscriptionService {
   private ws: WebSocket | null = null;
   private sessionId = 0;
   private connectTimeout: ReturnType<typeof setTimeout> | null = null;
+  private commitTimer: ReturnType<typeof setInterval> | null = null;
   private listeners: Set<(event: VoiceTranscriptionEvent) => void> = new Set();
   private pendingStart: { sessionId: number; resolve: (result: VoiceStartResult) => void } | null =
     null;
@@ -35,6 +36,13 @@ export class VoiceTranscriptionService {
     if (this.connectTimeout !== null) {
       clearTimeout(this.connectTimeout);
       this.connectTimeout = null;
+    }
+  }
+
+  private clearCommitTimer(): void {
+    if (this.commitTimer !== null) {
+      clearInterval(this.commitTimer);
+      this.commitTimer = null;
     }
   }
 
@@ -108,14 +116,20 @@ export class VoiceTranscriptionService {
               language: settings.language || "en",
               ...(prompt ? { prompt } : {}),
             },
-            turn_detection: {
-              type: "server_vad",
-              silence_duration_ms: 800,
-            },
+            turn_detection: null,
           },
         };
         logDebug(`${P} Sending session.update`, { language: settings.language || "en" });
         ws.send(JSON.stringify(sessionConfig));
+
+        // Periodically commit the audio buffer to trigger transcription
+        // without waiting for silence detection.
+        this.clearCommitTimer();
+        this.commitTimer = setInterval(() => {
+          if (this.ws?.readyState === WebSocket.OPEN && this.sessionId === mySessionId) {
+            this.ws.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+          }
+        }, 2000);
 
         this.emit({ type: "status", status: "recording" });
         this.settlePendingStart(mySessionId, { ok: true });
@@ -207,6 +221,7 @@ export class VoiceTranscriptionService {
     this.sessionId++;
     this.audioChunkCount = 0;
     this.clearConnectTimeout();
+    this.clearCommitTimer();
     if (pendingSessionId !== undefined) {
       this.settlePendingStart(pendingSessionId, { ok: false, error: "Voice session stopped" });
     }
