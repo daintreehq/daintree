@@ -1,15 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import {
-  X,
-  Maximize2,
-  Minimize2,
-  RotateCcw,
-  Grid2X2,
-  Activity,
-  Plus,
-  Bell,
-  BellOff,
-} from "lucide-react";
+import { X, Maximize2, Minimize2, RotateCcw, Grid2X2, Activity, Plus, Bell } from "lucide-react";
 import {
   DndContext,
   closestCenter,
@@ -32,7 +22,6 @@ import { DockToBottomIcon } from "@/components/icons";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { useBackgroundPanelStats } from "@/hooks";
 import { useTerminalStore } from "@/store/terminalStore";
-import { fireWatchNotification } from "@/lib/watchNotification";
 import { TabButton, type TabInfo } from "./TabButton";
 import { SortableTabButton } from "./SortableTabButton";
 import { panelKindCanRestart } from "@shared/config/panelKindRegistry";
@@ -236,29 +225,15 @@ function PanelHeaderComponent({
 
   // Watch state — only relevant for agent panels
   const isWatched = useTerminalStore((state) => state.watchedPanels.has(id));
-  const watchPanel = useTerminalStore((state) => state.watchPanel);
   const unwatchPanel = useTerminalStore((state) => state.unwatchPanel);
-  const panelAgentState = useTerminalStore(
-    (state) => state.terminals.find((t) => t.id === id)?.agentState
-  );
-  const panelWorktreeId = useTerminalStore(
-    (state) => state.terminals.find((t) => t.id === id)?.worktreeId ?? undefined
-  );
   const showWatchButton = !!agentId;
 
-  const handleToggleWatch = useCallback(
+  const handleCancelWatch = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
-      if (isWatched) {
-        unwatchPanel(id);
-      } else if (panelAgentState === "completed" || panelAgentState === "waiting") {
-        // Agent already in terminal state — fire immediately, no need to arm watch
-        fireWatchNotification(id, title, panelAgentState, panelWorktreeId);
-      } else {
-        watchPanel(id);
-      }
+      unwatchPanel(id);
     },
-    [id, title, isWatched, panelAgentState, panelWorktreeId, watchPanel, unwatchPanel]
+    [id, unwatchPanel]
   );
 
   // In dock, show shortened title without command summary for space efficiency
@@ -598,41 +573,25 @@ function PanelHeaderComponent({
 
         <div className="flex items-center gap-1.5">
           {/* Window controls - hover only */}
-          {/* Watch toggle — rendered outside hover container so the active bell is always visible */}
-          {showWatchButton && (
+          {/* Watch status indicator — only visible when actively watching; clicking cancels watch */}
+          {showWatchButton && isWatched && (
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
                     type="button"
-                    onClick={handleToggleWatch}
+                    onClick={handleCancelWatch}
                     onPointerDown={(e) => e.stopPropagation()}
-                    className={cn(
-                      "p-1.5 transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-canopy-accent",
-                      isWatched
-                        ? "text-canopy-accent hover:text-canopy-accent/80"
-                        : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 text-canopy-text/60 hover:text-canopy-text pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto"
-                    )}
-                    aria-label={
-                      isWatched
-                        ? "Cancel watch — stop waiting for completion"
-                        : "Watch this terminal — notify on completion"
-                    }
-                    aria-pressed={isWatched}
+                    className="p-1.5 transition-all text-canopy-accent hover:text-canopy-accent/80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-canopy-accent"
+                    aria-label="Cancel watch — stop waiting for completion"
                   >
-                    {isWatched ? (
-                      <Bell
-                        className="w-3 h-3 animate-pulse motion-reduce:animate-none"
-                        aria-hidden="true"
-                      />
-                    ) : (
-                      <BellOff className="w-3 h-3" aria-hidden="true" />
-                    )}
+                    <Bell
+                      className="w-3 h-3 animate-pulse motion-reduce:animate-none"
+                      aria-hidden="true"
+                    />
                   </button>
                 </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {isWatched ? "Cancel watch" : "Watch this terminal"}
-                </TooltipContent>
+                <TooltipContent side="bottom">Cancel watch</TooltipContent>
               </Tooltip>
             </TooltipProvider>
           )}
