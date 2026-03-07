@@ -62,7 +62,7 @@ export function VoiceRecordingToolbarButton() {
                 ? "text-canopy-text hover:bg-white/[0.06]"
                 : status === "connecting"
                   ? "text-canopy-text/60 hover:bg-white/[0.06]"
-                  : "text-status-warning hover:bg-status-warning/10 hover:text-status-warning"
+                  : "text-canopy-accent hover:bg-white/[0.06] hover:text-canopy-accent"
             )}
             aria-label={tooltipTitle}
           >
