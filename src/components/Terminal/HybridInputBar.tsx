@@ -158,12 +158,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const currentProject = useProjectStore((s) => s.currentProject);
     const voiceStatus = useVoiceRecordingStore((s) => s.status);
     const activeVoicePanelId = useVoiceRecordingStore((s) => s.activeTarget?.panelId ?? null);
-    const liveTranscript = useVoiceRecordingStore(
-      (s) => s.panelBuffers[terminalId]?.liveText ?? ""
-    );
-    const completedVoiceSegmentCount = useVoiceRecordingStore(
-      (s) => s.panelBuffers[terminalId]?.completedSegments.length ?? 0
-    );
+    const voiceDraftRevision = useTerminalInputStore((s) => s.voiceDraftRevision);
     const panelWorktreeId = useTerminalStore(
       (s) => s.terminals.find((terminal) => terminal.id === terminalId)?.worktreeId
     );
@@ -496,30 +491,29 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       [applyEditorValue]
     );
 
-    const insertVoiceText = useCallback((text: string) => {
+    // Voice segments are flushed to the draft store by VoiceRecordingService
+    // and increment voiceDraftRevision.  Sync the editor to the draft when
+    // that revision bumps (works even if this component was unmounted during
+    // a worktree switch — on remount, the draft already contains the text).
+    useEffect(() => {
+      if (voiceDraftRevision === 0) return;
+      const draft = useTerminalInputStore.getState().getDraftInput(terminalId, currentProject?.id);
       const view = editorViewRef.current;
       if (!view) return;
-
       const current = view.state.doc.toString();
-      const separator = current && !current.endsWith(" ") ? " " : "";
-      const insert = separator + text;
-      const from = view.state.doc.length;
-
-      isApplyingExternalValueRef.current = true;
-      view.dispatch({
-        changes: { from, insert },
-        selection: { anchor: from + insert.length },
-        scrollIntoView: true,
-      });
-      view.focus();
-    }, []);
-
-    useEffect(() => {
-      if (completedVoiceSegmentCount === 0) return;
-      const segments = useVoiceRecordingStore.getState().consumeCompletedSegments(terminalId);
-      if (segments.length === 0) return;
-      insertVoiceText(segments.join(" "));
-    }, [completedVoiceSegmentCount, insertVoiceText, terminalId]);
+      if (draft !== current) {
+        // Update React state first so the draft-writeback effect (which
+        // syncs `value` → setDraftInput) won't overwrite with stale data.
+        setValue(draft);
+        lastEmittedValueRef.current = draft;
+        isApplyingExternalValueRef.current = true;
+        view.dispatch({
+          changes: { from: 0, to: current.length, insert: draft },
+          selection: { anchor: draft.length },
+          scrollIntoView: true,
+        });
+      }
+    }, [voiceDraftRevision, terminalId, currentProject?.id]);
 
     const sendFromEditor = useCallback(() => {
       const view = editorViewRef.current;
@@ -1181,7 +1175,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               "group-hover:border-white/[0.08] group-hover:bg-overlay-medium",
               "focus-within:border-white/[0.12] focus-within:ring-1 focus-within:ring-white/[0.06] focus-within:bg-white/[0.05]",
               isVoiceActiveForPanel &&
-                "border-red-400/35 bg-red-500/[0.05] shadow-[0_0_0_1px_rgba(248,113,113,0.12),0_16px_36px_rgba(127,29,29,0.25)]",
+                "border-canopy-accent/60 bg-canopy-accent/[0.12] shadow-[0_0_0_1px_rgba(var(--theme-accent-rgb),0.35),0_0_16px_rgba(var(--theme-accent-rgb),0.15)]",
               disabled && "opacity-60"
             )}
             aria-disabled={disabled}
@@ -1229,11 +1223,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             </div>
           </div>
         </div>
-        {liveTranscript && (
-          <div className="px-1 pt-2 text-xs text-red-100/55" aria-live="polite">
-            {liveTranscript}
-          </div>
-        )}
       </div>
     );
 

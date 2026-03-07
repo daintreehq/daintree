@@ -27,7 +27,6 @@ export function VoiceInputButton({
   const status = useVoiceRecordingStore((state) => state.status);
   const isConfigured = useVoiceRecordingStore((state) => state.isConfigured);
   const errorMessage = useVoiceRecordingStore((state) => state.errorMessage);
-  const elapsedSeconds = useVoiceRecordingStore((state) => state.elapsedSeconds);
   const activePanelId = useVoiceRecordingStore((state) => state.activeTarget?.panelId ?? null);
 
   const isRecording = activePanelId === panelId && status === "recording";
@@ -75,12 +74,6 @@ export function VoiceInputButton({
     worktreeLabel,
   ]);
 
-  const formatDuration = (seconds: number) => {
-    const minutes = Math.floor(seconds / 60);
-    const remainder = seconds % 60;
-    return `${minutes}:${remainder.toString().padStart(2, "0")}`;
-  };
-
   return (
     <div className="relative flex items-center">
       <button
@@ -97,15 +90,18 @@ export function VoiceInputButton({
                 : "Start voice input"
         }
         className={cn(
-          "flex items-center justify-center rounded p-1 transition-colors",
+          "relative flex items-center justify-center rounded-full transition-colors",
           "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1",
           isRecording
-            ? "text-red-400 hover:text-red-300"
+            ? "h-6 w-6 bg-canopy-accent/20 text-canopy-accent hover:bg-canopy-accent/30"
             : isConnecting
-              ? "text-canopy-text/40"
-              : status === "error"
-                ? "text-yellow-400 hover:text-yellow-300"
-                : "text-canopy-text/40 hover:text-canopy-text/70",
+              ? "h-6 w-6 p-1 text-canopy-text/40"
+              : cn(
+                  "p-1",
+                  status === "error"
+                    ? "text-yellow-400 hover:text-yellow-300"
+                    : "text-canopy-text/40 hover:text-canopy-text/70"
+                ),
           disabled && !isRecording && "pointer-events-none opacity-40"
         )}
         aria-label={
@@ -117,25 +113,26 @@ export function VoiceInputButton({
         }
         aria-pressed={isConfigured ? isRecording : undefined}
       >
+        {isRecording && (
+          <span
+            className="absolute inset-0 animate-spin rounded-full"
+            style={{
+              background: `conic-gradient(rgba(var(--theme-accent-rgb), 0.7), rgba(var(--theme-accent-rgb), 0.15), rgba(var(--theme-accent-rgb), 0.7))`,
+              mask: "radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1.5px))",
+              WebkitMask:
+                "radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1.5px))",
+              animationDuration: "1.5s",
+            }}
+          />
+        )}
         {isConnecting ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        ) : isRecording ? (
-          <div className="relative">
-            <Mic className="h-3.5 w-3.5" />
-            <span className="absolute -right-1 -top-1 h-1.5 w-1.5 animate-pulse rounded-full bg-red-400" />
-          </div>
         ) : isConfigured ? (
-          <Mic className="h-3.5 w-3.5" />
+          <Mic className="h-3 w-3 relative" />
         ) : (
           <MicOff className="h-3.5 w-3.5" />
         )}
       </button>
-
-      {isRecording && (
-        <span className="ml-1 font-mono text-[10px] tabular-nums text-red-400/80">
-          {formatDuration(elapsedSeconds)}
-        </span>
-      )}
     </div>
   );
 }

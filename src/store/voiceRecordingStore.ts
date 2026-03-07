@@ -13,6 +13,9 @@ export interface VoiceRecordingTarget {
 interface VoiceTranscriptBuffer {
   liveText: string;
   completedSegments: string[];
+  projectId?: string;
+  /** Draft length snapshot taken before the first delta of a segment. */
+  draftLengthAtSegmentStart: number;
 }
 
 interface VoiceAnnouncement {
@@ -39,6 +42,7 @@ interface VoiceRecordingState {
   setError: (message: string | null) => void;
   setElapsedSeconds: (seconds: number) => void;
   appendDelta: (delta: string) => void;
+  setDraftLengthAtSegmentStart: (panelId: string, length: number) => void;
   completeSegment: (text: string) => void;
   finishSession: (options?: FinishSessionOptions) => void;
   consumeCompletedSegments: (panelId: string) => string[];
@@ -51,7 +55,9 @@ function getBuffer(
   panelBuffers: Record<string, VoiceTranscriptBuffer>,
   panelId: string
 ): VoiceTranscriptBuffer {
-  return panelBuffers[panelId] ?? { liveText: "", completedSegments: [] };
+  return (
+    panelBuffers[panelId] ?? { liveText: "", completedSegments: [], draftLengthAtSegmentStart: -1 }
+  );
 }
 
 export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) => ({
@@ -76,6 +82,8 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
         [target.panelId]: {
           ...getBuffer(state.panelBuffers, target.panelId),
           liveText: "",
+          projectId: target.projectId,
+          draftLengthAtSegmentStart: -1,
         },
       },
     })),
@@ -102,6 +110,18 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
       };
     }),
 
+  setDraftLengthAtSegmentStart: (panelId, length) =>
+    set((state) => {
+      const buffer = getBuffer(state.panelBuffers, panelId);
+      if (buffer.draftLengthAtSegmentStart >= 0) return state;
+      return {
+        panelBuffers: {
+          ...state.panelBuffers,
+          [panelId]: { ...buffer, draftLengthAtSegmentStart: length },
+        },
+      };
+    }),
+
   completeSegment: (text) =>
     set((state) => {
       const panelId = state.activeTarget?.panelId;
@@ -116,6 +136,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
             [panelId]: {
               ...buffer,
               liveText: "",
+              draftLengthAtSegmentStart: -1,
             },
           },
         };
@@ -125,7 +146,9 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
         panelBuffers: {
           ...state.panelBuffers,
           [panelId]: {
+            ...buffer,
             liveText: "",
+            draftLengthAtSegmentStart: -1,
             completedSegments: [...buffer.completedSegments, normalized],
           },
         },
@@ -157,6 +180,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
         panelBuffers: {
           ...state.panelBuffers,
           [panelId]: {
+            ...buffer,
             liveText: "",
             completedSegments,
           },

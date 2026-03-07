@@ -1,5 +1,6 @@
 import { useProjectStore } from "@/store/projectStore";
 import { useTerminalStore } from "@/store/terminalStore";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useVoiceRecordingStore, type VoiceRecordingTarget } from "@/store/voiceRecordingStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -7,7 +8,6 @@ import { VOICE_INPUT_SETTINGS_CHANGED_EVENT } from "@/lib/voiceInputSettingsEven
 import { logDebug, logWarn, logError } from "@/utils/logger";
 
 const LOG_PREFIX = "[VoiceRecording]";
-const AUTO_STOP_MS = 60_000;
 
 function formatTargetLabel(target: VoiceRecordingTarget): string {
   const project = target.projectName?.trim();
@@ -27,7 +27,6 @@ class VoiceRecordingService {
   private audioContext: AudioContext | null = null;
   private workletNode: AudioWorkletNode | null = null;
   private stream: MediaStream | null = null;
-  private autoStopTimer: ReturnType<typeof setTimeout> | null = null;
   private elapsedTimer: ReturnType<typeof setInterval> | null = null;
   private sessionStartedAt = 0;
   private unsubscribers: Array<() => void> = [];
@@ -48,6 +47,31 @@ class VoiceRecordingService {
     this.unsubscribers.push(
       voiceInput.onTranscriptionDelta((delta) => {
         logDebug(`${LOG_PREFIX} Received transcription delta`, { length: delta.length });
+        const voiceState = useVoiceRecordingStore.getState();
+        const target = voiceState.activeTarget;
+        if (target) {
+          const buffer = voiceState.panelBuffers[target.panelId];
+          const isFirstDelta = !buffer || buffer.liveText === "";
+          if (isFirstDelta) {
+            // Snapshot draft length before we start appending deltas for this segment.
+            const draftLen = useTerminalInputStore
+              .getState()
+              .getDraftInput(target.panelId, target.projectId).length;
+            useVoiceRecordingStore
+              .getState()
+              .setDraftLengthAtSegmentStart(target.panelId, draftLen);
+            // First delta of a new utterance — use appendVoiceText for separator logic.
+            useTerminalInputStore
+              .getState()
+              .appendVoiceText(target.panelId, delta, target.projectId);
+          } else {
+            // Subsequent deltas — append raw to keep length in sync with liveText.
+            const store = useTerminalInputStore.getState();
+            const existing = store.getDraftInput(target.panelId, target.projectId);
+            store.setDraftInput(target.panelId, existing + delta, target.projectId);
+            store.bumpVoiceDraftRevision();
+          }
+        }
         useVoiceRecordingStore.getState().appendDelta(delta);
       })
     );
@@ -55,6 +79,23 @@ class VoiceRecordingService {
     this.unsubscribers.push(
       voiceInput.onTranscriptionComplete((text) => {
         logDebug(`${LOG_PREFIX} Received transcription complete`, { text });
+        const voiceState = useVoiceRecordingStore.getState();
+        const panelId = voiceState.activeTarget?.panelId;
+        const projectId = voiceState.activeTarget?.projectId;
+        if (panelId) {
+          const buffer = voiceState.panelBuffers[panelId];
+          const segmentStart = buffer?.draftLengthAtSegmentStart ?? -1;
+          if (segmentStart >= 0 || text.trim()) {
+            const store = useTerminalInputStore.getState();
+            const draft = store.getDraftInput(panelId, projectId);
+            // Slice back to where this segment started and replace with final transcript.
+            const base = segmentStart >= 0 ? draft.slice(0, segmentStart) : draft;
+            const separator = base && !base.endsWith(" ") ? " " : "";
+            const finalText = text.trim();
+            store.setDraftInput(panelId, base + separator + finalText, projectId);
+            store.bumpVoiceDraftRevision();
+          }
+        }
         useVoiceRecordingStore.getState().completeSegment(text);
       })
     );
@@ -149,12 +190,19 @@ class VoiceRecordingService {
     this.unsubscribers.push(
       useTerminalStore.subscribe((state) => {
         const activeTarget = useVoiceRecordingStore.getState().activeTarget;
-        const activePanelId = activeTarget?.panelId ?? null;
+        if (!activeTarget) return;
 
-        if (!activePanelId) return;
+        // Don't stop recording during a project switch — terminals are
+        // temporarily cleared and will be rehydrated in the new project.
+        if (useProjectStore.getState().isSwitching) return;
+
+        // If the recording target belongs to a different project than the
+        // one currently loaded, the panel's absence is expected.
+        const currentProjectId = useProjectStore.getState().currentProject?.id;
+        if (activeTarget.projectId && currentProjectId !== activeTarget.projectId) return;
 
         const panel = state.terminals.find(
-          (terminal) => terminal.id === activePanelId && terminal.location !== "trash"
+          (terminal) => terminal.id === activeTarget.panelId && terminal.location !== "trash"
         );
 
         if (!panel) {
@@ -362,7 +410,6 @@ class VoiceRecordingService {
 
     this.sessionStartedAt = Date.now();
     this.startElapsedTimer();
-    this.startAutoStopTimer();
     useVoiceRecordingStore.getState().setStatus("recording");
     logDebug(`${LOG_PREFIX} Recording started successfully`);
     useVoiceRecordingStore
@@ -409,6 +456,19 @@ class VoiceRecordingService {
     }
 
     if (hasSession) {
+      // Flush any remaining delta text (liveText) to the draft store before
+      // finishSession clears it — this handles the case where recording stops
+      // mid-utterance with un-committed delta text in the editor.
+      if (preserveLiveText && storeState.activeTarget) {
+        const { panelId } = storeState.activeTarget;
+        const buffer = useVoiceRecordingStore.getState().panelBuffers[panelId];
+        const remaining = buffer?.liveText.trim();
+        if (remaining) {
+          // liveText was already streamed as deltas — it's in the draft.
+          // Just bump revision so the editor syncs if needed.
+          useTerminalInputStore.getState().bumpVoiceDraftRevision();
+        }
+      }
       useVoiceRecordingStore.getState().finishSession({ preserveLiveText, nextStatus });
       if (shouldAnnounce) {
         useVoiceRecordingStore.getState().announce(announcement);
@@ -536,21 +596,6 @@ class VoiceRecordingService {
     }, 1000);
   }
 
-  private startAutoStopTimer(): void {
-    this.clearAutoStopTimer();
-    this.autoStopTimer = setTimeout(() => {
-      void this.stop("Dictation stopped automatically after 60 seconds.", {
-        preserveLiveText: true,
-      });
-    }, AUTO_STOP_MS);
-  }
-
-  private clearAutoStopTimer(): void {
-    if (!this.autoStopTimer) return;
-    clearTimeout(this.autoStopTimer);
-    this.autoStopTimer = null;
-  }
-
   private clearElapsedTimer(): void {
     if (!this.elapsedTimer) return;
     clearInterval(this.elapsedTimer);
@@ -558,9 +603,16 @@ class VoiceRecordingService {
   }
 
   private clearTimers(): void {
-    this.clearAutoStopTimer();
     this.clearElapsedTimer();
     useVoiceRecordingStore.getState().setElapsedSeconds(0);
+  }
+
+  destroy(): void {
+    for (const unsub of this.unsubscribers) {
+      unsub();
+    }
+    this.unsubscribers = [];
+    this.initialized = false;
   }
 
   private async cleanupAudioCapture(): Promise<void> {
@@ -585,3 +637,12 @@ class VoiceRecordingService {
 }
 
 export const voiceRecordingService = new VoiceRecordingService();
+
+// In development, Vite HMR re-evaluates this module and creates a new
+// singleton. Without cleanup, the old singleton's ipcRenderer.on listeners
+// stay alive and forward every event twice, causing text duplication.
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    voiceRecordingService.destroy();
+  });
+}

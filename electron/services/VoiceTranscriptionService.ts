@@ -186,10 +186,12 @@ export class VoiceTranscriptionService {
   }
 
   private audioChunkCount = 0;
+  private staleChunkWarned = false;
 
   sendAudioChunk(chunk: ArrayBuffer): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      if (this.audioChunkCount === 0) {
+      if (!this.staleChunkWarned) {
+        this.staleChunkWarned = true;
         logWarn(`${P} sendAudioChunk called but WebSocket not open`, {
           readyState: this.ws?.readyState,
         });
@@ -214,6 +216,7 @@ export class VoiceTranscriptionService {
     const pendingSessionId = this.pendingStart?.sessionId;
     this.sessionId++;
     this.audioChunkCount = 0;
+    this.staleChunkWarned = false;
     this.clearConnectTimeout();
     if (pendingSessionId !== undefined) {
       this.settlePendingStart(pendingSessionId, { ok: false, error: "Voice session stopped" });
