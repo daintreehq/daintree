@@ -21,7 +21,7 @@ export interface NotifyPayload {
   placement?: NotificationPlacement;
   /**
    * Controls routing:
-   * - "high" (default): toast when focused, OS native when blurred
+   * - "high" (default): toast when focused, history only when blurred
    * - "low": history inbox only — never shown as toast or OS notification
    * - "watch": always shows both in-app toast and OS native notification
    */
@@ -42,7 +42,7 @@ export interface NotifyPayload {
  * |---------|----------|-------|-----------|---------|
  * | focused | high     | yes   | no        | yes     |
  * | focused | low      | no    | no        | yes     |
- * | blurred | high     | no    | yes       | yes     |
+ * | blurred | high     | no    | no        | yes     |
  * | blurred | low      | no    | no        | yes     |
  * | any     | watch    | yes   | yes       | yes     |
  *
@@ -73,9 +73,9 @@ export function notify(payload: NotifyPayload): string {
   const isFocused = typeof document !== "undefined" ? document.hasFocus() : true;
 
   const shouldToast = priority === "watch" || (priority === "high" && isFocused);
-  const shouldNative = priority === "watch" || (priority === "high" && !isFocused);
+  const shouldNative = priority === "watch";
 
-  if (shouldNative && historyMessage) {
+  if (shouldNative && historyMessage && typeof window !== "undefined") {
     window.electron?.notification?.showNative?.({
       title: title ?? "Canopy",
       body: historyMessage,

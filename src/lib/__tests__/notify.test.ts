@@ -109,24 +109,19 @@ describe("notify()", () => {
     });
   });
 
-  describe("routing — blurred + high → OS native only", () => {
-    it("calls showNative and does NOT add toast when blurred + high", () => {
+  describe("routing — blurred + high → history only", () => {
+    it("does NOT toast or show OS native when blurred + high", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(false);
       notify({ type: "error", message: "Build failed", priority: "high" });
       expect(useNotificationStore.getState().notifications).toHaveLength(0);
-      expect(mockShowNative).toHaveBeenCalledWith({
-        title: "Canopy",
-        body: "Build failed",
-      });
+      expect(mockShowNative).not.toHaveBeenCalled();
     });
 
-    it("uses notification title in native alert when title provided", () => {
+    it("still adds to history when blurred + high", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(false);
       notify({ type: "error", title: "Build Error", message: "Compile failed", priority: "high" });
-      expect(mockShowNative).toHaveBeenCalledWith({
-        title: "Build Error",
-        body: "Compile failed",
-      });
+      expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
+      expect(mockShowNative).not.toHaveBeenCalled();
     });
   });
 

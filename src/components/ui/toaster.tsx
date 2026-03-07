@@ -119,7 +119,7 @@ export function Toaster() {
   }, []);
 
   const toastNotifications = notifications.filter(
-    (notification) => notification.placement !== "grid-bar" && !notification.dismissed
+    (notification) => notification.placement !== "grid-bar"
   );
 
   if (!mounted || toastNotifications.length === 0) return null;

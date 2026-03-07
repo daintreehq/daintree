@@ -18,23 +18,26 @@ interface ThreadGroup {
 }
 
 function groupByCorrelationId(entries: NotificationHistoryEntry[]): ThreadGroup[] {
-  const groups = new Map<string, NotificationHistoryEntry[]>();
+  const groups = new Map<string, { entries: NotificationHistoryEntry[]; isSolo: boolean }>();
   const order: string[] = [];
 
   for (const entry of entries) {
-    const key = entry.correlationId ?? `solo:${entry.id}`;
-    if (!groups.has(key)) {
-      groups.set(key, []);
-      order.push(key);
+    if (entry.correlationId) {
+      if (!groups.has(entry.correlationId)) {
+        groups.set(entry.correlationId, { entries: [], isSolo: false });
+        order.push(entry.correlationId);
+      }
+      groups.get(entry.correlationId)!.entries.push(entry);
+    } else {
+      groups.set(entry.id, { entries: [entry], isSolo: true });
+      order.push(entry.id);
     }
-    groups.get(key)!.push(entry);
   }
 
   return order.map((key) => {
-    const groupEntries = groups.get(key)!;
-    const correlationId = key.startsWith("solo:") ? undefined : key;
+    const { entries: groupEntries, isSolo } = groups.get(key)!;
     return {
-      correlationId,
+      correlationId: isSolo ? undefined : key,
       entries: groupEntries,
       latestTimestamp: Math.max(...groupEntries.map((e) => e.timestamp)),
     };
