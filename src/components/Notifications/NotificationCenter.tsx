@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Bell, Trash2 } from "lucide-react";
 import {
   useNotificationHistoryStore,
@@ -49,17 +49,23 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   const clearAll = useNotificationHistoryStore((s) => s.clearAll);
   const markAllRead = useNotificationHistoryStore((s) => s.markAllRead);
 
-  const unseenIdsRef = useRef<Set<string>>(new Set());
+  const [unseenIds, setUnseenIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (open) {
       const currentEntries = useNotificationHistoryStore.getState().entries;
-      unseenIdsRef.current = new Set(currentEntries.filter((e) => !e.seenAsToast).map((e) => e.id));
+      setUnseenIds(new Set(currentEntries.filter((e) => !e.seenAsToast).map((e) => e.id)));
       markAllRead();
     } else {
-      unseenIdsRef.current = new Set();
+      setUnseenIds(new Set());
     }
   }, [open, markAllRead]);
+
+  useEffect(() => {
+    if (open && entries.some((e) => !e.seenAsToast)) {
+      markAllRead();
+    }
+  }, [open, entries, markAllRead]);
 
   const groups = useMemo(() => groupByCorrelationId(entries), [entries]);
 
@@ -91,16 +97,12 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           <div className="divide-y divide-white/[0.04]">
             {groups.map((group) =>
               group.correlationId && group.entries.length > 1 ? (
-                <NotificationThread
-                  key={group.correlationId}
-                  group={group}
-                  unseenIds={unseenIdsRef.current}
-                />
+                <NotificationThread key={group.correlationId} group={group} unseenIds={unseenIds} />
               ) : (
                 <NotificationCenterEntry
                   key={group.entries[0].id}
                   entry={group.entries[0]}
-                  isNew={unseenIdsRef.current.has(group.entries[0].id)}
+                  isNew={unseenIds.has(group.entries[0].id)}
                 />
               )
             )}

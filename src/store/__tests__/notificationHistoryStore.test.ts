@@ -149,5 +149,15 @@ describe("notificationHistorySlice", () => {
       const after = getState().entries[0];
       expect(after).toBe(before);
     });
+
+    it("unreadCount stays accurate when overflow evicts an unseen entry", () => {
+      for (let i = 0; i < 50; i++) {
+        addEntry({ message: `missed-${i}` });
+      }
+      expect(getState().unreadCount).toBe(50);
+      getState().addEntry({ type: "success", message: "seen", seenAsToast: true });
+      expect(getState().entries).toHaveLength(50);
+      expect(getState().unreadCount).toBe(49);
+    });
   });
 });

@@ -57,7 +57,9 @@ export function NotificationCenterEntry({
         <span className="text-[10px] text-canopy-text/40 tabular-nums">
           {formatRelativeTime(entry.timestamp)}
         </span>
-        {isNew && <span className="h-1.5 w-1.5 rounded-full bg-canopy-accent shrink-0" />}
+        {isNew && (
+          <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-canopy-accent shrink-0" />
+        )}
       </div>
     </div>
   );

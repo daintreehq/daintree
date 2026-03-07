@@ -7,7 +7,7 @@ export interface NotificationHistoryEntry {
   message: string;
   timestamp: number;
   correlationId?: string;
-  /** True when the notification was shown as an in-app toast (user saw it). False when missed (app blurred or low priority). */
+  /** True when the user has seen this notification (shown as toast, or the notification center was opened). False when missed (app blurred or low priority, and center not yet opened). */
   seenAsToast: boolean;
   context?: {
     projectId?: string;
@@ -46,11 +46,8 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>((set
       if (updated.length > MAX_ENTRIES) {
         updated.length = MAX_ENTRIES;
       }
-      const countIncrement = seenAsToast ? 0 : 1;
-      return {
-        entries: updated,
-        unreadCount: Math.min(state.unreadCount + countIncrement, MAX_ENTRIES),
-      };
+      const unreadCount = updated.filter((e) => !e.seenAsToast).length;
+      return { entries: updated, unreadCount };
     });
   },
   clearAll: () => set({ entries: [], unreadCount: 0 }),
