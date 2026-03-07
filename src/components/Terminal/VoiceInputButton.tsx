@@ -8,12 +8,14 @@ const AUTO_STOP_MS = 60_000;
 interface VoiceInputButtonProps {
   onTranscriptionDelta: (delta: string) => void;
   onTranscriptionComplete: (text: string) => void;
+  onRecordingStateChange?: (isRecording: boolean) => void;
   disabled?: boolean;
 }
 
 export function VoiceInputButton({
   onTranscriptionDelta,
   onTranscriptionComplete,
+  onRecordingStateChange,
   disabled = false,
 }: VoiceInputButtonProps) {
   const [status, setStatus] = useState<VoiceInputStatus>("idle");
@@ -30,6 +32,10 @@ export function VoiceInputButton({
   const generationRef = useRef(0);
 
   const isRecording = status === "recording";
+
+  useEffect(() => {
+    onRecordingStateChange?.(isRecording);
+  }, [isRecording, onRecordingStateChange]);
 
   const stopRecording = useCallback(async () => {
     // Increment generation so any in-flight startRecording async steps become no-ops.
