@@ -33,8 +33,11 @@ export const inputTheme = EditorView.theme({
   "&.cm-focused .cm-cursor": {
     borderLeft: "2px solid var(--theme-accent-primary)",
   },
+  "& .cm-selectionBackground": {
+    backgroundColor: "color-mix(in oklab, var(--theme-accent-primary) 18%, transparent)",
+  },
   "&.cm-focused .cm-selectionBackground": {
-    backgroundColor: "color-mix(in oklab, var(--theme-syntax-chip) 22%, transparent)",
+    backgroundColor: "color-mix(in oklab, var(--theme-accent-primary) 32%, transparent)",
   },
   ".cm-dropCursor": {
     borderLeftColor: "var(--theme-accent-primary)",
