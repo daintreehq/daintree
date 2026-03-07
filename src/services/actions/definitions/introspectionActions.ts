@@ -1,6 +1,9 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import { z } from "zod";
+import { useTerminalStore } from "@/store/terminalStore";
+import { useProjectStore } from "@/store/projectStore";
+import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 
 export function registerIntrospectionActions(
   actions: ActionRegistry,
@@ -58,14 +61,52 @@ export function registerIntrospectionActions(
     id: "actions.getContext",
     title: "Get Action Context",
     description:
-      "Get the current action execution context including focused panel, active worktree, and current project",
+      "Get the current UI context: focused terminal, active worktree, current project, and sidecar state",
     category: "introspection",
     kind: "query",
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const { getActionContext } = await import("@/services/ActionService");
-      return getActionContext();
+      const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
+      const { useSidecarStore } = await import("@/store/sidecarStore");
+
+      const project = useProjectStore.getState().currentProject;
+      const terminalState = useTerminalStore.getState();
+      const worktreeSelection = useWorktreeSelectionStore.getState();
+      const worktrees = useWorktreeDataStore.getState().worktrees;
+      const sidecar = useSidecarStore.getState();
+
+      const focusedId = terminalState.focusedId;
+      const focusedTerminal = focusedId
+        ? terminalState.terminals.find((t) => t.id === focusedId)
+        : null;
+
+      const activeWorktreeId = worktreeSelection.activeWorktreeId;
+      const activeWorktree = activeWorktreeId ? worktrees.get(activeWorktreeId) : null;
+
+      const ctx: ActionContext = {
+        projectId: project?.id,
+        projectName: project?.name,
+        projectPath: project?.path,
+        activeWorktreeId: activeWorktreeId ?? undefined,
+        activeWorktreeName: activeWorktree?.name,
+        activeWorktreePath: activeWorktree?.path,
+        activeWorktreeBranch: activeWorktree?.branch,
+        activeWorktreeIsMain: activeWorktree?.isMainWorktree,
+        focusedWorktreeId: worktreeSelection.focusedWorktreeId ?? undefined,
+        focusedTerminalId: focusedId ?? undefined,
+        focusedTerminalKind: focusedTerminal?.kind,
+        focusedTerminalType: focusedTerminal?.type,
+        focusedTerminalTitle: focusedTerminal?.title,
+      };
+
+      return {
+        ...ctx,
+        sidecarOpen: sidecar.isOpen,
+        sidecarActiveTabId: sidecar.activeTabId,
+        terminalCount: terminalState.terminals.filter((t) => t.location !== "trash").length,
+        worktreeCount: worktrees.size,
+      };
     },
   }));
 }
