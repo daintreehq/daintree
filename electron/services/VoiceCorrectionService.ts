@@ -8,9 +8,12 @@ import {
 export { CORE_CORRECTION_PROMPT, buildCorrectionSystemPrompt };
 
 const P = "[VoiceCorrection]";
-const CORRECTION_TIMEOUT_MS = 2000;
+const CORRECTION_TIMEOUT_MS = 5000;
 const MAX_HISTORY = 3;
-const MAX_TOKENS = 300;
+// gpt-5-nano is a reasoning model that uses internal reasoning tokens before
+// producing visible output. 1024 gives enough headroom for ~700 reasoning
+// tokens plus the corrected sentence output.
+const MAX_COMPLETION_TOKENS = 1024;
 
 export interface VoiceCorrectionSettings {
   model: string;
@@ -92,6 +95,9 @@ export class VoiceCorrectionService {
 
     const userMessage = userParts.join("\n\n");
 
+    // GPT-5 family models are reasoning models that require different API parameters
+    const isReasoningModel = model.startsWith("gpt-5");
+
     logDebug(`${P} Calling Chat Completions`, { model, historyLen: this.history.length });
 
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -106,8 +112,10 @@ export class VoiceCorrectionService {
           { role: "system", content: systemPrompt },
           { role: "user", content: userMessage },
         ],
-        temperature: 0,
-        max_tokens: MAX_TOKENS,
+        // Reasoning models (gpt-5-nano) don't support temperature and need
+        // reasoning_effort to limit internal chain-of-thought token usage.
+        ...(isReasoningModel ? { reasoning_effort: "low" } : { temperature: 0 }),
+        max_completion_tokens: MAX_COMPLETION_TOKENS,
       }),
     });
 

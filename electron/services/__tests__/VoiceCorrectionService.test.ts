@@ -67,14 +67,14 @@ describe("VoiceCorrectionService", () => {
         .mockImplementation(
           () =>
             new Promise((resolve) =>
-              setTimeout(() => resolve(makeFetchResponse("Corrected.")), 5000)
+              setTimeout(() => resolve(makeFetchResponse("Corrected.")), 10000)
             )
         )
     );
 
     const svc = new VoiceCorrectionService();
     const resultPromise = svc.correct("react is great", BASE_SETTINGS);
-    vi.advanceTimersByTime(3000);
+    vi.advanceTimersByTime(6000);
     const result = await resultPromise;
     expect(result).toBe("react is great");
   });
@@ -202,7 +202,11 @@ describe("VoiceCorrectionService", () => {
     await svc.correct("test", BASE_SETTINGS);
 
     const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
-    expect(body.temperature).toBe(0);
+    // gpt-5-nano is a reasoning model: no temperature, uses reasoning_effort
+    expect(body.temperature).toBeUndefined();
+    expect(body.reasoning_effort).toBe("low");
+    expect(body.max_completion_tokens).toBe(1024);
+    expect(body.max_tokens).toBeUndefined();
   });
 
   it("falls back to raw text when API returns whitespace-only content", async () => {

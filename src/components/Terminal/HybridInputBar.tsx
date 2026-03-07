@@ -520,11 +520,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     // Sync pending-correction decorations to the editor whenever they change.
     const pendingCorrections = useVoiceRecordingStore(
-      (s) => s.panelBuffers[terminalId]?.pendingCorrections ?? []
+      (s) => s.panelBuffers[terminalId]?.pendingCorrections
     );
     useEffect(() => {
       const view = editorViewRef.current;
       if (!view) return;
+      if (!pendingCorrections || pendingCorrections.length === 0) {
+        view.dispatch({ effects: setPendingCorrectionRanges.of([]) });
+        return;
+      }
       const doc = view.state.doc.toString();
       const ranges = pendingCorrections
         .map((p) => {
