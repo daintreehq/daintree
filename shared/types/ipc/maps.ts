@@ -1265,11 +1265,43 @@ export interface IpcInvokeMap {
   // MCP Server channels
   "mcp-server:get-status": {
     args: [];
-    result: { enabled: boolean; port: number | null };
+    result: {
+      enabled: boolean;
+      port: number | null;
+      configuredPort: number | null;
+      apiKey: string;
+    };
   };
   "mcp-server:set-enabled": {
     args: [enabled: boolean];
-    result: { enabled: boolean; port: number | null };
+    result: {
+      enabled: boolean;
+      port: number | null;
+      configuredPort: number | null;
+      apiKey: string;
+    };
+  };
+  "mcp-server:set-port": {
+    args: [port: number | null];
+    result: {
+      enabled: boolean;
+      port: number | null;
+      configuredPort: number | null;
+      apiKey: string;
+    };
+  };
+  "mcp-server:set-api-key": {
+    args: [apiKey: string];
+    result: {
+      enabled: boolean;
+      port: number | null;
+      configuredPort: number | null;
+      apiKey: string;
+    };
+  };
+  "mcp-server:generate-api-key": {
+    args: [];
+    result: string;
   };
   "mcp-server:get-config-snippet": {
     args: [];
