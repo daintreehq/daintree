@@ -890,12 +890,17 @@ export type MicPermissionStatus =
 
 export type VoiceTranscriptionModel = "gpt-4o-mini-transcribe" | "gpt-4o-transcribe";
 
+export type VoiceCorrectionModel = "gpt-5-nano" | "gpt-4o-mini" | "gpt-4o";
+
 export interface VoiceInputSettings {
   enabled: boolean;
   apiKey: string;
   language: string;
   customDictionary: string[];
   transcriptionModel: VoiceTranscriptionModel;
+  correctionEnabled: boolean;
+  correctionModel: VoiceCorrectionModel;
+  correctionSystemPrompt: string;
 }
 
 export type VoiceInputStatus = "idle" | "connecting" | "recording" | "finishing" | "error";

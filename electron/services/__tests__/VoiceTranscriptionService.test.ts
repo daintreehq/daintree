@@ -90,6 +90,9 @@ describe("VoiceTranscriptionService", () => {
       language: "en",
       customDictionary: [],
       transcriptionModel: "gpt-4o-mini-transcribe" as const,
+      correctionEnabled: false,
+      correctionModel: "gpt-5-nano" as const,
+      correctionSystemPrompt: "",
     });
 
     expect(statuses).toContain("connecting");
@@ -115,6 +118,9 @@ describe("VoiceTranscriptionService", () => {
       language: "en",
       customDictionary: [],
       transcriptionModel: "gpt-4o-mini-transcribe" as const,
+      correctionEnabled: false,
+      correctionModel: "gpt-5-nano" as const,
+      correctionSystemPrompt: "",
     };
 
     // Start first session
@@ -147,6 +153,9 @@ describe("VoiceTranscriptionService", () => {
       language: "en",
       customDictionary: [],
       transcriptionModel: "gpt-4o-mini-transcribe" as const,
+      correctionEnabled: false,
+      correctionModel: "gpt-5-nano" as const,
+      correctionSystemPrompt: "",
     });
 
     service.stop();

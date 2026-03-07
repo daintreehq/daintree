@@ -10,6 +10,7 @@ import type {
 import type { IssueAssociation } from "../shared/types/ipc/worktree.js";
 import { DEFAULT_AGENT_SETTINGS, DEFAULT_APP_AGENT_CONFIG } from "../shared/types/index.js";
 import type { AppThemeConfig } from "../shared/types/appTheme.js";
+import { DEFAULT_CORRECTION_SYSTEM_PROMPT } from "./services/VoiceCorrectionService.js";
 
 export interface StoreSchema {
   _schemaVersion: number;
@@ -123,6 +124,9 @@ export interface StoreSchema {
     language: string;
     customDictionary: string[];
     transcriptionModel: string;
+    correctionEnabled: boolean;
+    correctionModel: string;
+    correctionSystemPrompt: string;
   };
   mcpServer: {
     enabled: boolean;
@@ -200,6 +204,9 @@ const storeOptions = {
       language: "en",
       customDictionary: [],
       transcriptionModel: "gpt-4o-mini-transcribe",
+      correctionEnabled: false,
+      correctionModel: "gpt-5-nano",
+      correctionSystemPrompt: DEFAULT_CORRECTION_SYSTEM_PROMPT,
     },
     mcpServer: {
       enabled: false,

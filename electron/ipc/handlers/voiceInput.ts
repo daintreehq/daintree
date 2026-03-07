@@ -3,11 +3,13 @@ import { spawn } from "child_process";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import { VoiceTranscriptionService } from "../../services/VoiceTranscriptionService.js";
+import { VoiceCorrectionService } from "../../services/VoiceCorrectionService.js";
 import type { HandlerDependencies } from "../types.js";
 import type { VoiceInputSettings } from "../../../shared/types/ipc/api.js";
 
 let service: VoiceTranscriptionService | null = null;
 let activeEventUnsubscribe: (() => void) | null = null;
+let correctionService: VoiceCorrectionService | null = null;
 
 function getService(): VoiceTranscriptionService {
   if (!service) {
@@ -99,6 +101,15 @@ async function validateOpenAIKey(apiKey: string): Promise<{ valid: boolean; erro
   }
 }
 
+function buildProjectContext(): string | undefined {
+  const projects = store.get("projects");
+  const currentId = projects?.currentProjectId;
+  if (!currentId) return undefined;
+  const project = projects?.list?.find((p) => p.id === currentId);
+  if (!project?.name) return undefined;
+  return project.name;
+}
+
 export function registerVoiceInputHandlers(deps: HandlerDependencies): () => void {
   const handleGetSettings = async () => {
     return store.get("voiceInput");
@@ -106,13 +117,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
 
   const handleSetSettings = async (
     _event: Electron.IpcMainInvokeEvent,
-    patch: Partial<{
-      enabled: boolean;
-      apiKey: string;
-      language: string;
-      customDictionary: string[];
-      transcriptionModel: string;
-    }>
+    patch: Partial<VoiceInputSettings>
   ) => {
     const current = store.get("voiceInput");
     store.set("voiceInput", { ...current, ...patch });
@@ -120,10 +125,19 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
 
   const handleStart = async (event: Electron.IpcMainInvokeEvent) => {
     const svc = getService();
-    const settings = store.get("voiceInput");
+    const settings = store.get("voiceInput") as VoiceInputSettings;
 
     // Clean up any existing subscription before starting a new session
     cleanupActiveSubscription();
+
+    // Initialize (or reset) the correction service for this session
+    if (!correctionService) {
+      correctionService = new VoiceCorrectionService();
+    }
+    correctionService.resetHistory();
+
+    // Build project context from the active project name if available
+    const projectContext = buildProjectContext();
 
     const unsubscribe = svc.onEvent((voiceEvent) => {
       const win = deps.mainWindow;
@@ -132,7 +146,26 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       if (voiceEvent.type === "delta") {
         win.webContents.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_DELTA, voiceEvent.text);
       } else if (voiceEvent.type === "complete") {
-        win.webContents.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, voiceEvent.text);
+        const rawText = voiceEvent.text;
+        if (settings.correctionEnabled && settings.apiKey) {
+          // Apply correction asynchronously before forwarding to the renderer.
+          // Falls back to raw text on timeout or error.
+          void correctionService!
+            .correct(rawText, {
+              model: settings.correctionModel,
+              systemPrompt: settings.correctionSystemPrompt,
+              apiKey: settings.apiKey,
+              customDictionary: settings.customDictionary,
+              projectContext,
+            })
+            .then((finalText) => {
+              if (!win.isDestroyed()) {
+                win.webContents.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, finalText);
+              }
+            });
+        } else {
+          win.webContents.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, rawText);
+        }
       } else if (voiceEvent.type === "error") {
         win.webContents.send(CHANNELS.VOICE_INPUT_ERROR, voiceEvent.message);
       } else if (voiceEvent.type === "status") {
@@ -152,7 +185,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     };
     event.sender.once("destroyed", onDestroyed);
 
-    const result = await svc.start(settings as VoiceInputSettings);
+    const result = await svc.start(settings);
     if (!result.ok) {
       // Failed to start — clean up subscription immediately
       if (activeEventUnsubscribe === unsubscribe) {
@@ -215,5 +248,6 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     cleanupActiveSubscription();
     service?.destroy();
     service = null;
+    correctionService = null;
   };
 }

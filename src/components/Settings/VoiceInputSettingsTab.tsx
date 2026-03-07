@@ -14,6 +14,8 @@ import {
   Loader2,
   FlaskConical,
   ExternalLink,
+  Sparkles,
+  RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "./SettingsSection";
@@ -23,6 +25,7 @@ import type {
   VoiceInputSettings,
   MicPermissionStatus,
   VoiceTranscriptionModel,
+  VoiceCorrectionModel,
 } from "@shared/types";
 
 const LANGUAGES = [
@@ -55,12 +58,47 @@ const TRANSCRIPTION_MODELS: {
   },
 ];
 
+const CORRECTION_MODELS: {
+  value: VoiceCorrectionModel;
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: "gpt-5-nano",
+    label: "GPT-5 Nano",
+    description: "Fastest · ~$0.003/hr",
+  },
+  {
+    value: "gpt-4o-mini",
+    label: "GPT-4o Mini",
+    description: "Balanced · ~$0.008/hr",
+  },
+  {
+    value: "gpt-4o",
+    label: "GPT-4o",
+    description: "Highest quality · ~$0.11/hr",
+  },
+];
+
+const DEFAULT_CORRECTION_SYSTEM_PROMPT = `You are a speech-to-text post-processor. Your sole task is to clean raw transcription text for readability while preserving the exact original meaning and tone.
+
+Rules:
+- Remove filler words (um, uh, like, you know, so, right) only when used as fillers, not when used meaningfully
+- Fix punctuation and sentence casing
+- Correct technical term capitalization (React, TypeScript, JavaScript, Python, Node.js, API, GitHub, npm, etc.)
+- Correct obvious homophone errors based on context (their/there/they're, to/too/two, etc.)
+- Do NOT rephrase, summarize, or improve the speaker's eloquence or grammar beyond these fixes
+- If the input is already correct, return it verbatim`;
+
 const DEFAULT_SETTINGS: VoiceInputSettings = {
   enabled: false,
   apiKey: "",
   language: "en",
   customDictionary: [],
   transcriptionModel: "gpt-4o-mini-transcribe",
+  correctionEnabled: false,
+  correctionModel: "gpt-5-nano",
+  correctionSystemPrompt: DEFAULT_CORRECTION_SYSTEM_PROMPT,
 };
 
 type LoadState = "loading" | "ready" | "error";
@@ -403,6 +441,9 @@ export function VoiceInputSettingsTab() {
             </select>
           </SettingsSection>
 
+          {/* AI Text Correction */}
+          <AiCorrectionSection settings={settings} update={update} />
+
           {/* Custom Dictionary */}
           <div className="space-y-4">
             <div>
@@ -474,6 +515,103 @@ export function VoiceInputSettingsTab() {
         </>
       )}
     </div>
+  );
+}
+
+interface AiCorrectionSectionProps {
+  settings: VoiceInputSettings;
+  update: (patch: Partial<VoiceInputSettings>) => void;
+}
+
+function AiCorrectionSection({ settings, update }: AiCorrectionSectionProps) {
+  const [promptExpanded, setPromptExpanded] = useState(false);
+
+  const handleResetPrompt = () => {
+    update({ correctionSystemPrompt: DEFAULT_CORRECTION_SYSTEM_PROMPT });
+  };
+
+  return (
+    <>
+      <SettingsSwitchCard
+        icon={Sparkles}
+        title="AI Text Correction"
+        subtitle="Automatically clean up transcriptions — removing filler words, fixing punctuation, and correcting technical terms"
+        isEnabled={settings.correctionEnabled}
+        onChange={() => update({ correctionEnabled: !settings.correctionEnabled })}
+        ariaLabel="Toggle AI text correction"
+      />
+
+      {settings.correctionEnabled && (
+        <SettingsSection
+          icon={Sparkles}
+          title="Correction Model"
+          description="Choose the model used for text correction. GPT-5 Nano is fastest and cheapest; GPT-4o offers higher quality corrections."
+        >
+          <div className="space-y-4">
+            <select
+              value={settings.correctionModel}
+              onChange={(e) => update({ correctionModel: e.target.value as VoiceCorrectionModel })}
+              className="w-full max-w-xs bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-sm text-canopy-text focus:outline-none focus:ring-1 focus:ring-canopy-accent"
+            >
+              {CORRECTION_MODELS.map(({ value, label, description }) => (
+                <option key={value} value={value}>
+                  {label} — {description}
+                </option>
+              ))}
+            </select>
+
+            <p className="text-xs text-canopy-text/50">
+              Cost estimates assume ~3 sentences per minute of dictation. Actual cost depends on
+              sentence length and usage.
+            </p>
+
+            <div className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-medium text-canopy-text">System Prompt</h4>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={handleResetPrompt}
+                    className="text-canopy-text/50 hover:text-canopy-text text-xs h-7 px-2"
+                    title="Reset to default prompt"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    Reset
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setPromptExpanded((v) => !v)}
+                    className="text-canopy-text/50 hover:text-canopy-text text-xs h-7 px-2"
+                  >
+                    {promptExpanded ? "Collapse" : "Edit"}
+                  </Button>
+                </div>
+              </div>
+
+              {promptExpanded ? (
+                <textarea
+                  value={settings.correctionSystemPrompt}
+                  onChange={(e) => update({ correctionSystemPrompt: e.target.value })}
+                  rows={8}
+                  className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:ring-1 focus:ring-canopy-accent resize-y"
+                  spellCheck={false}
+                />
+              ) : (
+                <p className="text-xs text-canopy-text/50 line-clamp-2">
+                  {settings.correctionSystemPrompt}
+                </p>
+              )}
+
+              <p className="text-xs text-canopy-text/40">
+                A guardrail requiring plain-text output is always appended to your prompt.
+              </p>
+            </div>
+          </div>
+        </SettingsSection>
+      )}
+    </>
   );
 }
 
