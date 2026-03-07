@@ -1,26 +1,35 @@
-/**
- * Tests for WorkflowPersistence - file-based workflow run state persistence.
- */
-
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import fs from "fs/promises";
-import path from "path";
-import os from "os";
+import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
 import { WorkflowPersistence } from "../persistence/WorkflowPersistence.js";
 import type { WorkflowRun } from "../../../shared/types/workflowRun.js";
 import type { WorkflowDefinition } from "../../../shared/types/workflow.js";
+import * as schema from "../persistence/schema.js";
 
-// Mock electron app for testing
-vi.mock("electron", () => ({
-  app: {
-    getPath: vi.fn().mockReturnValue(os.tmpdir()),
-  },
-}));
+const CREATE_TABLES_SQL = `
+  CREATE TABLE IF NOT EXISTS workflow_runs (
+    run_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    workflow_id TEXT NOT NULL,
+    workflow_version TEXT NOT NULL,
+    status TEXT NOT NULL,
+    started_at INTEGER NOT NULL,
+    completed_at INTEGER,
+    definition TEXT NOT NULL,
+    node_states TEXT NOT NULL DEFAULT '{}',
+    task_mapping TEXT NOT NULL DEFAULT '{}',
+    scheduled_nodes TEXT NOT NULL DEFAULT '[]',
+    evaluated_conditions TEXT NOT NULL DEFAULT '[]'
+  );
+  CREATE INDEX IF NOT EXISTS workflow_runs_project_idx ON workflow_runs(project_id);
+  CREATE INDEX IF NOT EXISTS workflow_runs_project_status_idx ON workflow_runs(project_id, status);
+`;
 
 describe("WorkflowPersistence", () => {
   let persistence: WorkflowPersistence;
+  let sqlite: Database.Database;
+  let db: ReturnType<typeof drizzle<typeof schema>>;
   let testProjectId: string;
-  let testDir: string;
 
   const mockWorkflowDefinition: WorkflowDefinition = {
     id: "test-workflow",
@@ -49,28 +58,17 @@ describe("WorkflowPersistence", () => {
     ...overrides,
   });
 
-  beforeEach(async () => {
-    // Create a unique test directory for each test
-    testDir = path.join(os.tmpdir(), `workflow-persistence-test-${Date.now()}`);
-    await fs.mkdir(testDir, { recursive: true });
+  beforeEach(() => {
+    sqlite = new Database(":memory:");
+    sqlite.exec(CREATE_TABLES_SQL);
+    db = drizzle(sqlite, { schema });
 
-    // Use a valid SHA-256 hash as project ID (64 hex chars)
     testProjectId = "a".repeat(64);
-
-    // Create persistence with 0 debounce for immediate saves in tests
-    persistence = new WorkflowPersistence(0);
-
-    // Override the projects config dir for testing
-    (persistence as unknown as { projectsConfigDir: string }).projectsConfigDir = testDir;
+    persistence = new WorkflowPersistence(db, 0);
   });
 
-  afterEach(async () => {
-    // Clean up test directory
-    try {
-      await fs.rm(testDir, { recursive: true, force: true });
-    } catch {
-      // Ignore cleanup errors
-    }
+  afterEach(() => {
+    sqlite.close();
   });
 
   describe("save and load", () => {
@@ -84,8 +82,8 @@ describe("WorkflowPersistence", () => {
       const loaded = await persistence.load(testProjectId);
 
       expect(loaded).toHaveLength(2);
-      expect(loaded[0].workflowId).toBe("workflow-1");
-      expect(loaded[1].workflowId).toBe("workflow-2");
+      const ids = loaded.map((r) => r.workflowId).sort();
+      expect(ids).toEqual(["workflow-1", "workflow-2"]);
     });
 
     it("saves and loads workflow runs with node states", async () => {
@@ -151,18 +149,6 @@ describe("WorkflowPersistence", () => {
       expect(loaded).toEqual([]);
     });
 
-    it("creates project directory if it does not exist", async () => {
-      const runs = [createTestRun()];
-      await persistence.save(testProjectId, runs);
-
-      const projectDir = path.join(testDir, testProjectId);
-      const exists = await fs
-        .access(projectDir)
-        .then(() => true)
-        .catch(() => false);
-      expect(exists).toBe(true);
-    });
-
     it("preserves workflow definition in persisted runs", async () => {
       const customDefinition: WorkflowDefinition = {
         id: "custom-workflow",
@@ -187,112 +173,62 @@ describe("WorkflowPersistence", () => {
       expect(loaded[0].definition.name).toBe("Custom Workflow");
       expect(loaded[0].definition.nodes[0].config.args).toEqual({ foo: "bar" });
     });
-  });
 
-  describe("corruption handling", () => {
-    it("quarantines corrupted file and returns empty array", async () => {
-      const projectDir = path.join(testDir, testProjectId);
-      await fs.mkdir(projectDir, { recursive: true });
-
-      const filePath = path.join(projectDir, "workflow-runs.json");
-      await fs.writeFile(filePath, "{ invalid json }", "utf-8");
-
-      const loaded = await persistence.load(testProjectId);
-      expect(loaded).toEqual([]);
-
-      // Check quarantine file exists (with timestamp suffix)
-      const files = await fs.readdir(projectDir);
-      const quarantineFiles = files.filter((f) => f.startsWith("workflow-runs.json.corrupted."));
-      expect(quarantineFiles.length).toBeGreaterThan(0);
-    });
-
-    it("quarantines file with invalid schema", async () => {
-      const projectDir = path.join(testDir, testProjectId);
-      await fs.mkdir(projectDir, { recursive: true });
-
-      const filePath = path.join(projectDir, "workflow-runs.json");
-      await fs.writeFile(
-        filePath,
-        JSON.stringify({
-          version: "1.0",
-          runs: [{ runId: 123, workflowId: "test" }], // runId should be string
-          lastUpdated: Date.now(),
-        }),
-        "utf-8"
-      );
-
-      const loaded = await persistence.load(testProjectId);
-      expect(loaded).toEqual([]);
-
-      const files = await fs.readdir(projectDir);
-      const quarantineFiles = files.filter((f) => f.startsWith("workflow-runs.json.corrupted."));
-      expect(quarantineFiles.length).toBeGreaterThan(0);
-    });
-  });
-
-  describe("atomic writes", () => {
-    it("uses temp file for atomic write", async () => {
-      const runs = [createTestRun()];
-
-      // Spy on resilient fs wrappers (code uses these instead of raw fs)
-      const fsUtils = await import("../../utils/fs.js");
-      const writeSpy = vi.spyOn(fsUtils, "resilientWriteFile");
-      const renameSpy = vi.spyOn(fsUtils, "resilientRename");
-
+    it("overwrites existing runs on subsequent saves", async () => {
+      const runs = [createTestRun({ workflowId: "old-workflow" })];
       await persistence.save(testProjectId, runs);
 
-      // Should write to temp file then rename
-      expect(writeSpy).toHaveBeenCalled();
-      expect(renameSpy).toHaveBeenCalled();
+      const updated = [createTestRun({ workflowId: "new-workflow" })];
+      await persistence.save(testProjectId, updated);
 
-      const writeCall = writeSpy.mock.calls[0];
-      const renameCall = renameSpy.mock.calls[0];
+      const loaded = await persistence.load(testProjectId);
+      expect(loaded).toHaveLength(1);
+      expect(loaded[0].workflowId).toBe("new-workflow");
+    });
 
-      // Temp file should have .tmp extension
-      expect(String(writeCall[0])).toContain(".tmp");
-      // Rename should be from temp to final
-      expect(String(renameCall[0])).toContain(".tmp");
-      expect(String(renameCall[1])).toContain("workflow-runs.json");
-      expect(String(renameCall[1])).not.toContain(".tmp");
+    it("isolates runs by project", async () => {
+      const projectA = "a".repeat(64);
+      const projectB = "b".repeat(64);
 
-      writeSpy.mockRestore();
-      renameSpy.mockRestore();
+      await persistence.save(projectA, [createTestRun({ workflowId: "wf-a" })]);
+      await persistence.save(projectB, [createTestRun({ workflowId: "wf-b" })]);
+
+      const loadedA = await persistence.load(projectA);
+      const loadedB = await persistence.load(projectB);
+
+      expect(loadedA[0].workflowId).toBe("wf-a");
+      expect(loadedB[0].workflowId).toBe("wf-b");
     });
   });
 
   describe("flush", () => {
     it("flushes pending saves immediately", async () => {
-      // Create persistence with longer debounce
-      const slowPersistence = new WorkflowPersistence(5000);
-      (slowPersistence as unknown as { projectsConfigDir: string }).projectsConfigDir = testDir;
+      const slowPersistence = new WorkflowPersistence(db, 5000);
 
       const runs = [createTestRun()];
-
-      // This starts a debounced save
       slowPersistence.save(testProjectId, runs);
 
-      // Flush should force immediate save
       await slowPersistence.flush(testProjectId);
 
-      // Verify file was saved
       const loaded = await slowPersistence.load(testProjectId);
       expect(loaded).toHaveLength(1);
+    });
+
+    it("flush is a no-op when no pending save", async () => {
+      await expect(persistence.flush(testProjectId)).resolves.not.toThrow();
     });
   });
 
   describe("clear", () => {
-    it("removes workflow runs file for project", async () => {
+    it("removes workflow runs for project", async () => {
       const runs = [createTestRun()];
       await persistence.save(testProjectId, runs);
 
-      // Verify file exists
       let loaded = await persistence.load(testProjectId);
       expect(loaded).toHaveLength(1);
 
-      // Clear
       await persistence.clear(testProjectId);
 
-      // Verify file is gone
       loaded = await persistence.load(testProjectId);
       expect(loaded).toEqual([]);
     });
@@ -302,8 +238,7 @@ describe("WorkflowPersistence", () => {
     });
 
     it("cancels pending debounced saves so cleared state is not resurrected", async () => {
-      const slowPersistence = new WorkflowPersistence(5000);
-      (slowPersistence as unknown as { projectsConfigDir: string }).projectsConfigDir = testDir;
+      const slowPersistence = new WorkflowPersistence(db, 5000);
 
       vi.useFakeTimers();
       try {
@@ -328,8 +263,8 @@ describe("WorkflowPersistence", () => {
       expect(loaded).toEqual([]);
     });
 
-    it("rejects project IDs that could cause path traversal", async () => {
-      const loaded = await persistence.load("../../../etc/passwd");
+    it("rejects project IDs that could cause injection", async () => {
+      const loaded = await persistence.load("'; DROP TABLE workflow_runs; --");
       expect(loaded).toEqual([]);
     });
 
@@ -337,20 +272,6 @@ describe("WorkflowPersistence", () => {
       await expect(persistence.save("invalid-project-id", [createTestRun()])).rejects.toThrow(
         "Invalid project ID"
       );
-    });
-  });
-
-  describe("schema versioning", () => {
-    it("includes version in saved data", async () => {
-      const runs = [createTestRun()];
-      await persistence.save(testProjectId, runs);
-
-      const filePath = path.join(testDir, testProjectId, "workflow-runs.json");
-      const content = await fs.readFile(filePath, "utf-8");
-      const data = JSON.parse(content);
-
-      expect(data.version).toBe("1.0");
-      expect(data.lastUpdated).toBeGreaterThan(0);
     });
   });
 
@@ -373,6 +294,57 @@ describe("WorkflowPersistence", () => {
         "failed",
         "running",
       ]);
+    });
+
+    it("preserves empty scheduledNodes Set", async () => {
+      const run = createTestRun();
+      expect(run.scheduledNodes.size).toBe(0);
+
+      await persistence.save(testProjectId, [run]);
+      const loaded = await persistence.load(testProjectId);
+
+      expect(loaded[0].scheduledNodes).toBeInstanceOf(Set);
+      expect(loaded[0].scheduledNodes.size).toBe(0);
+    });
+
+    it("preserves NodeState with only required status field (all optional fields absent)", async () => {
+      const run = createTestRun({
+        nodeStates: {
+          "node-minimal": { status: "queued" },
+          "node-with-task": { status: "running", taskId: "task-abc" },
+        },
+      });
+
+      await persistence.save(testProjectId, [run]);
+      const loaded = await persistence.load(testProjectId);
+
+      expect(loaded[0].nodeStates["node-minimal"].status).toBe("queued");
+      expect(loaded[0].nodeStates["node-minimal"].taskId).toBeUndefined();
+      expect(loaded[0].nodeStates["node-minimal"].startedAt).toBeUndefined();
+      expect(loaded[0].nodeStates["node-with-task"].taskId).toBe("task-abc");
+    });
+
+    it("last-write wins when multiple saves are queued for same project", async () => {
+      const slowPersistence = new WorkflowPersistence(db, 5000);
+
+      vi.useFakeTimers();
+      try {
+        const first = [createTestRun({ workflowId: "first" })];
+        const second = [createTestRun({ workflowId: "second" })];
+
+        const p1 = slowPersistence.save(testProjectId, first);
+        const p2 = slowPersistence.save(testProjectId, second);
+
+        vi.advanceTimersByTime(6000);
+
+        await Promise.all([p1, p2]);
+
+        const loaded = await slowPersistence.load(testProjectId);
+        expect(loaded).toHaveLength(1);
+        expect(loaded[0].workflowId).toBe("second");
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

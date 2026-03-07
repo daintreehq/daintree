@@ -14,6 +14,7 @@ let buildReadyTimer = null;
 const external = [
   "electron",
   "node-pty", // Native module
+  "better-sqlite3", // Native module
   "esbuild", // Build tool
   "copytree", // Externalize to preserve file structure (config files)
   "simple-git", // Externalize to avoid dynamic require issues

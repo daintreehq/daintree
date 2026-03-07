@@ -1,25 +1,40 @@
-/**
- * Tests for TaskPersistence - file-based task queue persistence.
- */
-
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import fs from "fs/promises";
-import path from "path";
-import os from "os";
+import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
 import { TaskPersistence } from "../persistence/TaskPersistence.js";
 import type { TaskRecord } from "../../../shared/types/task.js";
+import * as schema from "../persistence/schema.js";
 
-// Mock electron app for testing
-vi.mock("electron", () => ({
-  app: {
-    getPath: vi.fn().mockReturnValue(os.tmpdir()),
-  },
-}));
+const CREATE_TABLES_SQL = `
+  CREATE TABLE IF NOT EXISTS tasks (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    status TEXT NOT NULL,
+    priority INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    queued_at INTEGER,
+    started_at INTEGER,
+    completed_at INTEGER,
+    dependencies TEXT NOT NULL DEFAULT '[]',
+    worktree_id TEXT,
+    assigned_agent_id TEXT,
+    run_id TEXT,
+    metadata TEXT,
+    result TEXT,
+    routing_hints TEXT
+  );
+  CREATE INDEX IF NOT EXISTS tasks_project_idx ON tasks(project_id);
+  CREATE INDEX IF NOT EXISTS tasks_project_status_idx ON tasks(project_id, status);
+`;
 
 describe("TaskPersistence", () => {
   let persistence: TaskPersistence;
+  let sqlite: Database.Database;
+  let db: ReturnType<typeof drizzle<typeof schema>>;
   let testProjectId: string;
-  let testDir: string;
 
   const createTestTask = (overrides: Partial<TaskRecord> = {}): TaskRecord => ({
     id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -33,28 +48,17 @@ describe("TaskPersistence", () => {
     ...overrides,
   });
 
-  beforeEach(async () => {
-    // Create a unique test directory for each test
-    testDir = path.join(os.tmpdir(), `task-persistence-test-${Date.now()}`);
-    await fs.mkdir(testDir, { recursive: true });
+  beforeEach(() => {
+    sqlite = new Database(":memory:");
+    sqlite.exec(CREATE_TABLES_SQL);
+    db = drizzle(sqlite, { schema });
 
-    // Use a valid SHA-256 hash as project ID (64 hex chars)
     testProjectId = "a".repeat(64);
-
-    // Create persistence with 0 debounce for immediate saves in tests
-    persistence = new TaskPersistence(0);
-
-    // Override the projects config dir for testing
-    (persistence as unknown as { projectsConfigDir: string }).projectsConfigDir = testDir;
+    persistence = new TaskPersistence(db, 0);
   });
 
-  afterEach(async () => {
-    // Clean up test directory
-    try {
-      await fs.rm(testDir, { recursive: true, force: true });
-    } catch {
-      // Ignore cleanup errors
-    }
+  afterEach(() => {
+    sqlite.close();
   });
 
   describe("save and load", () => {
@@ -68,10 +72,10 @@ describe("TaskPersistence", () => {
       const loaded = await persistence.load(testProjectId);
 
       expect(loaded).toHaveLength(2);
-      expect(loaded[0].title).toBe("Task 1");
-      expect(loaded[0].priority).toBe(10);
-      expect(loaded[1].title).toBe("Task 2");
-      expect(loaded[1].priority).toBe(5);
+      const t1 = loaded.find((t) => t.title === "Task 1");
+      const t2 = loaded.find((t) => t.title === "Task 2");
+      expect(t1?.priority).toBe(10);
+      expect(t2?.priority).toBe(5);
     });
 
     it("saves tasks with dependencies", async () => {
@@ -80,7 +84,6 @@ describe("TaskPersistence", () => {
         id: "task-2",
         title: "Task 2",
         dependencies: ["task-1"],
-        blockedBy: ["task-1"],
       });
 
       await persistence.save(testProjectId, [task1, task2]);
@@ -114,130 +117,88 @@ describe("TaskPersistence", () => {
       expect(loaded[0].result?.artifacts).toEqual(["/path/to/file.txt"]);
     });
 
+    it("saves tasks with routingHints", async () => {
+      const task = createTestTask({
+        routingHints: { requiredCapabilities: ["javascript"], preferredDomains: ["frontend"] },
+      });
+
+      await persistence.save(testProjectId, [task]);
+      const loaded = await persistence.load(testProjectId);
+
+      expect(loaded[0].routingHints?.requiredCapabilities).toEqual(["javascript"]);
+    });
+
     it("returns empty array for non-existent project", async () => {
       const loaded = await persistence.load("b".repeat(64));
       expect(loaded).toEqual([]);
     });
 
-    it("creates project directory if it does not exist", async () => {
+    it("overwrites existing tasks on subsequent saves", async () => {
+      const tasks = [createTestTask({ title: "Original" })];
+      await persistence.save(testProjectId, tasks);
+
+      const updated = [createTestTask({ title: "Updated" })];
+      await persistence.save(testProjectId, updated);
+
+      const loaded = await persistence.load(testProjectId);
+      expect(loaded).toHaveLength(1);
+      expect(loaded[0].title).toBe("Updated");
+    });
+
+    it("saves empty array (clears project tasks)", async () => {
       const tasks = [createTestTask()];
       await persistence.save(testProjectId, tasks);
 
-      const projectDir = path.join(testDir, testProjectId);
-      const exists = await fs
-        .access(projectDir)
-        .then(() => true)
-        .catch(() => false);
-      expect(exists).toBe(true);
-    });
-  });
-
-  describe("corruption handling", () => {
-    it("quarantines corrupted file and returns empty array", async () => {
-      const projectDir = path.join(testDir, testProjectId);
-      await fs.mkdir(projectDir, { recursive: true });
-
-      const filePath = path.join(projectDir, "tasks.json");
-      await fs.writeFile(filePath, "{ invalid json }", "utf-8");
-
+      await persistence.save(testProjectId, []);
       const loaded = await persistence.load(testProjectId);
       expect(loaded).toEqual([]);
-
-      // Check quarantine file exists (with timestamp suffix)
-      const checkDir = path.join(testDir, testProjectId);
-      const files = await fs.readdir(checkDir);
-      const quarantineFiles = files.filter((f) => f.startsWith("tasks.json.corrupted."));
-      expect(quarantineFiles.length).toBeGreaterThan(0);
     });
 
-    it("quarantines file with invalid schema", async () => {
-      const projectDir = path.join(testDir, testProjectId);
-      await fs.mkdir(projectDir, { recursive: true });
+    it("isolates tasks by project", async () => {
+      const projectA = "a".repeat(64);
+      const projectB = "b".repeat(64);
 
-      const filePath = path.join(projectDir, "tasks.json");
-      await fs.writeFile(
-        filePath,
-        JSON.stringify({
-          version: "1.0",
-          tasks: [{ id: 123, title: "Invalid ID type" }], // id should be string
-          lastUpdated: Date.now(),
-        }),
-        "utf-8"
-      );
+      await persistence.save(projectA, [createTestTask({ title: "Task A" })]);
+      await persistence.save(projectB, [createTestTask({ title: "Task B" })]);
 
-      const loaded = await persistence.load(testProjectId);
-      expect(loaded).toEqual([]);
+      const loadedA = await persistence.load(projectA);
+      const loadedB = await persistence.load(projectB);
 
-      // Check quarantine file exists (with timestamp suffix)
-      const checkFiles = await fs.readdir(projectDir);
-      const quarantineFiles = checkFiles.filter((f) => f.startsWith("tasks.json.corrupted."));
-      expect(quarantineFiles.length).toBeGreaterThan(0);
-    });
-  });
-
-  describe("atomic writes", () => {
-    it("uses temp file for atomic write", async () => {
-      const tasks = [createTestTask()];
-
-      // Spy on resilient fs wrappers (code uses these instead of raw fs)
-      const fsUtils = await import("../../utils/fs.js");
-      const writeSpy = vi.spyOn(fsUtils, "resilientWriteFile");
-      const renameSpy = vi.spyOn(fsUtils, "resilientRename");
-
-      await persistence.save(testProjectId, tasks);
-
-      // Should write to temp file then rename
-      expect(writeSpy).toHaveBeenCalled();
-      expect(renameSpy).toHaveBeenCalled();
-
-      const writeCall = writeSpy.mock.calls[0];
-      const renameCall = renameSpy.mock.calls[0];
-
-      // Temp file should have .tmp extension
-      expect(String(writeCall[0])).toContain(".tmp");
-      // Rename should be from temp to final
-      expect(String(renameCall[0])).toContain(".tmp");
-      expect(String(renameCall[1])).toContain("tasks.json");
-      expect(String(renameCall[1])).not.toContain(".tmp");
-
-      writeSpy.mockRestore();
-      renameSpy.mockRestore();
+      expect(loadedA).toHaveLength(1);
+      expect(loadedA[0].title).toBe("Task A");
+      expect(loadedB).toHaveLength(1);
+      expect(loadedB[0].title).toBe("Task B");
     });
   });
 
   describe("flush", () => {
     it("flushes pending saves immediately", async () => {
-      // Create persistence with longer debounce
-      const slowPersistence = new TaskPersistence(5000);
-      (slowPersistence as unknown as { projectsConfigDir: string }).projectsConfigDir = testDir;
+      const slowPersistence = new TaskPersistence(db, 5000);
 
       const tasks = [createTestTask()];
-
-      // This starts a debounced save
       slowPersistence.save(testProjectId, tasks);
 
-      // Flush should force immediate save
       await slowPersistence.flush(testProjectId);
 
-      // Verify file was saved
       const loaded = await slowPersistence.load(testProjectId);
       expect(loaded).toHaveLength(1);
+    });
+
+    it("flush is a no-op when no pending save", async () => {
+      await expect(persistence.flush(testProjectId)).resolves.not.toThrow();
     });
   });
 
   describe("clear", () => {
-    it("removes tasks file for project", async () => {
+    it("removes tasks for project", async () => {
       const tasks = [createTestTask()];
       await persistence.save(testProjectId, tasks);
 
-      // Verify file exists
       let loaded = await persistence.load(testProjectId);
       expect(loaded).toHaveLength(1);
 
-      // Clear
       await persistence.clear(testProjectId);
 
-      // Verify file is gone
       loaded = await persistence.load(testProjectId);
       expect(loaded).toEqual([]);
     });
@@ -247,8 +208,7 @@ describe("TaskPersistence", () => {
     });
 
     it("cancels pending debounced saves so cleared state is not resurrected", async () => {
-      const slowPersistence = new TaskPersistence(5000);
-      (slowPersistence as unknown as { projectsConfigDir: string }).projectsConfigDir = testDir;
+      const slowPersistence = new TaskPersistence(db, 5000);
 
       vi.useFakeTimers();
       try {
@@ -268,13 +228,13 @@ describe("TaskPersistence", () => {
   });
 
   describe("project ID validation", () => {
-    it("returns null path for invalid project ID", async () => {
+    it("returns empty array for invalid project ID", async () => {
       const loaded = await persistence.load("invalid-project-id");
       expect(loaded).toEqual([]);
     });
 
-    it("rejects project IDs that could cause path traversal", async () => {
-      const loaded = await persistence.load("../../../etc/passwd");
+    it("rejects project IDs that could cause injection", async () => {
+      const loaded = await persistence.load("'; DROP TABLE tasks; --");
       expect(loaded).toEqual([]);
     });
 
@@ -285,17 +245,53 @@ describe("TaskPersistence", () => {
     });
   });
 
-  describe("schema versioning", () => {
-    it("includes version in saved data", async () => {
-      const tasks = [createTestTask()];
-      await persistence.save(testProjectId, tasks);
+  describe("all task fields round-trip", () => {
+    it("preserves all optional timestamp fields", async () => {
+      const now = Date.now();
+      const task = createTestTask({
+        status: "completed",
+        queuedAt: now - 3000,
+        startedAt: now - 2000,
+        completedAt: now - 1000,
+        worktreeId: "wt-abc",
+        assignedAgentId: "agent-123",
+        runId: "run-456",
+      });
 
-      const filePath = path.join(testDir, testProjectId, "tasks.json");
-      const content = await fs.readFile(filePath, "utf-8");
-      const data = JSON.parse(content);
+      await persistence.save(testProjectId, [task]);
+      const loaded = await persistence.load(testProjectId);
 
-      expect(data.version).toBe("1.0");
-      expect(data.lastUpdated).toBeGreaterThan(0);
+      expect(loaded[0].queuedAt).toBe(task.queuedAt);
+      expect(loaded[0].startedAt).toBe(task.startedAt);
+      expect(loaded[0].completedAt).toBe(task.completedAt);
+      expect(loaded[0].worktreeId).toBe("wt-abc");
+      expect(loaded[0].assignedAgentId).toBe("agent-123");
+      expect(loaded[0].runId).toBe("run-456");
+    });
+  });
+
+  describe("debounce coalescing", () => {
+    it("last-write wins when multiple saves are queued for same project", async () => {
+      const slowPersistence = new TaskPersistence(db, 5000);
+
+      vi.useFakeTimers();
+      try {
+        const first = [createTestTask({ title: "First" })];
+        const second = [createTestTask({ title: "Second" })];
+
+        const p1 = slowPersistence.save(testProjectId, first);
+        const p2 = slowPersistence.save(testProjectId, second);
+
+        vi.advanceTimersByTime(6000);
+
+        await Promise.all([p1, p2]);
+
+        const loaded = await slowPersistence.load(testProjectId);
+        expect(loaded).toHaveLength(1);
+        expect(loaded[0].title).toBe("Second");
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

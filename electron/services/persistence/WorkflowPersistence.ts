@@ -1,174 +1,128 @@
-import { z } from "zod";
-import fs from "fs/promises";
-import { existsSync } from "fs";
-import path from "path";
-import { app } from "electron";
-import { resilientRename, resilientWriteFile, resilientUnlink } from "../../utils/fs.js";
-import type { WorkflowRun } from "../../../shared/types/workflowRun.js";
-import {
-  WorkflowDefinitionSchema,
-  WorkflowConditionSchema,
-} from "../../../shared/types/workflow.js";
+import { eq } from "drizzle-orm";
+import type {
+  WorkflowRun,
+  NodeState,
+  EvaluatedCondition,
+} from "../../../shared/types/workflowRun.js";
+import type { WorkflowDefinition } from "../../../shared/types/workflow.js";
+import { openDb, getSharedDb, type AppDb } from "./db.js";
+import * as schema from "./schema.js";
 
-const WORKFLOW_RUNS_FILENAME = "workflow-runs.json";
-const SCHEMA_VERSION = "1.0";
-
-const TaskResultSchema = z.object({
-  summary: z.string().optional(),
-  artifacts: z.array(z.string()).optional(),
-  error: z.string().optional(),
-});
-
-const NodeStateSchema = z.object({
-  status: z.enum(["draft", "queued", "running", "blocked", "completed", "failed", "cancelled"]),
-  taskId: z.string().optional(),
-  startedAt: z.number().optional(),
-  completedAt: z.number().optional(),
-  result: TaskResultSchema.optional(),
-});
-
-const EvaluatedConditionSchema = z.object({
-  nodeId: z.string(),
-  condition: WorkflowConditionSchema,
-  result: z.boolean(),
-  timestamp: z.number(),
-});
-
-const WorkflowRunSchema = z.object({
-  runId: z.string().min(1),
-  workflowId: z.string().min(1),
-  workflowVersion: z.string(),
-  status: z.enum(["running", "completed", "failed", "cancelled"]),
-  startedAt: z.number(),
-  completedAt: z.number().optional(),
-  definition: WorkflowDefinitionSchema,
-  nodeStates: z.record(z.string(), NodeStateSchema),
-  taskMapping: z.record(z.string(), z.string()),
-  scheduledNodes: z.array(z.string()),
-  evaluatedConditions: z.array(EvaluatedConditionSchema),
-});
-
-const WorkflowRunsStateSchema = z.object({
-  version: z.literal(SCHEMA_VERSION),
-  runs: z.array(WorkflowRunSchema),
-  lastUpdated: z.number(),
-});
-
-export interface WorkflowRunsState {
-  version: string;
-  runs: SerializedWorkflowRun[];
-  lastUpdated: number;
+function toRow(run: WorkflowRun, projectId: string): schema.WorkflowRunRow {
+  return {
+    runId: run.runId,
+    projectId,
+    workflowId: run.workflowId,
+    workflowVersion: run.workflowVersion,
+    status: run.status,
+    startedAt: run.startedAt,
+    completedAt: run.completedAt ?? null,
+    definition: JSON.stringify(run.definition),
+    nodeStates: JSON.stringify(run.nodeStates),
+    taskMapping: JSON.stringify(run.taskMapping),
+    scheduledNodes: JSON.stringify(Array.from(run.scheduledNodes)),
+    evaluatedConditions: JSON.stringify(run.evaluatedConditions),
+  };
 }
 
-interface SerializedWorkflowRun extends Omit<WorkflowRun, "scheduledNodes"> {
-  scheduledNodes: string[];
+function fromRow(row: schema.WorkflowRunRow): WorkflowRun {
+  return {
+    runId: row.runId,
+    workflowId: row.workflowId,
+    workflowVersion: row.workflowVersion,
+    status: row.status as WorkflowRun["status"],
+    startedAt: row.startedAt,
+    completedAt: row.completedAt ?? undefined,
+    definition: JSON.parse(row.definition as string) as WorkflowDefinition,
+    nodeStates: JSON.parse(row.nodeStates as string) as Record<string, NodeState>,
+    taskMapping: JSON.parse(row.taskMapping as string) as Record<string, string>,
+    scheduledNodes: new Set<string>(JSON.parse(row.scheduledNodes as string) as string[]),
+    evaluatedConditions: JSON.parse(row.evaluatedConditions as string) as EvaluatedCondition[],
+  };
 }
 
 export class WorkflowPersistence {
-  private projectsConfigDir: string;
+  private _db: AppDb | null = null;
+  private _dbProvider: (() => AppDb) | null = null;
   private saveDebounceMs: number;
   private pendingSaves: Map<
     string,
     {
       timer: ReturnType<typeof setTimeout>;
-      state: WorkflowRunsState;
+      runs: WorkflowRun[];
       resolvers: Array<() => void>;
       rejecters: Array<(error: unknown) => void>;
     }
   > = new Map();
-  private inFlightSaves: Map<string, Promise<void>> = new Map();
 
-  constructor(debounceMs: number = 1000) {
-    this.projectsConfigDir = path.join(app.getPath("userData"), "projects");
+  constructor(dbOrPath?: AppDb | string, debounceMs: number = 1000) {
     this.saveDebounceMs = debounceMs;
+    if (dbOrPath && typeof dbOrPath === "object") {
+      this._db = dbOrPath;
+    } else if (typeof dbOrPath === "string") {
+      this._dbProvider = () => openDb(dbOrPath).db;
+    } else {
+      this._dbProvider = () => getSharedDb();
+    }
+  }
+
+  private get db(): AppDb {
+    if (!this._db) {
+      this._db = this._dbProvider!();
+    }
+    return this._db;
   }
 
   private isValidProjectId(projectId: string): boolean {
     return /^[0-9a-f]{64}$/.test(projectId);
   }
 
-  private getWorkflowRunsFilePath(projectId: string): string | null {
-    if (!this.isValidProjectId(projectId)) {
-      return null;
-    }
-    const stateDir = path.join(this.projectsConfigDir, projectId);
-    const normalized = path.normalize(stateDir);
-    if (!normalized.startsWith(this.projectsConfigDir + path.sep)) {
-      return null;
-    }
-    return path.join(normalized, WORKFLOW_RUNS_FILENAME);
-  }
-
   async load(projectId: string): Promise<WorkflowRun[]> {
-    const filePath = this.getWorkflowRunsFilePath(projectId);
-    if (!filePath || !existsSync(filePath)) {
+    if (!this.isValidProjectId(projectId)) {
       return [];
     }
 
     try {
-      const content = await fs.readFile(filePath, "utf-8");
-      const parsed = JSON.parse(content);
-      const validated = WorkflowRunsStateSchema.parse(parsed);
-
-      const runs = validated.runs.map(
-        (serialized): WorkflowRun => ({
-          ...serialized,
-          scheduledNodes: new Set(serialized.scheduledNodes),
-        })
-      );
-
+      const rows = this.db
+        .select()
+        .from(schema.workflowRuns)
+        .where(eq(schema.workflowRuns.projectId, projectId))
+        .all();
+      const runs: WorkflowRun[] = [];
+      for (const row of rows) {
+        try {
+          runs.push(fromRow(row));
+        } catch (rowError) {
+          console.error(
+            `[WorkflowPersistence] Skipping corrupt workflow run row ${row.runId}:`,
+            rowError
+          );
+        }
+      }
       console.log(
         `[WorkflowPersistence] Loaded ${runs.length} workflow runs for project ${projectId}`
       );
       return runs;
     } catch (error) {
       console.error(`[WorkflowPersistence] Failed to load workflow runs for ${projectId}:`, error);
-
-      if (filePath) {
-        try {
-          const timestamp = Date.now();
-          const quarantinePath = `${filePath}.corrupted.${timestamp}`;
-          await resilientRename(filePath, quarantinePath);
-          console.warn(
-            `[WorkflowPersistence] Corrupted workflow runs file moved to ${quarantinePath}`
-          );
-        } catch (quarantineError) {
-          console.error(
-            `[WorkflowPersistence] Failed to quarantine corrupted file: ${filePath}`,
-            quarantineError
-          );
-        }
-      }
-
       return [];
     }
   }
 
   async save(projectId: string, runs: WorkflowRun[]): Promise<void> {
-    if (!this.getWorkflowRunsFilePath(projectId)) {
+    if (!this.isValidProjectId(projectId)) {
       throw new Error(`Invalid project ID: ${projectId}`);
     }
-
-    const serializedRuns: SerializedWorkflowRun[] = runs.map((run) => ({
-      ...run,
-      scheduledNodes: Array.from(run.scheduledNodes),
-    }));
-
-    const state: WorkflowRunsState = {
-      version: SCHEMA_VERSION,
-      runs: serializedRuns,
-      lastUpdated: Date.now(),
-    };
 
     let pending = this.pendingSaves.get(projectId);
 
     if (pending) {
       clearTimeout(pending.timer);
-      pending.state = state;
+      pending.runs = runs;
     } else {
       pending = {
         timer: null as unknown as ReturnType<typeof setTimeout>,
-        state,
+        runs,
         resolvers: [],
         rejecters: [],
       };
@@ -180,14 +134,14 @@ export class WorkflowPersistence {
       pending!.rejecters.push(reject);
     });
 
-    pending.timer = setTimeout(async () => {
+    pending.timer = setTimeout(() => {
       const entry = this.pendingSaves.get(projectId);
       if (!entry) return;
 
       this.pendingSaves.delete(projectId);
 
       try {
-        await this.saveImmediate(projectId, entry.state);
+        this.saveSync(projectId, entry.runs);
         entry.resolvers.forEach((r) => r());
       } catch (error) {
         entry.rejecters.forEach((r) => r(error));
@@ -197,65 +151,19 @@ export class WorkflowPersistence {
     return promise;
   }
 
-  async saveImmediate(projectId: string, state: WorkflowRunsState): Promise<void> {
-    const inFlight = this.inFlightSaves.get(projectId);
-    if (inFlight) {
-      await inFlight;
-    }
-
-    const filePath = this.getWorkflowRunsFilePath(projectId);
-    if (!filePath) {
-      throw new Error(`Invalid project ID: ${projectId}`);
-    }
-
-    const stateDir = path.dirname(filePath);
-    const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const tempFilePath = `${filePath}.${uniqueSuffix}.tmp`;
-
-    const attemptSave = async (ensureDir: boolean): Promise<void> => {
-      if (ensureDir) {
-        await fs.mkdir(stateDir, { recursive: true });
+  private saveSync(projectId: string, runs: WorkflowRun[]): void {
+    this.db.transaction((tx) => {
+      tx.delete(schema.workflowRuns).where(eq(schema.workflowRuns.projectId, projectId)).run();
+      if (runs.length > 0) {
+        tx.insert(schema.workflowRuns)
+          .values(runs.map((r) => toRow(r, projectId)))
+          .run();
       }
-      await resilientWriteFile(tempFilePath, JSON.stringify(state, null, 2), "utf-8");
-      await resilientRename(tempFilePath, filePath);
-    };
-
-    const savePromise = (async () => {
-      try {
-        await attemptSave(false);
-      } catch (error) {
-        const isEnoent = error instanceof Error && "code" in error && error.code === "ENOENT";
-        if (!isEnoent) {
-          this.cleanupTempFile(tempFilePath);
-          throw error;
-        }
-
-        try {
-          await attemptSave(true);
-        } catch (retryError) {
-          this.cleanupTempFile(tempFilePath);
-          throw retryError;
-        }
-      }
-
-      console.log(
-        `[WorkflowPersistence] Saved ${state.runs.length} workflow runs for project ${projectId}`
-      );
-    })();
-
-    this.inFlightSaves.set(projectId, savePromise);
-
-    try {
-      await savePromise;
-    } finally {
-      this.inFlightSaves.delete(projectId);
-    }
-  }
-
-  private cleanupTempFile(tempFilePath: string): void {
-    fs.unlink(tempFilePath).catch(() => {
-      // Ignore cleanup errors
     });
+
+    console.log(
+      `[WorkflowPersistence] Saved ${runs.length} workflow runs for project ${projectId}`
+    );
   }
 
   async flush(projectId: string): Promise<void> {
@@ -266,17 +174,12 @@ export class WorkflowPersistence {
       this.pendingSaves.delete(projectId);
 
       try {
-        await this.saveImmediate(projectId, pending.state);
+        this.saveSync(projectId, pending.runs);
         pending.resolvers.forEach((r) => r());
       } catch (error) {
         pending.rejecters.forEach((r) => r(error));
         throw error;
       }
-    }
-
-    const inFlight = this.inFlightSaves.get(projectId);
-    if (inFlight) {
-      await inFlight;
     }
   }
 
@@ -285,22 +188,14 @@ export class WorkflowPersistence {
     if (pending) {
       clearTimeout(pending.timer);
       this.pendingSaves.delete(projectId);
-      pending.resolvers.forEach((resolve) => resolve());
     }
 
-    const inFlight = this.inFlightSaves.get(projectId);
-    if (inFlight) {
+    if (this.isValidProjectId(projectId)) {
       try {
-        await inFlight;
-      } catch {
-        // Best-effort clear: continue to file deletion even if in-flight save failed.
-      }
-    }
-
-    const filePath = this.getWorkflowRunsFilePath(projectId);
-    if (filePath && existsSync(filePath)) {
-      try {
-        await resilientUnlink(filePath);
+        this.db
+          .delete(schema.workflowRuns)
+          .where(eq(schema.workflowRuns.projectId, projectId))
+          .run();
         console.log(`[WorkflowPersistence] Cleared workflow runs for project ${projectId}`);
       } catch (error) {
         console.error(
@@ -309,6 +204,8 @@ export class WorkflowPersistence {
         );
       }
     }
+
+    pending?.resolvers.forEach((resolve) => resolve());
   }
 }
 
