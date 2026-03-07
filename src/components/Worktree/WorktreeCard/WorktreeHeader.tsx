@@ -431,7 +431,7 @@ export function WorktreeHeader({
         </div>
       </div>
 
-      {(worktree.issueNumber || worktree.prNumber) && (
+      {(worktree.issueNumber || (worktree.prNumber && worktree.prState !== "closed")) && (
         <div className="flex flex-col gap-0.5">
           {worktree.issueNumber && (
             <IssueBadge
@@ -441,7 +441,7 @@ export function WorktreeHeader({
               onOpen={badges.onOpenIssue}
             />
           )}
-          {worktree.prNumber && (
+          {worktree.prNumber && worktree.prState !== "closed" && (
             <PRBadge
               prNumber={worktree.prNumber}
               prState={worktree.prState}

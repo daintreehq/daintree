@@ -788,6 +788,18 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
     !maximizedId &&
     !showPlaceholder;
 
+  // Memoize the two-pane terminal pair to produce a stable array reference across renders.
+  // This prevents TwoPaneSplitLayout from receiving a new prop reference on every ContentGrid
+  // re-render, which avoids unnecessary child effect churn and reconciliation work.
+  const twoPaneTerminals = useMemo((): [TerminalInstance, TerminalInstance] | null => {
+    if (!useTwoPaneSplitMode) return null;
+    const panels = tabGroups
+      .slice(0, 2)
+      .map((g) => getTabGroupPanels(g.id, "grid")[0])
+      .filter((t): t is TerminalInstance => t !== undefined);
+    return panels.length === 2 ? (panels as [TerminalInstance, TerminalInstance]) : null;
+  }, [useTwoPaneSplitMode, tabGroups, getTabGroupPanels]);
+
   // Track mode transitions and stabilize terminals after switch
   const prevModeRef = useRef<boolean>(useTwoPaneSplitMode);
   const gridTerminalsRef = useRef(gridTerminals);
@@ -908,42 +920,35 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
 
   const isEmpty = gridTerminals.length === 0;
 
-  if (useTwoPaneSplitMode) {
-    const twoPaneTerminals = tabGroups
-      .slice(0, 2)
-      .map((g) => getTabGroupPanels(g.id, "grid")[0])
-      .filter((t): t is TerminalInstance => t !== undefined);
-
-    if (twoPaneTerminals.length === 2) {
-      return (
-        <div className={cn("h-full flex flex-col", className)}>
-          <GridNotificationBar className="mx-1 mt-1 shrink-0" />
-          <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
-          <div
-            ref={combinedGridRef}
-            onContextMenu={handleGridContextMenu}
-            className={cn(
-              "relative flex-1 min-h-0",
-              isOver && "ring-2 ring-canopy-accent/30 ring-inset"
-            )}
-          >
-            <TwoPaneSplitLayout
-              terminals={twoPaneTerminals as [TerminalInstance, TerminalInstance]}
-              focusedId={focusedId}
-              activeWorktreeId={activeWorktreeId}
-              isInTrash={isInTrash}
-              onAddTabLeft={() => handleAddTabForPanel(twoPaneTerminals[0])}
-              onAddTabRight={() => handleAddTabForPanel(twoPaneTerminals[1])}
-            />
-            <GridFullOverlay maxTerminals={maxGridCapacity} show={showGridFullOverlay} />
-          </div>
+  if (useTwoPaneSplitMode && twoPaneTerminals) {
+    return (
+      <div key="split-mode" className={cn("h-full flex flex-col", className)}>
+        <GridNotificationBar className="mx-1 mt-1 shrink-0" />
+        <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
+        <div
+          ref={combinedGridRef}
+          onContextMenu={handleGridContextMenu}
+          className={cn(
+            "relative flex-1 min-h-0",
+            isOver && "ring-2 ring-canopy-accent/30 ring-inset"
+          )}
+        >
+          <TwoPaneSplitLayout
+            terminals={twoPaneTerminals}
+            focusedId={focusedId}
+            activeWorktreeId={activeWorktreeId}
+            isInTrash={isInTrash}
+            onAddTabLeft={() => handleAddTabForPanel(twoPaneTerminals[0])}
+            onAddTabRight={() => handleAddTabForPanel(twoPaneTerminals[1])}
+          />
+          <GridFullOverlay maxTerminals={maxGridCapacity} show={showGridFullOverlay} />
         </div>
-      );
-    }
+      </div>
+    );
   }
 
   return (
-    <div className={cn("h-full flex flex-col", className)}>
+    <div key="grid-mode" className={cn("h-full flex flex-col", className)}>
       <GridNotificationBar className="mx-1 mt-1 shrink-0" />
       <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
       <div className="relative flex-1 min-h-0">

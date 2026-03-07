@@ -35,9 +35,12 @@ export function TwoPaneSplitLayout({
   // Refs for unmount cleanup (avoid closure/dependency issues)
   const localRatioRef = useRef<number | null>(null);
   const activeWorktreeIdRef = useRef<string | null>(null);
+  const terminalsRef = useRef(terminals);
+  const commitRatioIfChangedRef = useRef<typeof commitRatioIfChanged>(null!);
 
   localRatioRef.current = localRatio;
   activeWorktreeIdRef.current = activeWorktreeId;
+  terminalsRef.current = terminals;
 
   const ratioByWorktreeId = useTwoPaneSplitStore((state) => state.ratioByWorktreeId);
   const defaultRatio = useTwoPaneSplitStore((state) => state.config.defaultRatio);
@@ -45,6 +48,8 @@ export function TwoPaneSplitLayout({
   const setWorktreeRatio = useTwoPaneSplitStore((state) => state.setWorktreeRatio);
   const commitRatioIfChanged = useTwoPaneSplitStore((state) => state.commitRatioIfChanged);
   const resetWorktreeRatio = useTwoPaneSplitStore((state) => state.resetWorktreeRatio);
+
+  commitRatioIfChangedRef.current = commitRatioIfChanged;
 
   const worktreeRatio = activeWorktreeId ? ratioByWorktreeId[activeWorktreeId] : undefined;
 
@@ -152,17 +157,17 @@ export function TwoPaneSplitLayout({
       const worktreeId = activeWorktreeIdRef.current;
 
       // Unlock resize for all terminals
-      for (const terminal of terminals) {
+      for (const terminal of terminalsRef.current) {
         terminalInstanceService.lockResize(terminal.id, false);
       }
 
       // Flush pending ratio if present
       if (pendingRatio !== null && worktreeId) {
-        commitRatioIfChanged(worktreeId, pendingRatio);
+        commitRatioIfChangedRef.current(worktreeId, pendingRatio);
       }
     };
-    // Empty deps - only run on mount/unmount
-  }, [terminals, commitRatioIfChanged]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- empty deps intentional: all values read via refs
+  }, []);
 
   const minRatio = useMemo(() => {
     if (containerWidth <= 0) return 0.2;
