@@ -105,9 +105,18 @@ describe("afterPack", () => {
       await afterPack(createContext("win32", "/build/win"));
 
       expect(mockExistsSync).toHaveBeenCalledWith(path.join(unpackedBase, "node_modules/node-pty"));
-      // Windows uses ConPTY binaries, not pty.node
+      // Windows uses ConPTY binaries only (winpty removed in node-pty 1.2.0-beta)
       expect(mockExistsSync).toHaveBeenCalledWith(
         path.join(unpackedBase, "node_modules/node-pty/build/Release/conpty.node")
+      );
+      expect(mockExistsSync).toHaveBeenCalledWith(
+        path.join(unpackedBase, "node_modules/node-pty/build/Release/conpty_console_list.node")
+      );
+      expect(mockExistsSync).toHaveBeenCalledWith(
+        path.join(unpackedBase, "node_modules/node-pty/build/Release/conpty/conpty.dll")
+      );
+      expect(mockExistsSync).toHaveBeenCalledWith(
+        path.join(unpackedBase, "node_modules/node-pty/build/Release/conpty/OpenConsole.exe")
       );
     });
 
@@ -129,11 +138,24 @@ describe("afterPack", () => {
       );
     });
 
-    it("should throw when Windows binary is missing", async () => {
+    it("should throw with compiled binary error when conpty.node is missing", async () => {
       mockExistsSync.mockReturnValueOnce(true).mockReturnValueOnce(false);
 
       await expect(afterPack(createContext("win32", "/build/win"))).rejects.toThrow(
-        /Windows node-pty binary not found/
+        /Windows node-pty compiled binary not found/
+      );
+    });
+
+    it("should throw with post-install error when conpty.dll is missing", async () => {
+      // node-pty dir exists, conpty.node exists, conpty_console_list.node exists, then conpty/conpty.dll missing
+      mockExistsSync
+        .mockReturnValueOnce(true)
+        .mockReturnValueOnce(true)
+        .mockReturnValueOnce(true)
+        .mockReturnValueOnce(false);
+
+      await expect(afterPack(createContext("win32", "/build/win"))).rejects.toThrow(
+        /Windows node-pty post-install binary not found/
       );
     });
   });

@@ -38,18 +38,24 @@ exports.default = async function afterPack(context) {
 
   if (electronPlatformName === "win32") {
     // Windows uses ConPTY exclusively (winpty removed in node-pty 1.2.0-beta)
-    const windowsBinaries = [
-      "conpty.node",
-      "conpty_console_list.node",
-      "conpty/conpty.dll",
-      "conpty/OpenConsole.exe",
-    ];
-    for (const bin of windowsBinaries) {
+    const compiledBinaries = ["conpty.node", "conpty_console_list.node"];
+    const postInstallBinaries = ["conpty/conpty.dll", "conpty/OpenConsole.exe"];
+    for (const bin of compiledBinaries) {
       const binPath = path.join(nodePtyPath, "build/Release", bin);
       if (!fs.existsSync(binPath)) {
         throw new Error(
-          `[afterPack] CRITICAL: Windows node-pty binary not found: ${binPath}. ` +
-            "Ensure node-pty was built on a Windows runner with VS 2022 Build Tools."
+          `[afterPack] CRITICAL: Windows node-pty compiled binary not found: ${binPath}. ` +
+            "Ensure node-pty was rebuilt on a Windows runner with VS 2022 Build Tools."
+        );
+      }
+    }
+    for (const bin of postInstallBinaries) {
+      const binPath = path.join(nodePtyPath, "build/Release", bin);
+      if (!fs.existsSync(binPath)) {
+        throw new Error(
+          `[afterPack] CRITICAL: Windows node-pty post-install binary not found: ${binPath}. ` +
+            "Ensure node-pty's postinstall script ran (no --ignore-scripts) and was not " +
+            "cleaned by a cross-platform node_modules cache."
         );
       }
     }
