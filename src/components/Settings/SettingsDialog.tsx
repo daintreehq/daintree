@@ -2,7 +2,7 @@ import { useState, useEffect, useDeferredValue, useMemo, useRef } from "react";
 import { useSidecarStore } from "@/store";
 import {
   X,
-  Bot,
+  Waypoints,
   Code,
   Github,
   LayoutGrid,
@@ -280,7 +280,7 @@ export function SettingsDialog({
               setActiveTab("agents");
               setSearchQuery("");
             }}
-            icon={<Bot className="w-4 h-4" />}
+            icon={<Waypoints className="w-4 h-4" />}
           >
             <span className="flex-1">CLI Agents</span>
             {matchCounts.agents ? <MatchBadge count={matchCounts.agents} /> : null}

@@ -25,7 +25,7 @@ import {
   Copy,
   Settings,
   AlertCircle,
-  Bot,
+  Waypoints,
   PackagePlus,
   Bell,
 } from "lucide-react";
@@ -42,22 +42,22 @@ const BUTTON_METADATA: Partial<Record<ToolbarButtonId, ButtonMetadata>> = {
   },
   claude: {
     label: "Claude Agent",
-    icon: <Bot className="h-4 w-4" />,
+    icon: <Waypoints className="h-4 w-4" />,
     description: "Launch Claude AI agent",
   },
   gemini: {
     label: "Gemini Agent",
-    icon: <Bot className="h-4 w-4" />,
+    icon: <Waypoints className="h-4 w-4" />,
     description: "Launch Gemini AI agent",
   },
   codex: {
     label: "Codex Agent",
-    icon: <Bot className="h-4 w-4" />,
+    icon: <Waypoints className="h-4 w-4" />,
     description: "Launch Codex AI agent",
   },
   opencode: {
     label: "OpenCode Agent",
-    icon: <Bot className="h-4 w-4" />,
+    icon: <Waypoints className="h-4 w-4" />,
     description: "Launch OpenCode AI agent",
   },
   terminal: {

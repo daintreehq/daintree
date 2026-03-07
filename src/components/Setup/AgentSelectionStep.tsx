@@ -5,7 +5,7 @@ import { useAgentSettingsStore } from "@/store";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { AGENT_REGISTRY, AGENT_IDS } from "@/config/agents";
 import { isCanopyEnvEnabled } from "@/utils/env";
-import { Bot, Loader2 } from "lucide-react";
+import { Waypoints, Loader2 } from "lucide-react";
 
 const SKIP_FIRST_RUN_DIALOGS = isCanopyEnvEnabled("CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS");
 
@@ -82,7 +82,7 @@ export function AgentSelectionStep({ isOpen, onContinue, onSkip }: AgentSelectio
   return (
     <AppDialog isOpen={isOpen} onClose={handleSkip} size="md" dismissible={!isSaving}>
       <AppDialog.Header>
-        <AppDialog.Title icon={<Bot className="w-5 h-5 text-canopy-accent" />}>
+        <AppDialog.Title icon={<Waypoints className="w-5 h-5 text-canopy-accent" />}>
           Choose your AI agents
         </AppDialog.Title>
         <AppDialog.CloseButton />
