@@ -187,7 +187,6 @@ interface ProjectListContentProps {
   query: string;
   onSelect: (project: SearchableProject) => void;
   listRef: React.RefObject<HTMLDivElement | null>;
-  onAddProject?: () => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
 }
@@ -198,7 +197,6 @@ function ProjectListContent({
   query,
   onSelect,
   listRef,
-  onAddProject,
   onStopProject,
   onCloseProject,
 }: ProjectListContentProps) {
@@ -233,23 +231,7 @@ function ProjectListContent({
         {results.length === 0 ? (
           <div className="p-2">
             <div className="px-3 py-8 text-center text-canopy-text/50 text-sm">
-              {query.trim() ? (
-                <>
-                  <div>{`No projects match "${query}"`}</div>
-                  {onAddProject && (
-                    <button
-                      type="button"
-                      onClick={() => onAddProject()}
-                      className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] bg-white/[0.04] text-canopy-text/70 hover:text-canopy-text hover:bg-white/[0.06] transition-colors cursor-pointer text-sm"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      Add Project...
-                    </button>
-                  )}
-                </>
-              ) : (
-                "No projects available"
-              )}
+              {query.trim() ? <div>{`No projects match "${query}"`}</div> : "No projects available"}
             </div>
           </div>
         ) : sections ? (
@@ -459,7 +441,6 @@ function ProjectPaletteInner({
           query={query}
           onSelect={onSelect}
           listRef={listRef}
-          onAddProject={onAddProject}
           onStopProject={onStopProject}
           onCloseProject={onCloseProject}
         />
