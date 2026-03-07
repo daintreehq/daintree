@@ -147,15 +147,20 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       if (voiceEvent.type === "delta") {
         win.webContents.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_DELTA, voiceEvent.text);
       } else if (voiceEvent.type === "complete") {
-        const rawText = voiceEvent.text;
-        // Always send raw text immediately so the renderer can finalize the segment.
-        win.webContents.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, rawText);
+        const rawText = voiceEvent.text.trim();
 
         // Read correction settings live so mid-session changes take effect immediately.
         const liveSettings = store.get("voiceInput") as VoiceInputSettings;
-        if (liveSettings.correctionEnabled && liveSettings.apiKey) {
-          // Apply correction asynchronously; send a replacement event when ready.
-          // Falls back silently on timeout/error (raw text already displayed).
+        const willCorrect = !!(liveSettings.correctionEnabled && liveSettings.apiKey);
+
+        // Send raw text + whether correction will happen so the renderer knows
+        // whether to mark text as pending (grayed) or finalize it immediately.
+        win.webContents.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
+          text: rawText,
+          willCorrect,
+        });
+
+        if (willCorrect) {
           void correctionService!
             .correct(rawText, {
               model: liveSettings.correctionModel,

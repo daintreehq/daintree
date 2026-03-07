@@ -79,8 +79,8 @@ class VoiceRecordingService {
     );
 
     this.unsubscribers.push(
-      voiceInput.onTranscriptionComplete((text) => {
-        logDebug(`${LOG_PREFIX} Received transcription complete`, { text });
+      voiceInput.onTranscriptionComplete(({ text, willCorrect }) => {
+        logDebug(`${LOG_PREFIX} Received transcription complete`, { text, willCorrect });
         const voiceState = useVoiceRecordingStore.getState();
         const panelId = voiceState.activeTarget?.panelId;
         const projectId = voiceState.activeTarget?.projectId;
@@ -98,9 +98,13 @@ class VoiceRecordingService {
             inputStore.setDraftInput(panelId, base + separator + finalText, projectId);
             inputStore.bumpVoiceDraftRevision();
 
-            // Mark this segment as pending correction (will be dimmed in the editor).
-            // The main process sends a correction-replace event when the AI finishes.
-            useVoiceRecordingStore.getState().addPendingCorrection(panelId, insertStart, finalText);
+            // Only mark as pending correction if the backend will actually correct.
+            // Otherwise the text stays gray forever since no replace event arrives.
+            if (willCorrect) {
+              useVoiceRecordingStore
+                .getState()
+                .addPendingCorrection(panelId, insertStart, finalText);
+            }
           }
         }
         useVoiceRecordingStore.getState().completeSegment(text);
@@ -291,7 +295,12 @@ class VoiceRecordingService {
       enabled: settings.enabled,
       hasApiKey: !!settings.apiKey,
       isConfigured,
+      correctionEnabled: settings.correctionEnabled,
     });
+    // Keep correction state in sync for live-segment dimming
+    useVoiceRecordingStore
+      .getState()
+      .setCorrectionEnabled(!!(settings.correctionEnabled && settings.apiKey));
     useVoiceRecordingStore.getState().setConfigured(isConfigured);
     return isConfigured;
   }

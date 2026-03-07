@@ -39,6 +39,8 @@ interface FinishSessionOptions {
 
 interface VoiceRecordingState {
   isConfigured: boolean;
+  /** Whether AI correction is enabled for the current session. */
+  correctionEnabled: boolean;
   status: VoiceInputStatus;
   errorMessage: string | null;
   activeTarget: VoiceRecordingTarget | null;
@@ -47,6 +49,7 @@ interface VoiceRecordingState {
   panelBuffers: Record<string, VoiceTranscriptBuffer>;
   announcement: VoiceAnnouncement | null;
   setConfigured: (isConfigured: boolean) => void;
+  setCorrectionEnabled: (enabled: boolean) => void;
   setAudioLevel: (level: number) => void;
   beginSession: (target: VoiceRecordingTarget) => void;
   setStatus: (status: VoiceInputStatus) => void;
@@ -81,6 +84,7 @@ function getBuffer(
 
 export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) => ({
   isConfigured: false,
+  correctionEnabled: false,
   status: "idle",
   errorMessage: null,
   activeTarget: null,
@@ -90,6 +94,8 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
   announcement: null,
 
   setConfigured: (isConfigured) => set({ isConfigured }),
+
+  setCorrectionEnabled: (correctionEnabled) => set({ correctionEnabled }),
 
   setAudioLevel: (audioLevel) => set({ audioLevel }),
 

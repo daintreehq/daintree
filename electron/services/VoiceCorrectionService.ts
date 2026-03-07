@@ -11,9 +11,8 @@ const P = "[VoiceCorrection]";
 const CORRECTION_TIMEOUT_MS = 5000;
 const MAX_HISTORY = 3;
 // gpt-5-nano is a reasoning model that uses internal reasoning tokens before
-// producing visible output. 1024 gives enough headroom for ~700 reasoning
-// tokens plus the corrected sentence output.
-const MAX_COMPLETION_TOKENS = 1024;
+// producing visible output. 512 gives headroom for reasoning + one sentence output.
+const MAX_COMPLETION_TOKENS = 512;
 
 export interface VoiceCorrectionSettings {
   model: string;
@@ -84,14 +83,16 @@ export class VoiceCorrectionService {
     };
     const systemPrompt = buildCorrectionSystemPrompt(context);
 
-    // User message: only history + raw text (changes every request)
+    // User message: history (for context) + current sentence to correct
     const userParts: string[] = [];
 
     if (this.history.length > 0) {
-      userParts.push(`Previous sentences:\n${this.history.map((s) => `- ${s}`).join("\n")}`);
+      userParts.push(
+        `Previous corrected sentences (use for context, do NOT repeat):\n${this.history.map((s, i) => `${i + 1}. ${s}`).join("\n")}`
+      );
     }
 
-    userParts.push(`Correct this sentence:\n${rawText}`);
+    userParts.push(`Current sentence to correct:\n${rawText}`);
 
     const userMessage = userParts.join("\n\n");
 

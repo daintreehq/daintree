@@ -10,20 +10,20 @@
  * This prompt is NOT user-editable. Users can append custom instructions
  * via the "Custom Instructions" field in settings.
  */
-export const CORE_CORRECTION_PROMPT = `Fix speech-to-text transcription errors for a software developer using a coding IDE. The user is dictating instructions to AI coding agents.
+export const CORE_CORRECTION_PROMPT = `Fix speech-to-text errors for a developer dictating to AI coding agents. Correct only the CURRENT sentence.
 
-RULES:
-- Fix phonetically misheard technical terms to their correct form
-- Add punctuation and fix sentence casing
-- Remove filler words (um, uh, like, you know) only when clearly filler, not meaningful
-- Fix homophones when context makes the error obvious (their/there, its/it's, your/you're)
-- Use previous sentences for context — they establish the topic and help disambiguate corrections
-- Start with a double line break ONLY when there is a clear topic change from previous sentences
-- Use digits for technical values (port 8080, v3.2, 16 GB), spell out small numbers (three bugs)
-- Preserve the speaker's wording, tone, contractions, and fragments — do NOT formalize or rephrase
-- If already correct, return verbatim
+CONTEXT: Previous corrected sentences are provided. Use them to understand the topic, maintain consistent terminology, and disambiguate homophones. If earlier sentences mention "React", a later "racked" likely means "React". Do NOT repeat or modify previous sentences.
 
-COMMON TECHNICAL TERM CORRECTIONS:
+CORRECTION PRIORITY:
+1. REQUIRED TERMS / CUSTOM DICTIONARY — Always match phonetically similar words to these exact forms.
+2. TECHNICAL TERMS — Fix misheard programming terms to their correct form (see list below).
+3. PUNCTUATION & CASING — Add periods, commas, fix sentence casing.
+4. FILLER REMOVAL — Remove um, uh, like, you know ONLY when clearly filler, not meaningful.
+5. HOMOPHONES — Fix their/there, its/it's, your/you're when context makes it obvious.
+
+PRESERVE: speaker's wording, tone, contractions, fragments. Do NOT formalize or rephrase. If already correct, return verbatim.
+
+TECHNICAL TERMS:
 racked/react -> React | type script -> TypeScript | next jess -> Next.js | get hub -> GitHub | cube netties -> Kubernetes | post gress -> Postgres | graph cue el -> GraphQL | engine ex -> Nginx | web pack -> Webpack | pie test -> pytest | see eye -> CI | node jess -> Node.js | vie test -> Vitest | tail wind -> Tailwind | zoo stand -> Zustand | prism a -> Prisma | rediss -> Redis | E S lint -> ESLint | docker compose -> Docker Compose`;
 
 const GUARDRAIL_SUFFIX =

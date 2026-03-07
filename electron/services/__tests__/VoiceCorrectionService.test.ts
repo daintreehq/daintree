@@ -191,7 +191,7 @@ describe("VoiceCorrectionService", () => {
 
     const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
     const systemMessage = body.messages[0].content as string;
-    expect(systemMessage).toContain("speech-to-text transcription errors");
+    expect(systemMessage).toContain("speech-to-text errors");
   });
 
   it("uses reasoning model parameters for gpt-5 models", async () => {
@@ -206,7 +206,7 @@ describe("VoiceCorrectionService", () => {
     expect(body.messages[0].role).toBe("developer");
     expect(body.temperature).toBeUndefined();
     expect(body.reasoning_effort).toBe("low");
-    expect(body.max_completion_tokens).toBe(1024);
+    expect(body.max_completion_tokens).toBe(512);
     expect(body.max_tokens).toBeUndefined();
   });
 

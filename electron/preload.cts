@@ -1618,8 +1618,9 @@ const api: ElectronAPI = {
       ipcRenderer.send(CHANNELS.VOICE_INPUT_AUDIO_CHUNK, chunk),
     onTranscriptionDelta: (callback: (delta: string) => void) =>
       _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_DELTA, callback),
-    onTranscriptionComplete: (callback: (text: string) => void) =>
-      _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, callback),
+    onTranscriptionComplete: (
+      callback: (payload: { text: string; willCorrect: boolean }) => void
+    ) => _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, callback),
     onCorrectionReplace: (
       callback: (payload: { rawText: string; correctedText: string }) => void
     ) => _typedOn(CHANNELS.VOICE_INPUT_CORRECTION_REPLACE, callback),
