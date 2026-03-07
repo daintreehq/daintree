@@ -131,7 +131,7 @@ describe("VoiceCorrectionService integration", () => {
               { role: "user", content: `Correct this sentence:\n${input}` },
             ],
             reasoning_effort: config.effort,
-            max_completion_tokens: 512,
+            max_completion_tokens: 1024,
           }),
         });
         const elapsed = Date.now() - start;
