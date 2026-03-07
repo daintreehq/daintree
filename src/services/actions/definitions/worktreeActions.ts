@@ -161,6 +161,9 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       if (!worktreeId) {
         throw new Error("Failed to create worktree: no worktreeId returned from backend");
       }
+      // Mark as pending before selecting so the data store can re-apply terminal policy
+      // once worktree data arrives from the workspace host polling cycle.
+      useWorktreeSelectionStore.getState().setPendingWorktree(worktreeId);
       useWorktreeSelectionStore.getState().selectWorktree(worktreeId);
       return worktreeId;
     },

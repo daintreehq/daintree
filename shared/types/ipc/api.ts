@@ -160,6 +160,7 @@ export interface ElectronAPI {
     getAllIssueAssociations(): Promise<Record<string, IssueAssociation>>;
     onUpdate(callback: (state: WorktreeState) => void): () => void;
     onRemove(callback: (data: { worktreeId: string }) => void): () => void;
+    onActivated(callback: (data: { worktreeId: string }) => void): () => void;
   };
   terminal: {
     spawn(options: TerminalSpawnOptions): Promise<string>;

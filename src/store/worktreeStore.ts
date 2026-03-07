@@ -21,6 +21,7 @@ interface CrossDiffDialogState {
 interface WorktreeSelectionState {
   activeWorktreeId: string | null;
   focusedWorktreeId: string | null;
+  pendingWorktreeId: string | null;
   expandedWorktrees: Set<string>;
   expandedTerminals: Set<string>;
   createDialog: CreateDialogState;
@@ -31,6 +32,8 @@ interface WorktreeSelectionState {
   setActiveWorktree: (id: string | null) => void;
   setFocusedWorktree: (id: string | null) => void;
   selectWorktree: (id: string) => void;
+  setPendingWorktree: (id: string | null) => void;
+  applyPendingWorktreeSelection: (worktreeId: string) => void;
   toggleWorktreeExpanded: (id: string) => void;
   setWorktreeExpanded: (id: string, expanded: boolean) => void;
   collapseAllWorktrees: () => void;
@@ -196,6 +199,7 @@ function persistActiveWorktree(id: string | null): void {
 const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set, get) => ({
   activeWorktreeId: null,
   focusedWorktreeId: null,
+  pendingWorktreeId: null,
   expandedWorktrees: new Set<string>(),
   expandedTerminals: new Set<string>(),
   createDialog: { isOpen: false, initialIssue: null, initialPR: null },
@@ -238,8 +242,13 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
   setFocusedWorktree: (id) => set({ focusedWorktreeId: id }),
 
   selectWorktree: (id) => {
-    // Skip if already active to prevent terminal reload flicker
+    // Skip if already active to prevent terminal reload flicker.
+    // Also clear any pending selection for this ID — it's already active,
+    // so the terminal policy was applied when we first selected it.
     if (get().activeWorktreeId === id) {
+      if (get().pendingWorktreeId === id) {
+        set({ pendingWorktreeId: null });
+      }
       return;
     }
 
@@ -304,6 +313,23 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
           });
         });
     }
+  },
+
+  setPendingWorktree: (id) => set({ pendingWorktreeId: id }),
+
+  applyPendingWorktreeSelection: (worktreeId) => {
+    const state = get();
+    if (state.pendingWorktreeId !== worktreeId) {
+      return;
+    }
+    // Always clear pending — if the active worktree has since changed, this pending is stale.
+    set({ pendingWorktreeId: null });
+    // Only apply terminal policy if this worktree is still the active one.
+    if (state.activeWorktreeId !== worktreeId) {
+      return;
+    }
+    const generation = state._policyGeneration;
+    applyWorktreeTerminalPolicy(get, set, worktreeId, generation);
   },
 
   toggleWorktreeExpanded: (id) =>
@@ -393,6 +419,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     set({
       activeWorktreeId: null,
       focusedWorktreeId: null,
+      pendingWorktreeId: null,
       expandedWorktrees: new Set<string>(),
       expandedTerminals: new Set<string>(),
       createDialog: { isOpen: false, initialIssue: null, initialPR: null },

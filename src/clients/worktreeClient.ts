@@ -80,4 +80,8 @@ export const worktreeClient = {
   onRemove: (callback: (data: { worktreeId: string }) => void): (() => void) => {
     return window.electron.worktree.onRemove(callback);
   },
+
+  onActivated: (callback: (data: { worktreeId: string }) => void): (() => void) => {
+    return window.electron.worktree.onActivated(callback);
+  },
 } as const;

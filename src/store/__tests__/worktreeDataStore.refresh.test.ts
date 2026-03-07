@@ -18,6 +18,7 @@ vi.mock("@/clients", () => ({
       };
     }),
     onRemove: vi.fn(() => () => {}),
+    onActivated: vi.fn(() => () => {}),
   },
   githubClient: {
     onPRDetected: vi.fn(() => () => {}),
