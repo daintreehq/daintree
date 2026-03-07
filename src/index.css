@@ -560,6 +560,24 @@ body,
   will-change: transform, opacity;
 }
 
+/* Voice recording: rotating conic border ring */
+@keyframes voice-ring-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Subtle opacity pulse for voice recording indicator */
+@keyframes voice-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
 /* Slower spinner to reduce "chaos" in dense panel grids */
 @keyframes spin-slow {
   to {

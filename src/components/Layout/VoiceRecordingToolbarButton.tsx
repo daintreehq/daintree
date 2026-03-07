@@ -26,6 +26,8 @@ export function VoiceRecordingToolbarButton() {
     return null;
   }
 
+  const isRecording = status === "recording";
+
   const contextLabel = [activeTarget.projectName, activeTarget.worktreeLabel]
     .filter(Boolean)
     .join(" / ");
@@ -55,28 +57,31 @@ export function VoiceRecordingToolbarButton() {
               void voiceRecordingService.focusActiveTarget();
             }}
             className={cn(
-              "relative text-canopy-text transition-colors mr-0.5",
-              status === "recording"
-                ? "text-green-400 hover:bg-green-500/10 hover:text-green-300"
-                : status === "finishing"
-                  ? "text-yellow-400 hover:bg-yellow-500/10 hover:text-yellow-300"
+              "relative transition-colors mr-0.5",
+              isRecording
+                ? "text-canopy-text hover:bg-white/[0.06]"
+                : status === "connecting"
+                  ? "text-canopy-text/60 hover:bg-white/[0.06]"
                   : "text-yellow-400 hover:bg-yellow-500/10 hover:text-yellow-300"
             )}
             aria-label={tooltipTitle}
           >
-            {status === "recording" && (
-              <span
-                className="absolute inset-0 rounded-md transition-shadow"
-                style={{
-                  boxShadow: `0 0 ${3 + audioLevel * 6}px ${audioLevel * 2}px rgba(74, 222, 128, ${0.1 + audioLevel * 0.35})`,
-                  transitionDuration: "80ms",
-                }}
-              />
-            )}
-            {status === "connecting" || status === "finishing" ? (
+            {status === "finishing" ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
-              <Mic className="h-4 w-4" />
+              <div className="relative">
+                <Mic className="h-4 w-4" />
+                <span
+                  className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full transition-colors"
+                  style={{
+                    backgroundColor:
+                      status === "connecting"
+                        ? "rgba(var(--theme-accent-rgb), 0.4)"
+                        : `rgba(var(--theme-accent-rgb), ${0.3 + audioLevel * 0.7})`,
+                    transitionDuration: "80ms",
+                  }}
+                />
+              </div>
             )}
           </Button>
         </TooltipTrigger>
