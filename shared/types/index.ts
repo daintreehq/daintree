@@ -185,6 +185,8 @@ export type {
   // Electron API
   ElectronAPI,
   NotificationSettings,
+  VoiceInputSettings,
+  VoiceInputStatus,
   BranchInfo,
   CreateWorktreeOptions,
   // Adaptive backoff

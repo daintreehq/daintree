@@ -805,4 +805,24 @@ export interface ElectronAPI {
     setEnabled(enabled: boolean): Promise<void>;
     markPromptShown(): Promise<void>;
   };
+  voiceInput: {
+    getSettings(): Promise<VoiceInputSettings>;
+    setSettings(settings: Partial<VoiceInputSettings>): Promise<void>;
+    start(): Promise<{ ok: true } | { ok: false; error: string }>;
+    stop(): Promise<void>;
+    sendAudioChunk(chunk: ArrayBuffer): void;
+    onTranscriptionDelta(callback: (delta: string) => void): () => void;
+    onTranscriptionComplete(callback: (text: string) => void): () => void;
+    onError(callback: (error: string) => void): () => void;
+    onStatus(callback: (status: VoiceInputStatus) => void): () => void;
+  };
 }
+
+export interface VoiceInputSettings {
+  enabled: boolean;
+  apiKey: string;
+  language: string;
+  customDictionary: string[];
+}
+
+export type VoiceInputStatus = "idle" | "connecting" | "recording" | "error";

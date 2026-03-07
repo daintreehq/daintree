@@ -12,6 +12,7 @@ import {
   Terminal,
   Settings as SettingsIcon,
   Bell,
+  Mic,
   Search,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -29,6 +30,7 @@ import { KeyboardShortcutsTab } from "./KeyboardShortcutsTab";
 import { WorktreeSettingsTab } from "./WorktreeSettingsTab";
 import { ToolbarSettingsTab } from "./ToolbarSettingsTab";
 import { EditorIntegrationTab } from "./EditorIntegrationTab";
+import { VoiceInputSettingsTab } from "./VoiceInputSettingsTab";
 import { SETTINGS_SEARCH_INDEX } from "./settingsSearchIndex";
 import { filterSettings, countMatchesPerTab, HighlightText } from "./settingsSearchUtils";
 
@@ -51,6 +53,7 @@ export type SettingsTab =
   | "toolbar"
   | "notifications"
   | "editor"
+  | "voice"
   | "troubleshooting";
 
 export function SettingsDialog({
@@ -161,6 +164,7 @@ export function SettingsDialog({
     toolbar: "Toolbar Customization",
     notifications: "Notifications",
     editor: "Editor Integration",
+    voice: "Voice Input",
     troubleshooting: "Troubleshooting",
   };
 
@@ -337,6 +341,17 @@ export function SettingsDialog({
             {matchCounts.editor ? <MatchBadge count={matchCounts.editor} /> : null}
           </NavButton>
           <NavButton
+            active={activeTab === "voice" && !isSearching}
+            onClick={() => {
+              setActiveTab("voice");
+              setSearchQuery("");
+            }}
+            icon={<Mic className="w-4 h-4" />}
+          >
+            <span className="flex-1">Voice Input</span>
+            {matchCounts.voice ? <MatchBadge count={matchCounts.voice} /> : null}
+          </NavButton>
+          <NavButton
             active={activeTab === "troubleshooting" && !isSearching}
             onClick={() => {
               setActiveTab("troubleshooting");
@@ -418,6 +433,10 @@ export function SettingsDialog({
 
                 <div className={activeTab === "editor" ? "" : "hidden"}>
                   <EditorIntegrationTab />
+                </div>
+
+                <div className={activeTab === "voice" ? "" : "hidden"}>
+                  <VoiceInputSettingsTab />
                 </div>
 
                 <div className={activeTab === "troubleshooting" ? "" : "hidden"}>
