@@ -92,7 +92,7 @@ describe("VoiceTranscriptionService", () => {
       transcriptionModel: "gpt-4o-mini-transcribe" as const,
       correctionEnabled: false,
       correctionModel: "gpt-5-nano" as const,
-      correctionSystemPrompt: "",
+      correctionCustomInstructions: "",
     });
 
     expect(statuses).toContain("connecting");
@@ -120,7 +120,7 @@ describe("VoiceTranscriptionService", () => {
       transcriptionModel: "gpt-4o-mini-transcribe" as const,
       correctionEnabled: false,
       correctionModel: "gpt-5-nano" as const,
-      correctionSystemPrompt: "",
+      correctionCustomInstructions: "",
     };
 
     // Start first session
@@ -155,7 +155,7 @@ describe("VoiceTranscriptionService", () => {
       transcriptionModel: "gpt-4o-mini-transcribe" as const,
       correctionEnabled: false,
       correctionModel: "gpt-5-nano" as const,
-      correctionSystemPrompt: "",
+      correctionCustomInstructions: "",
     });
 
     service.stop();

@@ -15,13 +15,14 @@ import {
   FlaskConical,
   ExternalLink,
   Sparkles,
-  RotateCcw,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { dispatchVoiceInputSettingsChanged } from "@/lib/voiceInputSettingsEvents";
-import { DEFAULT_CORRECTION_SYSTEM_PROMPT } from "@shared/config/voiceCorrection";
+import { CORE_CORRECTION_PROMPT } from "@shared/config/voiceCorrection";
 import type {
   VoiceInputSettings,
   MicPermissionStatus,
@@ -66,7 +67,7 @@ const DEFAULT_SETTINGS: VoiceInputSettings = {
   transcriptionModel: "gpt-4o-mini-transcribe",
   correctionEnabled: false,
   correctionModel: "gpt-5-nano",
-  correctionSystemPrompt: DEFAULT_CORRECTION_SYSTEM_PROMPT,
+  correctionCustomInstructions: "",
 };
 
 type LoadState = "loading" | "ready" | "error";
@@ -492,18 +493,14 @@ interface AiCorrectionSectionProps {
 }
 
 function AiCorrectionSection({ settings, update }: AiCorrectionSectionProps) {
-  const [promptExpanded, setPromptExpanded] = useState(false);
-
-  const handleResetPrompt = () => {
-    update({ correctionSystemPrompt: DEFAULT_CORRECTION_SYSTEM_PROMPT });
-  };
+  const [corePromptExpanded, setCorePromptExpanded] = useState(false);
 
   return (
     <>
       <SettingsSwitchCard
         icon={Sparkles}
         title="AI Text Correction"
-        subtitle="Automatically clean up transcriptions — removing filler words, fixing punctuation, and correcting technical terms"
+        subtitle="Automatically clean up transcriptions — correcting mistranscribed words, fixing punctuation, and removing filler words"
         isEnabled={settings.correctionEnabled}
         onChange={() => update({ correctionEnabled: !settings.correctionEnabled })}
         ariaLabel="Toggle AI text correction"
@@ -513,52 +510,57 @@ function AiCorrectionSection({ settings, update }: AiCorrectionSectionProps) {
         <SettingsSection
           icon={Sparkles}
           title="Correction Settings"
-          description="Transcriptions are corrected using GPT-5 Nano — the fastest and most cost-effective model with excellent prompt-caching support."
+          description="Transcriptions are corrected using GPT-5 Nano with an optimized prompt. Project name, custom dictionary, and your instructions are included automatically."
         >
           <div className="space-y-4">
+            {/* Core prompt (read-only) */}
             <div className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <h4 className="text-sm font-medium text-canopy-text">System Prompt</h4>
-                <div className="flex items-center gap-2">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={handleResetPrompt}
-                    className="text-canopy-text/50 hover:text-canopy-text text-xs h-7 px-2"
-                    title="Reset to default prompt"
-                  >
-                    <RotateCcw className="w-3 h-3" />
-                    Reset
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setPromptExpanded((v) => !v)}
-                    className="text-canopy-text/50 hover:text-canopy-text text-xs h-7 px-2"
-                  >
-                    {promptExpanded ? "Collapse" : "Edit"}
-                  </Button>
-                </div>
-              </div>
+              <button
+                type="button"
+                onClick={() => setCorePromptExpanded((v) => !v)}
+                className="flex items-center justify-between w-full text-left"
+              >
+                <h4 className="text-sm font-medium text-canopy-text">Core Prompt</h4>
+                {corePromptExpanded ? (
+                  <ChevronUp className="w-4 h-4 text-canopy-text/40" />
+                ) : (
+                  <ChevronDown className="w-4 h-4 text-canopy-text/40" />
+                )}
+              </button>
 
-              {promptExpanded ? (
-                <textarea
-                  value={settings.correctionSystemPrompt}
-                  onChange={(e) => update({ correctionSystemPrompt: e.target.value })}
-                  rows={8}
-                  className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:ring-1 focus:ring-canopy-accent resize-y"
-                  spellCheck={false}
-                />
+              {corePromptExpanded ? (
+                <pre className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-canopy-text/60 whitespace-pre-wrap overflow-y-auto max-h-64">
+                  {CORE_CORRECTION_PROMPT}
+                </pre>
               ) : (
-                <p className="text-xs text-canopy-text/50 line-clamp-2">
-                  {settings.correctionSystemPrompt}
+                <p className="text-xs text-canopy-text/40">
+                  High-Fidelity Orthographic Auditor — corrects phonetic mistranscriptions,
+                  punctuation, homophones, and filler words while preserving the speaker&apos;s
+                  original language.
                 </p>
               )}
-
-              <p className="text-xs text-canopy-text/40">
-                A guardrail requiring plain-text output is always appended to your prompt.
-              </p>
             </div>
+
+            {/* Custom instructions (user-editable, appended to core prompt) */}
+            <div className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-3">
+              <h4 className="text-sm font-medium text-canopy-text">Custom Instructions</h4>
+              <p className="text-xs text-canopy-text/40">
+                Add project-specific rules or corrections. These are appended to the core prompt.
+              </p>
+              <textarea
+                value={settings.correctionCustomInstructions}
+                onChange={(e) => update({ correctionCustomInstructions: e.target.value })}
+                rows={3}
+                placeholder='e.g., "Always capitalize ProductName as one word" or "The acronym CMS refers to our Content Management System"'
+                className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-canopy-text placeholder:text-canopy-text/30 focus:outline-none focus:ring-1 focus:ring-canopy-accent resize-y"
+                spellCheck={false}
+              />
+            </div>
+
+            <p className="text-xs text-canopy-text/40">
+              The system prompt also includes your project name and custom dictionary automatically.
+              Prompt caching keeps costs minimal (~$0.005/1M cached tokens).
+            </p>
           </div>
         </SettingsSection>
       )}

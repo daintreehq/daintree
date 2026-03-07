@@ -1,12 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  VoiceCorrectionService,
-  DEFAULT_CORRECTION_SYSTEM_PROMPT,
-} from "../VoiceCorrectionService.js";
+import { VoiceCorrectionService } from "../VoiceCorrectionService.js";
 
 const BASE_SETTINGS = {
   model: "gpt-5-nano",
-  systemPrompt: DEFAULT_CORRECTION_SYSTEM_PROMPT,
   apiKey: "sk-test",
   customDictionary: [] as string[],
 };
@@ -93,7 +89,7 @@ describe("VoiceCorrectionService", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("includes custom vocabulary in the API request", async () => {
+  it("includes custom dictionary in the system message", async () => {
     const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse("Canopy is great."));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -104,24 +100,39 @@ describe("VoiceCorrectionService", () => {
     });
 
     const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
-    const userMessage = body.messages[1].content as string;
-    expect(userMessage).toContain("Canopy");
-    expect(userMessage).toContain("Worktree");
+    const systemMessage = body.messages[0].content as string;
+    expect(systemMessage).toContain("Canopy");
+    expect(systemMessage).toContain("Worktree");
   });
 
-  it("includes project context in the API request", async () => {
+  it("includes project name in the system message", async () => {
     const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse("Corrected."));
     vi.stubGlobal("fetch", fetchMock);
 
     const svc = new VoiceCorrectionService();
     await svc.correct("test sentence", {
       ...BASE_SETTINGS,
-      projectContext: "my-project",
+      projectName: "my-project",
     });
 
     const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
-    const userMessage = body.messages[1].content as string;
-    expect(userMessage).toContain("my-project");
+    const systemMessage = body.messages[0].content as string;
+    expect(systemMessage).toContain("my-project");
+  });
+
+  it("includes custom instructions in the system message", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse("Corrected."));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const svc = new VoiceCorrectionService();
+    await svc.correct("test sentence", {
+      ...BASE_SETTINGS,
+      customInstructions: "Always capitalize ProductName.",
+    });
+
+    const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+    const systemMessage = body.messages[0].content as string;
+    expect(systemMessage).toContain("Always capitalize ProductName.");
   });
 
   it("maintains a sliding history window of 3 sentences", async () => {
@@ -159,17 +170,28 @@ describe("VoiceCorrectionService", () => {
     expect(userMessage).not.toContain("sentence one");
   });
 
-  it("always appends guardrail suffix to the system prompt", async () => {
+  it("always includes guardrail suffix in the system prompt", async () => {
     const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse("Corrected."));
     vi.stubGlobal("fetch", fetchMock);
 
     const svc = new VoiceCorrectionService();
-    await svc.correct("test", { ...BASE_SETTINGS, systemPrompt: "Custom prompt." });
+    await svc.correct("test", BASE_SETTINGS);
 
     const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
     const systemMessage = body.messages[0].content as string;
-    expect(systemMessage).toContain("Custom prompt.");
     expect(systemMessage).toContain("Output ONLY the corrected text");
+  });
+
+  it("includes core prompt in the system message", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse("Corrected."));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const svc = new VoiceCorrectionService();
+    await svc.correct("test", BASE_SETTINGS);
+
+    const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+    const systemMessage = body.messages[0].content as string;
+    expect(systemMessage).toContain("High-Fidelity Orthographic Auditor");
   });
 
   it("uses temperature 0 in API requests", async () => {

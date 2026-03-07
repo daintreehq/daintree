@@ -1608,7 +1608,7 @@ const api: ElectronAPI = {
         transcriptionModel: "gpt-4o-mini-transcribe" | "gpt-4o-transcribe";
         correctionEnabled: boolean;
         correctionModel: "gpt-5-nano";
-        correctionSystemPrompt: string;
+        correctionCustomInstructions: string;
       }>
     ) => _typedInvoke(CHANNELS.VOICE_INPUT_SET_SETTINGS, patch),
     start: () => _typedInvoke(CHANNELS.VOICE_INPUT_START),

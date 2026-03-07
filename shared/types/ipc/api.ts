@@ -903,7 +903,7 @@ export interface VoiceInputSettings {
   transcriptionModel: VoiceTranscriptionModel;
   correctionEnabled: boolean;
   correctionModel: VoiceCorrectionModel;
-  correctionSystemPrompt: string;
+  correctionCustomInstructions: string;
 }
 
 export type VoiceInputStatus = "idle" | "connecting" | "recording" | "finishing" | "error";

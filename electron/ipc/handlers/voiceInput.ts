@@ -101,13 +101,12 @@ async function validateOpenAIKey(apiKey: string): Promise<{ valid: boolean; erro
   }
 }
 
-function buildProjectContext(): string | undefined {
+function getProjectInfo(): { name?: string; path?: string } {
   const projects = store.get("projects");
   const currentId = projects?.currentProjectId;
-  if (!currentId) return undefined;
+  if (!currentId) return {};
   const project = projects?.list?.find((p) => p.id === currentId);
-  if (!project?.name) return undefined;
-  return project.name;
+  return { name: project?.name, path: project?.path };
 }
 
 export function registerVoiceInputHandlers(deps: HandlerDependencies): () => void {
@@ -138,8 +137,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     }
     correctionService.resetHistory();
 
-    // Build project context from the active project name if available
-    const projectContext = buildProjectContext();
+    // Capture project info at session start for the correction prompt context
+    const projectInfo = getProjectInfo();
 
     const unsubscribe = svc.onEvent((voiceEvent) => {
       const win = deps.mainWindow;
@@ -160,10 +159,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           void correctionService!
             .correct(rawText, {
               model: liveSettings.correctionModel,
-              systemPrompt: liveSettings.correctionSystemPrompt,
               apiKey: liveSettings.apiKey,
               customDictionary: liveSettings.customDictionary,
-              projectContext,
+              customInstructions: liveSettings.correctionCustomInstructions,
+              projectName: projectInfo.name,
+              projectPath: projectInfo.path,
             })
             .then((correctedText) => {
               if (!win.isDestroyed()) {

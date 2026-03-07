@@ -1,22 +1,24 @@
 import { logDebug, logWarn } from "../utils/logger.js";
-import { DEFAULT_CORRECTION_SYSTEM_PROMPT } from "../../shared/config/voiceCorrection.js";
+import {
+  CORE_CORRECTION_PROMPT,
+  buildCorrectionSystemPrompt,
+  type CorrectionPromptContext,
+} from "../../shared/config/voiceCorrection.js";
 
-export { DEFAULT_CORRECTION_SYSTEM_PROMPT };
+export { CORE_CORRECTION_PROMPT, buildCorrectionSystemPrompt };
 
 const P = "[VoiceCorrection]";
 const CORRECTION_TIMEOUT_MS = 2000;
 const MAX_HISTORY = 3;
 const MAX_TOKENS = 300;
 
-const GUARDRAIL_SUFFIX =
-  "\n\nOutput ONLY the corrected text — no explanations, no markup, no quotes, nothing else.";
-
 export interface VoiceCorrectionSettings {
   model: string;
-  systemPrompt: string;
   apiKey: string;
   customDictionary: string[];
-  projectContext?: string;
+  customInstructions?: string;
+  projectName?: string;
+  projectPath?: string;
 }
 
 export class VoiceCorrectionService {
@@ -67,28 +69,28 @@ export class VoiceCorrectionService {
   }
 
   private async callApi(rawText: string, settings: VoiceCorrectionSettings): Promise<string> {
-    const { model, systemPrompt, apiKey, customDictionary, projectContext } = settings;
+    const { model, apiKey, customDictionary, customInstructions, projectName, projectPath } =
+      settings;
 
-    const parts: string[] = [];
+    // System message: core prompt + context (cached across requests)
+    const context: CorrectionPromptContext = {
+      projectName,
+      projectPath,
+      customDictionary,
+      customInstructions,
+    };
+    const systemPrompt = buildCorrectionSystemPrompt(context);
 
-    if (projectContext) {
-      parts.push(`Project context: ${projectContext}`);
-    }
+    // User message: only history + raw text (changes every request)
+    const userParts: string[] = [];
 
     if (this.history.length > 0) {
-      parts.push(`Previous sentences:\n${this.history.map((s) => `- ${s}`).join("\n")}`);
+      userParts.push(`Previous sentences:\n${this.history.map((s) => `- ${s}`).join("\n")}`);
     }
 
-    if (customDictionary.length > 0) {
-      parts.push(
-        `Custom vocabulary (preserve these terms exactly): ${customDictionary.join(", ")}`
-      );
-    }
+    userParts.push(`Correct this sentence:\n${rawText}`);
 
-    parts.push(`Correct this sentence:\n${rawText}`);
-
-    const userMessage = parts.join("\n\n");
-    const fullSystemPrompt = systemPrompt.trim() + GUARDRAIL_SUFFIX;
+    const userMessage = userParts.join("\n\n");
 
     logDebug(`${P} Calling Chat Completions`, { model, historyLen: this.history.length });
 
@@ -101,7 +103,7 @@ export class VoiceCorrectionService {
       body: JSON.stringify({
         model,
         messages: [
-          { role: "system", content: fullSystemPrompt },
+          { role: "system", content: systemPrompt },
           { role: "user", content: userMessage },
         ],
         temperature: 0,

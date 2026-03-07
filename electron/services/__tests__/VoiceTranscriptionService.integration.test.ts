@@ -31,7 +31,7 @@ describe("VoiceTranscriptionService integration", () => {
         transcriptionModel: "gpt-4o-mini-transcribe",
         correctionEnabled: false,
         correctionModel: "gpt-5-nano",
-        correctionSystemPrompt: "",
+        correctionCustomInstructions: "",
       });
 
       expect(result).toEqual({ ok: true });
