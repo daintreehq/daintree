@@ -155,6 +155,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     const openPicker = useCommandStore((s) => s.openPicker);
     const [voiceEnabled, setVoiceEnabled] = useState(false);
+    const [isVoiceRecording, setIsVoiceRecording] = useState(false);
     const pendingTranscriptRef = useRef<string>("");
 
     const commandContext = useMemo(
@@ -1172,7 +1173,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           <div
             ref={inputShellRef}
             className={cn(
-              "relative",
+              "group/shell relative",
               "flex w-full items-center gap-1.5 rounded-sm border border-white/[0.06] bg-overlay-soft py-1 shadow-[0_6px_12px_rgba(0,0,0,0.18)] transition-colors",
               "group-hover:border-white/[0.08] group-hover:bg-overlay-medium",
               "focus-within:border-white/[0.12] focus-within:ring-1 focus-within:ring-white/[0.06] focus-within:bg-white/[0.05]",
@@ -1203,11 +1204,18 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               />
             </div>
 
-            <div className="flex items-center gap-0.5 pr-1.5">
+            <div
+              className={cn(
+                "flex items-center gap-0.5 pr-1.5 transition-opacity motion-reduce:transition-none",
+                "opacity-0 group-hover:opacity-100 group-focus-within/shell:opacity-100",
+                isVoiceRecording && "opacity-100"
+              )}
+            >
               {voiceEnabled && (
                 <VoiceInputButton
                   onTranscriptionDelta={handleVoiceTranscriptionDelta}
                   onTranscriptionComplete={handleVoiceTranscriptionComplete}
+                  onRecordingStateChange={setIsVoiceRecording}
                   disabled={disabled}
                 />
               )}
