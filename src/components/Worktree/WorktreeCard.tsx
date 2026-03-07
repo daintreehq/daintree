@@ -137,6 +137,8 @@ export function WorktreeCard({
     effectiveSummary,
     computedSubtitle,
     spineState,
+    isLifecycleRunning,
+    lifecycleLabel,
   } = useWorktreeStatus({ worktree, worktreeErrorCount: worktreeErrors.length });
 
   const {
@@ -522,6 +524,8 @@ export function WorktreeCard({
           onDismissError={dismissError}
           onRetryError={handleErrorRetry}
           onOpenReviewHub={() => setShowReviewHub(true)}
+          isLifecycleRunning={isLifecycleRunning}
+          lifecycleLabel={lifecycleLabel}
         />
 
         <WorktreeTerminalSection

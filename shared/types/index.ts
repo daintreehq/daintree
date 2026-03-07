@@ -21,6 +21,9 @@ export type {
   StagingStatus,
   // Worktree types
   WorktreeMood,
+  WorktreeLifecyclePhase,
+  WorktreeLifecycleState,
+  WorktreeLifecycleStatus,
   Worktree,
   WorktreeState,
   // Notification types
