@@ -489,6 +489,17 @@ const CHANNELS = {
   TELEMETRY_GET: "telemetry:get",
   TELEMETRY_SET_ENABLED: "telemetry:set-enabled",
   TELEMETRY_MARK_PROMPT_SHOWN: "telemetry:mark-prompt-shown",
+
+  // Voice Input channels
+  VOICE_INPUT_GET_SETTINGS: "voice-input:get-settings",
+  VOICE_INPUT_SET_SETTINGS: "voice-input:set-settings",
+  VOICE_INPUT_START: "voice-input:start",
+  VOICE_INPUT_STOP: "voice-input:stop",
+  VOICE_INPUT_AUDIO_CHUNK: "voice-input:audio-chunk",
+  VOICE_INPUT_TRANSCRIPTION_DELTA: "voice-input:transcription-delta",
+  VOICE_INPUT_TRANSCRIPTION_COMPLETE: "voice-input:transcription-complete",
+  VOICE_INPUT_ERROR: "voice-input:error",
+  VOICE_INPUT_STATUS: "voice-input:status",
 } as const;
 
 const api: ElectronAPI = {
@@ -1568,6 +1579,30 @@ const api: ElectronAPI = {
     get: () => _typedInvoke(CHANNELS.TELEMETRY_GET),
     setEnabled: (enabled: boolean) => _typedInvoke(CHANNELS.TELEMETRY_SET_ENABLED, enabled),
     markPromptShown: () => _typedInvoke(CHANNELS.TELEMETRY_MARK_PROMPT_SHOWN),
+  },
+
+  // Voice Input API
+  voiceInput: {
+    getSettings: () => _typedInvoke(CHANNELS.VOICE_INPUT_GET_SETTINGS),
+    setSettings: (
+      patch: Partial<{
+        enabled: boolean;
+        apiKey: string;
+        language: string;
+        customDictionary: string[];
+      }>
+    ) => _typedInvoke(CHANNELS.VOICE_INPUT_SET_SETTINGS, patch),
+    start: () => _typedInvoke(CHANNELS.VOICE_INPUT_START),
+    stop: () => _typedInvoke(CHANNELS.VOICE_INPUT_STOP),
+    sendAudioChunk: (chunk: ArrayBuffer) =>
+      ipcRenderer.send(CHANNELS.VOICE_INPUT_AUDIO_CHUNK, chunk),
+    onTranscriptionDelta: (callback: (delta: string) => void) =>
+      _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_DELTA, callback),
+    onTranscriptionComplete: (callback: (text: string) => void) =>
+      _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, callback),
+    onError: (callback: (error: string) => void) => _typedOn(CHANNELS.VOICE_INPUT_ERROR, callback),
+    onStatus: (callback: (status: "idle" | "connecting" | "recording" | "error") => void) =>
+      _typedOn(CHANNELS.VOICE_INPUT_STATUS, callback),
   },
 };
 
