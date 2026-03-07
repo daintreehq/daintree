@@ -188,6 +188,7 @@ export type {
   VoiceInputSettings,
   VoiceInputStatus,
   VoiceTranscriptionModel,
+  VoiceCorrectionModel,
   MicPermissionStatus,
   BranchInfo,
   CreateWorktreeOptions,

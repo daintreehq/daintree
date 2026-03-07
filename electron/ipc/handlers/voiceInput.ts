@@ -3,11 +3,30 @@ import { spawn } from "child_process";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import { VoiceTranscriptionService } from "../../services/VoiceTranscriptionService.js";
+import { VoiceCorrectionService } from "../../services/VoiceCorrectionService.js";
 import type { HandlerDependencies } from "../types.js";
 import type { VoiceInputSettings } from "../../../shared/types/ipc/api.js";
 
 let service: VoiceTranscriptionService | null = null;
 let activeEventUnsubscribe: (() => void) | null = null;
+let correctionService: VoiceCorrectionService | null = null;
+
+const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
+  enabled: false,
+  apiKey: "",
+  language: "en",
+  customDictionary: [],
+  transcriptionModel: "gpt-4o-mini-transcribe",
+  correctionEnabled: false,
+  correctionModel: "gpt-5-nano",
+  correctionCustomInstructions: "",
+};
+
+/** Read voiceInput settings with defaults for fields added after initial store creation. */
+function getVoiceSettings(): VoiceInputSettings {
+  const stored = store.get("voiceInput") as Partial<VoiceInputSettings> | undefined;
+  return { ...VOICE_INPUT_DEFAULTS, ...stored };
+}
 
 function getService(): VoiceTranscriptionService {
   if (!service) {
@@ -99,31 +118,44 @@ async function validateOpenAIKey(apiKey: string): Promise<{ valid: boolean; erro
   }
 }
 
+function getProjectInfo(): { name?: string; path?: string } {
+  const projects = store.get("projects");
+  const currentId = projects?.currentProjectId;
+  if (!currentId) return {};
+  const project = projects?.list?.find((p) => p.id === currentId);
+  return { name: project?.name, path: project?.path };
+}
+
 export function registerVoiceInputHandlers(deps: HandlerDependencies): () => void {
   const handleGetSettings = async () => {
-    return store.get("voiceInput");
+    return getVoiceSettings();
   };
 
   const handleSetSettings = async (
     _event: Electron.IpcMainInvokeEvent,
-    patch: Partial<{
-      enabled: boolean;
-      apiKey: string;
-      language: string;
-      customDictionary: string[];
-      transcriptionModel: string;
-    }>
+    patch: Partial<VoiceInputSettings>
   ) => {
-    const current = store.get("voiceInput");
+    const current = getVoiceSettings();
     store.set("voiceInput", { ...current, ...patch });
   };
 
   const handleStart = async (event: Electron.IpcMainInvokeEvent) => {
     const svc = getService();
-    const settings = store.get("voiceInput");
+    // Snapshot transcription settings at session start (model, language, API key).
+    // Correction settings are read live from store per-event so mid-session changes apply.
+    const settings = getVoiceSettings();
 
     // Clean up any existing subscription before starting a new session
     cleanupActiveSubscription();
+
+    // Initialize (or reset) the correction service for this session
+    if (!correctionService) {
+      correctionService = new VoiceCorrectionService();
+    }
+    correctionService.resetHistory();
+
+    // Capture project info at session start for the correction prompt context
+    const projectInfo = getProjectInfo();
 
     const unsubscribe = svc.onEvent((voiceEvent) => {
       const win = deps.mainWindow;
@@ -132,7 +164,40 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       if (voiceEvent.type === "delta") {
         win.webContents.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_DELTA, voiceEvent.text);
       } else if (voiceEvent.type === "complete") {
-        win.webContents.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, voiceEvent.text);
+        const rawText = voiceEvent.text.trim();
+
+        // Read correction settings live so mid-session changes take effect immediately.
+        // Use getVoiceSettings() to ensure new fields have defaults even if the
+        // persisted object predates their addition.
+        const liveSettings = getVoiceSettings();
+        const willCorrect = !!(liveSettings.correctionEnabled && liveSettings.apiKey);
+
+        // Send raw text + whether correction will happen so the renderer knows
+        // whether to mark text as pending (grayed) or finalize it immediately.
+        win.webContents.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
+          text: rawText,
+          willCorrect,
+        });
+
+        if (willCorrect) {
+          void correctionService!
+            .correct(rawText, {
+              model: liveSettings.correctionModel,
+              apiKey: liveSettings.apiKey,
+              customDictionary: liveSettings.customDictionary,
+              customInstructions: liveSettings.correctionCustomInstructions,
+              projectName: projectInfo.name,
+              projectPath: projectInfo.path,
+            })
+            .then((correctedText) => {
+              if (!win.isDestroyed()) {
+                win.webContents.send(CHANNELS.VOICE_INPUT_CORRECTION_REPLACE, {
+                  rawText,
+                  correctedText,
+                });
+              }
+            });
+        }
       } else if (voiceEvent.type === "error") {
         win.webContents.send(CHANNELS.VOICE_INPUT_ERROR, voiceEvent.message);
       } else if (voiceEvent.type === "status") {
@@ -152,7 +217,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     };
     event.sender.once("destroyed", onDestroyed);
 
-    const result = await svc.start(settings as VoiceInputSettings);
+    const result = await svc.start(settings);
     if (!result.ok) {
       // Failed to start — clean up subscription immediately
       if (activeEventUnsubscribe === unsubscribe) {
@@ -215,5 +280,6 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     cleanupActiveSubscription();
     service?.destroy();
     service = null;
+    correctionService = null;
   };
 }

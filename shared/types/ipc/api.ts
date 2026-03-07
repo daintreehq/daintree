@@ -814,7 +814,12 @@ export interface ElectronAPI {
     stop(): Promise<void>;
     sendAudioChunk(chunk: ArrayBuffer): void;
     onTranscriptionDelta(callback: (delta: string) => void): () => void;
-    onTranscriptionComplete(callback: (text: string) => void): () => void;
+    onTranscriptionComplete(
+      callback: (payload: { text: string; willCorrect: boolean }) => void
+    ): () => void;
+    onCorrectionReplace(
+      callback: (payload: { rawText: string; correctedText: string }) => void
+    ): () => void;
     onError(callback: (error: string) => void): () => void;
     onStatus(callback: (status: VoiceInputStatus) => void): () => void;
     checkMicPermission(): Promise<MicPermissionStatus>;
@@ -890,12 +895,17 @@ export type MicPermissionStatus =
 
 export type VoiceTranscriptionModel = "gpt-4o-mini-transcribe" | "gpt-4o-transcribe";
 
+export type VoiceCorrectionModel = "gpt-5-nano";
+
 export interface VoiceInputSettings {
   enabled: boolean;
   apiKey: string;
   language: string;
   customDictionary: string[];
   transcriptionModel: VoiceTranscriptionModel;
+  correctionEnabled: boolean;
+  correctionModel: VoiceCorrectionModel;
+  correctionCustomInstructions: string;
 }
 
 export type VoiceInputStatus = "idle" | "connecting" | "recording" | "finishing" | "error";

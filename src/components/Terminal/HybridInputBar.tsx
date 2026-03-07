@@ -51,6 +51,8 @@ import {
   addFileDropChip,
   createFileDropChipTooltip,
   createFilePasteHandler,
+  pendingCorrectionField,
+  setPendingCorrectionRanges,
 } from "./inputEditorExtensions";
 
 export interface HybridInputBarHandle {
@@ -515,6 +517,56 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         });
       }
     }, [voiceDraftRevision, terminalId, currentProject?.id]);
+
+    // Sync pending-correction decorations to the editor whenever they change.
+    // This covers both:
+    // 1. Explicit pending corrections (text awaiting AI correction after transcription completes)
+    // 2. Live segment text (text currently streaming in via deltas, not yet finalized)
+    const pendingCorrections = useVoiceRecordingStore(
+      (s) => s.panelBuffers[terminalId]?.pendingCorrections
+    );
+    const liveSegmentStart = useVoiceRecordingStore(
+      (s) => s.panelBuffers[terminalId]?.draftLengthAtSegmentStart ?? -1
+    );
+    const voiceCorrectionEnabled = useVoiceRecordingStore((s) => s.correctionEnabled);
+    const voiceIsActive = useVoiceRecordingStore(
+      (s) => s.status === "recording" || s.status === "connecting"
+    );
+
+    useEffect(() => {
+      const view = editorViewRef.current;
+      if (!view) return;
+
+      const ranges: { from: number; to: number }[] = [];
+
+      // Add ranges for pending corrections (finalized segments awaiting AI response)
+      if (pendingCorrections && pendingCorrections.length > 0) {
+        const doc = view.state.doc.toString();
+        for (const p of pendingCorrections) {
+          const idx = doc.indexOf(p.rawText, Math.max(0, p.segmentStart - 20));
+          if (idx >= 0) {
+            ranges.push({ from: idx, to: idx + p.rawText.length });
+          }
+        }
+      }
+
+      // Add range for live segment (text streaming in via deltas, not yet finalized)
+      // This makes delta text appear gray immediately when correction is enabled.
+      if (voiceCorrectionEnabled && voiceIsActive && liveSegmentStart >= 0) {
+        const docLen = view.state.doc.length;
+        if (liveSegmentStart < docLen) {
+          ranges.push({ from: liveSegmentStart, to: docLen });
+        }
+      }
+
+      view.dispatch({ effects: setPendingCorrectionRanges.of(ranges) });
+    }, [
+      pendingCorrections,
+      voiceDraftRevision,
+      liveSegmentStart,
+      voiceCorrectionEnabled,
+      voiceIsActive,
+    ]);
 
     const sendFromEditor = useCallback(() => {
       const view = editorViewRef.current;
@@ -1059,6 +1111,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           fileDropChipTooltipCompartmentRef.current.of(
             !disabled ? createFileDropChipTooltip() : []
           ),
+          pendingCorrectionField,
           keymapCompartmentRef.current.of(keymapExtension),
           editorUpdateListener,
           domEventHandlers,
