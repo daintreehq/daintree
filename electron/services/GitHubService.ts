@@ -777,11 +777,16 @@ function parsePRNode(node: Record<string, unknown>): GitHubPR {
   const reviewsData = node.reviews as { totalCount?: number };
   const merged = node.merged as boolean;
   const rawState = node.state as string;
+  const headRepo = node.headRepository as { nameWithOwner?: string } | null;
+  const baseRepo = node.baseRepository as { nameWithOwner?: string } | null;
 
   let state: "OPEN" | "CLOSED" | "MERGED" = rawState as "OPEN" | "CLOSED" | "MERGED";
   if (merged) {
     state = "MERGED";
   }
+
+  const isFork =
+    headRepo && baseRepo ? headRepo.nameWithOwner !== baseRepo.nameWithOwner : undefined;
 
   return {
     number: node.number as number,
@@ -795,6 +800,8 @@ function parsePRNode(node: Record<string, unknown>): GitHubPR {
       avatarUrl: author?.avatarUrl ?? "",
     },
     reviewCount: reviewsData?.totalCount,
+    headRefName: (node.headRefName as string) || undefined,
+    isFork: isFork ?? undefined,
   };
 }
 

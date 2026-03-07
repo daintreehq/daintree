@@ -90,6 +90,13 @@ export const LIST_PRS_QUERY = `
           isDraft
           updatedAt
           merged
+          headRefName
+          headRepository {
+            nameWithOwner
+          }
+          baseRepository {
+            nameWithOwner
+          }
           author {
             login
             avatarUrl
@@ -146,6 +153,13 @@ export const SEARCH_QUERY = `
           isDraft
           updatedAt
           merged
+          headRefName
+          headRepository {
+            nameWithOwner
+          }
+          baseRepository {
+            nameWithOwner
+          }
           author {
             login
             avatarUrl
@@ -231,6 +245,13 @@ export const GET_PR_QUERY = `
         merged
         createdAt
         updatedAt
+        headRefName
+        headRepository {
+          nameWithOwner
+        }
+        baseRepository {
+          nameWithOwner
+        }
         author {
           login
           avatarUrl

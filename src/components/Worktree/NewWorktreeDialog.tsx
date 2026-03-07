@@ -14,7 +14,7 @@ import {
   Info,
 } from "lucide-react";
 import type { BranchInfo, CreateWorktreeOptions } from "@/types/electron";
-import type { GitHubIssue } from "@shared/types/github";
+import type { GitHubIssue, GitHubPR } from "@shared/types/github";
 import { worktreeClient, githubClient, projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { IssueSelector } from "@/components/GitHub/IssueSelector";
@@ -37,6 +37,7 @@ interface NewWorktreeDialogProps {
   rootPath: string;
   onWorktreeCreated?: () => void;
   initialIssue?: GitHubIssue | null;
+  initialPR?: GitHubPR | null;
 }
 
 export function NewWorktreeDialog({
@@ -45,6 +46,7 @@ export function NewWorktreeDialog({
   rootPath,
   onWorktreeCreated,
   initialIssue,
+  initialPR,
 }: NewWorktreeDialogProps) {
   const [branches, setBranches] = useState<BranchInfo[]>([]);
   const [loading, setLoading] = useState(false);
@@ -375,7 +377,13 @@ export function NewWorktreeDialog({
     setBaseBranch("");
     setFromRemote(false);
     setSelectedIssue(initialIssue ?? null);
-    setBranchInput("");
+
+    if (initialPR?.headRefName) {
+      setBranchInput(initialPR.headRefName);
+      branchInputTouchedRef.current = true;
+    } else {
+      setBranchInput("");
+    }
     setWorktreePath("");
     setProjectSettings(null);
     setGitUsername(null);
@@ -392,16 +400,37 @@ export function NewWorktreeDialog({
         if (!isCurrent) return;
 
         setBranches(branchList);
-        const currentBranch = branchList.find((b) => b.current);
-        const mainBranch =
-          branchList.find((b) => b.name === "main") || branchList.find((b) => b.name === "master");
 
-        const initialBranch = currentBranch?.name || mainBranch?.name || branchList[0]?.name || "";
-        setBaseBranch(initialBranch);
+        if (initialPR?.headRefName) {
+          // For PR checkout, prefer the remote tracking branch origin/<headRefName>
+          const remoteBranchName = `origin/${initialPR.headRefName}`;
+          const remoteBranch = branchList.find((b) => b.name === remoteBranchName);
+          if (remoteBranch) {
+            setBaseBranch(remoteBranchName);
+            setFromRemote(true);
+          } else {
+            // Remote not fetched yet — fall back to main/master; user can adjust
+            const mainBranch =
+              branchList.find((b) => b.name === "main") ||
+              branchList.find((b) => b.name === "master");
+            const fallback = mainBranch?.name || branchList[0]?.name || "";
+            setBaseBranch(fallback);
+            setFromRemote(!!branchList.find((b) => b.name === fallback)?.remote);
+          }
+        } else {
+          const currentBranch = branchList.find((b) => b.current);
+          const mainBranch =
+            branchList.find((b) => b.name === "main") ||
+            branchList.find((b) => b.name === "master");
 
-        // Auto-set fromRemote based on the initial branch type
-        const initialBranchInfo = branchList.find((b) => b.name === initialBranch);
-        setFromRemote(!!initialBranchInfo?.remote);
+          const initialBranch =
+            currentBranch?.name || mainBranch?.name || branchList[0]?.name || "";
+          setBaseBranch(initialBranch);
+
+          // Auto-set fromRemote based on the initial branch type
+          const initialBranchInfo = branchList.find((b) => b.name === initialBranch);
+          setFromRemote(!!initialBranchInfo?.remote);
+        }
       })
       .catch((err) => {
         if (!isCurrent) return;
@@ -418,7 +447,7 @@ export function NewWorktreeDialog({
     return () => {
       isCurrent = false;
     };
-  }, [isOpen, rootPath, initialIssue]);
+  }, [isOpen, rootPath, initialIssue, initialPR]);
 
   useEffect(() => {
     if (isOpen && !loading) {
@@ -685,7 +714,7 @@ export function NewWorktreeDialog({
     >
       <AppDialog.Header>
         <AppDialog.Title icon={<GitBranch className="w-5 h-5 text-canopy-accent" />}>
-          Create New Worktree
+          {initialPR ? "Checkout PR Branch" : "Create New Worktree"}
         </AppDialog.Title>
         <AppDialog.CloseButton />
       </AppDialog.Header>
@@ -699,38 +728,48 @@ export function NewWorktreeDialog({
         ) : (
           <TooltipProvider>
             <div className="space-y-4">
-              <div className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <label className="block text-sm font-medium text-canopy-text">
-                    Link Issue (Optional)
-                  </label>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        className="text-canopy-text/40 hover:text-canopy-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent focus-visible:ring-offset-2"
-                        aria-label="Help for Link Issue field"
-                        disabled={creating}
-                      >
-                        <Info className="w-3.5 h-3.5" aria-hidden="true" />
-                        <span className="sr-only">Help for Link Issue field</span>
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="right">
-                      <p>Select an issue to auto-generate a branch name</p>
-                    </TooltipContent>
-                  </Tooltip>
+              {initialPR ? (
+                <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-[var(--radius-md)] bg-canopy-accent/5 border border-canopy-accent/20 text-sm">
+                  <GitBranch className="w-4 h-4 text-canopy-accent shrink-0" aria-hidden="true" />
+                  <span className="text-canopy-text/80">
+                    PR <span className="font-medium text-canopy-text">#{initialPR.number}</span> —{" "}
+                    {initialPR.title}
+                  </span>
                 </div>
-                <IssueSelector
-                  projectPath={rootPath}
-                  selectedIssue={selectedIssue}
-                  onSelect={setSelectedIssue}
-                  disabled={creating}
-                />
-              </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <label className="block text-sm font-medium text-canopy-text">
+                      Link Issue (Optional)
+                    </label>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          className="text-canopy-text/40 hover:text-canopy-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent focus-visible:ring-offset-2"
+                          aria-label="Help for Link Issue field"
+                          disabled={creating}
+                        >
+                          <Info className="w-3.5 h-3.5" aria-hidden="true" />
+                          <span className="sr-only">Help for Link Issue field</span>
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="right">
+                        <p>Select an issue to auto-generate a branch name</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                  <IssueSelector
+                    projectPath={rootPath}
+                    selectedIssue={selectedIssue}
+                    onSelect={setSelectedIssue}
+                    disabled={creating}
+                  />
+                </div>
+              )}
 
               {/* Assignment control - only show when issue is selected and GitHub auth available */}
-              {canAssignIssue && (
+              {!initialPR && canAssignIssue && (
                 <div className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border bg-canopy-bg/50 border-canopy-border transition-colors">
                   {currentUserAvatar ? (
                     <img

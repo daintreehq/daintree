@@ -583,6 +583,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           rootPath={rootPath}
           onWorktreeCreated={refresh}
           initialIssue={createDialog.initialIssue}
+          initialPR={createDialog.initialPR}
         />
       )}
     </div>
