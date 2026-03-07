@@ -34,55 +34,76 @@ describe("twoPaneSplitStore", () => {
       useTwoPaneSplitStore.getState().commitRatioIfChanged("wt1", 0.05);
       expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt1"]).toBe(0.2);
     });
+
+    it("no-ops when out-of-range value clamps to the already-stored value", () => {
+      useTwoPaneSplitStore.setState({ ratioByWorktreeId: { wt1: 0.8 } });
+      const before = useTwoPaneSplitStore.getState().ratioByWorktreeId;
+      // 0.95 clamps to 0.8 which equals the stored value — should not update
+      useTwoPaneSplitStore.getState().commitRatioIfChanged("wt1", 0.95);
+      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId).toBe(before);
+    });
   });
 
-  describe("2-pane to 3-pane transition (issue #2638)", () => {
-    it("preserves stored ratio across mode transitions", () => {
-      // Simulate: user resizes in two-pane mode, ratio gets committed
+  describe("no-op persistence invariants (relevant to issue #2638 transition)", () => {
+    it("null commit after a successful commit leaves ratio intact", () => {
       useTwoPaneSplitStore.getState().commitRatioIfChanged("wt1", 0.65);
       expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt1"]).toBe(0.65);
 
-      // Simulate: third panel added — TwoPaneSplitLayout unmounts with no pending ratio
-      // commitRatioIfChanged(worktreeId, null) should be a no-op
+      // Unmount cleanup fires with null (no pending ratio) — must be a no-op
       useTwoPaneSplitStore.getState().commitRatioIfChanged("wt1", null);
       expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt1"]).toBe(0.65);
     });
 
-    it("restores saved ratio when returning to two-pane mode", () => {
-      // Commit a custom ratio
+    it("ratio survives a null commit and is readable by getWorktreeRatio", () => {
       useTwoPaneSplitStore.getState().commitRatioIfChanged("wt1", 0.65);
-
-      // Third panel added (no-op commit)
       useTwoPaneSplitStore.getState().commitRatioIfChanged("wt1", null);
 
-      // Third panel removed — ratio should still be 0.65
-      const ratio = useTwoPaneSplitStore.getState().getWorktreeRatio("wt1");
-      expect(ratio).toBe(0.65);
+      expect(useTwoPaneSplitStore.getState().getWorktreeRatio("wt1")).toBe(0.65);
     });
 
-    it("mid-drag transition flushes pending ratio once and does not corrupt state", () => {
-      // Simulate: user is mid-drag at 0.7 when third panel is added
-      // The cleanup effect fires once on unmount and commits the drag position
+    it("a non-null commit overwrites the previous stored ratio", () => {
+      // Models the mid-drag unmount: cleanup flushes the current drag position
+      useTwoPaneSplitStore.getState().commitRatioIfChanged("wt1", 0.5);
       useTwoPaneSplitStore.getState().commitRatioIfChanged("wt1", 0.7);
-
-      // State should reflect the in-progress drag position
       expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt1"]).toBe(0.7);
 
-      // Subsequent no-op commit (null) should not change anything
+      // A subsequent null commit does not revert it
       useTwoPaneSplitStore.getState().commitRatioIfChanged("wt1", null);
       expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt1"]).toBe(0.7);
     });
 
-    it("does not affect other worktrees during transition", () => {
+    it("does not affect other worktrees when one worktree commits null", () => {
       useTwoPaneSplitStore.setState({
         ratioByWorktreeId: { wt1: 0.65, wt2: 0.4 },
       });
 
-      // wt1 transitions (no pending ratio)
       useTwoPaneSplitStore.getState().commitRatioIfChanged("wt1", null);
 
-      // wt2 should be unaffected
       expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt2"]).toBe(0.4);
+    });
+  });
+
+  describe("setWorktreeRatio", () => {
+    it("always writes the clamped value, unlike commitRatioIfChanged which no-ops on equal", () => {
+      useTwoPaneSplitStore.setState({ ratioByWorktreeId: { wt1: 0.7 } });
+      const before = useTwoPaneSplitStore.getState().ratioByWorktreeId;
+
+      // commitRatioIfChanged preserves reference when value is unchanged
+      useTwoPaneSplitStore.getState().commitRatioIfChanged("wt1", 0.7);
+      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId).toBe(before);
+
+      // setWorktreeRatio always produces a new object (used for swap inversion)
+      useTwoPaneSplitStore.getState().setWorktreeRatio("wt1", 0.7);
+      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId).not.toBe(before);
+      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt1"]).toBe(0.7);
+    });
+
+    it("clamps the value to [0.2, 0.8]", () => {
+      useTwoPaneSplitStore.getState().setWorktreeRatio("wt1", 0.1);
+      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt1"]).toBe(0.2);
+
+      useTwoPaneSplitStore.getState().setWorktreeRatio("wt1", 0.9);
+      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt1"]).toBe(0.8);
     });
   });
 
