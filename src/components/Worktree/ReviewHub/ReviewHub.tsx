@@ -30,6 +30,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
   } | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const refreshIdRef = useRef(0);
+  const bgRefreshIdRef = useRef(0);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const savedScrollTop = useRef(0);
   const debouncedBgRefreshRef = useRef<ReturnType<typeof debounce> | null>(null);
@@ -59,17 +60,18 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
 
   const backgroundRefresh = useCallback(async () => {
     if (!worktreePath) return;
-    const requestId = ++refreshIdRef.current;
+    const requestId = ++bgRefreshIdRef.current;
     setIsBackgroundRefreshing(true);
     try {
       const result = await window.electron.git.getStagingStatus(worktreePath);
-      if (refreshIdRef.current === requestId) {
+      if (bgRefreshIdRef.current === requestId) {
         setStatus(result);
+        setLoadError(null);
       }
     } catch {
       // Keep existing data visible; silently drop background errors
     } finally {
-      if (refreshIdRef.current === requestId) {
+      if (bgRefreshIdRef.current === requestId) {
         setIsBackgroundRefreshing(false);
       }
     }
@@ -82,6 +84,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
       void refresh();
     } else {
       refreshIdRef.current++;
+      bgRefreshIdRef.current++;
       setStatus(null);
       setLoadError(null);
       setActionError(null);

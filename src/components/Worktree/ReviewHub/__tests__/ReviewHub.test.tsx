@@ -230,9 +230,10 @@ describe("ReviewHub", () => {
 
   it("cancels debounce before explicit stage actions", async () => {
     render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-    await waitFor(() => screen.getByText("index.ts"));
+    await waitFor(() => screen.getByText("app.ts"));
 
-    const stageBtn = screen.getAllByRole("button", { name: /stage/i })[0];
+    // Click the "Stage src/app.ts" button (unstaged file) — aria-label starts with "Stage"
+    const stageBtn = screen.getByRole("button", { name: /^Stage src\/app\.ts/i });
     fireEvent.click(stageBtn);
 
     await waitFor(() => expect(debounceCancelSpy).toHaveBeenCalled());
@@ -282,5 +283,64 @@ describe("ReviewHub", () => {
     });
 
     screen.getByText("index.ts");
+  });
+
+  it("removes old rows after background refresh replaces status", async () => {
+    render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    await waitFor(() => screen.getByText("index.ts"));
+
+    const statusWithNewFiles = makeStatus({
+      staged: [{ path: "new-feature.ts", status: "added", insertions: 10, deletions: 0 }],
+      unstaged: [],
+    });
+    getStagingStatusMock.mockResolvedValue(statusWithNewFiles);
+
+    await act(async () => {
+      capturedUpdateCallback!(makeWorktreeState());
+      await Promise.resolve();
+    });
+
+    await waitFor(() => screen.getByText("new-feature.ts"));
+    expect(screen.queryByText("index.ts")).toBeNull();
+    expect(screen.queryByText("app.ts")).toBeNull();
+  });
+
+  it("background refresh clears a prior loadError on success", async () => {
+    getStagingStatusMock.mockRejectedValue(new Error("git error"));
+    render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    await waitFor(() => screen.getByText("git error"));
+
+    getStagingStatusMock.mockResolvedValue(makeStatus());
+
+    await act(async () => {
+      capturedUpdateCallback!(makeWorktreeState());
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("git error")).toBeNull();
+      screen.getByText("index.ts");
+    });
+  });
+
+  it("foreground and background requests use independent IDs, neither suppresses the other", async () => {
+    render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    await waitFor(() => screen.getByText("index.ts"));
+
+    // Trigger a background refresh (fires immediately due to mocked debounce)
+    await act(async () => {
+      capturedUpdateCallback!(makeWorktreeState());
+      await Promise.resolve();
+    });
+
+    // Then trigger an explicit manual refresh
+    const refreshButton = screen.getByRole("button", { name: /refresh/i });
+    act(() => fireEvent.click(refreshButton));
+
+    await waitFor(() => {
+      // Both should have fired — total calls: 1 initial + 1 bg + 1 manual = 3
+      expect(getStagingStatusMock).toHaveBeenCalledTimes(3);
+      screen.getByText("index.ts");
+    });
   });
 });
