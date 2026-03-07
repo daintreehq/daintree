@@ -154,7 +154,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const latestRef = useRef<LatestState | null>(null);
 
     const openPicker = useCommandStore((s) => s.openPicker);
-    const [voiceEnabled, setVoiceEnabled] = useState(false);
+    const [isVoiceConfigured, setIsVoiceConfigured] = useState(false);
     const pendingTranscriptRef = useRef<string>("");
 
     const commandContext = useMemo(
@@ -246,7 +246,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         window.electron?.voiceInput
           ?.getSettings()
           .then((s) => {
-            setVoiceEnabled(s.enabled);
+            setIsVoiceConfigured(s.enabled && !!s.apiKey);
           })
           .catch(() => {});
       };
@@ -1204,13 +1204,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             </div>
 
             <div className="flex items-center gap-0.5 pr-1.5">
-              {voiceEnabled && (
-                <VoiceInputButton
-                  onTranscriptionDelta={handleVoiceTranscriptionDelta}
-                  onTranscriptionComplete={handleVoiceTranscriptionComplete}
-                  disabled={disabled}
-                />
-              )}
+              <VoiceInputButton
+                onTranscriptionDelta={handleVoiceTranscriptionDelta}
+                onTranscriptionComplete={handleVoiceTranscriptionComplete}
+                disabled={disabled}
+                isConfigured={isVoiceConfigured}
+              />
               <CommandPickerButton onClick={openPicker} disabled={disabled} />
             </div>
           </div>
