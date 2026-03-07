@@ -82,7 +82,7 @@ describe("VoiceCorrectionService integration", () => {
   );
 
   it.skipIf(!OPENAI_API_KEY)(
-    "handles the configured correction model (gpt-5-nano)",
+    "gpt-5-nano: corrects technical terms and removes fillers",
     async () => {
       svc = new VoiceCorrectionService();
 
@@ -98,10 +98,94 @@ describe("VoiceCorrectionService integration", () => {
       console.log("Corrected:", result);
 
       expect(result).toBeTruthy();
-      // At minimum, the API should return *something* (even if uncorrected)
-      expect(result.length).toBeGreaterThan(0);
+      expect(result).toContain("React");
+      expect(result.toLowerCase()).not.toMatch(/\bum\b/);
+      expect(result.toLowerCase()).not.toMatch(/\blike\b.*update/);
     },
     15_000
+  );
+
+  it.skipIf(!OPENAI_API_KEY)(
+    "gpt-5-nano: output contains no preamble, quotes, or explanatory text",
+    async () => {
+      svc = new VoiceCorrectionService();
+
+      const input = "the type script compiler is throwing errors on the racked component";
+      const result = await svc.correct(input, {
+        model: "gpt-5-nano",
+        apiKey: OPENAI_API_KEY,
+        customDictionary: [],
+      });
+
+      console.log("Model:    ", "gpt-5-nano");
+      console.log("Raw:      ", input);
+      console.log("Corrected:", result);
+
+      // Must not start with preamble phrases
+      expect(result).not.toMatch(/^(here is|here's|the corrected|corrected:|sure[,!])/i);
+      // Must not be wrapped in quotes
+      expect(result).not.toMatch(/^["'`]/);
+      // Must not contain markdown code fences
+      expect(result).not.toContain("```");
+      // Content should be present
+      expect(result.toLowerCase()).toContain("typescript");
+    },
+    15_000
+  );
+
+  it.skipIf(!OPENAI_API_KEY)(
+    "gpt-5-nano: returns already-correct input verbatim (idempotency)",
+    async () => {
+      svc = new VoiceCorrectionService();
+
+      const input = "The TypeScript compiler is throwing errors on the React component.";
+      const result = await svc.correct(input, {
+        model: "gpt-5-nano",
+        apiKey: OPENAI_API_KEY,
+        customDictionary: [],
+      });
+
+      console.log("Model:    ", "gpt-5-nano");
+      console.log("Raw:      ", input);
+      console.log("Corrected:", result);
+
+      // Already correct input should be returned verbatim or nearly verbatim
+      expect(result.toLowerCase()).toContain("typescript");
+      expect(result.toLowerCase()).toContain("react");
+      expect(result.toLowerCase()).toContain("compiler");
+      // Should not add new content or explanations
+      expect(result).not.toMatch(/^(here is|the corrected)/i);
+    },
+    15_000
+  );
+
+  it.skipIf(!OPENAI_API_KEY)(
+    "gpt-5-nano: handles paragraph-length input (multi-clause)",
+    async () => {
+      svc = new VoiceCorrectionService();
+
+      // Simulates a paragraph-level input as planned in #2672
+      const input =
+        "um so the type script compiler is throwing errors and we need to fix the racked component, also the tail wind styles are broken and the zoo stand store needs updating";
+      const result = await svc.correct(input, {
+        model: "gpt-5-nano",
+        apiKey: OPENAI_API_KEY,
+        customDictionary: [],
+      });
+
+      console.log("Model:    ", "gpt-5-nano");
+      console.log("Raw:      ", input);
+      console.log("Corrected:", result);
+
+      expect(result).toBeTruthy();
+      expect(result).toContain("TypeScript");
+      expect(result).toContain("React");
+      expect(result).toContain("Tailwind");
+      expect(result).toContain("Zustand");
+      // No preamble
+      expect(result).not.toMatch(/^(here is|the corrected)/i);
+    },
+    20_000
   );
 
   it.skipIf(!OPENAI_API_KEY)(

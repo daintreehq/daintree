@@ -146,8 +146,7 @@ describe("VoiceCorrectionService", () => {
     await svc.correct("sentence three", BASE_SETTINGS);
     await svc.correct("sentence four", BASE_SETTINGS);
 
-    // The 4th call should have history: [s2, s3, s4-corrected-from-call3]
-    // (not sentence one since window is 3)
+    // The 4th call should have history with sentences 2-4 (window of 3, so sentence 1 dropped)
     const lastBody = JSON.parse(
       (fetchMock.mock.calls[3] as [string, RequestInit])[1].body as string
     );
@@ -179,7 +178,8 @@ describe("VoiceCorrectionService", () => {
 
     const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
     const systemMessage = body.messages[0].content as string;
-    expect(systemMessage).toContain("Output ONLY the corrected text");
+    expect(systemMessage).toContain("plain text only");
+    expect(systemMessage).toContain("Begin immediately");
   });
 
   it("includes core prompt in the system message", async () => {
@@ -191,7 +191,7 @@ describe("VoiceCorrectionService", () => {
 
     const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
     const systemMessage = body.messages[0].content as string;
-    expect(systemMessage).toContain("speech-to-text errors");
+    expect(systemMessage).toContain("speech-to-text correction engine");
   });
 
   it("uses reasoning model parameters for gpt-5 models", async () => {
