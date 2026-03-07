@@ -30,13 +30,13 @@ function Stat({ icon, value, label, highlight, className }: StatProps) {
     <div
       className={cn(
         "flex items-center gap-1.5 text-xs",
-        highlight ? "text-canopy-text" : "text-canopy-text/60",
+        highlight ? "text-canopy-text" : "text-canopy-text/75",
         className
       )}
     >
       <span className="shrink-0 opacity-70">{icon}</span>
       <span className="font-mono font-medium">{value}</span>
-      <span className="hidden sm:inline text-canopy-text/40">{label}</span>
+      <span className="hidden sm:inline text-canopy-text/55">{label}</span>
     </div>
   );
 }
@@ -49,7 +49,7 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
 
   if (compact) {
     return (
-      <div className="flex items-center gap-3 text-xs text-canopy-text/60">
+      <div className="flex items-center gap-3 text-xs text-canopy-text/75">
         <Stat
           icon={<GitCommit className="w-3 h-3" />}
           value={pulse.commitsInRange}
@@ -112,9 +112,9 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
 
       {hasDelta && (
         <div className="flex items-center gap-3 text-xs">
-          <div className="flex items-center gap-1 text-canopy-text/50">
+          <div className="flex items-center gap-1 text-canopy-text/70">
             <GitBranch className="w-3 h-3" />
-            <span className="font-mono text-canopy-text/40">
+            <span className="font-mono text-canopy-text/55">
               vs {pulse.deltaToMain!.baseBranch}
             </span>
           </div>
@@ -134,20 +134,20 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
           )}
 
           {pulse.deltaToMain!.filesChanged !== undefined && pulse.deltaToMain!.filesChanged > 0 && (
-            <div className="flex items-center gap-0.5 text-canopy-text/50">
+            <div className="flex items-center gap-0.5 text-canopy-text/70">
               <FileCode className="w-3 h-3" />
               <span className="font-mono">{pulse.deltaToMain!.filesChanged}</span>
-              <span className="text-canopy-text/30">files</span>
+              <span className="text-canopy-text/55">files</span>
             </div>
           )}
 
           {(pulse.deltaToMain!.insertions ?? 0) > 0 && (
-            <span className="font-mono text-status-success/70">
+            <span className="font-mono text-status-success/80">
               +{pulse.deltaToMain!.insertions}
             </span>
           )}
           {(pulse.deltaToMain!.deletions ?? 0) > 0 && (
-            <span className="font-mono text-status-error/70">-{pulse.deltaToMain!.deletions}</span>
+            <span className="font-mono text-status-error/80">-{pulse.deltaToMain!.deletions}</span>
           )}
         </div>
       )}
