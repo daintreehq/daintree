@@ -51,6 +51,8 @@ import {
   addFileDropChip,
   createFileDropChipTooltip,
   createFilePasteHandler,
+  pendingCorrectionField,
+  setPendingCorrectionRanges,
 } from "./inputEditorExtensions";
 
 export interface HybridInputBarHandle {
@@ -515,6 +517,24 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         });
       }
     }, [voiceDraftRevision, terminalId, currentProject?.id]);
+
+    // Sync pending-correction decorations to the editor whenever they change.
+    const pendingCorrections = useVoiceRecordingStore(
+      (s) => s.panelBuffers[terminalId]?.pendingCorrections ?? []
+    );
+    useEffect(() => {
+      const view = editorViewRef.current;
+      if (!view) return;
+      const doc = view.state.doc.toString();
+      const ranges = pendingCorrections
+        .map((p) => {
+          const idx = doc.indexOf(p.rawText, Math.max(0, p.segmentStart - 20));
+          if (idx < 0) return null;
+          return { from: idx, to: idx + p.rawText.length };
+        })
+        .filter((r): r is { from: number; to: number } => r !== null);
+      view.dispatch({ effects: setPendingCorrectionRanges.of(ranges) });
+    }, [pendingCorrections, voiceDraftRevision]);
 
     const sendFromEditor = useCallback(() => {
       const view = editorViewRef.current;
@@ -1059,6 +1079,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           fileDropChipTooltipCompartmentRef.current.of(
             !disabled ? createFileDropChipTooltip() : []
           ),
+          pendingCorrectionField,
           keymapCompartmentRef.current.of(keymapExtension),
           editorUpdateListener,
           domEventHandlers,

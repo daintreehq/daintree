@@ -10,12 +10,21 @@ export interface VoiceRecordingTarget {
   worktreeLabel?: string;
 }
 
+export interface PendingCorrection {
+  /** Character offset in the draft where the uncorrected segment starts. */
+  segmentStart: number;
+  /** The raw text that was inserted and is awaiting correction. */
+  rawText: string;
+}
+
 interface VoiceTranscriptBuffer {
   liveText: string;
   completedSegments: string[];
   projectId?: string;
   /** Draft length snapshot taken before the first delta of a segment. */
   draftLengthAtSegmentStart: number;
+  /** Segments awaiting AI correction — shown dimmed in the editor. */
+  pendingCorrections: PendingCorrection[];
 }
 
 interface VoiceAnnouncement {
@@ -46,6 +55,9 @@ interface VoiceRecordingState {
   appendDelta: (delta: string) => void;
   setDraftLengthAtSegmentStart: (panelId: string, length: number) => void;
   completeSegment: (text: string) => void;
+  addPendingCorrection: (panelId: string, segmentStart: number, rawText: string) => void;
+  resolvePendingCorrection: (panelId: string, rawText: string) => void;
+  getPendingCorrections: (panelId: string) => PendingCorrection[];
   finishSession: (options?: FinishSessionOptions) => void;
   consumeCompletedSegments: (panelId: string) => string[];
   clearPanelBuffer: (panelId: string) => void;
@@ -58,7 +70,12 @@ function getBuffer(
   panelId: string
 ): VoiceTranscriptBuffer {
   return (
-    panelBuffers[panelId] ?? { liveText: "", completedSegments: [], draftLengthAtSegmentStart: -1 }
+    panelBuffers[panelId] ?? {
+      liveText: "",
+      completedSegments: [],
+      draftLengthAtSegmentStart: -1,
+      pendingCorrections: [],
+    }
   );
 }
 
@@ -159,6 +176,39 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
         },
       };
     }),
+
+  addPendingCorrection: (panelId, segmentStart, rawText) =>
+    set((state) => {
+      const buffer = getBuffer(state.panelBuffers, panelId);
+      return {
+        panelBuffers: {
+          ...state.panelBuffers,
+          [panelId]: {
+            ...buffer,
+            pendingCorrections: [...buffer.pendingCorrections, { segmentStart, rawText }],
+          },
+        },
+      };
+    }),
+
+  resolvePendingCorrection: (panelId, rawText) =>
+    set((state) => {
+      const buffer = getBuffer(state.panelBuffers, panelId);
+      const idx = buffer.pendingCorrections.findIndex((p) => p.rawText === rawText);
+      if (idx === -1) return state;
+      const next = [...buffer.pendingCorrections];
+      next.splice(idx, 1);
+      return {
+        panelBuffers: {
+          ...state.panelBuffers,
+          [panelId]: { ...buffer, pendingCorrections: next },
+        },
+      };
+    }),
+
+  getPendingCorrections: (panelId) => {
+    return getBuffer(get().panelBuffers, panelId).pendingCorrections;
+  },
 
   finishSession: ({ nextStatus = "idle", preserveLiveText = false } = {}) =>
     set((state) => {

@@ -149,11 +149,14 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         win.webContents.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_DELTA, voiceEvent.text);
       } else if (voiceEvent.type === "complete") {
         const rawText = voiceEvent.text;
+        // Always send raw text immediately so the renderer can finalize the segment.
+        win.webContents.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, rawText);
+
         // Read correction settings live so mid-session changes take effect immediately.
         const liveSettings = store.get("voiceInput") as VoiceInputSettings;
         if (liveSettings.correctionEnabled && liveSettings.apiKey) {
-          // Apply correction asynchronously before forwarding to the renderer.
-          // Falls back to raw text on timeout or error.
+          // Apply correction asynchronously; send a replacement event when ready.
+          // Falls back silently on timeout/error (raw text already displayed).
           void correctionService!
             .correct(rawText, {
               model: liveSettings.correctionModel,
@@ -162,13 +165,14 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
               customDictionary: liveSettings.customDictionary,
               projectContext,
             })
-            .then((finalText) => {
+            .then((correctedText) => {
               if (!win.isDestroyed()) {
-                win.webContents.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, finalText);
+                win.webContents.send(CHANNELS.VOICE_INPUT_CORRECTION_REPLACE, {
+                  rawText,
+                  correctedText,
+                });
               }
             });
-        } else {
-          win.webContents.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, rawText);
         }
       } else if (voiceEvent.type === "error") {
         win.webContents.send(CHANNELS.VOICE_INPUT_ERROR, voiceEvent.message);

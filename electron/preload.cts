@@ -1619,6 +1619,9 @@ const api: ElectronAPI = {
       _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_DELTA, callback),
     onTranscriptionComplete: (callback: (text: string) => void) =>
       _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, callback),
+    onCorrectionReplace: (
+      callback: (payload: { rawText: string; correctedText: string }) => void
+    ) => _typedOn(CHANNELS.VOICE_INPUT_CORRECTION_REPLACE, callback),
     onError: (callback: (error: string) => void) => _typedOn(CHANNELS.VOICE_INPUT_ERROR, callback),
     onStatus: (callback: (status: "idle" | "connecting" | "recording" | "error") => void) =>
       _typedOn(CHANNELS.VOICE_INPUT_STATUS, callback),

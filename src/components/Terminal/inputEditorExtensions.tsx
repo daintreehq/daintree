@@ -119,9 +119,41 @@ export const inputTheme = EditorView.theme(
       width: "14px",
       flexShrink: "0",
     },
+    ".cm-voice-pending-correction": {
+      opacity: "0.4",
+      transition: "opacity 150ms ease-out",
+    },
   },
   { dark: true }
 );
+
+const pendingCorrectionMark = Decoration.mark({ class: "cm-voice-pending-correction" });
+
+export const setPendingCorrectionRanges = StateEffect.define<{ from: number; to: number }[]>();
+
+export const pendingCorrectionField = StateField.define({
+  create() {
+    return Decoration.none;
+  },
+  update(deco, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(setPendingCorrectionRanges)) {
+        const ranges = effect.value;
+        if (ranges.length === 0) return Decoration.none;
+        const docLen = tr.state.doc.length;
+        const marks = ranges
+          .filter((r) => r.from >= 0 && r.to <= docLen && r.from < r.to)
+          .map((r) => pendingCorrectionMark.range(r.from, r.to));
+        return marks.length > 0 ? Decoration.set(marks) : Decoration.none;
+      }
+    }
+    if (tr.docChanged) {
+      return deco.map(tr.changes);
+    }
+    return deco;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
 
 const slashChipMark = Decoration.mark({ class: "cm-slash-command-chip" });
 const invalidChipMark = Decoration.mark({
