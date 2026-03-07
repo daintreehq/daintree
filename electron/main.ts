@@ -300,6 +300,7 @@ import { workflowLoader } from "./services/WorkflowLoader.js";
 import { autoUpdaterService } from "./services/AutoUpdaterService.js";
 import { SMOKE_BOOT_TIMEOUT_MS, runSmokeFunctionalChecks } from "./services/smokeTest.js";
 import { initializeTelemetry } from "./services/TelemetryService.js";
+import { mcpServerService } from "./services/McpServerService.js";
 
 // Initialize logger early with userData path
 initializeLogger(app.getPath("userData"));
@@ -428,6 +429,7 @@ if (!gotTheLock) {
 
     Promise.all([
       workspaceClient ? workspaceClient.dispose() : Promise.resolve(),
+      mcpServerService.stop(),
       new Promise<void>((resolve) => {
         // Dispose orchestrator and routing before ptyClient to prevent event handlers from firing
         disposeTaskOrchestrator();
@@ -606,6 +608,10 @@ async function initializeDeferredServices(
 
   eventBuf.start();
   console.log("[MAIN] EventBuffer started");
+
+  mcpServerService.start(window).catch((err) => {
+    console.error("[MAIN] MCP server failed to start:", err);
+  });
 
   const elapsed = Date.now() - startTime;
   console.log(`[MAIN] All deferred services initialized in ${elapsed}ms`);

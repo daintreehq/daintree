@@ -3,6 +3,16 @@ import { z } from "zod";
 import { githubClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
 
+const GitHubListOptionsSchema = z.object({
+  cwd: z.string().describe("Working directory of the git repo"),
+  search: z.string().optional().describe("Search query"),
+  state: z
+    .enum(["open", "closed", "merged", "all"])
+    .optional()
+    .describe("State filter (default: open)"),
+  cursor: z.string().optional().describe("Pagination cursor from previous response"),
+});
+
 export function registerGithubActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   actions.set("github.openIssues", () => ({
     id: "github.openIssues",
@@ -90,30 +100,29 @@ export function registerGithubActions(actions: ActionRegistry, _callbacks: Actio
   actions.set("github.listIssues", () => ({
     id: "github.listIssues",
     title: "List GitHub Issues",
-    description: "List issues via GitHub CLI",
+    description: "List issues via GitHub CLI. Returns paginated results with cursor for next page.",
     category: "github",
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ options: z.any() }),
+    argsSchema: GitHubListOptionsSchema,
     run: async (args: unknown) => {
-      const { options } = args as { options: unknown };
-      return await githubClient.listIssues(options as any);
+      return await githubClient.listIssues(args as any);
     },
   }));
 
   actions.set("github.listPullRequests", () => ({
     id: "github.listPullRequests",
     title: "List GitHub Pull Requests",
-    description: "List pull requests via GitHub CLI",
+    description:
+      "List pull requests via GitHub CLI. Returns paginated results with cursor for next page.",
     category: "github",
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ options: z.any() }),
+    argsSchema: GitHubListOptionsSchema,
     run: async (args: unknown) => {
-      const { options } = args as { options: unknown };
-      return await githubClient.listPullRequests(options as any);
+      return await githubClient.listPullRequests(args as any);
     },
   }));
 

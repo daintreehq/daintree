@@ -209,14 +209,18 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
   actions.set("terminal.close", () => ({
     id: "terminal.close",
     title: "Close Terminal",
-    description: "Close the focused terminal (move to trash)",
+    description:
+      "Close a terminal (move to trash). Targets the specified terminal, or the focused terminal if omitted.",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    run: async () => {
+    argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
+    run: async (args: unknown) => {
+      const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
       const state = useTerminalStore.getState();
-      const targetId = state.focusedId ?? state.terminals.find((t) => t.location !== "trash")?.id;
+      const targetId =
+        terminalId ?? state.focusedId ?? state.terminals.find((t) => t.location !== "trash")?.id;
       if (targetId) {
         state.trashTerminal(targetId);
         const remaining = useTerminalStore
@@ -358,16 +362,27 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
   actions.set("terminal.rename", () => ({
     id: "terminal.rename",
     title: "Rename Terminal",
-    description: "Rename the terminal tab",
+    description:
+      "Rename the terminal tab. If name is provided, renames programmatically. Otherwise opens the rename dialog.",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ terminalId: z.string().optional() }),
+    argsSchema: z.object({
+      terminalId: z.string().optional(),
+      name: z
+        .string()
+        .optional()
+        .describe("New name for the terminal. If omitted, opens the rename dialog."),
+    }),
     run: async (args: unknown) => {
-      const { terminalId } = args as { terminalId?: string };
+      const { terminalId, name } = args as { terminalId?: string; name?: string };
       const targetId = terminalId ?? useTerminalStore.getState().focusedId;
-      if (targetId) {
+      if (!targetId) return;
+
+      if (name !== undefined) {
+        useTerminalStore.getState().updateTitle(targetId, name);
+      } else {
         window.dispatchEvent(
           new CustomEvent("canopy:rename-terminal", { detail: { id: targetId } })
         );

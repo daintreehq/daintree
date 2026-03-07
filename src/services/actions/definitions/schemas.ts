@@ -41,9 +41,9 @@ export const GitStatusSchema = z.enum([
 export const PulseRangeDaysSchema = z.union([z.literal(60), z.literal(120), z.literal(180)]);
 
 export const FileSearchPayloadSchema = z.object({
-  cwd: z.string(),
-  query: z.string(),
-  limit: z.number().int().positive().optional(),
+  cwd: z.string().describe("Working directory to search in (project root path)"),
+  query: z.string().describe("File name search query"),
+  limit: z.number().int().positive().optional().describe("Max results to return"),
 });
 
 export const CopyTreeOptionsSchema = z.object({

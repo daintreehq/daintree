@@ -27,6 +27,7 @@ import { registerClipboardHandlers } from "./handlers/clipboard.js";
 import { registerGitWriteHandlers } from "./handlers/git-write.js";
 import { registerTelemetryHandlers } from "./handlers/telemetry.js";
 import { registerVoiceInputHandlers } from "./handlers/voiceInput.js";
+import { registerMcpServerHandlers } from "./handlers/mcpServer.js";
 import { events } from "../services/events.js";
 import { typedHandle, typedSend, sendToRenderer } from "./utils.js";
 
@@ -84,6 +85,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerGitWriteHandlers(deps));
     register(() => registerTelemetryHandlers());
     register(() => registerVoiceInputHandlers(deps));
+    register(() => registerMcpServerHandlers());
   } catch (error) {
     runCleanups(cleanupFunctions);
     throw error;

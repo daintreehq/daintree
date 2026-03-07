@@ -505,6 +505,14 @@ const CHANNELS = {
   VOICE_INPUT_REQUEST_MIC_PERMISSION: "voice-input:request-mic-permission",
   VOICE_INPUT_OPEN_MIC_SETTINGS: "voice-input:open-mic-settings",
   VOICE_INPUT_VALIDATE_API_KEY: "voice-input:validate-api-key",
+
+  // MCP Server channels
+  MCP_SERVER_GET_STATUS: "mcp-server:get-status",
+  MCP_SERVER_SET_ENABLED: "mcp-server:set-enabled",
+  MCP_SERVER_SET_PORT: "mcp-server:set-port",
+  MCP_SERVER_SET_API_KEY: "mcp-server:set-api-key",
+  MCP_SERVER_GENERATE_API_KEY: "mcp-server:generate-api-key",
+  MCP_SERVER_GET_CONFIG_SNIPPET: "mcp-server:get-config-snippet",
 } as const;
 
 const api: ElectronAPI = {
@@ -1615,6 +1623,48 @@ const api: ElectronAPI = {
     requestMicPermission: () => _typedInvoke(CHANNELS.VOICE_INPUT_REQUEST_MIC_PERMISSION),
     openMicSettings: () => _typedInvoke(CHANNELS.VOICE_INPUT_OPEN_MIC_SETTINGS),
     validateApiKey: (apiKey: string) => _typedInvoke(CHANNELS.VOICE_INPUT_VALIDATE_API_KEY, apiKey),
+  },
+
+  mcpServer: {
+    getStatus: () => _typedInvoke(CHANNELS.MCP_SERVER_GET_STATUS),
+    setEnabled: (enabled: boolean) => _typedInvoke(CHANNELS.MCP_SERVER_SET_ENABLED, enabled),
+    setPort: (port: number | null) => _typedInvoke(CHANNELS.MCP_SERVER_SET_PORT, port),
+    setApiKey: (apiKey: string) => _typedInvoke(CHANNELS.MCP_SERVER_SET_API_KEY, apiKey),
+    generateApiKey: () => _typedInvoke(CHANNELS.MCP_SERVER_GENERATE_API_KEY),
+    getConfigSnippet: () => _typedInvoke(CHANNELS.MCP_SERVER_GET_CONFIG_SNIPPET),
+  },
+
+  mcpBridge: {
+    onGetManifestRequest: (callback: (requestId: string) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: { requestId: string }) =>
+        callback(payload.requestId);
+      ipcRenderer.on("mcp:get-manifest-request", handler);
+      return () => ipcRenderer.removeListener("mcp:get-manifest-request", handler);
+    },
+
+    sendGetManifestResponse: (requestId: string, manifest: unknown) => {
+      ipcRenderer.send("mcp:get-manifest-response", { requestId, manifest });
+    },
+
+    onDispatchActionRequest: (
+      callback: (payload: {
+        requestId: string;
+        actionId: string;
+        args?: unknown;
+        confirmed?: boolean;
+      }) => void
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        payload: { requestId: string; actionId: string; args?: unknown; confirmed?: boolean }
+      ) => callback(payload);
+      ipcRenderer.on("mcp:dispatch-action-request", handler);
+      return () => ipcRenderer.removeListener("mcp:dispatch-action-request", handler);
+    },
+
+    sendDispatchActionResponse: (payload: { requestId: string; result: unknown }) => {
+      ipcRenderer.send("mcp:dispatch-action-response", payload);
+    },
   },
 };
 

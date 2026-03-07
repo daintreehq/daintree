@@ -13,7 +13,7 @@ import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitI
 import type { AgentSettings } from "../agentSettings.js";
 import type { UserAgentRegistry, UserAgentConfig } from "../userAgentRegistry.js";
 import type { KeyAction } from "../keymap.js";
-import type { KeybindingImportResult, VoiceInputSettings } from "./api.js";
+import type { KeybindingImportResult, MicPermissionStatus, VoiceInputSettings } from "./api.js";
 
 import type {
   WorktreeSetActivePayload,
@@ -1240,7 +1240,7 @@ export interface IpcInvokeMap {
   };
   "voice-input:check-mic-permission": {
     args: [];
-    result: "granted" | "denied" | "not-determined" | "restricted" | "unknown";
+    result: MicPermissionStatus;
   };
   "voice-input:request-mic-permission": {
     args: [];
@@ -1253,6 +1253,52 @@ export interface IpcInvokeMap {
   "voice-input:validate-api-key": {
     args: [apiKey: string];
     result: { valid: boolean; error?: string };
+  };
+
+  // MCP Server channels
+  "mcp-server:get-status": {
+    args: [];
+    result: {
+      enabled: boolean;
+      port: number | null;
+      configuredPort: number | null;
+      apiKey: string;
+    };
+  };
+  "mcp-server:set-enabled": {
+    args: [enabled: boolean];
+    result: {
+      enabled: boolean;
+      port: number | null;
+      configuredPort: number | null;
+      apiKey: string;
+    };
+  };
+  "mcp-server:set-port": {
+    args: [port: number | null];
+    result: {
+      enabled: boolean;
+      port: number | null;
+      configuredPort: number | null;
+      apiKey: string;
+    };
+  };
+  "mcp-server:set-api-key": {
+    args: [apiKey: string];
+    result: {
+      enabled: boolean;
+      port: number | null;
+      configuredPort: number | null;
+      apiKey: string;
+    };
+  };
+  "mcp-server:generate-api-key": {
+    args: [];
+    result: string;
+  };
+  "mcp-server:get-config-snippet": {
+    args: [];
+    result: string;
   };
 }
 

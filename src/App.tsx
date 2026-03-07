@@ -35,6 +35,7 @@ import { useActionPalette } from "./hooks/useActionPalette";
 import { useQuickSwitcher } from "./hooks/useQuickSwitcher";
 import { useWorktreePalette } from "./hooks/useWorktreePalette";
 import { useDoubleShift } from "./hooks/useDoubleShift";
+import { useMcpBridge } from "./hooks/useMcpBridge";
 import { createTooltipWithShortcut } from "./lib/platform";
 import {
   useAppHydration,
@@ -631,6 +632,7 @@ function App() {
   useWindowNotifications();
   useWatchedPanelNotifications();
   useUpdateListener();
+  useMcpBridge();
   const [homeDir, setHomeDir] = useState<string | undefined>(undefined);
   useEffect(() => {
     systemClient.getHomeDir().then(setHomeDir).catch(console.error);

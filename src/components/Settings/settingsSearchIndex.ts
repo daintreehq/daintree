@@ -514,4 +514,46 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     description: "Clear all per-worktree split ratio overrides and return to the default ratio",
     keywords: ["reset", "worktree", "ratio", "split", "default", "clear"],
   },
+
+  // MCP Server
+  {
+    id: "mcp-server-enable",
+    tab: "mcp",
+    tabLabel: "MCP Server",
+    section: "MCP Server",
+    title: "Enable MCP Server",
+    description:
+      "Start a local MCP server so AI agents can invoke Canopy actions (open terminals, inject context, switch worktrees, etc.)",
+    keywords: ["mcp", "server", "agent", "local", "tools", "automation", "api", "enable"],
+  },
+  {
+    id: "mcp-server-config",
+    tab: "mcp",
+    tabLabel: "MCP Server",
+    section: "Connection",
+    title: "Copy MCP Config",
+    description:
+      "Copy the MCP server config snippet (JSON) to paste into your MCP client configuration",
+    keywords: ["mcp", "config", "copy", "snippet", "json", "client", "cursor", "claude"],
+  },
+  {
+    id: "mcp-server-port",
+    tab: "mcp",
+    tabLabel: "MCP Server",
+    section: "Port",
+    title: "Server Port",
+    description:
+      "Set a fixed port for the MCP server or leave empty for automatic ephemeral port assignment",
+    keywords: ["mcp", "port", "fixed", "ephemeral", "network", "bind"],
+  },
+  {
+    id: "mcp-server-auth",
+    tab: "mcp",
+    tabLabel: "MCP Server",
+    section: "Authentication",
+    title: "API Key Authentication",
+    description:
+      "Generate a bearer token to secure MCP connections. Clients must include the token in the Authorization header.",
+    keywords: ["mcp", "api", "key", "auth", "token", "bearer", "security", "password"],
+  },
 ];

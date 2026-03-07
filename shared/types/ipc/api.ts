@@ -822,6 +822,63 @@ export interface ElectronAPI {
     openMicSettings(): Promise<void>;
     validateApiKey(apiKey: string): Promise<{ valid: boolean; error?: string }>;
   };
+  mcpServer: {
+    /** Get current MCP server status and configuration */
+    getStatus(): Promise<{
+      enabled: boolean;
+      port: number | null;
+      configuredPort: number | null;
+      apiKey: string;
+    }>;
+    /** Enable or disable the MCP server */
+    setEnabled(enabled: boolean): Promise<{
+      enabled: boolean;
+      port: number | null;
+      configuredPort: number | null;
+      apiKey: string;
+    }>;
+    /** Set a fixed port (null = auto-assign ephemeral port) */
+    setPort(port: number | null): Promise<{
+      enabled: boolean;
+      port: number | null;
+      configuredPort: number | null;
+      apiKey: string;
+    }>;
+    /** Set the API key for bearer token authentication (empty string = no auth) */
+    setApiKey(apiKey: string): Promise<{
+      enabled: boolean;
+      port: number | null;
+      configuredPort: number | null;
+      apiKey: string;
+    }>;
+    /** Generate a random API key and persist it */
+    generateApiKey(): Promise<string>;
+    /** Get the JSON config snippet to paste into an MCP client config */
+    getConfigSnippet(): Promise<string>;
+  };
+  mcpBridge: {
+    /** Listen for manifest requests from main process */
+    onGetManifestRequest(callback: (requestId: string) => void): () => void;
+    /** Send action manifest to main process */
+    sendGetManifestResponse(
+      requestId: string,
+      manifest: import("../actions.js").ActionManifestEntry[]
+    ): void;
+    /** Listen for action dispatch requests from main process */
+    onDispatchActionRequest(
+      callback: (payload: {
+        requestId: string;
+        actionId: string;
+        args?: unknown;
+        confirmed?: boolean;
+      }) => void
+    ): () => void;
+    /** Send action dispatch result to main process */
+    sendDispatchActionResponse(payload: {
+      requestId: string;
+      result: import("../actions.js").ActionDispatchResult;
+    }): void;
+  };
 }
 
 export type MicPermissionStatus =

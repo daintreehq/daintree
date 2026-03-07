@@ -113,7 +113,8 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
   actions.set("files.search", () => ({
     id: "files.search",
     title: "Search Files",
-    description: "Search for files in a directory",
+    description:
+      "Search for files by name in a directory. Requires cwd (use project_getCurrent to get the project path).",
     category: "files",
     kind: "query",
     danger: "safe",
@@ -265,7 +266,15 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ worktreeId: z.string(), dirPath: z.string().optional() }),
+    argsSchema: z.object({
+      worktreeId: z.string().describe("Worktree ID to browse"),
+      dirPath: z
+        .string()
+        .optional()
+        .describe(
+          "Relative path within the worktree (e.g. 'src', 'src/components'). Omit for root."
+        ),
+    }),
     run: async (args: unknown) => {
       const { worktreeId, dirPath } = args as { worktreeId: string; dirPath?: string };
       return await copyTreeClient.getFileTree(worktreeId, dirPath);

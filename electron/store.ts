@@ -124,6 +124,11 @@ export interface StoreSchema {
     customDictionary: string[];
     transcriptionModel: string;
   };
+  mcpServer: {
+    enabled: boolean;
+    port: number | null;
+    apiKey: string;
+  };
 }
 
 const storeOptions = {
@@ -195,6 +200,11 @@ const storeOptions = {
       language: "en",
       customDictionary: [],
       transcriptionModel: "gpt-4o-mini-transcribe",
+    },
+    mcpServer: {
+      enabled: false,
+      port: 45454,
+      apiKey: "",
     },
   },
   cwd: process.env.CANOPY_USER_DATA,
