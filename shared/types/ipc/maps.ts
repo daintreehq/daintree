@@ -1406,7 +1406,8 @@ export interface IpcEventMap {
 
   // Voice input events
   "voice-input:transcription-delta": string;
-  "voice-input:transcription-complete": string;
+  "voice-input:transcription-complete": { text: string; willCorrect: boolean };
+  "voice-input:correction-replace": { rawText: string; correctedText: string };
   "voice-input:error": string;
   "voice-input:status": "idle" | "connecting" | "recording" | "error";
 }

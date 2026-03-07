@@ -123,6 +123,9 @@ export interface StoreSchema {
     language: string;
     customDictionary: string[];
     transcriptionModel: string;
+    correctionEnabled: boolean;
+    correctionModel: string;
+    correctionCustomInstructions: string;
   };
   mcpServer: {
     enabled: boolean;
@@ -200,6 +203,9 @@ const storeOptions = {
       language: "en",
       customDictionary: [],
       transcriptionModel: "gpt-4o-mini-transcribe",
+      correctionEnabled: false,
+      correctionModel: "gpt-5-nano",
+      correctionCustomInstructions: "",
     },
     mcpServer: {
       enabled: false,

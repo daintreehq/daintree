@@ -79,8 +79,8 @@ class VoiceRecordingService {
     );
 
     this.unsubscribers.push(
-      voiceInput.onTranscriptionComplete((text) => {
-        logDebug(`${LOG_PREFIX} Received transcription complete`, { text });
+      voiceInput.onTranscriptionComplete(({ text, willCorrect }) => {
+        logDebug(`${LOG_PREFIX} Received transcription complete`, { text, willCorrect });
         const voiceState = useVoiceRecordingStore.getState();
         const panelId = voiceState.activeTarget?.panelId;
         const projectId = voiceState.activeTarget?.projectId;
@@ -88,17 +88,81 @@ class VoiceRecordingService {
           const buffer = voiceState.panelBuffers[panelId];
           const segmentStart = buffer?.draftLengthAtSegmentStart ?? -1;
           if (segmentStart >= 0 || text.trim()) {
-            const store = useTerminalInputStore.getState();
-            const draft = store.getDraftInput(panelId, projectId);
+            const inputStore = useTerminalInputStore.getState();
+            const draft = inputStore.getDraftInput(panelId, projectId);
             // Slice back to where this segment started and replace with final transcript.
             const base = segmentStart >= 0 ? draft.slice(0, segmentStart) : draft;
             const separator = base && !base.endsWith(" ") ? " " : "";
             const finalText = text.trim();
-            store.setDraftInput(panelId, base + separator + finalText, projectId);
-            store.bumpVoiceDraftRevision();
+            const insertStart = base.length + separator.length;
+            inputStore.setDraftInput(panelId, base + separator + finalText, projectId);
+            inputStore.bumpVoiceDraftRevision();
+
+            // Only mark as pending correction if the backend will actually correct.
+            // Otherwise the text stays gray forever since no replace event arrives.
+            if (willCorrect) {
+              useVoiceRecordingStore
+                .getState()
+                .addPendingCorrection(panelId, insertStart, finalText);
+            }
           }
         }
         useVoiceRecordingStore.getState().completeSegment(text);
+      })
+    );
+
+    this.unsubscribers.push(
+      voiceInput.onCorrectionReplace(({ rawText, correctedText }) => {
+        logDebug(`${LOG_PREFIX} Received correction replace`, {
+          rawText,
+          correctedText,
+          changed: rawText !== correctedText,
+        });
+        const voiceState = useVoiceRecordingStore.getState();
+        // Find the panel that has this pending correction.
+        // Check active target first, then fall back to scanning all buffers.
+        let panelId = voiceState.activeTarget?.panelId;
+        let projectId = voiceState.activeTarget?.projectId;
+
+        if (panelId) {
+          const buffer = voiceState.panelBuffers[panelId];
+          if (!buffer?.pendingCorrections.some((p) => p.rawText === rawText)) {
+            panelId = undefined;
+          }
+        }
+
+        if (!panelId) {
+          for (const [id, buffer] of Object.entries(voiceState.panelBuffers)) {
+            if (buffer.pendingCorrections.some((p) => p.rawText === rawText)) {
+              panelId = id;
+              projectId = buffer.projectId;
+              break;
+            }
+          }
+        }
+
+        if (!panelId) return;
+
+        if (rawText !== correctedText) {
+          const inputStore = useTerminalInputStore.getState();
+          const draft = inputStore.getDraftInput(panelId, projectId);
+          // Find the raw text in the draft by scanning from the expected offset.
+          const pending = voiceState.panelBuffers[panelId]?.pendingCorrections.find(
+            (p) => p.rawText === rawText
+          );
+          if (pending) {
+            // Locate the raw text — it may have shifted due to earlier corrections.
+            const idx = draft.indexOf(rawText, Math.max(0, pending.segmentStart - 20));
+            if (idx >= 0) {
+              const before = draft.slice(0, idx);
+              const after = draft.slice(idx + rawText.length);
+              inputStore.setDraftInput(panelId, before + correctedText + after, projectId);
+              inputStore.bumpVoiceDraftRevision();
+            }
+          }
+        }
+
+        useVoiceRecordingStore.getState().resolvePendingCorrection(panelId, rawText);
       })
     );
 
@@ -231,7 +295,12 @@ class VoiceRecordingService {
       enabled: settings.enabled,
       hasApiKey: !!settings.apiKey,
       isConfigured,
+      correctionEnabled: settings.correctionEnabled,
     });
+    // Keep correction state in sync for live-segment dimming
+    useVoiceRecordingStore
+      .getState()
+      .setCorrectionEnabled(!!(settings.correctionEnabled && settings.apiKey));
     useVoiceRecordingStore.getState().setConfigured(isConfigured);
     return isConfigured;
   }

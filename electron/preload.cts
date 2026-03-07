@@ -499,6 +499,7 @@ const CHANNELS = {
   VOICE_INPUT_AUDIO_CHUNK: "voice-input:audio-chunk",
   VOICE_INPUT_TRANSCRIPTION_DELTA: "voice-input:transcription-delta",
   VOICE_INPUT_TRANSCRIPTION_COMPLETE: "voice-input:transcription-complete",
+  VOICE_INPUT_CORRECTION_REPLACE: "voice-input:correction-replace",
   VOICE_INPUT_ERROR: "voice-input:error",
   VOICE_INPUT_STATUS: "voice-input:status",
   VOICE_INPUT_CHECK_MIC_PERMISSION: "voice-input:check-mic-permission",
@@ -1606,6 +1607,9 @@ const api: ElectronAPI = {
         language: string;
         customDictionary: string[];
         transcriptionModel: "gpt-4o-mini-transcribe" | "gpt-4o-transcribe";
+        correctionEnabled: boolean;
+        correctionModel: "gpt-5-nano";
+        correctionCustomInstructions: string;
       }>
     ) => _typedInvoke(CHANNELS.VOICE_INPUT_SET_SETTINGS, patch),
     start: () => _typedInvoke(CHANNELS.VOICE_INPUT_START),
@@ -1614,8 +1618,12 @@ const api: ElectronAPI = {
       ipcRenderer.send(CHANNELS.VOICE_INPUT_AUDIO_CHUNK, chunk),
     onTranscriptionDelta: (callback: (delta: string) => void) =>
       _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_DELTA, callback),
-    onTranscriptionComplete: (callback: (text: string) => void) =>
-      _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, callback),
+    onTranscriptionComplete: (
+      callback: (payload: { text: string; willCorrect: boolean }) => void
+    ) => _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, callback),
+    onCorrectionReplace: (
+      callback: (payload: { rawText: string; correctedText: string }) => void
+    ) => _typedOn(CHANNELS.VOICE_INPUT_CORRECTION_REPLACE, callback),
     onError: (callback: (error: string) => void) => _typedOn(CHANNELS.VOICE_INPUT_ERROR, callback),
     onStatus: (callback: (status: "idle" | "connecting" | "recording" | "error") => void) =>
       _typedOn(CHANNELS.VOICE_INPUT_STATUS, callback),
