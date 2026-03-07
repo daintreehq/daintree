@@ -318,19 +318,16 @@ const __dirname = path.dirname(__filename);
 // Telemetry must be initialized before error handlers so Sentry captures uncaught errors
 void initializeTelemetry();
 
-// Initialize crash recovery service early — detects dirty shutdown from previous session
-initializeCrashRecoveryService();
-
 process.on("uncaughtException", (error) => {
   console.error("[FATAL] Uncaught Exception:", error);
-  getCrashRecoveryService().recordCrash(error);
+  // Note: crash recording is handled by the running.lock marker approach — the marker
+  // written at startup is only removed on clean exit, so actual process deaths are
+  // automatically detected on the next launch without needing recordCrash() here.
 });
 
 process.on("unhandledRejection", (reason, promise) => {
   console.error("[FATAL] Unhandled Promise Rejection at:", promise, "reason:", reason);
-  getCrashRecoveryService().recordCrash(
-    reason instanceof Error ? reason : new Error(String(reason))
-  );
+  // Same as above — the marker handles crash detection; rejections may not kill the process.
 });
 
 let mainWindow: BrowserWindow | null = null;
@@ -378,6 +375,10 @@ if (!gotTheLock) {
   console.log("[MAIN] Another instance is already running. Quitting...");
   app.quit();
 } else {
+  // Initialize crash recovery only in the winning instance — a losing second instance
+  // must not consume/delete the current session's marker before it quits.
+  initializeCrashRecoveryService();
+
   app.on("second-instance", (_event, commandLine, _workingDirectory) => {
     console.log("[MAIN] Second instance detected, focusing main window");
     if (mainWindow) {

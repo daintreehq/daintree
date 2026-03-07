@@ -841,7 +841,7 @@ function App() {
   const crashResolved = crashState.status !== "loading" && crashState.status !== "pending";
 
   // App lifecycle hooks
-  const { isStateLoaded } = useAppHydration(hydrationCallbacks);
+  const { isStateLoaded } = useAppHydration(hydrationCallbacks, crashResolved);
   useProjectSwitchRehydration(hydrationCallbacks);
   useFirstRunToasts(isStateLoaded);
 
