@@ -191,10 +191,10 @@ describe("VoiceCorrectionService", () => {
 
     const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
     const systemMessage = body.messages[0].content as string;
-    expect(systemMessage).toContain("High-Fidelity Orthographic Auditor");
+    expect(systemMessage).toContain("speech-to-text transcription errors");
   });
 
-  it("uses temperature 0 in API requests", async () => {
+  it("uses reasoning model parameters for gpt-5 models", async () => {
     const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse("Corrected."));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -202,7 +202,8 @@ describe("VoiceCorrectionService", () => {
     await svc.correct("test", BASE_SETTINGS);
 
     const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
-    // gpt-5-nano is a reasoning model: no temperature, uses reasoning_effort
+    // gpt-5-nano is a reasoning model: developer role, no temperature, reasoning_effort
+    expect(body.messages[0].role).toBe("developer");
     expect(body.temperature).toBeUndefined();
     expect(body.reasoning_effort).toBe("low");
     expect(body.max_completion_tokens).toBe(1024);

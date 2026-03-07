@@ -109,7 +109,8 @@ export class VoiceCorrectionService {
       body: JSON.stringify({
         model,
         messages: [
-          { role: "system", content: systemPrompt },
+          // GPT-5 reasoning models use "developer" role for instructions
+          { role: isReasoningModel ? "developer" : "system", content: systemPrompt },
           { role: "user", content: userMessage },
         ],
         // Reasoning models (gpt-5-nano) don't support temperature and need
