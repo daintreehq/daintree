@@ -11,6 +11,11 @@ let service: VoiceTranscriptionService | null = null;
 let activeEventUnsubscribe: (() => void) | null = null;
 let correctionService: VoiceCorrectionService | null = null;
 
+/** Utterances accumulated since the last paragraph boundary. */
+let paragraphBuffer: string[] = [];
+/** Project info captured at session start for correction prompts. */
+let sessionProjectInfo: { name?: string; path?: string } = {};
+
 const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
   enabled: false,
   apiKey: "",
@@ -126,6 +131,44 @@ function getProjectInfo(): { name?: string; path?: string } {
   return { name: project?.name, path: project?.path };
 }
 
+/**
+ * Join the paragraph buffer into a single raw text string and clear it.
+ * If correction is enabled, fires an async correction call and sends
+ * VOICE_INPUT_CORRECTION_REPLACE when it resolves.
+ * Returns the raw paragraph text (or null if the buffer was empty).
+ */
+function flushParagraphBuffer(win: Electron.BrowserWindow | null): { rawText: string | null } {
+  if (paragraphBuffer.length === 0) return { rawText: null };
+
+  const rawText = paragraphBuffer.join(" ");
+  paragraphBuffer = [];
+
+  const liveSettings = getVoiceSettings();
+  const willCorrect = !!(liveSettings.correctionEnabled && liveSettings.apiKey);
+
+  if (willCorrect && correctionService && win && !win.isDestroyed()) {
+    void correctionService
+      .correct(rawText, {
+        model: liveSettings.correctionModel,
+        apiKey: liveSettings.apiKey,
+        customDictionary: liveSettings.customDictionary,
+        customInstructions: liveSettings.correctionCustomInstructions,
+        projectName: sessionProjectInfo.name,
+        projectPath: sessionProjectInfo.path,
+      })
+      .then((correctedText) => {
+        if (!win.isDestroyed()) {
+          win.webContents.send(CHANNELS.VOICE_INPUT_CORRECTION_REPLACE, {
+            rawText,
+            correctedText,
+          });
+        }
+      });
+  }
+
+  return { rawText };
+}
+
 export function registerVoiceInputHandlers(deps: HandlerDependencies): () => void {
   const handleGetSettings = async () => {
     return getVoiceSettings();
@@ -154,8 +197,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     }
     correctionService.resetHistory();
 
-    // Capture project info at session start for the correction prompt context
-    const projectInfo = getProjectInfo();
+    // Capture project info and reset paragraph buffer at session start
+    sessionProjectInfo = getProjectInfo();
+    paragraphBuffer = [];
 
     const unsubscribe = svc.onEvent((voiceEvent) => {
       const win = deps.mainWindow;
@@ -166,38 +210,18 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       } else if (voiceEvent.type === "complete") {
         const rawText = voiceEvent.text.trim();
 
-        // Read correction settings live so mid-session changes take effect immediately.
-        // Use getVoiceSettings() to ensure new fields have defaults even if the
-        // persisted object predates their addition.
-        const liveSettings = getVoiceSettings();
-        const willCorrect = !!(liveSettings.correctionEnabled && liveSettings.apiKey);
+        // Accumulate utterance into paragraph buffer — correction fires at paragraph
+        // boundaries (Enter or stop), not per utterance.
+        if (rawText) {
+          paragraphBuffer.push(rawText);
+        }
 
-        // Send raw text + whether correction will happen so the renderer knows
-        // whether to mark text as pending (grayed) or finalize it immediately.
+        // Notify the renderer so it can finalize the utterance in the draft.
+        // willCorrect is always false here: correction is batched at paragraph level.
         win.webContents.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
           text: rawText,
-          willCorrect,
+          willCorrect: false,
         });
-
-        if (willCorrect) {
-          void correctionService!
-            .correct(rawText, {
-              model: liveSettings.correctionModel,
-              apiKey: liveSettings.apiKey,
-              customDictionary: liveSettings.customDictionary,
-              customInstructions: liveSettings.correctionCustomInstructions,
-              projectName: projectInfo.name,
-              projectPath: projectInfo.path,
-            })
-            .then((correctedText) => {
-              if (!win.isDestroyed()) {
-                win.webContents.send(CHANNELS.VOICE_INPUT_CORRECTION_REPLACE, {
-                  rawText,
-                  correctedText,
-                });
-              }
-            });
-        }
       } else if (voiceEvent.type === "error") {
         win.webContents.send(CHANNELS.VOICE_INPUT_ERROR, voiceEvent.message);
       } else if (voiceEvent.type === "status") {
@@ -229,12 +253,19 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     return result;
   };
 
-  const handleStop = async () => {
+  const handleStop = async (): Promise<{ rawText: string | null }> => {
     if (service) {
       // Drain first (waits for pending transcriptions), then clean up subscription.
       await service.stopGracefully();
     }
     cleanupActiveSubscription();
+
+    // Flush any remaining paragraph utterances gathered since the last boundary.
+    return flushParagraphBuffer(deps.mainWindow);
+  };
+
+  const handleFlushParagraph = (): { rawText: string | null } => {
+    return flushParagraphBuffer(deps.mainWindow);
   };
 
   const handleAudioChunk = (_event: Electron.IpcMainInvokeEvent, chunk: ArrayBuffer) => {
@@ -266,6 +297,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   ipcMain.handle(CHANNELS.VOICE_INPUT_REQUEST_MIC_PERMISSION, handleRequestMicPermission);
   ipcMain.handle(CHANNELS.VOICE_INPUT_OPEN_MIC_SETTINGS, handleOpenMicSettings);
   ipcMain.handle(CHANNELS.VOICE_INPUT_VALIDATE_API_KEY, handleValidateApiKey);
+  ipcMain.handle(CHANNELS.VOICE_INPUT_FLUSH_PARAGRAPH, handleFlushParagraph);
 
   return () => {
     ipcMain.removeHandler(CHANNELS.VOICE_INPUT_GET_SETTINGS);
@@ -277,9 +309,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     ipcMain.removeHandler(CHANNELS.VOICE_INPUT_REQUEST_MIC_PERMISSION);
     ipcMain.removeHandler(CHANNELS.VOICE_INPUT_OPEN_MIC_SETTINGS);
     ipcMain.removeHandler(CHANNELS.VOICE_INPUT_VALIDATE_API_KEY);
+    ipcMain.removeHandler(CHANNELS.VOICE_INPUT_FLUSH_PARAGRAPH);
     cleanupActiveSubscription();
     service?.destroy();
     service = null;
     correctionService = null;
+    paragraphBuffer = [];
   };
 }

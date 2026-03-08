@@ -362,6 +362,7 @@ export const CHANNELS = {
   VOICE_INPUT_REQUEST_MIC_PERMISSION: "voice-input:request-mic-permission",
   VOICE_INPUT_OPEN_MIC_SETTINGS: "voice-input:open-mic-settings",
   VOICE_INPUT_VALIDATE_API_KEY: "voice-input:validate-api-key",
+  VOICE_INPUT_FLUSH_PARAGRAPH: "voice-input:flush-paragraph",
 
   // Crash Recovery channels
   CRASH_RECOVERY_GET_PENDING: "crash-recovery:get-pending",

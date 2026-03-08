@@ -508,6 +508,7 @@ const CHANNELS = {
   VOICE_INPUT_REQUEST_MIC_PERMISSION: "voice-input:request-mic-permission",
   VOICE_INPUT_OPEN_MIC_SETTINGS: "voice-input:open-mic-settings",
   VOICE_INPUT_VALIDATE_API_KEY: "voice-input:validate-api-key",
+  VOICE_INPUT_FLUSH_PARAGRAPH: "voice-input:flush-paragraph",
 
   // MCP Server channels
   MCP_SERVER_GET_STATUS: "mcp-server:get-status",
@@ -1627,6 +1628,7 @@ const api: ElectronAPI = {
     ) => _typedInvoke(CHANNELS.VOICE_INPUT_SET_SETTINGS, patch),
     start: () => _typedInvoke(CHANNELS.VOICE_INPUT_START),
     stop: () => _typedInvoke(CHANNELS.VOICE_INPUT_STOP),
+    flushParagraph: () => _typedInvoke(CHANNELS.VOICE_INPUT_FLUSH_PARAGRAPH),
     sendAudioChunk: (chunk: ArrayBuffer) =>
       ipcRenderer.send(CHANNELS.VOICE_INPUT_AUDIO_CHUNK, chunk),
     onTranscriptionDelta: (callback: (delta: string) => void) =>

@@ -8,11 +8,11 @@ import {
 export { CORE_CORRECTION_PROMPT, buildCorrectionSystemPrompt };
 
 const P = "[VoiceCorrection]";
-const CORRECTION_TIMEOUT_MS = 5000;
+// Paragraphs take longer than single sentences for gpt-5-nano (reasoning overhead).
+const CORRECTION_TIMEOUT_MS = 15000;
 const MAX_HISTORY = 3;
-// gpt-5-nano is a reasoning model that uses internal reasoning tokens before
-// producing visible output. 1024 gives headroom for reasoning + output.
-const MAX_COMPLETION_TOKENS = 1024;
+// Paragraph-level correction requires more tokens: reasoning + multi-sentence output.
+const MAX_COMPLETION_TOKENS = 2048;
 
 export interface VoiceCorrectionSettings {
   model: string;
@@ -88,11 +88,11 @@ export class VoiceCorrectionService {
 
     if (this.history.length > 0) {
       userParts.push(
-        `Previous corrected sentences (use for context, do NOT repeat):\n${this.history.map((s, i) => `${i + 1}. ${s}`).join("\n")}`
+        `Previous corrected paragraphs (use for context, do NOT repeat):\n${this.history.map((s, i) => `${i + 1}. ${s}`).join("\n")}`
       );
     }
 
-    userParts.push(`Current sentence to correct:\n${rawText}`);
+    userParts.push(`Current paragraph to correct:\n${rawText}`);
 
     const userMessage = userParts.join("\n\n");
 

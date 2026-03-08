@@ -1236,7 +1236,11 @@ export interface IpcInvokeMap {
   };
   "voice-input:stop": {
     args: [];
-    result: void;
+    result: { rawText: string | null };
+  };
+  "voice-input:flush-paragraph": {
+    args: [];
+    result: { rawText: string | null };
   };
   "voice-input:check-mic-permission": {
     args: [];

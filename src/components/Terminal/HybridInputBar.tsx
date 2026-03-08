@@ -96,6 +96,7 @@ interface LatestState {
     direction: "up" | "down",
     currentInput: string
   ) => string | null;
+  isVoiceActiveForPanel: boolean;
 }
 
 export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarProps>(
@@ -346,6 +347,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       resetHistoryIndex,
       clearDraftInput,
       navigateHistory,
+      isVoiceActiveForPanel,
     };
 
     useLayoutEffect(() => {
@@ -932,6 +934,42 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             }
 
             if (latest.disabled) return true;
+
+            // During voice recording, plain Enter commits the current paragraph
+            // instead of submitting to the terminal.
+            if (latest.isVoiceActiveForPanel) {
+              handledEnterRef.current = true;
+              setTimeout(() => {
+                handledEnterRef.current = false;
+              }, 0);
+
+              const { terminalId: tid, projectId: pid } = latest;
+              const voiceStore = useVoiceRecordingStore.getState();
+              const buffer = voiceStore.panelBuffers[tid];
+              const paragraphStart = buffer?.activeParagraphStart ?? -1;
+              const rawText =
+                buffer?.completedSegments && buffer.completedSegments.length > 0
+                  ? buffer.completedSegments.join(" ")
+                  : null;
+
+              // Flush paragraph buffer in the main process (fires correction async).
+              void window.electron.voiceInput.flushParagraph();
+
+              // Mark the paragraph as pending correction in the renderer so the
+              // accumulated text shows as gray until the correction arrives.
+              if (rawText && paragraphStart >= 0) {
+                voiceStore.addPendingCorrection(tid, paragraphStart, rawText);
+              }
+
+              // Insert a newline at the end of the draft and reset paragraph state.
+              const inputStore = useTerminalInputStore.getState();
+              const draft = inputStore.getDraftInput(tid, pid);
+              inputStore.setDraftInput(tid, draft + "\n", pid);
+              inputStore.bumpVoiceDraftRevision();
+
+              voiceStore.resetParagraphState(tid);
+              return true;
+            }
 
             const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
             if (text.trim().length === 0) {

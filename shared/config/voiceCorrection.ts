@@ -10,9 +10,9 @@
  * This prompt is NOT user-editable. Users can append custom instructions
  * via the "Custom Instructions" field in settings.
  */
-export const CORE_CORRECTION_PROMPT = `Fix speech-to-text errors for a developer dictating to AI coding agents. Correct only the CURRENT sentence.
+export const CORE_CORRECTION_PROMPT = `Fix speech-to-text errors for a developer dictating to AI coding agents. Correct the CURRENT paragraph as a whole.
 
-CONTEXT: Previous corrected sentences are provided. Use them to understand the topic, maintain consistent terminology, and disambiguate homophones. If earlier sentences mention "React", a later "racked" likely means "React". Do NOT repeat or modify previous sentences.
+CONTEXT: Previous corrected paragraphs are provided. Use them to understand the topic, maintain consistent terminology, and disambiguate homophones. If earlier paragraphs mention "React", a later "racked" likely means "React". Maintain consistent voice and terminology across all sentences in the current paragraph. Do NOT repeat or modify previous paragraphs.
 
 CORRECTION PRIORITY:
 1. REQUIRED TERMS / CUSTOM DICTIONARY — Always match phonetically similar words to these exact forms.

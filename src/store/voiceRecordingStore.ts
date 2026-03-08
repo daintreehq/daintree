@@ -25,6 +25,8 @@ interface VoiceTranscriptBuffer {
   draftLengthAtSegmentStart: number;
   /** Segments awaiting AI correction — shown dimmed in the editor. */
   pendingCorrections: PendingCorrection[];
+  /** Draft length at the start of the current paragraph (-1 = not set). */
+  activeParagraphStart: number;
 }
 
 interface VoiceAnnouncement {
@@ -61,6 +63,8 @@ interface VoiceRecordingState {
   addPendingCorrection: (panelId: string, segmentStart: number, rawText: string) => void;
   resolvePendingCorrection: (panelId: string, rawText: string) => void;
   getPendingCorrections: (panelId: string) => PendingCorrection[];
+  setActiveParagraphStart: (panelId: string, length: number) => void;
+  resetParagraphState: (panelId: string) => void;
   finishSession: (options?: FinishSessionOptions) => void;
   consumeCompletedSegments: (panelId: string) => string[];
   clearPanelBuffer: (panelId: string) => void;
@@ -78,6 +82,7 @@ function getBuffer(
       completedSegments: [],
       draftLengthAtSegmentStart: -1,
       pendingCorrections: [],
+      activeParagraphStart: -1,
     }
   );
 }
@@ -112,6 +117,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
           liveText: "",
           projectId: target.projectId,
           draftLengthAtSegmentStart: -1,
+          activeParagraphStart: -1,
         },
       },
     })),
@@ -215,6 +221,33 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
   getPendingCorrections: (panelId) => {
     return getBuffer(get().panelBuffers, panelId).pendingCorrections;
   },
+
+  setActiveParagraphStart: (panelId, length) =>
+    set((state) => {
+      const buffer = getBuffer(state.panelBuffers, panelId);
+      if (buffer.activeParagraphStart >= 0) return state;
+      return {
+        panelBuffers: {
+          ...state.panelBuffers,
+          [panelId]: { ...buffer, activeParagraphStart: length },
+        },
+      };
+    }),
+
+  resetParagraphState: (panelId) =>
+    set((state) => {
+      const buffer = getBuffer(state.panelBuffers, panelId);
+      return {
+        panelBuffers: {
+          ...state.panelBuffers,
+          [panelId]: {
+            ...buffer,
+            completedSegments: [],
+            activeParagraphStart: -1,
+          },
+        },
+      };
+    }),
 
   finishSession: ({ nextStatus = "idle", preserveLiveText = false } = {}) =>
     set((state) => {

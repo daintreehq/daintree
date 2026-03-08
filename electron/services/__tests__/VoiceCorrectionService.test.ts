@@ -67,14 +67,14 @@ describe("VoiceCorrectionService", () => {
         .mockImplementation(
           () =>
             new Promise((resolve) =>
-              setTimeout(() => resolve(makeFetchResponse("Corrected.")), 10000)
+              setTimeout(() => resolve(makeFetchResponse("Corrected.")), 30000)
             )
         )
     );
 
     const svc = new VoiceCorrectionService();
     const resultPromise = svc.correct("react is great", BASE_SETTINGS);
-    vi.advanceTimersByTime(6000);
+    vi.advanceTimersByTime(16000);
     const result = await resultPromise;
     expect(result).toBe("react is great");
   });
@@ -135,7 +135,7 @@ describe("VoiceCorrectionService", () => {
     expect(systemMessage).toContain("Always capitalize ProductName.");
   });
 
-  it("maintains a sliding history window of 3 sentences", async () => {
+  it("maintains a sliding history window of 3 paragraphs", async () => {
     const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse("Corrected sentence."));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -206,7 +206,7 @@ describe("VoiceCorrectionService", () => {
     expect(body.messages[0].role).toBe("developer");
     expect(body.temperature).toBeUndefined();
     expect(body.reasoning_effort).toBe("low");
-    expect(body.max_completion_tokens).toBe(1024);
+    expect(body.max_completion_tokens).toBe(2048);
     expect(body.max_tokens).toBeUndefined();
   });
 
