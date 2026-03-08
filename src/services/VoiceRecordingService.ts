@@ -63,6 +63,8 @@ class VoiceRecordingService {
             useVoiceRecordingStore
               .getState()
               .setDraftLengthAtSegmentStart(target.panelId, draftLen);
+            // Track paragraph start for the first utterance in a new paragraph.
+            useVoiceRecordingStore.getState().setActiveParagraphStart(target.panelId, draftLen);
             // First delta of a new utterance — use appendVoiceText for separator logic.
             useTerminalInputStore
               .getState()
@@ -80,8 +82,8 @@ class VoiceRecordingService {
     );
 
     this.unsubscribers.push(
-      voiceInput.onTranscriptionComplete(({ text, willCorrect }) => {
-        logDebug(`${LOG_PREFIX} Received transcription complete`, { text, willCorrect });
+      voiceInput.onTranscriptionComplete(({ text }) => {
+        logDebug(`${LOG_PREFIX} Received transcription complete`, { text });
         const voiceState = useVoiceRecordingStore.getState();
         const panelId = voiceState.activeTarget?.panelId;
         const projectId = voiceState.activeTarget?.projectId;
@@ -95,17 +97,9 @@ class VoiceRecordingService {
             const base = segmentStart >= 0 ? draft.slice(0, segmentStart) : draft;
             const separator = base && !base.endsWith(" ") ? " " : "";
             const finalText = text.trim();
-            const insertStart = base.length + separator.length;
             inputStore.setDraftInput(panelId, base + separator + finalText, projectId);
             inputStore.bumpVoiceDraftRevision();
-
-            // Only mark as pending correction if the backend will actually correct.
-            // Otherwise the text stays gray forever since no replace event arrives.
-            if (willCorrect) {
-              useVoiceRecordingStore
-                .getState()
-                .addPendingCorrection(panelId, insertStart, finalText);
-            }
+            // Correction is batched at paragraph level — no per-utterance pending entry.
           }
         }
         useVoiceRecordingStore.getState().completeSegment(text);
@@ -534,13 +528,32 @@ class VoiceRecordingService {
     this.generation++;
 
     if (!skipRemoteStop) {
-      // Graceful stop: the IPC handler drains pending transcriptions
-      // before resolving. Keep activeTarget alive so late transcription
-      // events are still applied to the correct panel.
+      // Graceful stop: the IPC handler drains pending transcriptions and flushes
+      // the paragraph buffer before resolving. Keep activeTarget alive so late
+      // transcription and correction events are still applied to the correct panel.
       logDebug(`${LOG_PREFIX} Sending remote stop (graceful drain)`);
       this.isStoppingSession = true;
       useVoiceRecordingStore.getState().setStatus("finishing");
-      await window.electron.voiceInput.stop().catch(() => {});
+      const stopResult = await window.electron.voiceInput.stop().catch(() => null);
+
+      // If the backend flushed a paragraph, register a pending correction so the
+      // UI shows it as gray until CORRECTION_REPLACE arrives (which may be after
+      // finishSession clears activeTarget — the fallback scan in onCorrectionReplace
+      // handles that case).
+      if (stopResult?.rawText) {
+        const currentTarget = useVoiceRecordingStore.getState().activeTarget;
+        // Only add pending correction when correction is enabled — otherwise
+        // no CORRECTION_REPLACE will arrive and the text stays dimmed permanently.
+        if (currentTarget && useVoiceRecordingStore.getState().correctionEnabled) {
+          const buffer = useVoiceRecordingStore.getState().panelBuffers[currentTarget.panelId];
+          const paragraphStart = buffer?.activeParagraphStart ?? -1;
+          if (paragraphStart >= 0) {
+            useVoiceRecordingStore
+              .getState()
+              .addPendingCorrection(currentTarget.panelId, paragraphStart, stopResult.rawText);
+          }
+        }
+      }
     }
 
     if (hasSession) {

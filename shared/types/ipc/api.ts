@@ -814,7 +814,8 @@ export interface ElectronAPI {
     getSettings(): Promise<VoiceInputSettings>;
     setSettings(settings: Partial<VoiceInputSettings>): Promise<void>;
     start(): Promise<{ ok: true } | { ok: false; error: string }>;
-    stop(): Promise<void>;
+    stop(): Promise<{ rawText: string | null }>;
+    flushParagraph(): Promise<{ rawText: string | null }>;
     sendAudioChunk(chunk: ArrayBuffer): void;
     onTranscriptionDelta(callback: (delta: string) => void): () => void;
     onTranscriptionComplete(
