@@ -182,4 +182,80 @@ describe("notify()", () => {
       expect(id).toBe("");
     });
   });
+
+  describe("seenAsToast — entry field reflects toast delivery", () => {
+    it("seenAsToast is true when focused + high (toast was shown)", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "success", message: "Done", priority: "high" });
+      expect(useNotificationHistoryStore.getState().entries[0].seenAsToast).toBe(true);
+    });
+
+    it("seenAsToast is false when blurred + high (toast not shown)", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(false);
+      notify({ type: "error", message: "Failed", priority: "high" });
+      expect(useNotificationHistoryStore.getState().entries[0].seenAsToast).toBe(false);
+    });
+
+    it("seenAsToast is false for low priority regardless of focus (never toasts)", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "info", message: "Silent", priority: "low" });
+      expect(useNotificationHistoryStore.getState().entries[0].seenAsToast).toBe(false);
+    });
+
+    it("seenAsToast is true for watch priority (always toasts)", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(false);
+      notify({ type: "warning", message: "Agent waiting", priority: "watch" });
+      expect(useNotificationHistoryStore.getState().entries[0].seenAsToast).toBe(true);
+    });
+
+    it("seenAsToast is true for grid-bar placement (shown inline)", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(false);
+      notify({ type: "info", message: "Inline", priority: "low", placement: "grid-bar" });
+      expect(useNotificationHistoryStore.getState().entries[0].seenAsToast).toBe(true);
+    });
+  });
+
+  describe("badge count — unreadCount only increments for missed notifications", () => {
+    it("does not increment unreadCount when focused + high (toast was shown)", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "success", message: "Done", priority: "high" });
+      expect(useNotificationHistoryStore.getState().unreadCount).toBe(0);
+    });
+
+    it("increments unreadCount when blurred + high (notification missed)", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(false);
+      notify({ type: "error", message: "Failed", priority: "high" });
+      expect(useNotificationHistoryStore.getState().unreadCount).toBe(1);
+    });
+
+    it("increments unreadCount for low priority (never toasted)", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "info", message: "Silent", priority: "low" });
+      expect(useNotificationHistoryStore.getState().unreadCount).toBe(1);
+    });
+
+    it("does not increment unreadCount for watch priority (always toasts)", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(false);
+      notify({ type: "warning", message: "Agent waiting", priority: "watch" });
+      expect(useNotificationHistoryStore.getState().unreadCount).toBe(0);
+    });
+
+    it("does not increment unreadCount for grid-bar notifications (shown inline)", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(false);
+      notify({ type: "info", message: "Inline", priority: "low", placement: "grid-bar" });
+      expect(useNotificationHistoryStore.getState().unreadCount).toBe(0);
+    });
+
+    it("counts only blurred notifications across mixed session", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "success", message: "Seen 1", priority: "high" });
+      notify({ type: "info", message: "Low 1", priority: "low" });
+
+      vi.spyOn(document, "hasFocus").mockReturnValue(false);
+      notify({ type: "error", message: "Missed 1", priority: "high" });
+      notify({ type: "error", message: "Missed 2", priority: "high" });
+
+      expect(useNotificationHistoryStore.getState().unreadCount).toBe(3);
+    });
+  });
 });

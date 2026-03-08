@@ -54,16 +54,16 @@ export function notify(payload: NotifyPayload): string {
 
   const historyMessage = inboxMessage ?? (typeof message === "string" ? message : undefined);
 
-  if (historyMessage) {
-    useNotificationHistoryStore.getState().addEntry({
-      type,
-      title,
-      message: historyMessage,
-      correlationId,
-    });
-  }
-
   if (placement === "grid-bar") {
+    if (historyMessage) {
+      useNotificationHistoryStore.getState().addEntry({
+        type,
+        title,
+        message: historyMessage,
+        correlationId,
+        seenAsToast: true,
+      });
+    }
     return useNotificationStore.getState().addNotification({
       ...payload,
       priority,
@@ -74,6 +74,16 @@ export function notify(payload: NotifyPayload): string {
 
   const shouldToast = priority === "watch" || (priority === "high" && isFocused);
   const shouldNative = priority === "watch";
+
+  if (historyMessage) {
+    useNotificationHistoryStore.getState().addEntry({
+      type,
+      title,
+      message: historyMessage,
+      correlationId,
+      seenAsToast: shouldToast,
+    });
+  }
 
   if (shouldNative && historyMessage && typeof window !== "undefined") {
     window.electron?.notification?.showNative?.({
