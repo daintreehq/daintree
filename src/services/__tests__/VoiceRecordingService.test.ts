@@ -85,6 +85,7 @@ function buildElectronStub() {
       onTranscriptionDelta: vi.fn(() => () => {}),
       onTranscriptionComplete: vi.fn(() => () => {}),
       onCorrectionReplace: vi.fn(() => () => {}),
+      onParagraphBoundary: vi.fn(() => () => {}),
       onError: vi.fn(() => () => {}),
       onStatus: vi.fn(() => () => {}),
       getSettings: vi.fn().mockResolvedValue({

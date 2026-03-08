@@ -175,11 +175,13 @@ export function VoiceInputSettingsTab() {
 
       {settings.enabled && (
         <>
-          {/* Deepgram API Key */}
+          {/* ── Stage 1: Speech-to-Text ── */}
+          <StageDivider label="Speech-to-Text" sublabel="Deepgram Nova" />
+
           <SettingsSection
             icon={Key}
             title="Deepgram API Key"
-            description="Required for transcription via Deepgram Nova-3. Your key is stored locally and never shared."
+            description="Required for real-time transcription. Your key is stored locally and never shared."
           >
             <ApiKeyField
               value={settings.deepgramApiKey}
@@ -192,7 +194,6 @@ export function VoiceInputSettingsTab() {
             />
           </SettingsSection>
 
-          {/* Microphone Permission */}
           <SettingsSection
             icon={Shield}
             title="Microphone Permission"
@@ -207,62 +208,52 @@ export function VoiceInputSettingsTab() {
             />
           </SettingsSection>
 
-          {/* Language */}
-          <SettingsSection
-            icon={Globe}
-            title="Language"
-            description="Select the primary language for transcription. Setting a language reduces latency and improves accuracy."
-          >
-            <select
-              value={settings.language}
-              onChange={(e) => update({ language: e.target.value })}
-              className="w-full max-w-xs bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-sm text-canopy-text focus:outline-none focus:ring-1 focus:ring-canopy-accent"
-            >
-              {LANGUAGES.map(({ code, label }) => (
-                <option key={code} value={code}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </SettingsSection>
-
-          {/* Transcription Model */}
-          <SettingsSection
-            icon={Mic}
-            title="Transcription Model"
-            description="Choose the Deepgram model for speech-to-text. Nova-3 offers the best accuracy; Nova-2 is a stable fallback."
-          >
-            <select
-              value={settings.transcriptionModel}
-              onChange={(e) =>
-                update({ transcriptionModel: e.target.value as VoiceTranscriptionModel })
-              }
-              className="w-full max-w-xs bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-sm text-canopy-text focus:outline-none focus:ring-1 focus:ring-canopy-accent"
-            >
-              {TRANSCRIPTION_MODELS.map(({ value, label, description }) => (
-                <option key={value} value={value}>
-                  {label} — {description}
-                </option>
-              ))}
-            </select>
-          </SettingsSection>
-
-          {/* AI Text Correction */}
-          <AiCorrectionSection settings={settings} update={update} />
+          {/* Language + Model — compact single row */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-canopy-text/70 flex items-center gap-1.5">
+                <Globe className="w-3.5 h-3.5" aria-hidden="true" />
+                Language
+              </label>
+              <select
+                value={settings.language}
+                onChange={(e) => update({ language: e.target.value })}
+                className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-sm text-canopy-text focus:outline-none focus:ring-1 focus:ring-canopy-accent"
+              >
+                {LANGUAGES.map(({ code, label }) => (
+                  <option key={code} value={code}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-canopy-text/70 flex items-center gap-1.5">
+                <Mic className="w-3.5 h-3.5" aria-hidden="true" />
+                Model
+              </label>
+              <select
+                value={settings.transcriptionModel}
+                onChange={(e) =>
+                  update({ transcriptionModel: e.target.value as VoiceTranscriptionModel })
+                }
+                className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-sm text-canopy-text focus:outline-none focus:ring-1 focus:ring-canopy-accent"
+              >
+                {TRANSCRIPTION_MODELS.map(({ value, label, description }) => (
+                  <option key={value} value={value}>
+                    {label} — {description}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
 
           {/* Custom Dictionary */}
-          <div className="space-y-4">
-            <div>
-              <h4 className="text-sm font-medium text-canopy-text mb-2 flex items-center gap-2">
-                <BookText className="w-4 h-4 text-canopy-text/70" aria-hidden="true" />
-                Custom Dictionary
-              </h4>
-              <p className="text-xs text-canopy-text/50 mb-4">
-                Add domain-specific terms, project names, and technical abbreviations. These are
-                sent to Deepgram as keyterms to improve transcription accuracy (up to 100 terms).
-              </p>
-            </div>
-
+          <SettingsSection
+            icon={BookText}
+            title="Custom Dictionary"
+            description="Domain-specific terms sent to Deepgram as keyterms to boost recognition accuracy (up to 100)."
+          >
             <div className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-4">
               <div className="flex gap-2">
                 <input
@@ -312,12 +303,17 @@ export function VoiceInputSettingsTab() {
                 </div>
               ) : (
                 <p className="text-xs text-canopy-text/40">
-                  No custom terms added. Terms like project names, framework abbreviations, or
-                  domain-specific vocabulary help the transcription model understand your speech.
+                  No custom terms added yet. Add project names, framework abbreviations, or
+                  domain-specific vocabulary.
                 </p>
               )}
             </div>
-          </div>
+          </SettingsSection>
+
+          {/* ── Stage 2: AI Correction ── */}
+          <StageDivider label="AI Text Correction" sublabel="Optional · OpenAI" />
+
+          <AiCorrectionSection settings={settings} update={update} />
         </>
       )}
     </div>
@@ -506,6 +502,21 @@ function ApiKeyField({
   );
 }
 
+function StageDivider({ label, sublabel }: { label: string; sublabel: string }) {
+  return (
+    <div className="flex items-center gap-3 pt-2">
+      <div className="h-px flex-1 bg-canopy-border" />
+      <div className="text-center">
+        <span className="text-xs font-semibold uppercase tracking-wider text-canopy-text/60">
+          {label}
+        </span>
+        <span className="block text-[10px] text-canopy-text/35">{sublabel}</span>
+      </div>
+      <div className="h-px flex-1 bg-canopy-border" />
+    </div>
+  );
+}
+
 interface AiCorrectionSectionProps {
   settings: VoiceInputSettings;
   update: (patch: Partial<VoiceInputSettings>) => void;
@@ -519,19 +530,19 @@ function AiCorrectionSection({ settings, update }: AiCorrectionSectionProps) {
       <SettingsSwitchCard
         icon={Sparkles}
         title="AI Text Correction"
-        subtitle="Automatically clean up transcriptions — correcting mistranscribed words, fixing punctuation, and removing filler words"
+        subtitle="Post-process transcriptions with GPT-5 Nano to fix technical terms, punctuation, and filler words"
         isEnabled={settings.correctionEnabled}
         onChange={() => update({ correctionEnabled: !settings.correctionEnabled })}
         ariaLabel="Toggle AI text correction"
       />
 
       {settings.correctionEnabled && (
-        <SettingsSection
-          icon={Sparkles}
-          title="AI Text Correction — OpenAI API Key"
-          description="Correction uses GPT-5 Nano via OpenAI. This requires a separate OpenAI key and is independent of the Deepgram transcription key."
-        >
-          <div className="space-y-4">
+        <div className="space-y-4 pl-2 border-l-2 border-canopy-accent/20 ml-2">
+          <SettingsSection
+            icon={Key}
+            title="OpenAI API Key"
+            description="Required for correction via GPT-5 Nano. Independent of the Deepgram transcription key."
+          >
             <ApiKeyField
               value={settings.correctionApiKey}
               placeholder="sk-..."
@@ -541,62 +552,58 @@ function AiCorrectionSection({ settings, update }: AiCorrectionSectionProps) {
               dashboardLabel="Open OpenAI Dashboard"
               getInfoText="Create an OpenAI API key for GPT-5 Nano correction. This is optional — if no key is set, correction is skipped entirely."
             />
+          </SettingsSection>
 
-            {settings.correctionApiKey && (
-              <>
-                {/* Core prompt (read-only) */}
-                <div className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-3">
-                  <button
-                    type="button"
-                    onClick={() => setCorePromptExpanded((v) => !v)}
-                    className="flex items-center justify-between w-full text-left"
-                  >
-                    <h4 className="text-sm font-medium text-canopy-text">Core Prompt</h4>
-                    {corePromptExpanded ? (
-                      <ChevronUp className="w-4 h-4 text-canopy-text/40" />
-                    ) : (
-                      <ChevronDown className="w-4 h-4 text-canopy-text/40" />
-                    )}
-                  </button>
-
+          {settings.correctionApiKey && (
+            <>
+              <div className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-3">
+                <button
+                  type="button"
+                  onClick={() => setCorePromptExpanded((v) => !v)}
+                  className="flex items-center justify-between w-full text-left"
+                >
+                  <h4 className="text-sm font-medium text-canopy-text">Core Prompt</h4>
                   {corePromptExpanded ? (
-                    <pre className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-canopy-text/60 whitespace-pre-wrap overflow-y-auto max-h-64">
-                      {CORE_CORRECTION_PROMPT}
-                    </pre>
+                    <ChevronUp className="w-4 h-4 text-canopy-text/40" />
                   ) : (
-                    <p className="text-xs text-canopy-text/40">
-                      High-Fidelity Orthographic Auditor — corrects phonetic mistranscriptions,
-                      punctuation, homophones, and filler words while preserving the speaker&apos;s
-                      original language.
-                    </p>
+                    <ChevronDown className="w-4 h-4 text-canopy-text/40" />
                   )}
-                </div>
+                </button>
 
-                {/* Custom instructions */}
-                <div className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-3">
-                  <h4 className="text-sm font-medium text-canopy-text">Custom Instructions</h4>
+                {corePromptExpanded ? (
+                  <pre className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-canopy-text/60 whitespace-pre-wrap overflow-y-auto max-h-64">
+                    {CORE_CORRECTION_PROMPT}
+                  </pre>
+                ) : (
                   <p className="text-xs text-canopy-text/40">
-                    Add project-specific rules or corrections. These are appended to the core
-                    prompt.
+                    Corrects phonetic mistranscriptions, punctuation, homophones, and filler words
+                    while preserving the speaker&apos;s original phrasing.
                   </p>
-                  <textarea
-                    value={settings.correctionCustomInstructions}
-                    onChange={(e) => update({ correctionCustomInstructions: e.target.value })}
-                    rows={3}
-                    placeholder='e.g., "Always capitalize ProductName as one word" or "The acronym CMS refers to our Content Management System"'
-                    className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-canopy-text placeholder:text-canopy-text/30 focus:outline-none focus:ring-1 focus:ring-canopy-accent resize-y"
-                    spellCheck={false}
-                  />
-                </div>
+                )}
+              </div>
 
+              <div className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-3">
+                <h4 className="text-sm font-medium text-canopy-text">Custom Instructions</h4>
                 <p className="text-xs text-canopy-text/40">
-                  The system prompt also includes your project name and custom dictionary
-                  automatically. Prompt caching keeps costs minimal (~$0.005/1M cached tokens).
+                  Project-specific rules appended to the core prompt.
                 </p>
-              </>
-            )}
-          </div>
-        </SettingsSection>
+                <textarea
+                  value={settings.correctionCustomInstructions}
+                  onChange={(e) => update({ correctionCustomInstructions: e.target.value })}
+                  rows={3}
+                  placeholder='e.g., "Always capitalize ProductName as one word" or "The acronym CMS refers to our Content Management System"'
+                  className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-canopy-text placeholder:text-canopy-text/30 focus:outline-none focus:ring-1 focus:ring-canopy-accent resize-y"
+                  spellCheck={false}
+                />
+              </div>
+
+              <p className="text-xs text-canopy-text/40">
+                Your project name and custom dictionary are included automatically. Prompt caching
+                keeps costs minimal.
+              </p>
+            </>
+          )}
+        </div>
       )}
     </>
   );

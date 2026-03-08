@@ -66,7 +66,7 @@ export function SettingsSwitchCard({
       </div>
       <div
         className={cn(
-          "w-11 h-6 rounded-full relative transition-colors",
+          "w-11 h-6 shrink-0 rounded-full relative transition-colors",
           isEnabled ? scheme.toggle : "bg-canopy-border"
         )}
         aria-hidden="true"

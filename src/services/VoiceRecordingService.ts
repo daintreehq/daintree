@@ -95,7 +95,7 @@ class VoiceRecordingService {
             const draft = inputStore.getDraftInput(panelId, projectId);
             // Slice back to where this segment started and replace with final transcript.
             const base = segmentStart >= 0 ? draft.slice(0, segmentStart) : draft;
-            const separator = base && !base.endsWith(" ") ? " " : "";
+            const separator = base && !base.endsWith(" ") && !base.endsWith("\n") ? " " : "";
             const finalText = text.trim();
             inputStore.setDraftInput(panelId, base + separator + finalText, projectId);
             inputStore.bumpVoiceDraftRevision();
@@ -158,6 +158,34 @@ class VoiceRecordingService {
         }
 
         useVoiceRecordingStore.getState().resolvePendingCorrection(panelId, rawText);
+      })
+    );
+
+    this.unsubscribers.push(
+      voiceInput.onParagraphBoundary(({ rawText }) => {
+        logDebug(`${LOG_PREFIX} Received paragraph boundary from Deepgram`, { rawText });
+        const voiceState = useVoiceRecordingStore.getState();
+        const currentTarget = voiceState.activeTarget;
+        if (!currentTarget) return;
+
+        const { panelId, projectId } = currentTarget;
+        const buffer = voiceState.panelBuffers[panelId];
+        if (!buffer) return;
+
+        // Use the rawText from the main process (what it actually flushed),
+        // which is authoritative — avoids reconstructing from renderer-local state.
+        const paragraphStart = buffer.activeParagraphStart ?? -1;
+        if (rawText && paragraphStart >= 0 && voiceState.correctionEnabled) {
+          voiceState.addPendingCorrection(panelId, paragraphStart, rawText);
+        }
+
+        // Insert a newline to visually separate paragraphs and reset paragraph state.
+        const inputStore = useTerminalInputStore.getState();
+        const draft = inputStore.getDraftInput(panelId, projectId);
+        inputStore.setDraftInput(panelId, draft + "\n", projectId);
+        inputStore.bumpVoiceDraftRevision();
+
+        voiceState.resetParagraphState(panelId);
       })
     );
 

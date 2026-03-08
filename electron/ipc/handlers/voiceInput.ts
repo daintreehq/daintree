@@ -271,6 +271,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           text: rawText,
           willCorrect: false,
         });
+      } else if (voiceEvent.type === "paragraph_boundary") {
+        // Deepgram detected a paragraph break — auto-flush the previous paragraph
+        // for correction (if enabled) and notify the renderer with the flushed text.
+        const { rawText: flushedText } = flushParagraphBuffer(win);
+        win.webContents.send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, { rawText: flushedText });
       } else if (voiceEvent.type === "error") {
         win.webContents.send(CHANNELS.VOICE_INPUT_ERROR, voiceEvent.message);
       } else if (voiceEvent.type === "status") {

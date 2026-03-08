@@ -364,6 +364,7 @@ export const CHANNELS = {
   VOICE_INPUT_VALIDATE_API_KEY: "voice-input:validate-api-key",
   VOICE_INPUT_VALIDATE_CORRECTION_API_KEY: "voice-input:validate-correction-api-key",
   VOICE_INPUT_FLUSH_PARAGRAPH: "voice-input:flush-paragraph",
+  VOICE_INPUT_PARAGRAPH_BOUNDARY: "voice-input:paragraph-boundary",
 
   // Crash Recovery channels
   CRASH_RECOVERY_GET_PENDING: "crash-recovery:get-pending",

@@ -8,6 +8,7 @@ const P = "[VoiceTranscription]";
 export type VoiceTranscriptionEvent =
   | { type: "delta"; text: string }
   | { type: "complete"; text: string }
+  | { type: "paragraph_boundary" }
   | { type: "error"; message: string }
   | { type: "status"; status: "idle" | "connecting" | "recording" | "finishing" | "error" };
 
@@ -102,6 +103,7 @@ export class VoiceTranscriptionService {
         model: settings.transcriptionModel || "nova-3",
         language: settings.language || "en",
         smart_format: true,
+        paragraphs: true,
         interim_results: true,
         endpointing: 500,
         utterance_end_ms: 1000,
@@ -176,11 +178,12 @@ export class VoiceTranscriptionService {
       connection.on(LiveTranscriptionEvents.Error, (err) => {
         this.clearConnectTimeout();
         if (this.sessionId !== mySessionId) return;
+        const errObj = err as { message?: string; error?: string };
         const message =
           err instanceof Error
             ? err.message
-            : ((err as { message?: string })?.message ?? "Deepgram error");
-        logError(`${P} Connection error`, err);
+            : (errObj?.message ?? errObj?.error ?? "Deepgram error");
+        logError(`${P} Connection error`, { message });
         this.cleanupConnection();
         this.emit({ type: "error", message });
         this.emit({ type: "status", status: "error" });
@@ -203,6 +206,24 @@ export class VoiceTranscriptionService {
     });
   }
 
+  private emitCompleteWithParagraphDetection(text: string): void {
+    // Deepgram inserts \n\n at paragraph boundaries when paragraphs=true.
+    // Split on these boundaries so each paragraph is emitted separately,
+    // with a paragraph_boundary event between them.
+    // Only emit boundaries between non-empty parts to avoid spurious events
+    // from leading/trailing \n\n (e.g. "para\n\n" or "\n\npara").
+    const parts = text
+      .split(/\n\n+/)
+      .map((p) => p.trim())
+      .filter(Boolean);
+    for (let i = 0; i < parts.length; i++) {
+      this.emit({ type: "complete", text: parts[i] });
+      if (i < parts.length - 1) {
+        this.emit({ type: "paragraph_boundary" });
+      }
+    }
+  }
+
   private handleTranscript(transcript: string, isFinal: boolean, speechFinal: boolean): void {
     if (speechFinal) {
       const segments = [...this.utteranceSegments, transcript].filter((s) => s.trim());
@@ -210,7 +231,7 @@ export class VoiceTranscriptionService {
       this.resetUtteranceState();
 
       if (fullText) {
-        this.emit({ type: "complete", text: fullText });
+        this.emitCompleteWithParagraphDetection(fullText);
       }
       if (this.isDraining) {
         this.settleDrain();
@@ -252,7 +273,7 @@ export class VoiceTranscriptionService {
     const fullText = (this.liveText || this.utteranceSegments.join(" ")).trim();
     this.resetUtteranceState();
     if (fullText) {
-      this.emit({ type: "complete", text: fullText });
+      this.emitCompleteWithParagraphDetection(fullText);
     }
     if (this.isDraining) {
       this.settleDrain();

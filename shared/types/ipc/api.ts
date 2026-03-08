@@ -824,6 +824,7 @@ export interface ElectronAPI {
     onCorrectionReplace(
       callback: (payload: { rawText: string; correctedText: string }) => void
     ): () => void;
+    onParagraphBoundary(callback: (payload: { rawText: string | null }) => void): () => void;
     onError(callback: (error: string) => void): () => void;
     onStatus(callback: (status: VoiceInputStatus) => void): () => void;
     checkMicPermission(): Promise<MicPermissionStatus>;
