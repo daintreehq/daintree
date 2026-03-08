@@ -261,26 +261,6 @@ This is used for the very first release when gitflow hasn't been set up yet.
 
 ---
 
-## Phase 4.5: Pre-Release Build Verification
-
-Before tagging, trigger a test build via `workflow_dispatch` to verify all platforms build successfully:
-
-```bash
-gh workflow run release.yml --ref develop
-```
-
-Wait for the build jobs (macOS, Linux, Windows) to complete. Poll with:
-
-```bash
-gh api repos/canopyide/canopy/actions/runs/RUN_ID/jobs --jq '.jobs[] | select(.name | test("build")) | {name, conclusion}'
-```
-
-**All three build jobs must pass before proceeding to tagging.** If any fail, fix the issue on `develop` and re-trigger. Do NOT proceed to tag & push with a failing build — re-tagging after push is expensive and disruptive.
-
-Use `AskUserQuestion` to report build results and confirm proceeding to tag.
-
----
-
 ## Phase 5: Tag & Push
 
 ### Create the tag
