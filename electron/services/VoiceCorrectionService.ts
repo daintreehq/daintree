@@ -88,11 +88,11 @@ export class VoiceCorrectionService {
 
     if (this.history.length > 0) {
       userParts.push(
-        `Previous corrected sentences (use for context, do NOT repeat):\n${this.history.map((s, i) => `${i + 1}. ${s}`).join("\n")}`
+        `<history>\n${this.history.map((s, i) => `${i + 1}. ${s}`).join("\n")}\n</history>`
       );
     }
 
-    userParts.push(`Current sentence to correct:\n${rawText}`);
+    userParts.push(`<input>\n${rawText}\n</input>`);
 
     const userMessage = userParts.join("\n\n");
 
