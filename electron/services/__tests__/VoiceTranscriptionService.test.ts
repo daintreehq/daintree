@@ -251,7 +251,7 @@ describe("VoiceTranscriptionService", () => {
     expect(completes).toEqual(["First utterance.", "Second utterance."]);
   });
 
-  it("sends audio chunks as Buffer after connection opens", async () => {
+  it("sends audio chunks as ArrayBuffer after connection opens", async () => {
     const service = new VoiceTranscriptionService();
     const p = service.start(BASE_SETTINGS);
     const conn = deepgramMock.instances.at(-1)!;
@@ -262,8 +262,8 @@ describe("VoiceTranscriptionService", () => {
     service.sendAudioChunk(chunk);
 
     expect(conn.sent).toHaveLength(1);
-    expect(conn.sent[0]).toBeInstanceOf(Buffer);
-    expect(conn.sent[0].byteLength).toBe(8);
+    expect(conn.sent[0]).toBeInstanceOf(ArrayBuffer);
+    expect((conn.sent[0] as unknown as ArrayBuffer).byteLength).toBe(8);
   });
 
   it("buffers pre-connect audio chunks and flushes on open", async () => {

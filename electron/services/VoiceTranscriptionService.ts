@@ -239,12 +239,17 @@ export class VoiceTranscriptionService {
     } else if (!this.liveText) {
       this.emit({ type: "delta", text: accumulated });
       this.liveText = accumulated;
+    } else {
+      // Deepgram revised earlier text (non-prefix change). Update the baseline
+      // so future appends can still emit incremental deltas correctly.
+      this.liveText = accumulated;
     }
   }
 
   private flushUtterance(): void {
-    if (this.utteranceSegments.length === 0) return;
-    const fullText = this.utteranceSegments.join(" ").trim();
+    // Use liveText if set — it includes any pending interim transcript that has
+    // not yet received is_final=true (e.g. when UtteranceEnd fires without speech_final).
+    const fullText = (this.liveText || this.utteranceSegments.join(" ")).trim();
     this.resetUtteranceState();
     if (fullText) {
       this.emit({ type: "complete", text: fullText });
@@ -380,10 +385,15 @@ export class VoiceTranscriptionService {
       }, 3000);
     });
 
+    const sessionIdBeforeDrain = this.sessionId;
     await this.drainPromise;
 
-    this.cleanupPreviousSession();
-    this.emit({ type: "status", status: "idle" });
+    // If start() was called during drain it already ran cleanupPreviousSession()
+    // and incremented sessionId — don't tear down the new session.
+    if (this.sessionId === sessionIdBeforeDrain) {
+      this.cleanupPreviousSession();
+      this.emit({ type: "status", status: "idle" });
+    }
   }
 
   stop(): void {

@@ -9,6 +9,7 @@ import type { VoiceInputSettings } from "../../../shared/types/ipc/api.js";
 
 let service: VoiceTranscriptionService | null = null;
 let activeEventUnsubscribe: (() => void) | null = null;
+let activeDestroyListener: { sender: Electron.WebContents; fn: () => void } | null = null;
 let correctionService: VoiceCorrectionService | null = null;
 
 /** Utterances accumulated since the last paragraph boundary. */
@@ -57,6 +58,10 @@ function cleanupActiveSubscription(): void {
   if (activeEventUnsubscribe) {
     activeEventUnsubscribe();
     activeEventUnsubscribe = null;
+  }
+  if (activeDestroyListener) {
+    activeDestroyListener.sender.removeListener("destroyed", activeDestroyListener.fn);
+    activeDestroyListener = null;
   }
 }
 
@@ -280,10 +285,12 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       if (activeEventUnsubscribe === unsubscribe) {
         activeEventUnsubscribe = null;
       }
+      activeDestroyListener = null;
       unsubscribe();
       service?.stop();
     };
     event.sender.once("destroyed", onDestroyed);
+    activeDestroyListener = { sender: event.sender, fn: onDestroyed };
 
     const result = await svc.start(settings);
     if (!result.ok) {
@@ -293,6 +300,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       }
       unsubscribe();
       event.sender.removeListener("destroyed", onDestroyed);
+      activeDestroyListener = null;
     }
     return result;
   };

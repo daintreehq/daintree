@@ -460,7 +460,7 @@ class VoiceRecordingService {
       .getState()
       .announce(`Dictation started in ${formatTargetLabel(target)}.`);
 
-    // Connect to OpenAI in parallel — audio is already flowing.
+    // Connect to Deepgram in parallel — audio is already flowing.
     logDebug(`${LOG_PREFIX} Calling voiceInput.start() IPC`);
     const result = await window.electron.voiceInput.start();
     logDebug(`${LOG_PREFIX} voiceInput.start() returned`, {
