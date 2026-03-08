@@ -90,4 +90,23 @@ describe("color system contract", () => {
       );
     }
   });
+
+  it("exports --color-accent-primary-foreground mapped to --theme-accent-foreground", () => {
+    expect(indexCss).toMatch(
+      /--color-accent-primary-foreground:\s*var\(--theme-accent-foreground\)/
+    );
+  });
+
+  it("maps .dark --primary-foreground to --color-accent-primary-foreground, not --color-accent-foreground", () => {
+    const darkBlock = indexCss.match(/\.dark\s*\{[^}]+\}/s)?.[0] ?? "";
+    expect(darkBlock).toMatch(/--primary-foreground:\s*var\(--color-accent-primary-foreground\)/);
+    expect(darkBlock).not.toMatch(/--primary-foreground:\s*var\(--color-accent-foreground\)/);
+  });
+
+  it("maps .dark --sidebar-primary-foreground to --color-accent-primary-foreground", () => {
+    const darkBlock = indexCss.match(/\.dark\s*\{[^}]+\}/s)?.[0] ?? "";
+    expect(darkBlock).toMatch(
+      /--sidebar-primary-foreground:\s*var\(--color-accent-primary-foreground\)/
+    );
+  });
 });
